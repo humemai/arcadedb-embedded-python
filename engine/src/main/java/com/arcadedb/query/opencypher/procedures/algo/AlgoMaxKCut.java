@@ -19,10 +19,9 @@
 package com.arcadedb.query.opencypher.procedures.algo;
 
 import com.arcadedb.database.Database;
-import com.arcadedb.database.RID;
-import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.sql.executor.CommandContext;
+import com.arcadedb.query.sql.executor.WorkGuard;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 
@@ -45,11 +44,12 @@ import java.util.stream.Stream;
  *
  * <p>Parameters:
  * <ul>
- *   <li>{@code k} (int, required) – number of partitions (k ≥ 2)</li>
+ *   <li>{@code k} (int, required) – number of partitions (k ≥ 2; clamped to the node count, since a
+ *       cut into more parts than there are nodes can only leave the surplus parts empty)</li>
  *   <li>{@code config} (map, optional):
  *     <ul>
- *       <li>{@code maxIterations} (int, default 100) – local-search passes per restart</li>
- *       <li>{@code restarts} (int, default 3) – number of random restarts</li>
+ *       <li>{@code maxIterations} (int, default 100, minimum 1) – local-search passes per restart</li>
+ *       <li>{@code restarts} (int, default 3, minimum 1) – number of random restarts</li>
  *       <li>{@code weightProperty} (String, default null) – edge weight property name</li>
  *       <li>{@code relTypes} (String, default all)</li>
  *       <li>{@code direction} (String, default BOTH)</li>
@@ -67,6 +67,10 @@ import java.util.stream.Stream;
  * ORDER BY community
  * </pre>
  * </p>
+ *
+ * <p>{@code restarts} and {@code maxIterations} multiply CPU work with no graph-derived ceiling, so rather
+ * than capping them at a guessed maximum the local search honours thread interruption and the
+ * {@code arcadedb.command.timeout} deadline, and a long run stays abortable.</p>
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
@@ -101,13 +105,13 @@ public class AlgoMaxKCut extends AbstractAlgoProcedure {
   public Stream<Result> execute(final Object[] args, final Result inputRow, final CommandContext context) {
     validateArgs(args);
 
-    final int k = args[0] instanceof Number kn ? extractInt(kn, "k") : 2;
-    if (k < 2)
-      throw new IllegalArgumentException(getName() + "(): k must be ≥ 2, got " + k);
+    final int rawK = args[0] instanceof Number kn ? extractInt(kn, "k") : 2;
+    if (rawK < 2)
+      throw new IllegalArgumentException(getName() + "(): k must be ≥ 2, got " + rawK);
 
     final Map<String, Object> config = args.length > 1 ? extractMap(args[1], "config") : null;
-    final int maxIter = config != null && config.get("maxIterations") instanceof Number n ? extractInt(n, "maxIterations") : 100;
-    final int restarts = config != null && config.get("restarts") instanceof Number n ? extractInt(n, "restarts") : 3;
+    final int maxIter = config != null && config.get("maxIterations") instanceof Number n ? extractInt(n, "maxIterations", 1) : 100;
+    final int restarts = config != null && config.get("restarts") instanceof Number n ? extractInt(n, "restarts", 1) : 3;
     final String weightProperty = config != null ? (String) config.get("weightProperty") : null;
     final long seed = config != null && config.get("seed") instanceof Number n ? n.longValue() : -1L;
     final String[] relTypes = config != null ? extractRelTypes(config.get("relTypes")) : null;
@@ -119,10 +123,22 @@ public class AlgoMaxKCut extends AbstractAlgoProcedure {
     final int n = graph.nodeCount;
     if (n == 0)
       return Stream.empty();
-    final int[][] adj = graph.adjacency(dir, relTypes);
-
-    // Build weighted adjacency (null weightProperty → all weights = 1.0)
-    final double[][] adjW = buildWeightedAdj(graph, adj, dir, relTypes, weightProperty);
+    // Clamp to the graph size, same as AlgoHierarchicalClustering's numClusters: a cut into more
+    // parts than there are nodes can only leave the surplus parts empty, and the per-node gain array
+    // (`new double[k]`, allocated once per node per pass per restart) would otherwise be sized off an
+    // unclamped k - a multi-GB allocation attempt for e.g. algo.maxKCut(2000000000) on a tiny graph.
+    // The floor of 2 keeps the clamp from undercutting the k >= 2 contract validated above: on a
+    // single-node graph a bare Math.min would hand the local search k = 1, i.e. a "cut" into one
+    // partition, which is not the degenerate-but-valid answer to what the caller asked for.
+    final int k = Math.max(2, Math.min(rawK, n));
+    final WorkGuard guard = newWorkGuard(context);
+    // Neighbours and weights come from a single walk of the same edges (null weightProperty →
+    // all weights = 1.0), so weights[i][j] is guaranteed to be the weight of the edge to
+    // neighbors[i][j] - see GraphData.weightedAdjacency and issue #6301, which converted the other
+    // weighted algorithms off the same hand-rolled parallel array this one used to build.
+    final GraphData.WeightedAdjacency weighted = graph.weightedAdjacency(guard, dir, weightProperty, relTypes);
+    final int[][] adj = weighted.neighbors();
+    final double[][] adjW = weighted.weights();
 
     final Random rng = seed >= 0 ? new Random(seed) : new Random();
     int[] bestAssign = new int[n];
@@ -136,8 +152,11 @@ public class AlgoMaxKCut extends AbstractAlgoProcedure {
 
       // Local search: for each node try all k partitions
       for (int pass = 0; pass < maxIter; pass++) {
+        guard.check();
         boolean improved = false;
         for (int i = 0; i < n; i++) {
+          // A single pass walks the whole graph, so on a large one the checkpoint belongs inside the pass too.
+          guard.checkPeriodically(i);
           final int curPart = assign[i];
           // Compute contribution of each partition choice for node i
           final double[] gain = new double[k];
@@ -184,38 +203,6 @@ public class AlgoMaxKCut extends AbstractAlgoProcedure {
       r.setProperty("cutWeight", finalCut);
       return (Result) r;
     });
-  }
-
-  /** Builds a parallel weight array for each adjacency list entry. */
-  private double[][] buildWeightedAdj(final GraphData graph,
-      final int[][] adj, final Vertex.DIRECTION dir, final String[] relTypes, final String weightProp) {
-    final int n = graph.nodeCount;
-    final double[][] adjW = new double[n][];
-    for (int i = 0; i < n; i++) {
-      adjW[i] = new double[adj[i].length];
-      Arrays.fill(adjW[i], 1.0);
-    }
-    if (weightProp == null)
-      return adjW;
-
-    // Fill weights from edge properties
-    for (int i = 0; i < n; i++) {
-      final Iterable<Edge> edges = relTypes != null && relTypes.length > 0 ?
-          graph.getVertex(i).getEdges(dir, relTypes) :
-          graph.getVertex(i).getEdges(dir);
-      int pos = 0;
-      for (final Edge e : edges) {
-        final RID nbRid = neighborRid(e, graph.getRID(i), dir);
-        if (nbRid == null || graph.indexOf(nbRid) < 0)
-          continue;
-        if (pos < adjW[i].length) {
-          final Object w = e.get(weightProp);
-          adjW[i][pos] = w instanceof Number num ? num.doubleValue() : 1.0;
-          pos++;
-        }
-      }
-    }
-    return adjW;
   }
 
   private static double computeCutWeight(final int n, final int[][] adj, final double[][] adjW,

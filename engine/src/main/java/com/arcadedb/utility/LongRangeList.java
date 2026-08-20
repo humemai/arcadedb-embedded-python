@@ -18,8 +18,10 @@
  */
 package com.arcadedb.utility;
 
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.AbstractList;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -110,13 +112,29 @@ public class LongRangeList extends AbstractList<Long> implements RandomAccess {
   /**
    * O(1) lookup: an element belongs to the range when its distance from the start is an exact multiple of the
    * step and the resulting index falls inside the range.
+   * <p>
+   * Only the integral boxed types are accepted, because this implements {@link List#indexOf(Object)}, whose
+   * contract is {@code equals()} and {@code Long.valueOf(5).equals(Double.valueOf(5.0))} is false. A caller whose
+   * own equality coerces numerically - Cypher's {@code =} does, so {@code IN} does - converts the value itself and
+   * asks {@link #containsLong(long)} instead.
    */
   @Override
   public int indexOf(final Object o) {
-    if (!(o instanceof Number number) || o instanceof Double || o instanceof Float)
+    if (!(o instanceof Number number) || o instanceof Double || o instanceof Float || o instanceof BigInteger
+        || o instanceof BigDecimal)
       return -1;
 
-    final long value = number.longValue();
+    return indexOfLong(number.longValue());
+  }
+
+  /**
+   * O(1) membership by value: whether {@code value} is one of {@code start + i * step} for {@code 0 <= i < size}.
+   */
+  public boolean containsLong(final long value) {
+    return indexOfLong(value) > -1;
+  }
+
+  private int indexOfLong(final long value) {
     final long distance;
     try {
       distance = Math.subtractExact(value, start);
@@ -158,6 +176,37 @@ public class LongRangeList extends AbstractList<Long> implements RandomAccess {
         return start + (next++) * step;
       }
     };
+  }
+
+  /**
+   * A range read backwards is still an arithmetic progression - {@code start + (size - 1) * step} walked with the
+   * opposite step - so it is answered in constant space instead of copying every element into an
+   * {@code ArrayList}. That copy is what {@code reverse()} used to pay (issue #6353): a range costs no heap while
+   * it stays lazy, and {@code arcadedb.queryMaxRangeSize} is documented as the cap on what a query may
+   * <i>materialise</i>, so a reversal that materialises turns a free range into gigabytes of boxed longs.
+   * <p>
+   * Overriding {@link List#reversed()} rather than adding a private helper means every caller that already speaks
+   * the {@code SequencedCollection} vocabulary gets the lazy answer for free. The returned range is independent of
+   * this one - both are immutable, so nothing observes the difference from the view {@code List} would return.
+   */
+  @Override
+  public List<Long> reversed() {
+    if (size <= 1)
+      // Reversing nothing, or a single element, gives back the same sequence.
+      return this;
+    try {
+      // start + (size - 1) * step is the last element, which get(size - 1) already computes without overflowing:
+      // the constructor is only ever handed a size that LongRangeList.cardinality() counted for a range whose end
+      // is a long, so the last element is a long too.
+      return new LongRangeList(start + (long) (size - 1) * step, Math.negateExact(step), size);
+    } catch (final ArithmeticException e) {
+      // Long.MIN_VALUE has no positive counterpart. Only a two-element range can carry that step - a third element
+      // would need 2 * |step| to fit in a long - so materialising the reversal here costs two boxed longs.
+      final List<Long> reversed = new ArrayList<>(size);
+      for (int i = size - 1; i >= 0; i--)
+        reversed.add(get(i));
+      return reversed;
+    }
   }
 
   @Override

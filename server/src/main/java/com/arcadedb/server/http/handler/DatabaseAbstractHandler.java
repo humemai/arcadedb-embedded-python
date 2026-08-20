@@ -18,6 +18,7 @@
  */
 package com.arcadedb.server.http.handler;
 
+import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseContext;
@@ -111,7 +112,8 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
     } else
       database = null;
 
-    final int retries = payload != null && !payload.isNull("retries") ? payload.getInt("retries") : 1;
+    final int retries = resolveRetries(payload,
+        database != null ? database.getConfiguration() : httpServer.getServer().getConfiguration());
 
     // Resolve HA database for read consistency (may be wrapped inside ServerDatabase).
     final HAReplicatedDatabase haDbForRead = resolveHAReplicatedDatabase(database);
@@ -152,28 +154,16 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
       if (activeSession != null) {
         // EXECUTE THE CODE LOCKING THE CURRENT SESSION. THIS AVOIDS USING THE SAME SESSION FROM MULTIPLE THREADS AT THE SAME TIME
         activeSession.execute(user, () -> {
-          if (finalAtomicTransaction) {
-            database.transaction(() -> {
-              try {
-                response.set(execute(exchange, user, database, payload));
-              } catch (Exception e) {
-                throw new TransactionException("Error on executing command", e);
-              }
-            }, false, retries);
-          } else
+          if (finalAtomicTransaction)
+            executeInTransaction(exchange, user, database, payload, response, retries);
+          else
             response.set(execute(exchange, user, database, payload));
           return null;
         });
       } else {
-        if (finalAtomicTransaction) {
-          database.transaction(() -> {
-            try {
-              response.set(execute(exchange, user, database, payload));
-            } catch (Exception e) {
-              throw new TransactionException("Error on executing command", e);
-            }
-          }, false, retries);
-        } else
+        if (finalAtomicTransaction)
+          executeInTransaction(exchange, user, database, payload, response, retries);
+        else
           response.set(execute(exchange, user, database, payload));
       }
 
@@ -205,6 +195,68 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
     }
 
     return response.get();
+  }
+
+  /**
+   * Runs {@link #execute(HttpServerExchange, ServerSecurityUser, Database, JSONObject)} inside the auto-commit
+   * transaction, retrying it up to {@code retries} times.
+   * <p>
+   * A {@link RuntimeException} is rethrown <b>unchanged</b>. Wrapping it - which this block used to do for every
+   * exception alike - broke the two contracts the wrapper itself depends on (issue #6201):
+   * <ul>
+   * <li>{@code LocalDatabase.transaction(...)} decides what to retry by type
+   * ({@code catch (NeedRetryException | DuplicatedKeyException)}). A conflict raised while {@code execute()} runs -
+   * a {@code save()} losing an MVCC race, an index update hitting a concurrent key - arrived there already wrapped,
+   * matched neither arm and propagated on the first attempt, so {@code retries} had no effect on anything but a
+   * conflict detected by the wrapper's own {@code commit()}.</li>
+   * <li>The HTTP error mapping in {@link AbstractServerHttpHandler} keys on the exception type, so a retryable
+   * conflict was answered as an opaque 500 "Error on transaction commit" rather than the documented 503, and a
+   * client whose retry policy keys on 503 gave up on a write that would have succeeded on retry.</li>
+   * </ul>
+   * Only a CHECKED exception still needs the wrapper, because {@code TransactionScope.execute()} declares none;
+   * every ArcadeDB exception is unchecked and therefore reaches both dispatchers as itself.
+   * <p>
+   * Package-private for direct unit testing.
+   */
+  void executeInTransaction(final HttpServerExchange exchange, final ServerSecurityUser user,
+      final DatabaseInternal database, final JSONObject payload, final AtomicReference<ExecutionResponse> response,
+      final int retries) {
+    database.transaction(() -> {
+      try {
+        response.set(execute(exchange, user, database, payload));
+      } catch (final RuntimeException e) {
+        throw e;
+      } catch (final Exception e) {
+        throw new TransactionException("Error on executing command", e);
+      }
+    }, false, retries);
+  }
+
+  /**
+   * How many attempts an auto-committed request gets: the {@code retries} field of the payload when the client
+   * asked for a specific number, {@link GlobalConfiguration#TX_RETRIES} otherwise.
+   * <p>
+   * The default used to be a hard-coded 1, which meant nothing retried unless the client asked for retries it had
+   * no reason to know existed. That was invisible until #6201: the auto-commit wrapper converted every exception
+   * into a {@code TransactionException}, so {@code LocalDatabase.transaction}'s
+   * {@code catch (NeedRetryException | DuplicatedKeyException)} never matched anything raised while the command
+   * ran and the value was dead. It is live now, so an MVCC conflict that a second attempt would have committed is
+   * answered 503 on the first.
+   * <p>
+   * Following {@code TX_RETRIES} is what makes the HTTP entry point behave like every other one - the embedded
+   * {@code Database.transaction(txBlock)} and {@code RemoteDatabase} both take their attempt count from it - and
+   * it is a knob an operator can already turn per database, including down to 1. Re-running a command that is not
+   * idempotent is safe here for the reason it is safe there: the engine retries only after rolling the
+   * transaction back, so the retried attempt starts from committed state and nothing the failed one wrote
+   * survives to be duplicated. Only the two conflict families are retried at all; every other failure propagates
+   * on the first attempt.
+   * <p>
+   * Package-private for direct unit testing.
+   */
+  static int resolveRetries(final JSONObject payload, final ContextConfiguration configuration) {
+    if (payload != null && !payload.isNull("retries"))
+      return payload.getInt("retries");
+    return configuration.getValueAsInteger(GlobalConfiguration.TX_RETRIES);
   }
 
   /**

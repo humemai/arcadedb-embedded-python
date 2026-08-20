@@ -541,6 +541,14 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
         LogManager.instance().log(this, Level.FINE, "CLIENT executeCommand: success = %s", response.getSuccess());
 
       if (!response.getSuccess()) {
+        // Unreachable against a correct server: executeCommandInternal now only ever returns success=true
+        // (every failure is rethrown server-side and reaches this client as a StatusRuntimeException, caught
+        // below and mapped to the exact engine exception type - issue #6192). Kept and logged loudly rather
+        // than removed, as a canary: if a future server-side regression ever reintroduces this in-band
+        // envelope, it fails visibly here instead of silently resurrecting the untyped fallback #6192 fixed.
+        LogManager.instance().log(this, Level.SEVERE,
+            "CLIENT executeCommand: server returned success=false in-band, which should be unreachable after #6192: %s",
+            response.getMessage());
         throw new DatabaseOperationException("Failed to execute command: " + response.getMessage());
       }
 
@@ -1940,20 +1948,27 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     if (!grpcRecord.getType().isEmpty())
       map.put("@type", grpcRecord.getType());
 
-    GrpcValue catFromGrpcRecord = grpcRecord.getPropertiesMap().get("@cat");
+    // The wire's @cat is trustworthy for the CATEGORY (issue #6404), but constructing a concrete
+    // RemoteImmutableDocument/Vertex/Edge still needs the type resolvable client-side - its constructor looks
+    // the type up eagerly and throws SchemaException if it can't. Unlike @cat, the client's schema cache has no
+    // way to know about a type created after it was last (or never) loaded, and RemoteSchema only reloads a
+    // NEVER-loaded cache, not a stale one: a type created after the first schema access on this connection stays
+    // invisible until something explicitly invalidates the cache. Before @cat was sent on the wire this same
+    // existsType() check was where the category came from in the first place (mapRecordType(), below), so an
+    // unresolvable type was already silently downgraded to the property-only fallback instead of a crash -
+    // trusting the wire for the category must not remove that safety net. Checked once, up front, so the
+    // @cat-absent fallback below can reuse the confirmed type instead of resolving it a second time.
+    final String typeName = grpcRecord.getType();
+    if (typeName.isEmpty() || !getSchema().existsType(typeName))
+      return null;
 
-    String cat;
-
-    if (catFromGrpcRecord != null)
-      cat = catFromGrpcRecord.getStringValue();
-    else
-      cat = mapRecordType(grpcRecord);
-
-    if (cat != null)
-      map.put("@cat", cat);
+    final GrpcValue catFromGrpcRecord = grpcRecord.getPropertiesMap().get("@cat");
+    final String cat = catFromGrpcRecord != null ? catFromGrpcRecord.getStringValue() : mapRecordType(typeName);
 
     if (cat == null)
       return null;
+
+    map.put("@cat", cat);
 
     return switch (cat) {
       case "d" -> new RemoteImmutableDocument(this, map);
@@ -1963,23 +1978,16 @@ public class RemoteGrpcDatabase extends RemoteDatabase {
     };
   }
 
-  private String mapRecordType(GrpcRecord grpcRecord) {
-    // Determine record category from type name
-    String typeName = grpcRecord.getType();
-
-    // Check schema to determine actual type
+  /** {@code typeName} must already be confirmed to exist client-side - see the {@code existsType()} check above. */
+  private String mapRecordType(final String typeName) {
     try {
-      if (typeName != null && !typeName.isBlank() && getSchema().existsType(typeName)) {
-        Object type = getSchema().getType(typeName);
-
-        return switch (type) {
-          case VertexType v -> "v";
-          case EdgeType e -> "e";
-          case DocumentType d -> "d";
-          default -> null;
-        };
-      } else
-        return null;
+      final Object type = getSchema().getType(typeName);
+      return switch (type) {
+        case VertexType v -> "v";
+        case EdgeType e -> "e";
+        case DocumentType d -> "d";
+        default -> null;
+      };
 
     } catch (Exception e) {
       throw new RuntimeException(e);

@@ -51,6 +51,44 @@ public class CheckDatabaseStatement extends SimpleExecStatement {
   public final Set<Rid>              records  = new LinkedHashSet<>();
   public       boolean               fix      = false;
   public       boolean               compress = false;
+  /**
+   * #6090: {@code DELETE ORPHANS}. Reclaims ORPHAN EDGE RECORDS - edge records whose {@code @out}/{@code @in} name
+   * valid vertices but which no vertex's edge list references, so {@code countType()} counts them and no traversal
+   * reaches them.
+   * <p>
+   * A CLAUSE OF ITS OWN rather than part of {@code FIX}, because the detection cannot tell garbage from a vertex
+   * that merely lost its head-chunk pointer; the full argument is on
+   * {@link DatabaseChecker#setDeleteOrphanEdgeRecords(boolean)}. Reporting the finding needs no clause at all - it
+   * is on for every run.
+   */
+  public       boolean               deleteOrphans = false;
+  /**
+   * #6189: {@code RECLAIM UNREFERENCED FILES}. Reclaims the files this node holds that no schema component was
+   * ever built for - what an abandoned instalment sequence leaves on a follower, or what a DDL that throws after
+   * creating a file leaves anywhere. A CLAUSE OF ITS OWN, on the same pattern as {@code DELETE ORPHANS} above: the
+   * detection ({@link com.arcadedb.engine.UnreferencedFiles}) can also prove two OTHER shapes - a bucket, or an
+   * index, that a schema component still names but no type claims - and those stay report-only, because removing
+   * their file without also unregistering the component would leave the schema pointing at nothing. Reporting all
+   * three is always on; reclaiming the safe one is opt-in. See
+   * {@link com.arcadedb.engine.DatabaseChecker#setReclaimUnreferencedFiles(boolean)}.
+   */
+  public       boolean               reclaimUnreferencedFiles = false;
+  /**
+   * #6360: {@code DEEP}. Opts into the checks that DECODE the data instead of reconciling what describes it - see
+   * {@link DatabaseChecker#setDeep(boolean)}. Independent of {@code FIX}: nothing this tier finds is repairable,
+   * since a block whose declared statistics disagree with its own values was written that way.
+   */
+  public       boolean               deep     = false;
+
+  /** Shared with the grammar's own diagnostics: {@code DELETE ORPHANS} is a repair and has nothing to do without FIX. */
+  public static final String DELETE_ORPHANS_WITHOUT_FIX_ERROR =
+      "CHECK DATABASE DELETE ORPHANS removes records, so it requires FIX: write CHECK DATABASE FIX DELETE ORPHANS. "
+          + "Without it the orphan edge records are still reported, under the unreachableEdgeRecords key";
+  /** Shared with the grammar's own diagnostics: {@code RECLAIM UNREFERENCED FILES} is a repair and needs FIX too. */
+  public static final String RECLAIM_UNREFERENCED_FILES_WITHOUT_FIX_ERROR =
+      "CHECK DATABASE RECLAIM UNREFERENCED FILES removes files, so it requires FIX: write CHECK DATABASE FIX "
+          + "RECLAIM UNREFERENCED FILES. Without it the unreferenced files are still reported, under the "
+          + "unreferencedFiles key";
 
   public CheckDatabaseStatement() {
   }
@@ -69,6 +107,15 @@ public class CheckDatabaseStatement extends SimpleExecStatement {
       // whose actual problem is the clause combination. Diagnose the outer mistake first.
       throw new IllegalArgumentException(DatabaseChecker.RECORD_SCOPE_CONFLICT_ERROR);
 
+    if (deleteOrphans && !fix)
+      // Refused rather than silently implying FIX: a statement that removes records must say so, and a caller who
+      // only wanted the finding already has it without any clause at all.
+      throw new IllegalArgumentException(DELETE_ORPHANS_WITHOUT_FIX_ERROR);
+
+    if (reclaimUnreferencedFiles && !fix)
+      // Same refusal, same reason: RECLAIM UNREFERENCED FILES removes files and must say so explicitly.
+      throw new IllegalArgumentException(RECLAIM_UNREFERENCED_FILES_WITHOUT_FIX_ERROR);
+
     final DatabaseChecker checker = createChecker(context);
     checker.setVerboseLevel(0);
     checker.setBuckets(buckets.stream().map(x -> x.getValue()).collect(Collectors.toSet()));
@@ -81,6 +128,9 @@ public class CheckDatabaseStatement extends SimpleExecStatement {
     checker.setRecords(records.stream().map(x -> x.toRecordId((Result) null, context))
         .collect(Collectors.toCollection(LinkedHashSet::new)));
     checker.setFix(fix);
+    checker.setDeep(deep);
+    checker.setDeleteOrphanEdgeRecords(deleteOrphans);
+    checker.setReclaimUnreferencedFiles(reclaimUnreferencedFiles);
     checker.setCompress(compress);
 
     // PUBLISH LIVE PROGRESS (issue #5372): pollable while the check runs via the progress HTTP endpoint,
@@ -147,6 +197,15 @@ public class CheckDatabaseStatement extends SimpleExecStatement {
 
     if (fix)
       builder.append(" FIX");
+
+    if (deleteOrphans)
+      builder.append(" DELETE ORPHANS");
+
+    if (reclaimUnreferencedFiles)
+      builder.append(" RECLAIM UNREFERENCED FILES");
+
+    if (deep)
+      builder.append(" DEEP");
 
     if (compress)
       builder.append(" COMPRESS");

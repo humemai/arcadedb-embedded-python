@@ -178,6 +178,24 @@ public class BaseIdentifier extends SimpleNode {
     return suffix != null && suffix.isEarlyCalculated(context);
   }
 
+  /**
+   * A suffix is a property or variable reference, never a literal.
+   *
+   * @see Expression#isLiteral(boolean)
+   */
+  public boolean isLiteral(final boolean allowInputParameters) {
+    return levelZero != null && levelZero.isLiteral(allowInputParameters);
+  }
+
+  /**
+   * A suffix is a property or variable reference, never a foldable call.
+   *
+   * @see Expression#isFoldable()
+   */
+  boolean isFoldableFunctionCall() {
+    return levelZero != null && levelZero.isFoldableFunctionCall();
+  }
+
   public SimpleNode splitForAggregation(final AggregateProjectionSplit aggregateProj, final CommandContext context) {
     if (isAggregate(context)) {
       final BaseIdentifier result = new BaseIdentifier();

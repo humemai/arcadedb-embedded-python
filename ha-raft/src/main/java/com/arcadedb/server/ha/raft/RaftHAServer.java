@@ -23,6 +23,7 @@ import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.HAServerPlugin;
+import com.arcadedb.server.ServerDatabase;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.monitor.HAReplicationStatsProvider;
 import org.apache.ratis.client.RaftClient;
@@ -70,11 +71,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -85,6 +89,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -131,19 +137,43 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   private final    long                    quorumTimeout;
   private final    RaftGroup               raftGroup;
   private final    RaftPeerId              localPeerId;
-  private final    Map<RaftPeerId, String> httpAddresses      = new HashMap<>();
+  // Concurrent, not a plain HashMap: this is the one address map that is structurally modified while the
+  // cluster runs - RaftClusterManager puts on a peer add and removes on a peer leave - and it is read
+  // without any lock by the lag monitor, by cluster reporting, and (since issue #6191) by every write a
+  // follower forwards. A HashMap resizing under a concurrent get() is how a reader sees a stale or missing
+  // address, or spins. The siblings below are populated in the constructor and never written again, so a
+  // final field publishes them safely.
+  private final    Map<RaftPeerId, String> httpAddresses      = new ConcurrentHashMap<>();
   // Explicit HTTPS endpoints (optional 5th field in HA_SERVER_LIST). Used for encrypted
   // peer-to-peer transfers (snapshot download) when SSL is enabled.
-  private final    Map<RaftPeerId, String> httpsAddresses     = new HashMap<>();
+  // ConcurrentHashMap like its HTTP sibling, not because anything mutates it today - it is filled once in the
+  // constructor - but because it is READ from other threads (the verify endpoint's peer-query pool since issue
+  // #6221, the resync executors before it), and the day an addPeer overload starts declaring an https port the
+  // map type must not be the thing that has to be remembered.
+  private final    Map<RaftPeerId, String> httpsAddresses     = new ConcurrentHashMap<>();
   // Logged at most once: warns operators that HTTP addresses are derived (not explicitly configured).
   private final    AtomicBoolean           httpFallbackWarned = new AtomicBoolean(false);
   // Logged at most once: notes that peer HTTPS endpoints are derived from this node's local HTTPS port.
   private final    AtomicBoolean           httpsFallbackWarned = new AtomicBoolean(false);
+  // The last ambiguity verdict logged for this protocol, or null when the most recent pass found none. Warns that
+  // a peer-to-peer endpoint was WITHHELD because two peers resolved to it. Distinct from the two latches above,
+  // which fire whenever an address is derived at all - which a healthy homogeneous StatefulSet also does (issue
+  // #6267). Per node, like every other latch here: a test that builds several RaftHAServer instances gets a fresh
+  // pair each time. See the {@code isNewAmbiguityVerdict} contract for why this is a remembered verdict rather
+  // than a boolean (issue #6297).
+  private final    AtomicReference<String> httpAmbiguityReported  = new AtomicReference<>();
+  private final    AtomicReference<String> httpsAmbiguityReported = new AtomicReference<>();
   // Client-reachable Bolt endpoints (optional object-form 'bolt' field in HA_SERVER_LIST). Advertised
   // in the Bolt ROUTE routing table so neo4j:// drivers can discover leader/followers.
   private final    Map<RaftPeerId, String> boltAddresses      = new HashMap<>();
-  // Logged at most once: warns operators that Bolt routing addresses are derived (not explicitly configured).
-  private final    AtomicBoolean           boltFallbackWarned = new AtomicBoolean(false);
+  // Client-reachable gRPC endpoints (optional object-form 'grpc' field in HA_SERVER_LIST). Advertised in the
+  // gRPC routing table so a caller refused on a follower is told an address it can actually dial (issue #6091).
+  private final    Map<RaftPeerId, String> grpcAddresses      = new HashMap<>();
+  // Logged at most once per protocol: warns operators that routing addresses are derived, not configured.
+  private final    Map<HAServerPlugin.ROUTING_PROTOCOL, AtomicBoolean> routingFallbackWarned = createRoutingProtocolLatches();
+  // The last routing-ambiguity verdict logged per protocol: warns that peers resolved to a shared address and were
+  // not advertised. Re-reported whenever the verdict changes, see {@code isNewAmbiguityVerdict} (issue #6297).
+  private final    Map<HAServerPlugin.ROUTING_PROTOCOL, AtomicReference<String>> routingAmbiguityReported = createRoutingProtocolVerdicts();
   private final    Map<RaftPeerId, String> peerDisplayNames   = new ConcurrentHashMap<>();
   private final    String                  clusterName;
 
@@ -249,6 +279,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     this.httpAddresses.putAll(parsed.httpAddresses());
     this.httpsAddresses.putAll(parsed.httpsAddresses());
     this.boltAddresses.putAll(parsed.boltAddresses());
+    this.grpcAddresses.putAll(parsed.grpcAddresses());
 
     RaftPeerId resolvedLocalPeerId;
     try {
@@ -368,6 +399,75 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   /**
+   * Returns this node's own HTTP address (host:port), or {@code null} when it cannot be resolved right
+   * now (the HTTP listener is not up yet). Resolved through the same path as every peer address, so a
+   * caller comparing the two compares like with like.
+   */
+  public String getLocalHttpAddress() {
+    return resolveHttpAddress(localPeerId);
+  }
+
+  /**
+   * True when {@code address} is the HTTP endpoint this node itself is listening on, i.e. dialing it would
+   * come straight back here. Answers the one question every automatic redirect has to ask before it
+   * redirects: an address resolved for a <em>peer</em> that turns out to be ours identifies nothing (issue
+   * #6191). It is what the derive fallback in {@link #resolveHttpAddress(RaftPeerId)} produces on a cluster
+   * whose nodes share a host and declare no {@code http} port - it combines the peer's Raft host with this
+   * node's HTTP port, so every peer collapses onto this node's own address.
+   * <p>
+   * A textual comparison, like the peer bookkeeping it reads: both sides come from the same resolver, so a
+   * derived address matches a derived one. It deliberately does not resolve hostnames - a declared host name
+   * is a statement about which node owns which port that this method has no business second-guessing - with
+   * the single exception of the loopback spellings, which are one socket written two ways and are what a
+   * single-machine cluster is usually configured with (issue #6204).
+   */
+  public boolean isOwnHttpAddress(final String address) {
+    return isSameHttpEndpoint(getLocalHttpAddress(), address);
+  }
+
+  /**
+   * Whether two {@code host:port} addresses name the same listening socket. Case-insensitive, because host
+   * names are: the two sides can come from different entries of {@code HA_SERVER_LIST} and a difference in
+   * case would otherwise read as "a different node", which is the answer that lets a redirect loop live.
+   * <p>
+   * Beyond the text, the one equivalence it knows is the loopback host: a hand-written server list for a
+   * single-machine cluster routinely spells one node {@code localhost} and the next {@code 127.0.0.1}, and
+   * that is precisely the deployment where the derive fallback resolves a peer onto this node's own socket
+   * (issue #6204). The equivalence is only applied when the ports are equal, which is what makes it safe -
+   * two nodes cannot both be listening on one port of one host, so "loopback on both sides, same port" is
+   * the same socket rather than an ambiguity worth preserving. It is not extended to a wildcard bind or to a
+   * different address of the loopback range: those can genuinely name another node, and answering "that is
+   * me" for one of them would refuse a write that had to be forwarded. See {@link LoopbackHosts}.
+   * <p>
+   * Package-private for testing.
+   */
+  static boolean isSameHttpEndpoint(final String address, final String other) {
+    if (address == null || other == null)
+      return false;
+    if (address.equalsIgnoreCase(other))
+      return true;
+
+    // The last colon separates the port: an unbracketed IPv6 literal carries colons of its own, and only the
+    // last one is the separator.
+    final int addressPortAt = address.lastIndexOf(':');
+    final int otherPortAt = other.lastIndexOf(':');
+    if (addressPortAt < 0 || otherPortAt < 0)
+      return false;
+
+    // Compared in place: on a same-host cluster the port is what differs, so the common "no" costs nothing.
+    // A zero-length port would compare equal to another zero-length port and satisfy the condition the whole
+    // equivalence rests on without there being a port at all, so it is refused first (issue #6212).
+    final int portLength = address.length() - addressPortAt - 1;
+    if (portLength == 0 //
+        || portLength != other.length() - otherPortAt - 1 //
+        || !address.regionMatches(addressPortAt + 1, other, otherPortAt + 1, portLength))
+      return false;
+
+    return LoopbackHosts.isLoopback(address.substring(0, addressPortAt)) //
+        && LoopbackHosts.isLoopback(other.substring(0, otherPortAt));
+  }
+
+  /**
    * Returns the HTTPS address (host:httpsPort) for a peer, or {@code null} when no HTTPS endpoint can
    * be resolved. The endpoint is taken from the explicit 5th field of the server list when present;
    * otherwise, on a homogeneous cluster, it is derived from the peer's Raft host plus this node's
@@ -377,6 +477,15 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    */
   public String getPeerHttpsAddress(final RaftPeerId peerId) {
     return resolveHttpsAddress(peerId);
+  }
+
+  /**
+   * This node's own HTTPS address (host:port), or {@code null} when SSL is disabled or it cannot be resolved
+   * right now. The HTTPS counterpart of {@link #getLocalHttpAddress()}, resolved through the same path as every
+   * peer's HTTPS address so a caller comparing the two compares like with like (issue #6221).
+   */
+  public String getLocalHttpsAddress() {
+    return resolveHttpsAddress(localPeerId);
   }
 
   /**
@@ -400,24 +509,23 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     if (targetId.equals(localPeerId))
       return; // never resync the leader itself
 
+    // Through the guard, like every other unattended dial of a resolved peer address (issue #6221). This one
+    // carries the most destructive payload of them all - "drop your copy of every database and download it
+    // again" - so an address that names the wrong follower costs a healthy node its local copies, and the id
+    // check above cannot see that: it says who we MEAN, not where the address points.
+    final PeerDialAddress dial = PeerDialAddress.resolve(this, targetId, "stalled replica");
+    if (dial.refused()) {
+      LogManager.instance().log(this, Level.WARNING, "Cannot force resync of stalled replica '%s': %s", peerId,
+          dial.refusal());
+      return;
+    }
+
     // On an SSL-enabled cluster the follower listens on HTTPS (a different port from plain HTTP), so
     // prefer its HTTPS endpoint; mirror SnapshotInstaller's behaviour and fall back to plain HTTP
     // only when no HTTPS endpoint is known.
     final boolean useSSL = configuration.getValueAsBoolean(GlobalConfiguration.NETWORK_USE_SSL);
-    boolean https = false;
-    String followerAddr = null;
-    if (useSSL) {
-      followerAddr = getPeerHttpsAddress(targetId);
-      if (followerAddr != null)
-        https = true;
-    }
-    if (followerAddr == null)
-      followerAddr = getPeerHttpAddress(targetId);
-    if (followerAddr == null) {
-      LogManager.instance().log(this, Level.WARNING,
-          "Cannot force resync of stalled replica '%s': its address is unknown", peerId);
-      return;
-    }
+    final boolean https = useSSL && dial.httpsAddress() != null;
+    final String followerAddr = https ? dial.httpsAddress() : dial.httpAddress();
 
     final String clusterToken = getClusterToken();
     if (clusterToken == null || clusterToken.isEmpty()) {
@@ -1052,6 +1160,24 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   @Override
+  public void retryUnfilledSnapshotGap() {
+    if (raftServer == null || shutdownRequested)
+      return;
+    final ArcadeStateMachine sm = stateMachine;
+    if (sm != null)
+      sm.retryUnfilledSnapshotGap();
+  }
+
+  @Override
+  public void verifyBootstrapDivergence() {
+    if (raftServer == null || shutdownRequested)
+      return;
+    final ArcadeStateMachine sm = stateMachine;
+    if (sm != null)
+      sm.verifyBootstrapDivergence();
+  }
+
+  @Override
   public void reportResyncProgress() {
     final FollowerResyncProgressTracker tracker = resyncProgressTracker;
     if (tracker == null || raftServer == null || shutdownRequested || isLeader())
@@ -1475,15 +1601,6 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     return resolveHttpAddress(getLeaderId());
   }
 
-  /**
-   * Returns the HTTPS address (host:httpsPort) of the current Raft leader, or {@code null} when no
-   * HTTPS endpoint can be resolved (SSL disabled, no local HTTPS listener, or leader unknown).
-   * See {@link #getPeerHttpsAddress(RaftPeerId)}.
-   */
-  public String getLeaderHttpsAddress() {
-    return resolveHttpsAddress(getLeaderId());
-  }
-
   public RaftClient getClient() {
     return raftClient;
   }
@@ -1582,6 +1699,11 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     return raftProperties;
   }
 
+  /**
+   * The live map of explicitly declared peer HTTP endpoints, keyed by peer id - not a copy: callers add an
+   * entry when a peer joins and drop it when one leaves. It is a {@link ConcurrentHashMap}, so writing to it
+   * while other threads resolve addresses is safe, but it rejects null keys and values.
+   */
   public Map<RaftPeerId, String> getHttpAddresses() {
     return httpAddresses;
   }
@@ -1660,28 +1782,426 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   /**
-   * Builds a single-snapshot Bolt routing table (leader as writer, followers as readers) from one
-   * {@link #getLeaderId()} read, so a concurrent leader change cannot make the writer and reader sets
-   * mutually inconsistent. Returns {@code null} when no leader is known or the leader has no resolvable
-   * Bolt address. Readers reflect the configured cluster membership, matching {@link #getReplicaAddresses()};
-   * peers whose Bolt address cannot be resolved are skipped.
+   * Builds a single-snapshot routing table for one client protocol (leader as writer, followers as readers)
+   * from one {@link #getLeaderId()} read, so a concurrent leader change cannot make the writer and reader sets
+   * mutually inconsistent. Returns {@code null} when no leader is known, the leader has no resolvable
+   * address for that protocol, or that address cannot be told apart from a follower's (see
+   * {@link #selectUnambiguousRouting}). Readers reflect the configured cluster membership, matching
+   * {@link #getReplicaAddresses()}; peers whose address cannot be resolved, or resolved to an address another
+   * peer claims too, are skipped.
+   * <p>
+   * The ambiguity filter is deliberately confined to the client-routing view and is <b>not</b> applied to the
+   * HTTP addresses behind {@link #getReplicaAddresses()} or {@code getStats()}: those feed cluster reporting
+   * and peer-to-peer snapshot transfer, where withholding a best-effort address does harm and no client ever
+   * auto-redirects onto it. Here an address is handed to a client precisely so it can dial it unattended.
    */
-  public HAServerPlugin.BoltRoutingTable getBoltRoutingTable() {
+  public HAServerPlugin.RoutingTable getRoutingTable(final HAServerPlugin.ROUTING_PROTOCOL protocol) {
     final RaftPeerId leaderId = getLeaderId();
     if (leaderId == null)
       return null;
-    final String writer = resolveBoltAddress(leaderId);
+    return routingTableFor(protocol, leaderId);
+  }
+
+  /**
+   * The body of {@link #getRoutingTable}, given the leader rather than reading it from Ratis. Split out so the
+   * warn wiring below can be driven by a test without a live division - {@code getLeaderId()} answers null until
+   * one exists, which is before this method is reached, so the half of the contract that a CLEAN pass carries
+   * (clearing the verdict memory) would otherwise have nothing exercising it. Package-private for testing.
+   */
+  HAServerPlugin.RoutingTable routingTableFor(final HAServerPlugin.ROUTING_PROTOCOL protocol,
+      final RaftPeerId leaderId) {
+    // Read once and passed down: the "was this declared or derived?" flag below and the address the resolver
+    // returns must come from the same map, or a future second source could make them disagree about a peer.
+    final Map<RaftPeerId, String> declared = declaredRoutingAddresses(protocol);
+
+    final String writer = resolveRoutingAddress(protocol, declared, leaderId);
     if (writer == null)
       return null;
-    final List<String> readers = new ArrayList<>();
-    for (final RaftPeer peer : raftGroup.getPeers()) {
-      if (!peer.getId().equals(leaderId)) {
-        final String reader = resolveBoltAddress(peer.getId());
-        if (reader != null)
-          readers.add(reader);
-      }
+
+    final Collection<RaftPeer> peers = raftGroup.getPeers();
+
+    // Index 0 is always the writer, so one pair of arrays carries the whole view and the ambiguity check can
+    // see the leader and the followers at once. A peer that resolves to nothing is skipped, exactly as before.
+    //
+    // The +1 is not slack: raftGroup is final and holds the peers HA_SERVER_LIST was parsed into, while the
+    // leader comes from live Ratis state, so a leader that joined at runtime (addPeer, the Kubernetes
+    // auto-join) is not in getPeers() and the writer occupies a slot beyond it. Sizing to peers.size() would
+    // put an ArrayIndexOutOfBoundsException on the Bolt ROUTE path in exactly that window.
+    final String[] addresses = new String[peers.size() + 1];
+    final boolean[] fromConfig = new boolean[addresses.length];
+    // Carried alongside so the warning can name the peers that collided rather than only say that some did
+    // (issue #6297) - which is also what makes the line usable as the "have I already said this?" key.
+    final RaftPeerId[] owners = new RaftPeerId[addresses.length];
+    addresses[0] = writer;
+    fromConfig[0] = declared.containsKey(leaderId);
+    owners[0] = leaderId;
+    int resolved = 1;
+
+    for (final RaftPeer peer : peers) {
+      if (peer.getId().equals(leaderId))
+        continue;
+      final String reader = resolveRoutingAddress(protocol, declared, peer.getId());
+      if (reader == null)
+        continue;
+      addresses[resolved] = reader;
+      fromConfig[resolved] = declared.containsKey(peer.getId());
+      owners[resolved] = peer.getId();
+      ++resolved;
     }
-    return new HAServerPlugin.BoltRoutingTable(writer, List.copyOf(readers));
+
+    // Counted once and handed to both, the way unambiguousPeerAddress already does it: the selection and the
+    // warning ask the same question of the same view, so building the map twice is pure waste on a path that now
+    // runs the warning on every call.
+    final Map<String, int[]> claims = claimsByAddress(addresses, fromConfig, resolved);
+
+    final HAServerPlugin.RoutingTable table = selectUnambiguousRouting(protocol, addresses, fromConfig, resolved,
+        claims);
+    // Unconditional, and that is the whole point: the verdict memory is only cleared by a pass that reaches it
+    // with nothing to say, so guarding this call on "is it ambiguous now?" left the memory holding the last
+    // collision forever. The operator would then fix that collision, hit it again later, and be told nothing -
+    // the exact case issue #6297 exists to fix. A clean view renders to the empty verdict, which is what clears
+    // the memory.
+    warnAmbiguousRouting(protocol, addresses, fromConfig, owners, resolved, claims);
+    return table;
+  }
+
+  /**
+   * Drops from a resolved routing view every address that cannot be attributed to a single peer, and returns
+   * {@code null} when the writer's own address is one of them.
+   * <p>
+   * Two peers can never legitimately answer on one {@code host:port} for one protocol - they would be fighting
+   * over the socket - so an address claimed by two peers identifies at most one of them and the resolver has no
+   * way to say which. That is not a hypothetical: with no {@code bolt:}/{@code grpc:} field declared, a peer's
+   * endpoint is derived as its Raft host plus <em>this</em> node's port, so on a cluster whose nodes differ by
+   * port rather than by host (several nodes on one machine, a dev or test deployment) every peer derives to the
+   * same address and the "leader" a follower advertises is the follower itself. A caller that redirects
+   * automatically - the point of the gRPC refusal trailers (issue #6091) - would dial the node that just
+   * refused it, be refused again, and loop.
+   * <p>
+   * A <b>declared</b> address outranks a derived one when the two collide: the operator stated it, and the
+   * collision only proves the guess wrong. Two declared addresses colliding is a configuration error with no
+   * defensible winner, so neither is advertised.
+   * <p>
+   * {@code null} is the answer both callers already handle: Bolt's ROUTE falls back to advertising this node as
+   * READ/ROUTE (never writer) and the gRPC refusal falls back to naming the leader's HTTP address. Both degrade
+   * to what they did before the address could be resolved at all, which beats a confidently wrong one.
+   * Package-private for testing.
+   *
+   * @param addresses  resolved addresses, the writer's at index 0
+   * @param fromConfig whether the address at the same index was declared rather than derived
+   * @param count      number of populated entries in both arrays
+   */
+  static HAServerPlugin.RoutingTable selectUnambiguousRouting(final HAServerPlugin.ROUTING_PROTOCOL protocol,
+      final String[] addresses, final boolean[] fromConfig, final int count) {
+    return selectUnambiguousRouting(protocol, addresses, fromConfig, count,
+        claimsByAddress(addresses, fromConfig, count));
+  }
+
+  /**
+   * The same, for a caller that has already counted the claims and would otherwise have this method count them a
+   * second time over the same view.
+   *
+   * @param claims the {@link #claimsByAddress} counts for exactly this view
+   */
+  static HAServerPlugin.RoutingTable selectUnambiguousRouting(final HAServerPlugin.ROUTING_PROTOCOL protocol,
+      final String[] addresses, final boolean[] fromConfig, final int count, final Map<String, int[]> claims) {
+    if (!identifiesOnePeer(claims.get(addresses[0]), fromConfig[0]))
+      return null;
+
+    final List<String> readers = new ArrayList<>(count - 1);
+    for (int i = 1; i < count; i++)
+      if (identifiesOnePeer(claims.get(addresses[i]), fromConfig[i]))
+        readers.add(addresses[i]);
+
+    return new HAServerPlugin.RoutingTable(protocol, addresses[0], List.copyOf(readers));
+  }
+
+  /**
+   * address -&gt; {peers claiming it, of which declared}. Sized for the group: every caller runs per ROUTE request,
+   * per refusal or per snapshot install, never on a data path. Package-private for testing.
+   */
+  static Map<String, int[]> claimsByAddress(final String[] addresses, final boolean[] fromConfig,
+      final int count) {
+    final Map<String, int[]> claims = new HashMap<>(count * 2);
+    for (int i = 0; i < count; i++) {
+      final int[] claim = claims.computeIfAbsent(addresses[i], a -> new int[2]);
+      ++claim[0];
+      if (fromConfig[i])
+        ++claim[1];
+    }
+    return claims;
+  }
+
+  /** True when the address this claim describes belongs to exactly one peer, or to the only one that declared it. */
+  private static boolean identifiesOnePeer(final int[] claim, final boolean declared) {
+    return claim[0] == 1 || (declared && claim[1] == 1);
+  }
+
+  /**
+   * The HTTP address of {@code peerId}, but only when it identifies that peer and no other; {@code null}
+   * otherwise. The same question {@link #selectUnambiguousRouting} asks of a client routing table, asked of the
+   * peer-to-peer HTTP endpoint (issue #6202).
+   * <p>
+   * With no {@code http} port declared in {@link GlobalConfiguration#HA_SERVER_LIST}, a peer's HTTP address is
+   * derived as its Raft host plus <em>this</em> node's port (see {@link #resolveHttpAddress(RaftPeerId)}), so on a
+   * cluster whose nodes differ by port rather than by host every peer collapses onto one address. Two peers can
+   * never legitimately answer on one {@code host:port} - they would be fighting over the socket - so an address
+   * two of them resolve to identifies at most one, and the resolver has no way to say which. A declared address
+   * outranks a derived one when they collide: the operator stated it, and the collision only proves the guess
+   * wrong.
+   * <p>
+   * The plain {@link #getPeerHttpAddress(RaftPeerId)} deliberately keeps returning the best-effort address for
+   * cluster reporting and for a caller that merely displays it. This variant is for the callers that act on the
+   * address unattended, where a wrong-but-plausible peer is worse than no peer at all: a follower that reconciles
+   * its databases from a node that is not the leader reports success and returns to the ready set carrying
+   * whatever it copied.
+   */
+  public String getUnambiguousPeerHttpAddress(final RaftPeerId peerId) {
+    return unambiguousPeerAddress(peerId, false);
+  }
+
+  /**
+   * The HTTPS address of {@code peerId}, but only when it identifies that peer and no other; {@code null}
+   * otherwise. The HTTPS twin of {@link #getUnambiguousPeerHttpAddress}, and not a formality: the two endpoints
+   * are read from two independent maps - the 3rd field of {@link GlobalConfiguration#HA_SERVER_LIST} against its
+   * 5th - each with its own derive fallback onto <em>this</em> node's port for that protocol. A cluster that
+   * declares distinct {@code http} ports and omits the {@code https} one therefore passes the HTTP check and
+   * still collapses every peer's HTTPS endpoint onto this node's own, so the HTTP verdict cannot stand in for
+   * this one (issue #6221).
+   * <p>
+   * Returns {@code null} when SSL is disabled or no HTTPS listener is up, exactly as
+   * {@link #getPeerHttpsAddress} does: a caller that cannot resolve an HTTPS endpoint falls back to the plain
+   * HTTP one, which is the always-present listener, and a withheld address is meant to take the same route as an
+   * unknown one.
+   */
+  public String getUnambiguousPeerHttpsAddress(final RaftPeerId peerId) {
+    return unambiguousPeerAddress(peerId, true);
+  }
+
+  /** A peer's HTTP endpoint as this node resolves it, and whether that endpoint identifies that peer alone. */
+  public record PeerHttpEndpoint(String address, boolean ambiguous) {
+  }
+
+  /**
+   * Every group peer's HTTP endpoint, each carrying the verdict {@link #getUnambiguousPeerHttpAddress} would
+   * give it, in one pass over the group rather than one pass per peer.
+   * <p>
+   * The per-peer accessors answer about one peer, and answering that question means resolving <em>all</em> of
+   * them to see who else claims the address - so a caller that wants the answer for the whole group, as the
+   * cluster-status endpoint does, would resolve the group once per peer and once more for the plain address:
+   * O(peers²) for a question that is O(peers). Cluster sizes make that harmless today, which is exactly why it
+   * is worth removing before the shape is copied somewhere it is not.
+   * <p>
+   * A peer whose address cannot be resolved at all is absent from the map rather than present with a
+   * {@code null} address: it is the same "nothing to report" an unknown peer produces from the accessors.
+   * The claim counting and the declared-beats-derived tie-break are the shared {@code claimsByAddress} /
+   * {@code identifiesOnePeer} pair, so this cannot answer differently from the accessors, and an ambiguity
+   * seen here trips the same one-time warning.
+   */
+  public Map<RaftPeerId, PeerHttpEndpoint> getPeerHttpEndpoints() {
+    final Collection<RaftPeer> peers = raftGroup.getPeers();
+    final String[] addresses = new String[peers.size()];
+    final boolean[] fromConfig = new boolean[addresses.length];
+    final RaftPeerId[] owners = new RaftPeerId[addresses.length];
+    int resolved = 0;
+
+    for (final RaftPeer peer : peers) {
+      final String address = resolveHttpAddress(peer);
+      if (address == null)
+        continue;
+      addresses[resolved] = address;
+      fromConfig[resolved] = httpAddresses.containsKey(peer.getId());
+      owners[resolved] = peer.getId();
+      ++resolved;
+    }
+
+    final Map<String, int[]> claims = claimsByAddress(addresses, fromConfig, resolved);
+    final Map<RaftPeerId, PeerHttpEndpoint> endpoints = new LinkedHashMap<>(resolved * 2);
+    for (int i = 0; i < resolved; i++)
+      endpoints.put(owners[i], new PeerHttpEndpoint(addresses[i],
+          !identifiesOnePeer(claims.get(addresses[i]), fromConfig[i])));
+
+    // Logs nothing unless something is ambiguous, and then names every collision this pass found. Handed the
+    // clean views too: that is what resets the memory, so the same collision reappearing later is reported again.
+    warnAmbiguousPeerAddress(false, addresses, fromConfig, owners, resolved, claims);
+
+    return endpoints;
+  }
+
+  /**
+   * Shared body of the two accessors above: an address is handed out only when the peer asked about is the only
+   * one that resolves to it, or the only one that declared it. Parameterized by protocol rather than duplicated,
+   * so the HTTPS arm cannot answer a different question from the HTTP one.
+   */
+  private String unambiguousPeerAddress(final RaftPeerId peerId, final boolean https) {
+    final String address = https ? resolveHttpsAddress(peerId) : resolveHttpAddress(peerId);
+    if (address == null)
+      return null;
+
+    final Map<RaftPeerId, String> declared = https ? httpsAddresses : httpAddresses;
+    final Collection<RaftPeer> peers = raftGroup.getPeers();
+    // Index 0 is always the peer asked about. The +1 is not slack: raftGroup holds the peers HA_SERVER_LIST was
+    // parsed into, so a peer that joined at runtime (addPeer, the Kubernetes auto-join) is not in getPeers() and
+    // occupies a slot beyond it - the same sizing getRoutingTable uses, for the same reason.
+    final String[] addresses = new String[peers.size() + 1];
+    final boolean[] fromConfig = new boolean[addresses.length];
+    final RaftPeerId[] owners = new RaftPeerId[addresses.length];
+    addresses[0] = address;
+    fromConfig[0] = declared.containsKey(peerId);
+    owners[0] = peerId;
+    int resolved = 1;
+
+    for (final RaftPeer peer : peers) {
+      if (peer.getId().equals(peerId))
+        continue;
+      final String other = https ? resolveHttpsAddress(peer.getId()) : resolveHttpAddress(peer);
+      if (other == null)
+        continue;
+      addresses[resolved] = other;
+      fromConfig[resolved] = declared.containsKey(peer.getId());
+      owners[resolved] = peer.getId();
+      ++resolved;
+    }
+
+    final Map<String, int[]> claims = claimsByAddress(addresses, fromConfig, resolved);
+    // Before the verdict on the peer asked about, not after it, and for the same reason getRoutingTable calls it
+    // unconditionally: a pass that finds nothing is the only thing that clears the memory, so returning early
+    // here left it holding a stale collision that silently swallowed the same one when it came back. It also
+    // matches what the warning already claims to be - a report of every collision the pass found, not of the one
+    // address the caller happened to ask about - so a healthy peer in an unhealthy cluster now says so.
+    warnAmbiguousPeerAddress(https, addresses, fromConfig, owners, resolved, claims);
+
+    if (identifiesOnePeer(claims.get(address), fromConfig[0]))
+      return address;
+    return null;
+  }
+
+  /**
+   * Tells the operator, once per protocol, that a peer-to-peer endpoint was <em>withheld</em> - which peers
+   * could not be told apart, and what to write to fix it.
+   * <p>
+   * Without this the refusal is silent (issue #6267): {@link #unambiguousPeerAddress} answers {@code null} and
+   * every caller decides for itself whether to say anything, so the misconfiguration is visible only where one
+   * happens to log it. Neither existing warning covers it. {@link #deriveHttpAddressWithWarning} and its HTTPS
+   * twin fire whenever an address is <em>derived at all</em>, which is also what a perfectly healthy homogeneous
+   * Kubernetes StatefulSet does, so they cannot distinguish "deriving, and fine" from "deriving, and two peers
+   * just collapsed onto one address"; {@link #warnAmbiguousRouting} says exactly this, but about the client
+   * routing tables of issue #6183, not about the peer-to-peer endpoints a resync and a cluster verify dial.
+   * <p>
+   * Once per <em>verdict</em> rather than once per attempt: the resync and verify paths ask on every attempt, and
+   * a misconfiguration that has not changed between attempts should not be re-reported on each one. The memory
+   * lives on this node - one per {@code RaftHAServer}, which in a server process means for its lifetime - and it
+   * holds the rendered collision list rather than a boolean, so the operator is told again when a
+   * <em>different</em> set of peers collides (issue #6297). {@code httpAddressAmbiguous} on
+   * {@code GET /api/v1/cluster} remains the always-current view, recomputed per request.
+   * <p>
+   * Since the one line is all an operator gets, it names <em>every</em> collision this pass found, not just the
+   * one the caller asked about: a cluster can have two independent colliding pairs, and reporting one of them
+   * would send the operator to declare two ports and leave the other pair withheld. That is also what makes the
+   * verdict the right memory key - it is the whole picture, so any change to it is a change the operator has not
+   * been told about yet.
+   * <p>
+   * Both callers hand over every resolved view, ambiguous or not, because a clean pass is the only thing that
+   * clears the memory. Package-private for testing.
+   */
+  void warnAmbiguousPeerAddress(final boolean https, final String[] addresses, final boolean[] fromConfig,
+      final RaftPeerId[] owners, final int count, final Map<String, int[]> claims) {
+    final String collisions = describeAmbiguity(addresses, fromConfig, owners, count, claims);
+    if (!isNewAmbiguityVerdict(https ? httpsAmbiguityReported : httpAmbiguityReported, collisions))
+      return;
+
+    final String protocol = https ? "HTTPS" : "HTTP";
+    final String field = https ? "https" : "http";
+    LogManager.instance().log(this, Level.WARNING,
+        "HA %s peer endpoints are ambiguous: %s. Two listening sockets cannot both own one address, so it identifies "
+            + "at most one of the peers that resolve to it and nothing can say which. Their %s endpoint is withheld "
+            + "rather than guessed, so a snapshot resync and a cluster verify refuse to dial them and report them "
+            + "unverified instead of answering for the wrong node. Declare each node's %s port explicitly with the "
+            + "'host:{raft:..,%s:..}' object syntax in %s.",
+        protocol, collisions, protocol, protocol, field, GlobalConfiguration.HA_SERVER_LIST.getKey());
+  }
+
+  /**
+   * Tells the operator which peers shared a routing address and what to write to fix it, on the same
+   * report-when-the-verdict-changes contract as its peer-to-peer twin above (issue #6297).
+   * <p>
+   * Called on <em>every</em> resolved view, ambiguous or not, because a clean pass is the only thing that clears
+   * the memory. Package-private for testing.
+   */
+  void warnAmbiguousRouting(final HAServerPlugin.ROUTING_PROTOCOL protocol, final String[] addresses,
+      final boolean[] fromConfig, final RaftPeerId[] owners, final int count, final Map<String, int[]> claims) {
+    final String collisions = describeAmbiguity(addresses, fromConfig, owners, count, claims);
+    if (!isNewAmbiguityVerdict(routingAmbiguityReported.get(protocol), collisions))
+      return;
+
+    final String field = routingConfigField(protocol);
+    LogManager.instance().log(this, Level.WARNING,
+        "HA %s routing is ambiguous: %s. Two listening sockets cannot both own one address, so the peers that "
+            + "cannot be told apart are not advertised, and nothing is advertised at all when the leader is one of "
+            + "them. Declare each node's %s port explicitly with the 'host:{raft:..,%s:..}' object syntax in %s.",
+        protocol.name(), collisions, protocol.name(), field, GlobalConfiguration.HA_SERVER_LIST.getKey());
+  }
+
+  /**
+   * Renders every address in a resolved view that fails to identify exactly one peer, as
+   * {@code "peerA, peerB -> host:port; peerC, peerD -> host:port2"}, or the empty string when the view is clean.
+   * <p>
+   * A peer that DECLARED an address others merely derive to keeps it (declared beats derived), so it is not among
+   * them and must not be named as withheld. Sorted, by address and then by peer, because the group arrives in
+   * whatever order Ratis holds it: the operator gets the same line for the same misconfiguration whichever node
+   * logs it, which is also what lets the line double as the memory key in {@link #isNewAmbiguityVerdict}.
+   * Package-private for testing.
+   */
+  static String describeAmbiguity(final String[] addresses, final boolean[] fromConfig, final RaftPeerId[] owners,
+      final int count, final Map<String, int[]> claims) {
+    final Map<String, List<String>> withheld = new TreeMap<>();
+    for (int i = 0; i < count; i++) {
+      if (identifiesOnePeer(claims.get(addresses[i]), fromConfig[i]))
+        continue;
+      withheld.computeIfAbsent(addresses[i], a -> new ArrayList<>()).add(String.valueOf(owners[i]));
+    }
+
+    // The common case on a correctly declared cluster, and getPeerHttpEndpoints() asks on every request: answer it
+    // without building a renderer that would render nothing.
+    if (withheld.isEmpty())
+      return "";
+
+    final StringBuilder collisions = new StringBuilder();
+    for (final Map.Entry<String, List<String>> collision : withheld.entrySet()) {
+      Collections.sort(collision.getValue());
+      if (!collisions.isEmpty())
+        collisions.append("; ");
+      collisions.append(String.join(", ", collision.getValue())).append(" -> ").append(collision.getKey());
+    }
+    return collisions.toString();
+  }
+
+  /**
+   * Whether {@code collisions} - one ambiguity pass rendered by {@link #describeAmbiguity} - says something the
+   * operator has not already been told through {@code lastReported}, which it updates.
+   * <p>
+   * The point of issue #6297: a plain "log this once" latch is right until the operator acts on it. They read the
+   * line, declare the two ports it named, and a different pair of peers - or a peer added at runtime onto an
+   * address already taken - now collides with nothing logged, because the latch is spent. Keying on the verdict
+   * instead of on a membership-change event is both stricter and looser in the directions that matter: a
+   * membership change that leaves the verdict identical says nothing new and stays quiet, and any change to the
+   * verdict is reported whatever produced it. A pass that finds no collision clears the memory rather than
+   * reporting, so a misconfiguration that is fixed and later reintroduced is announced again.
+   * <p>
+   * Deliberately a plain {@code getAndSet} and not a {@code compareAndSet} loop. Two threads arriving with two
+   * DIFFERENT verdicts can both be told "changed" and both log; that is a duplicate warning about a
+   * misconfiguration that really did change, which is the outcome this method exists to produce, and a CAS loop
+   * would only decide which of the two the operator is not told about. The old {@code AtomicBoolean} had the same
+   * race with a worse shape - the loser was silenced permanently rather than for one pass.
+   * <p>
+   * Package-private for testing.
+   */
+  static boolean isNewAmbiguityVerdict(final AtomicReference<String> lastReported, final String collisions) {
+    if (collisions.isEmpty()) {
+      lastReported.set(null);
+      return false;
+    }
+    return !collisions.equals(lastReported.getAndSet(collisions));
   }
 
   /**
@@ -1712,40 +2232,86 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   /**
-   * Resolves the client-reachable Bolt address (host:boltPort) of a peer. Returns the address declared
-   * with the object-form {@code bolt:} field when present; otherwise derives it from the peer's Raft host
-   * plus this node's local Bolt port. The fallback is correct only for homogeneous deployments where every
-   * node listens on the same Bolt port (e.g. a Kubernetes StatefulSet); a one-time WARNING is logged so
-   * operators declare explicit Bolt ports for heterogeneous clusters. Returns {@code null} when the peer is
-   * unknown or the local Bolt port is unavailable.
+   * Resolves the client-reachable address (host:port) of a peer for one client protocol. Returns the address
+   * declared with the matching object-form field ({@code bolt:} / {@code grpc:}) when present; otherwise
+   * derives it from the peer's Raft host plus <em>this</em> node's local port for that protocol. The fallback
+   * is correct only for homogeneous deployments where every node listens on the same port (e.g. a Kubernetes
+   * StatefulSet); a one-time WARNING per protocol is logged so operators declare explicit ports for
+   * heterogeneous clusters. Returns {@code null} when the peer is unknown or the local port is unavailable.
+   *
+   * @param declared the declared-address map for this protocol, passed in so the caller and this method cannot
+   *                 disagree about which peers were declared
    */
-  private String resolveBoltAddress(final RaftPeerId peerId) {
+  private String resolveRoutingAddress(final HAServerPlugin.ROUTING_PROTOCOL protocol,
+      final Map<RaftPeerId, String> declared, final RaftPeerId peerId) {
     if (peerId == null)
       return null;
-    final String configured = boltAddresses.get(peerId);
+    final String configured = declared.get(peerId);
     if (configured != null)
       return configured;
-    final int localBoltPort = configuration.getValueAsInteger(GlobalConfiguration.BOLT_PORT);
-    final String derived = deriveBoltAddress(peerRaftAddress(peerId), localBoltPort);
-    if (derived != null && boltFallbackWarned.compareAndSet(false, true))
+    final int localPort = localRoutingPort(protocol);
+    final String derived = deriveRoutingAddress(peerRaftAddress(peerId), localPort);
+    if (derived != null && routingFallbackWarned.get(protocol).compareAndSet(false, true)) {
+      final String field = routingConfigField(protocol);
       LogManager.instance().log(this, Level.WARNING,
-          "HA Bolt routing addresses are not configured in '%s': deriving peer Bolt endpoints from each peer's Raft host plus this node's Bolt port (%d). "
-              + "This is correct only when every node listens on the same Bolt port (e.g. a Kubernetes StatefulSet). For clusters with heterogeneous "
-              + "Bolt ports, declare them explicitly using the 'host:{raft:..,bolt:..}' object syntax in %s.",
-          GlobalConfiguration.HA_SERVER_LIST.getKey(), localBoltPort, GlobalConfiguration.HA_SERVER_LIST.getKey());
+          "HA %s routing addresses are not configured in '%s': deriving every peer's %s endpoint from its Raft host plus this node's "
+              + "own %s port (%d). That is correct only when every node listens on the same port (e.g. a Kubernetes StatefulSet); on a "
+              + "cluster with heterogeneous ports, declare them explicitly with the 'host:{raft:..,%s:..}' object syntax in %s.",
+          protocol.name(), GlobalConfiguration.HA_SERVER_LIST.getKey(), protocol.name(), protocol.name(), localPort,
+          field, GlobalConfiguration.HA_SERVER_LIST.getKey());
+    }
     return derived;
   }
 
+  /** The explicitly declared addresses for one client protocol, as parsed from {@code HA_SERVER_LIST}. */
+  private Map<RaftPeerId, String> declaredRoutingAddresses(final HAServerPlugin.ROUTING_PROTOCOL protocol) {
+    return switch (protocol) {
+      case BOLT -> boltAddresses;
+      case GRPC -> grpcAddresses;
+    };
+  }
+
+  /** This node's own listening port for one client protocol, used by the derive fallback. */
+  private int localRoutingPort(final HAServerPlugin.ROUTING_PROTOCOL protocol) {
+    return switch (protocol) {
+      case BOLT -> configuration.getValueAsInteger(GlobalConfiguration.BOLT_PORT);
+      case GRPC -> configuration.getValueAsInteger(GlobalConfiguration.GRPC_PORT);
+    };
+  }
+
+  /** The {@code HA_SERVER_LIST} object-form field an operator writes to declare this protocol's port. */
+  private static String routingConfigField(final HAServerPlugin.ROUTING_PROTOCOL protocol) {
+    return protocol.name().toLowerCase(Locale.ENGLISH);
+  }
+
+  /** One "already warned" latch per client protocol, so a derived Bolt address does not mute the gRPC warning. */
+  private static Map<HAServerPlugin.ROUTING_PROTOCOL, AtomicBoolean> createRoutingProtocolLatches() {
+    final Map<HAServerPlugin.ROUTING_PROTOCOL, AtomicBoolean> latches = new EnumMap<>(
+        HAServerPlugin.ROUTING_PROTOCOL.class);
+    for (final HAServerPlugin.ROUTING_PROTOCOL protocol : HAServerPlugin.ROUTING_PROTOCOL.values())
+      latches.put(protocol, new AtomicBoolean(false));
+    return latches;
+  }
+
+  /** One remembered ambiguity verdict per client protocol, for the same reason the latches above are per protocol. */
+  private static Map<HAServerPlugin.ROUTING_PROTOCOL, AtomicReference<String>> createRoutingProtocolVerdicts() {
+    final Map<HAServerPlugin.ROUTING_PROTOCOL, AtomicReference<String>> verdicts = new EnumMap<>(
+        HAServerPlugin.ROUTING_PROTOCOL.class);
+    for (final HAServerPlugin.ROUTING_PROTOCOL protocol : HAServerPlugin.ROUTING_PROTOCOL.values())
+      verdicts.put(protocol, new AtomicReference<>());
+    return verdicts;
+  }
+
   /**
-   * Derives a Bolt address (host:boltPort) by combining a peer's Raft host with the given Bolt port.
+   * Derives a client-reachable address (host:port) by combining a peer's Raft host with the given port.
    * Returns {@code null} when the port is not positive or the host cannot be extracted. Package-private
    * for testing.
    */
-  static String deriveBoltAddress(final String raftAddress, final int boltPort) {
-    if (raftAddress == null || boltPort <= 0)
+  static String deriveRoutingAddress(final String raftAddress, final int port) {
+    if (raftAddress == null || port <= 0)
       return null;
     final String host = extractHost(raftAddress);
-    return host != null ? host + ":" + boltPort : null;
+    return host != null ? host + ":" + port : null;
   }
 
   private String deriveHttpAddressWithWarning(final String raftAddress) {
@@ -2142,20 +2708,42 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     try {
       final long deadline = System.currentTimeMillis() + quorumTimeout;
       synchronized (applyNotifier) {
-        while (getLastAppliedIndex() < targetIndex) {
+        while (getTrustedAppliedIndex() < targetIndex) {
+          if (!throwOnTimeout && getStaleSnapshotAppliedFloor() >= 0) {
+            // No explicit "targetIndex > floor" test is needed, and adding one would be dead code:
+            // reaching this line means the loop condition held, i.e. getTrustedAppliedIndex() (pinned at
+            // the floor for the whole life of an outstanding gap, since Ratis' own counter starts at the
+            // marker index - above the floor by construction - and only grows) is below targetIndex.
+            //
+            // That invariant is established in ArcadeStateMachine.reinitialize()'s snapshot-gap branch:
+            // it publishes the floor as persistedApplied and only when
+            // snapshotIndex > persistedApplied + HA_SNAPSHOT_GAP_TOLERANCE, so marker > floor always
+            // holds while the floor is outstanding. Anything that changes what that branch publishes
+            // must revisit this reasoning.
+            //
+            // READ_YOUR_WRITES / bookmark: the target therefore sits inside a gap that only the pending
+            // snapshot resync can fill, so waiting out the quorum timeout cannot change the outcome.
+            // Degrade now with the same contract the timeout branch below applies (issue #6111).
+            LogManager.instance().log(this, Level.WARNING,
+                "READ_YOUR_WRITES target %d is inside a pending snapshot resync gap (trusted applied=%d): "
+                    + "consistency degraded to EVENTUAL without waiting",
+                targetIndex, getTrustedAppliedIndex());
+            return;
+          }
           final long remaining = deadline - System.currentTimeMillis();
           if (remaining <= 0) {
             if (throwOnTimeout) {
               LogManager.instance().log(this, Level.WARNING,
-                  "LINEARIZABLE read failed: local apply timeout applied=%d < readIndex=%d after %dms (failing read)",
-                  getLastAppliedIndex(), targetIndex, quorumTimeout);
+                  "LINEARIZABLE read failed: local apply timeout applied=%d < readIndex=%d after %dms "
+                      + "(staleSnapshotFloor=%d, failing read)",
+                  getTrustedAppliedIndex(), targetIndex, quorumTimeout, getStaleSnapshotAppliedFloor());
               throw new ReplicationException(
-                  "LINEARIZABLE read timed out waiting for local apply: applied=" + getLastAppliedIndex()
+                  "LINEARIZABLE read timed out waiting for local apply: applied=" + getTrustedAppliedIndex()
                       + " < readIndex=" + targetIndex);
             }
             LogManager.instance().log(this, Level.WARNING,
                 "READ_YOUR_WRITES consistency timeout: applied=%d < target=%d (consistency degraded to EVENTUAL)",
-                getLastAppliedIndex(), targetIndex);
+                getTrustedAppliedIndex(), targetIndex);
             return;
           }
           applyNotifier.wait(Math.min(remaining, APPLY_WAIT_RECHECK_INTERVAL_MS));
@@ -2189,18 +2777,29 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
 
       final long deadline = System.currentTimeMillis() + quorumTimeout;
       synchronized (applyNotifier) {
-        while (getLastAppliedIndex() < commitIndex) {
+        while (getTrustedAppliedIndex() < commitIndex) {
+          if (getStaleSnapshotAppliedFloor() >= 0) {
+            // Same reasoning as waitForAppliedIndex: the loop condition already proves commitIndex sits
+            // above the floor, so no explicit comparison is needed. Only the pending snapshot resync can
+            // close the gap; this waiter is best-effort by contract, so degrade now instead of burning
+            // the whole quorum timeout (issue #6111).
+            LogManager.instance().log(this, Level.WARNING,
+                "waitForLocalApply: commit=%d is inside a pending snapshot resync gap (trusted applied=%d), "
+                    + "returning without waiting (reads may be stale)",
+                commitIndex, getTrustedAppliedIndex());
+            return;
+          }
           final long remaining = deadline - System.currentTimeMillis();
           if (remaining <= 0) {
             HALog.log(this, HALog.DETAILED, "waitForLocalApply timed out: applied=%d < commit=%d",
-                getLastAppliedIndex(), commitIndex);
+                getTrustedAppliedIndex(), commitIndex);
             return;
           }
           applyNotifier.wait(Math.min(remaining, APPLY_WAIT_RECHECK_INTERVAL_MS));
         }
       }
       HALog.log(this, HALog.TRACE, "Local apply caught up: applied=%d >= commit=%d",
-          getLastAppliedIndex(), commitIndex);
+          getTrustedAppliedIndex(), commitIndex);
     } catch (final InterruptedException e) {
       Thread.currentThread().interrupt();
     } catch (final Exception e) {
@@ -2218,6 +2817,33 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       // restart re-initializes the division (issue #5271); report "unknown" instead of propagating.
       return -1;
     }
+  }
+
+  /**
+   * The applied index a read may actually rely on: {@link #getLastAppliedIndex()} clamped to the
+   * stale-snapshot read floor while one is outstanding (issue #6111).
+   * <p>
+   * Ratis derives the value {@link #getLastAppliedIndex()} reports from the snapshot marker the moment
+   * the marker is seeded, so a node that restarted onto a marker running ahead of the entries it really
+   * applied ({@code ArcadeStateMachine.reinitialize()}'s snapshot-gap branch) advertises an applied
+   * index covering data it does not hold. Using the raw value as the apply-wait predicate let a
+   * LINEARIZABLE or READ_YOUR_WRITES read inside that gap proceed against the stale local state; the
+   * clamp keeps the waiters honest until the flagged re-download lands. Reporting paths (cluster status,
+   * lag detection) deliberately keep using the raw Ratis value.
+   */
+  public long getTrustedAppliedIndex() {
+    final long applied = getLastAppliedIndex();
+    final long floor = getStaleSnapshotAppliedFloor();
+    return floor < 0 ? applied : Math.min(applied, floor);
+  }
+
+  /**
+   * The state machine's stale-snapshot read floor, or {@code -1} when there is none or the state machine
+   * is not wired yet. See {@link ArcadeStateMachine#getStaleSnapshotAppliedFloor()} (issue #6111).
+   */
+  private long getStaleSnapshotAppliedFloor() {
+    final ArcadeStateMachine sm = stateMachine;
+    return sm == null ? -1 : sm.getStaleSnapshotAppliedFloor();
   }
 
   public long getCommitIndex() {
@@ -2400,6 +3026,63 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
           peerId, matchIndex, nextIndex, lag, lastContactMs, status, laggingForMs));
     }
     return samples;
+  }
+
+  /**
+   * Per-database schema-WAL instalment counters (issue #6144). Reported on EVERY node, not just the
+   * leader, for the same reason the phase-2 holds below are: the instalments a node shipped while it
+   * was the leader are what explain a stall its writers saw, and that question outlives the term.
+   * <p>
+   * Skips databases that are not currently in memory ({@code allowLoad=false}): a metrics refresh must
+   * not turn into a database-open workload, and a database nobody has opened has shipped nothing.
+   */
+  public List<HAReplicationStatsProvider.SchemaInstalmentSample> getSchemaInstalmentSamples() {
+    final List<HAReplicationStatsProvider.SchemaInstalmentSample> samples = new ArrayList<>();
+    forEachOpenReplicatedDatabase((name, db) -> samples.add(new HAReplicationStatsProvider.SchemaInstalmentSample(
+        name, db.getSchemaWalInstalmentsShipped(), db.getSchemaWalInstalmentTotalTimeMs(),
+        db.getSchemaWalInstalmentMaxTimeMs())));
+    return samples;
+  }
+
+  /**
+   * Per-database count of files this node holds that no schema component claims (issue #6143). The
+   * node that LOST leadership mid-session is the only one that logs the files it could not retire;
+   * this is how the nodes still holding them say so, which is what makes the SEVERE line actionable
+   * without reading a data directory by hand.
+   * <p>
+   * The count is memoized on the database behind a (file modification count, schema version) gate (issue #6168),
+   * so this refresh - every 5 seconds, per open database, forever - walks the schema only when one of the two has
+   * actually moved.
+   */
+  public List<HAReplicationStatsProvider.UnreferencedFilesSample> getUnreferencedFilesSamples() {
+    final List<HAReplicationStatsProvider.UnreferencedFilesSample> samples = new ArrayList<>();
+    forEachOpenReplicatedDatabase((name, db) -> samples.add(
+        new HAReplicationStatsProvider.UnreferencedFilesSample(name, db.getUnreferencedFilesCount())));
+    return samples;
+  }
+
+  /**
+   * Visits every non-reserved database this server currently holds OPEN, as its Raft wrapper. Shared by the two
+   * per-database metric collectors above so they agree on which databases exist and neither of them can open one.
+   * A database being concurrently dropped or unloaded is skipped rather than allowed to fail the whole refresh.
+   */
+  private void forEachOpenReplicatedDatabase(final BiConsumer<String, RaftReplicatedDatabase> visitor) {
+    if (arcadeServer == null)
+      return;
+
+    for (final String dbName : arcadeServer.getDatabaseNames()) {
+      if (ArcadeDBServer.isReservedDatabaseName(dbName))
+        continue;
+      try {
+        final ServerDatabase db = arcadeServer.getDatabase(dbName, false, false);
+        if (db != null && db.getWrappedDatabaseInstance() instanceof RaftReplicatedDatabase replicated)
+          visitor.accept(dbName, replicated);
+      } catch (final RuntimeException e) {
+        LogManager.instance().log(this, Level.FINE,
+            "Skipping per-database HA metrics for '%s' (likely being dropped or unloaded): %s", dbName,
+            e.getMessage());
+      }
+    }
   }
 
   /**

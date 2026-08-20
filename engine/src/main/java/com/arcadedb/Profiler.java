@@ -254,6 +254,8 @@ public class Profiler {
     final long edgeAppendMerges = pStats.edgeAppendMerges;
     final long txPageSlotMerges = pStats.txPageSlotMerges;
     final long mergesDeclinedByCoverage = pStats.mergesDeclinedByCoverage;
+    final long chunkChainReadRevalidations = pStats.chunkChainReadRevalidations;
+    final long chunkChainReadRetries = pStats.chunkChainReadRetries;
     final long evictionRuns = pStats.evictionRuns;
     final long pagesEvicted = pStats.pagesEvicted;
     final int readCachePages = pStats.readCachePages;
@@ -266,6 +268,9 @@ public class Profiler {
     json.put("pagesReadSize", new JSONObject().put("space", pagesReadSize));
     json.put("pagesWrittenSize", new JSONObject().put("space", pagesWrittenSize));
     json.put("pageFlushQueueLength", new JSONObject().put("value", pageFlushQueueLength));
+    // The per-database companion (#6281): pageFlushQueueLength is a sum across databases and no longer comparable
+    // with arcadedb.pageFlushQueue, while this one is exactly what that setting bounds.
+    json.put("pageFlushQueueMaxPerDatabase", new JSONObject().put("value", pStats.pageFlushQueueMaxPerDatabase));
     json.put("asyncQueueLength", new JSONObject().put("value", asyncQueueLength));
     json.put("asyncParallelLevel", new JSONObject().put("count", asyncParallelLevel));
     json.put("pageCacheHits", new JSONObject().put("count", pageCacheHits));
@@ -281,6 +286,10 @@ public class Profiler {
     json.put("edgeAppendMerges", new JSONObject().put("count", edgeAppendMerges));
     json.put("txPageSlotMerges", new JSONObject().put("count", txPageSlotMerges));
     json.put("mergesDeclinedByCoverage", new JSONObject().put("count", mergesDeclinedByCoverage));
+    // #6217: the read-path twin of txPageSlotMerges - a chunked read that met a moved page and completed anyway -
+    // and, next to it, the reads that had to restart because the record itself had moved.
+    json.put("chunkChainReadRevalidations", new JSONObject().put("count", chunkChainReadRevalidations));
+    json.put("chunkChainReadRetries", new JSONObject().put("count", chunkChainReadRetries));
 
     json.put("writeTx", new JSONObject().put("count", writeTx));
     json.put("readTx", new JSONObject().put("count", readTx));
@@ -326,6 +335,7 @@ public class Profiler {
     json.put("snapshotBarrierMaxTime", new JSONObject().put("value", pStats.snapshotBarrierMaxMillis));
     json.put("snapshotBarriersInexact", new JSONObject().put("count", pStats.snapshotBarriersInexact));
     json.put("deferredRAM", new JSONObject().put("space", pStats.deferredRAMBytes));
+    json.put("pageFlushQueueWaits", new JSONObject().put("count", pStats.flushQueueWaits));
 
     final long freeSpace = new File(".").getFreeSpace();
     final long totalSpace = new File(".").getTotalSpace();
@@ -435,6 +445,8 @@ public class Profiler {
       final long edgeAppendMerges = pStats.edgeAppendMerges;
       final long txPageSlotMerges = pStats.txPageSlotMerges;
       final long mergesDeclinedByCoverage = pStats.mergesDeclinedByCoverage;
+      final long chunkChainReadRevalidations = pStats.chunkChainReadRevalidations;
+      final long chunkChainReadRetries = pStats.chunkChainReadRetries;
       final long evictionRuns = pStats.evictionRuns;
       final long pagesEvicted = pStats.pagesEvicted;
       final int readCachePages = pStats.readCachePages;
@@ -489,8 +501,8 @@ public class Profiler {
       buffer.append("%n INDEXES compactions=%d".formatted(indexCompactions));
 
       buffer.append(
-        "%n PAGE-MANAGER flushQueue=%d deferredRAM=%s cacheHits=%d cacheMiss=%d concModExceptions=%d evictionRuns=%d pagesEvicted=%d".formatted(
-          pageFlushQueueLength, FileUtils.getSizeAsString(pStats.deferredRAMBytes),
+        "%n PAGE-MANAGER flushQueue=%d flushQueueMaxPerDb=%d flushQueueWaits=%d deferredRAM=%s cacheHits=%d cacheMiss=%d concModExceptions=%d evictionRuns=%d pagesEvicted=%d".formatted(
+          pageFlushQueueLength, pStats.pageFlushQueueMaxPerDatabase, pStats.flushQueueWaits, FileUtils.getSizeAsString(pStats.deferredRAMBytes),
           pageCacheHits, pageCacheMiss, concurrentModificationExceptions, evictionRuns, pagesEvicted));
 
       // #5608: read this line together with concModExceptions above. Contention absorbed by a merge never becomes a
@@ -498,6 +510,11 @@ public class Profiler {
       // without declaring its coverage (see MutablePage.beginCoveredWrite).
       buffer.append("%n    edgeAppendMerges=%d txPageSlotMerges=%d mergesDeclinedByCoverage=%d".formatted(
           edgeAppendMerges, txPageSlotMerges, mergesDeclinedByCoverage));
+
+      // #6217: the same reading, one line down, for the READ path of a record too big for its page. Revalidations are
+      // false conflicts that did not happen; retries are reads thrown away because the record really had moved.
+      buffer.append("%n    chunkChainReadRevalidations=%d chunkChainReadRetries=%d".formatted(
+          chunkChainReadRevalidations, chunkChainReadRetries));
 
       // #6116: printed unconditionally, zeros included. "No window is open" is the answer an operator is looking for
       // most of the time, and a line that appears only sometimes cannot be read as one.

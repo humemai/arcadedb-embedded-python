@@ -1691,11 +1691,11 @@ class CypherExpressionBuilder {
       // sees the stored RID rather than the live Vertex it saw during the write. Dereference it
       // transparently, applying the same temporal-type restoration as the single-level
       // PropertyAccessExpression, so the same expression keeps working across the transaction
-      // boundary (#5800) and stays consistent with the variable-bound access path.
-      if (baseValue instanceof RID rid) {
-        final Object rawValue = rid.asVertex().get(propertyName);
-        return TemporalUtil.convertFromStorage(rawValue);
-      }
+      // boundary (#5800) and stays consistent with the variable-bound access path - literally so: the
+      // dereference itself lives in PropertyAccessExpression, which also turns a link that resolves to
+      // nothing into a Cypher-flavored TypeError instead of a raw RecordNotFoundException (#5898).
+      if (baseValue instanceof RID rid)
+        return PropertyAccessExpression.readLinkedProperty(rid, propertyName);
 
       // Handle Document types
       if (baseValue instanceof Document) {
@@ -2186,7 +2186,7 @@ class CypherExpressionBuilder {
         final Expression rhsExpr = parseExpressionFromText(strCtx.expression6());
         final List<Expression> listItems = new ArrayList<>();
         listItems.add(rhsExpr);
-        return new BooleanWrapperExpression(new InExpression(leftExpr, listItems, false));
+        return new BooleanWrapperExpression(new InExpression(leftExpr, listItems));
       }
     }
 
@@ -2203,33 +2203,13 @@ class CypherExpressionBuilder {
     final Cypher25Parser.LabelComparisonContext labelCtx = (Cypher25Parser.LabelComparisonContext) ctx.comparisonExpression6();
     final Cypher25Parser.LabelExpressionContext labelExprCtx = labelCtx.labelExpression();
 
-    final List<String> labels = new ArrayList<>();
-    LabelCheckExpression.LabelOperator operator = LabelCheckExpression.LabelOperator.AND;
-
-    String labelText = labelExprCtx.getText();
-    if (labelText.startsWith(":"))
-      labelText = labelText.substring(1);
-    else if (labelText.toUpperCase(Locale.ROOT).startsWith("IS"))
-      labelText = labelText.substring(2).trim();
-
-    if (labelText.contains("|")) {
-      operator = LabelCheckExpression.LabelOperator.OR;
-      final String[] parts = labelText.split("\\|:?");
-      for (final String part : parts) {
-        final String label = part.trim();
-        if (!label.isEmpty())
-          labels.add(label);
-      }
-    } else if (labelText.contains("&") || labelText.contains(":")) {
-      final String[] parts = labelText.split("[&:]");
-      for (final String part : parts) {
-        final String label = part.trim();
-        if (!label.isEmpty())
-          labels.add(label);
-      }
-    } else {
-      labels.add(labelText.trim());
-    }
+    // See parseLabelCheckExpression in CypherASTBuilder: extract through the grammar so backticks
+    // are stripped and a quoted label is never split on a character of its own name. This also
+    // drops the ':'/'IS' prefix at the token level, so both spellings land on the same label.
+    final List<String> labels = ParserUtils.extractLabels(labelExprCtx);
+    final LabelCheckExpression.LabelOperator operator = ParserUtils.isLabelDisjunction(labelExprCtx) ?
+        LabelCheckExpression.LabelOperator.OR :
+        LabelCheckExpression.LabelOperator.AND;
 
     return new BooleanWrapperExpression(new LabelCheckExpression(leftExpr, labels, operator, ctx.getText()));
   }
@@ -2596,13 +2576,19 @@ class CypherExpressionBuilder {
     String variable = null;
     List<String> labels = null;
     Map<String, Object> properties = null;
+    // A node pattern in expression position - a pattern comprehension, a pattern predicate - used to be built with
+    // the disjunction flag hardcoded to false, so (y:A|B) arrived at the executor looking exactly like (y:A:B) and
+    // matched only what carries BOTH labels. Read off the grammar here, the same way the MATCH-side builder does,
+    // rather than left for the executor to guess (issue #6338).
+    boolean labelDisjunction = false;
 
     if (ctx.variable() != null) {
-      variable = ctx.variable().getText();
+      variable = ParserUtils.stripBackticks(ctx.variable().getText());
     }
 
     if (ctx.labelExpression() != null) {
       labels = extractLabels(ctx.labelExpression());
+      labelDisjunction = ParserUtils.isLabelDisjunction(ctx.labelExpression());
     }
 
     String propertiesParameterName = null;
@@ -2620,7 +2606,7 @@ class CypherExpressionBuilder {
     if (ctx.expression() != null)
       whereExpression = new BooleanCoercionExpression(parseExpression(ctx.expression()));
 
-    return new NodePattern(variable, labels, null, properties, propertiesParameterName, false, whereExpression);
+    return new NodePattern(variable, labels, null, properties, propertiesParameterName, labelDisjunction, whereExpression);
   }
 
   /**
@@ -2634,7 +2620,7 @@ class CypherExpressionBuilder {
     Integer maxHops = null;
 
     if (ctx.variable() != null) {
-      variable = ctx.variable().getText();
+      variable = ParserUtils.stripBackticks(ctx.variable().getText());
     }
 
     if (ctx.labelExpression() != null) {
@@ -2649,18 +2635,13 @@ class CypherExpressionBuilder {
         properties = parseMapProperties(ctx.properties().map());
     }
 
-    // Path length (variable-length relationships)
+    // Path length (variable-length relationships), read through the one place that knows what [*] means.
+    // Written as its own copy of the MATCH-side block, this is where [*] lost its normalization to [*1..] and a
+    // pattern comprehension planned it as a single fixed hop (issue #6370).
     if (ctx.pathLength() != null) {
-      final Cypher25Parser.PathLengthContext pathLen = ctx.pathLength();
-      if (pathLen.from != null) {
-        minHops = Integer.parseInt(pathLen.from.getText());
-      }
-      if (pathLen.to != null) {
-        maxHops = Integer.parseInt(pathLen.to.getText());
-      }
-      if (pathLen.single != null) {
-        minHops = maxHops = Integer.parseInt(pathLen.single.getText());
-      }
+      final ParserUtils.PathLength pathLength = ParserUtils.parsePathLength(ctx.pathLength());
+      minHops = pathLength.minHops();
+      maxHops = pathLength.maxHops();
     }
 
     // Direction
@@ -2687,19 +2668,17 @@ class CypherExpressionBuilder {
   }
 
   /**
-   * Extract labels from a labelExpression context.
+   * Extract labels from a labelExpression context, through the same grammar-based walk the MATCH-side builder uses.
+   * <p>
+   * This used to split the raw text on {@code :}, {@code &} and {@code |}, which is a different answer from the one
+   * {@code MATCH} gives for the same pattern: a backtick-quoted label containing a separator was chopped into
+   * pieces, the backticks were kept on every name, and a dynamic {@code $(expression)} label was turned into a
+   * literal label named after its own source text. The two blocks were meant to be copies of each other, and every
+   * way they were not is a way an expression-position pattern answered differently from the identical MATCH
+   * pattern (issues #6370, #6363).
    */
   private List<String> extractLabels(final Cypher25Parser.LabelExpressionContext ctx) {
-    final String text = ctx.getText();
-    final String cleanText = text.replaceAll("^:+", "");
-    final String[] parts = cleanText.split("[:&|]+");
-    final List<String> labels = new ArrayList<>();
-    for (String part : parts) {
-      if (!part.isEmpty()) {
-        labels.add(part);
-      }
-    }
-    return labels;
+    return ParserUtils.extractLabels(ctx);
   }
 
   /**

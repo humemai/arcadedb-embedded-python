@@ -59,6 +59,46 @@ public class ParserUtils {
   }
 
   /**
+   * The hop bounds a relationship pattern's {@code *} suffix declares, as the pair
+   * {@code RelationshipPattern} carries: {@code null} on either side means "unbounded in that direction", and both
+   * {@code null} means the pattern is not variable-length at all.
+   *
+   * @param minHops lower bound, inclusive
+   * @param maxHops upper bound, inclusive, {@code null} when unbounded
+   */
+  public record PathLength(Integer minHops, Integer maxHops) {
+    /** The bounds of a relationship pattern carrying no {@code *} suffix: a single fixed hop. */
+    public static final PathLength FIXED_SINGLE_HOP = new PathLength(null, null);
+  }
+
+  /**
+   * Reads the hop bounds off a {@code pathLength} context, normalizing the bare {@code [*]} spelling.
+   * <p>
+   * {@code [*]} means {@code [*1..]} everywhere in Cypher, and normalizing it is not decoration: with both bounds
+   * left {@code null}, {@code RelationshipPattern.isVariableLength()} answers false and the hop is planned as one
+   * fixed hop, so {@code [(a)-[*]->(b:A) | b.n]} silently answered as though the user had written a single-hop
+   * pattern. That is what happened while the MATCH-side builder normalized it and the expression-side copy of the
+   * same block did not (issue #6370), so the normalization lives here and both builders read it from one place
+   * rather than each carrying its own copy to drift from.
+   *
+   * @param ctx the {@code pathLength} context, which the caller has already established is present
+   *
+   * @return the declared bounds, never {@code null}
+   */
+  public static PathLength parsePathLength(final Cypher25Parser.PathLengthContext ctx) {
+    if (ctx == null)
+      return PathLength.FIXED_SINGLE_HOP;
+    if (ctx.single != null) {
+      final int exact = Integer.parseInt(ctx.single.getText());
+      return new PathLength(exact, exact);
+    }
+    final Integer minHops = ctx.from != null ? Integer.parseInt(ctx.from.getText()) : null;
+    final Integer maxHops = ctx.to != null ? Integer.parseInt(ctx.to.getText()) : null;
+    // Bare * with no range: [*] means [*1..] (min=1, max=unbounded).
+    return minHops == null && maxHops == null ? new PathLength(1, null) : new PathLength(minHops, maxHops);
+  }
+
+  /**
    * Extract labels from a label expression context using grammar-based parsing.
    * Handles multiple labels, alternative labels, and combinations.
    * Examples:
@@ -70,22 +110,11 @@ public class ParserUtils {
    * @return list of label names with backticks stripped
    */
   public static List<String> extractLabels(final Cypher25Parser.LabelExpressionContext ctx) {
-    // Walk the grammar tree for static label names; dynamic $(expression) labels are returned by
-    // collectDynamicLabelContexts and handled at runtime.
-    if (containsDynamicLabel(ctx))
-      return collectStaticLabels(ctx);
-
-    // Fast path: text-based parsing for the common case without dynamic labels.
-    final String text = ctx.getText();
-    final String cleanText = text.replaceAll("^:+", "");
-    final String[] parts = cleanText.split("[:&|]+");
-
-    final List<String> labels = new ArrayList<>();
-    for (final String part : parts) {
-      if (!part.isEmpty())
-        labels.add(stripBackticks(part));
-    }
-    return labels;
+    // Always walk the grammar tree: it reaches each label name as its own token, so backticks are
+    // stripped from every one of them and a quoted name is never mistaken for a separator list
+    // (`Event Message` stays one label; so would a name containing ':', '&' or '|'). Dynamic
+    // $(expression) labels are skipped here and returned by collectDynamicLabelContexts instead.
+    return collectStaticLabels(ctx);
   }
 
   /**
@@ -98,16 +127,32 @@ public class ParserUtils {
   public static boolean isLabelDisjunction(final Cypher25Parser.LabelExpressionContext ctx) {
     if (ctx == null)
       return false;
-    final String text = ctx.getText();
-    if (text == null || text.indexOf('|') < 0)
-      return false;
-    // If both operators are present, treat as conjunction-of-disjunctions and let
-    // the executor fall back to AND semantics. Cypher 25's full label expression
-    // grammar (with parentheses) is not yet supported; this fix targets the
-    // common pure-OR case that issue #4105 reports.
-    if (text.indexOf('&') >= 0)
-      return false;
-    return true;
+    // Read the operators off the grammar rather than off the text, so a '|' or '&' inside a
+    // backtick-quoted label name is a character of that name and not an operator.
+    return hasOperator(ctx, Cypher25Parser.LabelExpression4Context.class)
+        && !hasOperator(ctx, Cypher25Parser.LabelExpression3Context.class);
+  }
+
+  /**
+   * Returns true when some node of the given label-expression rule class combined more than one
+   * operand, i.e. the operator that rule encodes ({@code |} for labelExpression4, {@code &} or
+   * {@code :} for labelExpression3) is actually present in the expression.
+   */
+  private static boolean hasOperator(final ParseTree node, final Class<? extends ParserRuleContext> ruleClass) {
+    if (ruleClass.isInstance(node)) {
+      int operands = 0;
+      for (int i = 0; i < node.getChildCount(); i++) {
+        if (node.getChild(i) instanceof ParserRuleContext)
+          operands++;
+      }
+      if (operands > 1)
+        return true;
+    }
+    for (int i = 0; i < node.getChildCount(); i++) {
+      if (hasOperator(node.getChild(i), ruleClass))
+        return true;
+    }
+    return false;
   }
 
   /**
@@ -157,23 +202,6 @@ public class ParserUtils {
 
     for (int i = 0; i < node.getChildCount(); i++)
       collectDynamicLabelContextsRecursive(node.getChild(i), out);
-  }
-
-  /**
-   * Returns true if the label expression contains any dynamic {@code $(expression)} label.
-   */
-  public static boolean containsDynamicLabel(final ParserRuleContext ctx) {
-    return containsDynamicLabelRecursive(ctx);
-  }
-
-  private static boolean containsDynamicLabelRecursive(final ParseTree node) {
-    if (node instanceof Cypher25Parser.DynamicLabelContext)
-      return true;
-    for (int i = 0; i < node.getChildCount(); i++) {
-      if (containsDynamicLabelRecursive(node.getChild(i)))
-        return true;
-    }
-    return false;
   }
 
   /**

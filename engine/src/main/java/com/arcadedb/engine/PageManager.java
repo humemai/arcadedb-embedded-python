@@ -78,7 +78,7 @@ public class PageManager extends LockContext {
   private final    ConcurrentMap<PageId, Boolean>    pendingFlushPages                     = new ConcurrentHashMap<>();
   private volatile long                               maxRAM;
   final            AtomicLong                        totalReadCacheRAM                     = new AtomicLong();
-  // #5636: the counters below, down to totalMergesDeclinedByCoverage, are exported as Prometheus COUNTERS (see
+  // #5636: the counters below, down to totalChunkChainReadRetries, are exported as Prometheus COUNTERS (see
   // EngineMetricsBinder), which requires them never to decrease for the lifetime of the JVM. They are deliberately
   // reset nowhere - note close() resets only totalReadCacheRAM above, which is an instantaneous gauge. Adding a
   // "reset stats" affordance that touched them would make each reset read as a counter reset and fabricate a rate()
@@ -93,6 +93,8 @@ public class PageManager extends LockContext {
   private final    AtomicLong                        totalEdgeAppendMerges                 = new AtomicLong();
   private final    AtomicLong                        totalTxPageSlotMerges                 = new AtomicLong();
   private final    AtomicLong                        totalMergesDeclinedByCoverage         = new AtomicLong();
+  private final    AtomicLong                        totalChunkChainReadRevalidations      = new AtomicLong();
+  private final    AtomicLong                        totalChunkChainReadRetries            = new AtomicLong();
   private final    AtomicLong                        evictionRuns                          = new AtomicLong();
   private final    AtomicLong                        pagesEvicted                          = new AtomicLong();
   // #6116: the snapshot totals below are exported as Prometheus counters together with the ones above, and
@@ -184,7 +186,21 @@ public class PageManager extends LockContext {
     public long pagesReadSize;
     public long pagesWritten;
     public long pagesWrittenSize;
+    /**
+     * Batches waiting in the flush pipeline across EVERY open database. Its scale changed with issue #6281: until
+     * then the queue was capacity-bound to {@code arcadedb.pageFlushQueue}, so this reaching that value meant "the
+     * pipeline is full". The bound is now per database, so this is a sum and can reach
+     * {@code pageFlushQueue x open databases}. An alert comparing it against {@code pageFlushQueue} therefore no
+     * longer says what it used to - {@link #pageFlushQueueMaxPerDatabase} is the number that still does.
+     */
     public int  pageFlushQueueLength;
+    /**
+     * The busiest single database's share of that pipeline - reserved by a committer or occupied by its batch - which
+     * is what {@code arcadedb.pageFlushQueue} actually bounds since issue #6281. This reaching the configured value
+     * is the "a database is at its bound, and its committers are being held" signal that
+     * {@link #pageFlushQueueLength} used to carry, and it is the one to alert on.
+     */
+    public int  pageFlushQueueMaxPerDatabase;
     public long cacheHits;
     public long cacheMiss;
     public long concurrentModificationExceptions;
@@ -192,6 +208,10 @@ public class PageManager extends LockContext {
     public long txPageSlotMerges;
     /** See {@link PageManager#incrementMergesDeclinedByCoverage()}: commit ATTEMPTS failed on a coverage decline, not pages. */
     public long mergesDeclinedByCoverage;
+    /** See {@link PageManager#incrementChunkChainReadRevalidations()}: the read-path twin of {@code txPageSlotMerges}. */
+    public long chunkChainReadRevalidations;
+    /** See {@link PageManager#incrementChunkChainReadRetries()}: chunked reads restarted because the record itself moved. */
+    public long chunkChainReadRetries;
     public long evictionRuns;
     public long pagesEvicted;
     public int  readCachePages;
@@ -239,6 +259,8 @@ public class PageManager extends LockContext {
     public long   snapshotBarriersInexact;
     /** See {@link PageManager#getDeferredRAMBytes()} (#6087): dirty pages held in RAM by a flush suspension. */
     public long   deferredRAMBytes;
+    /** See {@link PageManager#getFlushQueueWaits()} (#6259): commits held waiting for room in the flush queue. */
+    public long   flushQueueWaits;
   }
 
   private PageManager() {
@@ -901,7 +923,8 @@ public class PageManager extends LockContext {
   /**
    * Bytes of dirty pages currently held in memory because flushing is suspended on some database (a full backup, an HA
    * snapshot ship, an HA verify). Once this crosses {@link com.arcadedb.GlobalConfiguration#FLUSH_SUSPEND_MAX_DEFERRED_RAM}
-   * the flush thread stops draining its queue and committing threads are throttled instead, so this is the direct
+   * the committing threads OF THE SUSPENDED DATABASES are throttled (issue #6200 - before it, the flush thread stopped
+   * draining its queue altogether, which throttled the committers of every open database), so this is the direct
    * measure of how much a long suspension is costing writers.
    *
    * @return 0 when no suspension is in progress, or when the page manager is closed.
@@ -909,6 +932,49 @@ public class PageManager extends LockContext {
   public long getDeferredRAMBytes() {
     final PageManagerFlushThread thread = flushThread;
     return thread != null ? thread.deferredRAMBytes.get() : 0L;
+  }
+
+  /**
+   * How many times a writer had to WAIT for room in the bounded flush queue instead of being admitted straight away
+   * (issue #6259) - that is, how often the disk has not kept up with the write rate.
+   * <p>
+   * The companion of {@code pageFlushQueueLength} and the number that queue length cannot give: the length is an
+   * instant, sampled between two bursts as easily as during one, while this is cumulative evidence that commits were
+   * actually held. Rising while the length reads low means the pipeline is saturating in bursts.
+   *
+   * @return 0 when nothing has ever been throttled, or when the page manager is closed.
+   */
+  public long getFlushQueueWaits() {
+    final PageManagerFlushThread thread = flushThread;
+    return thread != null ? thread.queueSlotWaits.get() : 0L;
+  }
+
+  /**
+   * The same backlog as {@link #getDeferredRAMBytes}, for a single database (issue #6200): the number that says WHICH
+   * suspension is costing the heap, which the JVM-wide total cannot.
+   *
+   * @return 0 when that database has nothing deferred, or when the page manager is closed.
+   */
+  public long getDeferredRAMBytesOf(final BasicDatabase database) {
+    final PageManagerFlushThread thread = flushThread;
+    return thread != null ? thread.getDeferredRAMBytesOf(database) : 0L;
+  }
+
+  /**
+   * Holds the caller while the deferred backlog of ITS database is over the cap (issue #4728). A no-op unless that
+   * database is currently suspended - see {@link PageManagerFlushThread#awaitDeferredBacklogUnderCap}, and note that
+   * this must never be called with the page-manager lock held (issue #6200).
+   * <p>
+   * ASSUMPTION, shared with {@code PagesToFlush} and therefore with the whole flush pipeline: a batch carries the
+   * pages of ONE database, so the first page names it. Every caller satisfies it - a publication is one
+   * transaction's pages, and the direct {@code writePages} callers (LSM compaction, bloom filter, sparse segment
+   * builder) write one component of one database - and a mixed batch would already mis-key the deferral, the
+   * per-database pending count and the suspension check long before it reached here. Do not introduce one.
+   */
+  private void awaitDeferredBacklogUnderCap(final List<MutablePage> pages) throws InterruptedException {
+    if (flushThread == null || pages == null || pages.isEmpty())
+      return;
+    flushThread.awaitDeferredBacklogUnderCap(pages.getFirst().getPageId().getDatabase());
   }
 
   /**
@@ -1000,6 +1066,40 @@ public class PageManager extends LockContext {
    */
   public void incrementMergesDeclinedByCoverage() {
     totalMergesDeclinedByCoverage.incrementAndGet();
+  }
+
+  /**
+   * Counts a chunk-chain read that met a moved page and completed anyway (#6217): a page the read walked was at a
+   * newer version by the time the read validated it, and none of the bytes this record owns on that page had
+   * changed, so the assembled record is the committed one and the read returns it. Before #6217 that read failed and
+   * was retried, and after {@code arcadedb.txRetries} attempts it raised a {@link ConcurrentModificationException}
+   * on a record no writer had touched - continuation chunks of unrelated records share pages by design.
+   * <p>
+   * This is the read-path twin of {@link #incrementTxPageSlotMerges()}: both count a false conflict that did NOT
+   * happen, so a rise here is contention being absorbed rather than a problem. Watch it next to
+   * {@link PPageManagerStats#chunkChainReadRetries}, which counts the reads that had to restart because the record
+   * really had moved.
+   * <p>
+   * COUNTING SEMANTICS: one per read ATTEMPT that completed after comparing, however many of its pages had moved.
+   */
+  public void incrementChunkChainReadRevalidations() {
+    totalChunkChainReadRevalidations.incrementAndGet();
+  }
+
+  /**
+   * Counts a chunk-chain read ATTEMPT thrown away because the record itself changed under it (see
+   * {@link #incrementChunkChainReadRevalidations()} for the case that no longer counts as one). The last attempt of a
+   * read that gives up contributes here too, right before it raises {@link ConcurrentModificationException}, so this
+   * is "restarts", not "failed reads".
+   * <p>
+   * CONTENTION, and nothing else, since #6258: a chain that could not be WALKED used to be counted here as well and
+   * retried like a busy record, which made this counter mean two unrelated things at once and put a corrupted record
+   * on the contention chart. Such a chain now raises {@code BrokenChunkChainException} where it is found and
+   * contributes nothing here. Restarts also stop as soon as another attempt provably cannot read anything else, so a
+   * rise here is writers meeting readers rather than a budget being spent on a verdict already settled.
+   */
+  public void incrementChunkChainReadRetries() {
+    totalChunkChainReadRetries.incrementAndGet();
   }
 
   public void checkPageVersion(final MutablePage page, final boolean isNew) throws IOException {
@@ -1101,13 +1201,30 @@ public class PageManager extends LockContext {
    */
   public void publishPages(final List<MutablePage> pagesToWrite, final Map<PageId, MutablePage> newPages,
       final boolean asyncFlush) throws IOException, InterruptedException {
+    // BOTH WAITS ARE OUTSIDE THE LOCK, AND THAT IS THE ENTIRE POINT (issues #6200 and #6259). Publication holds the
+    // JVM-wide page-manager lock across BOTH of its halves - the page write and the flush enqueue - because the
+    // snapshot t0 barrier (#6075/#6125) rests on exactly that, so the enqueue cannot move out; what can, and must, is
+    // everything the enqueue might WAIT for. Served one line lower, inside lock(), each of these would be charged to
+    // every committer of every database in the process:
+    //   - #6200: while a database is suspended its dirty pages pile up in RAM, and the cap that bounds that backlog
+    //     is served by holding ITS committers.
+    //   - #6259: when the bounded flush queue fills - a write burst, a slow volume, an fsync spike - the committer
+    //     waits for room HERE, and reaches its offer inside the lock with a slot already reserved for it.
+    boolean flushSlotReserved = false;
+    if (asyncFlush) {
+      awaitDeferredBacklogUnderCap(pagesToWrite);
+      flushSlotReserved = reserveFlushQueueSlot(pagesToWrite);
+    }
+
+    boolean handedOver = false;
     lock();
     try {
       // Write pages (and put in readCache) BEFORE updating pageCount, otherwise concurrent
       // transactions can observe pageCount > readCache state and treat the new page as a
       // pre-existing empty page (sparse-file semantics), allowing two records' chunk chains
       // to land on the same physical slot.
-      writePages(pagesToWrite, asyncFlush);
+      handedOver = true;
+      writePagesNoBackpressure(pagesToWrite, asyncFlush, flushSlotReserved);
 
       if (newPages != null)
         for (final MutablePage p : newPages.values()) {
@@ -1120,6 +1237,13 @@ public class PageManager extends LockContext {
 
     } finally {
       unlock();
+      if (flushSlotReserved && !handedOver)
+        // Not a live path TODAY - nothing between the reservation and the hand-off below can throw, lock() being a
+        // plain ReentrantLock - but it is not a comment about today: this covers ANY future statement inserted
+        // between them that throws, which is exactly the refactor that would otherwise strand a reservation. And a
+        // stranded one is silent and permanent: the flush pipeline is one slot smaller for the life of the process,
+        // with nothing in a running system ever pointing at it (review of #6269).
+        releaseFlushQueueSlot(pagesToWrite);
     }
   }
 
@@ -1244,12 +1368,15 @@ public class PageManager extends LockContext {
     stats.pagesWritten = totalPagesWritten.get();
     stats.pagesWrittenSize = totalPagesWrittenSize.get();
     stats.pageFlushQueueLength = flushThread != null ? flushThread.queue.size() : 0;
+    stats.pageFlushQueueMaxPerDatabase = flushThread != null ? flushThread.maxSlotsUsedByAnyDatabase() : 0;
     stats.cacheHits = cacheHits.get();
     stats.cacheMiss = cacheMiss.get();
     stats.concurrentModificationExceptions = totalConcurrentModificationExceptions.get();
     stats.edgeAppendMerges = totalEdgeAppendMerges.get();
     stats.txPageSlotMerges = totalTxPageSlotMerges.get();
     stats.mergesDeclinedByCoverage = totalMergesDeclinedByCoverage.get();
+    stats.chunkChainReadRevalidations = totalChunkChainReadRevalidations.get();
+    stats.chunkChainReadRetries = totalChunkChainReadRetries.get();
     stats.evictionRuns = evictionRuns.get();
     stats.pagesEvicted = pagesEvicted.get();
     stats.snapshotWindowsOpened = totalSnapshotWindowsOpened.get();
@@ -1262,6 +1389,7 @@ public class PageManager extends LockContext {
     stats.snapshotBarrierMaxMillis = maxSnapshotBarrierMillis.get();
     stats.snapshotBarriersInexact = totalSnapshotBarriersInexact.get();
     stats.deferredRAMBytes = getDeferredRAMBytes();
+    stats.flushQueueWaits = getFlushQueueWaits();
     collectSnapshotGauges(stats);
     return stats;
   }
@@ -1321,18 +1449,78 @@ public class PageManager extends LockContext {
   }
 
   public void writePages(final List<MutablePage> updatedPages, final boolean asyncFlush) throws IOException, InterruptedException {
+    // Entry point of the asynchronous writers that do NOT go through publishPages (LSM index compaction): they hold
+    // no page-manager lock, so the deferred-backlog cap of #4728 (issue #6200) and the flush-queue admission control
+    // (issue #6259) are both served right here, in the same order and for the same reasons as in publishPages.
+    boolean flushSlotReserved = false;
     if (asyncFlush) {
-      for (final MutablePage page : updatedPages)
-        putPageInReadCache(new CachedPage(page, true));
-      flushThread.scheduleFlushOfPages(updatedPages);
-    } else {
-      // SYNCHRONOUS FLUSH
-      for (final MutablePage page : updatedPages) {
-        flushPage(page);
-        // ADD THE PAGE IN TO READ CACHE. FROM THIS POINT THE PAGE IS NEVER MODIFIED, SO IT CAN BE CACHED
-        putPageInReadCache(new CachedPage(page, false));
-      }
+      awaitDeferredBacklogUnderCap(updatedPages);
+      flushSlotReserved = reserveFlushQueueSlot(updatedPages);
     }
+    writePagesNoBackpressure(updatedPages, asyncFlush, flushSlotReserved);
+  }
+
+  /**
+   * {@link #writePages} without the two waits that must be served before the page-manager lock, for the caller that
+   * has already served them: {@link #publishPages} (issues #6200 and #6259).
+   *
+   * @param flushSlotReserved a flush-pipeline slot taken by the caller, on the pages' own database's budget, before it
+   *                          took the lock. This method owns it from here on - handing it to the enqueue, or giving it
+   *                          back on any path that does not reach one - so the caller must not release it again.
+   */
+  private void writePagesNoBackpressure(final List<MutablePage> updatedPages, final boolean asyncFlush,
+      final boolean flushSlotReserved) throws IOException, InterruptedException {
+    boolean handedOver = false;
+    try {
+      if (asyncFlush) {
+        for (final MutablePage page : updatedPages)
+          putPageInReadCache(new CachedPage(page, true));
+        handedOver = true;
+        flushThread.scheduleFlushOfPages(updatedPages,
+            flushSlotReserved ? updatedPages.getFirst().getPageId().getDatabase() : null);
+      } else {
+        // SYNCHRONOUS FLUSH
+        for (final MutablePage page : updatedPages) {
+          flushPage(page);
+          // ADD THE PAGE IN TO READ CACHE. FROM THIS POINT THE PAGE IS NEVER MODIFIED, SO IT CAN BE CACHED
+          putPageInReadCache(new CachedPage(page, false));
+        }
+      }
+    } finally {
+      if (flushSlotReserved && !handedOver)
+        // The read-cache loop above threw, or anything a later refactor puts before the hand-off does: the enqueue
+        // was never reached, so the slot goes back rather than being held by a publication that is not going to
+        // happen. Unlike its twin in publishPages this one IS reachable today - putPageInReadCache does I/O.
+        releaseFlushQueueSlot(updatedPages);
+    }
+  }
+
+  /**
+   * Reserves the flush-queue slot the enqueue inside the page-manager lock will need, waiting HERE - outside that
+   * lock - for as long as the queue is full (issue #6259). See
+   * {@link PageManagerFlushThread#reserveQueueSlot(com.arcadedb.database.BasicDatabase)} for why the wait cannot live
+   * where the enqueue does, and why the budget it draws on is the batch's own database's (issue #6281).
+   *
+   * @return {@code false} when there is nothing to enqueue, or when the flush thread is shutting down: either way no
+   *     reservation is held and none has to be released.
+   */
+  private boolean reserveFlushQueueSlot(final List<MutablePage> pages) throws InterruptedException {
+    final PageManagerFlushThread thread = flushThread;
+    if (thread == null || pages == null || pages.isEmpty())
+      return false;
+    return thread.reserveQueueSlot(pages.getFirst().getPageId().getDatabase());
+  }
+
+  /**
+   * Gives back a reservation that never reached an enqueue. Re-reads the field rather than capturing the thread that
+   * granted it: the only way to observe a different one here is a full page-manager shutdown and restart in the
+   * window, which needs every database in the JVM to have been closed mid-publication - and would have thrown at the
+   * enqueue long before reaching this.
+   */
+  private void releaseFlushQueueSlot(final List<MutablePage> pages) {
+    final PageManagerFlushThread thread = flushThread;
+    if (thread != null && pages != null && !pages.isEmpty())
+      thread.releaseQueueReservation(pages.getFirst().getPageId().getDatabase());
   }
 
   protected void flushPage(final MutablePage page) throws IOException {
@@ -1340,6 +1528,16 @@ public class PageManager extends LockContext {
 
     if (!database.isOpen()) {
       LogManager.instance().log(this, Level.SEVERE, "Cannot flush page %s because the database is closed", page);
+      // The page will never be flushed and its content is irrelevant (the database is closed, or being
+      // dropped): release its WAL ack so the close-time ack gate (#4928) is not tripped by a pending count
+      // that can never be satisfied - flushPage() is never called again for this page once the database is
+      // closed, so without this the page's WALFile.pagesToFlush counter is stranded above zero forever and
+      // TransactionManager.close()'s retry loop burns its whole budget waiting on it (issue #6440). Mirrors
+      // the "file dropped" branch a few lines below and PageManagerFlushThread.removePagesOfFileFromBatch.
+      // takeWALFile makes the release exactly-once against a racing caller of the same page.
+      final WALFile walFile = page.takeWALFile();
+      if (walFile != null)
+        walFile.notifyPageFlushed();
       return;
     }
 
@@ -1371,7 +1569,12 @@ public class PageManager extends LockContext {
       } catch (final DatabaseIsClosedException e) {
         // The database was closed concurrently after the isOpen() check above.
         // The page data has already been written to disk, so we can safely skip
-        // the metadata updates.
+        // the metadata updates - but the WAL ack must still happen (issue #6440): the write above already
+        // succeeded, so skipping just this call (as opposed to the metadata update) would strand the page's
+        // WALFile.pagesToFlush counter above zero forever even though its content is safely on disk.
+        final WALFile walFile = page.takeWALFile();
+        if (walFile != null)
+          walFile.notifyPageFlushed();
       }
 
     } else {
@@ -1567,6 +1770,18 @@ public class PageManager extends LockContext {
     checkForPageDisposal();
   }
 
+  /**
+   * <b>A read answering is not the same fact as the file holding the page, and no caller can tell the two apart</b> (issue
+   * #6351, note). The read cache is consulted FIRST and the flush queue second ({@link #loadPage}), so a resident image answers
+   * for a page whose bytes may not be on disk yet - which is the whole point of both, and correct - and only a miss in both ever
+   * reaches {@code file.getTotalPages()}. With {@code createIfNotExists} the read invents a zero page rather than refusing at
+   * all.
+   * <p>
+   * So a guard must never infer "this page exists" from a read having succeeded. It has to read the BYTES and say what makes
+   * them legal content, the way {@link Dictionary#reload()} does with the per-page header every dictionary page carries. Making
+   * residency prove it corresponds to the file would be a large change on the hottest path in the engine, for a hazard nobody
+   * has demonstrated; this note is here so the next person who finds a guard behaving oddly does not have to rediscover why.
+   */
   private CachedPage getCachedPage(final PageId pageId, final int pageSize, final boolean isNew, final boolean createIfNotExists)
       throws IOException {
     checkForPageDisposal();

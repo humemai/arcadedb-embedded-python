@@ -70,8 +70,29 @@ public class Restore {
     return this;
   }
 
+  /**
+   * Restore threads: -1 automatic, 0 the legacy single-threaded stream walk, N a pool of N. Overrides
+   * {@link com.arcadedb.GlobalConfiguration#RESTORE_THREADS}. Ignored, with a fallback to the sequential walk, when
+   * the archive cannot be opened for random access: an http(s) URL or an encrypted archive.
+   */
+  public Restore setRestoreThreads(final int restoreThreads) {
+    settings.restoreThreads = RestoreSettings.checkIntSetting("restoreThreads", restoreThreads, -1,
+        RestoreSettings.MAX_RESTORE_THREADS);
+    return this;
+  }
+
   public Restore setLogger(final ConsoleLogger logger) {
     this.logger = logger;
+    return this;
+  }
+
+  /**
+   * Overrides {@link com.arcadedb.GlobalConfiguration#SERVER_RESTORE_IMPORT_ALLOW_LOCAL_URLS} for this restore. The
+   * server command handler calls this reflectively with the value it already validated the URL against, so the
+   * fetch cannot land on a stricter-or-looser answer than the pre-check that accepted the command (issue #6381).
+   */
+  public Restore setAllowLocalUrls(final boolean allowLocalUrls) {
+    settings.allowLocalUrls = allowLocalUrls;
     return this;
   }
 

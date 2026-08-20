@@ -23,6 +23,7 @@ import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
+import com.arcadedb.query.sql.executor.WorkGuard;
 
 import java.util.BitSet;
 import java.util.List;
@@ -82,6 +83,7 @@ public class AlgoTriangleCount extends AbstractAlgoProcedure {
     final String[] relTypes = args.length > 0 ? extractRelTypes(args[0]) : null;
 
     final Database db = context.getDatabase();
+    final WorkGuard guard = newWorkGuard(context);
 
     final GraphData graph = loadGraph(db, null, relTypes, context);
 
@@ -92,9 +94,12 @@ public class AlgoTriangleCount extends AbstractAlgoProcedure {
     // Always use BOTH for triangle counting (undirected notion)
     final int[][] adj = graph.adjacency(Vertex.DIRECTION.BOTH, relTypes);
 
-    // Build neighbor BitSets for fast intersection
+    // Build neighbor BitSets for fast intersection: a nodeCount x nodeCount bit matrix, reserved before the
+    // first BitSet is allocated and built under the checkpoint, because the build is itself O(n²/64) (issue #6375).
+    graph.memory().reserve(bitsetMatrixBytes(n, n), "the neighbour bitsets", n + " x " + n + " nodes");
     final BitSet[] neighborSets = new BitSet[n];
     for (int i = 0; i < n; i++) {
+      guard.checkPeriodically(i);
       neighborSets[i] = new BitSet(n);
       for (final int j : adj[i])
         neighborSets[i].set(j);
@@ -105,6 +110,10 @@ public class AlgoTriangleCount extends AbstractAlgoProcedure {
     // For each node u, for each neighbor v of u, count common neighbors
     // Each triangle (u,v,w) is counted at u via (v,w) AND via (w,v) → divide by 2
     for (int u = 0; u < n; u++) {
+      // One node costs the sum of its neighbours' degrees, so the whole loop is O(sum of degree²) - quadratic
+      // in the degree distribution, and a single supernode's turn is long enough to want the check unthrottled
+      // (issue #6302).
+      guard.check();
       long count = 0;
       final int[] nu = adj[u];
       for (int ki = 0; ki < nu.length; ki++) {

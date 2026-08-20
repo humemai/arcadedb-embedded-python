@@ -24,6 +24,18 @@ import java.util.Locale;
 import java.util.Map;
 
 public class RestoreSettings {
+  /**
+   * Upper bound on the restore thread count, matching the allowed-value set of
+   * {@link com.arcadedb.GlobalConfiguration#RESTORE_THREADS} so the CLI, the API and the global configuration all
+   * reject the same values. Far above any core count that makes sense; the point is to bound the pool, not to be a
+   * useful setting up there.
+   * <p>
+   * The engine module cannot depend on this one, so {@code RESTORE_THREADS} repeats the literal instead of
+   * referencing this constant. Change one and change the other; {@code restoreThreadBoundMatchesTheGlobalConfiguration}
+   * fails if they drift.
+   */
+  public static final int MAX_RESTORE_THREADS = 256;
+
   public       String              format               = "full";
   public       String              inputFileURL;
   public       String              databaseDirectory;
@@ -31,6 +43,19 @@ public class RestoreSettings {
   public       int                 verboseLevel         = 2;
   public       String              encryptionAlgorithm  = "AES";
   public       String              encryptionKey;
+  /**
+   * Restore threads: -1 automatic, 0 the legacy single-threaded stream walk, N a pool of N. {@code null} defers to
+   * {@link com.arcadedb.GlobalConfiguration#RESTORE_THREADS}.
+   */
+  public       Integer             restoreThreads;
+  /**
+   * Whether an http(s) input URL may resolve to a local-file, loopback, link-local or private-network address.
+   * {@code null} defers to {@link com.arcadedb.GlobalConfiguration#SERVER_RESTORE_IMPORT_ALLOW_LOCAL_URLS} (the
+   * default, and what a CLI/embedded invocation with no server gets); a caller that already resolved this against
+   * its own configuration - the server command handler, against its per-instance {@code ContextConfiguration} - sets
+   * it explicitly so the fetch-time check agrees with whatever pre-check already accepted the command (issue #6381).
+   */
+  public       Boolean             allowLocalUrls;
   public final Map<String, String> options              = new HashMap<>();
 
   protected void parseParameters(final String[] args) {
@@ -66,6 +91,10 @@ public class RestoreSettings {
           databaseDirectory = value;
         yield 2;
       }
+      case "restoreThreads" -> {
+        restoreThreads = parseIntSetting(name, value, -1, MAX_RESTORE_THREADS);
+        yield 2;
+      }
       case "o" -> {
         overwriteDestination = true;
         yield 1;
@@ -90,5 +119,26 @@ public class RestoreSettings {
 
     if (inputFileURL.contains("..") || inputFileURL.startsWith(File.separator))
       throw new IllegalArgumentException("Invalid backup file: cannot contain '..' or start with '/'");
+  }
+
+  /**
+   * Rejects an out-of-range or non-numeric value at parse time instead of letting it reach the executor, where an
+   * invalid thread count would surface as an opaque {@code IllegalArgumentException} from the JDK.
+   */
+  public static int parseIntSetting(final String name, final String value, final int min, final int max) {
+    final int parsed;
+    try {
+      parsed = Integer.parseInt(value != null ? value.trim() : null);
+    } catch (final NumberFormatException e) {
+      throw new IllegalArgumentException("Restore setting '%s' requires an integer, found '%s'".formatted(name, value), e);
+    }
+    return checkIntSetting(name, parsed, min, max);
+  }
+
+  public static int checkIntSetting(final String name, final int value, final int min, final int max) {
+    if (value < min || value > max)
+      throw new IllegalArgumentException(
+          "Restore setting '%s' must be between %d and %d, found %d".formatted(name, min, max, value));
+    return value;
   }
 }

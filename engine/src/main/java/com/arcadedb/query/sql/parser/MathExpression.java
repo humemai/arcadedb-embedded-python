@@ -787,6 +787,10 @@ public class MathExpression extends SimpleNode {
     if (childExpressions.size() == 2) {
       // Extract scalar values from ResultSets for arithmetic operations (issue #1723)
       final Object leftValue = extractScalarFromResultSet(childExpressions.getFirst().execute(currentRecord, context));
+      // `??` is the one operator whose result can be decided by the left operand alone, so the right one - which may
+      // be a function call or a sub-query - is not evaluated when the fallback is not taken (issue #6393).
+      if (operators.getFirst() == Operator.NULL_COALESCING && leftValue != null)
+        return leftValue;
       final Object rightValue = extractScalarFromResultSet(childExpressions.get(1).execute(currentRecord, context));
       return operators.getFirst().apply(leftValue, rightValue);
     }
@@ -804,6 +808,10 @@ public class MathExpression extends SimpleNode {
     if (childExpressions.size() == 2) {
       // Extract scalar values from ResultSets for arithmetic operations (issue #1723)
       final Object leftValue = extractScalarFromResultSet(childExpressions.getFirst().execute(currentRecord, context));
+      // `??` is the one operator whose result can be decided by the left operand alone, so the right one - which may
+      // be a function call or a sub-query - is not evaluated when the fallback is not taken (issue #6393).
+      if (operators.getFirst() == Operator.NULL_COALESCING && leftValue != null)
+        return leftValue;
       final Object rightValue = extractScalarFromResultSet(childExpressions.get(1).execute(currentRecord, context));
       return operators.getFirst().apply(leftValue, rightValue);
     }
@@ -977,6 +985,9 @@ public class MathExpression extends SimpleNode {
         case XOR:
           builder.append("^");
           break;
+        case NULL_COALESCING:
+          builder.append("??");
+          break;
         }
         builder.append(" ");
       }
@@ -1088,9 +1099,38 @@ public class MathExpression extends SimpleNode {
     return false;
   }
 
+  /**
+   * @see Expression#isEarlyCalculated(CommandContext) for what "early calculated" does and does not promise.
+   */
   public boolean isEarlyCalculated(final CommandContext context) {
     for (final MathExpression exp : childExpressions) {
       if (!exp.isEarlyCalculated(context))
+        return false;
+    }
+    return true;
+  }
+
+  /**
+   * @see Expression#isLiteral()
+   */
+  public boolean isLiteral() {
+    return isLiteral(false);
+  }
+
+  /**
+   * A compound arithmetic expression is a literal one only when every one of its operands is. A subclass that keeps
+   * its operands outside {@link #childExpressions} - an array literal, a CASE - would inherit the {@code false} an
+   * empty operand list gives, which is the safe answer but a missed fold; each of those overrides this and answers
+   * for itself. A node this walker cannot see into is never mistaken for a literal.
+   *
+   * @see Expression#isLiteral(boolean)
+   */
+  public boolean isLiteral(final boolean allowInputParameters) {
+    if (childExpressions.isEmpty())
+      return false;
+
+    for (final MathExpression exp : childExpressions) {
+      if (!exp.isLiteral(allowInputParameters))
         return false;
     }
     return true;

@@ -18,13 +18,20 @@
  */
 package com.arcadedb.query.opencypher;
 
+import com.arcadedb.database.Database;
+import com.arcadedb.database.Record;
+import com.arcadedb.exception.CommandSemanticException;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.Schema;
+import com.arcadedb.schema.VertexType;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -57,6 +64,33 @@ public final class Labels {
   public static final String LABEL_SEPARATOR = "~";
 
   /**
+   * The type a vertex created with no labels lands in, and the one type a supertype walk never reports as a label.
+   * <p>
+   * Before this, "no labels" was represented by a type named {@code V} or {@code Vertex} - names drawn from the
+   * same namespace users write labels from, so the two meanings collided. A node whose only label was genuinely
+   * {@code V} matched {@code (n:V)} (the type system does not distinguish "this vertex's type is called V" from
+   * "this vertex was tagged V") and then reported {@code labels(n) = []}, because {@link #getLabels} filtered the
+   * name to answer the other question. Adding a label to such a node rebuilt its composite from the label set
+   * {@link #getOwnLabels} computed, which the same filter had emptied, so {@code SET n:Extra} silently dropped the
+   * original label instead of keeping it alongside the new one (issue #6395, the corner issue #6363 deliberately
+   * left alone).
+   * <p>
+   * Reserved by construction rather than by convention: {@link #LABEL_SEPARATOR} already cannot appear inside a
+   * single label (it is how a composite name is told apart from one), so wrapping the sentinel in it - as opposed
+   * to picking an ordinary-looking word like {@code V} - means no label a query writes can ever equal this name,
+   * and the filter in {@link #isBaseVertexTypeName} needs no exception for a real label happening to share it.
+   * <p>
+   * Also the type the imported-from-Neo4j graph's unlabelled nodes land in, and the common supertype every
+   * imported label type extends (see {@code Neo4jImporter}): a shared root lets one polymorphic query reach
+   * every vertex the import produced regardless of its label, which is worth keeping - the mistake was giving
+   * that root a name ({@code Node}) that a real schema might also want to use as an ordinary label, and that the
+   * label walk did not know to filter away from an ancestor position. Filtering this sentinel at every depth of
+   * the walk, not only at the vertex's own type, is what makes a shared root safe to keep: {@code Person EXTENDS
+   * ~NO_LABEL~} reports {@code ["Person"]}, not {@code ["NO_LABEL", "Person"]}.
+   */
+  public static final String NO_LABEL_TYPE = LABEL_SEPARATOR + "NO_LABEL" + LABEL_SEPARATOR;
+
+  /**
    * Private constructor to prevent instantiation.
    */
   private Labels() {
@@ -80,11 +114,11 @@ public final class Labels {
    * </ul>
    *
    * @param labels list of label names (duplicates are ignored)
-   * @return composite type name, or "V" if labels is null/empty
+   * @return composite type name, or {@link #NO_LABEL_TYPE} if labels is null/empty
    */
   public static String getCompositeTypeName(final List<String> labels) {
     if (labels == null || labels.isEmpty())
-      return "V";
+      return NO_LABEL_TYPE;
     if (labels.size() == 1)
       return labels.get(0);
 
@@ -99,36 +133,181 @@ public final class Labels {
   }
 
   /**
-   * Gets all labels for a vertex.
+   * Every label a vertex answers to: its own type name and each of its ancestors', sorted alphabetically, with the
+   * synthetic composite names and {@link #NO_LABEL_TYPE} left out. A node whose own type is the sentinel carries
+   * no label at all and answers with an empty list.
    * <p>
-   * For composite types (types with multiple supertypes), returns the supertype names
-   * as the labels. For single-label vertices, returns the type name as the sole label.
+   * The set this returns is exactly the set {@link #hasLabel} says yes to, which is the invariant Cypher promises and
+   * the one this used to break (issue #6363): the rule was "supertypes are the labels, unless there are none", written
+   * for the {@code A~B} composite - whose own name is an implementation detail and whose supertypes really are its
+   * labels - and applied to every other shape as well. A vertex of a type declared {@code Manager EXTENDS Employee}
+   * reported {@code [Employee]}, missing the very label {@code MATCH (n:Manager)} had just matched it by, and a type
+   * extending a composite reported the composite's synthetic name instead of the two labels it encodes.
+   * <p>
+   * A composite name never leaves this method: it is an encoding of the labels below it, so the walk goes through it
+   * to its supertypes rather than reporting it. Which types those are is decided structurally, by
+   * {@link #isLabelComposite} - a type somebody created whose name merely contains the separator keeps its name and
+   * is a label like any other.
    *
    * @param vertex the vertex to get labels from
-   * @return list of labels (sorted alphabetically for composite types)
+   *
+   * @return the vertex's labels, sorted alphabetically, empty for an unlabelled node
    */
   public static List<String> getLabels(final Vertex vertex) {
-    final DocumentType type = vertex.getType();
+    return getLabels(vertex.getType());
+  }
+
+  /**
+   * Type-level form of {@link #getLabels(Vertex)}.
+   */
+  public static List<String> getLabels(final DocumentType type) {
     final String typeName = type.getName();
 
-    // If the vertex was created without labels, it has the base "Vertex" type
-    // In Cypher, unlabeled nodes have an empty label list
-    if ("Vertex".equals(typeName) || "V".equals(typeName))
+    // A vertex created without labels lands in NO_LABEL_TYPE, and in Cypher an unlabelled node has an empty
+    // label list.
+    if (isBaseVertexTypeName(typeName))
       return List.of();
 
     final List<DocumentType> superTypes = type.getSuperTypes();
-
-    if (superTypes.isEmpty()) {
-      // Single-label vertex - type name is the label
+    // The overwhelmingly common case - a vertex of an ordinary type that extends nothing - answers without
+    // allocating a set.
+    if (superTypes.isEmpty())
       return List.of(typeName);
-    }
 
-    // Multi-label vertex - supertypes are the labels
-    final List<String> labels = new ArrayList<>(superTypes.size());
-    for (final DocumentType superType : superTypes)
-      labels.add(superType.getName());
-    Collections.sort(labels);
-    return labels;
+    final Set<String> labels = new TreeSet<>();
+    collectLabels(type, labels);
+    return List.copyOf(labels);
+  }
+
+  /**
+   * Adds {@code type}'s label to {@code out} unless the type is a synthetic composite or the sentinel, then
+   * recurses into its supertypes.
+   * <p>
+   * Unlike {@code V}/{@code Vertex} before issue #6395, {@link #NO_LABEL_TYPE} is filtered at every depth, not
+   * only at the vertex's own type: it is reserved by construction (its name can never be a real label, see the
+   * field's own javadoc), so there is no ordinary-label reading to preserve for it the way there was for a
+   * genuine supertype named {@code V} - the openCypher TCK writes exactly that in {@code (b:U:V:W:X:Y:Z)}, and
+   * with {@code V} no longer a sentinel it is reported like any other label.
+   */
+  private static void collectLabels(final DocumentType type, final Set<String> out) {
+    final List<DocumentType> superTypes = type.getSuperTypes();
+    if (isBaseVertexTypeName(type.getName())) {
+      // The sentinel is never a label, however deep in the hierarchy it appears - unlike V/Vertex before it, it
+      // is not a name a query can ever have written, so there is no ordinary-label reading to preserve here the
+      // way there is one for a genuine supertype named V (issue #6395). Recurse past it rather than stopping: a
+      // type that extends it may still extend something else worth reporting.
+      for (int i = 0; i < superTypes.size(); i++)
+        collectLabels(superTypes.get(i), out);
+      return;
+    }
+    if (!isLabelComposite(type, superTypes))
+      out.add(type.getName());
+    for (int i = 0; i < superTypes.size(); i++)
+      collectLabels(superTypes.get(i), out);
+  }
+
+  /**
+   * The labels a relabelling has to carry over, which is not the same question as {@link #getLabels}: an inherited
+   * label comes back on its own through the type hierarchy, so naming it again in the new composite would flatten the
+   * hierarchy instead of extending it.
+   * <p>
+   * For a vertex of type {@code Manager EXTENDS Employee} this is {@code [Manager]}, so {@code SET n:Extra} builds
+   * {@code Extra~Manager} extending both - the vertex stays a {@code Manager} and therefore stays an {@code Employee}
+   * too. Deriving the composite from the full label set instead would have built {@code Employee~Extra} and dropped
+   * the subtype, which is what issue #6363 reports. For a composite the answer is the labels it encodes, reached
+   * through its supertypes exactly as before, and a type that only looks like one by name keeps its name.
+   *
+   * @param vertex the vertex about to be relabelled
+   *
+   * @return the minimal label set that reproduces the vertex's current type, sorted alphabetically
+   */
+  public static List<String> getOwnLabels(final Vertex vertex) {
+    final DocumentType type = vertex.getType();
+    final String typeName = type.getName();
+
+    if (isBaseVertexTypeName(typeName))
+      return List.of();
+    if (!isLabelComposite(type, type.getSuperTypes()))
+      return List.of(typeName);
+
+    final Set<String> labels = new TreeSet<>();
+    collectOwnLabels(type, labels);
+    return List.copyOf(labels);
+  }
+
+  /**
+   * Walks down through composite types only: an ordinary type stops the walk and contributes its own name, because
+   * its ancestors are reached from it and do not have to be listed alongside it.
+   */
+  private static void collectOwnLabels(final DocumentType type, final Set<String> out) {
+    final List<DocumentType> superTypes = type.getSuperTypes();
+    if (isBaseVertexTypeName(type.getName())) {
+      // Symmetric with collectLabels: a composite that happens to inherit the sentinel through one of its own
+      // supertypes (the Neo4j importer's shared root, reached through a label type) must not have it show
+      // through a relabelling's own-label set either.
+      for (int i = 0; i < superTypes.size(); i++)
+        collectOwnLabels(superTypes.get(i), out);
+      return;
+    }
+    if (!isLabelComposite(type, superTypes)) {
+      out.add(type.getName());
+      return;
+    }
+    for (int i = 0; i < superTypes.size(); i++)
+      collectOwnLabels(superTypes.get(i), out);
+  }
+
+  /**
+   * Whether a type is one this class built to carry several labels, as opposed to a type somebody created whose name
+   * merely contains the separator.
+   * <p>
+   * Asked structurally rather than by name: a composite's name is exactly the deduplicated, sorted, separator-joined
+   * names of its own supertypes, which is what {@link #ensureCompositeType} writes and what nothing else produces.
+   * The name alone cannot answer it - {@code isCompositeTypeName} is a heuristic, and under it a user type called
+   * {@code a~b} that extends anything would have had its own name dropped from both the label list and, worse, from
+   * the set a relabelling rebuilds the type out of.
+   *
+   * @param type       the type to classify
+   * @param superTypes {@code type}'s direct supertypes, passed in because every caller already has them
+   *
+   * @return true when the type is a label composite and its name is therefore an encoding, not a label
+   */
+  private static boolean isLabelComposite(final DocumentType type, final List<DocumentType> superTypes) {
+    // A composite always encodes at least two labels: one label is the type itself, never a composite.
+    if (superTypes.size() < 2 || !isCompositeTypeName(type.getName()))
+      return false;
+    final List<String> superTypeNames = new ArrayList<>(superTypes.size());
+    for (int i = 0; i < superTypes.size(); i++)
+      superTypeNames.add(superTypes.get(i).getName());
+    return type.getName().equals(getCompositeTypeName(superTypeNames));
+  }
+
+  /**
+   * Whether a type name is {@link #NO_LABEL_TYPE}, the type a node lands in when it carries no label at all: such
+   * a node is a Cypher node with an empty label list.
+   */
+  private static boolean isBaseVertexTypeName(final String typeName) {
+    return NO_LABEL_TYPE.equals(typeName);
+  }
+
+  /**
+   * Whether a label is still carried by a set of labels, which is what decides if a {@code REMOVE n:Label} can be
+   * honoured: an inherited label cannot be taken away on its own, because every type answering to the subtype that
+   * implies it answers to it too (issue #6363).
+   *
+   * @param schema          the database schema
+   * @param remainingLabels the labels the vertex would keep
+   * @param label           the label being taken away
+   *
+   * @return true when one of the remaining labels names a type that is still an instance of {@code label}
+   */
+  public static boolean impliedBy(final Schema schema, final List<String> remainingLabels, final String label) {
+    for (int i = 0; i < remainingLabels.size(); i++) {
+      final DocumentType type = schema.getTypeOrNull(remainingLabels.get(i));
+      if (type != null && type.instanceOf(label))
+        return true;
+    }
+    return false;
   }
 
   /**
@@ -147,6 +326,164 @@ public final class Labels {
   }
 
   /**
+   * Checks a vertex against a pattern's label list, with the meaning the pattern gave it: a disjunction
+   * {@code (n:A|B)} is satisfied by any one of the labels, a conjunction {@code (n:A:B)} by all of them, and an
+   * empty list by everything.
+   * <p>
+   * This is the one place that knows what a disjunction means for a matched record. Every step that has to decide
+   * whether a vertex satisfies a node pattern routes through it - the anchor of a pattern, the far endpoint of a
+   * single hop, and the end of a variable-length path - because they used to decide it separately and disagreed:
+   * before issue #6338 a disjunction written on a node a relationship expands into ANDed its alternatives and so
+   * rejected every row, silently, while the same disjunction on the anchor matched.
+   *
+   * @param vertex      the vertex to test
+   * @param labels      the labels written on the pattern (already resolved, dynamic labels included)
+   * @param disjunction whether the labels were written as alternatives ({@code A|B}) rather than as a conjunction
+   *
+   * @return true when the vertex satisfies the label constraint
+   */
+  public static boolean matches(final Vertex vertex, final List<String> labels, final boolean disjunction) {
+    return matches(vertex.getType(), labels, disjunction);
+  }
+
+  /**
+   * Type-level form of {@link #matches(Vertex, List, boolean)}, for the paths that resolve a record's type from its
+   * bucket id and must not pay for loading the record.
+   */
+  public static boolean matches(final DocumentType type, final List<String> labels, final boolean disjunction) {
+    if (labels == null || labels.isEmpty())
+      return true;
+    if (type == null)
+      return false;
+    if (disjunction) {
+      for (int i = 0; i < labels.size(); i++)
+        if (type.instanceOf(labels.get(i)))
+          return true;
+      return false;
+    }
+    for (int i = 0; i < labels.size(); i++)
+      if (!type.instanceOf(labels.get(i)))
+        return false;
+    return true;
+  }
+
+  /**
+   * Whether the schema can still produce a record satisfying the label constraint, used to skip work rather than to
+   * decide a row: a conjunction needs every label to name an existing type, a disjunction only needs one of them.
+   * An alternative naming a type nobody ever created is an alternative that matches nothing, not a filter that
+   * rejects everything (issue #6338).
+   */
+  public static boolean canMatchInSchema(final Schema schema, final List<String> labels, final boolean disjunction) {
+    if (labels == null || labels.isEmpty())
+      return true;
+    if (disjunction) {
+      for (int i = 0; i < labels.size(); i++)
+        if (schema.existsType(labels.get(i)))
+          return true;
+      return false;
+    }
+    for (int i = 0; i < labels.size(); i++)
+      if (!schema.existsType(labels.get(i)))
+        return false;
+    return true;
+  }
+
+  /**
+   * The vertex types whose records can satisfy a node pattern's label constraint: every declared vertex type
+   * {@link #matches(DocumentType, List, boolean)} accepts, so a disjunction {@code (n:A|B)} selects the types of
+   * <b>both</b> alternatives and a conjunction {@code (n:A:B)} only the types carrying all of them. An empty label
+   * list selects every vertex type.
+   * <p>
+   * This is the scan-side companion of {@code matches}: deciding a row and deciding what to scan have to say the
+   * same thing about a disjunction, and when they did not, an unbound start node scanned only the first
+   * alternative's type and the alternatives after it silently went missing from the answer (issue #6352).
+   * <p>
+   * The returned types are meant to be iterated <b>non-polymorphically</b>: the list already contains every matching
+   * subtype, so a polymorphic scan of each would visit a subtype once per matching ancestor.
+   * <p>
+   * The cost model sums its estimate over this same list, so what a disjunction anchor is costed at and what it
+   * actually visits stay the same set (issue #6363).
+   *
+   * @param schema      the database schema
+   * @param labels      the labels written on the pattern (already resolved, dynamic labels included)
+   * @param disjunction whether the labels were written as alternatives ({@code A|B}) rather than as a conjunction
+   *
+   * @return the vertex types to scan, empty when nothing in the schema can match
+   */
+  public static List<DocumentType> matchingVertexTypes(final Schema schema, final List<String> labels,
+      final boolean disjunction) {
+    final Collection<? extends DocumentType> allTypes = schema.getTypes();
+    final List<DocumentType> matching = new ArrayList<>(allTypes.size());
+    for (final DocumentType type : allTypes)
+      if (type instanceof VertexType && matches(type, labels, disjunction))
+        matching.add(type);
+    return matching;
+  }
+
+  /**
+   * Walks every vertex that can satisfy a node pattern's label constraint, in one lazy pass and without visiting a
+   * vertex twice, over the types {@code matchingVertexTypes} selects.
+   * <p>
+   * A single label is served by one polymorphic scan of that type, which is the same set of records at the price of
+   * one schema lookup instead of a walk of the whole type list.
+   *
+   * @param database    the database to scan
+   * @param labels      the labels written on the pattern (already resolved, dynamic labels included)
+   * @param disjunction whether the labels were written as alternatives ({@code A|B}) rather than as a conjunction
+   *
+   * @return an iterator over the candidate vertices, empty when nothing in the schema can match
+   */
+  public static Iterator<Record> iterateMatchingVertices(final Database database, final List<String> labels,
+      final boolean disjunction) {
+    final Schema schema = database.getSchema();
+
+    if (labels != null && labels.size() == 1) {
+      final String label = labels.get(0);
+      // A type name that names an edge or document type is not a label: labels and relationship types are separate
+      // namespaces in Cypher, so such a pattern matches no node rather than yielding records that are not vertices.
+      if (!(schema.getTypeOrNull(label) instanceof VertexType))
+        return Collections.emptyIterator();
+      return database.iterateType(label, true);
+    }
+
+    final List<DocumentType> types = matchingVertexTypes(schema, labels, disjunction);
+    if (types.isEmpty())
+      return Collections.emptyIterator();
+    if (types.size() == 1)
+      return database.iterateType(types.get(0).getName(), false);
+    return new ChainedTypeIterator(database, types);
+  }
+
+  /**
+   * Walks a list of types one after the other, opening each type's iterator only when the previous one is drained.
+   */
+  private static final class ChainedTypeIterator implements Iterator<Record> {
+    private final Database           database;
+    private final List<DocumentType> types;
+    private       int                nextType = 0;
+    private       Iterator<Record>   current  = Collections.emptyIterator();
+
+    private ChainedTypeIterator(final Database database, final List<DocumentType> types) {
+      this.database = database;
+      this.types = types;
+    }
+
+    @Override
+    public boolean hasNext() {
+      while (!current.hasNext() && nextType < types.size())
+        current = database.iterateType(types.get(nextType++).getName(), false);
+      return current.hasNext();
+    }
+
+    @Override
+    public Record next() {
+      if (!hasNext())
+        throw new NoSuchElementException();
+      return current.next();
+    }
+  }
+
+  /**
    * Ensures composite type exists, creating it if necessary.
    * Returns the type name to use for creating vertices.
    * <p>
@@ -156,17 +493,32 @@ public final class Labels {
    * <p>
    * Duplicate labels are automatically ignored, matching Neo4j's behavior
    * (GitHub issue #3264).
+   * <p>
+   * A label literally equal to {@link #NO_LABEL_TYPE} is refused rather than created: {@link #LABEL_SEPARATOR}
+   * makes the sentinel unwritable as one label among several (it can never survive {@link #isLabelComposite}'s
+   * name match), but a single-label {@code CREATE (:`~NO_LABEL~`)} bypasses that entirely and would otherwise
+   * land the vertex on the sentinel type itself - the exact {@code V}/{@code Vertex} collision this class exists
+   * to close, reopened under a name a query merely has to spell correctly instead of guess (issue #6395 review).
+   * Every write path that can introduce a new label - {@code CreateStep}, {@code MergeStep}, {@code SetStep}'s
+   * {@code SET n:Label}, and the {@code merge.node} procedure - creates its type through this one method, so the
+   * guard here closes all of them at once.
    *
    * @param schema the database schema
    * @param labels list of labels for the vertex (duplicates are ignored)
    * @return the type name to use (composite type name if multiple unique labels)
+   *
+   * @throws CommandSemanticException when {@code labels} contains {@link #NO_LABEL_TYPE}
    */
   public static String ensureCompositeType(final Schema schema, final List<String> labels) {
     if (labels == null || labels.isEmpty())
-      return "V";
+      return NO_LABEL_TYPE;
 
     // Deduplicate and sort labels using TreeSet
     final Set<String> uniqueLabels = new TreeSet<>(labels);
+
+    if (uniqueLabels.contains(NO_LABEL_TYPE))
+      throw new CommandSemanticException(
+          "'" + NO_LABEL_TYPE + "' is a reserved type name and cannot be used as a label");
 
     // Handle single label case (including after deduplication)
     if (uniqueLabels.size() == 1) {

@@ -167,6 +167,22 @@ public interface Schema {
 
   DocumentType getType(String typeName);
 
+  /**
+   * Returns the type with the given name, or {@code null} when the schema does not have it.
+   * <p>
+   * The non-throwing companion of {@link #getType(String)}, for the many callers that can tolerate an absent type and
+   * had to spell it {@code existsType(name) ? getType(name) : null} - two probes of the same map, and an exception
+   * used as control flow if they forgot the guard. The default implementation is exactly that pair, so an
+   * out-of-tree {@link Schema} keeps working; the built-in schemas answer with a single lookup.
+   *
+   * @param typeName name of the type to look up
+   *
+   * @return the type, or {@code null} if no type with that name exists
+   */
+  default DocumentType getTypeOrNull(final String typeName) {
+    return existsType(typeName) ? getType(typeName) : null;
+  }
+
   void dropType(String typeName);
 
   String getTypeNameByBucketId(int bucketId);
@@ -488,6 +504,21 @@ public interface Schema {
   void setExtension(String name, JSONObject value);
 
   enum INDEX_TYPE {
-    LSM_TREE, FULL_TEXT, LSM_VECTOR, LSM_SPARSE_VECTOR, GEOSPATIAL, HASH
+    LSM_TREE, FULL_TEXT, LSM_VECTOR, LSM_SPARSE_VECTOR, GEOSPATIAL, HASH;
+
+    /**
+     * Whether a build of this index type may run INSIDE a transaction opened by whoever is writing, which is what
+     * lets it index the records that transaction has written and not yet committed (issue #6324, item 1).
+     * <p>
+     * True for every index whose build stages its entries on the transaction and whose reads go back through it -
+     * {@code LSM_TREE} and everything layered on it. False for the vector families: their build writes a graph, and
+     * for sparse its segments, as files of their own, and their SEARCH path reads those files through the page cache
+     * rather than through the transaction, so entries left uncommitted are written but not findable. Building them in
+     * a transaction of their own keeps that path whole, at the cost this issue is about - a vector index created in
+     * the same transaction as its inserts still needs those writes committed first - which is the lesser of the two.
+     */
+    public boolean buildCanShareCallerTransaction() {
+      return this != LSM_VECTOR && this != LSM_SPARSE_VECTOR;
+    }
   }
 }

@@ -32,7 +32,6 @@ import com.arcadedb.query.sql.executor.ResultInternal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
@@ -113,7 +112,10 @@ public class AlgoDijkstraSingleSource extends AbstractAlgoProcedure {
 
     // Try CSR-accelerated path: requires a provider with edge properties
     final GraphTraversalProvider provider = findProvider(db, relTypes);
-    if (provider instanceof GraphAnalyticalView gav && gav.hasEdgeProperties()) {
+    // Not the coarser hasEdgeProperties(): the CSR kernel below reads the weight column directly and falls back
+    // to a unit weight when it is missing, so a view materialising some OTHER property would silently answer an
+    // unweighted shortest path to a weighted question (issue #6301).
+    if (provider instanceof GraphAnalyticalView gav && gav.servesEdgeProperty(weightProperty, relTypes)) {
       context.setVariable(CommandContext.CSR_ACCELERATED_VAR, true);
       return executeWithCSR(context, gav, startNode.getIdentity(), relTypes, weightProperty, dir);
     }
@@ -149,10 +151,7 @@ public class AlgoDijkstraSingleSource extends AbstractAlgoProcedure {
 
   private Stream<Result> executeWithOLTP(final Database db, final Vertex startNode,
       final String[] relTypes, final String weightProperty, final Vertex.DIRECTION dir) {
-    final List<Vertex> vertices = new ArrayList<>();
-    final Iterator<Vertex> iter = getAllVertices(db, null);
-    while (iter.hasNext())
-      vertices.add(iter.next());
+    final List<Vertex> vertices = loadVertices(db, null, newMemoryBudget(db));
 
     final int n = vertices.size();
     if (n == 0)

@@ -20,21 +20,23 @@ package com.arcadedb.query.opencypher.executor.steps;
 
 import com.arcadedb.database.Document;
 import com.arcadedb.database.MutableDocument;
+import com.arcadedb.exception.CommandSemanticException;
 import com.arcadedb.exception.TimeoutException;
-import com.arcadedb.graph.Edge;
-import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.opencypher.Labels;
 import com.arcadedb.query.opencypher.ast.RemoveClause;
 import com.arcadedb.query.opencypher.executor.CypherFunctionFactory;
 import com.arcadedb.query.opencypher.executor.DeletedEntityMarker;
 import com.arcadedb.query.opencypher.executor.ExpressionEvaluator;
+import com.arcadedb.query.opencypher.executor.LabelReplacements;
+import com.arcadedb.query.opencypher.executor.RowAliases;
 import com.arcadedb.query.sql.executor.AbstractExecutionStep;
 import com.arcadedb.query.sql.executor.CommandContext;
-import com.arcadedb.query.sql.executor.QueryStatistics;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.schema.DocumentType;
+import com.arcadedb.schema.Schema;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -69,6 +71,9 @@ public class RemoveStep extends AbstractExecutionStep {
       private final List<Result> buffer = new ArrayList<>();
       private int bufferIndex = 0;
       private boolean finished = false;
+      // Tracks the vertices a label removal replaced. A label change rewrites the record under a new type, so
+      // every later row still holding the original refers to a deleted RID (issues #6312, #6313).
+      private final LabelReplacements replacements = new LabelReplacements();
 
       @Override
       public boolean hasNext() {
@@ -111,7 +116,7 @@ public class RemoveStep extends AbstractExecutionStep {
               rowCount++;
 
             // Apply REMOVE operations to this result
-            applyRemoveOperations(inputResult);
+            applyRemoveOperations(inputResult, replacements);
 
             // Pass through the modified result
             buffer.add(inputResult);
@@ -136,12 +141,17 @@ public class RemoveStep extends AbstractExecutionStep {
   /**
    * Applies all REMOVE operations to a result.
    *
-   * @param result the result containing variables to update
+   * @param result       the result containing variables to update
+   * @param replacements the vertices earlier rows of this same clause relabelled, and therefore replaced
    */
-  private void applyRemoveOperations(final Result result) {
+  private void applyRemoveOperations(final Result result, final LabelReplacements replacements) {
     if (removeClause == null || removeClause.isEmpty()) {
       return;
     }
+
+    // A node this clause already relabelled on an earlier row reaches this row as the deleted original: point
+    // every alias of it at the live replacement before anything reads or writes through them.
+    replacements.redirect(result);
 
     // Check if we're already in a transaction
     final boolean wasInTransaction = context.getDatabase().isTransactionActive();
@@ -156,7 +166,7 @@ public class RemoveStep extends AbstractExecutionStep {
         if (item.getType() == RemoveClause.RemoveItem.RemoveType.PROPERTY)
           removeProperty(item, result);
         else if (item.getType() == RemoveClause.RemoveItem.RemoveType.LABELS)
-          removeLabels(item, result);
+          removeLabels(item, result, replacements);
       }
 
       // Commit transaction if we started it
@@ -228,13 +238,17 @@ public class RemoveStep extends AbstractExecutionStep {
 
     // Update the result with the modified document
     ((ResultInternal) result).setProperty(variable, mutableDoc);
+    // ...and with it every other alias of the same node, so all of them observe the removal - one binding per node
+    // per row is what Cypher promises, and it is what SET has always delivered (issue #6328).
+    RowAliases.propagateUpdate(result, doc, mutableDoc);
   }
 
   /**
    * Removes labels from a vertex by changing its type.
    * Creates a new vertex with the reduced label set and migrates properties/edges.
    */
-  private void removeLabels(final RemoveClause.RemoveItem item, final Result result) {
+  private void removeLabels(final RemoveClause.RemoveItem item, final Result result,
+      final LabelReplacements replacements) {
     final String variable = item.getVariable();
     final Object obj = result.getProperty(variable);
     // #5795: reject a label removal targeting a node deleted earlier in the same query instead
@@ -243,51 +257,71 @@ public class RemoveStep extends AbstractExecutionStep {
     if (!(obj instanceof Vertex vertex))
       return;
 
-    final List<String> currentLabels = Labels.getLabels(vertex);
-    final List<String> labelsToRemove = item.getLabels();
+    // If a prior row already relabelled this node, work on the replacement so the idempotency check below reads
+    // the current type. The per-row redirect() reaches this alias too, so today this only re-confirms it; it stays
+    // because it makes the method correct on its own terms - the write target is resolved here, not assumed to
+    // have been resolved by the caller - and it costs one map lookup that is skipped until a label write happens.
+    vertex = replacements.resolve(vertex);
 
-    // Check how many of the labels to remove actually exist on the vertex
-    int removedLabelsCount = 0;
-    for (final String label : labelsToRemove)
-      if (currentLabels.contains(label))
-        removedLabelsCount++;
-    if (removedLabelsCount == 0)
-      return;
+    // The reduced type is rebuilt from the vertex's OWN labels: an inherited one is carried by the subtype that
+    // remains and must not be listed alongside it, or the vertex would be moved out of that subtype (issue #6363).
+    final DocumentType currentType = vertex.getType();
+    final List<String> currentLabels = Labels.getOwnLabels(vertex);
+    final List<String> labelsToRemove = item.getLabels();
 
     // Compute remaining labels
     final List<String> remainingLabels = new ArrayList<>(currentLabels);
     remainingLabels.removeAll(labelsToRemove);
 
+    // Count the labels the vertex actually carries - a label it does not have is a no-op, exactly as in Neo4j, and
+    // a label named twice in one clause is one label, since a label is set membership and not a count. A label the
+    // vertex only answers to through a type it keeps is a different matter: no type it could be moved to answers
+    // 'no' to that label and 'yes' to the subtype implying it, so the removal is refused rather than reported as
+    // done and silently not done.
+    final Schema schema = context.getDatabase().getSchema();
+    int removedLabelsCount = 0;
+    for (int i = 0; i < labelsToRemove.size(); i++) {
+      final String label = labelsToRemove.get(i);
+      // indexOf != i skips a repeat of a label named earlier in the same clause - a linear scan rather than a Set,
+      // because a clause holds a handful of labels and this costs no allocation on a path that usually finds none.
+      if (!currentType.instanceOf(label) || labelsToRemove.indexOf(label) != i)
+        continue;
+      if (Labels.impliedBy(schema, remainingLabels, label))
+        throw new CommandSemanticException("Cannot remove label '" + label + "' from a vertex of type '"
+            + currentType.getName() + "': the type inherits that label from its hierarchy, so the vertex would still "
+            + "answer to it. Drop the label from the type hierarchy with SQL (ALTER TYPE), or remove the inheriting "
+            + "label too");
+      removedLabelsCount++;
+    }
+    if (removedLabelsCount == 0)
+      return;
+
     final String newTypeName;
     if (remainingLabels.isEmpty()) {
-      newTypeName = "V";
-      context.getDatabase().getSchema().getOrCreateVertexType("V");
+      // The same reserved sentinel CreateStep/MergeStep use for "no labels", rather than a second, differently
+      // named type meaning the same thing (issue #6395: a node stripped of its last label used to land in "V"
+      // while one created unlabelled landed in "Vertex", so the two collided with neither and with each other).
+      newTypeName = Labels.NO_LABEL_TYPE;
+      schema.getOrCreateVertexType(Labels.NO_LABEL_TYPE);
     } else {
-      newTypeName = Labels.ensureCompositeType(
-          context.getDatabase().getSchema(), remainingLabels);
+      newTypeName = Labels.ensureCompositeType(schema, remainingLabels);
     }
 
+    // Nothing to do when the reduced type is the type the vertex already has, and this guard has to stay AHEAD of
+    // the statistics update below: the count above asks `instanceOf`, which says yes to a vertex's own composite
+    // name (`REMOVE n:`Author~Topic`` on an Author~Topic vertex), while that name is not one of the labels
+    // `remainingLabels` is built from and so removes nothing. This early return is what keeps such a no-op from
+    // being reported as a removal.
     if (vertex.getTypeName().equals(newTypeName))
       return;
 
-    // Create new vertex with the reduced type, copy properties
-    final MutableVertex newVertex = context.getDatabase().newVertex(newTypeName);
-    for (final String prop : vertex.getPropertyNames())
-      newVertex.set(prop, vertex.get(prop));
-    newVertex.save();
+    // Rewrite the vertex under the reduced type. The record moves, so the replacement is recorded and every
+    // alias of this node in the row - and in every later row - follows it.
+    replacements.replace(vertex, newTypeName);
 
-    final QueryStatistics stats = context.getStatistics();
-    stats.addLabelsRemoved(removedLabelsCount);
+    context.getStatistics().addLabelsRemoved(removedLabelsCount);
 
-    // Migrate edges
-    for (final Edge edge : vertex.getEdges(Vertex.DIRECTION.OUT))
-      newVertex.newEdge(edge.getTypeName(), edge.getVertex(Vertex.DIRECTION.IN));
-    for (final Edge edge : vertex.getEdges(Vertex.DIRECTION.IN))
-      edge.getVertex(Vertex.DIRECTION.OUT).newEdge(edge.getTypeName(), newVertex);
-
-    vertex.delete();
-
-    ((ResultInternal) result).setProperty(variable, newVertex);
+    replacements.redirect(result);
   }
 
   @Override
@@ -300,7 +334,7 @@ public class RemoveStep extends AbstractExecutionStep {
       builder.append(" (").append(removeClause.getItems().size()).append(" items)");
     }
     if (context.isProfiling()) {
-      builder.append(" (").append(getCostFormatted()).append(")");
+      builder.append(" (").append(getCostFormatted());
       if (rowCount > 0)
         builder.append(", ").append(getRowCountFormatted());
       builder.append(")");

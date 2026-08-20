@@ -49,6 +49,48 @@ public class BinaryCondition extends BooleanExpression {
     return operator.execute(context != null ? context.getDatabase() : null, leftVal, rightVal);
   }
 
+  /**
+   * Folds the comparison at plan time, but only when both of its operands are foldable: written in the statement as
+   * literals ({@code 1 = 0}, {@code 'a' = 'b'}, {@code 1 = 1 + 1}), or a call to a
+   * {@link com.arcadedb.query.sql.executor.SQLFunction#isDeterministic() deterministic} built-in over foldable
+   * arguments ({@code 1 = abs(-1)}, issue #6190).
+   */
+  @Override
+  public boolean isAlwaysFalse(final CommandContext context) {
+    return literalVerdict(context, Boolean.FALSE);
+  }
+
+  /**
+   * The mirror of {@link #isAlwaysFalse(CommandContext)}, folded under the same restriction: a comparison whose
+   * operands are both foldable ({@code 1 = 1}, {@code 'a' = 'a'}, {@code 2 = 1 + 1}, {@code 1 = abs(-1)}) is true for
+   * every record or for none, and the planner can drop the filter instead of evaluating it once per record.
+   */
+  @Override
+  public boolean isAlwaysTrue(final CommandContext context) {
+    return literalVerdict(context, Boolean.TRUE);
+  }
+
+  /**
+   * Evaluates the comparison at plan time, but only when both of its operands are {@link Expression#isFoldable()
+   * foldable}. See {@link Expression#isLiteral()} for why a bound parameter is excluded even though it could be
+   * computed without a record, and {@link Expression#isFoldable()} for the one function-call shape that is admitted
+   * despite that restriction.
+   *
+   * @return true when the fold is possible AND its verdict is {@code expected}; false whenever the comparison cannot be
+   * folded, which is the conservative answer both callers need
+   */
+  private boolean literalVerdict(final CommandContext context, final Boolean expected) {
+    if (left == null || right == null || !left.isFoldable() || !right.isFoldable())
+      return false;
+
+    try {
+      return expected.equals(evaluate((Result) null, context));
+    } catch (final Exception e) {
+      // a comparison the operator cannot make (eg. between incompatible types) is left to the runtime to report
+      return false;
+    }
+  }
+
   public void toString(final Map<String, Object> params, final StringBuilder builder) {
     left.toString(params, builder);
     builder.append(" ");

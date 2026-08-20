@@ -25,6 +25,7 @@ import com.arcadedb.exception.CommandParsingException;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.utility.LongRangeList;
+import com.arcadedb.utility.StallAwareStopwatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,7 +69,7 @@ class CypherRangeHeapExhaustionTest {
 
   /** The reported PoC: it must fail fast instead of filling the heap. */
   @Test
-  @Timeout(value = 30, unit = TimeUnit.SECONDS)
+  @Timeout(value = 60, unit = TimeUnit.SECONDS)
   void reportedPocIsRejectedWithoutExhaustingHeap() {
     final Throwable thrown = catchThrowable(() -> consume("RETURN range(0, 9999999999) AS v"));
     assertThat(thrown).isNotNull();
@@ -78,7 +79,7 @@ class CypherRangeHeapExhaustionTest {
   }
 
   @Test
-  @Timeout(value = 30, unit = TimeUnit.SECONDS)
+  @Timeout(value = 60, unit = TimeUnit.SECONDS)
   void oversizedRangeIsRejectedInsideUnwindToo() {
     final Throwable thrown = catchThrowable(() -> consume("UNWIND range(0, 9999999999) AS i RETURN count(i) AS c"));
     assertThat(thrown).isNotNull();
@@ -99,15 +100,25 @@ class CypherRangeHeapExhaustionTest {
 
   /**
    * With the limit disabled the range stays usable but must remain lazy: a billion elements would need tens of
-   * GB if materialised, so answering within the timeout is the proof that nothing is copied.
+   * GB if materialised, so answering quickly is the proof that nothing is copied.
+   * <p>
+   * Every read here is answered from start, step and size alone, so all of them are inside the measured window
+   * (issue #6270) and the bound IS the claim: a materialised list could not serve any of them cheaply.
+   * {@code IN} used to be outside it, because it walked the list element by element and so cost 3 s locally and
+   * about 20 s on a CI runner for an element near the end of the range. It is arithmetic since issue #6323, and
+   * {@code CypherInRangeMembershipTest} is where the answer it gives is pinned down against the walk's. The
+   * {@code @Timeout} stays as a hang detector.
    */
   @Test
-  @Timeout(value = 30, unit = TimeUnit.SECONDS)
+  @Timeout(value = 60, unit = TimeUnit.SECONDS)
   void hugeRangeIsLazyWhenTheLimitIsDisabled() {
     database.getConfiguration().setValue(GlobalConfiguration.QUERY_MAX_RANGE_SIZE, -1L);
+
+    final StallAwareStopwatch stopwatch = StallAwareStopwatch.start();
     assertThat(single("RETURN size(range(0, 999999999)) AS r")).isEqualTo(1_000_000_000L);
     assertThat(single("RETURN range(0, 999999999)[123456789] AS r")).isEqualTo(123_456_789L);
     assertThat(single("RETURN 999999998 IN range(0, 999999999) AS r")).isEqualTo(true);
+    stopwatch.assertStayedUnder(5_000L, "three constant-cost reads of a lazy range, not a billion-element copy");
   }
 
   /** A range within the limit is not copied into an ArrayList any more. */

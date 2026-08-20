@@ -19,12 +19,11 @@
 package com.arcadedb.query.opencypher.procedures.algo;
 
 import com.arcadedb.database.Database;
-import com.arcadedb.database.RID;
-import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
+import com.arcadedb.query.sql.executor.WorkGuard;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -57,6 +56,18 @@ import java.util.stream.Stream;
  * RETURN source.name, target.name, weight
  * </pre>
  * </p>
+ *
+ * <p>Working set: a {@code terminals x nodeCount} pair of Dijkstra tables plus one entry per terminal pair -
+ * about {@code t²/2} of them - in five parallel primitive arrays, both reserved through
+ * {@link AbstractAlgoProcedure.MemoryBudget} before anything is allocated. Quadratic in a list the caller
+ * supplies and nothing bounds, which is why the pair count is also computed in {@code long}. The time it buys is
+ * bounded the other way, by a {@link WorkGuard} checkpoint in each of the Dijkstra, Kruskal and pruning loops
+ * (issue #6302).</p>
+ *
+ * <p>Edge weights are read through {@code GraphData.weightedAdjacency}, which produces the neighbour list and its
+ * weights from one walk of the same edges. Deriving them from a second, independently ordered traversal is what
+ * made a {@code relTypes} filter and the mere presence of a Graph Analytical View each change the tree this
+ * procedure returned (issue #6301).</p>
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
@@ -99,18 +110,49 @@ public class AlgoSteinerTree extends AbstractAlgoProcedure {
       return Stream.empty();
 
     final Database db = context.getDatabase();
+    final WorkGuard guard = newWorkGuard(context);
     final GraphData graph = loadGraph(db, null, relTypes, context);
 
     final int n = graph.nodeCount;
     if (n == 0)
       return Stream.empty();
 
-    // Build weighted adjacency lists (undirected for shortest paths)
-    final int[][] adj = graph.adjacency(Vertex.DIRECTION.BOTH, relTypes);
-    final double[][] adjW = buildWeightedAdj(graph, adj, weightProperty);
+    final int t = terminals.size();
+
+    // The terminal list is the knob here, and it is the one knob a caller supplies as data rather than as a
+    // number: nothing bounds its length, and it need not even be bounded by the node count, since repeating the
+    // same vertex is accepted. It sizes two working sets, both reserved before the adjacency build so that a
+    // list too long to serve costs nothing beyond the reservation:
+    //   - the Dijkstra tables, terminals x nodeCount of doubles plus the same of ints;
+    //   - one entry per terminal PAIR, about t²/2 of them, in four parallel arrays.
+    // The pair count is computed in long. In int, `t * (t - 1)` wraps just past 46341 terminals - the division
+    // by 2 happens after the product, so the wrap is not avoided by the result fitting an int - and a negative
+    // pairCount reached `new int[pairCount]` as a bare NegativeArraySizeException naming nothing.
+    final long pairCount = (long) t * (t - 1) / 2;
+    final MemoryBudget memory = graph.memory();
+    memory.reserve(saturatingSum(matrixBytes(t, n, DOUBLE_BYTES), matrixBytes(t, n, INT_BYTES)),
+        "the per-terminal Dijkstra tables", t + " terminals x " + n + " nodes");
+    // Per pair: the endpoints pU/pV, the weight pW, and the two int arrays the index sort works over (the
+    // order and the merge scratch). Four ints and a double, all primitive - which is what
+    // sortedIndexesByWeight() is for: through Arrays.sort(Integer[], Comparator) the sort alone used to cost
+    // 24 bytes per pair, more than everything else here put together (issue #6289).
+    memory.reserve(saturatingProduct(pairCount, 4 * INT_BYTES + DOUBLE_BYTES),
+        "the terminal-pair arrays", pairCount + " pairs over " + t + " terminals");
+    if (pairCount > Integer.MAX_VALUE)
+      throw new IllegalArgumentException(getName() + "(): " + t + " terminalNodes make " + pairCount
+          + " terminal pairs, more than the " + Integer.MAX_VALUE + " entries a Java array can hold");
+
+    // Build weighted adjacency lists (undirected for shortest paths). Neighbours and weights come out of one
+    // walk of the same edges, which is what keeps `adjW[i][j]` the weight of the edge to `adj[i][j]`: the
+    // hand-rolled second traversal this replaced filled the weights positionally from an unfiltered
+    // getEdges(BOTH) walk and attached them to whatever neighbour happened to sit at that index, so a relTypes
+    // filter or a Graph Analytical View each silently changed the tree Dijkstra went on to find (issue #6301).
+    final GraphData.WeightedAdjacency weighted = graph.weightedAdjacency(guard, Vertex.DIRECTION.BOTH, weightProperty,
+        relTypes);
+    final int[][] adj = weighted.neighbors();
+    final double[][] adjW = weighted.weights();
 
     // Map terminals to their indices
-    final int t = terminals.size();
     final int[] termIdx = new int[t];
     for (int i = 0; i < t; i++) {
       final int idx = graph.indexOf(terminals.get(i).getIdentity());
@@ -123,17 +165,20 @@ public class AlgoSteinerTree extends AbstractAlgoProcedure {
     final double[][] dist = new double[t][n]; // dist[ti][v] = shortest path from terminal ti to v
     final int[][] prev = new int[t][n];       // prev[ti][v] = predecessor of v in Dijkstra from ti
     for (int ti = 0; ti < t; ti++) {
+      // One Dijkstra per terminal over the whole graph: O(t x (V + E) log V), sized by a terminal list the
+      // caller supplies and by the graph, with no knob to cap either (issue #6302).
+      guard.check();
       Arrays.fill(dist[ti], Double.MAX_VALUE);
       Arrays.fill(prev[ti], -1);
-      dijkstra(termIdx[ti], adj, adjW, dist[ti], prev[ti]);
+      dijkstra(termIdx[ti], adj, adjW, dist[ti], prev[ti], guard);
     }
 
     // ── Step 2: Build complete graph on terminals, run MST (Kruskal's) ────
-    // Number of terminal pairs
-    final int pairCount = t * (t - 1) / 2;
-    final int[] pU = new int[pairCount];
-    final int[] pV = new int[pairCount];
-    final double[] pW = new double[pairCount];
+    // Number of terminal pairs, computed in long and bounded above.
+    final int pairs = (int) pairCount;
+    final int[] pU = new int[pairs];
+    final int[] pV = new int[pairs];
+    final double[] pW = new double[pairs];
     int pi = 0;
     for (int i = 0; i < t; i++)
       for (int j = i + 1; j < t; j++) {
@@ -143,11 +188,9 @@ public class AlgoSteinerTree extends AbstractAlgoProcedure {
         pi++;
       }
 
-    // Sort by weight for Kruskal's
-    final Integer[] sortIdx = new Integer[pairCount];
-    for (int i = 0; i < pairCount; i++)
-      sortIdx[i] = i;
-    Arrays.sort(sortIdx, (a, b) -> Double.compare(pW[a], pW[b]));
+    // Sort by weight for Kruskal's, over primitive indices: `pairs` is quadratic in a terminal list the caller
+    // supplies, so a boxed Integer[] here is ~2M objects at 2000 terminals.
+    final int[] sortIdx = sortedIndexesByWeight(pW, pairs);
 
     // Union-Find on terminal indices
     final int[] parent = new int[t];
@@ -159,7 +202,10 @@ public class AlgoSteinerTree extends AbstractAlgoProcedure {
     final int[] mstU = new int[t - 1];
     final int[] mstV = new int[t - 1];
     int mstSize = 0;
-    for (int k = 0; k < pairCount && mstSize < t - 1; k++) {
+    for (int k = 0; k < pairs && mstSize < t - 1; k++) {
+      // `pairs` is quadratic in the terminal list, and one iteration is two union-find finds - small enough
+      // that the check is throttled rather than paid per pair.
+      guard.checkPeriodically(k);
       final int idx = sortIdx[k];
       if (pW[idx] == Double.MAX_VALUE)
         continue; // unreachable pair
@@ -210,8 +256,12 @@ public class AlgoSteinerTree extends AbstractAlgoProcedure {
     // Iteratively remove non-terminal leaves
     boolean changed = true;
     while (changed) {
+      // Leaf pruning repeats until a whole pass changes nothing, so it is O(V x (V + E)) in the worst case -
+      // one more graph-driven loop with nothing to bound it.
+      guard.check();
       changed = false;
       for (int i = 0; i < n; i++) {
+        guard.checkPeriodically(i);
         if (!steinerNodes[i] || isTerminal(i, termIdx))
           continue;
         if (steinerDeg[i] == 1) {
@@ -267,12 +317,14 @@ public class AlgoSteinerTree extends AbstractAlgoProcedure {
   // ── Dijkstra ─────────────────────────────────────────────────────────────
 
   private static void dijkstra(final int src, final int[][] adj, final double[][] adjW,
-      final double[] dist, final int[] prev) {
+      final double[] dist, final int[] prev, final WorkGuard guard) {
     dist[src] = 0.0;
     // PriorityQueue entry: [cost, node]
     final PriorityQueue<double[]> pq = new PriorityQueue<>(Comparator.comparingDouble(e -> e[0]));
     pq.offer(new double[]{ 0.0, src });
     while (!pq.isEmpty()) {
+      // Settling one node costs its degree, which on a supernode is the whole edge list.
+      guard.check();
       final double[] top = pq.poll();
       final double d = top[0];
       final int u = (int) top[1];
@@ -326,39 +378,5 @@ public class AlgoSteinerTree extends AbstractAlgoProcedure {
         return;
       }
     }
-  }
-
-  private double[][] buildWeightedAdj(final GraphData graph, final int[][] adj,
-      final String weightProp) {
-    final int n = graph.nodeCount;
-    final double[][] adjW = new double[n][];
-    for (int i = 0; i < n; i++) {
-      adjW[i] = new double[adj[i].length];
-      Arrays.fill(adjW[i], 1.0);
-    }
-    if (weightProp == null)
-      return adjW;
-    for (int i = 0; i < n; i++) {
-      final Iterable<Edge> edges = graph.getVertex(i).getEdges(Vertex.DIRECTION.BOTH);
-      // Build a temporary map: neighbour index → weight
-      final double[] tmpW = new double[adj[i].length];
-      Arrays.fill(tmpW, 1.0);
-      int pos = 0;
-      for (final Edge e : edges) {
-        final RID nbRid = neighborRid(e, graph.getRID(i), Vertex.DIRECTION.BOTH);
-        if (nbRid == null)
-          continue;
-        final int nbIdx = graph.indexOf(nbRid);
-        if (nbIdx < 0)
-          continue;
-        if (pos < adj[i].length) {
-          final Object w = e.get(weightProp);
-          tmpW[pos] = w instanceof Number num ? num.doubleValue() : 1.0;
-          pos++;
-        }
-      }
-      adjW[i] = tmpW;
-    }
-    return adjW;
   }
 }

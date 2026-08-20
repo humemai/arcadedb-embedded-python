@@ -34,6 +34,7 @@ import com.arcadedb.database.RecordEvents;
 import com.arcadedb.database.RecordFactory;
 import com.arcadedb.database.TransactionContext;
 import com.arcadedb.database.TransactionExplicitLock;
+import com.arcadedb.database.async.AsyncQuiesce;
 import com.arcadedb.database.async.DatabaseAsyncExecutor;
 import com.arcadedb.database.async.ErrorCallback;
 import com.arcadedb.database.async.OkCallback;
@@ -487,6 +488,16 @@ public class ServerDatabase implements DatabaseInternal {
   @Override
   public boolean isAsyncProcessing() {
     return wrapped.isAsyncProcessing();
+  }
+
+  @Override
+  public void waitForAsyncCompletion() {
+    wrapped.waitForAsyncCompletion();
+  }
+
+  @Override
+  public AsyncQuiesce quiesceAsync() {
+    return wrapped.quiesceAsync();
   }
 
   public DocumentIndexer getIndexer() {

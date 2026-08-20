@@ -49,12 +49,11 @@ public class EdgeVertexIterator extends ResettableIteratorBase<Pair<RID, RID>> {
     if (currentPosition.get() < currentContainer.getUsed())
       return true;
 
-    currentContainer = currentContainer.getPrevious();
-    if (currentContainer != null) {
-      currentPosition.set(MutableEdgeSegment.CONTENT_START_POSITION);
-      return currentPosition.get() < currentContainer.getUsed();
-    }
-    return false;
+    if (moveToPreviousChunk() == null)
+      return false;
+
+    currentPosition.set(MutableEdgeSegment.CONTENT_START_POSITION);
+    return currentPosition.get() < currentContainer.getUsed();
   }
 
   @Override

@@ -380,15 +380,53 @@ public class DatabaseContext extends ThreadLocal<Map<String, DatabaseContext.Dat
   }
 
   public static class DatabaseContextTL {
-    public final List<TransactionContext> transactions = new ArrayList<>(3);
-    public       boolean                  asyncMode    = false;
+    public final List<TransactionContext> transactions             = new ArrayList<>(3);
+    /**
+     * Whether the default round-robin bucket strategy picks a bucket PER THREAD for this database, so that concurrent
+     * writers do not compete for the same pages.
+     * <p>
+     * It was called {@code asyncMode}, which is what it is not (issue #6324, note b). It has never meant "this thread
+     * is an async worker": #6303 removed the one place that read it that way ({@code RebuildIndexStatement}, where
+     * the misreading refused exactly the operation that issue set out to give back), and it is set on
+     * {@code AsyncCommandPool} threads, which are deliberately NOT workers. "Is this thread a worker of that
+     * executor" is answered by thread IDENTITY ({@code DatabaseAsyncExecutorImpl.isCurrentThreadOneOfMyWorkers}), and
+     * nothing else should be asked of this flag.
+     */
+    public       boolean                  perThreadBucketSelection = false;
     private      Binary                   temporaryBuffer1;
     private      Binary                   temporaryBuffer2;
-    private      int                      maxNested    = 3;
-    private      SecurityDatabaseUser     currentUser  = null;
+    private      int                      maxNested                = 3;
+    private      SecurityDatabaseUser     currentUser              = null;
     // The stateful client session bound to this thread context (GQL SESSION statements).
     // Set by the protocol owner (HTTP/Bolt) alongside the transaction; null in plain embedded use.
     private      QuerySession             querySession = null;
+    /**
+     * True while a record-read event listener is running on this thread for this database, so that a listener which
+     * reads does not fire the listeners again.
+     * <p>
+     * The hazard is structural: {@code LocalBucket.getRecordInternal} fires BEFORE READ from inside the read itself,
+     * so a listener that loads anything re-enters it, which fires the listener, which loads... The shipped
+     * {@code BEFORE READ} trigger adapter did exactly that and made every read of its type die with a
+     * {@code StackOverflowError}; that one is fixed at the source, but any user listener - or the body of any
+     * READ trigger, which is arbitrary SQL/JavaScript - can still write {@code SELECT FROM SameType} and rebuild
+     * the loop by hand.
+     * <p>
+     * Lives HERE rather than in a {@code ThreadLocal} of its own, and not only to avoid a second thread-local: this
+     * context is keyed by database, so the guard is too. A bare thread-local would suppress the read events of
+     * database B while a listener of database A happened to be running on the same thread, which on a
+     * multi-database server is a silently missed event rather than a saved stack frame.
+     */
+    private      boolean                  firingReadEvents = false;
+
+    /** See {@link #firingReadEvents}. */
+    public boolean isFiringReadEvents() {
+      return firingReadEvents;
+    }
+
+    /** See {@link #firingReadEvents}. Callers MUST restore the previous value in a finally. */
+    public void setFiringReadEvents(final boolean firingReadEvents) {
+      this.firingReadEvents = firingReadEvents;
+    }
 
     public SecurityDatabaseUser getCurrentUser() {
       return currentUser;

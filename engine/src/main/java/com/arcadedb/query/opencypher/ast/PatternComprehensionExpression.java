@@ -31,8 +31,6 @@ import com.arcadedb.query.opencypher.query.OpenCypherQueryEngine;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
-import com.arcadedb.schema.DocumentType;
-import com.arcadedb.schema.VertexType;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -121,12 +119,15 @@ public class PatternComprehensionExpression implements Expression {
       return;
     }
 
-    // Inline WHERE predicate on the leading node, e.g. [(a WHERE a.v = 1)-[:E]->(x) | x]. Only the
-    // first hop needs the check here: every later hop starts from the previous hop's end node, which
-    // matchesEndPattern already validated, and an uncorrelated start is validated while iterating
-    // candidates in traverseUncorrelatedStart.
-    if (hopIndex == 0 && knownStartVertex == null
-        && !matchesNodeWhereExpression(startVertex, startNodePattern, inlineWhereRow(startNodePattern, currentResult), context))
+    // Label, inline-property and inline-WHERE constraints on the leading node, e.g.
+    // [(a:Company WHERE a.v = 1)-[:E]->(x) | x]. Only the first hop needs the check here: every
+    // later hop starts from the previous hop's end node, which matchesEndPattern already validated,
+    // and an uncorrelated start is validated while iterating candidates in traverseUncorrelatedStart.
+    // A correlated start (the leading node reuses an outer-bound variable) used to skip the label and
+    // inline-property checks entirely and enforce only the WHERE predicate, so a comprehension and
+    // the sibling exists(...) pattern predicate - which enforces all three on a bound start vertex
+    // (issue #5095) - disagreed on the same pattern (issue #6374).
+    if (hopIndex == 0 && knownStartVertex == null && !matchesStartNodePattern(startVertex, startNodePattern, currentResult, context))
       return;
 
     // Add start vertex to path at first hop
@@ -177,25 +178,21 @@ public class PatternComprehensionExpression implements Expression {
   private void traverseUncorrelatedStart(final Result baseResult, final CommandContext context,
       final Result currentResult, final List<Object> resultList, final List<Object> pathElements,
       final NodePattern startNodePattern) {
-    final List<String> startLabels = startNodePattern.getLabels();
-    final Iterable<? extends Record> candidates;
-    if (startLabels != null && !startLabels.isEmpty()) {
-      // Use the first label as the iteration root; remaining labels are checked per vertex.
-      // Polymorphic iteration so subtypes (e.g. composite multi-label types) are visited.
-      final String typeName = startLabels.get(0);
-      if (!context.getDatabase().getSchema().existsType(typeName))
-        return;
-      candidates = () -> context.getDatabase().iterateType(typeName, true);
-    } else {
-      // No label constraint: iterate every vertex type registered in the schema.
-      candidates = collectAllVertices(context);
-    }
+    // The scan visits every vertex type the label constraint can be satisfied by, which for a disjunction
+    // (y:A|B) means the types of both alternatives. Taking the first label as the iteration root left the
+    // per-candidate filter below correct but never handed it a vertex carrying only a later alternative, and an
+    // alternative naming a type nobody created emptied the whole comprehension (issue #6352). The candidate types
+    // come from the rule the pattern anchor uses in MatchNodeStep, so a comprehension and the MATCH spelling of
+    // the same pattern cannot drift apart again.
+    final Iterator<Record> candidates = Labels.iterateMatchingVertices(context.getDatabase(),
+        startNodePattern.getLabels(), startNodePattern.isLabelDisjunction());
 
     // Row reused across every candidate vertex, for the same reason as the edge expansions below:
     // only the node variable changes per candidate, so the enclosing bindings are copied once.
     final ResultInternal whereEvalRow = inlineWhereRow(startNodePattern, currentResult);
 
-    for (final Record record : candidates) {
+    while (candidates.hasNext()) {
+      final Record record = candidates.next();
       if (!(record instanceof Vertex candidate))
         continue;
       if (!matchesStartPattern(candidate, startNodePattern, currentResult, whereEvalRow, context))
@@ -216,35 +213,32 @@ public class PatternComprehensionExpression implements Expression {
   }
 
   /**
-   * Returns true if a vertex matches the start node pattern's labels, inline properties and inline
-   * {@code WHERE} predicate.
+   * Returns true if a candidate vertex matches the start node pattern's inline properties and inline
+   * {@code WHERE} predicate. The labels are not re-checked here: the candidates come from the types the label
+   * constraint selects, so every one of them already carries the labels the pattern asks for (issue #6352).
    */
   private boolean matchesStartPattern(final Vertex vertex, final NodePattern startNodePattern, final Result bindings,
       final ResultInternal whereEvalRow, final CommandContext context) {
-    if (startNodePattern.hasLabels()) {
-      for (final String label : startNodePattern.getLabels()) {
-        if (!Labels.hasLabel(vertex, label))
-          return false;
-      }
-    }
     if (!InlineProperties.matches(vertex, startNodePattern.getProperties(), bindings, context))
       return false;
     return matchesNodeWhereExpression(vertex, startNodePattern, whereEvalRow, context);
   }
 
   /**
-   * Collects an Iterable that walks all vertex-typed records in the database.
+   * Returns true if a <b>correlated</b> start vertex - the leading node of the pattern reusing a
+   * variable already bound in the outer scope - satisfies the start node pattern's labels, inline
+   * properties and inline {@code WHERE} predicate. Unlike {@link #matchesStartPattern}, the labels
+   * are checked here: the vertex did not come from a label-filtered candidate scan, it is whatever
+   * the outer scope already bound (issue #6374, mirroring {@code PatternPredicateExpression}'s
+   * enforcement of the same rule for {@code exists(...)}, issue #5095).
    */
-  private static Iterable<Record> collectAllVertices(final CommandContext context) {
-    final List<Record> all = new ArrayList<>();
-    for (final DocumentType type : context.getDatabase().getSchema().getTypes()) {
-      if (!(type instanceof VertexType))
-        continue;
-      final Iterator<Record> it = context.getDatabase().iterateType(type.getName(), false);
-      while (it.hasNext())
-        all.add(it.next());
-    }
-    return all;
+  private boolean matchesStartNodePattern(final Vertex vertex, final NodePattern startNodePattern, final Result bindings,
+      final CommandContext context) {
+    if (!Labels.matches(vertex, startNodePattern.getLabels(), startNodePattern.isLabelDisjunction()))
+      return false;
+    if (!InlineProperties.matches(vertex, startNodePattern.getProperties(), bindings, context))
+      return false;
+    return matchesNodeWhereExpression(vertex, startNodePattern, inlineWhereRow(startNodePattern, bindings), context);
   }
 
   private void traverseVariableLength(final Result baseResult, final CommandContext context,
@@ -320,12 +314,8 @@ public class PatternComprehensionExpression implements Expression {
   private boolean matchesEndPattern(final Vertex vertex, final NodePattern endNodePattern, final Result baseResult,
       final Result bindings, final ResultInternal whereEvalRow, final RelationshipPattern relPattern, final Edge edge,
       final CommandContext context) {
-    if (endNodePattern.hasLabels()) {
-      for (final String label : endNodePattern.getLabels()) {
-        if (!Labels.hasLabel(vertex, label))
-          return false;
-      }
-    }
+    if (!Labels.matches(vertex, endNodePattern.getLabels(), endNodePattern.isLabelDisjunction()))
+      return false;
     if (!InlineProperties.matches(vertex, endNodePattern.getProperties(), bindings, context))
       return false;
     // Variable binding consistency (issue #4111): if the end variable is already

@@ -142,6 +142,14 @@ public class ArrayRangeSelector extends SimpleNode {
     return Arrays.asList(Arrays.copyOfRange(arrayResult, lFrom, lTo));
   }
 
+  /**
+   * @see Expression#isEarlyCalculated(CommandContext)
+   */
+  public boolean isEarlyCalculated(final CommandContext context) {
+    return (fromSelector == null || fromSelector.isEarlyCalculated(context)) //
+        && (toSelector == null || toSelector.isEarlyCalculated(context));
+  }
+
   public ArrayRangeSelector copy() {
     final ArrayRangeSelector result = new ArrayRangeSelector();
     result.from = from;
@@ -165,6 +173,15 @@ public class ArrayRangeSelector extends SimpleNode {
   @Override
   protected SimpleNode[] getCacheableElements() {
     return new SimpleNode[] { fromSelector, toSelector };
+  }
+
+  /**
+   * Without this, every field here is null/false-default on a bare-integer range ({@code a[1..3]}), so two parses
+   * of the same range compared unequal (object identity) instead of equal (issue #6409, item 3).
+   */
+  @Override
+  protected Object[] getIdentityElements() {
+    return new Object[] { from, to, newRange, included, fromSelector, toSelector };
   }
 
   public void setValue(final Object target, final Object value, final CommandContext context) {

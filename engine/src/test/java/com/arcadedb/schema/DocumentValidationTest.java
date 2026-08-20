@@ -31,6 +31,7 @@ import com.arcadedb.graph.MutableEdge;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.utility.StallAwareStopwatch;
 import org.junit.jupiter.api.Test;
 
 import java.text.SimpleDateFormat;
@@ -202,7 +203,9 @@ class DocumentValidationTest extends TestHelper {
 
     database.command("sql", "create property Validation.long LONG (default 1)");
     database.command("sql", "create property Validation.string STRING (default \"1\")");
-    database.command("sql", "create property Validation.dat DATETIME (default sysdate('YYYY-MM-DD HH:MM:SS'))");
+    // sysdate()'s only argument is a zone id, not a format (issue #6388): the string passed here was never a valid
+    // java.time pattern either, it was simply ignored.
+    database.command("sql", "create property Validation.dat DATETIME (default sysdate())");
 
     assertThat(clazz.getProperty("long").getDefaultValue()).isEqualTo(1L);
     assertThat(clazz.getProperty("string").getDefaultValue()).isEqualTo("1");
@@ -237,7 +240,10 @@ class DocumentValidationTest extends TestHelper {
     final DocumentType clazz = database.getSchema().createDocumentType("Validation");
 
     database.command("sql", "create property Validation.string STRING (mandatory true, notnull true, default \"Hi\")");
-    database.command("sql", "create property Validation.dat DATETIME (mandatory true, default null)");
+    // Issue #6134: a default that evaluates to null fills in nothing, so the property is left absent rather than
+    // explicitly set to null - which means it can no longer satisfy MANDATORY either, hence no `mandatory true` here.
+    // See nullDefaultCannotSatisfyAMandatoryProperty().
+    database.command("sql", "create property Validation.dat DATETIME (default null)");
 
     assertThat(clazz.getProperty("string").getDefaultValue()).isEqualTo("Hi");
     assertThat(clazz.getProperty("dat").getDefaultValue()).isNull();
@@ -246,7 +252,7 @@ class DocumentValidationTest extends TestHelper {
       final MutableDocument d = database.newDocument("Validation");
       d.save();
       assertThat(d.get("string")).isEqualTo("Hi");
-      assertThat(d.get("dat")).isNull();
+      assertThat(d.has("dat")).isFalse();
 
       final ResultSet resultSet = database.command("sql", "insert into Validation set string = null");
 
@@ -254,9 +260,23 @@ class DocumentValidationTest extends TestHelper {
       final Result result = resultSet.next();
 
       assertThat(result.<String>getProperty("string")).isEqualTo("Hi");
-      assertThat(result.hasProperty("dat")).isTrue();
-      assertThat(result.<String>getProperty("dat")).isNull();
+      assertThat(result.hasProperty("dat")).isFalse();
     });
+  }
+
+  /**
+   * Issue #6134: a MANDATORY property whose DEFAULT evaluates to null is not filled in by the default, so the record is
+   * rejected as missing the property. It used to be accepted with the property present and null - and a NOTNULL
+   * property in the same shape was rejected with "cannot be null", an error pointing at the caller's data rather than
+   * at the schema default that actually caused it.
+   */
+  @Test
+  void nullDefaultCannotSatisfyAMandatoryProperty() {
+    database.getSchema().createDocumentType("Validation");
+    database.command("sql", "create property Validation.dat DATETIME (mandatory true, default null)");
+
+    database.transaction(() -> assertThatThrownBy(() -> database.newDocument("Validation").save()).isInstanceOf(
+        ValidationException.class).hasMessageContaining("Validation.dat").hasMessageContaining("mandatory"));
   }
 
   @Test
@@ -715,13 +735,12 @@ class DocumentValidationTest extends TestHelper {
     final MutableDocument d = database.newDocument(clazz.getName());
     d.set("string", "a".repeat(40) + "!");
 
-    final long begin = System.currentTimeMillis();
+    final StallAwareStopwatch stopwatch = StallAwareStopwatch.start();
     assertThatThrownBy(d::validate).isInstanceOf(TimeoutException.class);
-    final long elapsedMillis = System.currentTimeMillis() - begin;
 
     // Generous upper bound: proves validation was aborted near the configured deadline rather than merely
     // being slow (the unbounded match takes tens of seconds).
-    assertThat(elapsedMillis).isLessThan(5000);
+    stopwatch.assertGaveUpWithin(5000, "the configured 200ms deadline from an unbounded match");
   }
 
   @Test
@@ -743,13 +762,12 @@ class DocumentValidationTest extends TestHelper {
     for (int i = 0; i < 10; i++)
       d.set("field" + i, pathological);
 
-    final long begin = System.currentTimeMillis();
+    final StallAwareStopwatch stopwatch = StallAwareStopwatch.start();
     assertThatThrownBy(d::validate).isInstanceOf(TimeoutException.class);
-    final long elapsedMillis = System.currentTimeMillis() - begin;
 
     // 10 independent 200ms-per-property budgets would take >= 2000ms; a shared deadline keeps the whole
     // document validation close to the single configured 200ms bound instead.
-    assertThat(elapsedMillis).isLessThan(1000);
+    stopwatch.assertStayedUnder(1000, "one 200ms budget shared by the whole document, not one per property");
   }
 
   @Test

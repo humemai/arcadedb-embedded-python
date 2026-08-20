@@ -28,6 +28,8 @@ import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.nio.ByteBuffer;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -51,28 +53,47 @@ import java.util.stream.StreamSupport;
  * Represents PostgreSQL data types and provides serialization/deserialization functionality.
  */
 public enum PostgresType {
-  SMALLINT(21, Short.class, 2, value -> Short.parseShort(value)),
-  INTEGER(23, Integer.class, 4, value -> Integer.parseInt(value)),
-  LONG(20, Long.class, 8, value -> Long.parseLong(value)),
-  REAL(700, Float.class, 4, value -> Float.parseFloat(value)),
-  DOUBLE(701, Double.class, 8, value -> Double.parseDouble(value)),
-  CHAR(18, Character.class, 1, value -> value.charAt(0)),
-  BOOLEAN(16, Boolean.class, 1, value -> parseBooleanText(value)),
-  DATE(1082, Date.class, 4, value -> parseDateText(value)),
-  TIMESTAMP(1114, LocalDateTime.class, 8, value -> parseTimestampText(value)),
-  VARCHAR(1043, String.class, -1, value -> value),
-  TEXT(25, String.class, -1, value -> value),
-  BPCHAR(1042, String.class, -1, value -> value),
-  JSON(114, JSONObject.class, -1, PostgresType::parseJsonText),
+  // The three catalog columns after the OID are pg_type's own: typname, typelem (the element type of an
+  // array, 0 for a scalar) and typarray (the array type built on a scalar, 0 for an array). They are the
+  // answer this protocol gives a client that enumerates or looks up pg_type (issue #5290), so they hold
+  // PostgreSQL's real names and OIDs rather than anything ArcadeDB-specific: a client resolves the OID it
+  // was handed in RowDescription against them, and a name that is not Postgres' name resolves to nothing.
+  SMALLINT(21, "int2", 0, 1005, Short.class, 2, value -> Short.parseShort(value)),
+  INTEGER(23, "int4", 0, 1007, Integer.class, 4, value -> Integer.parseInt(value)),
+  LONG(20, "int8", 0, 1016, Long.class, 8, value -> Long.parseLong(value)),
+  REAL(700, "float4", 0, 1021, Float.class, 4, value -> Float.parseFloat(value)),
+  DOUBLE(701, "float8", 0, 1022, Double.class, 8, value -> Double.parseDouble(value)),
+  CHAR(18, "char", 0, 1002, Character.class, 1, value -> value.charAt(0)),
+  BOOLEAN(16, "bool", 0, 1000, Boolean.class, 1, value -> parseBooleanText(value)),
+  DATE(1082, "date", 0, 1182, Date.class, 4, value -> parseDateText(value)),
+  TIMESTAMP(1114, "timestamp", 0, 1115, LocalDateTime.class, 8, value -> parseTimestampText(value)),
+  VARCHAR(1043, "varchar", 0, 1015, String.class, -1, value -> value),
+  TEXT(25, "text", 0, 1009, String.class, -1, value -> value),
+  BPCHAR(1042, "bpchar", 0, 1014, String.class, -1, value -> value),
+  JSON(114, "json", 0, 199, JSONObject.class, -1, PostgresType::parseJsonText),
+  // The type PostgreSQL has for a blob, and the only honest answer for a byte[] (issue #6411). A byte[] used
+  // to be typed as "char"[] (OID 1002) by getTypeForValue and as varchar (OID 1043) by getTypeFromArcade, so
+  // a BINARY column's OID depended on whether the result set happened to be empty - and neither answer was
+  // right: an array of one-byte characters makes the client decode arbitrary bytes as text, which for any
+  // non-UTF-8 payload loses data rather than merely looking odd.
+  BYTEA(17, "bytea", 0, 1001, byte[].class, -1, PostgresType::parseByteaText),
+  // PostgreSQL's arbitrary-precision decimal (issue #6447). DECIMAL used to be typed as DOUBLE by the schema
+  // path (lossy for a BigDecimal outside float64's range/precision) and as VARCHAR by the value path (forces a
+  // client to treat the column as text) - neither was right, and the two disagreeing meant a column's OID also
+  // depended on whether the result set was empty. NUMERIC is the honest answer PostgreSQL already has for this.
+  NUMERIC(1700, "numeric", 0, 1231, BigDecimal.class, -1, BigDecimal::new),
   // Adding array types with PostgreSQL array type codes
-  ARRAY_INT(1007, Collection.class, -1, value -> parseArrayFromString(value, Integer::parseInt)),
-  ARRAY_CHAR(1003, Collection.class, -1, value -> parseArrayFromString(value, s -> s.charAt(0))),
-  ARRAY_LONG(1016, Collection.class, -1, value -> parseArrayFromString(value, Long::parseLong)),
-  ARRAY_REAL(1021, Collection.class, -1, value -> parseArrayFromString(value, Float::parseFloat)),
-  ARRAY_DOUBLE(1022, Collection.class, -1, value -> parseArrayFromString(value, Double::parseDouble)),
-  ARRAY_TEXT(1009, Collection.class, -1, value -> parseArrayFromString(value, s -> s)),
-  ARRAY_JSON(199, Collection.class, -1, value -> parseArrayFromString(value, s -> s)),
-  ARRAY_BOOLEAN(1000, Collection.class, -1, value -> parseArrayFromString(value, Boolean::parseBoolean));
+  ARRAY_INT(1007, "_int4", 23, 0, Collection.class, -1, value -> parseArrayFromString(value, Integer::parseInt)),
+  // 1002 is "char"[], the array of the single-byte CHAR (OID 18) this enum pairs it with. It used to be
+  // declared as 1003, which in PostgreSQL is name[] - an unrelated type - so a client resolving the OID
+  // this protocol announced for a list of characters was told a type ArcadeDB never produces (issue #5290).
+  ARRAY_CHAR(1002, "_char", 18, 0, Collection.class, -1, value -> parseArrayFromString(value, s -> s.charAt(0))),
+  ARRAY_LONG(1016, "_int8", 20, 0, Collection.class, -1, value -> parseArrayFromString(value, Long::parseLong)),
+  ARRAY_REAL(1021, "_float4", 700, 0, Collection.class, -1, value -> parseArrayFromString(value, Float::parseFloat)),
+  ARRAY_DOUBLE(1022, "_float8", 701, 0, Collection.class, -1, value -> parseArrayFromString(value, Double::parseDouble)),
+  ARRAY_TEXT(1009, "_text", 25, 0, Collection.class, -1, value -> parseArrayFromString(value, s -> s)),
+  ARRAY_JSON(199, "_json", 114, 0, Collection.class, -1, value -> parseArrayFromString(value, s -> s)),
+  ARRAY_BOOLEAN(1000, "_bool", 16, 0, Collection.class, -1, value -> parseArrayFromString(value, Boolean::parseBoolean));
 
   private static final Map<Integer, PostgresType> CODE_MAP = Arrays.stream(values())
       .collect(Collectors.toMap(type -> type.code, type -> type));
@@ -97,6 +118,93 @@ public enum PostgresType {
     if (!trimmed.isEmpty() && trimmed.charAt(0) == '[')
       return new JSONArray(trimmed).toList();
     return new JSONObject(value);
+  }
+
+  /**
+   * Parses the text representation of a bytea. PostgreSQL emits the hex format {@code \x<hexdigits>} for any
+   * server version from 9.0 on - which is what this protocol announces - but still accepts the older escape
+   * format on input, and some clients still send it, so both are read here.
+   */
+  private static byte[] parseByteaText(final String value) {
+    if (value == null)
+      throw new PostgresProtocolException("Cannot parse null BYTEA text value");
+
+    if (value.length() >= 2 && value.charAt(0) == '\\' && (value.charAt(1) == 'x' || value.charAt(1) == 'X')) {
+      final int digits = value.length() - 2;
+      if (digits % 2 != 0)
+        throw new PostgresProtocolException("Invalid hex BYTEA text value: odd number of digits");
+
+      final byte[] bytes = new byte[digits / 2];
+      for (int i = 0; i < bytes.length; i++) {
+        final int high = Character.digit(value.charAt(2 + i * 2), 16);
+        final int low = Character.digit(value.charAt(3 + i * 2), 16);
+        if (high < 0 || low < 0)
+          throw new PostgresProtocolException("Invalid hex BYTEA text value: not a hex digit");
+        bytes[i] = (byte) ((high << 4) | low);
+      }
+      return bytes;
+    }
+
+    return parseByteaEscapeText(value);
+  }
+
+  /**
+   * Decodes the pre-9.0 bytea escape format: a backslash introduces either another backslash or a three-digit
+   * octal byte, and everything else stands for itself.
+   */
+  private static byte[] parseByteaEscapeText(final String value) {
+    final byte[] bytes = new byte[value.length()];
+    int len = 0;
+    for (int i = 0; i < value.length(); i++) {
+      final char c = value.charAt(i);
+      if (c != '\\') {
+        bytes[len++] = (byte) c;
+        continue;
+      }
+
+      if (i + 1 >= value.length())
+        throw new PostgresProtocolException("Invalid escaped BYTEA text value: trailing backslash");
+
+      final char next = value.charAt(++i);
+      if (next == '\\') {
+        bytes[len++] = (byte) '\\';
+        continue;
+      }
+
+      if (i + 2 >= value.length())
+        throw new PostgresProtocolException("Invalid escaped BYTEA text value: truncated octal escape");
+
+      int octal = 0;
+      for (int digit = 0; digit < 3; digit++) {
+        final int parsed = Character.digit(value.charAt(i + digit), 8);
+        if (parsed < 0)
+          throw new PostgresProtocolException("Invalid escaped BYTEA text value: not an octal digit");
+        octal = octal * 8 + parsed;
+      }
+      i += 2;
+      bytes[len++] = (byte) octal;
+    }
+    return Arrays.copyOf(bytes, len);
+  }
+
+  /** Renders bytes in the {@code \x<hexdigits>} form PostgreSQL 9.0 and later emit. */
+  private static String toByteaText(final byte[] bytes) {
+    final StringBuilder buffer = new StringBuilder(2 + bytes.length * 2);
+    buffer.append("\\x");
+    for (final byte b : bytes) {
+      buffer.append(Character.forDigit((b >> 4) & 0xF, 16));
+      buffer.append(Character.forDigit(b & 0xF, 16));
+    }
+    return buffer.toString();
+  }
+
+  /** The bytes behind a value announced as bytea, or null when the value is not one. */
+  private static byte[] byteaValueOf(final Object value) {
+    if (value instanceof byte[] bytes)
+      return bytes;
+    if (value instanceof Binary binary)
+      return binary.toByteArray();
+    return null;
   }
 
   private static Boolean parseBooleanText(final String value) {
@@ -136,6 +244,184 @@ public enum PostgresType {
     return new BigDecimal(value.toString());
   }
 
+  private static BigDecimal toBigDecimalValue(final Object value) {
+    if (value instanceof BigDecimal bd)
+      return bd;
+    if (value instanceof Number n)
+      return new BigDecimal(n.toString());
+    return new BigDecimal(value.toString());
+  }
+
+  // NUMERIC's binary wire format (PostgreSQL src/backend/utils/adt/numeric.c) is a header of four int16s -
+  // ndigits, weight, sign, dscale - followed by ndigits base-10000 digits, most significant first. weight is
+  // the base-10000 exponent of the first digit, so the decimal point always falls on a 4-decimal-digit
+  // boundary; leading and trailing all-zero digit groups are dropped (weight/dscale carry that information
+  // instead), which is why a value like 0.5 encodes as a single digit [5000] at weight -1 rather than padding
+  // out to whatever precision produced it.
+  private static final int NUMERIC_DIGIT_WIDTH = 4;
+  private static final int NUMERIC_BASE        = 10000;
+  private static final int NUMERIC_POS_SIGN    = 0x0000;
+  private static final int NUMERIC_NEG_SIGN    = 0x4000;
+  private static final int NUMERIC_NAN_SIGN    = 0xC000;
+  // PostgreSQL's own cap (NUMERIC_MAX_RESULT_SCALE-derived) on digit groups in one value; a declared count
+  // above this cannot be a value this codec produced, only a malformed or adversarial payload.
+  private static final int NUMERIC_MAX_DIGITS  = 4000;
+  // The largest bit length a BigInteger with NUMERIC_MAX_DIGITS * NUMERIC_DIGIT_WIDTH (16000) decimal digits
+  // can have: ceil(16000 * log2(10)) = ceil(16000 * 3.321928094887362) = 53151. Any BigInteger past this bound
+  // has more than 16000 decimal digits, guaranteed - checking bitLength() (already computed, effectively O(1))
+  // catches that before putNumericBinary calls toString() on it, which is not.
+  private static final int NUMERIC_MAX_UNSCALED_BITS = 53151;
+
+  /**
+   * Encodes a BigDecimal in PostgreSQL's NUMERIC binary wire format. Unlike {@link #parseNumericBinary}, which
+   * only has to reject bytes an attacker sent, this also has to reject a BigDecimal ArcadeDB itself produced:
+   * a DECIMAL property has no configured precision/scale limit, so a value with a large enough scale would
+   * otherwise silently wrap through the header fields' {@code (short)} casts below and write a self-
+   * inconsistent payload - the {@code putInt} length prefix would stay correct, but a real client decoding the
+   * wrapped {@code ndigits}/{@code weight}/{@code dscale} out of that payload would not agree with it.
+   */
+  private static void putNumericBinary(final Binary typeBuffer, final BigDecimal decimalValue) {
+    // Checked on the RAW scale, before any normalization. BigDecimal(String) parsing scientific notation (e.g.
+    // a plain SQL literal like '1E2000000000' - DECIMAL has no configured precision/scale limit) is itself O(1):
+    // it just stores unscaledValue=1, scale=-2000000000. setScale(0) below is not - going from a very negative
+    // scale up to 0 has to actually materialize unscaledValue * 10^|scale| as a real BigInteger. Rejecting the
+    // raw scale first means that materialization, and the multi-GB allocation it would otherwise trigger, never
+    // starts. -(long) avoids the int overflow of negating Integer.MIN_VALUE.
+    if (decimalValue.scale() < 0 && -(long) decimalValue.scale() > NUMERIC_MAX_DIGITS * NUMERIC_DIGIT_WIDTH)
+      throw new PostgresProtocolException("NUMERIC scale exceeds the supported maximum: " + decimalValue.scale());
+
+    final BigDecimal normalized = decimalValue.scale() < 0 ? decimalValue.setScale(0) : decimalValue;
+    final int dscale = normalized.scale();
+    // Checked before any padding so a value with an absurd scale fails fast instead of first allocating a
+    // proportionally huge digit string.
+    if (dscale < 0 || dscale > NUMERIC_MAX_DIGITS * NUMERIC_DIGIT_WIDTH)
+      throw new PostgresProtocolException("NUMERIC scale exceeds the supported maximum: " + dscale);
+
+    final boolean negative = normalized.signum() < 0;
+    final BigInteger unscaled = normalized.unscaledValue().abs();
+    // Bounds the MAGNITUDE the same way the checks above bound the SCALE: a short scientific-notation literal
+    // like '1E2000000000' is already rejected by the scale check (it always implies a very negative scale),
+    // but a value that is simply a great many literal digits at a small/zero scale - reachable from a compact
+    // SQL expression rather than a giant literal - would otherwise sail past both scale checks and reach the
+    // O(n) toString()/padding work below before the digit-count check further down ever gets a chance to
+    // reject it.
+    if (unscaled.bitLength() > NUMERIC_MAX_UNSCALED_BITS)
+      throw new PostgresProtocolException("NUMERIC precision exceeds the supported maximum: " + unscaled.bitLength() + " bits");
+
+    if (unscaled.equals(BigInteger.ZERO)) {
+      typeBuffer.putInt(8);
+      typeBuffer.putShort((short) 0);
+      typeBuffer.putShort((short) 0);
+      typeBuffer.putShort((short) NUMERIC_POS_SIGN);
+      typeBuffer.putShort((short) dscale);
+      return;
+    }
+
+    // Position the digits so index 0 is the most significant decimal digit and the decimal point sits
+    // `dscale` digits from the right, padding with leading/trailing zeros so both the integer part and the
+    // fractional part are a whole number of 4-digit groups.
+    String digits = unscaled.toString();
+    if (dscale > digits.length())
+      digits = "0".repeat(dscale - digits.length()) + digits;
+    int integerDigitCount = digits.length() - dscale;
+
+    final int fractionPad = (NUMERIC_DIGIT_WIDTH - dscale % NUMERIC_DIGIT_WIDTH) % NUMERIC_DIGIT_WIDTH;
+    digits = digits + "0".repeat(fractionPad);
+
+    final int leadPad = (NUMERIC_DIGIT_WIDTH - integerDigitCount % NUMERIC_DIGIT_WIDTH) % NUMERIC_DIGIT_WIDTH;
+    digits = "0".repeat(leadPad) + digits;
+    integerDigitCount += leadPad;
+
+    final int groupCount = digits.length() / NUMERIC_DIGIT_WIDTH;
+    final int integerGroups = integerDigitCount / NUMERIC_DIGIT_WIDTH;
+
+    final int[] groups = new int[groupCount];
+    for (int i = 0; i < groupCount; i++)
+      groups[i] = Integer.parseInt(digits.substring(i * NUMERIC_DIGIT_WIDTH, (i + 1) * NUMERIC_DIGIT_WIDTH));
+
+    int start = 0;
+    while (start < groupCount - 1 && groups[start] == 0)
+      start++;
+    int end = groupCount - 1;
+    while (end > start && groups[end] == 0)
+      end--;
+
+    final int ndigits = end - start + 1;
+    final int weight = integerGroups - 1 - start;
+
+    // Both fields are about to go through a (short) cast: reject rather than let either wrap silently into a
+    // header that no longer matches the digits actually written.
+    if (ndigits > NUMERIC_MAX_DIGITS)
+      throw new PostgresProtocolException("NUMERIC digit count exceeds the supported maximum: " + ndigits);
+    if (weight < Short.MIN_VALUE || weight > Short.MAX_VALUE)
+      throw new PostgresProtocolException("NUMERIC weight exceeds the supported range: " + weight);
+
+    typeBuffer.putInt(8 + ndigits * 2);
+    typeBuffer.putShort((short) ndigits);
+    typeBuffer.putShort((short) weight);
+    typeBuffer.putShort((short) (negative ? NUMERIC_NEG_SIGN : NUMERIC_POS_SIGN));
+    typeBuffer.putShort((short) dscale);
+    for (int i = 0; i < ndigits; i++)
+      typeBuffer.putShort((short) groups[start + i]);
+  }
+
+  /** Decodes PostgreSQL's NUMERIC binary wire format, the inverse of {@link #putNumericBinary}. */
+  private static BigDecimal parseNumericBinary(final ByteBuffer buffer) {
+    final int ndigits = buffer.getShort() & 0xFFFF;
+    final int weight = buffer.getShort();
+    final int sign = buffer.getShort() & 0xFFFF;
+    final int dscale = buffer.getShort() & 0xFFFF;
+
+    if (sign == NUMERIC_NAN_SIGN)
+      throw new PostgresProtocolException("NaN NUMERIC values are not supported");
+    if (sign != NUMERIC_POS_SIGN && sign != NUMERIC_NEG_SIGN)
+      throw new PostgresProtocolException("Invalid NUMERIC sign: " + sign);
+    if (ndigits > NUMERIC_MAX_DIGITS)
+      throw new PostgresProtocolException("NUMERIC digit count exceeds the supported maximum: " + ndigits);
+    if (ndigits * 2 > buffer.remaining())
+      throw new PostgresProtocolException("NUMERIC digit count exceeds remaining buffer bytes");
+    // dscale is an unsigned 16-bit field, so this cannot runaway unbounded, but a declared scale wildly beyond
+    // what ndigits could ever back is still a malformed payload rather than one this codec produced - and
+    // setScale below would otherwise pad a BigInteger out to it. Same bound the encode side rejects at.
+    if (dscale > NUMERIC_MAX_DIGITS * NUMERIC_DIGIT_WIDTH)
+      throw new PostgresProtocolException("NUMERIC scale exceeds the supported maximum: " + dscale);
+    // weight is otherwise unbounded within its short range: a payload with an extreme weight combined with a
+    // small ndigits and the max-allowed dscale derives a `scale` far apart from dscale, and setScale below
+    // would materialize a BigInteger to bridge that gap - the same class of unbounded-materialization risk
+    // putNumericBinary guards against on the encode side, just with a smaller blast radius here because weight
+    // is capped by its own wire width rather than an arbitrary int.
+    if (weight < -NUMERIC_MAX_DIGITS || weight > NUMERIC_MAX_DIGITS)
+      throw new PostgresProtocolException("NUMERIC weight exceeds the supported range: " + weight);
+
+    if (ndigits == 0)
+      return BigDecimal.ZERO.setScale(dscale);
+
+    BigInteger magnitude = BigInteger.ZERO;
+    for (int i = 0; i < ndigits; i++) {
+      final int digit = buffer.getShort() & 0xFFFF;
+      if (digit >= NUMERIC_BASE)
+        throw new PostgresProtocolException("Invalid NUMERIC digit: " + digit);
+      magnitude = magnitude.multiply(BigInteger.valueOf(NUMERIC_BASE)).add(BigInteger.valueOf(digit));
+    }
+
+    // The digit sequence runs from base-10000 exponent `weight` down to `weight - ndigits + 1`; each step is
+    // NUMERIC_DIGIT_WIDTH decimal digits, so the whole magnitude sits at decimal scale -4*(weight-ndigits+1).
+    final int scale = NUMERIC_DIGIT_WIDTH * (ndigits - 1 - weight);
+    BigDecimal result = new BigDecimal(magnitude, scale);
+    if (sign == NUMERIC_NEG_SIGN)
+      result = result.negate();
+
+    // Trailing zero digit groups are dropped by the encoder, so the scale derived from `weight`/`ndigits` can
+    // be smaller than dscale; padding back up to it is always exact (the dropped digits were zero) - unless the
+    // payload is malformed and dscale does not actually match the precision ndigits/weight encode, in which
+    // case this is a value this codec could never have produced rather than a genuine JVM arithmetic error.
+    try {
+      return result.setScale(dscale, RoundingMode.UNNECESSARY);
+    } catch (final ArithmeticException e) {
+      throw new PostgresProtocolException("NUMERIC dscale does not match the encoded precision: " + dscale);
+    }
+  }
+
   private static boolean toBooleanValue(final Object value) {
     if (value instanceof Boolean b)
       return b;
@@ -169,15 +455,34 @@ public enum PostgresType {
   }
 
   public final  int                      code;
+  /** pg_type.typname, the name PostgreSQL itself gives {@link #code}. */
+  public final  String                   typeName;
+  /** pg_type.typelem: the OID of the element type for an array type, 0 for a scalar. */
+  public final  int                      elementCode;
+  /** pg_type.typarray: the OID of the array type built on a scalar, 0 for an array type. */
+  public final  int                      arrayCode;
   public final  Class<?>                 cls;
   public final  int                      size;
   private final Function<String, Object> textParser;
 
-  PostgresType(final int code, final Class<?> cls, final int size, Function<String, Object> textParser) {
+  PostgresType(final int code, final String typeName, final int elementCode, final int arrayCode, final Class<?> cls,
+      final int size, Function<String, Object> textParser) {
     this.code = code;
+    this.typeName = typeName;
+    this.elementCode = elementCode;
+    this.arrayCode = arrayCode;
     this.cls = cls;
     this.size = size;
     this.textParser = textParser;
+  }
+
+  /**
+   * Returns the type carrying the given OID, or null when this protocol has no such type. Unlike
+   * {@code deserializeAsText}/{@code deserializeAsBinary}, which reject an unknown OID, a catalog lookup
+   * for a type ArcadeDB cannot produce is a legitimate answer of "no row" rather than an error.
+   */
+  public static PostgresType byCode(final int code) {
+    return CODE_MAP.get(code);
   }
 
   /**
@@ -238,8 +543,12 @@ public enum PostgresType {
       return PostgresType.REAL;
     } else if (val instanceof Double) {
       return PostgresType.DOUBLE;
-    } else if (val instanceof Integer || val instanceof Short || val instanceof Byte) {
+    } else if (val instanceof Integer) {
       return PostgresType.INTEGER;
+    } else if (val instanceof Short || val instanceof Byte) {
+      // Matches the schema path (Type.SHORT/Type.BYTE -> SMALLINT, issue #6447): widening to INTEGER here made
+      // a column's OID depend on whether the result set happened to be empty.
+      return PostgresType.SMALLINT;
     } else if (val instanceof Long) {
       return PostgresType.LONG;
     } else if (val instanceof Boolean) {
@@ -248,6 +557,8 @@ public enum PostgresType {
       return PostgresType.VARCHAR;
     } else if (val instanceof Character) {
       return PostgresType.CHAR;
+    } else if (val instanceof BigDecimal) {
+      return PostgresType.NUMERIC;
     } else if (val instanceof JSONObject) {
       return PostgresType.JSON;
     } else if (val instanceof Result) {
@@ -280,8 +591,8 @@ public enum PostgresType {
         }
       }
       return PostgresType.ARRAY_TEXT;
-    } else if (val instanceof byte[]) {
-      return PostgresType.ARRAY_CHAR;
+    } else if (val instanceof byte[] || val instanceof Binary) {
+      return PostgresType.BYTEA;
     } else if (val.getClass().isArray()) {
       // Handle Java arrays
       return switch (val) {
@@ -307,6 +618,11 @@ public enum PostgresType {
         default -> throw new IllegalStateException("Unexpected value: " + val);
       };
     } else if (val instanceof Date) {
+      return PostgresType.DATE;
+    } else if (val instanceof LocalDate) {
+      // Type.DATE's runtime representation is configurable per database (GlobalConfiguration.DATE_IMPLEMENTATION)
+      // and defaults to LocalDate, not Date - so a sampled value from a default-configured database never hit
+      // the Date branch above and fell all the way through to VARCHAR, disagreeing with the schema path's DATE.
       return PostgresType.DATE;
     } else if (val instanceof LocalDateTime) {
       return PostgresType.TIMESTAMP;
@@ -388,7 +704,7 @@ public enum PostgresType {
       case STRING -> PostgresType.VARCHAR;
       case DATETIME, DATETIME_MICROS, DATETIME_NANOS, DATETIME_SECOND -> PostgresType.TIMESTAMP;
       case DATE -> PostgresType.DATE;
-      case BINARY -> PostgresType.VARCHAR; // No direct binary type, use VARCHAR
+      case BINARY -> PostgresType.BYTEA;
       case LIST -> PostgresType.ARRAY_TEXT;
       case ARRAY_OF_SHORTS, ARRAY_OF_INTEGERS -> PostgresType.ARRAY_INT;
       case ARRAY_OF_LONGS -> PostgresType.ARRAY_LONG;
@@ -396,7 +712,7 @@ public enum PostgresType {
       case ARRAY_OF_DOUBLES -> PostgresType.ARRAY_DOUBLE;
       case MAP, EMBEDDED -> PostgresType.JSON;
       case LINK -> PostgresType.VARCHAR;
-      case DECIMAL -> PostgresType.DOUBLE;
+      case DECIMAL -> PostgresType.NUMERIC;
       default -> PostgresType.VARCHAR;
     };
   }
@@ -411,6 +727,7 @@ public enum PostgresType {
   @SuppressWarnings("unchecked")
   public void serializeAsText(final PostgresType pgType, final Binary typeBuffer, final Object value) {
     String serializedValue = null;
+    final byte[] byteaValue = pgType == BYTEA ? byteaValueOf(value) : null;
     if (value == null && pgType.code == BOOLEAN.code) {
       serializedValue = "0";
     } else if (pgType == JSON && value != null && (value instanceof Collection<?> || value.getClass().isArray())) {
@@ -418,6 +735,10 @@ public enum PostgresType {
       // instead of a Postgres array literal, so the payload matches the announced OID.
       serializedValue = serializeCollectionAsJson(
           value instanceof Collection<?> collection ? collection : convertPrimitiveArrayToCollection(value));
+    } else if (byteaValue != null) {
+      // A blob announced as bytea travels as \x<hex> (issue #6411), not as the {1,2,3} array literal the
+      // generic byte[] handling below would produce for it.
+      serializedValue = toByteaText(byteaValue);
     } else if (value instanceof Collection<?> collection) {
       // Handle array serialization
       serializedValue = serializeArrayToString(collection, pgType);
@@ -428,6 +749,10 @@ public enum PostgresType {
     } else if (value instanceof Boolean b) {
       // PostgreSQL BOOL text format is "t"/"f"
       serializedValue = b ? "t" : "f";
+    } else if (value instanceof BigDecimal bd) {
+      // BigDecimal.toString() switches to scientific notation outside a small exponent range (e.g. "1E+10"),
+      // which is not a NUMERIC text value PostgreSQL itself would ever emit or a client would expect to parse.
+      serializedValue = bd.toPlainString();
     } else if (value instanceof Date date) {
       // DATE (OID 1082) expects "YYYY-MM-DD" in text format
       serializedValue = date.toInstant().atZone(ZoneOffset.UTC).format(DateTimeFormatter.ISO_LOCAL_DATE);
@@ -485,6 +810,17 @@ public enum PostgresType {
       typeBuffer.putInt(1);
       typeBuffer.putByte((byte) (toBooleanValue(value) ? 1 : 0));
     }
+    case BYTEA -> {
+      // bytea binary format is the raw bytes, with no framing of its own beyond the length prefix.
+      final byte[] bytes = byteaValueOf(value);
+      if (bytes == null) {
+        serializeAsText(pgType, typeBuffer, value);
+        return;
+      }
+      typeBuffer.putInt(bytes.length);
+      typeBuffer.putByteArray(bytes);
+    }
+    case NUMERIC -> putNumericBinary(typeBuffer, toBigDecimalValue(value));
     case CHAR -> {
       // Postgres "char" (OID 18) is a single byte on the wire.
       typeBuffer.putInt(1);
@@ -800,6 +1136,8 @@ public enum PostgresType {
         }
         yield LocalDateTime.ofEpochSecond(secs, nanos, ZoneOffset.UTC);
       }
+      case BYTEA -> valueAsBytes.clone();
+      case NUMERIC -> parseNumericBinary(buffer);
       case CHAR -> (char) buffer.get();
       case BOOLEAN -> buffer.get() == 1;
       case JSON -> {
@@ -896,11 +1234,13 @@ public enum PostgresType {
    * strings and breaks typed parameter comparisons.
    */
   public boolean isNativeScalarType() {
-    return this == SMALLINT ||
+    return this == BYTEA ||
+        this == SMALLINT ||
         this == INTEGER ||
         this == LONG ||
         this == REAL ||
         this == DOUBLE ||
+        this == NUMERIC ||
         this == CHAR ||
         this == BOOLEAN ||
         this == DATE ||

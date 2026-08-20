@@ -218,7 +218,7 @@ selectStatement
 /**
  * TRAVERSE statement
  * TRAVERSE [fields] FROM target [MAXDEPTH n] [WHILE condition]
- * [LIMIT n] [STRATEGY strategy]
+ * [LIMIT n] [STRATEGY strategy] [TIMEOUT n]
  */
 traverseStatement
     : TRAVERSE (traverseProjectionItem (COMMA traverseProjectionItem)*)?
@@ -227,12 +227,13 @@ traverseStatement
       (WHILE whereClause)?
       limit?
       (STRATEGY (DEPTH_FIRST | BREADTH_FIRST))?
+      timeout?
     ;
 
 /**
  * MATCH statement
  * MATCH pattern [, pattern]* RETURN [DISTINCT] items
- * [GROUP BY] [ORDER BY] [UNWIND] [SKIP_KW] [LIMIT]
+ * [GROUP BY] [ORDER BY] [UNWIND] [SKIP_KW] [LIMIT] [TIMEOUT n]
  */
 matchStatement
     : MATCH matchExpression (COMMA (NOT? matchExpression))*
@@ -242,6 +243,7 @@ matchStatement
       unwind?
       skip?
       limit?
+      timeout?
     ;
 
 matchReturnItem
@@ -1101,6 +1103,15 @@ checkDatabaseStatement
       (BUCKET (identifier | INTEGER_LITERAL) (COMMA (identifier | INTEGER_LITERAL))*)?
       (RECORD rid (COMMA rid)*)?
       (FIX)?
+      // Issue #6090: opt-in reclaim of ORPHAN EDGE RECORDS (edge records no vertex's edge list references).
+      // Deliberately its own clause rather than part of FIX - see DatabaseChecker.setDeleteOrphanEdgeRecords.
+      (DELETE ORPHANS)?
+      // Issue #6189: opt-in reclaim of files this node holds that no schema component was ever built for.
+      // Deliberately its own clause too - see DatabaseChecker.setReclaimUnreferencedFiles.
+      (RECLAIM UNREFERENCED FILES)?
+      // Issue #6360: the tier of checking that DECODES the data instead of reconciling what describes it. See
+      // DatabaseChecker.setDeep.
+      (DEEP)?
       (COMPRESS)?
     ;
 
@@ -1697,6 +1708,11 @@ identifier
     | REFERENCES
     | ADDBUCKET
     | REMOVEBUCKET
+    | ORPHANS
+    | RECLAIM
+    | UNREFERENCED
+    | FILES
+    | DEEP
     | FORCE
     | OPTIMIZE
     | INVERSE

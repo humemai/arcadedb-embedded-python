@@ -460,6 +460,8 @@ public class CoreApiSpec implements OpenApiContributor {
     responses.addApiResponse("400", SpecBuilders.errorResponse("Bad request"));
     responses.addApiResponse("401", SpecBuilders.errorResponse("Unauthorized"));
     responses.addApiResponse("404", SpecBuilders.errorResponse("Database not found"));
+    responses.addApiResponse("413", SpecBuilders.errorResponse(
+        "The result exceeds 'arcadedb.server.httpQueryMaxResultRows': narrow or page the query"));
     responses.addApiResponse("500", SpecBuilders.errorResponse("Internal server error"));
     return responses;
   }
@@ -470,6 +472,8 @@ public class CoreApiSpec implements OpenApiContributor {
     responses.addApiResponse("400", SpecBuilders.errorResponse("Bad request"));
     responses.addApiResponse("401", SpecBuilders.errorResponse("Unauthorized"));
     responses.addApiResponse("404", SpecBuilders.errorResponse("Database not found"));
+    responses.addApiResponse("413", SpecBuilders.errorResponse(
+        "The result exceeds 'arcadedb.server.httpQueryMaxResultRows': narrow or page the command"));
     responses.addApiResponse("500", SpecBuilders.errorResponse("Internal server error"));
     return responses;
   }
@@ -506,7 +510,9 @@ public class CoreApiSpec implements OpenApiContributor {
         honored as written and only a query stating none is capped by the server default \
         ('arcadedb.server.httpQueryDefaultLimit'). Use -1 for no cap. The response always reports the cap \
         that was applied ('limit'), how many rows it carries ('returned') and whether rows were left \
-        behind ('truncated').""").example(100));
+        behind ('truncated'). No value here can widen a single response past the server's hard ceiling \
+        ('arcadedb.server.httpQueryMaxResultRows'): a result that would exceed it is refused with 413 \
+        instead of being truncated.""").example(100));
     schema.setRequired(List.of("command"));
     return schema;
   }
@@ -584,8 +590,7 @@ public class CoreApiSpec implements OpenApiContributor {
     schema.addProperty("verticesCreated", SpecBuilders.integer("Vertices created"));
     schema.addProperty("edgesCreated", SpecBuilders.integer("Edges created"));
     schema.addProperty("elapsedMs", SpecBuilders.integer("Elapsed time in milliseconds"));
-    schema.addProperty("bytesRead", SpecBuilders.integer(
-        "Bytes of the upload the server consumed, so a client can verify its whole file arrived"));
+    addLoadAccounting(schema);
     schema.addProperty("idMapping", SpecBuilders.object(
         "Temporary id to RID mapping, present only when temporary ids were used and the mapping was small enough to echo"));
     schema.addProperty("idMappingOmitted", SpecBuilders.bool(
@@ -616,7 +621,25 @@ public class CoreApiSpec implements OpenApiContributor {
     schema.addProperty("partialCommit", SpecBuilders.bool("""
         True when earlier chunks are durably committed. Retrying the whole payload then duplicates \
         the already-committed vertices, because temporary ids are not keys."""));
+    addLoadAccounting(schema);
     return schema;
+  }
+
+  /**
+   * What the load did with the payload, on the successful answer and the failing ones alike: a client reconciling a
+   * partial load needs them exactly where it needs the counts.
+   */
+  private void addLoadAccounting(final Schema<Object> schema) {
+    schema.addProperty("bytesRead", SpecBuilders.integer("""
+        Bytes of the upload the server consumed, so a client can verify its whole file arrived - and, on a \
+        truncated load, how far the server got. Never more than the client sent."""));
+    schema.addProperty("linesRead", SpecBuilders.integer(
+        "Lines the parser read, so 'linesRead' minus 'linesSkipped' can be checked against the records created"));
+    schema.addProperty("linesSkipped", SpecBuilders.integer(
+        "Lines that carried no record: blank lines, plus CSV headers and '---' separators"));
+    schema.addProperty("verticesWithoutId", SpecBuilders.integer("""
+        Vertices created without an '@id' under refMode=id. They are loaded and durable, but no edge can \
+        reference them. Absent when zero."""));
   }
 
   private Schema<?> createProgressResponseSchema() {

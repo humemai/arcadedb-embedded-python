@@ -127,7 +127,10 @@ public class Dictionary extends PaginatedComponent {
       final int pageSize)
       throws IOException {
     super(database, name, filePath, DICT_EXT, mode, pageSize, CURRENT_VERSION);
-    if (file.getSize() == 0) {
+    // NO COMMITTED PAGE, SO PAGE 0 HAS TO BE CREATED. ASKED OF pageCount RATHER THAN OF THE FILE'S SIZE FOR THE REASONS SET OUT
+    // AT reload() (ISSUE #6351), WHICH IS WHERE THAT ARGUMENT LIVES. ON THE BRAND NEW FILE THIS CONSTRUCTOR IS FOR, THE TWO GIVE
+    // THE SAME ANSWER.
+    if (pageCount.get() == 0) {
       // NEW FILE, CREATE HEADER PAGE
       final MutablePage header = database.getTransaction().addPage(new PageId(database, file.getFileId(), 0), pageSize);
       updateCounters(header);
@@ -467,13 +470,24 @@ public class Dictionary extends PaginatedComponent {
   }
 
   public void reload() throws IOException {
-    if (file.getSize() == 0) {
-      // No header page on disk. Creating it commits a transaction, and the commit resolves this file id
-      // against the schema - which has not registered this component yet when the load path builds it,
-      // so committing here fails with "File with id '0' was not found" and the database cannot be
-      // opened at all. The creation is deferred to createHeaderPageIfMissing(), which LocalSchema calls
-      // once the component is registered. The in-RAM dictionary is already empty, which is the correct
-      // state for an empty file.
+    // NOTHING COMMITTED, SO THERE IS NOTHING TO READ. ASKED OF pageCount AND NOT OF THE FILE'S SIZE (ISSUE #6351), FOR THE SAME
+    // REASON THE LOOP BELOW COUNTS WITH pageCount: THE FILE IS NOT THE COMMITTED STATE. A COMMIT ADVANCES pageCount AND HANDS
+    // THE PAGE TO THE FLUSH THREAD, SO UNTIL THAT THREAD GETS TO IT THE FILE IS SHORTER THAN THE COUNT CLAIMS - AND WHILE THE
+    // DICTIONARY'S FIRST PAGE IS IN FLIGHT THE FILE IS STILL EMPTY WITH ONE PAGE ALREADY COMMITTED. RETURNING THERE DOES NOT
+    // MERELY LOAD NOTHING: THIS IS THE REPAIR PATH (ROLLBACK, REPLICATION APPLY, updateName()'s OWN catch), SO LEAVING entries
+    // UNTOUCHED LEAVES THE THING BEING REPAIRED IN PLACE - A ROLLED-BACK RENAME SURVIVING IN RAM WITH NO PAGE EVER REWRITTEN -
+    // AND IT SKIPS THE WHOLE LOOP BELOW, TRUNCATION GUARD INCLUDED.
+    //
+    // A PAGE THE COUNT CLAIMS IS STILL REACHABLE IN THAT WINDOW: PageManager.loadPage LOOKS IN THE FLUSH QUEUE BEFORE IT LOOKS
+    // AT THE FILE, AND BY THE TIME A PAGE LEAVES THE QUEUE THE FILE COVERS IT.
+    //
+    // ON THE LOAD PATH THE TWO SOURCES AGREE BY CONSTRUCTION - PaginatedComponent's CONSTRUCTOR DERIVES pageCount FROM THE FILE
+    // SIZE - SO THE CASE THIS GUARD WAS WRITTEN FOR IS UNCHANGED: NO HEADER PAGE ON DISK. CREATING IT COMMITS A TRANSACTION, AND
+    // THE COMMIT RESOLVES THIS FILE ID AGAINST THE SCHEMA - WHICH HAS NOT REGISTERED THIS COMPONENT YET WHEN THE LOAD PATH
+    // BUILDS IT, SO COMMITTING HERE FAILS WITH "File with id '0' was not found" AND THE DATABASE CANNOT BE OPENED AT ALL. THE
+    // CREATION IS DEFERRED TO createHeaderPageIfMissing(), WHICH LocalSchema CALLS ONCE THE COMPONENT IS REGISTERED. THE IN-RAM
+    // DICTIONARY IS ALREADY EMPTY, WHICH IS THE CORRECT STATE FOR A DICTIONARY WITH NOTHING COMMITTED.
+    if (pageCount.get() == 0) {
       return;
 
     } else {
@@ -505,10 +519,29 @@ public class Dictionary extends PaginatedComponent {
           page = database.getPageManager()
               .getImmutablePage(new PageId(database, file.getFileId(), pageNumber), pageSize, false, pageNumber == 0);
         } catch (final IllegalArgumentException e) {
-          throw new DatabaseMetadataException(
-              "Schema dictionary of database '" + database.getName() + "' is truncated: page " + pageNumber + " of " + totalPages
-                  + " is missing. Reading on would silently renumber every name stored after it", e);
+          throw new DatabaseMetadataException(truncatedMessage(pageNumber, totalPages, "is missing"), e);
         }
+
+        // AND THE READ ANSWERING IS NOT THE SAME FACT AS THE PAGE BEING THERE (ISSUE #6341). THE GUARD ABOVE ASKS THE PAGE MANAGER,
+        // WHICH REFUSES ONLY A PAGE PAST THE END OF THE FILE - IT CANNOT REFUSE A HOLE *INSIDE* IT, AND A HOLE IS EXACTLY WHAT THE
+        // SCENARIO THIS CLASS NAMES PRODUCES: A PARTIAL REPLICATION REPLAY WRITES PAGE N WITHOUT THE ONES BEFORE IT, AND WRITING AT
+        // OFFSET N * pageSize EXTENDS THE FILE OVER THE SKIPPED PAGES RATHER THAN LEAVING IT SHORT. THOSE PAGES THEN READ BACK AS
+        // ZEROES, AND A ZERO PAGE DECLARES A CONTENT SIZE OF ZERO - SO THE LOOP BELOW READS NOTHING FROM IT AND EVERY NAME AFTER IT
+        // COMES BACK WITH AN ID LOWER BY HOWEVER MANY THE SKIPPED PAGE HELD. SILENTLY, WHICH IS THE ONE OUTCOME THIS CLASS EXISTS
+        // TO PREVENT.
+        //
+        // EVERY DICTIONARY PAGE EVER WRITTEN CARRIES THE LEGACY COUNTER (updateCounters(), ON BOTH addPage() AND
+        // resetPageForRewrite()), SO A CONTENT SIZE BELOW IT IS NOT A LEGAL EMPTY PAGE: IT IS A PAGE NOBODY WROTE. THAT IS A
+        // STATEMENT ABOUT THE BYTES, NOT ABOUT WHETHER A READ HAPPENED TO SUCCEED, WHICH IS WHY IT ALSO COVERS AN INVENTED OR
+        // OTHERWISE UNWRITTEN IMAGE REACHING HERE BY ANY OTHER ROUTE.
+        //
+        // PAGE 0 IS DELIBERATELY EXEMPT, AND IT IS THE ONE PAGE THAT CAN BE: ITS createIfNotExists ABOVE MATERIALISES PAGE 0 OF A
+        // FILE SHORTER THAN ONE PAGE (KILLED MID-WRITE), WHICH IS WHAT THE SINGLE-PAGE READER DID AND WHAT KEEPS SUCH A DATABASE
+        // OPENABLE. THERE IS NOTHING AFTER IT TO RENUMBER.
+        if (page == null)
+          throw new DatabaseMetadataException(truncatedMessage(pageNumber, totalPages, "is missing"));
+        if (pageNumber > 0 && page.getContentSize() < DICTIONARY_HEADER_SIZE)
+          throw new DatabaseMetadataException(truncatedMessage(pageNumber, totalPages, "was never written"));
 
         page.setBufferPosition(DICTIONARY_HEADER_SIZE);
         while (page.getBufferPosition() < page.getContentSize())
@@ -532,13 +565,28 @@ public class Dictionary extends PaginatedComponent {
   }
 
   /**
-   * Writes the header page when the dictionary file is empty, which happens when the database was killed
-   * before the page reached disk. Must be called only after the component has been registered in the
+   * One wording for both ways a claimed page can fail to be readable content - it is past the end of the file, or it is a hole
+   * inside it - because they are the same fact to whoever reads the message: the dictionary cannot be loaded without moving ids
+   * that are already written inside records.
+   */
+  private String truncatedMessage(final int pageNumber, final int totalPages, final String what) {
+    return "Schema dictionary of database '" + database.getName() + "' is truncated: page " + pageNumber + " of " + totalPages
+        + " " + what + ". Reading on would silently renumber every name stored after it";
+  }
+
+  /**
+   * Writes the header page when the dictionary has no committed page, which happens when the database was
+   * killed before the page reached disk. Must be called only after the component has been registered in the
    * schema: the write commits a transaction whose second phase resolves this file id, so an earlier call
    * fails with {@code SchemaException: File with id '0' was not found}.
    */
   public void createHeaderPageIfMissing() throws IOException {
-    if (file.getSize() > 0)
+    // ASKED OF pageCount RATHER THAN OF THE FILE'S SIZE FOR THE REASONS SET OUT AT reload() (ISSUE #6351). WHAT IS SPECIFIC TO
+    // THIS SITE IS WHERE THE TWO PART: A FILE HOLDING LESS THAN ONE WHOLE PAGE - KILLED MID-WRITE - WHERE THE OLD CHECK SAW BYTES
+    // AND LEFT THE STUB UNREPAIRED FOR GOOD, WHILE THE COUNT SAYS WHAT IS TRUE, THAT NO PAGE IS COMMITTED. reload() ALREADY
+    // TREATS SUCH A FILE AS AN EMPTY PAGE 0 (ITS FLOOR OF 1 PLUS createIfNotExists), SO WRITING THE HEADER PAGE OVER THOSE BYTES
+    // ONLY MAKES THE FILE AGREE WITH THE IN-RAM VIEW INSTEAD OF LEAVING IT TO WHATEVER APPENDS NEXT.
+    if (pageCount.get() > 0)
       return;
 
     database.transaction(() -> {

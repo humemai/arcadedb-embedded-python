@@ -31,8 +31,10 @@ import com.arcadedb.utility.FileUtils;
 import org.apache.ratis.protocol.RaftPeerId;
 
 import java.io.File;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.IntPredicate;
 import java.util.function.LongSupplier;
 import java.util.logging.Level;
 
@@ -44,21 +46,48 @@ import java.util.logging.Level;
 public abstract class BaseRaftHATest extends BaseGraphServerTest {
 
   private static final int  BASE_RAFT_PORT          = 2434;
-  // 120s: two independent CI runs of this PR (runs 31578870619 and 31587763511) each showed
-  // Issue5410AbandonedTicketReleaseIT stall for the ENTIRE poll budget - once at 30s, once at 60s -
-  // immediately after RaftMigrationCompactionRaceIT (a 72k-record, 24-compaction-round, 12-writer-
-  // thread IT) ran in the same shared, reused JVM fork (failsafe reuseForks=true/forkCount=1 for the
-  // whole module). Both stalls were confirmed real via the test's own embedded log timestamps, not a
-  // log-flush artifact. Not reproducible locally in isolation, nor under an emulated 4-CPU/3.9GB-heap
-  // constraint matching the CI runner - only in the full-suite adjacency. The project's own
-  // engine-concurrency skill documents ArcadeStateMachine.notifyInstallSnapshotFromLeader as a
-  // not-yet-migrated user of the JDK common ForkJoinPool, which is also shared with JDK GC/reference
-  // handler internals - exactly the "long-running [GC-heavy] work starves engine work" failure shape
-  // this looks like. This bump is a mitigation, not a fix: it only widens the ceiling on the rare
-  // stalled path (withResyncRetry()/awaitValue()/awaitCountOn() all return as soon as the condition
-  // is met), while the real fix - isolating heavy ITs into their own fork, or migrating the common-
-  // pool caller - is tracked as a follow-up rather than attempted here.
-  private static final long RESYNC_RETRY_TIMEOUT_MS = 120_000;
+  // 30s, down from 120s, and set from a measurement rather than from a suspicion (issue #6267).
+  //
+  // The 120s was a reaction to two CI runs (31578870619, 31587763511) in which
+  // Issue5410AbandonedTicketReleaseIT stalled for the ENTIRE poll budget - once at 30s, once at 60s -
+  // immediately after RaftMigrationCompactionRaceIT (a 72k-record, 24-compaction-round, 12-writer-thread IT)
+  // ran in the same shared, reused JVM fork (failsafe reuseForks=true/forkCount=1 for the whole module). The
+  // stalls were real, not a log-flush artifact, and never reproduced in isolation. The suspected cause was
+  // ArcadeStateMachine.notifyInstallSnapshotFromLeader running its download on the JDK common ForkJoinPool,
+  // shared with JDK GC/reference-handler internals - the "long-running work starves engine work" shape. That
+  // caller has had its own executor since issue #6202, and #6221/#6226 added the instrument below rather than
+  // guessing: a budget nothing exhausts leaves no trace of how much of it was needed.
+  //
+  // The measurement, over nine full ha-integration-tests runs since #6226 merged (31968696717, 31969178061,
+  // 31969810563, 31972218219, 31975575222, 31977924355, 31980155942, 31980224898 and the merge run itself),
+  // 235 tests each: NOT ONE wait exceeded the 10s report threshold. The corroboration is the per-class
+  // elapsed time - all ten classes that call these helpers ran in every one of those runs, and the slowest
+  // of them took 53s WALL CLOCK for the whole class, cluster startup and teardown included, so no single
+  // wait inside it can have approached even half the old budget.
+  //
+  // 30s is what the rest of this class already treats as "long enough for the cluster to do anything it is
+  // going to do": waitForReplicationIsCompleted, waitAllReplicasAreConnected and LEADER_ELECTION_TIMEOUT_MS
+  // all use it. The budget that had no measurement behind it was also the only one four times larger than
+  // its siblings; it is now one of them. It stays generous - three times the largest wait the instrument can
+  // prove any of those runs needed - while a genuine hang costs 90s less before it is reported.
+  //
+  // Whether it can come down again, and what to do about the fork adjacency described above, are tracked by
+  // issue #6343: a comment here is not a tracker, which is what issue #6297 was filed to establish and issue
+  // #6323 found had been lost.
+  private static final long RESYNC_RETRY_TIMEOUT_MS = 30_000;
+  /**
+   * Above this, a wait is worth a line in the log: it is evidence about the budget above, not noise. Lowered
+   * to 5s with the budget (issue #6267) to keep the same resolution: at the old 10s a wait could consume a
+   * third of the new budget and still say nothing, which is the blindness that let the 120s stand unmeasured
+   * for as long as it did. The next decision this feeds is issue #6343.
+   */
+  private static final long SLOW_WAIT_REPORT_MS     = 5_000;
+  /**
+   * How long {@link #findLeaderIndex()} waits for an election before answering "no leader". An election in these
+   * in-process clusters settles in a second or two; the budget is for the loaded CI runner where the question
+   * arrives while one is still in flight.
+   */
+  private static final long LEADER_ELECTION_TIMEOUT_MS = 30_000;
 
   /**
    * Returns the peer ID for a given server index in the test cluster.
@@ -256,15 +285,47 @@ public abstract class BaseRaftHATest extends BaseGraphServerTest {
     return null;
   }
 
+  /**
+   * Ensures the replicas about to be compared have caught up, then compares them. The base {@code endTest()}
+   * calls the comparison directly, without a Raft-aware wait.
+   * <p>
+   * The wait covers exactly {@link #getServerToCheck()} - the servers the comparison will look at - rather than
+   * every configured one. The two sets differ only for a test that takes a server out of the Raft group
+   * ({@code DynamicMembershipTest}): a peer that is no longer a member never applies another entry, so waiting
+   * for it to reach the leader's last-applied index can only burn the full 30 s budget per evicted server and
+   * then log a timeout, and comparing it can only report the divergence the eviction was asking for. Both are
+   * charged to {@code endTest}, which is the wrong place to read about a peer some earlier line removed on
+   * purpose (issue #6267).
+   */
   @Override
   protected void checkDatabasesAreIdentical() {
-    // Ensure all Raft replicas have caught up before comparing pages.
-    // The base endTest() calls this directly without a Raft-aware wait.
-    for (int i = 0; i < getServerCount(); i++) {
+    for (final int i : getServerToCheck())
       if (getServer(i) != null && getServer(i).isStarted())
         waitForReplicationIsCompleted(i);
-    }
     super.checkDatabasesAreIdentical();
+  }
+
+  /**
+   * The subset of server indexes {@code keep} accepts, in index order, as the {@code int[]}
+   * {@link #getServerToCheck()} is declared to return. The one place that turns a per-server predicate into that
+   * array, so an override does not have to hand-roll the two-pass count-then-fill each time.
+   */
+  protected int[] serversMatching(final IntPredicate keep) {
+    final int count = getServerCount();
+    final int[] buffer = new int[count];
+    int found = 0;
+    for (int i = 0; i < count; i++)
+      if (keep.test(i))
+        buffer[found++] = i;
+    return found == count ? buffer : Arrays.copyOf(buffer, found);
+  }
+
+  /**
+   * The servers that are currently running. The default set for a test that deliberately stops one: a stopped
+   * server has no database to compare, and nothing to wait for.
+   */
+  protected int[] startedServers() {
+    return serversMatching(i -> getServer(i) != null && getServer(i).isStarted());
   }
 
   /**
@@ -292,15 +353,38 @@ public abstract class BaseRaftHATest extends BaseGraphServerTest {
   }
 
   /**
-   * Returns the index of the current Raft leader, or -1 if no leader is elected.
+   * Returns the index of the current Raft leader, waiting up to {@link #LEADER_ELECTION_TIMEOUT_MS} for one, or
+   * -1 if none is elected within it.
+   * <p>
+   * It used to sample once and return -1 the instant it was called during a leaderless window - between the
+   * cluster starting and the first election, or across a term change. Nearly every caller then asserts
+   * {@code isGreaterThanOrEqualTo(0)} with "a Raft leader must be elected", which on a loaded machine fails in a
+   * different test method on every run: not a leaderless cluster, a question asked half a second early. Seven
+   * call sites had already wrapped it in an {@code await().until(() -> findLeaderIndex() >= 0)} of their own,
+   * one test at a time; waiting here is that workaround made general.
+   * <p>
+   * No caller asserts a negative result - none of the ~100 tests that use it expects a leaderless cluster - so
+   * waiting changes no test's meaning, only how long the answer takes when the answer is "not yet". A cluster
+   * that genuinely has no leader still costs the full budget once, at the end of which the caller fails exactly
+   * as it did before.
    */
   protected int findLeaderIndex() {
-    for (int i = 0; i < getServerCount(); i++) {
-      final RaftHAPlugin plugin = getRaftPlugin(i);
-      if (plugin != null && plugin.isLeader())
-        return i;
+    final long deadline = System.currentTimeMillis() + LEADER_ELECTION_TIMEOUT_MS;
+    while (true) {
+      for (int i = 0; i < getServerCount(); i++) {
+        final RaftHAPlugin plugin = getRaftPlugin(i);
+        if (plugin != null && plugin.isLeader())
+          return i;
+      }
+      if (System.currentTimeMillis() >= deadline)
+        return -1;
+      try {
+        Thread.sleep(100);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return -1;
+      }
     }
-    return -1;
   }
 
   /**
@@ -351,14 +435,19 @@ public abstract class BaseRaftHATest extends BaseGraphServerTest {
    * and the use that follows it, so retrying on the actual failure is the only shape that is not itself racy.
    */
   protected <T> T withResyncRetry(final int serverIndex, final Function<Database, T> operation) {
-    final long deadline = System.currentTimeMillis() + RESYNC_RETRY_TIMEOUT_MS;
+    final long start = System.currentTimeMillis();
+    final long deadline = start + RESYNC_RETRY_TIMEOUT_MS;
     while (true) {
       final Database db = getServerDatabase(serverIndex, getDatabaseName());
       try {
-        return operation.apply(db);
+        final T result = operation.apply(db);
+        reportSlowWait("withResyncRetry on server " + serverIndex, start, true);
+        return result;
       } catch (final DatabaseIsClosedException e) {
-        if (System.currentTimeMillis() >= deadline)
+        if (System.currentTimeMillis() >= deadline) {
+          reportSlowWait("withResyncRetry on server " + serverIndex, start, false);
           throw e;
+        }
         LogManager.instance().log(this, Level.INFO,
             "TEST: database '%s' on server %d closed mid-operation (snapshot-reinstall resync); retrying with a fresh handle",
             getDatabaseName(), serverIndex);
@@ -395,13 +484,16 @@ public abstract class BaseRaftHATest extends BaseGraphServerTest {
    * never became queryable at all.
    */
   protected long awaitValue(final long expected, final LongSupplier supplier) throws InterruptedException {
-    final long deadline = System.currentTimeMillis() + RESYNC_RETRY_TIMEOUT_MS;
+    final long start = System.currentTimeMillis();
+    final long deadline = start + RESYNC_RETRY_TIMEOUT_MS;
     long lastRead = -1;
     while (System.currentTimeMillis() < deadline) {
       try {
         lastRead = supplier.getAsLong();
-        if (lastRead == expected)
+        if (lastRead == expected) {
+          reportSlowWait("awaitValue(" + expected + ")", start, true);
           return lastRead;
+        }
       } catch (final RuntimeException e) {
         // Mid-resync the database is closed and being reinstalled; keep polling until the deadline. The
         // previous good reading is kept: it describes the follower better than the fact that one poll hit a
@@ -409,10 +501,31 @@ public abstract class BaseRaftHATest extends BaseGraphServerTest {
       }
       Thread.sleep(250);
     }
+    reportSlowWait("awaitValue(" + expected + ")", start, false);
     return lastRead;
   }
 
   protected long awaitCountOn(final int serverIndex, final String typeName, final long expected) throws InterruptedException {
     return awaitValue(expected, () -> countOn(serverIndex, typeName));
+  }
+
+  /**
+   * Records how much of {@link #RESYNC_RETRY_TIMEOUT_MS} a wait actually consumed, when it consumed enough to be
+   * worth knowing. A budget that is never exhausted leaves no evidence of how much of it was needed, which is
+   * exactly why the old 120 s stood on a suspicion rather than on a measurement (issue #6221): a wait that
+   * satisfies in 300 ms and one that satisfies at 95 s are indistinguishable in a green run. Nine runs of
+   * silence are what let it come down to 30 s (issue #6267), and the instrument stays for the same reason it
+   * was added - the next cut, or the case for putting it back, has to come from evidence too.
+   * <p>
+   * Logged, not asserted: a slow wait is not a failure, and a test that failed the moment a CI runner was busy
+   * would be a worse trade than the timeout it was meant to justify.
+   */
+  private void reportSlowWait(final String what, final long startMs, final boolean satisfied) {
+    final long elapsed = System.currentTimeMillis() - startMs;
+    if (elapsed < SLOW_WAIT_REPORT_MS)
+      return;
+    LogManager.instance().log(this, Level.WARNING,
+        "TEST: %s %s after %d ms of the %d ms budget (issue #6267: evidence for whether that budget can come down further)",
+        what, satisfied ? "satisfied" : "GAVE UP", elapsed, RESYNC_RETRY_TIMEOUT_MS);
   }
 }

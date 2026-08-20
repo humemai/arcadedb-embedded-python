@@ -56,44 +56,91 @@ public interface CommandContext {
   CommandContext setCachedValue(String key, Object value);
 
   /**
-   * Returns an absolute {@code arcadedb.command.regexTimeout} deadline (see {@link TimeBoundRegex#newDeadline(long)})
-   * shared for the lifetime of this context, computing and caching it on first call. Centralizes the
-   * get-cached-or-compute-and-cache pattern every regex-bounding call site in the engine needs to share one
-   * deadline across a series of related matches (issue #5886) - each call site previously hand-rolled this
-   * with its own cache key, which is exactly how a real bug shipped: two independently-chosen keys collided
-   * (a fixed {@code "MATCHES_DEADLINE"} key colliding with the pattern cache's {@code "MATCHES_" + <regex
-   * text>} keys for the literal pattern text {@code DEADLINE}). Centralizing here still requires each caller
-   * to pass a key that can't collide with anything else it puts in this same cache, but removes the need to
-   * hand-write the get-or-compute logic itself at every site.
-   *
-   * <p>The deadline is shared across every row evaluated through <em>this</em> context, but not necessarily
-   * across an entire query: {@code FetchFromTypeExecutionStep.syncPullParallel} gives each parallel bucket-scan
-   * worker its own {@link #copy()} of the context (deliberately, so workers don't race on this same cache's
-   * non-thread-safe backing map), so each worker computes its own deadline independently. A type scanned in
-   * parallel across N buckets is therefore bounded by {@code N * timeoutMillis} overall, not one shared budget.
-   * This is a much narrower gap than the one this method closes: bucket count is a schema/DDL property, not
-   * attacker-controlled the way row/item counts are.
-   *
-   * @param cacheKey      the {@link #getCachedValue(String)} key to store the deadline under - must not collide
-   *                      with any other key this context's cache holds
-   * @param timeoutMillis maximum time allowed from now, in milliseconds; a value {@code <= 0} disables the bound
+   * Returns the absolute {@code arcadedb.command.regexTimeout} deadline (see {@link TimeBoundRegex#newDeadline(long)})
+   * every regex evaluated through this command must finish by, resolved from
+   * {@link GlobalConfiguration#COMMAND_REGEX_TIMEOUT} on first use and then fixed - like
+   * {@link #getCommandDeadline()}, and for the same reason: a bound that restarts is not a bound.
+   * <p>
+   * One deadline per command rather than one per call site. Every site that bounds a regex against catastrophic
+   * backtracking needs to share a budget across a series of matches (issue #5886), and the deadline used to live
+   * in {@link #getCachedValue(String)} under a key each site chose for itself. That gave a query as many budgets
+   * as it used regex features, and - because {@link #copy()} does not copy that cache - gave each parallel
+   * bucket-scan worker one more, so a type scanned across N buckets was bounded by {@code N * timeoutMillis}
+   * (issue #6304). Carried on the context and resolved before copying, it is one budget for the whole command,
+   * however the command is decomposed. It also removes the key-collision hazard that shipped a real bug: a fixed
+   * {@code "MATCHES_DEADLINE"} key collided with the pattern cache's {@code "MATCHES_" + <regex text>} keys for
+   * the literal pattern text {@code DEADLINE}.
+   * <p>
+   * With the setting disabled the resolution costs no clock read at all - {@link TimeBoundRegex#newDeadline(long)}
+   * answers {@link Long#MAX_VALUE} for a non-positive timeout.
    */
-  default long getOrComputeRegexDeadline(final String cacheKey, final long timeoutMillis) {
-    Long deadline = (Long) getCachedValue(cacheKey);
-    if (deadline == null) {
-      deadline = TimeBoundRegex.newDeadline(timeoutMillis);
-      setCachedValue(cacheKey, deadline);
-    }
-    return deadline;
+  long getRegexDeadline();
+
+  /**
+   * Returns {@code arcadedb.command.timeout} in milliseconds for this context's database, or {@code 0} when the
+   * setting is disabled. Resolved once and remembered, so the hot paths that build a {@link WorkGuard} per
+   * batch do not re-read the configuration.
+   */
+  long getCommandTimeout();
+
+  /**
+   * Returns the absolute epoch-millis instant past which this command must stop, or {@link Long#MAX_VALUE} when
+   * {@code arcadedb.command.timeout} is disabled.
+   * <p>
+   * The deadline is computed on first use and then fixed for the lifetime of the context, and a context without
+   * one of its own inherits its parent's. That is what makes the setting mean "no command runs longer than X"
+   * rather than "no single step runs longer than X": a subquery, a {@code CALL} into a procedure or a per-row
+   * expansion that builds its own guard all land on the same instant instead of each starting a fresh budget
+   * (issue #6266).
+   */
+  long getCommandDeadline();
+
+  /**
+   * Names the bound {@link #getCommandDeadline()} currently expresses, for the abort message - e.g.
+   * {@code "arcadedb.command.timeout of 30000ms"} or {@code "TIMEOUT clause of 50ms"}. Read only on the failure
+   * path, so it costs nothing while the command is running.
+   */
+  String getCommandDeadlineDescription();
+
+  /**
+   * Pins this context's deadline to an already-computed instant, overriding whatever it would have resolved to,
+   * and says what to call that bound when a check aborts on it.
+   * <p>
+   * Two callers need this. A nested plan runs with a context of its own and pins the outer command's instant, so
+   * that nesting cannot buy extra budget. A SQL {@code TIMEOUT} clause is resolved by the planner rather than
+   * from the configuration, so the statement's own bound has to be published here or the in-loop guards - which
+   * read the deadline off this context - would never see it (issue #6266).
+   * <p>
+   * Every value is honoured, including {@code 0} - which pins a deadline already in the past, so the next check
+   * aborts - and {@link Long#MAX_VALUE}, which lifts the bound entirely. The one exception is
+   * {@link Long#MIN_VALUE}, which the implementation reserves as its "not resolved yet" marker and will
+   * therefore re-resolve rather than pin. Nothing can produce it - an epoch-millis instant that far in the past
+   * has no meaning and no arithmetic here reaches it - so it is named only so the next reader does not have to
+   * rediscover it.
+   */
+  default void setCommandDeadline(final long deadlineEpochMillis, final String description) {
+    setCommandDeadline(deadlineEpochMillis, description, false);
   }
 
   /**
-   * Convenience overload of {@link #getOrComputeRegexDeadline(String, long)} that resolves {@code timeoutMillis}
-   * from {@link GlobalConfiguration#COMMAND_REGEX_TIMEOUT} for this context's database.
+   * As {@link #setCommandDeadline(long, String)}, additionally saying what reaching the deadline means.
+   *
+   * @param yieldPartialResults {@code true} for a bound that asks for the rows produced so far rather than for a
+   *                            failure - a SQL {@code TIMEOUT n RETURN} clause. See
+   *                            {@link #isCommandDeadlinePartial()}.
    */
-  default long getOrComputeRegexDeadline(final String cacheKey) {
-    return getOrComputeRegexDeadline(cacheKey, GlobalConfiguration.COMMAND_REGEX_TIMEOUT.getValueAsLong(getDatabase()));
-  }
+  void setCommandDeadline(long deadlineEpochMillis, String description, boolean yieldPartialResults);
+
+  /**
+   * Whether reaching {@link #getCommandDeadline()} means "stop and yield what you have" rather than "fail".
+   * <p>
+   * Only a SQL {@code TIMEOUT n RETURN} clause sets this. A guard that reaches such a deadline raises
+   * {@link com.arcadedb.exception.PartialResultTimeoutException} instead of a plain
+   * {@link com.arcadedb.exception.TimeoutException}, and the step owning the clause turns that into the end of its
+   * result set. Without the distinction the clause could not be enforced inside a scan loop at all: a guard can
+   * only stop by throwing, and throwing is exactly what {@code RETURN} promises not to do (issue #6304).
+   */
+  boolean isCommandDeadlinePartial();
 
   CommandContext incrementVariable(String getNeighbors);
 

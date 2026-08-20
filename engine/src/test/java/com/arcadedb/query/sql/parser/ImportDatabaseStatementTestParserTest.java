@@ -20,6 +20,12 @@ package com.arcadedb.query.sql.parser;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
+
 class ImportDatabaseStatementTestParserTest extends AbstractParserTest {
 
   @Test
@@ -50,5 +56,48 @@ class ImportDatabaseStatementTestParserTest extends AbstractParserTest {
         IMPORT DATABASE WITH vertices="file://vertices.csv", verticesFileType=csv, typeIdProperty=Id, \
         edges="file://edges.csv", edgesFileType=csv, edgeFromField="From", edgeToField="To"\
         """);
+  }
+
+  /**
+   * Regression test for issue #6087: {@code copy()} only carried the URL over, so every {@code WITH ...} setting was
+   * silently dropped by the copy. Same defect {@code BackupDatabaseStatement} had (#6080).
+   */
+  @Test
+  void copyKeepsTheWithSettings() {
+    final SimpleNode parsed = checkRightSyntax("IMPORT DATABASE http://www.foo.bar WITH forceDatabaseCreate = true, commitEvery = 10000");
+    assertThat(parsed).isInstanceOf(ImportDatabaseStatement.class);
+
+    final ImportDatabaseStatement original = (ImportDatabaseStatement) parsed;
+    assertThat(renderSettings(original)).containsOnly(entry("forceDatabaseCreate", "true"), entry("commitEvery", "10000"));
+
+    final ImportDatabaseStatement copy = (ImportDatabaseStatement) original.copy();
+
+    assertThat(renderSettings(copy)).isEqualTo(renderSettings(original));
+    assertThat(copy.url).isEqualTo(original.url);
+  }
+
+  @Test
+  void copyOfAStatementWithoutSettingsKeepsAnEmptyMap() {
+    final SimpleNode parsed = checkRightSyntax("IMPORT DATABASE http://www.foo.bar");
+    final ImportDatabaseStatement original = (ImportDatabaseStatement) parsed;
+    assertThat(original.settings).isEmpty();
+
+    final ImportDatabaseStatement copy = (ImportDatabaseStatement) original.copy();
+
+    assertThat(copy.settings).isEmpty();
+    assertThat(copy.url).isEqualTo(original.url);
+  }
+
+  /**
+   * Renders the settings the way {@code executeSimple} consumes them: the setting name read back with
+   * {@code toString()} against the rendered value. The key is built as {@code new Expression(Identifier)} - never
+   * the raw-{@code value} shape this used to read (issue #6409, item 1) - so {@code toString()} is how every one of
+   * the five {@code WITH}-settings statements recovers it now.
+   */
+  private static Map<String, String> renderSettings(final ImportDatabaseStatement statement) {
+    final Map<String, String> rendered = new HashMap<>();
+    for (final Map.Entry<Expression, Expression> entry : statement.settings.entrySet())
+      rendered.put(entry.getKey().toString(), entry.getValue().toString());
+    return rendered;
   }
 }

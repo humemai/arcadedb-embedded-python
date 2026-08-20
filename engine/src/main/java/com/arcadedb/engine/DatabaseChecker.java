@@ -24,6 +24,8 @@ import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Document;
 import com.arcadedb.database.RID;
 import com.arcadedb.database.Record;
+import com.arcadedb.engine.timeseries.TimeSeriesEngine;
+import com.arcadedb.engine.timeseries.TimeSeriesIntegrity;
 import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.exception.RecordNotFoundException;
@@ -37,6 +39,7 @@ import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.IndexMetadata;
 import com.arcadedb.schema.LocalDocumentType;
 import com.arcadedb.schema.LocalEdgeType;
+import com.arcadedb.schema.LocalTimeSeriesType;
 import com.arcadedb.schema.LocalVertexType;
 import com.arcadedb.schema.Schema;
 import com.arcadedb.serializer.BinarySerializer;
@@ -58,10 +61,22 @@ public class DatabaseChecker {
   // gets a larger budget than a plain lock-acquisition timeout, where nothing was touched and giving up simply
   // leaves the index exactly as it was.
   private static final int          LOCK_POST_DROP_ATTEMPT_MULTIPLIER = 4;
+  /**
+   * How many unreferenced files the single log line about them names (issue #6143). A node that leaked files can
+   * hold any number of them and an unbounded log line helps nobody; the full list is always in the
+   * {@code unreferencedFiles} result key.
+   */
+  private static final int          LOGGED_UNREFERENCED_FILES = 20;
   private final DatabaseInternal    database;
   private       int                 verboseLevel = 1;
   private       boolean             fix          = false;
   private       boolean             compress     = false;
+  /** #6360: see {@link #setDeep(boolean)}. */
+  private       boolean             deep         = false;
+  /** #6090: see {@link #setDeleteOrphanEdgeRecords(boolean)} for why this is not part of {@link #fix}. */
+  private       boolean             deleteOrphanEdgeRecords = false;
+  /** #6189: see {@link #setReclaimUnreferencedFiles(boolean)} for why this is not part of {@link #fix} either. */
+  private       boolean             reclaimUnreferencedFiles = false;
   private       Set<Object>         buckets      = Collections.emptySet();
   private       Set<String>         types        = Collections.emptySet();
   /**
@@ -145,10 +160,57 @@ public class DatabaseChecker {
     result.put("prunedDanglingEntries", 0L);
     result.put("reconnectedEdges", 0L);
     result.put("invalidLinks", 0L);
+    // Issue #6090: the ORPHAN EDGE RECORD findings, seeded so a clean run publishes zeros rather than omitting the
+    // keys - "does this database hold any?" must be answerable from the result of every run, not only from one that
+    // happened to find some. unreachableEdgeRecords is the orphan count (an edge record no adjacency list
+    // references, so no traversal reaches it though countType counts it); the two edgesMissing* keys are the
+    // per-side breakdown, IN only for a bidirectional edge type. missingReferenceBack is left exactly as it was.
+    //
+    // THE THREE ARE NOT DISJOINT, which matters to anything rendering them as a summary (Studio, an HTTP client):
+    // an orphaned BIDIRECTIONAL edge is one record that increments all three, and an orphaned unidirectional one
+    // increments unreachableEdgeRecords and edgesMissingOutReference. They answer "how many edges have this
+    // defect", each independently, not "which bucket does each defective edge fall into", so summing them
+    // double-counts. unreachableEdgeRecords is the one to show as the orphan total; the other two are the
+    // per-direction detail behind it plus the half-linked edges that are still reachable from one side.
+
+    result.put("unreachableEdgeRecords", 0L);
+    result.put("edgesMissingOutReference", 0L);
+    result.put("edgesMissingInReference", 0L);
+    result.put("unreachableEdgeRecordsFound", new LinkedHashSet<RID>());
+    // Issue #6062: what the back-reference probes cost, seeded so a run always answers "why was this slow" rather
+    // than answering it only when a graph pass happened to run. adjacencyProbes is how many times the check asked an
+    // endpoint whether its adjacency list references an edge - structurally two per edge, per pass;
+    // adjacencyProbeListWalks is how many walks of a list answering them took, which used to be one per probe and
+    // now grows with the number of DISTINCT lists; adjacencyEntriesScanned is the entries those walks visited, the
+    // number that was quadratic in a super-node's degree. adjacencyProbeListWalks at or above adjacencyProbes on a
+    // graph with hubs means the cache is not engaging - the budget may be below the hub's degree, see
+    // arcadedb.checkDatabaseAdjacencyCacheEntries.
+    result.put("adjacencyProbes", 0L);
+    result.put("adjacencyProbeListWalks", 0L);
+    result.put("adjacencyEntriesScanned", 0L);
     result.put("warnings", new LinkedHashSet<>());
+    // Issue #6143: files this node holds that no schema component claims. Report-only, always present so a clean
+    // run says "none" rather than saying nothing, and empty under a RECORD scope, which cannot answer the question.
+    result.put("unreferencedFiles", new LinkedHashSet<String>());
+    // Issue #6189: which of the above this run actually deleted, seeded empty for the same reason - a caller must
+    // be able to read "none" rather than "nothing was asked". Stays empty unless BOTH fix and
+    // reclaimUnreferencedFiles are set; see checkUnreferencedFiles().
+    result.put("reclaimedUnreferencedFiles", new LinkedHashSet<String>());
     result.put("deletedRecordsAfterFix", new LinkedHashSet<>());
     result.put("corruptedRecords", new LinkedHashSet<>());
     result.put("corruptedIndexes", new LinkedHashSet<>());
+    // Issue #6340: the TimeSeries pass, seeded like every other family so a clean run publishes zeros rather than
+    // omitting the keys - "did this run look at the TimeSeries files at all?" has to be answerable from the result
+    // of every run, and a database with no TimeSeries type answers it with zeros rather than with silence.
+    result.put("corruptedTimeSeries", new LinkedHashSet<String>());
+    // #6360: one line per DERIVED counter or header FIX rewrote, and a count of them. Deliberately not folded into
+    // autoFix - see checkTimeSeries.
+    result.put("timeSeriesRepairs", new LinkedHashSet<String>());
+    result.put("repairedTimeSeries", 0L);
+    result.put("totalTimeSeriesTypes", 0L);
+    result.put("totalTimeSeriesShards", 0L);
+    result.put("totalTimeSeriesSamples", 0L);
+    result.put("totalTimeSeriesSealedBlocks", 0L);
     result.put("totalWarnings", 0L);
     result.put("totalCorruptedRecords", 0L);
     result.put("distinctMissingReferences", 0L);
@@ -169,6 +231,11 @@ public class DatabaseChecker {
     final List<DocumentType> edgeTypes = new ArrayList<>();
     final List<DocumentType> vertexTypes = new ArrayList<>();
     final List<DocumentType> documentTypes = new ArrayList<>();
+    // Issue #6340: a TimeSeries type is a LocalDocumentType and used to land in documentTypes, where the per-type
+    // pass found it had no record buckets and did nothing - which is the whole reason CHECK DATABASE had no
+    // TimeSeries coverage. Its data is not in record buckets: it is in the .tstb/.tstd components the schema
+    // registers as files and in the .ts.sealed files outside the paginated layer, so it gets its own pass.
+    final List<LocalTimeSeriesType> timeSeriesTypes = new ArrayList<>();
     for (final DocumentType type : database.getSchema().getTypes()) {
       if (types != null && !types.isEmpty() && (type == null || !types.contains(type.getName())))
         continue;
@@ -176,6 +243,8 @@ public class DatabaseChecker {
         edgeTypes.add(type);
       else if (type instanceof LocalVertexType)
         vertexTypes.add(type);
+      else if (type instanceof LocalTimeSeriesType tsType)
+        timeSeriesTypes.add(tsType);
       else
         documentTypes.add(type);
     }
@@ -229,6 +298,10 @@ public class DatabaseChecker {
       currentStep = 0;
       totalSteps = edgeTypes.size() + vertexTypes.size() + documentTypes.size() // per-type checks
           + 3 // buckets + external properties + indexes
+          // #6340: ONE step for all TimeSeries types, and only when the database has any. A step per type would
+          // change the plan of every database that has none, which is what every existing progress expectation
+          // was written against; a step that is not there costs nobody anything.
+          + (timeSeriesTypes.isEmpty() ? 0 : 1)
           + (reclaimOrphanedSegments ? 1 : 0)
           + (fix ? 1 : 0) // rebuild affected indexes
           + (compress ? 1 : 0);
@@ -250,11 +323,15 @@ public class DatabaseChecker {
 
       checkDocuments(documentTypes);
 
+      checkTimeSeries(timeSeriesTypes);
+
       checkBuckets(result);
 
       checkExternalProperties();
 
       corruptMetadataIndexes = checkIndexes();
+
+      checkUnreferencedFiles();
     }
 
     final Set<Integer> affectedBuckets = new HashSet<>();
@@ -475,6 +552,17 @@ public class DatabaseChecker {
   }
 
   /**
+   * Unions one edge scan's ORPHAN EDGE RECORD RIDs into the cross-type list (issue #6090). Merged by hand rather
+   * than through {@link #updateStats}, which only folds {@code Long} values - the same reason
+   * {@code corruptedRecords} is merged here. The count beside it stays exact even when this set hit its cap.
+   */
+  private void mergeUnreachableEdgeRecords(final Map<String, Object> stats) {
+    final Collection<RID> unreachable = (Collection<RID>) stats.get("unreachableEdgeRecordsFound");
+    if (unreachable != null)
+      ((LinkedHashSet<RID>) result.get("unreachableEdgeRecordsFound")).addAll(unreachable);
+  }
+
+  /**
    * Merges the records a sub-check actually deleted into {@code deletedRecordsAfterFix}.
    * <p>
    * Absent before, which made the field answer a different question depending on which pass did the removing: the
@@ -571,6 +659,119 @@ public class DatabaseChecker {
 
       stepComplete();
     }
+  }
+
+  /**
+   * Validates the storage of every TimeSeries type in scope (issue #6340).
+   * <p>
+   * <b>Why this pass exists.</b> Before it, {@code DatabaseChecker} contained no reference to TimeSeries at all -
+   * not to {@code .tstb}, not to {@code .tstd}, not to {@code .ts.sealed}. The checker walks record buckets and
+   * indexes; a TimeSeries type has neither, since {@code LocalTimeSeriesType} registers its shards with the schema
+   * as FILES rather than as a type's record buckets and its compacted data does not go through the paginated layer
+   * at all. So a type falling into the document arm had nothing to scan, and every one of the three on-disk
+   * formats TimeSeries owns - the mutable bucket, the sealed store, the tag dictionary, the last two with their
+   * own magics, headers and CRCs - was outside the reach of the only tool whose job is to find damage in them.
+   * That was not an abstract gap: #6314 fixed a bug that wrote real rows to disk at the wrong stride, and nothing
+   * in the engine could detect a file left in that state, because the header a mismatched session also wrote
+   * counts rows the pages no longer hold.
+   * <p>
+   * <b>{@code FIX} repairs derived bookkeeping and never a sample</b> (issue #6360 item 1, which asked exactly
+   * this). Three things here are DERIVED - the mutable bucket's page-0 counters, the sealed store's header block
+   * count and global timestamp bounds, and the tail of an interrupted sealed append - and every one of them is
+   * recomputable from, or invisible to, the data it describes. Rewriting them discards nothing, and leaving them
+   * wrong is not cosmetic: {@code TimeSeriesSealedStore.loadDirectory} reads the global bounds straight out of the
+   * header instead of recomputing them, so a query pruned against a wrong bound silently misses data the file
+   * holds, and {@code appendBlock} writes at the END of the sealed file, so a tail nothing can read makes every
+   * block appended after it unreadable too. Even there the repair is narrow: only a tail that STARTS with a block
+   * magic is dropped, because that one is incomplete by its own evidence, while one that does not could be a
+   * complete block whose magic took a bit flip.
+   * <p>
+   * Everything else is reported and left alone, and that is the answer rather than a deferral. A record bucket can
+   * be repaired because its records are self-describing and its indexes are derivable from them; a sealed block is
+   * append-only columnar data and the ONLY copy of the samples in it, so "repair" there means choosing which
+   * samples to throw away. Under HA a sealed store is derived and a node can rebuild one by recompacting from its
+   * replicated mutable pages - which makes discarding one recoverable, not automatic. That is an operator's
+   * decision with the operator's knowledge of the cluster behind it, and a checker that made it for them would be
+   * deleting data to make its own report come out clean.
+   * <p>
+   * <b>Scoped by TYPE and by nothing else.</b> The type filter has already been applied by the caller's
+   * classification, so naming a type checks that type's files and nothing else, exactly as it does for a document
+   * type. A BUCKET scope does not narrow this pass and cannot: a TimeSeries shard is not a bucket, so there is
+   * nothing for a bucket name to select - the same reason {@link #checkIndexes} is not narrowed by BUCKET either.
+   * A RECORD scope never reaches here, since that branch skips every database-wide pass.
+   * <p>
+   * ONE step for all types rather than one per type, so a database with no TimeSeries type keeps the step plan it
+   * had. The per-type progress is the tick.
+   */
+  private void checkTimeSeries(final List<LocalTimeSeriesType> timeSeriesTypes) {
+    if (timeSeriesTypes.isEmpty())
+      return;
+
+    if (verboseLevel > 0)
+      LogManager.instance().log(this, Level.INFO, "Checking TimeSeries types...");
+
+    stepBegin("Checking TimeSeries", timeSeriesTypes.size());
+
+    final TimeSeriesIntegrity.Options options = TimeSeriesIntegrity.Options.of(deep, fix);
+    final Set<String> corrupted = new LinkedHashSet<>();
+    long totalShards = 0;
+    long totalSamples = 0;
+    long totalSealedBlocks = 0;
+    long totalRepairs = 0;
+
+    for (final LocalTimeSeriesType type : timeSeriesTypes) {
+      stepTick();
+
+      final TimeSeriesEngine engine = type.getEngine();
+      if (engine == null) {
+        // The type is in the schema but its engine never initialised, so its files were never opened. Reported
+        // rather than skipped: a type nothing can read is exactly the kind of thing this check is asked about.
+        addWarning("timeseries '" + type.getName() + "': the storage engine is not initialised, so none of its "
+            + "files could be read");
+        corrupted.add(type.getName());
+        continue;
+      }
+
+      try {
+        // ONE walk over the type's shards, not three: the report carries the totals this pass publishes alongside
+        // the findings, and the totals are read inside the SAME lock window each shard's mutable-half check
+        // already runs in - so the numbers describe one instant, not a second and third walk over the same
+        // shards. The sealed-half findings do not share that window (issue #6406 item 1: they are fanned out
+        // across the type's own pool, after every shard's mutable half has already run) - see
+        // TimeSeriesEngine.checkIntegrity's own javadoc for what that trades away and why it is still safe.
+        final TimeSeriesEngine.IntegrityReport report = engine.checkIntegrity(options);
+
+        totalShards += report.shards();
+        totalSamples += report.samples();
+        totalSealedBlocks += report.sealedBlocks();
+
+        if (!report.problems().isEmpty()) {
+          corrupted.add(type.getName());
+          for (final String problem : report.problems())
+            addWarning("timeseries '" + type.getName() + "': " + problem);
+        }
+
+        // Kept out of autoFix, which is the RECORD action count (#6136) and has never included anything that is
+        // not a removed record or a pruned index entry. A header rewritten from the pages it describes is neither.
+        totalRepairs += report.repairs().size();
+        for (final String repair : report.repairs())
+          ((LinkedHashSet<String>) result.get("timeSeriesRepairs")).add("timeseries '" + type.getName() + "': " + repair);
+      } catch (final Exception e) {
+        // Same shape as the index arm: a check that cannot complete is itself a finding, never a reason to
+        // abandon the rest of the run.
+        addWarning("timeseries '" + type.getName() + "': integrity check failed: " + e.getMessage());
+        corrupted.add(type.getName());
+      }
+    }
+
+    ((LinkedHashSet<String>) result.get("corruptedTimeSeries")).addAll(corrupted);
+    result.put("totalTimeSeriesTypes", (long) timeSeriesTypes.size());
+    result.put("totalTimeSeriesShards", totalShards);
+    result.put("totalTimeSeriesSamples", totalSamples);
+    result.put("totalTimeSeriesSealedBlocks", totalSealedBlocks);
+    result.put("repairedTimeSeries", totalRepairs);
+
+    stepComplete();
   }
 
   /**
@@ -740,7 +941,7 @@ public class DatabaseChecker {
 
       final Map<String, Object> stats;
       if (type instanceof LocalEdgeType)
-        stats = graphChecker.checkEdges(type.getName(), rids, fix, verboseLevel,
+        stats = graphChecker.checkEdges(type.getName(), rids, fix, deleteOrphanEdgeRecords, verboseLevel,
             Math.max(0, maxWarnings - currentWarnings), Math.max(0, maxWarnings - currentCorrupted));
       else
         stats = graphChecker.checkVertices(type.getName(), rids, fix, verboseLevel,
@@ -749,6 +950,7 @@ public class DatabaseChecker {
       updateStats(stats);
       ((LinkedHashSet<String>) result.get("warnings")).addAll((Collection<String>) stats.get("warnings"));
       ((LinkedHashSet<RID>) result.get("corruptedRecords")).addAll((Collection<RID>) stats.get("corruptedRecords"));
+      mergeUnreachableEdgeRecords(stats);
       mergeDeletedRecords(stats);
       mergeMissingReferences((Map<RID, Long>) stats.get("missingReferences"),
           (Map<RID, String>) stats.get("missingReferenceErrors"));
@@ -857,13 +1059,14 @@ public class DatabaseChecker {
       final int currentCorrupted = ((LinkedHashSet<RID>) result.get("corruptedRecords")).size();
       final Map<String, Object> stats = new GraphDatabaseChecker(database)
           .setProgress(progressCallback, "Checking edges '" + type.getName() + "'", currentStep, totalSteps)
-          .checkEdges(type.getName(), fix, verboseLevel,
+          .checkEdges(type.getName(), null, fix, deleteOrphanEdgeRecords, verboseLevel,
               Math.max(0, maxWarnings - currentWarnings), Math.max(0, maxWarnings - currentCorrupted));
 
       updateStats(stats);
 
       ((LinkedHashSet<String>) result.get("warnings")).addAll((Collection<String>) stats.get("warnings"));
       ((LinkedHashSet<RID>) result.get("corruptedRecords")).addAll((Collection<RID>) stats.get("corruptedRecords"));
+      mergeUnreachableEdgeRecords(stats);
       mergeDeletedRecords(stats);
       mergeMissingReferences((Map<RID, Long>) stats.get("missingReferences"),
           (Map<RID, String>) stats.get("missingReferenceErrors"));
@@ -960,6 +1163,66 @@ public class DatabaseChecker {
     return this;
   }
 
+  /**
+   * Opt-in for the checks that have to DECODE the data rather than reconcile what describes it - {@code CHECK
+   * DATABASE ... DEEP} (issue #6360).
+   * <p>
+   * Today only the TimeSeries pass has a tier above its default, and what that tier adds is not more of the same:
+   * the default already reads every byte of every sealed store to verify its per-block CRC32s, which proves the
+   * bytes are the bytes that were written and proves nothing about whether they mean what the block claims. DEEP
+   * decompresses each block and reconciles it against the three claims read paths answer queries from without ever
+   * looking at the values - sorted timestamps, per-column min/max/sum, and the distinct tag values block pruning
+   * skips on. Each of those, when wrong, produces a wrong ANSWER rather than an error.
+   * <p>
+   * It is a clause of its own rather than the default because it is the one part of the check whose cost is
+   * decompression of the whole dataset rather than a sequential read of it, and because everything it can find is
+   * a bug in a writer rather than damage a disk did - the class of thing an operator goes looking for, not the
+   * class they run a scheduled check for.
+   */
+  public DatabaseChecker setDeep(final boolean deep) {
+    this.deep = deep;
+    return this;
+  }
+
+  /**
+   * Opt-in for reclaiming ORPHAN EDGE RECORDS (issue #6090): edge records no vertex's adjacency list references.
+   * Only meaningful together with {@link #setFix(boolean)}, which performs the removal.
+   * <p>
+   * SEPARATE FROM {@code FIX} ON PURPOSE, and the reason is a data-loss path rather than a taste for options. The
+   * detection cannot distinguish "this record is garbage a failed load left behind" from "this vertex lost its
+   * head-chunk pointer, so its perfectly good edges look unreferenced" - a null head chunk reads exactly like a
+   * vertex with no edges. In the second case the edge records are the ONLY surviving description of that
+   * adjacency and the thing {@code RESTORE VERTEX} rebuilds it from, so a repair that deletes them by default
+   * would turn a recoverable database into an unrecoverable one. Reporting is therefore always on; removing is
+   * always asked for.
+   */
+  public DatabaseChecker setDeleteOrphanEdgeRecords(final boolean deleteOrphanEdgeRecords) {
+    this.deleteOrphanEdgeRecords = deleteOrphanEdgeRecords;
+    return this;
+  }
+
+  /**
+   * Opt-in for reclaiming unreferenced files (issue #6189): the operator-triggered alternative to the automatic,
+   * inferred reclaim that issue #6189 explicitly did NOT take (see that issue for the full argument against it).
+   * Only meaningful together with {@link #setFix(boolean)}, which performs the removal.
+   * <p>
+   * Deletes exactly the files {@link UnreferencedFiles#scan} already proves under
+   * {@link UnreferencedFiles.Kind#NO_SCHEMA_COMPONENT} - nothing in the schema names them, so a raw file delete
+   * can never leave a dangling schema reference. The other two shapes {@code UnreferencedFiles} can prove,
+   * {@link UnreferencedFiles.Kind#UNOWNED_BUCKET} and {@link UnreferencedFiles.Kind#UNOWNED_INDEX}, are registered
+   * schema components; reclaiming those safely means unregistering the component, not only deleting its file, and
+   * stays a manual {@code DROP BUCKET} / index-tooling operation the finding's reason already names.
+   * <p>
+   * SEPARATE FROM {@code FIX} ON PURPOSE, for the same reason {@link #setDeleteOrphanEdgeRecords} is: reporting a
+   * finding is always safe, deleting is a step an operator has to ask for explicitly, on the node they chose to run
+   * this on. This runs against whatever {@link DatabaseInternal} this checker was constructed with - it does not
+   * itself target a specific node of a cluster.
+   */
+  public DatabaseChecker setReclaimUnreferencedFiles(final boolean reclaimUnreferencedFiles) {
+    this.reclaimUnreferencedFiles = reclaimUnreferencedFiles;
+    return this;
+  }
+
   public DatabaseChecker setMaxWarnings(final int maxWarnings) {
     this.maxWarnings = maxWarnings;
     return this;
@@ -1007,6 +1270,152 @@ public class DatabaseChecker {
     if (stepTotal > 0)
       stepDone = stepTotal;
     progressCallback.onProgress(currentStepName, currentStep, totalSteps, stepDone, stepTotal > 0 ? stepTotal : stepDone);
+  }
+
+  /**
+   * Reports the paginated files this node holds that no schema component claims (issue #6143), and - only when both
+   * {@link #fix} and {@link #reclaimUnreferencedFiles} were asked for - deletes the ones it can prove safe to delete
+   * (issue #6189).
+   * <p>
+   * The finding is always logged (verbosity permitting) and recorded in the {@code unreferencedFiles} result key
+   * BEFORE any deletion runs, so an operator who reads the log or the result sees what was found before what was
+   * removed - "the finding printed first" is a code-order guarantee here, not merely a documentation claim.
+   * <p>
+   * REPORTED AS ITS OWN RESULT KEY, NOT AS A WARNING, and the distinction is not cosmetic. A warning here means the
+   * data is suspect; an unreferenced file is not a defect in the data at all - nothing is corrupt, nothing is lost,
+   * and the state is one a supported operation produces (a bucket created with CREATE BUCKET and not yet given to a
+   * type is exactly this shape, and so is the file left by an index construction that refused its own arguments).
+   * Folding it into {@code warnings} would also redefine what a clean database is for every caller that treats an
+   * empty warning list as the definition, {@code TestHelper.checkDatabaseIntegrity} among them.
+   * <p>
+   * The principal producer is a replicated schema session that shipped instalments and then lost leadership: it can
+   * no longer submit the compensating removal, so the files its instalments created stay on the other nodes with
+   * nothing referencing them. Only the node that ran the session logs anything about it, and this check runs on the
+   * LEADER for a replicated database, so a clean result here does not certify the followers - the same caveat
+   * {@code checkedNodeScope} already carries for the rest of the run. Each node also publishes its own count as the
+   * {@code arcadedb.ha.schema.unreferenced_files} gauge, which is how an operator finds the node that holds them.
+   * <p>
+   * NOT LIMITED BY THE TYPE/BUCKET SCOPE, unlike everything else in this branch, and it cannot be: "no schema
+   * component claims this file" is a property of the whole schema, not of a type, so narrowing it would mean
+   * answering a different question - and the answer would be wrong, since a type that does not claim the file says
+   * nothing about whether another one does. A scoped run therefore reports findings from outside its scope, which
+   * the warning says. Same shape as the COMPRESS caveat above, and the reason both are stated rather than left to
+   * surprise someone.
+   * <p>
+   * The SCAN always runs, and only the log line honours {@code verboseLevel}: the result key has to be truthful on
+   * every run, because a caller reading {@code unreferencedFiles} as empty must be able to conclude there are none
+   * rather than that the run was quiet. It is in-memory with no I/O, so running it unconditionally costs nothing
+   * worth gating.
+   * <p>
+   * No progress step: it reads in-memory registries with no I/O, so it is over before a poller could observe it,
+   * and giving it one would change the step plan every existing progress test asserts.
+   */
+  private void checkUnreferencedFiles() {
+    final List<UnreferencedFiles.UnreferencedFile> unreferenced = UnreferencedFiles.scan(database);
+    if (unreferenced.isEmpty())
+      return;
+
+    final LinkedHashSet<String> reported = (LinkedHashSet<String>) result.get("unreferencedFiles");
+    for (final UnreferencedFiles.UnreferencedFile file : unreferenced)
+      reported.add(file.toString());
+
+    final boolean reclaiming = fix && reclaimUnreferencedFiles;
+
+    if (verboseLevel >= 1) {
+      // The log line names at most this many. The full list is always in the result key, which is a collection a
+      // caller can read; embedding all of it here would put an unbounded line in the log.
+      final StringBuilder names = new StringBuilder();
+      for (int i = 0; i < unreferenced.size() && i < LOGGED_UNREFERENCED_FILES; i++) {
+        if (i > 0)
+          names.append(", ");
+        names.append(unreferenced.get(i).fileName());
+      }
+      if (unreferenced.size() > LOGGED_UNREFERENCED_FILES)
+        names.append(" and ").append(unreferenced.size() - LOGGED_UNREFERENCED_FILES)
+            .append(" more (see the 'unreferencedFiles' result)");
+
+      LogManager.instance().log(this, Level.INFO,
+          "%d file(s) on this node are referenced by no schema component (this pass covers the whole database, "
+              + "whatever TYPE or BUCKET scope was asked for: a file nothing claims is a property of the schema, "
+              + "not of a type): %s. They are inert - no query, index or replication path reads a file the schema "
+              + "does not reference - so this costs disk only. %s", null, unreferenced.size(), names,
+          reclaiming ?
+              "CHECK DATABASE FIX RECLAIM UNREFERENCED FILES was asked for, so the ones this node can prove safe to "
+                  + "delete are being reclaimed now" :
+              "This check does not remove them; re-run as CHECK DATABASE FIX RECLAIM UNREFERENCED FILES to reclaim "
+                  + "the ones it can prove safe to delete, or remove them by hand with the server stopped, after a "
+                  + "backup");
+    }
+
+    // Logged/recorded above FIRST, deletion (if any) only after: an operator reading the log or the result sees
+    // what was found before what was removed.
+    if (reclaiming)
+      reclaimUnreferencedFiles(unreferenced);
+  }
+
+  /**
+   * Deletes the {@link UnreferencedFiles.Kind#NO_SCHEMA_COMPONENT} findings from {@code unreferenced} - the only
+   * shape a raw file delete can never leave a dangling schema reference behind, because nothing in the schema
+   * names it (issue #6189). {@code UNOWNED_BUCKET} and {@code UNOWNED_INDEX} findings are left untouched; see
+   * {@link #setReclaimUnreferencedFiles(boolean)} for why.
+   * <p>
+   * One file's failure does not abort the rest: {@link FileManager#dropFile} can fail independently per file, and a
+   * caller reclaiming ten files wants the nine that worked, not none of them because the tenth's I/O failed.
+   * <p>
+   * {@code unreferenced} is a snapshot {@link UnreferencedFiles#scan} took with no lock, on a database that stays
+   * open and writable for the whole of this method: the exact shape this reclaims, "no schema component was ever
+   * built for it", is also what a legitimate, still-in-progress instalment sequence looks like before it publishes
+   * (see the class doc). So EVERY file is re-verified right here, immediately before its own {@code dropFile} call,
+   * rather than trusted from the snapshot - a schema reload landing between the scan and this file's turn in the
+   * loop (which the I/O of dropping earlier files in the list only gives more time to) would otherwise mean
+   * deleting a file that is, by now, backing a live component. The re-check is one map lookup, so paying it per
+   * file costs nothing worth avoiding. It cannot close the window all the way to zero - a reload landing in the
+   * gap between this check and the {@code dropFile} two lines below is still possible - only a lock shared with
+   * the schema-attach path could do that, which is a separate, larger change this method does not make.
+   * <p>
+   * Package-private rather than private: the seam a test needs to drive this exact race deterministically, by
+   * handing it a finding whose fileId has since gained a real component, instead of only documenting the residual
+   * window in a comment (see {@code Issue6189ReclaimUnreferencedFilesTest}).
+   * <p>
+   * The "is it still gone from the schema" check and the "actually drop it" step are two separate calls rather
+   * than one, and cannot be otherwise: unregistering a schema component and removing a file are different
+   * subsystems with no shared lock to make them atomic together, which is exactly why the window between them is
+   * the one residual this method documents rather than closes. The "is it already gone from the FILE MANAGER"
+   * check does NOT have that excuse - both the check and the drop are one subsystem - so it is not a separate call
+   * at all: {@link FileManager#dropFile} reports whether it found anything to remove, atomically with removing it
+   * (issue #6189 review, second round), which is what {@code reclaimed} below trusts instead of a same-effect but
+   * racy {@code existsFile} call made before it.
+   */
+  void reclaimUnreferencedFiles(final List<UnreferencedFiles.UnreferencedFile> unreferenced) {
+    final LinkedHashSet<String> reclaimed = (LinkedHashSet<String>) result.get("reclaimedUnreferencedFiles");
+    for (final UnreferencedFiles.UnreferencedFile file : unreferenced) {
+      if (file.kind() != UnreferencedFiles.Kind.NO_SCHEMA_COMPONENT)
+        continue;
+
+      if (database.getSchema().getEmbedded().getFileByIdIfExists(file.fileId()) != null) {
+        // A schema component now claims this file id - it stopped being reclaimable sometime after the scan. Skip
+        // it rather than delete out from under whatever just attached it; the next CHECK DATABASE run reports its
+        // current state.
+        addWarning("skipped reclaiming " + file + ": a schema component was attached to it after it was found, so "
+            + "it is no longer safe to delete");
+        continue;
+      }
+
+      try {
+        if (!database.getFileManager().dropFile(file.fileId()))
+          // Already gone by the time this file's turn came up - e.g. a second RECLAIM run in flight at once, or the
+          // file was dropped some other way. dropFile() reports this atomically with checking, so - unlike the
+          // schema race above - there is no window left to warn about: whatever removed it already achieved the
+          // end state this call wanted, so this is a silent skip, not a warning.
+          continue;
+
+        reclaimed.add(file.toString());
+        if (verboseLevel >= 1)
+          LogManager.instance().log(this, Level.INFO, "reclaimed unreferenced file %s", null, file);
+      } catch (final IOException e) {
+        addWarning("failed to reclaim unreferenced file " + file + ": " + e.getMessage());
+      }
+    }
   }
 
   /** Detects (and on FIX deletes) external-property records that are no longer referenced by any primary record. */
@@ -1208,14 +1617,11 @@ public class DatabaseChecker {
           continue;
       }
 
-      final boolean startedNewTx = !database.isTransactionActive();
-      if (startedNewTx && fix)
-        database.begin();
-
+      // #6320: the transaction the repairs are made in belongs to check() itself now - it batches its commits, so it
+      // cannot be handed one that might be somebody else's. It used to be begun here, and only when no transaction was
+      // already open, which is the one case where batching would have had to be off: through HTTP a command always
+      // arrives with one open, so the bucket repairs of a production CHECK DATABASE FIX would never have been bounded.
       final Map<String, Object> stats = bucket.check(verboseLevel, fix);
-
-      if (startedNewTx && fix)
-        database.commit();
 
       updateStats(stats);
 

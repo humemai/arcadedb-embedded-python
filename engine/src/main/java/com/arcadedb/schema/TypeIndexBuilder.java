@@ -19,6 +19,7 @@
 package com.arcadedb.schema;
 
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.async.AsyncQuiesce;
 import com.arcadedb.engine.Bucket;
 import com.arcadedb.engine.LocalBucket;
 import com.arcadedb.exception.DatabaseMetadataException;
@@ -193,10 +194,17 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
       throw new DatabaseMetadataException(
           "Cannot create index on type '" + metadata.typeName + "' because indexType was not specified");
 
-    // Wait for any running async tasks (e.g., compaction) to complete before creating new index
-    // This prevents NeedRetryException when creating multiple indexes sequentially on large datasets
-    while (database.isAsyncProcessing())
-      database.async().waitCompletion();
+    // The index is built by SCANNING the buckets, so everything the async executor has been asked to write has to be
+    // committed first, or the build simply does not see it and the records end up with no entry at all - a silent
+    // wrong answer on every lookup, not a slow one (issue #6281).
+    //
+    // This used to be `while (database.isAsyncProcessing()) waitCompletion()`, which is not the same barrier: that
+    // predicate reports queued and executing TASKS, while a worker holds ONE transaction open across up to
+    // ASYNC_TX_BATCH_SIZE (10240 by default) of them. An executor whose queues happen to be drained at the instant of
+    // the check therefore answers "idle" while still sitting on thousands of uncommitted records, and the guard was
+    // then skipped entirely. It also prevents the NeedRetryException a running compaction used to raise when several
+    // indexes are created in a row on a large dataset, which is what the guard was originally added for.
+    database.waitForAsyncCompletion();
 
     // Carry the user-supplied TypeIndex name (set via {@link #withIndexName}) onto the
     // IndexMetadata so it propagates to each per-bucket index and ultimately to
@@ -401,8 +409,22 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
     if (replaced != null)
       existingTypeIndex.drop();
 
+    // Asked here because below this line there is ALWAYS a transaction, and the answer is about the one that was
+    // already there (issue #6324, item 1). See IndexBuilder#buildSharesCallerTransaction.
+    final boolean sharesCallerTransaction = buildSharesCallerTransaction();
+
     final TypeIndex created;
-    try {
+    // The barrier of #6281, paid at the top of this method, covers what the async side wrote BEFORE the build. This
+    // covers what it would write DURING it (issue #6303, item 2), and only the first half was ever here:
+    // LocalDocumentType.addIndexInternal registers the index before the scan, so a record saved AFTER that point
+    // stages its own entry and is safe - but one saved in the window between the barrier and that registration, and
+    // still uncommitted when the scan reads, is in neither the scan nor the index. Nothing stopped an async worker
+    // from opening exactly that window, because unlike BucketIndexBuilder this path never parked the workers at all.
+    //
+    // Held across the whole build rather than only across the scan: the registration is what the window is measured
+    // from, and it happens inside recordFileChanges. Reentrant, so the nested quiescence of any builder reached from
+    // here simply rides on this one.
+    try (final AsyncQuiesce asyncPaused = database.quiesceAsync()) {
       final long recordFileChangesStarted = System.nanoTime();
       schema.recordFileChanges(() -> {
         if (sortedBuild) {
@@ -412,13 +434,43 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
         } else
           for (int idx = 0; idx < buckets.size(); ++idx) {
             final int finalIdx = idx;
+
+            if (!sharesCallerTransaction) {
+              // ONE TRANSACTION, exactly as before issue #6324: with nothing of anybody else's to see, creating and
+              // building in one go is both simpler and one commit per bucket cheaper.
+              database.transaction(() -> {
+
+                final LocalBucket bucket = (LocalBucket) buckets.get(finalIdx);
+
+                indexes[finalIdx] = createBucketIndex(schema, type, keyTypes, bucket, true);
+
+              }, false, maxAttempts, null, null);
+              continue;
+            }
+
+            // TWO TRANSACTIONS, and the split is the whole of issue #6324, item 1.
+            //
+            // The COMPONENT is created in a transaction of its OWN. recordFileChanges writes the schema entry that
+            // names this index as soon as this callback returns, whatever the caller's transaction goes on to do, so
+            // the index FILE has to be committed on the same terms: leaving its first page inside a caller's
+            // transaction that later rolls back would leave the schema pointing at a file with no pages, which fails
+            // on the next write with "the file is invalid". Committing it also keeps the index usable from a NESTED
+            // transaction, which cannot see an outer transaction's uncommitted pages.
             database.transaction(() -> {
 
               final LocalBucket bucket = (LocalBucket) buckets.get(finalIdx);
 
-              indexes[finalIdx] = createBucketIndex(schema, type, keyTypes, bucket);
+              indexes[finalIdx] = createBucketIndex(schema, type, keyTypes, bucket, false);
 
             }, false, maxAttempts, null, null);
+
+            // The BUILD then joins the caller's transaction, because a scan reads the transaction it runs in: the
+            // pages that transaction has modified first, the committed ones underneath. That is what lets it see
+            // records the caller has written and not yet committed - `INSERT INTO V SET id = 7;
+            // CREATE INDEX ON V (id)` in one transaction used to end with the record present and NO entry for it, in
+            // neither the scan nor the index - and it makes the entries commit, or roll back, with the records they
+            // describe.
+            database.transaction(() -> buildCreatedIndex(indexes[finalIdx], true), true, maxAttempts, null, null);
           }
 
         return null;
@@ -540,11 +592,6 @@ public class TypeIndexBuilder extends IndexBuilder<TypeIndex> {
               + "left without an index on those properties", restoreError, replaced.typeName(),
           Arrays.asList(replaced.propertyNames()));
     }
-  }
-
-  protected Index createBucketIndex(final LocalSchema schema, final LocalDocumentType type, final Type[] keyTypes,
-      final LocalBucket bucket) {
-    return createBucketIndex(schema, type, keyTypes, bucket, true);
   }
 
   protected Index createBucketIndex(final LocalSchema schema, final LocalDocumentType type, final Type[] keyTypes,

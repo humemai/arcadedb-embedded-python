@@ -20,7 +20,6 @@ package com.arcadedb.function.sql.math;
 
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.query.sql.executor.CommandContext;
-import com.arcadedb.query.sql.executor.MultiValue;
 import com.arcadedb.function.sql.SQLAggregatedFunction;
 
 /**
@@ -88,12 +87,7 @@ public class SQLFunctionVariance extends SQLAggregatedFunction {
   @Override
   public Object execute(final Object self, final Identifiable currentRecord, final Object currentResult, final Object[] params,
       final CommandContext context) {
-    if (params[0] instanceof Number number) {
-      addValue(number);
-    } else if (MultiValue.isMultiValue(params[0])) {
-      for (final Object n : MultiValue.getMultiValueIterable(params[0]))
-        addValue((Number) n);
-    }
+    accumulateNumeric(params[0], this::addValue);
     return null;
   }
 

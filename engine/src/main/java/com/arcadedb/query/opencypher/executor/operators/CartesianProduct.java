@@ -22,11 +22,13 @@ import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.query.sql.executor.WorkGuard;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.NoSuchElementException;
+import java.util.function.BiPredicate;
 
 /**
  * Physical operator that produces a Cartesian product of two independent operators.
@@ -40,28 +42,49 @@ import java.util.NoSuchElementException;
  */
 public class CartesianProduct extends AbstractPhysicalOperator {
   private final PhysicalOperator right;
+  private final BiPredicate<Result, Result> pairFilter;
 
   public CartesianProduct(final PhysicalOperator left, final PhysicalOperator right,
                           final double estimatedCost, final long estimatedCardinality) {
+    this(left, right, estimatedCost, estimatedCardinality, null);
+  }
+
+  /**
+   * @param pairFilter when non-null, tested against every candidate (left, right) pair before it is
+   *                    merged into a row; a pair for which it returns {@code false} is skipped
+   *                    without ever allocating the merged row
+   */
+  public CartesianProduct(final PhysicalOperator left, final PhysicalOperator right,
+                          final double estimatedCost, final long estimatedCardinality,
+                          final BiPredicate<Result, Result> pairFilter) {
     super(left, estimatedCost, estimatedCardinality);
     this.right = right;
+    this.pairFilter = pairFilter;
   }
 
   @Override
   public ResultSet execute(final CommandContext context, final int nRecords) {
+    // A cartesian product emits |right| rows per left row without touching a source, so guarding the scans
+    // below it bounds nothing here: the check has to be on the row this operator itself produces (issue #6266).
+    final WorkGuard guard = WorkGuard.forCommandDeadline(context);
+
     return new ResultSet() {
       private ResultSet leftResults = null;
       private List<Result> rightResultsCache = null;
       private Result currentLeft = null;
       private int rightIndex = 0;
       private boolean finished = false;
+      private boolean initialized = false;
+      private Result pendingRight;
 
       @Override
       public boolean hasNext() {
+        ensureInitialized(context, nRecords);
         if (finished)
           return false;
-        ensureInitialized(context, nRecords);
-        return currentLeft != null && rightIndex < rightResultsCache.size();
+        if (pendingRight != null)
+          return true;
+        return advance();
       }
 
       @Override
@@ -69,7 +92,8 @@ public class CartesianProduct extends AbstractPhysicalOperator {
         if (!hasNext())
           throw new NoSuchElementException();
 
-        final Result rightResult = rightResultsCache.get(rightIndex);
+        final Result rightResult = pendingRight;
+        pendingRight = null;
 
         // Merge left and right properties into one result
         final ResultInternal merged = new ResultInternal();
@@ -78,22 +102,35 @@ public class CartesianProduct extends AbstractPhysicalOperator {
         for (final String prop : rightResult.getPropertyNames())
           merged.setProperty(prop, rightResult.getProperty(prop));
 
-        rightIndex++;
-        // Advance to next left row if we've exhausted right side
-        if (rightIndex >= rightResultsCache.size()) {
+        return merged;
+      }
+
+      // Scans forward from the current (left, right) position for the next pair the filter accepts,
+      // leaving it in pendingRight without merging it - a rejected pair never allocates a merged row.
+      private boolean advance() {
+        while (currentLeft != null) {
+          while (rightIndex < rightResultsCache.size()) {
+            guard.check();
+            final Result candidate = rightResultsCache.get(rightIndex++);
+            if (pairFilter == null || pairFilter.test(currentLeft, candidate)) {
+              pendingRight = candidate;
+              return true;
+            }
+          }
           if (leftResults.hasNext()) {
             currentLeft = leftResults.next();
             rightIndex = 0;
           } else
-            finished = true;
+            currentLeft = null;
         }
-
-        return merged;
+        finished = true;
+        return false;
       }
 
       private void ensureInitialized(final CommandContext ctx, final int n) {
-        if (leftResults != null)
+        if (initialized)
           return;
+        initialized = true;
 
         // Execute left and right operators
         leftResults = child.execute(ctx, n);
@@ -101,8 +138,10 @@ public class CartesianProduct extends AbstractPhysicalOperator {
 
         // Materialize right side for reuse across left rows
         rightResultsCache = new ArrayList<>();
-        while (rightResults.hasNext())
+        while (rightResults.hasNext()) {
+          guard.check();
           rightResultsCache.add(rightResults.next());
+        }
 
         // Get first left row
         if (leftResults.hasNext())
@@ -128,6 +167,8 @@ public class CartesianProduct extends AbstractPhysicalOperator {
     final String indent = getIndent(depth);
     final StringBuilder sb = new StringBuilder();
     sb.append(indent).append("+ CartesianProduct");
+    if (pairFilter != null)
+      sb.append(" [RelationshipUniquenessFilter pushed into join]");
     sb.append(" [cost=").append(String.format(Locale.US, "%.2f", estimatedCost));
     sb.append(", rows=").append(estimatedCardinality);
     sb.append("]\n");

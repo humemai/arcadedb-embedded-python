@@ -30,6 +30,7 @@ import com.arcadedb.database.RID;
 import com.arcadedb.database.Record;
 import com.arcadedb.database.RecordInternal;
 import com.arcadedb.database.TransactionContext;
+import com.arcadedb.exception.BrokenChunkChainException;
 import com.arcadedb.exception.ConcurrentModificationException;
 import com.arcadedb.engine.Bucket;
 import com.arcadedb.engine.LocalBucket;
@@ -43,6 +44,7 @@ import com.arcadedb.exception.ValidationException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.EdgeType;
+import com.arcadedb.schema.InternalBucketNaming;
 import com.arcadedb.schema.VertexType;
 import com.arcadedb.utility.MultiIterator;
 import com.arcadedb.utility.Pair;
@@ -58,6 +60,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.LongConsumer;
 import java.util.logging.Level;
 
 /**
@@ -67,9 +70,6 @@ import java.util.logging.Level;
  * @author Luca Garulli (l.garulli@arcadedata.it)
  */
 public class GraphEngine {
-  public static final String OUT_EDGES_SUFFIX = "_out_edges";
-  public static final String IN_EDGES_SUFFIX  = "_in_edges";
-
   public static final IterableGraph<Vertex> EMPTY_VERTEX_LIST = new IterableGraph<>() {
     @Override
     public Iterator<Vertex> iterator() {
@@ -115,24 +115,29 @@ public class GraphEngine {
 
   public List<Bucket> createVertexAdditionalBuckets(final LocalBucket b) {
     final Bucket[] outInBuckets = new Bucket[2];
-    if (database.getSchema().existsBucket(b.getName() + OUT_EDGES_SUFFIX))
-      outInBuckets[0] = database.getSchema().getBucketByName(b.getName() + OUT_EDGES_SUFFIX);
-    else
-      outInBuckets[0] = database.getSchema().createBucket(b.getName() + OUT_EDGES_SUFFIX);
+    final String outEdgesBucket = InternalBucketNaming.outEdgesBucketName(b.getName());
+    final String inEdgesBucket = InternalBucketNaming.inEdgesBucketName(b.getName());
 
-    if (database.getSchema().existsBucket(b.getName() + IN_EDGES_SUFFIX))
-      outInBuckets[1] = database.getSchema().getBucketByName(b.getName() + IN_EDGES_SUFFIX);
+    if (database.getSchema().existsBucket(outEdgesBucket))
+      outInBuckets[0] = database.getSchema().getBucketByName(outEdgesBucket);
     else
-      outInBuckets[1] = database.getSchema().createBucket(b.getName() + IN_EDGES_SUFFIX);
+      outInBuckets[0] = database.getSchema().createBucket(outEdgesBucket);
+
+    if (database.getSchema().existsBucket(inEdgesBucket))
+      outInBuckets[1] = database.getSchema().getBucketByName(inEdgesBucket);
+    else
+      outInBuckets[1] = database.getSchema().createBucket(inEdgesBucket);
     return List.of(outInBuckets);
   }
 
   public void dropVertexType(final VertexType type) {
     for (final Bucket b : type.getBuckets(false)) {
-      if (database.getSchema().existsBucket(b.getName() + OUT_EDGES_SUFFIX))
-        database.getSchema().dropBucket(b.getName() + OUT_EDGES_SUFFIX);
-      if (database.getSchema().existsBucket(b.getName() + IN_EDGES_SUFFIX))
-        database.getSchema().dropBucket(b.getName() + IN_EDGES_SUFFIX);
+      final String outEdgesBucket = InternalBucketNaming.outEdgesBucketName(b.getName());
+      final String inEdgesBucket = InternalBucketNaming.inEdgesBucketName(b.getName());
+      if (database.getSchema().existsBucket(outEdgesBucket))
+        database.getSchema().dropBucket(outEdgesBucket);
+      if (database.getSchema().existsBucket(inEdgesBucket))
+        database.getSchema().dropBucket(inEdgesBucket);
     }
 
     // DROP THE SUPER-NODE STRIPE POOL, IF THE TYPE EVER PROMOTED A VERTEX (#5156)
@@ -1248,6 +1253,8 @@ public class GraphEngine {
 
         iterator = edges.edgeIteratorForRemoval();
       }
+    } catch (final BrokenChunkChainException e) {
+      tolerateBrokenChunkChainEdgeList(e, vertex, direction, force);
     } catch (final NeedRetryException e) {
       tolerateUnreadableEdgeList(e, vertex, direction, force);
     } catch (final SerializationException | NegativeArraySizeException | BufferUnderflowException
@@ -1273,6 +1280,9 @@ public class GraphEngine {
             .log(this, Level.FINE, "Error on deleting %s edge connected to vertex %s (record not found)", direction,
                 vertex.getIdentity());
         continue;
+      } catch (final BrokenChunkChainException e) {
+        tolerateBrokenChunkChainEdgeList(e, vertex, direction, force);
+        break;
       } catch (final NeedRetryException e) {
         tolerateUnreadableEdgeList(e, vertex, direction, force);
         break;
@@ -1319,6 +1329,28 @@ public class GraphEngine {
         .log(this, Level.WARNING, """
                 Cannot read the %s edge list of vertex %s while force-deleting it: its edges survive, %s""", e,
             direction, vertex.getIdentity(), danglingRepairAdvice());
+  }
+
+  /**
+   * The record whose edge list this is could not be assembled because its chunk chain is structurally BROKEN
+   * (#6258): a continuation pointer into nowhere, a slot that no longer holds a chunk, a chain that loops.
+   * <p>
+   * Force-gated exactly like {@link #tolerateUnreadableEdgeList}, which is where this landed until the loader
+   * stopped reporting a broken chain as a retryable conflict, and the gate still belongs here for the same reason
+   * it belongs there: the caller that meets this shape is {@code LocalDatabase.deleteRecordNoLock}, which raises
+   * its force flag for a confirmed broken chain and comes straight back. What changed is only the honesty of the
+   * failure when force is off - it no longer advertises a retry that cannot help, so the message is the repair.
+   * Not folded into {@link #tolerateUndecodableEdgeList}: that one is tolerated WITHOUT force, and it is tolerated
+   * there because a corrupt BUFFER reaches the delete with the flag down. A broken chain does not.
+   */
+  private void tolerateBrokenChunkChainEdgeList(final BrokenChunkChainException e, final VertexInternal vertex,
+      final Vertex.DIRECTION direction, final boolean force) {
+    if (!force)
+      throw e;
+    LogManager.instance()
+        .log(this, Level.WARNING, """
+                Cannot read the %s edge list of vertex %s while force-deleting it (broken chunk chain): its edges \
+                survive, %s""", e, direction, vertex.getIdentity(), danglingRepairAdvice());
   }
 
   /**
@@ -1373,6 +1405,17 @@ public class GraphEngine {
       ((DatabaseInternal) edge.getDatabase()).deleteEdgeSkippingEndpoint(edge, vertex.getIdentity());
     } catch (final RecordNotFoundException e) {
       // ALREADY DELETED, IGNORE IT
+    } catch (final BrokenChunkChainException e) {
+      // The NEIGHBOUR's record (or a chunk of its list) is corrupted rather than merely busy (#6258). Same
+      // force gate as the retryable arm below, which is where this landed before the loader could tell the two
+      // apart; the advice names the repair rather than a retry.
+      if (!force)
+        throw e;
+      LogManager.instance()
+          .log(this, Level.WARNING, """
+                  Cannot disconnect edge %s from the vertex at its other end while force-deleting vertex %s \
+                  (broken chunk chain): the reference survives, %s""", e, edge.getIdentity(), vertex.getIdentity(),
+              danglingRepairAdvice());
     } catch (final NeedRetryException e) {
       // THE EDGE LIST OF THE VERTEX AT THE OTHER END IS NOT READABLE (SEE getEdgeHeadChunkForWrite). #5764: the
       // list that needs rebuilding belongs to the NEIGHBOUR, not to the vertex being deleted, so that is the RID
@@ -1896,9 +1939,9 @@ public class GraphEngine {
     final Bucket vertexBucket = database.getSchema().getBucketById(bucketId);
 
     if (direction == Vertex.DIRECTION.OUT)
-      return vertexBucket.getName() + OUT_EDGES_SUFFIX;
+      return InternalBucketNaming.outEdgesBucketName(vertexBucket.getName());
     else if (direction == Vertex.DIRECTION.IN)
-      return vertexBucket.getName() + IN_EDGES_SUFFIX;
+      return InternalBucketNaming.inEdgesBucketName(vertexBucket.getName());
 
     throw new IllegalArgumentException("Invalid direction");
   }
@@ -2077,6 +2120,22 @@ public class GraphEngine {
    */
   public static int[][] buildAdjacencyList(final List<Vertex> vertices, final Map<RID, Integer> ridToIdx,
       final Vertex.DIRECTION dir, final String[] relTypes) {
+    return buildAdjacencyList(vertices, ridToIdx, dir, relTypes, null);
+  }
+
+  /**
+   * As {@link #buildAdjacencyList(List, Map, Vertex.DIRECTION, String[])}, with a hook fired between the counting
+   * pass and the allocation.
+   * <p>
+   * The counting pass already establishes the exact number of neighbour entries, and it does so at the one moment
+   * the result is still free: nothing has been allocated yet. That is where a caller bounding its heap wants to
+   * decide, so the total is handed over there rather than after a structure it may refuse has already been built
+   * (issue #6317). A hook that throws aborts the build.
+   *
+   * @param entryCount notified with the total number of neighbour entries about to be allocated; may be null
+   */
+  public static int[][] buildAdjacencyList(final List<Vertex> vertices, final Map<RID, Integer> ridToIdx,
+      final Vertex.DIRECTION dir, final String[] relTypes, final LongConsumer entryCount) {
     final int n = vertices.size();
     final int[] counts = new int[n];
     for (int i = 0; i < n; i++) {
@@ -2097,6 +2156,12 @@ public class GraphEngine {
           GhostEdgeReporter.reportSkipped(rnf);
         }
       }
+    }
+    if (entryCount != null) {
+      long total = 0;
+      for (int i = 0; i < n; i++)
+        total += counts[i];
+      entryCount.accept(total);
     }
     final int[][] adj = new int[n][];
     for (int i = 0; i < n; i++)

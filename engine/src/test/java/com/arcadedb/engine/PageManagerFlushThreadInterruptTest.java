@@ -60,8 +60,8 @@ class PageManagerFlushThreadInterruptTest extends TestHelper {
 
     final PageId pageId = new PageId(db, fileId, pageNum);
     final MutablePage page = new MutablePage(pageId, pageSize, new byte[pageSize], 0, 0);
-    flush.pageIndex.put(pageId, page);
-    flush.queue.offer(new PagesToFlush(List.of(page)));
+    flush.pageIndex.put(page);
+    flush.offerBatch(new PagesToFlush(List.of(page)), false);
 
     // Occupy the page's I/O slot so the flush thread spins inside concurrentPageAccess (where the interrupt
     // check lives) until the slot is released, making the interrupt timing deterministic. NOTE: pendingFlushPages
@@ -95,7 +95,7 @@ class PageManagerFlushThreadInterruptTest extends TestHelper {
     final PaginatedComponentFile file = (PaginatedComponentFile) db.getFileManager().getFile(fileId);
     assertThat(file.getSize()).as("interrupted flush must still write the page before shutting down")
         .isGreaterThanOrEqualTo((long) (pageNum + 1) * pageSize);
-    assertThat(flush.pageIndex).as("no page may leak in the flush index").isEmpty();
+    assertThat(flush.pageIndex.isEmpty()).as("no page may leak in the flush index").isTrue();
   }
 
   @Test
@@ -121,9 +121,9 @@ class PageManagerFlushThreadInterruptTest extends TestHelper {
     final MutablePage blockedPage = new MutablePage(blockedPageId, pageSize, new byte[pageSize], 0, 0);
     final PageId freePageId = new PageId(db, fileId, pageNum);
     final MutablePage freePage = new MutablePage(freePageId, pageSize, new byte[pageSize], 0, 0);
-    flush.pageIndex.put(blockedPageId, blockedPage);
-    flush.pageIndex.put(freePageId, freePage);
-    flush.queue.offer(new PagesToFlush(List.of(blockedPage, freePage)));
+    flush.pageIndex.put(blockedPage);
+    flush.pageIndex.put(freePage);
+    flush.offerBatch(new PagesToFlush(List.of(blockedPage, freePage)), false);
 
     final Field pendingField = PageManager.class.getDeclaredField("pendingFlushPages");
     pendingField.setAccessible(true);
@@ -152,7 +152,7 @@ class PageManagerFlushThreadInterruptTest extends TestHelper {
     final PaginatedComponentFile file = (PaginatedComponentFile) db.getFileManager().getFile(fileId);
     assertThat(file.getSize()).as("the rest of the batch must still be flushed after a double fault")
         .isGreaterThanOrEqualTo((long) (pageNum + 1) * pageSize);
-    assertThat(flush.pageIndex).as("no page may leak in the flush index (a leak hangs the database close)").isEmpty();
+    assertThat(flush.pageIndex.isEmpty()).as("no page may leak in the flush index (a leak hangs the database close)").isTrue();
   }
 
   /**
@@ -184,8 +184,8 @@ class PageManagerFlushThreadInterruptTest extends TestHelper {
 
     final PageId pageId = new PageId(db, fileId, pageNum);
     final MutablePage page = new MutablePage(pageId, pageSize, new byte[pageSize], 0, 0);
-    flush.pageIndex.put(pageId, page);
-    flush.queue.offer(new PagesToFlush(List.of(page)));
+    flush.pageIndex.put(page);
+    flush.offerBatch(new PagesToFlush(List.of(page)), false);
 
     // Drive the (unstarted) flush thread by hand: with the database suspended, the batch is deferred.
     flush.flushPagesFromQueueToDisk(null, 100L);
@@ -204,6 +204,6 @@ class PageManagerFlushThreadInterruptTest extends TestHelper {
     final PaginatedComponentFile file = (PaginatedComponentFile) db.getFileManager().getFile(fileId);
     assertThat(file.getSize()).as("deferred page must still be written despite the caller's interrupt")
         .isGreaterThanOrEqualTo((long) (pageNum + 1) * pageSize);
-    assertThat(flush.pageIndex).as("no page may leak in the flush index").isEmpty();
+    assertThat(flush.pageIndex.isEmpty()).as("no page may leak in the flush index").isTrue();
   }
 }

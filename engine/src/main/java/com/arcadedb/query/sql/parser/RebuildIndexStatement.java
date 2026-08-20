@@ -21,8 +21,8 @@
 package com.arcadedb.query.sql.parser;
 
 import com.arcadedb.database.Database;
-import com.arcadedb.database.DatabaseContext;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.async.AsyncQuiesce;
 import com.arcadedb.database.bucketselectionstrategy.PartitionedBucketSelectionStrategy;
 import com.arcadedb.engine.Bucket;
 import com.arcadedb.engine.OperationProgress;
@@ -39,6 +39,7 @@ import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.InternalResultSet;
+import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.schema.DocumentType;
@@ -88,29 +89,76 @@ public class RebuildIndexStatement extends DDLStatement {
     boolean statsOnly = false;
     if (!settings.isEmpty()) {
       for (Map.Entry<Expression, Expression> entry : settings.entrySet()) {
-        // Render the setting value via Expression.toString(): its `value` field can be null depending on how the literal was
-        // parsed (it was for the integer in `WITH batchSize = 1000`), so toString() is the reliable accessor for all literals.
-        final String settingValue = entry.getValue().toString();
+        // Evaluated, not rendered: that is what resolves a bound parameter as well as a literal - see
+        // DDLStatement#parsePositiveIntSetting.
+        final Object settingValue = entry.getValue().execute((Result) null, context);
         if ("batchSize".equalsIgnoreCase(entry.getKey().toString()))
-          batchSize = Integer.parseInt(settingValue);
+          batchSize = parsePositiveIntSetting("REBUILD INDEX", "batchSize", settingValue);
         else if ("maxAttempts".equalsIgnoreCase(entry.getKey().toString()))
-          maxAttempts = Integer.parseInt(settingValue);
+          maxAttempts = parsePositiveIntSetting("REBUILD INDEX", "maxAttempts", settingValue);
         else if ("statsOnly".equalsIgnoreCase(entry.getKey().toString()))
-          statsOnly = Boolean.parseBoolean(settingValue);
+          statsOnly = parseBooleanSetting("REBUILD INDEX", "statsOnly", settingValue);
         else
           throw new CommandSQLParsingException("Unrecognized setting '" + entry.getKey() + "' in rebuild index statement");
       }
     }
 
+    final Database database = context.getDatabase();
+
+    // THE REFUSAL OF #2097 IS GONE FROM HERE, and one mechanism is left where there were two (issue #6303, note b).
+    // It tested the DatabaseContext.perThreadBucketSelection thread-local; the barrier below tests thread IDENTITY
+    // (isCurrentThreadOneOfMyWorkers). Two spellings of one question that agreed while the only thread with the flag
+    // set was a worker - and they were never asking the same question. perThreadBucketSelection means "pick a
+    // bucket per thread so concurrent asynchronous writers do not compete for the same pages"; identity means
+    // "is this the thread that
+    // would have to dequeue my own marker". Only the second one has anything to do with whether the barrier can be
+    // satisfied.
+    //
+    // Since #6303 they disagree, which is what makes the difference concrete: a command dispatched with
+    // awaitResponse=false runs on AsyncCommandPool, which sets perThreadBucketSelection (it writes concurrently, so
+    // it wants the per-thread bucket) and is NOT a worker (so the barrier CAN be satisfied). Keeping the check would
+    // on refusing exactly the operation this issue set out to give back.
+    //
+    // A rebuild that reaches a worker some other way is still refused - by the barrier below, in the same terms and
+    // with the same exception type.
+
+    // Both branches below SCAN the live data, and a worker of the async executor keeps ONE transaction open across up
+    // to ASYNC_TX_BATCH_SIZE tasks - so records it has already written can still be uncommitted, and invisible to any
+    // scan, even with every queue drained (issue #6281). Wait for that batch first.
+    //
+    // The two branches are hurt differently by that window, and both claims below are measured rather than assumed.
+    //
+    // The REBUILD proper does NOT lose index entries: those records staged their index operations in their own
+    // transaction when they were saved, and applying them at commit repopulates what the rebuild's scan could not
+    // see. A regression test written to catch a loss there passes with this call removed, which is why there is no
+    // such test. What it costs is a rebuild computed over a partial view - the misplaced-record detection of issue
+    // #832, and the reported totals.
+    //
+    // The statsOnly branch is worse, which is why this sits AHEAD of it rather than after: it recomputes the BM25
+    // corpus counters by scanning the type and then OVERWRITES the counters with what the scan found. Run inside the
+    // window it finds nothing committed and writes "0 documents" over counters the records had already bumped when
+    // they were saved, so the corpus size stays 0 for a type full of documents and every BM25 score is computed
+    // against it until somebody recomputes again. That one does not heal itself, and it has a test
+    // (Issue6281AsyncBatchIndexBuildTest#aStatsRecomputeOverAnIdleAsyncExecutorStillCountsItsUncommittedBatch:
+    // 0 of 200 documents counted with this call removed).
+    //
+    // Costs nothing on a database that never used the async API.
+    ((DatabaseInternal) database).waitForAsyncCompletion();
+
     if (statsOnly)
-      return recomputeStatistics(context.getDatabase(), result);
+      // Quiesced and not merely barriered (issue #6303, item 2). This branch SCANS the type and then OVERWRITES the
+      // BM25 corpus counters with what the scan found, so a record written by an async worker halfway through the
+      // scan is not merely missed - it is counted out of a total that then replaces the real one. The rebuild
+      // branch below inherits its quiescence from BucketIndexBuilder, one index at a time; this branch reaches no
+      // builder at all and has to hold its own.
+      try (final AsyncQuiesce asyncPaused = ((DatabaseInternal) database).quiesceAsync()) {
+        return recomputeStatistics(database, result);
+      }
 
     final AtomicLong total = new AtomicLong();
     final AtomicLong misplaced = new AtomicLong();
     // Types found to contain records sitting outside their partition hash-target bucket (issue #832).
     final Set<DocumentType> typesToRepartition = ConcurrentHashMap.newKeySet();
-
-    final Database database = context.getDatabase();
 
     final Index.BuildIndexCallback callback = (document, totalIndexed) -> {
       total.incrementAndGet();
@@ -293,18 +341,11 @@ public class RebuildIndexStatement extends DDLStatement {
       throw new CommandExecutionException(
           "Cannot rebuild index '" + idx.getName() + "' because it's manual and there aren't indications of what to index");
 
-    // Check if we're running in an async context (e.g., via HTTP API with awaitResponse=false).
-    // Index rebuild requires scheduling blocking tasks on all async threads, which will deadlock
-    // if we're already running on one of those threads. In this case, throw NeedRetryException
-    // to allow the operation to be retried in a non-async context.
+    // The async-context refusal of issue #2097 used to live here. It now runs at the top of executeDDL(), the only
+    // path that reaches this method, because the async barrier added there (issue #6281) would otherwise deadlock
+    // before this check was ever consulted - and because the statsOnly branch returns without coming here at all,
+    // so a check in this method could never have covered it.
     // See: https://github.com/ArcadeData/arcadedb/issues/2097
-    final DatabaseContext.DatabaseContextTL context = DatabaseContext.INSTANCE.getContextIfExists(
-        database.getDatabasePath());
-    if (context != null && context.asyncMode) {
-      throw new NeedRetryException(
-          "Cannot rebuild index '" + idx.getName() + "' while running in asynchronous context. " +
-          "Use synchronous execution (awaitResponse=true) or run the command directly.");
-    }
 
     // Sticky once true (#6040): sees whether ANY attempt so far got past its own dropIndex() call, so exhaustion
     // is judged against the right budget below - extended once the index has actually been dropped, not just the
@@ -458,6 +499,7 @@ public class RebuildIndexStatement extends DDLStatement {
     } else {
       name.toString(params, builder);
     }
+    appendWithSettings(settings, params, builder);
   }
 
   @Override
@@ -465,6 +507,9 @@ public class RebuildIndexStatement extends DDLStatement {
     final RebuildIndexStatement result = new RebuildIndexStatement();
     result.all = all;
     result.name = name == null ? null : name.copy();
+    // WITHOUT THIS, A COPY SILENTLY DROPS EVERY 'WITH ...' SETTING (batchSize, maxAttempts, statsOnly) - THE SAME
+    // DEFECT Export/Backup/ImportDatabaseStatement HAD (#6080, #6409)
+    result.settings.putAll(settings);
     return result;
   }
 
@@ -479,13 +524,14 @@ public class RebuildIndexStatement extends DDLStatement {
 
     if (all != that.all)
       return false;
-    return Objects.equals(name, that.name);
+    return Objects.equals(name, that.name) && Objects.equals(settings, that.settings);
   }
 
   @Override
   public int hashCode() {
     int result = all ? 1 : 0;
     result = 31 * result + (name != null ? name.hashCode() : 0);
+    result = 31 * result + settings.hashCode();
     return result;
   }
 }

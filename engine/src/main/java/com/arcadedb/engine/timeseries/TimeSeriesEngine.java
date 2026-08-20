@@ -707,6 +707,141 @@ public class TimeSeriesEngine implements AutoCloseable {
     return total;
   }
 
+  /**
+   * What this type's integrity check found and what it was looking at (issue #6340). {@code CHECK DATABASE}
+   * reports both: a caller reading a sample total of zero on a type that holds millions could not otherwise tell
+   * "checked and clean" from "not looked at", which is the state this whole pass exists to end.
+   */
+  public record IntegrityReport(List<String> problems, List<String> repairs, int shards, long samples,
+                                long sealedBlocks) {
+  }
+
+  /**
+   * Validates every file this type stores data in - each shard's mutable bucket and sealed store, plus the shared
+   * tag dictionary - and returns one line per problem, empty when there is none (issue #6340).
+   * <p>
+   * This is what {@code CHECK DATABASE} calls, and until it existed the tool had no reference to TimeSeries at
+   * all: the checker walks record buckets and indexes, and a TimeSeries type has neither - its mutable data lives
+   * in {@code .tstb}/{@code .tstd} components registered with the schema as files rather than as a type's record
+   * buckets, and its compacted data in {@code .ts.sealed} files outside the paginated layer entirely. Every other
+   * storage component in the engine was covered; these three formats, each with its own magic, header and (for the
+   * sealed store) CRCs, were not.
+   * <p>
+   * Every shard is visited ONCE for each half, and the totals come back with the verdict rather than being
+   * gathered by a second and third walk over the same shards: each shard measures itself inside the same lock
+   * window it checks itself in, so the numbers and the findings describe one instant instead of three.
+   * <p>
+   * Each line names the shard it came from, since a type has as many of each file as it has shards and an operator
+   * acting on a finding needs to know which one to act on.
+   * <p>
+   * The two knobs in {@link TimeSeriesIntegrity.Options} are {@code DEEP}, which decodes every sealed block rather
+   * than only verifying its CRC, and {@code FIX}, which repairs derived bookkeeping and never a sample. Both are
+   * documented where they are decided: {@code DatabaseChecker.setDeep} and {@code DatabaseChecker.checkTimeSeries}.
+   * <p>
+   * <b>Sequential mutable half, fanned-out sealed half (issue #6406 item 1).</b> {@link TimeSeriesShard#checkMutableIntegrity}
+   * opens a transaction bound to the calling thread, so shards are walked for it one at a time, exactly as before
+   * this issue. {@link TimeSeriesShard#checkSealedIntegrity} opens none and does {@code DEEP}'s per-block decoding -
+   * by a distance the heaviest work this pass does - so it is fanned out across {@code shardExecutor} instead: the
+   * same pool {@link #aggregateMultiBlocks} already uses for the same shape of read-only per-shard work, and a
+   * pool this class owns for exactly its own lifetime, so nothing here reaches for shared or engine-global
+   * parallelism. A type with one shard sees no fan-out (a single future, resolved on the pool with the same cost as
+   * calling it directly); the benefit scales with shard count, which is also where the sequential form's wall-clock
+   * used to scale.
+   * <p>
+   * <b>What running all shards' mutable halves before any shard's sealed half actually widens</b> (code review of
+   * #6406, called out here rather than left to be inferred from the two methods' javadoc separately): before this
+   * split, one shard's sealed check ran immediately after that SAME shard's mutable check, so the window between
+   * them was however long the unlock-and-return took - a handful of instructions. Now every shard's sealed check
+   * waits for EVERY shard's mutable check to finish first, so for every shard but the last, that window is however
+   * long the remaining shards' mutable phases take - potentially the bulk of the whole pass's sequential portion.
+   * This is a genuine change in how long a compaction has to land in the gap, not only a documentation one. It is
+   * still safe for the reason {@link TimeSeriesShard#checkSealedIntegrity} gives: the guarantee was never "nothing
+   * can happen between the two checks", it was "each half's own findings and totals describe one self-consistent
+   * instant of THAT half" - and a wider gap does not weaken that, it only makes a compaction landing in it more
+   * likely, which was already an accepted, documented outcome before this issue.
+   * <p>
+   * <b>{@code shardExecutor} has a new kind of consumer</b> (code review of #6406): this pass never touched that
+   * pool before this issue, and {@code appendBatch}'s parallel dispatch (no enclosing transaction on the calling
+   * thread) and {@link #aggregateMultiBlocks} already share it. A {@code DEEP} check now occupies all
+   * {@code shardCount} of its threads for the length of a full CRC32/decode walk over every shard's sealed file,
+   * so a concurrent append or aggregation that would otherwise run immediately queues behind it instead. Sharing
+   * the pool for this shape of read-only per-shard work is the existing, intentional design (see the
+   * {@code engine-concurrency} skill's pool inventory) - this is a new, and potentially long-running, consumer of
+   * it, not a new pool or a new pattern.
+   */
+  public IntegrityReport checkIntegrity(final TimeSeriesIntegrity.Options options) throws IOException {
+    final List<String> problems = new ArrayList<>();
+    final List<String> repairs = new ArrayList<>();
+    long samples = 0;
+    long sealedBlocks = 0;
+
+    // PHASE 1: THE MUTABLE HALF, SEQUENTIAL - each shard opens (and, under FIX, commits) its own transaction, and
+    // ArcadeDB transactions are bound to the calling thread, so this cannot be fanned out without putting
+    // concurrent transactions of the same database on different pool threads.
+    final TimeSeriesShard.IntegrityReport[] mutableReports = new TimeSeriesShard.IntegrityReport[shardCount];
+    for (int s = 0; s < shardCount; s++) {
+      mutableReports[s] = shards[s].checkMutableIntegrity(options);
+      samples += mutableReports[s].samples();
+      sealedBlocks += mutableReports[s].sealedBlocks();
+    }
+
+    // PHASE 2: THE SEALED HALF, FANNED OUT - opens no transaction, so every shard's sealed store can be checked on
+    // its own pool thread concurrently. This is where DEEP's per-block decoding lands, which is the expensive part
+    // of the whole pass.
+    @SuppressWarnings("unchecked")
+    final CompletableFuture<TimeSeriesShard.IntegrityReport>[] sealedFutures = new CompletableFuture[shardCount];
+    for (int s = 0; s < shardCount; s++) {
+      final TimeSeriesShard shard = shards[s];
+      sealedFutures[s] = CompletableFuture.supplyAsync(() -> {
+        try {
+          return shard.checkSealedIntegrity(options);
+        } catch (final IOException e) {
+          throw new CompletionException(e);
+        }
+      }, shardExecutor);
+    }
+
+    try {
+      CompletableFuture.allOf(sealedFutures).join();
+    } catch (final CompletionException e) {
+      if (e.getCause() instanceof IOException ioe)
+        throw ioe;
+      throw new IOException("Parallel shard integrity check failed", e.getCause());
+    }
+
+    // Merged in shard order, once both halves of every shard are known, so the report's shard-ordering does not
+    // depend on which pool thread happened to finish first.
+    for (int s = 0; s < shardCount; s++) {
+      final int shardIndex = shards[s].getShardIndex();
+      for (final String problem : mutableReports[s].problems())
+        problems.add("shard " + shardIndex + " " + problem);
+      for (final String repair : mutableReports[s].repairs())
+        repairs.add("shard " + shardIndex + " " + repair);
+
+      final TimeSeriesShard.IntegrityReport sealedReport = sealedFutures[s].join();
+      for (final String problem : sealedReport.problems())
+        problems.add("shard " + shardIndex + " " + problem);
+      for (final String repair : sealedReport.repairs())
+        repairs.add("shard " + shardIndex + " " + repair);
+    }
+
+    if (tagDictionary != null)
+      // Report-only, with no FIX arm of its own: the dictionary's entry count is derived the same way the other
+      // counters are, but an id it can no longer resolve is a TAG value that no longer exists anywhere, and there
+      // is nothing to recompute it from - the mutable rows hold the id, not the string.
+      for (final String problem : tagDictionary.checkIntegrity())
+        problems.add("tag dictionary: " + problem);
+
+    return new IntegrityReport(problems, repairs, shardCount, samples, sealedBlocks);
+  }
+
+  /**
+   * Report-only overload - the shape this had before #6360.
+   */
+  public IntegrityReport checkIntegrity() throws IOException {
+    return checkIntegrity(TimeSeriesIntegrity.Options.REPORT_ONLY);
+  }
+
   public int getShardCount() {
     return shardCount;
   }

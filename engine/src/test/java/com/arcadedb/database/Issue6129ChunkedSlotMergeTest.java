@@ -19,11 +19,8 @@
 package com.arcadedb.database;
 
 import com.arcadedb.GlobalConfiguration;
-import com.arcadedb.TestHelper;
-import com.arcadedb.engine.LocalBucket;
+import com.arcadedb.engine.PageManager;
 import com.arcadedb.exception.ConcurrentModificationException;
-import com.arcadedb.query.sql.executor.Result;
-import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.schema.Type;
 import org.junit.jupiter.api.Test;
 
@@ -32,7 +29,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
-class Issue6129ChunkedSlotMergeTest extends TestHelper {
+class Issue6129ChunkedSlotMergeTest extends BucketPageLayoutTestSupport {
   private static final int THREADS            = 8;
   private static final int RECORDS_PER_THREAD = 5;
   private static final int ROUNDS             = 8;
@@ -62,9 +58,13 @@ class Issue6129ChunkedSlotMergeTest extends TestHelper {
   void updatesOfChunkedRecordsSharingAPageNeverConflict() throws Exception {
     final RID[][] owned = createAndSpillRecords("Chunked");
 
-    final AtomicInteger conflicts = runConcurrentUpdates(owned, this::fixedSizePayload);
+    final ConcurrentUpdateOutcome outcome = runConcurrentUpdates(owned, this::fixedSizePayload);
 
-    assertThat(conflicts.get()).as("updating chunked records owned by different threads must not conflict").isZero();
+    assertThat(outcome.commitConflicts())
+        .as("updating chunked records owned by different threads must not conflict: %s", outcome).isZero();
+    assertThat(outcome.readSideConflicts())
+        .as("no record here is read by anybody but its owner, so no read may fail either (#6217): %s", outcome)
+        .isZero();
 
     verifyContent(owned, this::fixedSizePayload);
     checkDatabase();
@@ -76,14 +76,26 @@ class Issue6129ChunkedSlotMergeTest extends TestHelper {
    * rebasable - they are poisoned by the chunk writer - so what this pins down is that the head chunk's merge still
    * carries the whole write when the chain grows underneath it, and that a record's continuation chunks landing next
    * to another thread's do not bring the conflict back.
+   * <p>
+   * "Conflict" here means one the COMMIT raised, and a read of a chunked record used to be able to fail on a
+   * mechanism of its own: {@code loadMultiPageRecord} re-validated the page VERSION of everything its chain touched,
+   * and the continuation chunks of all 40 records of this fixture live on one page, so an unrelated rewrite
+   * invalidated a reader that had touched nothing of that record. That was issue #6217 - what made this test fail on
+   * a loaded machine, and why {@link ConcurrentUpdateOutcome} counts the two separately. Since #6217 the read
+   * validates the record instead of the pages under it, so both counters must now be zero, and the split is kept
+   * because it is what a future failure needs in order to name its own mechanism.
    */
   @Test
   void growingUpdatesOfChunkedRecordsSharingAPageNeverConflict() throws Exception {
     final RID[][] owned = createAndSpillRecords("ChunkedGrowing");
 
-    final AtomicInteger conflicts = runConcurrentUpdates(owned, this::growingPayload);
+    final ConcurrentUpdateOutcome outcome = runConcurrentUpdates(owned, this::growingPayload);
 
-    assertThat(conflicts.get()).as("extending the chunk chain of one's own record must not conflict").isZero();
+    assertThat(outcome.commitConflicts())
+        .as("extending the chunk chain of one's own record must not conflict: %s", outcome).isZero();
+    assertThat(outcome.readSideConflicts())
+        .as("no record here is read by anybody but its owner, so no read may fail either (#6217): %s", outcome)
+        .isZero();
 
     verifyContent(owned, this::growingPayload);
     checkDatabase();
@@ -397,8 +409,10 @@ class Issue6129ChunkedSlotMergeTest extends TestHelper {
     database.transaction(() -> {
       database.getSchema().createDocumentType("Holder", 1).createProperty("v", Type.STRING);
       placeholder[0] = database.newDocument("Holder").set("v", "p").save().getIdentity();
-      fillFirstPage("Holder");
     });
+    // Since #6149 a page with a free tail lends the spilling record the few bytes a chunk header needs, so a
+    // placeholder is only produced on a page with NO free tail left at all: seal page 0 to get one.
+    sealFirstPage("Holder");
 
     // Page 0 cannot host 20 KB and the record's own 9 bytes cannot hold a chunk header: the slot becomes a placeholder
     // POINTER and the content goes to the page that has room for it.
@@ -563,11 +577,15 @@ class Issue6129ChunkedSlotMergeTest extends TestHelper {
     throw new AssertionError("Not every record of " + typeName + " spilled into a chunk chain: " + bucketStats(typeName));
   }
 
-  private AtomicInteger runConcurrentUpdates(final RID[][] owned, final PayloadOf payloadOf) throws InterruptedException {
+  private ConcurrentUpdateOutcome runConcurrentUpdates(final RID[][] owned, final PayloadOf payloadOf)
+      throws InterruptedException {
     final List<Throwable> errors = new CopyOnWriteArrayList<>();
-    final AtomicInteger conflicts = new AtomicInteger();
+    final List<String> conflicts = new CopyOnWriteArrayList<>();
     final CountDownLatch start = new CountDownLatch(1);
     final List<Thread> threads = new ArrayList<>();
+
+    final PageManager pageManager = ((DatabaseInternal) database).getPageManager();
+    final PageManager.PPageManagerStats before = pageManager.getStats();
 
     for (int t = 0; t < THREADS; t++) {
       final int id = t;
@@ -581,7 +599,7 @@ class Issue6129ChunkedSlotMergeTest extends TestHelper {
               try {
                 database.transaction(() -> rid.asDocument(true).modify().set("payload", payload).save(), true, 1);
               } catch (final ConcurrentModificationException e) {
-                conflicts.incrementAndGet();
+                conflicts.add(rid + " round " + round + ": " + e.getMessage());
               }
             }
         } catch (final Throwable e) {
@@ -598,7 +616,65 @@ class Issue6129ChunkedSlotMergeTest extends TestHelper {
 
     if (!errors.isEmpty())
       throw new AssertionError(errors.size() + " thread(s) failed, first: " + errors.getFirst(), errors.getFirst());
-    return conflicts;
+
+    final PageManager.PPageManagerStats after = pageManager.getStats();
+    return new ConcurrentUpdateOutcome(conflicts,
+        after.concurrentModificationExceptions - before.concurrentModificationExceptions,
+        after.txPageSlotMerges - before.txPageSlotMerges,
+        after.mergesDeclinedByCoverage - before.mergesDeclinedByCoverage);
+  }
+
+  /**
+   * A conflict raised while READING the record, not while committing it: {@code loadMultiPageRecord} gives up after
+   * {@code TX_RETRIES} attempts at assembling a chain that keeps changing under it. It is a different mechanism from
+   * the one these tests are about, which is why it is counted apart - counting it as a merge failure is what made
+   * this class fail on a loaded machine with a bare "expected 0 but was 2", measured by shrinking the read budget to
+   * zero, where those runs produced exactly this message and nothing else. Until #6217 the read validated the page
+   * VERSIONS its chain had touched, so another record's chunk sharing a page was enough to raise it; it now
+   * validates the record's own chunks, so in these fixtures - where every record has exactly one writer, its own
+   * thread - it must not be raised at all.
+   */
+  private static boolean isReadSideConflict(final String message) {
+    return message != null && message.contains("was modified during read");
+  }
+
+  /**
+   * What a run of {@link #runConcurrentUpdates} ended with. The counters are here because a failure of these tests
+   * is a statement about the MERGE, and the merge already counts what it did: a version clash the merge absorbed
+   * ({@code merged}) is the normal case - all but a handful of the transactions in these runs hit one - so the
+   * question a failure has to answer is which of the two ways to lose it took. {@code declinedByCoverage} above zero
+   * means a write on the page carried no declaration, which is a defect in the engine and not in the fixture;
+   * {@code declinedByCoverage} at zero means the page was POISONED, i.e. a chunk of some record's chain lives on it.
+   * Without them a failure here is a bare "expected 0 but was 2", which is where this test's own flakiness
+   * investigation started.
+   */
+  private record ConcurrentUpdateOutcome(List<String> conflicts, long versionClashes, long merged,
+                                         long declinedByCoverage) {
+    /**
+     * Conflicts the COMMIT raised, which is what these tests assert on. A read-side chain revalidation
+     * ({@link #isReadSideConflict}) is not one of them.
+     */
+    int commitConflicts() {
+      return (int) conflicts.stream().filter(c -> !isReadSideConflict(c)).count();
+    }
+
+    /** The other half: conflicts raised by a READ of a chunked record, which since #6217 must not happen here. */
+    int readSideConflicts() {
+      return (int) conflicts.stream().filter(Issue6129ChunkedSlotMergeTest::isReadSideConflict).count();
+    }
+
+    @Override
+    public String toString() {
+      final String counters = commitConflicts() + " commit conflict(s) and " + readSideConflicts()
+          + " read-side chain revalidation(s) out of " + versionClashes + " page-version clashes, " + merged
+          + " absorbed by the slot merge, " + declinedByCoverage + " merges declined for missing coverage";
+      if (commitConflicts() == 0)
+        return counters;
+      return counters + ". " + (declinedByCoverage > 0
+          ? "A decline means a write on the page carried no declaration - an engine defect, not a fixture one."
+          : "No decline, so the page could not be merged because it was POISONED: a chunk of a chain lives on it.")
+          + " " + conflicts;
+    }
   }
 
   private void verifyContent(final RID[][] owned, final PayloadOf payloadOf) {
@@ -624,43 +700,4 @@ class Issue6129ChunkedSlotMergeTest extends TestHelper {
     return marker + "-" + "x".repeat(spilledPayloadSize + 1_500 * round - marker.length() - 1);
   }
 
-  /**
-   * Fills page 0 of a single-bucket type until a record no longer fits it: the next insert lands on another page, which
-   * shows up as a RID position that is not the previous one plus one (a new page restarts at a multiple of the page's
-   * slot count).
-   */
-  private void fillFirstPage(final String typeName) {
-    final String filler = "f".repeat(8 * 1024);
-    long previous = -1;
-    for (int i = 0; i < 64; i++) {
-      final long position = database.newDocument(typeName).set("v", filler).save().getIdentity().getPosition();
-      if (previous > -1 && position != previous + 1)
-        return;
-      previous = position;
-    }
-    throw new AssertionError("Page 0 of " + typeName + " did not fill up");
-  }
-
-  /** Physical layout of a single-bucket type: how many records are placeholders, chunked, and so on. */
-  private Map<String, Object> bucketStats(final String typeName) {
-    final LocalBucket bucket = (LocalBucket) database.getSchema().getType(typeName).getBuckets(false).getFirst();
-    final Map<String, Object>[] stats = new Map[1];
-    database.transaction(() -> stats[0] = bucket.check(0, false));
-    return stats[0];
-  }
-
-  private void checkDatabase() {
-    try (final ResultSet rs = database.command("SQL", "check database")) {
-      while (rs.hasNext()) {
-        final Result row = rs.next();
-        assertThat(numberProperty(row, "totalErrors")).as("check database: " + row.toJSON()).isZero();
-        assertThat(numberProperty(row, "autoFix")).as("check database: " + row.toJSON()).isZero();
-      }
-    }
-  }
-
-  private static long numberProperty(final Result row, final String name) {
-    final Object value = row.getProperty(name);
-    return value == null ? 0L : ((Number) value).longValue();
-  }
 }

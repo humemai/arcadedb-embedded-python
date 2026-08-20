@@ -21,6 +21,7 @@ package com.arcadedb.function.sql.text;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.function.sql.SQLFunctionAbstract;
+import com.arcadedb.utility.StringUtils;
 
 /**
  * Formats content.
@@ -41,14 +42,24 @@ public class SQLFunctionFormat extends SQLFunctionAbstract {
 
   public Object execute(final Object self, final Identifiable currentRecord, final Object currentResult, final Object[] params,
       final CommandContext context) {
+    if (params[0] == null)
+      return null;
+
     final Object[] args = new Object[params.length - 1];
 
     System.arraycopy(params, 1, args, 0, args.length);
 
-    return String.format((String) params[0], args);
+    // A pattern that does not match its arguments is a mistake in the query, so it answers a typed error rather than
+    // the raw java.util.Formatter exception it used to leak (issue #6389).
+    return StringUtils.format(NAME, params[0].toString(), args);
   }
 
   public String getSyntax() {
     return "format(<format>, <arg1> [,<argN>]*)";
   }
+
+  // Not marked isDeterministic(): java.lang.String#format resolves grouping/decimal separators and similar
+  // conversions against the JVM's default Locale, which is process-wide mutable state outside the arguments
+  // (issue #6190). A caller relying on locale-sensitive conversions across a `Locale.setDefault()` change must
+  // not have a stale value baked into a cached plan.
 }

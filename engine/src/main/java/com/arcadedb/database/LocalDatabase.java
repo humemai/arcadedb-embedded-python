@@ -21,6 +21,7 @@ package com.arcadedb.database;
 import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.Profiler;
+import com.arcadedb.database.async.AsyncQuiesce;
 import com.arcadedb.database.async.DatabaseAsyncExecutor;
 import com.arcadedb.database.async.DatabaseAsyncExecutorImpl;
 import com.arcadedb.database.async.ErrorCallback;
@@ -40,6 +41,7 @@ import com.arcadedb.engine.WALFileFactoryEmbedded;
 import com.arcadedb.engine.timeseries.TimeSeriesBucket;
 import com.arcadedb.engine.timeseries.TimeSeriesTagDictionary;
 import com.arcadedb.exception.ArcadeDBException;
+import com.arcadedb.exception.BrokenChunkChainException;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.ConcurrentModificationException;
 import com.arcadedb.exception.DatabaseIsClosedException;
@@ -92,7 +94,6 @@ import com.arcadedb.schema.LocalDocumentType;
 import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.schema.LocalTimeSeriesType;
 import com.arcadedb.schema.LocalVertexType;
-import com.arcadedb.schema.Property;
 import com.arcadedb.schema.Schema;
 import com.arcadedb.schema.VertexType;
 import com.arcadedb.security.SecurityDatabaseUser;
@@ -147,6 +148,10 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   public static final int MAX_RECOMMENDED_EDGE_LIST_CHUNK_SIZE = 8192;
   /** Header ({@code MutableEdgeSegment.CONTENT_START_POSITION}) plus room for a couple of maximum-width entries. */
   public static final int MIN_EDGE_LIST_CHUNK_SIZE             = 32;
+
+  /** What {@link #quiesceAsync()} hands back on a database that never created an async executor: nothing to park. */
+  private static final AsyncQuiesce NO_ASYNC_TO_QUIESCE = () -> {
+  };
 
   private static final Set<String> SUPPORTED_FILE_EXT = Set.of(
       Dictionary.DICT_EXT,
@@ -440,6 +445,63 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       }
     }
     return false;
+  }
+
+  @Override
+  public void waitForAsyncCompletion() {
+    // Read the field, never async(): that accessor CREATES the executor - worker threads included - and a database
+    // that never used async must not grow a thread pool just because somebody asked whether it was idle.
+    //
+    // And read it WITHOUT asyncLock, unlike isAsyncProcessing() one method up. That lock exists to serialize the
+    // lazy creation in async(); the field is volatile and, once assigned, is never assigned again - not even on
+    // close - so the only two values this read can see are "no executor yet" and "the one and only executor". A
+    // lock here would buy nothing and would be held across a blocking wait.
+    final DatabaseAsyncExecutorImpl executor = async;
+    if (executor == null)
+      return;
+
+    // REFUSED, not attempted, when the caller is one of the executor's own workers. waitCompletion() enqueues a
+    // marker on every worker - this thread's own included - and blocks until each has run, and the only consumer of
+    // a worker's queue is that worker: it would park on a marker nobody can dequeue and be lost for the life of the
+    // process. There is no honest alternative to refusing, either. Silently skipping the wait would put back exactly
+    // the bug this barrier exists to close, over the caller's OWN uncommitted batch; committing that batch here would
+    // commit the enclosing task's writes mid-task, which is the per-task atomicity AsyncThread.executeTask guards.
+    //
+    // NeedRetryException, and worded like it, because that is what RebuildIndexStatement.buildIndex already threw for
+    // this exact situation (issue #2097) - the guard now lives once, on the operation that cannot be satisfied,
+    // instead of once per call site that happens to remember it.
+    if (executor.isCurrentThreadOneOfMyWorkers())
+      throw new NeedRetryException(
+          "Cannot wait for the asynchronous executor of database '" + name + "' from one of its own worker threads: "
+              + "the wait would never end. Run this command synchronously (awaitResponse=true) instead");
+
+    // Unconditional, and that is the whole point (issue #6281). isProcessing() is not a precondition that can be
+    // tested first: a worker keeps ONE transaction open across up to ASYNC_TX_BATCH_SIZE tasks, so an executor whose
+    // queues are drained and whose workers are parked can still be holding thousands of uncommitted records.
+    // waitCompletion() is the only operation that closes that batch - it enqueues a marker BEHIND everything already
+    // submitted on every worker and that marker commits - so it has to run even when the executor looks idle.
+    // The loop then covers what a single pass cannot: tasks submitted by OTHER threads while this one was waiting.
+    do {
+      executor.waitCompletion();
+      // waitCompletion() answers an interrupt by restoring the flag and returning, so without this the loop would
+      // spin: every further pass would be interrupted at its first queue offer and come straight back. The caller's
+      // cancellation is left on the thread for it to observe.
+      if (Thread.currentThread().isInterrupted())
+        return;
+    } while (isAsyncProcessing());
+  }
+
+  @Override
+  public AsyncQuiesce quiesceAsync() {
+    // The field, never async(), for the same reason waitForAsyncCompletion() reads it: quiescing an executor that
+    // does not exist must not CREATE one. This is the reason BucketIndexBuilder no longer calls async() itself - it
+    // did, unconditionally, so building an index on a database that had never touched the async API started a full
+    // set of worker threads to park them (issue #6303, item 2).
+    final DatabaseAsyncExecutorImpl executor = async;
+    if (executor == null)
+      return NO_ASYNC_TO_QUIESCE;
+
+    return executor.quiesceWorkers();
   }
 
   public DatabaseAsyncExecutor async() {
@@ -1062,7 +1124,7 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
       if (bucketName == null && record instanceof Document doc)
         bucket = (LocalBucket) doc.getType().getBucketIdByRecord(doc,
-            DatabaseContext.INSTANCE.getContext(databasePath).asyncMode);
+            DatabaseContext.INSTANCE.getContext(databasePath).perThreadBucketSelection);
       else {
         bucket = (LocalBucket) schema.getBucketByName(bucketName);
         // Reject direct writes to internal buckets (e.g. paired external-property buckets). They are infrastructure
@@ -1427,6 +1489,15 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
           LogManager.instance().log(this, Level.WARNING,
               "Cannot read record %s for index/external cleanup on delete (corrupted buffer): %s. Deleting the record anyway; "
                   + "run a database check to repair any dangling index entries.", record.getIdentity(), e.getMessage());
+        } catch (final BrokenChunkChainException e) {
+          // The loader itself confirmed the chunk chain is structurally broken (#6258), so there is nothing left to
+          // disambiguate here: the body cannot be assembled and never will be. Same tolerant path as the branch below,
+          // minus the structural probe that branch has to run because a ConcurrentModificationException does not say
+          // which of the two problems it is. Still gated on the opt-in: forcing through is an admin decision either way.
+          if (!tolerateBrokenChain)
+            throw e;
+          forceBrokenChainDelete = true;
+          logBrokenChainForceDelete(record.getIdentity(), e);
         } catch (final ConcurrentModificationException e) {
           // The record body could not be assembled for a consistent read, so its indexed keys and EXTERNAL pointers could
           // not be read for cleanup. loadMultiPageRecord throws this after exhausting TX_RETRIES, but exhausted retries do
@@ -1448,22 +1519,36 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       } else if (record instanceof Vertex) {
         try {
           graphEngine.deleteVertex((VertexInternal) record, forceBrokenChainDelete);
+        } catch (final BrokenChunkChainException e) {
+          // The record body could not be assembled to reach the vertex's edge lists, and the loader has already
+          // confirmed why (#6258): no structural probe needed, only the opt-in and the guard against re-forcing a
+          // delete that was already forced.
+          if (!tolerateBrokenChain || forceBrokenChainDelete)
+            throw e;
+          logBrokenChainForcePhysicalDelete(record.getIdentity(), e);
+          graphEngine.deleteVertex((VertexInternal) record, true);
         } catch (final ConcurrentModificationException e) {
           // The physical removal can raise the #4932 retry signal even when index cleanup did not (e.g. the type has no
           // index left to read, so the broken chain is only discovered here). Fall back to force ONLY when the chain is
           // confirmed structurally broken; a genuine transient conflict (or an already-forced delete) rethrows to retry.
           if (!tolerateBrokenChain || forceBrokenChainDelete || !bucket.isChunkChainBroken(record.getIdentity()))
             throw e;
-          logBrokenChainForceDelete(record.getIdentity(), e);
+          logBrokenChainForcePhysicalDelete(record.getIdentity(), e);
           graphEngine.deleteVertex((VertexInternal) record, true);
         }
       } else {
         try {
           bucket.deleteRecord(record.getIdentity(), forceBrokenChainDelete);
         } catch (final ConcurrentModificationException e) {
+          // NO BrokenChunkChainException ARM HERE, unlike the vertex branch above, and the asymmetry is real rather
+          // than an omission (code review on #6258): deleteRecordInternal walks the chunk chain itself and never
+          // loads the record, so it reports a break as the #4932 retry signal and the structural probe below is
+          // still what tells the two apart. The vertex branch differs because reaching a vertex's edge lists means
+          // READING it, which is where the loader's own verdict comes from. Add the arm here the day
+          // deleteRecordInternal learns to name a broken chain as one.
           if (!tolerateBrokenChain || forceBrokenChainDelete || !bucket.isChunkChainBroken(record.getIdentity()))
             throw e;
-          logBrokenChainForceDelete(record.getIdentity(), e);
+          logBrokenChainForcePhysicalDelete(record.getIdentity(), e);
           bucket.deleteRecord(record.getIdentity(), true);
         }
       }
@@ -1493,10 +1578,24 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     }
   }
 
-  private void logBrokenChainForceDelete(final RID rid, final ConcurrentModificationException e) {
+  /** The INDEX/EXTERNAL cleanup could not read the record, so the delete proceeds without it. */
+  private void logBrokenChainForceDelete(final RID rid, final Exception e) {
     LogManager.instance().log(this, Level.WARNING,
         "Cannot read record %s for index/external cleanup on delete (broken multi-page chunk chain): %s. Deleting the "
             + "record anyway; run a database check to repair any dangling index entries.", rid, e.getMessage());
+  }
+
+  /**
+   * The PHYSICAL removal could not read the record - a vertex's edge lists, or the chunks to free. A different stage
+   * from the index cleanup above, leaving different things behind, so it says so instead of reusing that message:
+   * an operator running with {@code DELETE_TOLERATE_BROKEN_CHAIN} on was told to look for dangling index entries
+   * when what survived was edges and orphaned chunks (code review on #6258).
+   */
+  private void logBrokenChainForcePhysicalDelete(final RID rid, final Exception e) {
+    LogManager.instance().log(this, Level.WARNING,
+        "Cannot read record %s to remove it physically (broken multi-page chunk chain): %s. Deleting it anyway; the "
+            + "chunks it can no longer reach, and any edge left pointing at it, are repaired by a database check.",
+        rid, e.getMessage());
   }
 
   /**
@@ -2288,19 +2387,45 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
     FileUtils.writeFile(configurationFile, configuration.toJSON());
   }
 
+  /**
+   * Fires the AFTER READ listeners, under the same re-entrancy guard as the BEFORE READ ones - see
+   * {@code LocalBucket.fireBeforeReadEvents}, which owns the explanation.
+   * <p>
+   * This side receives the materialised record, so it does not have to load anything itself and the shipped trigger
+   * adapter never did. The body of an {@code AFTER READ} trigger is arbitrary SQL or JavaScript though, and one that
+   * reads its own type re-enters the read that fired it exactly as the before side would. ONE flag covers both
+   * directions because it answers one question - "is a read listener running on this thread for this database?" -
+   * and while one is, no read event of either kind should fire.
+   */
   @Override
   public Record invokeAfterReadEvents(Record record) {
+    final DocumentType recordType = record instanceof Document document ? document.getType() : null;
+    final RecordEventsRegistry typeEvents = recordType != null ? (RecordEventsRegistry) recordType.getEvents() : null;
+
+    if (!events.hasAfterReadListeners() && (typeEvents == null || !typeEvents.hasAfterReadListeners()))
+      return record;
+
+    final DatabaseContext.DatabaseContextTL context = DatabaseContext.INSTANCE.getContextIfExists(databasePath);
+    if (context == null)
+      return dispatchAfterRead(record, typeEvents);
+
+    if (context.isFiringReadEvents())
+      return record;
+
+    context.setFiringReadEvents(true);
+    try {
+      return dispatchAfterRead(record, typeEvents);
+    } finally {
+      context.setFiringReadEvents(false);
+    }
+  }
+
+  private Record dispatchAfterRead(Record record, final RecordEventsRegistry typeEvents) {
     // INVOKE EVENT CALLBACKS
     record = events.onAfterRead(record);
     if (record == null)
       return null;
-    if (record instanceof Document document) {
-      final DocumentType type = document.getType();
-      if (type != null) {
-        return ((RecordEventsRegistry) type.getEvents()).onAfterRead(record);
-      }
-    }
-    return record;
+    return typeEvents != null ? typeEvents.onAfterRead(record) : record;
   }
 
   private void lockDatabase() {
@@ -2452,6 +2577,10 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
       }
 
       if (drop)
+        // NOT redundant with the unconditional purge further down (#6133), and it has to stay BEFORE the wait:
+        // the files of a dropped database are about to be deleted, so its queued pages must leave the pipeline
+        // here or the wait below would sit through a backlog that nobody will ever need on disk. The later call
+        // then finds nothing left to purge and only does the forgetting, which is all a drop still needs from it.
         PageManager.INSTANCE.removeModifiedPagesOfDatabase(this);
 
       // #4928: bounded wait. When it gives up (wedged flush / unwritable disk), this close becomes
@@ -2472,11 +2601,17 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
 
       open = false;
 
-      if (preserveWalForRecovery)
-        // #4928: the give-up close leaves the stuck pages in the shared flush thread's index, referencing a
-        // now-closed database - they can never be flushed once open=false (flushPage early-returns). Purge
-        // them so the JVM-wide flush thread does not leak entries; their content is safe in the preserved WAL.
-        PageManager.INSTANCE.removeModifiedPagesOfDatabase(this);
+      // #4928: the give-up close leaves the stuck pages in the shared flush thread's index, referencing a
+      // now-closed database - they can never be flushed once open=false (flushPage early-returns). Purge them
+      // so the JVM-wide flush thread does not leak entries; their content is safe in the preserved WAL.
+      // #6133: done on EVERY close, not only the give-up one. On a clean close the page purge itself is a
+      // no-op - the wait above proved this database's pipeline empty - but this call is also where the
+      // JVM-wide flush thread FORGETS the database: its suspend and replay-drain locks, its deferred batches,
+      // its flush-progress counter and its pending-page counter are all keyed by the Database instance, as is
+      // the page manager's snapshot barrier monitor. Skipping it on the common path pinned one dead
+      // LocalDatabase (and everything it references) per closed database for the lifetime of
+      // PageManager.INSTANCE, which any process cycling through databases pays forever.
+      PageManager.INSTANCE.removeModifiedPagesOfDatabase(this);
 
       PageManager.INSTANCE.removeAllReadPagesOfDatabase(this);
 
@@ -2823,20 +2958,10 @@ public class LocalDatabase extends RWLockContext implements DatabaseInternal {
   }
 
   private void setDefaultValues(final Record record) {
-    if (record instanceof MutableDocument doc) {
-      final DocumentType type = doc.getType();
-
-      final Set<String> propertiesWithDefaultDefined = type.getPolymorphicPropertiesWithDefaultDefined();
-
-      for (final String pName : propertiesWithDefaultDefined) {
-        final Object pValue = doc.get(pName);
-        if (pValue == null) {
-          final Property p = type.getPolymorphicProperty(pName);
-          Object defValue = p.getDefaultValue();
-          doc.set(pName, defValue);
-        }
-      }
-    }
+    // The rule lives in DocumentType.applyDefaultValues, shared with ApplyDefaultsStep, so the two cannot diverge
+    // again on what a null-evaluating default means (issue #6134).
+    if (record instanceof MutableDocument doc)
+      doc.getType().applyDefaultValues(doc);
   }
 
   /**

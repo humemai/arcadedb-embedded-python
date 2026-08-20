@@ -29,6 +29,7 @@ import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.query.sql.executor.WorkGuard;
 import com.arcadedb.graph.EdgeIdentitySet;
 
 import java.util.ArrayList;
@@ -102,6 +103,9 @@ public class ExpandAll extends AbstractPhysicalOperator {
 
   @Override
   public ResultSet execute(final CommandContext context, final int nRecords) {
+    // Bounds this operator's row loop by the command deadline - see WorkGuard for why between-batches is
+    // not enough (issue #6266).
+    final WorkGuard guard = WorkGuard.forCommandDeadline(context);
     final ResultSet inputResults = child.execute(context, nRecords);
 
     return new ResultSet() {
@@ -151,6 +155,7 @@ public class ExpandAll extends AbstractPhysicalOperator {
             || (sameClausePrecedingRelVars != null && !sameClausePrecedingRelVars.isEmpty());
 
         while (buffer.size() < n) {
+          guard.check();
           if (!edgeNeeded) {
             if (!expandNeighbor())
               break;
@@ -293,18 +298,7 @@ public class ExpandAll extends AbstractPhysicalOperator {
    * check stays free in the common single-hop case.
    */
   private EdgeIdentitySet collectUsedEdgeRids(final Result row) {
-    if (sameClausePrecedingRelVars == null || sameClausePrecedingRelVars.isEmpty())
-      return null;
-    EdgeIdentitySet used = null;
-    for (final String relVar : sameClausePrecedingRelVars) {
-      final Object val = row.getProperty(relVar);
-      if (val instanceof Edge) {
-        if (used == null)
-          used = new EdgeIdentitySet();
-        used.add(((Edge) val).getIdentity());
-      }
-    }
-    return used;
+    return RelationshipBindings.collectEdgeIdentities(row, sameClausePrecedingRelVars);
   }
 
   @Override

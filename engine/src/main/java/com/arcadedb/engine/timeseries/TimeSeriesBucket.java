@@ -131,13 +131,19 @@ public class TimeSeriesBucket extends PaginatedComponent {
 
   /**
    * Factory handler for loading existing .tstb files during schema load.
-   * Columns are set later via {@link #setColumns(List)} when the TimeSeries type is initialized.
+   * Columns are set later via {@link #setColumns(List, TimeSeriesTagDictionary)} when the TimeSeries type is
+   * initialized.
+   * <p>
+   * The page size, version and mode {@code ComponentFactory} recovered from the file name are passed straight
+   * through, exactly as {@code LocalBucket}'s handler does (issue #6314). Re-deriving the page size from the live
+   * {@code bucketDefaultPageSize} instead would address every page of an already-written file at a stride that is
+   * not the one it was written with, which is a misaligned read of real bytes and not an exception.
    */
   public static class PaginatedComponentFactoryHandler implements ComponentFactory.PaginatedComponentFactoryHandler {
     @Override
     public PaginatedComponent createOnLoad(final DatabaseInternal database, final String name, final String filePath,
         final int id, final ComponentFile.MODE mode, final int pageSize, final int version) throws IOException {
-      return new TimeSeriesBucket(database, name, filePath, id, new ArrayList<>(), null);
+      return new TimeSeriesBucket(database, name, filePath, id, mode, pageSize, version, new ArrayList<>(), null);
     }
   }
 
@@ -167,12 +173,17 @@ public class TimeSeriesBucket extends PaginatedComponent {
   }
 
   /**
-   * Opens an existing TimeSeries bucket.
+   * Opens an existing TimeSeries bucket on the id, page size and version its own file name carries.
+   * <p>
+   * The {@code version} is what the file says, not {@link #CURRENT_VERSION}: which row layout this bucket reads is
+   * decided by whether a dictionary was handed to it, so claiming the current version for a file written by a
+   * build that stored tags inline would make {@link #getVersion()} disagree with both the file name and the
+   * layout in use.
    */
   public TimeSeriesBucket(final DatabaseInternal database, final String name, final String filePath, final int id,
-      final List<ColumnDefinition> columns, final TimeSeriesTagDictionary tagDictionary) throws IOException {
-    super(database, name, filePath, id, ComponentFile.MODE.READ_WRITE,
-        database.getConfiguration().getValueAsInteger(GlobalConfiguration.BUCKET_DEFAULT_PAGE_SIZE), CURRENT_VERSION);
+      final ComponentFile.MODE mode, final int pageSize, final int version, final List<ColumnDefinition> columns,
+      final TimeSeriesTagDictionary tagDictionary) throws IOException {
+    super(database, name, filePath, id, mode, pageSize, version);
     this.tagDictionary = tagDictionary;
     resolveLayout(columns);
   }
@@ -339,9 +350,7 @@ public class TimeSeriesBucket extends PaginatedComponent {
 
     flushDataPageHeader(dataPage, samplesInPage, pageMinTs, pageMaxTs);
 
-    headerPage.writeLong(HEADER_SAMPLE_COUNT_OFFSET, totalSamples);
-    headerPage.writeLong(HEADER_MIN_TS_OFFSET, minTs);
-    headerPage.writeLong(HEADER_MAX_TS_OFFSET, maxTs);
+    writeHeaderCounters(headerPage, totalSamples, minTs, maxTs);
   }
 
   /**
@@ -756,39 +765,38 @@ public class TimeSeriesBucket extends PaginatedComponent {
   }
 
   /**
-   * Returns the total sample count stored in this bucket.
+   * Returns the total sample count stored in this bucket, or 0 when the file carries no header page.
    */
   public long getSampleCount() throws IOException {
-    if (getTotalPages() == 0)
-      return 0;
-    final BasePage headerPage = database.getTransaction().getPage(new PageId(database, fileId, 0), pageSize);
-    return headerPage.readLong(HEADER_SAMPLE_COUNT_OFFSET);
+    final BasePage headerPage = readHeaderPage();
+    return headerPage == null ? 0 : headerPage.readLong(HEADER_SAMPLE_COUNT_OFFSET);
   }
 
   /**
-   * Returns the minimum timestamp across all samples.
+   * Returns the minimum timestamp across all samples, or {@link Long#MAX_VALUE} when there is none - the same
+   * empty marker {@link #initHeaderPage()} writes and {@link #clearDataPages()} restores, so a bucket with no
+   * header page yet answers exactly like an initialised empty one instead of claiming the epoch.
    */
   public long getMinTimestamp() throws IOException {
-    final BasePage headerPage = database.getTransaction().getPage(new PageId(database, fileId, 0), pageSize);
-    return headerPage.readLong(HEADER_MIN_TS_OFFSET);
+    final BasePage headerPage = readHeaderPage();
+    return headerPage == null ? Long.MAX_VALUE : headerPage.readLong(HEADER_MIN_TS_OFFSET);
   }
 
   /**
-   * Returns the maximum timestamp across all samples.
+   * Returns the maximum timestamp across all samples, or {@link Long#MIN_VALUE} when there is none (see
+   * {@link #getMinTimestamp()} for why that, and not 0).
    */
   public long getMaxTimestamp() throws IOException {
-    final BasePage headerPage = database.getTransaction().getPage(new PageId(database, fileId, 0), pageSize);
-    return headerPage.readLong(HEADER_MAX_TS_OFFSET);
+    final BasePage headerPage = readHeaderPage();
+    return headerPage == null ? Long.MIN_VALUE : headerPage.readLong(HEADER_MAX_TS_OFFSET);
   }
 
   /**
-   * Returns the number of data pages (excluding header page).
+   * Returns the number of data pages (excluding header page), or 0 when the file carries no header page.
    */
   public int getDataPageCount() throws IOException {
-    if (getTotalPages() == 0)
-      return 0;
-    final BasePage headerPage = database.getTransaction().getPage(new PageId(database, fileId, 0), pageSize);
-    return headerPage.readInt(HEADER_DATA_PAGE_COUNT);
+    final BasePage headerPage = readHeaderPage();
+    return headerPage == null ? 0 : headerPage.readInt(HEADER_DATA_PAGE_COUNT);
   }
 
   /**
@@ -801,19 +809,21 @@ public class TimeSeriesBucket extends PaginatedComponent {
   }
 
   /**
-   * Returns true if a compaction was in progress (crash recovery check).
+   * Returns true if a compaction was in progress (crash recovery check). A file with no header page has
+   * nothing to recover, so it answers false.
    */
   public boolean isCompactionInProgress() throws IOException {
-    final BasePage headerPage = database.getTransaction().getPage(new PageId(database, fileId, 0), pageSize);
-    return headerPage.readByte(HEADER_COMPACTION_FLAG) == 1;
+    final BasePage headerPage = readHeaderPage();
+    return headerPage != null && headerPage.readByte(HEADER_COMPACTION_FLAG) == 1;
   }
 
   /**
-   * Gets the compaction watermark (sealed store file offset).
+   * Gets the compaction watermark (sealed store file offset), or 0 - what {@link #initHeaderPage()} writes -
+   * when the file carries no header page.
    */
   public long getCompactionWatermark() throws IOException {
-    final BasePage headerPage = database.getTransaction().getPage(new PageId(database, fileId, 0), pageSize);
-    return headerPage.readLong(HEADER_COMPACTION_WATERMARK);
+    final BasePage headerPage = readHeaderPage();
+    return headerPage == null ? 0L : headerPage.readLong(HEADER_COMPACTION_WATERMARK);
   }
 
   /**
@@ -911,9 +921,7 @@ public class TimeSeriesBucket extends PaginatedComponent {
           maxTs = pMax;
       }
     }
-    headerPage.writeLong(HEADER_SAMPLE_COUNT_OFFSET, sampleCount);
-    headerPage.writeLong(HEADER_MIN_TS_OFFSET, minTs);
-    headerPage.writeLong(HEADER_MAX_TS_OFFSET, maxTs);
+    writeHeaderCounters(headerPage, sampleCount, minTs, maxTs);
     // Keep HEADER_DATA_PAGE_COUNT unchanged so cleared pages can be reused by new inserts
   }
 
@@ -928,9 +936,7 @@ public class TimeSeriesBucket extends PaginatedComponent {
   public void clearDataPages() throws IOException {
     final TransactionContext tx = database.getTransaction();
     final MutablePage headerPage = tx.getPageToModify(new PageId(database, fileId, 0), pageSize, false);
-    headerPage.writeLong(HEADER_SAMPLE_COUNT_OFFSET, 0L);
-    headerPage.writeLong(HEADER_MIN_TS_OFFSET, Long.MAX_VALUE);
-    headerPage.writeLong(HEADER_MAX_TS_OFFSET, Long.MIN_VALUE);
+    writeHeaderCounters(headerPage, 0L, Long.MAX_VALUE, Long.MIN_VALUE);
     headerPage.writeInt(HEADER_DATA_PAGE_COUNT, 0);
     // Physical pages are not touched: committing a single header page is O(1) regardless
     // of how many data pages were previously allocated, preventing OOM on large datasets.
@@ -969,15 +975,242 @@ public class TimeSeriesBucket extends PaginatedComponent {
 
   // --- Private helpers ---
 
+  /**
+   * Resolves the header page (page 0) for reading, or returns {@code null} when this file carries none.
+   * Every header reader goes through here so the answer to "is there a header?" is given once and given the
+   * same way (issue #6283); a reader that asks the transaction directly gets neither half of this right.
+   * <p>
+   * <b>It must not fabricate the page.</b> {@code tx.getPage()} resolves with {@code createIfNotExists=true}, so on
+   * a file with no page 0 it does not report absence - it invents a zero-filled page, caches it, and reads zeros
+   * out of it. That phantom is exactly what {@code TimeSeriesTagDictionary.readStoredHeader()} was built to avoid
+   * (issue #6198), and reading a real 0 out of it is worse than an exception: for min/max timestamp, 0 is a
+   * perfectly legal value.
+   * <p>
+   * <b>Nor may it gate on {@link #getTotalPages()}</b>, which two of these readers used to do. That counter is
+   * per-instance: it is seeded from the physical file size at construction and afterwards only the component
+   * registered with the schema gets it bumped at commit, so it under-reports for an instance built over a file
+   * whose committed pages are still in the flush queue - conflating "this instance has seen nothing" with "the
+   * file holds nothing" (issue #6198 again). The magic in page 0 has no such blind spot.
+   * <p>
+   * The active transaction's own page set comes first: it holds the copy this transaction must read - one it
+   * modified, or the page {@link #initHeaderPage()} added and has not committed yet - and neither is visible to
+   * the page manager. When the probe below does find the page, it is re-resolved through the transaction so the
+   * read takes part in its isolation like every other page read of this bucket; that second call is a read-cache
+   * hit, the page having just been loaded.
+   */
+  private BasePage readHeaderPage() throws IOException {
+    final BasePage headerPage = readPageIfPresent(0);
+    return headerPage != null && headerPage.readInt(HEADER_MAGIC_OFFSET) == MAGIC_VALUE ? headerPage : null;
+  }
+
+  /**
+   * Resolves one page of this bucket for reading, or {@code null} when the file does not carry it. The two rules
+   * {@link #readHeaderPage()} documents at length - never fabricate the page, never gate on {@link #getTotalPages()}
+   * - are properties of this resolution and not of page 0, so they live here and page 0 only adds the magic test
+   * on top.
+   */
+  private BasePage readPageIfPresent(final int pageNumber) throws IOException {
+    final PageId pageId = new PageId(database, fileId, pageNumber);
+    final TransactionContext tx = database.getTransactionIfExists();
+    final boolean inTransaction = tx != null && tx.isActive();
+
+    BasePage page;
+    if (inTransaction && tx.hasPageForRecord(pageId))
+      page = tx.getPage(pageId, pageSize);
+    else {
+      // (isNew=true, createIfNotExists=false): the pair that answers "absent" with null instead of creating the
+      // page, as TimeSeriesTagDictionary.readStoredHeader() does. With isNew=false the page manager would throw
+      // on a page that is not there.
+      page = database.getPageManager().getImmutablePage(pageId, pageSize, true, false);
+      if (page != null && inTransaction)
+        page = tx.getPage(pageId, pageSize);
+    }
+
+    return page;
+  }
+
+  /**
+   * Validates everything the mutable row format asserts about itself and returns one line per problem, empty when
+   * there is none - the shape {@code IndexInternal.checkIntegrity()} uses, so {@code DatabaseChecker} folds the
+   * answers of every storage kind the same way (issue #6340).
+   * <p>
+   * <b>The counters are the point.</b> Page 0 declares a sample count, a min and a max timestamp and a data page
+   * count, and every one of them is maintained exactly by {@link #appendSamples} and recomputed exactly by
+   * {@code clearDataPagesUpTo}, so each is reconcilable against the pages themselves. That is what makes this able
+   * to see the damage issue #6314 left behind: a session that wrote at the wrong stride put real rows at offsets
+   * this bucket will never look at again, and the header it also wrote counts them - so the sum over the data
+   * pages comes up short of the number page 0 claims, which is a statement no other reader ever makes.
+   * <p>
+   * Only page headers are read - 18 bytes at the front of each data page - and no row is decoded. That bounds the
+   * pass at one page read per data page, which is strictly cheaper than the record scan {@code checkBuckets}
+   * already runs over every record bucket.
+   * <p>
+   * <b>Under {@code FIX} the counters are rewritten from the pages</b> (issue #6360). This is the one repair a
+   * TimeSeries file admits without a policy decision behind it: every one of the three counters is DERIVED from
+   * the data pages and maintained incrementally, so recomputing them discards nothing - the pages are the data and
+   * the header is only a claim about them. {@code clearDataPagesUpTo} already recomputes exactly these three the
+   * same way on every retention pass. Nothing else here is repairable: a missing header magic, a wrong format
+   * version or a column count that disagrees with the schema all mean the ROWS cannot be located, and inventing a
+   * header for them would fabricate data rather than recover it.
+   * <p>
+   * A repairing call needs an active transaction and leaves it open - see {@link #repairHeaderCounters}.
+   */
+  public TimeSeriesIntegrity.Outcome checkIntegrity(final TimeSeriesIntegrity.Options options) throws IOException {
+    final List<String> problems = new ArrayList<>();
+    final List<String> repairs = new ArrayList<>();
+
+    final long fileSize = file.getSize();
+    if (fileSize % pageSize != 0)
+      problems.add("the file is " + fileSize + " bytes, which is not a whole number of " + pageSize
+          + "-byte pages: it was written at a different page size, or its tail was truncated");
+
+    final BasePage headerPage = readHeaderPage();
+    if (headerPage == null) {
+      if (fileSize > 0)
+        problems.add("the file holds " + fileSize + " bytes but page 0 does not carry the 'TSBC' magic: the header "
+            + "page is missing or was overwritten, so nothing can say what the rest of the file holds");
+      return new TimeSeriesIntegrity.Outcome(problems, repairs);
+    }
+
+    final int formatVersion = headerPage.readByte(HEADER_FORMAT_VERSION_OFFSET) & 0xFF;
+    if (formatVersion != version)
+      problems.add("page 0 declares mutable row format version " + formatVersion + " but the file name says version "
+          + version + ": the two decide whether a TAG column is a 4-byte dictionary id or an inline string");
+
+    final int declaredColumns = headerPage.readShort(HEADER_COLUMN_COUNT_OFFSET) & 0xFFFF;
+    if (!columns.isEmpty() && declaredColumns != columns.size())
+      problems.add("page 0 declares " + declaredColumns + " column(s) but the schema declares " + columns.size());
+
+    final int dataPageCount = headerPage.readInt(HEADER_DATA_PAGE_COUNT);
+    if (dataPageCount < 0) {
+      problems.add("page 0 declares a negative data page count of " + dataPageCount);
+      return new TimeSeriesIntegrity.Outcome(problems, repairs);
+    }
+
+    final long declaredSamples = headerPage.readLong(HEADER_SAMPLE_COUNT_OFFSET);
+    final long declaredMinTs = headerPage.readLong(HEADER_MIN_TS_OFFSET);
+    final long declaredMaxTs = headerPage.readLong(HEADER_MAX_TS_OFFSET);
+
+    // A component-factory stub has no columns until the type hands them over, and without them there is no stride
+    // and so no per-page sample ceiling to test against. The counters below are still reconcilable.
+    final int maxSamplesPerPage = columns.isEmpty() ? -1 : getMaxSamplesPerPage();
+
+    long samples = 0;
+    long minTs = Long.MAX_VALUE;
+    long maxTs = Long.MIN_VALUE;
+    // Whether every page page 0 announces was actually read. The three totals below are statements about ALL of
+    // them, so a walk that stopped at page N cannot make any of them: what it accumulated is a prefix, and
+    // reporting a prefix as the whole restates one finding as four.
+    boolean walkedEveryPage = true;
+    for (int pageNumber = 1; pageNumber <= dataPageCount; pageNumber++) {
+      final BasePage dataPage = readPageIfPresent(pageNumber);
+      if (dataPage == null) {
+        problems.add("page 0 declares " + dataPageCount + " data page(s) but page " + pageNumber
+            + " is not in the file: the samples it should hold are unreadable");
+        walkedEveryPage = false;
+        break;
+      }
+
+      final int count = dataPage.readShort(DATA_SAMPLE_COUNT_OFFSET) & 0xFFFF;
+      if (maxSamplesPerPage > 0 && count > maxSamplesPerPage) {
+        problems.add("data page " + pageNumber + " declares " + count + " sample(s), more than the "
+            + maxSamplesPerPage + " a " + pageSize + "-byte page holds at this type's " + rowSize + "-byte stride");
+        // The count is not usable, so neither is any total it would go into.
+        walkedEveryPage = false;
+        continue;
+      }
+
+      samples += count;
+      if (count == 0)
+        continue;
+
+      final long pageMinTs = dataPage.readLong(DATA_MIN_TS_OFFSET);
+      final long pageMaxTs = dataPage.readLong(DATA_MAX_TS_OFFSET);
+      if (pageMinTs > pageMaxTs) {
+        problems.add("data page " + pageNumber + " declares min timestamp " + pageMinTs + " above its max timestamp "
+            + pageMaxTs);
+        walkedEveryPage = false;
+        continue;
+      }
+      if (pageMinTs < minTs)
+        minTs = pageMinTs;
+      if (pageMaxTs > maxTs)
+        maxTs = pageMaxTs;
+    }
+
+    if (!walkedEveryPage)
+      return new TimeSeriesIntegrity.Outcome(problems, repairs);
+
+    boolean countersDisagree = false;
+    if (samples != declaredSamples) {
+      problems.add("page 0 declares " + declaredSamples + " sample(s) but its " + dataPageCount
+          + " data page(s) hold " + samples);
+      countersDisagree = true;
+    }
+
+    if (samples > 0) {
+      if (declaredMinTs != minTs) {
+        problems.add("page 0 declares min timestamp " + declaredMinTs + " but its data pages hold " + minTs);
+        countersDisagree = true;
+      }
+      if (declaredMaxTs != maxTs) {
+        problems.add("page 0 declares max timestamp " + declaredMaxTs + " but its data pages hold " + maxTs);
+        countersDisagree = true;
+      }
+    }
+
+    if (options.fix() && countersDisagree) {
+      repairHeaderCounters(samples, minTs, maxTs);
+      repairs.add("rewrote page 0's counters from its " + dataPageCount + " data page(s): " + samples + " sample(s)"
+          + (samples > 0 ? ", timestamps " + minTs + ".." + maxTs : ""));
+    }
+
+    return new TimeSeriesIntegrity.Outcome(problems, repairs);
+  }
+
+  /**
+   * Report-only overload for callers that only want the findings - the shape this had before #6360.
+   */
+  public List<String> checkIntegrity() throws IOException {
+    return checkIntegrity(TimeSeriesIntegrity.Options.REPORT_ONLY).problems();
+  }
+
+  /**
+   * Writes back the three counters {@link #checkIntegrity(TimeSeriesIntegrity.Options)} recomputed from the data
+   * pages. Same three fields, and the same values for an empty bucket, that {@code clearDataPages} writes.
+   * <p>
+   * <b>Writes into the CALLER's transaction and does not commit.</b> {@link TimeSeriesShard} owns the begin and
+   * the commit because under HA the commit has to happen with the compaction read lock already released - the same
+   * rule {@code TimeSeriesShard.appendSamples} documents at length, and for the same reason: a leader's commit
+   * waits for the active recording session, and a compaction holding one is waiting for that very lock.
+   */
+  void repairHeaderCounters(final long samples, final long minTs, final long maxTs) throws IOException {
+    writeHeaderCounters(database.getWrappedDatabaseInstance().getTransaction()
+        .getPageToModify(new PageId(database, fileId, 0), pageSize, false), samples, minTs, maxTs);
+  }
+
+  /**
+   * Writes page 0's three derived counters: how many samples the data pages hold and the timestamp span they cover.
+   * <p>
+   * ONE definition (#6360), and it is the check that made it worth having. {@link #checkIntegrity} reconciles
+   * against exactly these three, and its repair claimed to write them "the same way" the maintenance paths do -
+   * a claim that was a comment and is now the same call. An empty bucket gets the sentinels an empty span is
+   * spelled with, here rather than at four call sites that each had to remember them.
+   */
+  private static void writeHeaderCounters(final MutablePage headerPage, final long samples, final long minTs,
+      final long maxTs) {
+    headerPage.writeLong(HEADER_SAMPLE_COUNT_OFFSET, samples);
+    headerPage.writeLong(HEADER_MIN_TS_OFFSET, samples > 0 ? minTs : Long.MAX_VALUE);
+    headerPage.writeLong(HEADER_MAX_TS_OFFSET, samples > 0 ? maxTs : Long.MIN_VALUE);
+  }
+
   void initHeaderPage() throws IOException {
     final TransactionContext tx = database.getTransaction();
     final MutablePage headerPage = tx.addPage(new PageId(database, fileId, 0), pageSize);
     headerPage.writeInt(HEADER_MAGIC_OFFSET, MAGIC_VALUE);
     headerPage.writeByte(HEADER_FORMAT_VERSION_OFFSET, (byte) CURRENT_VERSION);
     headerPage.writeShort(HEADER_COLUMN_COUNT_OFFSET, (short) columns.size());
-    headerPage.writeLong(HEADER_SAMPLE_COUNT_OFFSET, 0L);
-    headerPage.writeLong(HEADER_MIN_TS_OFFSET, Long.MAX_VALUE);
-    headerPage.writeLong(HEADER_MAX_TS_OFFSET, Long.MIN_VALUE);
+    writeHeaderCounters(headerPage, 0L, Long.MAX_VALUE, Long.MIN_VALUE);
     headerPage.writeByte(HEADER_COMPACTION_FLAG, (byte) 0);
     headerPage.writeLong(HEADER_COMPACTION_WATERMARK, 0L);
     headerPage.writeInt(HEADER_DATA_PAGE_COUNT, 0);

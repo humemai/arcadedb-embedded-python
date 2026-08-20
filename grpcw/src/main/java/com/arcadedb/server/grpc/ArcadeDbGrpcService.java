@@ -42,6 +42,7 @@ import com.arcadedb.graph.MutableEdge;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.query.sql.executor.QueryStatistics;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
@@ -529,6 +530,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   public void executeCommand(ExecuteCommandRequest req, StreamObserver<ExecuteCommandResponse> resp) {
 
     final long t0 = System.nanoTime();
+    // Guards the catch block against calling onError once the success path has already fully delivered a
+    // terminal onNext/onCompleted pair - the same double-close exposure noted for the in-band error response
+    // this replaces (issue #6192).
+    boolean responded = false;
 
     try {
       // Check if this is an externally-managed transaction (started via beginTransaction RPC)
@@ -544,6 +549,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         return;
       }
 
+      final ExecuteCommandResponse response;
       if (txCtx != null) {
         // External transaction - execute command on the transaction's dedicated thread
         LogManager.instance().log(this, Level.FINE,
@@ -552,16 +558,20 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         Future<ExecuteCommandResponse> future = txCtx.executor.submit(() ->
             executeCommandInternal(req, t0, txCtx.db, true));
 
-        ExecuteCommandResponse response = future.get();
-        resp.onNext(response);
-        resp.onCompleted();
+        response = future.get();
       } else {
         // No external transaction - execute on current thread
         Database db = getDatabase(req.getDatabase(), req.getCredentials());
-        ExecuteCommandResponse response = executeCommandInternal(req, t0, db, false);
-        resp.onNext(response);
-        resp.onCompleted();
+        response = executeCommandInternal(req, t0, db, false);
       }
+      resp.onNext(response);
+      // Set before onCompleted(), not after: once onNext has handed a response to the observer, the RPC must
+      // never fall through to onError, regardless of what onCompleted() itself does. A concurrent client-side
+      // cancel landing between the two calls can make onCompleted() throw; setting the flag only after it
+      // returns would leave that narrow window where the catch below still calls onError on an already-
+      // -delivered call, hitting the exact double-close IllegalStateException the guard exists to prevent.
+      responded = true;
+      resp.onCompleted();
 
     } catch (Exception e) {
       // Unwrap ExecutionException to get the root cause
@@ -571,16 +581,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       }
       LogManager.instance().log(this, Level.SEVERE, "ERROR in executeCommand", cause);
 
-      final long ms = (System.nanoTime() - t0) / 1_000_000L;
-      ExecuteCommandResponse err = ExecuteCommandResponse
-          .newBuilder()
-          .setSuccess(false)
-          .setMessage(cause.getMessage() == null ? cause.toString() : cause.getMessage())
-          .setAffectedRecords(0L)
-          .setExecutionTimeMs(ms)
-          .build();
-      resp.onNext(err);
-      resp.onCompleted();
+      // Every failure now goes through GrpcErrorMapper and a gRPC error status, the same as createRecord,
+      // beginTransaction, commitTransaction and graphBatchLoad - not just the leader refusal that needed the
+      // redirect trailers (issue #6183). The in-band success=false envelope this RPC used to fall back to for
+      // everything else erased the exception type on the wire; the client's handleGrpcException/
+      // GrpcClientErrorMapper already rebuilds the exact type from the status + trailers (issue #6192).
+      if (!responded)
+        resp.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "ExecuteCommand", ha()));
     }
   }
 
@@ -793,14 +800,23 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         /* no-op */
       }
 
-      final long ms = (System.nanoTime() - t0) / 1_000_000L;
-      return ExecuteCommandResponse
-          .newBuilder()
-          .setSuccess(false)
-          .setMessage(e.getMessage() == null ? e.toString() : e.getMessage())
-          .setAffectedRecords(0L)
-          .setExecutionTimeMs(ms)
-          .build();
+      // Every failure is rethrown, once the rollback above has run, for executeCommand to map through
+      // GrpcErrorMapper into a gRPC error status (issue #6192) - this response envelope has nowhere to carry
+      // the exception type, and for a leader refusal nowhere to carry the redirect trailers either
+      // (issue #6183). A statement sent to a follower does not normally raise that one at all:
+      // RaftReplicatedDatabase.command forwards a DDL or non-idempotent statement to the leader rather than
+      // refusing it. What reaches this branch is the leadership change that lands between that decision and
+      // the schema write - the second isLeader() check inside recordFileChanges - where the caller is holding
+      // a failure it can only act on if it is told which node to repeat it against.
+      // Every engine exception (ArcadeDBException and its subtypes, including ServerIsNotTheLeaderException)
+      // is unchecked, so this branch is not expected to trigger in practice. It stays only because the method
+      // has no throws clause; if it ever did fire, the synthetic RuntimeException it wraps with would itself
+      // become the reported class name on the trailer instead of the real cause - the same class of type
+      // erasure this fix eliminates for everything else - since GrpcErrorMapper.unwrap only peels one level of
+      // ExecutionException, not an arbitrary wrapper.
+      if (e instanceof RuntimeException re)
+        throw re;
+      throw new RuntimeException(e);
     } finally {
       ProtocolContext.clear();
       recordGrpcProfile("grpc.command", profile, db != null ? db.getName() : req.getDatabase(),
@@ -854,7 +870,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         LogManager.instance().log(this, Level.SEVERE, "ERROR in createRecord (external tx)", cause);
         // Preserve the engine exception type (e.g. DuplicatedKeyException -> ALREADY_EXISTS with index/keys)
         // so the client can reconstruct it instead of receiving an opaque INTERNAL.
-        resp.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "CreateRecord"));
+        resp.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "CreateRecord", ha()));
       }
       return;
     }
@@ -866,7 +882,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       resp.onCompleted();
     } catch (Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "ERROR in createRecord", e);
-      resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "CreateRecord"));
+      resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "CreateRecord", ha()));
     }
   }
 
@@ -1624,7 +1640,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       LogManager.instance().log(this, Level.SEVERE, "Error beginning transaction: %s", cause, cause.getMessage());
       // Pass through an already-mapped status (e.g. UNAUTHENTICATED/PERMISSION_DENIED from getDatabase)
       // instead of masking it as INTERNAL, and preserve the exception type for everything else.
-      responseObserver.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "Failed to begin transaction"));
+      responseObserver.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "Failed to begin transaction", ha()));
     }
   }
 
@@ -1696,7 +1712,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // ConcurrentModificationException/NeedRetryException stays ABORTED while a permanent commit-time
       // DuplicatedKeyException becomes ALREADY_EXISTS (not retried forever), carrying the exception class
       // name so the client rebuilds the exact type.
-      rsp.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "Commit failed"));
+      rsp.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "Commit failed", ha()));
     } finally {
       // The transaction was claimed above (removed from activeTransactions), so release its concurrency slot and
       // shut the executor down exactly once here.
@@ -2692,19 +2708,14 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             // state (schema dictionary, type metadata) that only the leader can serialize, and running it on a
             // follower hits the race in Dictionary.getIdByName as the local state-machine apply runs
             // concurrently with this thread (issue #4122). The HTTP endpoint relays the payload to the leader;
-            // this stream cannot, because the HA plugin exposes the leader's HTTP address only and relaying a
-            // bulk load through a follower would double the traffic of the transport chosen to avoid exactly
-            // that. It is refused before a single record is written, so the caller can redirect and retry
-            // without having to reconcile a partial load.
-            final HAServerPlugin ha = arcadeServer != null ? arcadeServer.getHA() : null;
+            // this stream does not, because relaying a bulk load through a follower would double the traffic of
+            // the transport chosen to avoid exactly that. It is refused before a single record is written, and
+            // names an address the caller can dial, so redirecting costs it neither a partial load to reconcile
+            // nor knowledge of the deployment's port-mapping convention.
+            final HAServerPlugin ha = ha();
             if (ha != null && !ha.isLeader()) {
-              final String leader = ha.getLeaderAddress();
               errorSent[0] = true;
-              out.onError(Status.FAILED_PRECONDITION.withDescription(
-                  "graphBatchLoad: this server is not the cluster leader and a graph batch load must run on the leader. "
-                      + (leader != null && !leader.isBlank() ?
-                      "Reconnect to the leader at '" + leader + "' (HTTP address; use its gRPC port) and retry" :
-                      "The leader is currently unknown, retry once the election has settled")).asException());
+              out.onError(notTheLeader(ha, "graphBatchLoad", "a graph batch load must run on the leader"));
               return;
             }
 
@@ -2882,6 +2893,23 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         .setPartialCommit(counts[0] > 0 || edgesCommitted > 0)
         .build());
     return trailers;
+  }
+
+  /**
+   * The refusal a follower answers with when an RPC may only run on the cluster leader (issue #6091). Raising
+   * the engine's own {@link ServerIsNotTheLeaderException} through the shared mapper rather than assembling a
+   * status here is what keeps an explicit leadership check and an engine-raised refusal - a schema change the
+   * replicated database rejects on a follower - indistinguishable to a caller (issue #6183): same status, same
+   * trailers, same typed exception rebuilt on the client. All that is left to choose here is the wording.
+   */
+  private static StatusRuntimeException notTheLeader(final HAServerPlugin ha, final String rpc, final String why) {
+    return GrpcErrorMapper.toStatusRuntimeException(
+        new ServerIsNotTheLeaderException("this server is not the cluster leader and " + why, null), rpc, ha);
+  }
+
+  /** This server's HA plugin, or null when HA is inactive: the source of the leader address on a refusal. */
+  private HAServerPlugin ha() {
+    return arcadeServer != null ? arcadeServer.getHA() : null;
   }
 
   private Object[] toPropertyArray(final Map<String, GrpcValue> properties) {
@@ -4415,6 +4443,12 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           && doc.getType() != null) {
         builder.putProperties(Property.TYPE_PROPERTY, toGrpcValue(doc.getTypeName()));
       }
+
+      // @cat identifies the record's Java shape (document/vertex/edge), matching what JsonSerializer sends over
+      // HTTP (issue #6404). Sending it removes the client's need to resolve the type through the remote schema -
+      // RemoteGrpcDatabase.lookupByRID() has no result to fall back to when that resolution fails or lags.
+      if (!builder.getPropertiesMap().containsKey(Property.CAT_PROPERTY))
+        builder.putProperties(Property.CAT_PROPERTY, toGrpcValue(document instanceof Vertex ? "v" : document instanceof Edge ? "e" : "d"));
     }
 
     // If this is an Edge and @out/@in are not already in properties, add them
@@ -4481,6 +4515,12 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           builder.putProperties("@in", toGrpcValue(edge.getIn().getIdentity()));
         }
       }
+
+      // @cat identifies the record's Java shape (document/vertex/edge), matching what JsonSerializer sends over
+      // HTTP (issue #6404). Sending it removes the client's need to resolve the type through the remote schema -
+      // RemoteGrpcDatabase.lookupByRID() has no result to fall back to when that resolution fails or lags.
+      if (!builder.getPropertiesMap().containsKey(Property.CAT_PROPERTY))
+        builder.putProperties(Property.CAT_PROPERTY, toGrpcValue(dbRecord instanceof Vertex ? "v" : dbRecord instanceof Edge ? "e" : "d"));
     }
 
     LogManager.instance().log(this, Level.FINE, "ENC-REC DONE rid=%s type=%s props=%s", builder.getRid(),

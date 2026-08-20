@@ -37,6 +37,7 @@ import com.arcadedb.database.RecordCallback;
 import com.arcadedb.database.RecordEvents;
 import com.arcadedb.database.RecordFactory;
 import com.arcadedb.database.TransactionContext;
+import com.arcadedb.database.async.AsyncQuiesce;
 import com.arcadedb.database.async.DatabaseAsyncExecutor;
 import com.arcadedb.database.async.ErrorCallback;
 import com.arcadedb.database.async.OkCallback;
@@ -50,6 +51,7 @@ import com.arcadedb.engine.PageManager;
 import com.arcadedb.engine.PaginatedComponent;
 import com.arcadedb.engine.PaginatedComponentFile;
 import com.arcadedb.engine.TransactionManager;
+import com.arcadedb.engine.UnreferencedFiles;
 import com.arcadedb.engine.WALFile;
 import com.arcadedb.engine.WALFileFactory;
 import com.arcadedb.exception.ArcadeDBException;
@@ -93,6 +95,7 @@ import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.HAReplicatedDatabase;
 import com.arcadedb.server.HAServerPlugin;
+import com.arcadedb.server.LeaderForwardContext;
 
 import java.io.IOException;
 import java.net.URI;
@@ -114,6 +117,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.IntPredicate;
 import java.util.function.Function;
@@ -163,13 +167,34 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
    */
   private static final ThreadLocal<SchemaInstalmentState>                schemaInstalments      = new ThreadLocal<>();
   /**
-   * How many schema-WAL instalments this JVM has shipped since it started (issue #6136). A process-wide
-   * observability counter, not per-database state: the question it answers - "did a schema session have to ship
-   * its WAL incrementally, and how often?" - is asked of a node, and a leader runs one such session at a time
-   * anyway. Zero on a node that never crossed the threshold, which is every node until an index is rebuilt or a
-   * DDL callback writes more than half a Raft entry's worth of pages.
+   * Schema-WAL instalments this DATABASE has shipped since it was opened, and what they cost (issues #6136, #6144).
+   * <p>
+   * PER DATABASE, not per JVM, which is the whole reason these are instance fields: a multi-database server would
+   * otherwise report one number for every database on it, and "which database stalls its writers while it ships"
+   * is precisely the question being asked. Exported as Micrometer gauges tagged {@code database=<name>} through
+   * {@code RaftHAServer.getSchemaInstalmentSamples()}.
+   * <p>
+   * DURATION is the number that matters more than the count. Each instalment is a quorum round trip taken while the
+   * database write lock is held (see {@link #flushSchemaWalBufferIfFull}), so it is what a stalled writer is waiting
+   * on and what eats into the {@code arcadedb.ha.quorumTimeout} budget; a count alone cannot tell 200 fast
+   * instalments from 3 that each waited on a slow quorum member, which is why the max is kept alongside the total.
+   * <p>
+   * Zero on a node that never crossed the threshold, which is every node until an index is rebuilt or a DDL callback
+   * writes more than half a Raft entry's worth of pages. Monotonic for the life of the open database and reset by a
+   * close/reopen, like every other counter on this instance.
    */
-  private static final AtomicLong                                        schemaInstalmentsShipped = new AtomicLong();
+  private final        AtomicLong                                        schemaInstalmentsShipped = new AtomicLong();
+  private final        AtomicLong                                        schemaInstalmentTotalMs  = new AtomicLong();
+  private final        AtomicLong                                        schemaInstalmentMaxMs    = new AtomicLong();
+
+  /**
+   * Memoized unreferenced-file count behind the (file modification count, schema version) gate (issue #6168).
+   * <p>
+   * Lives HERE, on the database instance, rather than in a map on the server: the gauge that reads it is refreshed
+   * per open replicated database, so a per-instance holder needs no keying and no eviction - it is collected with
+   * the database it describes. See {@link UnreferencedFiles.MemoizedCount} for why the cached value cannot go stale.
+   */
+  private final        UnreferencedFiles.MemoizedCount                   unreferencedFiles        = new UnreferencedFiles.MemoizedCount();
 
   /**
    * Bookkeeping for a {@code recordFileChanges} session that ships its WAL incrementally (issue #6136).
@@ -210,6 +235,12 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
      * chunk created.
      */
     private int                        instalments;
+    /**
+     * Milliseconds this session spent inside {@code replicateSchemaInstalment}, for the end-of-session summary
+     * (issue #6144). Session-scoped rather than read off the database counters, which are cumulative and would
+     * describe every session since the database opened.
+     */
+    private long                       elapsedMs;
   }
 
   private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
@@ -263,6 +294,20 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
    * deployments that legitimately issue writes from background threads don't get log-spammed.
    */
   private final AtomicBoolean forwardAsRootWarned = new AtomicBoolean(false);
+
+  /**
+   * Emits the "the leader resolved to this node's own address" notice only once per database, so a
+   * misconfigured cluster under load reports the configuration to fix instead of one line per refused
+   * write (issue #6191).
+   */
+  private final AtomicBoolean selfForwardWarned = new AtomicBoolean(false);
+
+  /**
+   * Emits the "a peer forwarded a write here and this node is not the leader either" notice only once per
+   * database. The refusal itself travels back to the caller; this is so the node that proved the address
+   * wrong also says so in its own log (issue #6191).
+   */
+  private final AtomicBoolean forwardedAgainWarned = new AtomicBoolean(false);
 
   /**
    * Test-only fault-injection hook. Fires after Raft replication succeeds but BEFORE phase-2
@@ -1148,6 +1193,16 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   }
 
   @Override
+  public void waitForAsyncCompletion() {
+    proxied.waitForAsyncCompletion();
+  }
+
+  @Override
+  public AsyncQuiesce quiesceAsync() {
+    return proxied.quiesceAsync();
+  }
+
+  @Override
   public LocalTransactionExplicitLock acquireLock() {
     return proxied.acquireLock();
   }
@@ -1632,6 +1687,19 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       // retire the instalments' files. Decide deliberately which side of it your code belongs on rather than
       // dropping it in above.
       published = true;
+
+      // Issue #6144: one INFO line for a session that had to ship incrementally, so the common case is visible with
+      // no metrics backend at all and without first turning on detailed HA logging - which, for a stall, means
+      // reproducing it. Only sessions that shipped print anything, so an ordinary DDL stays silent. Deliberately
+      // BELOW the assignment above: it is a diagnostic, and one that threw before it would send the finally block
+      // into retiring files that are in fact published.
+      if (shippedInstalments > 0)
+        LogManager.instance().log(this, Level.INFO,
+            "Schema session on database '%s' shipped its WAL in %d instalment(s) totalling %d ms, each of them a "
+                + "quorum round trip taken with the database write lock held (every writer on this database waits "
+                + "them out). Lower arcadedb.ha.appendBufferSize multiplies them, raising it makes each one bigger",
+            null, getName(), shippedInstalments, instalmentState.elapsedMs);
+
       return result;
     } finally {
       if (!published)
@@ -1707,56 +1775,110 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
    * leadership per instalment would narrow the window without closing it (leadership can move between the check
    * and the submit), and a node that is no longer leader has no way to make the cluster do anything. The real fix
    * is for the new leader to reclaim unreferenced files, which is a garbage-collection feature this database does
-   * not have. Tracked as issue #6143, along with the fact that this SEVERE branch is reasoned about rather than
-   * covered - the step-down has to land between an instalment and the unwind to reach it.
+   * not have. Tracked as issue #6143, together with the diagnostic that lets an operator FIND those files on the
+   * nodes still holding them - {@code CHECK DATABASE} names them and every node publishes its own count as the
+   * {@code arcadedb.ha.schema.unreferenced_files} gauge - since only this node logs anything about them.
    */
-  private void retireAbandonedInstalments(final SchemaInstalmentState state) {
-    if (state == null || state.instalments == 0)
-      return;
+  private InstalmentRetirement retireAbandonedInstalments(final SchemaInstalmentState state) {
+    if (state == null)
+      return InstalmentRetirement.NOTHING_SHIPPED;
+
+    return retireAbandonedInstalments(this, getName(), state.instalments, state.shippedFiles,
+        proxied.getFileManager()::existsFile,
+        filesToRemove -> requireRaftServer().getTransactionBroker().replicateSchema(getName(), "",
+            Collections.emptyMap(), filesToRemove, Collections.emptyList(), Collections.emptyList()),
+        this::isLeader);
+  }
+
+  /**
+   * The compensation itself, with everything it touches passed in (issue #6143).
+   * <p>
+   * Split from the method above and made static so the branch that MATTERS most can be tested at all: a submitter
+   * that throws is a node that lost leadership mid-session, and reproducing that on a real cluster needs a step-down
+   * to land between an instalment and the unwind. It reports what it did through the return value rather than only
+   * through the log, so a test asserts behaviour instead of scraping messages - and a caller could act on it.
+   *
+   * @param logContext    what the log lines are attributed to, so they still read as coming from the database
+   * @param existsLocally answers whether THIS node still holds a given file id, the rule the whole method turns on
+   * @param submitter     replicates the removal; the only thing here that can fail
+   * @param stillLeader   used solely to phrase the failure, never to decide anything
+   */
+  static InstalmentRetirement retireAbandonedInstalments(final Object logContext, final String databaseName,
+      final int instalments, final Map<Integer, String> shippedFiles, final IntPredicate existsLocally,
+      final SchemaRetirementSubmitter submitter, final BooleanSupplier stillLeader) {
+    if (instalments == 0)
+      return InstalmentRetirement.NOTHING_SHIPPED;
 
     // Only what the leader has already let go of - see the javadoc: retiring a file the leader kept would turn an
     // agreed state into a diverged one.
     final Map<Integer, String> toRetire = new LinkedHashMap<>();
     final Map<Integer, String> keptByLeader = new LinkedHashMap<>();
-    partitionAbandonedFiles(state.shippedFiles, proxied.getFileManager()::existsFile, toRetire, keptByLeader);
+    partitionAbandonedFiles(shippedFiles, existsLocally, toRetire, keptByLeader);
 
     if (!keptByLeader.isEmpty())
-      LogManager.instance().log(this, Level.WARNING,
+      LogManager.instance().log(logContext, Level.WARNING,
           "Schema session on database '%s' failed after shipping %d instalment(s); file(s) %s exist on every node "
               + "but no schema references them, because the change was never published. Left in place: this node "
-              + "holds them too, so the cluster is consistent", null, getName(), state.instalments,
+              + "holds them too, so the cluster is consistent", null, databaseName, instalments,
           keptByLeader.values());
 
     if (toRetire.isEmpty()) {
-      if (keptByLeader.isEmpty())
+      if (keptByLeader.isEmpty()) {
         // WAL-only instalments: those pages went to files that already existed and the leader committed them
         // locally before buffering, so there is nothing to undo. Still reported, because an interrupted
         // replicated session is not a normal event.
-        LogManager.instance().log(this, Level.WARNING,
+        LogManager.instance().log(logContext, Level.WARNING,
             "Schema session on database '%s' failed after shipping %d WAL instalment(s); they created no file, so "
-                + "there is nothing to retire on the other nodes", null, getName(), state.instalments);
-      return;
+                + "there is nothing to retire on the other nodes", null, databaseName, instalments);
+        return InstalmentRetirement.NOTHING_TO_RETIRE;
+      }
+      return InstalmentRetirement.KEPT_BY_THIS_NODE;
     }
 
     try {
-      requireRaftServer().getTransactionBroker().replicateSchema(getName(), "", Collections.emptyMap(), toRetire,
-          Collections.emptyList(), Collections.emptyList());
+      submitter.retire(toRetire);
 
-      LogManager.instance().log(this, Level.WARNING,
+      LogManager.instance().log(logContext, Level.WARNING,
           "Schema session on database '%s' failed after shipping %d instalment(s); retired the %d file(s) they had "
-              + "created on the other nodes, matching this node: %s", null, getName(), state.instalments,
+              + "created on the other nodes, matching this node: %s", null, databaseName, instalments,
           toRetire.size(), toRetire.values());
+
+      return InstalmentRetirement.RETIRED;
 
     } catch (final Exception e) {
       // Names the leadership case, because it is both the likeliest cause and the one where "retry the operation"
       // is the wrong advice: this node cannot make the cluster do anything any more, so the files stay until
-      // somebody removes them.
-      LogManager.instance().log(this, Level.SEVERE,
+      // somebody removes them. It also names how to find them, because the nodes that HOLD them log nothing.
+      LogManager.instance().log(logContext, Level.SEVERE,
           "Schema session on database '%s' failed after shipping %d instalment(s) AND the compensating removal "
               + "could not be replicated%s. The other nodes are holding file(s) this node does not have and nothing "
-              + "will reclaim them: %s. Remove them manually once the cluster is healthy", e, getName(),
-          state.instalments, isLeader() ? "" : " because this node is no longer the leader", toRetire.values());
+              + "will reclaim them: %s. Run CHECK DATABASE, or read the arcadedb.ha.schema.unreferenced_files "
+              + "gauge, on each node to find them, and remove them once the cluster is healthy", e, databaseName,
+          instalments, stillLeader.getAsBoolean() ? "" : " because this node is no longer the leader",
+          toRetire.values());
+
+      return InstalmentRetirement.NOT_REPLICATED;
     }
+  }
+
+  /** What one compensation run did. Returned rather than only logged so the failure branches can be tested. */
+  enum InstalmentRetirement {
+    /** No instalment went out, so nothing on any other node is waiting to be undone. */
+    NOTHING_SHIPPED,
+    /** Instalments went out but created no file: their pages landed in files that already existed everywhere. */
+    NOTHING_TO_RETIRE,
+    /** Every announced file is still here, so both sides agree and retiring would be the divergence. */
+    KEPT_BY_THIS_NODE,
+    /** The other nodes were told to drop what this node no longer has. */
+    RETIRED,
+    /** The removal could not be replicated - typically lost leadership. The files stay until an operator acts. */
+    NOT_REPLICATED
+  }
+
+  /** Replicates the compensating removal. Separate from the broker so a test can make it fail (issue #6143). */
+  @FunctionalInterface
+  interface SchemaRetirementSubmitter {
+    void retire(Map<Integer, String> filesToRemove) throws Exception;
   }
 
   /**
@@ -1843,18 +1965,14 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     // Only the files created since the previous instalment: an already-announced one exists on the followers, and
     // re-announcing it would make createNewFiles run over a file that is being written into.
     //
-    // This re-reads the WHOLE recorded-changes list per instalment, so it is O(instalments x file changes). Fine
-    // for the caller this exists for - an index rebuild records one or two file changes however many instalments
-    // its WAL volume produces, so the second factor does not grow with the first. A future DDL that creates MANY
-    // files through this buffered path would make it quadratic and should carry the shipped/unshipped split
-    // forward instead; an index into the list is not that, since dropFile removes entries from the middle of it.
-    // Tracked as issue #6142.
-    final Map<Integer, String> newFiles = new LinkedHashMap<>();
-    final List<FileManager.FileChange> changes = proxied.getFileManager().getRecordedChanges();
-    if (changes != null)
-      for (final FileManager.FileChange c : changes)
-        if (c.create && !state.shippedFiles.containsKey(c.fileId))
-          newFiles.put(c.fileId, c.fileName);
+    // The split is carried FORWARD by the file manager rather than re-derived here (issue #6142): this used to walk
+    // the whole cumulative recorded-changes list on every instalment and filter it against shippedFiles, which is
+    // O(instalments x file changes) - harmless for an index rebuild, which records one or two file changes however
+    // many instalments its WAL volume produces, but quadratic for a DDL that creates many files through this same
+    // buffered path. Draining a queue makes the whole session cost one pass over its creations. An index into the
+    // cumulative list would NOT have worked: FileManager.dropFile removes the cancelled create from the middle of
+    // it, so a saved position stops meaning what it meant.
+    final Map<Integer, String> newFiles = proxied.getFileManager().drainRecordedCreates();
 
     final List<byte[]> walEntries = new ArrayList<>(schemaWalBuffer.get());
     final List<Map<Integer, Integer>> bucketDeltas = new ArrayList<>(schemaBucketDeltaBuffer.get());
@@ -1872,7 +1990,20 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     ++state.instalments;
     schemaInstalmentsShipped.incrementAndGet();
 
-    broker.replicateSchemaInstalment(getName(), newFiles, walEntries, bucketDeltas);
+    // Timed because the elapsed time IS the cost of this design (issue #6144): submitAndWait is a quorum round trip
+    // taken while the database write lock is held, so this interval is what every other writer on the database is
+    // waiting out. Measured around the send alone - the bookkeeping above and the buffer drain below are local.
+    final long startedAtNanos = System.nanoTime();
+    try {
+      broker.replicateSchemaInstalment(getName(), newFiles, walEntries, bucketDeltas);
+    } finally {
+      // In a finally so a failed instalment is counted too: an instalment that timed out against a slow quorum
+      // member held the write lock for the whole timeout, which is exactly the event an operator is looking for.
+      final long elapsedMs = (System.nanoTime() - startedAtNanos) / 1_000_000;
+      state.elapsedMs += elapsedMs;
+      schemaInstalmentTotalMs.addAndGet(elapsedMs);
+      schemaInstalmentMaxMs.accumulateAndGet(elapsedMs, Math::max);
+    }
 
     // The WAL buffer, by contrast, is drained only AFTER the entry is committed: it holds the ONLY copy of those
     // pages that can reach a follower, so clearing it before a failure would turn a replication error into silent
@@ -1908,9 +2039,28 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
         toRetire.put(shipped.getKey(), shipped.getValue());
   }
 
-  /** Schema-WAL instalments shipped by this JVM since it started - see {@link #schemaInstalmentsShipped}. */
-  public static long getSchemaWalInstalmentsShipped() {
+  /** Schema-WAL instalments this database has shipped since it opened - see {@link #schemaInstalmentsShipped}. */
+  public long getSchemaWalInstalmentsShipped() {
     return schemaInstalmentsShipped.get();
+  }
+
+  /** Milliseconds this database spent shipping schema-WAL instalments, write lock held throughout (issue #6144). */
+  public long getSchemaWalInstalmentTotalTimeMs() {
+    return schemaInstalmentTotalMs.get();
+  }
+
+  /** The longest single instalment this database has shipped, in milliseconds (issue #6144). */
+  public long getSchemaWalInstalmentMaxTimeMs() {
+    return schemaInstalmentMaxMs.get();
+  }
+
+  /**
+   * Files this node holds that no schema component claims (issue #6143), memoized behind the gate described on
+   * {@link UnreferencedFiles.MemoizedCount}: the walk runs only when a file or the schema has actually changed
+   * since the last refresh.
+   */
+  public long getUnreferencedFilesCount() {
+    return unreferencedFiles.get(proxied);
   }
 
   @Override
@@ -2461,6 +2611,36 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   private ResultSet forwardCommandToLeaderViaRaft(final String language, final String query,
       final Map<String, Object> mapArgs, final Object[] positionalArgs) {
     final RaftHAServer raft = requireRaftServer();
+
+    // This request is already the result of a peer redirecting it to what it believed was the leader, and it
+    // arrived on a node that is not the leader either. Redirecting it once more sends it round the cycle the
+    // wrong address created; refuse instead, so the peer that forwarded it (and through it the client) gets a
+    // typed, retryable answer in one hop rather than a hang (issue #6191).
+    //
+    // Deliberately before the leader-address wait below, unlike the self-address check that follows it: waiting
+    // would only make sense if this node might forward the request onward once a leader appears, and it must
+    // not. A leadership change in flight and an address that names the wrong node are indistinguishable from
+    // here, so the caller retries - which re-resolves the leader from scratch - rather than this node posting a
+    // non-idempotent write a second time on a path that cannot prove the first one did not execute.
+    if (LeaderForwardContext.isAlreadyForwarded()) {
+      // Said once in this node's own log too: the refusal travels back to the peer that forwarded the write
+      // and from there to the client, so without this line the only node that can name the misconfiguration -
+      // the one that proved the address wrong by receiving the request - says nothing about it anywhere.
+      if (forwardedAgainWarned.compareAndSet(false, true))
+        LogManager.instance().log(this, Level.WARNING,
+            "A cluster peer forwarded a write to this node as the leader, but this node is not the leader (db=%s). "
+                + "That peer resolved an HTTP address for the leader which does not identify it - unless leadership "
+                + "just moved, declare every node's HTTP port explicitly with the 'host:raftPort:httpPort' syntax in "
+                + "%s. The write is refused rather than forwarded on. This notice is logged only once per database.",
+            getName(), GlobalConfiguration.HA_SERVER_LIST.getKey());
+      throw new ServerIsNotTheLeaderException(
+          "Refusing to forward a write that a cluster peer already forwarded to the leader: it arrived on this node, "
+              + "which is not the leader. Either leadership moved while the request was in flight - retry - or the "
+              + "HTTP address that peer resolved for the leader does not identify it, which is what declaring every "
+              + "node's HTTP port ('host:raftPort:httpPort') in " + GlobalConfiguration.HA_SERVER_LIST.getKey()
+              + " prevents", raft.getLeaderName());
+    }
+
     // During cluster startup or a leader change there is a window with no elected leader. Rather than failing
     // the forwarded write immediately (which loses the caller's transaction - issue #4728 follow-up), wait a
     // bounded time for a leader to appear and forward as soon as one does. If this node becomes the leader
@@ -2470,6 +2650,27 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     if (leaderHttpAddress == null)
       throw new TransactionException("Cannot forward command to leader: leader HTTP address is not available "
           + "(no leader elected within " + leaderWaitMs + "ms; tune " + GlobalConfiguration.HA_FORWARD_LEADER_WAIT_TIMEOUT_MS.getKey() + ")");
+
+    // The address resolved for the leader is this node's own, and this node is not the leader: the POST would
+    // come back here, be forwarded again, and consume one more HTTP worker thread per hop. This is what the
+    // derive fallback produces when the peers share a host and no 'http' port is declared - it pairs the
+    // leader's Raft host with THIS node's HTTP port. Refuse with the typed error the HTTP and gRPC layers
+    // already know how to report (issue #6191). The one case where the self-address is right - this node
+    // became the leader while waiting above - is left alone: that POST executes locally and terminates.
+    if (!raft.isLeader() && raft.isOwnHttpAddress(leaderHttpAddress)) {
+      if (selfForwardWarned.compareAndSet(false, true))
+        LogManager.instance().log(this, Level.WARNING,
+            "The HTTP address resolved for the leader (%s) is this node's own, so a write forwarded to it would come "
+                + "back here and be forwarded again. Writes issued on this node are refused until the cluster can tell "
+                + "its peers' HTTP endpoints apart: declare every node's HTTP port explicitly with the "
+                + "'host:raftPort:httpPort' syntax in %s. This notice is logged only once per database.",
+            leaderHttpAddress, GlobalConfiguration.HA_SERVER_LIST.getKey());
+      throw new ServerIsNotTheLeaderException(
+          "Cannot forward the command: the HTTP address resolved for the leader (" + leaderHttpAddress
+              + ") is this node's own, and this node is not the leader. Declare every node's HTTP port explicitly with "
+              + "the 'host:raftPort:httpPort' syntax in " + GlobalConfiguration.HA_SERVER_LIST.getKey(),
+          raft.getLeaderName());
+    }
 
     final JSONObject body = new JSONObject();
     body.put("language", language);
@@ -2494,8 +2695,14 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
         .POST(HttpRequest.BodyPublishers.ofString(body.toString()));
 
     final String clusterToken = raftHAServer.getClusterToken();
-    if (clusterToken != null && !clusterToken.isBlank())
+    if (clusterToken != null && !clusterToken.isBlank()) {
       builder.header("X-ArcadeDB-Cluster-Token", clusterToken);
+      // One hop, and the receiving node knows it: if this address does not identify the leader, the node it
+      // does reach refuses the command instead of resolving the same wrong address and forwarding it again
+      // (issue #6191). Sent only with the token, because that is the only form in which a receiving node
+      // trusts the marker - same pairing as PostServerCommandHandler's forward.
+      builder.header(LeaderForwardContext.FORWARDED_TO_LEADER_HEADER, "true");
+    }
 
     String proxiedUser = proxied.getCurrentUserName();
     if (proxiedUser == null || proxiedUser.isBlank()) {
@@ -2616,6 +2823,14 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
 
     if (exceptionClass == null)
       return new TransactionException(message);
+
+    // ServerIsNotTheLeaderException carries the leader address as its second constructor argument (the HTTP
+    // layer sends it as exceptionArgs), so it too is rebuilt explicitly. Without this arm a leader-side "I am
+    // not the leader either" - the answer a node gives to a write forwarded onto it by a peer whose leader
+    // address was wrong (issue #6191) - collapsed into a plain TransactionException, and the caller lost both
+    // the retryability it inherits from NeedRetryException and the leader it names.
+    if (ServerIsNotTheLeaderException.class.getName().equals(exceptionClass))
+      return new ServerIsNotTheLeaderException(detail != null ? detail : message, exceptionArgs);
 
     // DuplicatedKeyException carries structured args (index name, keys, existing RID), so it is
     // reconstructed explicitly rather than from a plain message.

@@ -27,10 +27,9 @@ import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
+import com.arcadedb.query.sql.executor.WorkGuard;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -92,10 +91,9 @@ public class AlgoMaxFlow extends AbstractAlgoProcedure {
     final String capacityProperty = args.length > 3 ? extractString(args[3], "capacityProperty") : null;
 
     final Database db = context.getDatabase();
-    final List<Vertex> vertices = new ArrayList<>();
-    final Iterator<Vertex> iter = getAllVertices(db, null);
-    while (iter.hasNext())
-      vertices.add(iter.next());
+    final WorkGuard guard = newWorkGuard(context);
+    final MemoryBudget memory = newMemoryBudget(db);
+    final List<Vertex> vertices = loadVertices(db, null, memory);
 
     final int n = vertices.size();
     if (n == 0)
@@ -107,6 +105,13 @@ public class AlgoMaxFlow extends AbstractAlgoProcedure {
     final Integer snkIdx = ridToIdx.get(sinkNode.getIdentity());
     if (srcIdx == null || snkIdx == null)
       return Stream.empty();
+
+    // Edmonds-Karp keeps a dense capacity matrix and a dense residual matrix, both nodeCount x nodeCount and
+    // both alive to the end: 1.6 GB at 10 000 nodes, with no knob involved. Reserved before the first is
+    // allocated so that a graph too large for the dense formulation is a client error naming the node count and
+    // the budget, rather than an OutOfMemoryError.
+    memory.reserve(saturatingProduct(2L, matrixBytes(n, n, DOUBLE_BYTES)),
+        "the capacity and residual matrices", "2 matrices of " + n + " x " + n + " nodes");
 
     // Build capacity matrix as n×n array
     final double[][] capacity = new double[n][n];
@@ -145,6 +150,10 @@ public class AlgoMaxFlow extends AbstractAlgoProcedure {
     double maxFlow = 0.0;
 
     while (true) {
+      // Edmonds-Karp augments once per iteration and each augmentation is a BFS over the dense residual
+      // matrix, so the loop is O(V x E²) with the graph alone sizing it - no knob, and until issue #6302 no
+      // way for a thread interrupt or arcadedb.command.timeout to end it.
+      guard.check();
       // BFS to find augmenting path from src to snk
       Arrays.fill(parent, -1);
       parent[srcIdx] = srcIdx;
@@ -153,6 +162,9 @@ public class AlgoMaxFlow extends AbstractAlgoProcedure {
 
       bfs:
       while (head < tail) {
+        // Scanning one settled node's residual row is O(V), so a single BFS is O(V²) and needs a checkpoint of
+        // its own rather than one per augmentation.
+        guard.check();
         final int u = queue[head++];
         for (int v = 0; v < n; v++) {
           if (parent[v] == -1 && residual[u][v] > 0) {

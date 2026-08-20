@@ -494,6 +494,11 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       stmt.setLimit((Limit) visit(ctx.limit()));
     }
 
+    // Parse TIMEOUT clause
+    if (ctx.timeout() != null) {
+      stmt.timeout = (Timeout) visit(ctx.timeout());
+    }
+
     return stmt;
   }
 
@@ -586,6 +591,10 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     // LIMIT clause
     if (matchCtx.limit() != null) {
       stmt.limit = (Limit) visit(matchCtx.limit());
+    }
+
+    if (matchCtx.timeout() != null) {
+      stmt.timeout = (Timeout) visit(matchCtx.timeout());
     }
 
     return stmt;
@@ -1439,6 +1448,11 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       stmt.setStrategy(TraverseStatement.Strategy.DEPTH_FIRST);
     } else if (traverseCtx.BREADTH_FIRST() != null) {
       stmt.setStrategy(TraverseStatement.Strategy.BREADTH_FIRST);
+    }
+
+    // TIMEOUT clause (optional)
+    if (traverseCtx.timeout() != null) {
+      stmt.timeout = (Timeout) visit(traverseCtx.timeout());
     }
 
     return stmt;
@@ -2633,6 +2647,46 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
   }
 
   /**
+   * Null-coalescing expression ({@code ??}).
+   * Grammar: expression NULL_COALESCING expression
+   * <p>
+   * Without this visitor ANTLR's default {@code visitChildren} returned the result of the LAST child, which dropped
+   * the left operand from the tree altogether: {@code 'left' ?? 'right'} both rendered and evaluated as
+   * {@code 'right'} (issue #6393). The node is built as a two-operand {@link MathExpression} carrying
+   * {@link MathExpression.Operator#NULL_COALESCING}, whose {@code apply()} already implemented the semantics.
+   * <p>
+   * Unlike the sibling {@code ||} alternative next door, chains are NOT flattened: nesting {@code a ?? b ?? c} as
+   * {@code (a ?? b) ?? c} is what makes the left-to-right short-circuit in {@link MathExpression#execute} possible,
+   * and the operator is left-associative so the nesting matches how it parses.
+   */
+  @Override
+  public Expression visitNullCoalescing(final SQLParser.NullCoalescingContext ctx) {
+    final MathExpression coalesce = new MathExpression();
+    coalesce.childExpressions.add(asMathExpression((Expression) visit(ctx.expression(0))));
+    coalesce.childExpressions.add(asMathExpression((Expression) visit(ctx.expression(1))));
+    coalesce.operators.add(MathExpression.Operator.NULL_COALESCING);
+
+    final Expression result = new Expression();
+    result.mathExpression = coalesce;
+    return result;
+  }
+
+  /**
+   * Adapts an {@link Expression} to the {@link MathExpression} an operator node takes as a child. An expression that
+   * already IS a math expression is used as-is; anything the grammar parks outside that hierarchy (NULL, TRUE/FALSE,
+   * a RID, a JSON literal, an array concatenation, a parenthesised WHERE block) is wrapped in the
+   * {@link BaseExpression#expression} slot, which both {@code execute()} and {@code toString()} already delegate to.
+   */
+  private static MathExpression asMathExpression(final Expression expr) {
+    if (expr.mathExpression != null)
+      return expr.mathExpression;
+
+    final BaseExpression wrapper = new BaseExpression();
+    wrapper.expression = expr;
+    return wrapper;
+  }
+
+  /**
    * Helper method to copy fields from Expression to ArrayConcatExpressionElement.
    */
   private void copyExpressionFields(final Expression from, final ArrayConcatExpressionElement to) {
@@ -2876,6 +2930,15 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       // Unary plus: just return the expression as-is
       return innerExpr;
     } else if (ctx.MINUS() != null) {
+      // A minus applied to a plain numeric literal is folded INTO the literal, so `-1` is the number -1 and not the
+      // subtraction `0 - 1` (issue #6359, item 2). Modelling it as a subtraction is what Expression.toString() then
+      // rendered, and that rendering is read back as text by callers - REBUILD INDEX ... WITH batchSize = -1 reached
+      // Integer.parseInt as the string "0 - 1" - as well as being what EXPLAIN prints and what a projection without
+      // an alias is named after. It is also one evaluation cheaper on every read.
+      final BaseExpression negatedLiteral = tryNegateNumericLiteral(innerExpr);
+      if (negatedLiteral != null)
+        return negatedLiteral;
+
       // Unary minus: create 0 - expression
       // Create a MathExpression with zero and the MINUS operator
       final MathExpression result = new MathExpression();
@@ -2897,6 +2960,48 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     }
 
     throw new CommandSQLParsingException("Unknown unary operator");
+  }
+
+  /**
+   * Folds a unary minus into the numeric literal it applies to, returning the negative literal, or {@code null} when
+   * the operand is anything else - in which case {@link #visitUnary} keeps modelling the negation as {@code 0 - X}.
+   * <p>
+   * Negates the ALREADY-PARSED value rather than re-parsing a {@code "-"}-prefixed text, so the folded literal keeps
+   * exactly the numeric type {@code 0 - X} used to produce ({@code -2147483648} stays a {@code Long}, an
+   * {@code L}-suffixed literal stays a {@code Long}, a bare decimal stays a {@code Float}) and the sign lands
+   * correctly on every literal shape the visitors accept, not only on plain decimal.
+   * <p>
+   * A literal carrying a MODIFIER is left alone: a suffix binds tighter than the sign, so {@code -1.toString()} is
+   * {@code -(1.toString())} and folding it would move the negation inside the call.
+   */
+  private static BaseExpression tryNegateNumericLiteral(final MathExpression expression) {
+    if (!(expression instanceof final BaseExpression base) || base.number == null || base.modifier != null)
+      return null;
+
+    final Number value = base.number.getValue();
+    final Number negated;
+    if (value instanceof final Integer i)
+      negated = -i;
+    else if (value instanceof final Long l)
+      negated = -l;
+    else if (value instanceof final Float f)
+      negated = -f;
+    else if (value instanceof final Double d)
+      negated = -d;
+    else
+      // A magnitude the visitors could not represent as one of the four above has no folded form that is certainly
+      // equivalent, so leave it to the arithmetic.
+      return null;
+
+    final BaseExpression result = new BaseExpression();
+    if (base.number instanceof PInteger)
+      result.number = new PInteger().setValue(negated);
+    else {
+      final PNumber number = new PNumber();
+      number.value = negated;
+      result.number = number;
+    }
+    return result;
   }
 
   /**
@@ -3826,6 +3931,9 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     // Regular parenthesized expression
     final BaseExpression baseExpr = new BaseExpression();
     baseExpr.expression = (Expression) visit(ctx.expression());
+    // Remember that the parentheses were WRITTEN, so the rendering can put them back - see
+    // BaseExpression#parenthesized. Without it `(1 + 2) * 3` renders as `1 + 2 * 3` (issue #6359, item 2).
+    baseExpr.parenthesized = true;
 
     // Process modifiers if present
     if (CollectionUtils.isNotEmpty(ctx.modifier())) {
@@ -4355,6 +4463,16 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     } catch (final Exception e) {
       throw new CommandSQLParsingException("Failed to build TIMEOUT clause: " + e.getMessage(), e);
     }
+
+    // The grammar accepts TIMEOUT <n> (EXCEPTION | RETURN), and the executor has always honoured RETURN by
+    // returning the rows produced so far instead of raising - but the strategy token was never read here, so
+    // every clause arrived with a null strategy and behaved as EXCEPTION. Reading it makes both branches of
+    // TimeoutStep.stop() reachable, and tells StatementTimeouts which kind of bound to pin on the context so
+    // the in-loop guards can stop a RETURN clause by yielding rather than by raising (issues #6266, #6304).
+    if (ctx.RETURN() != null)
+      timeout.setFailureStrategy(Timeout.RETURN);
+    else if (ctx.EXCEPTION() != null)
+      timeout.setFailureStrategy(Timeout.EXCEPTION);
 
     return timeout;
   }
@@ -6018,14 +6136,44 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       final List<SQLParser.IdentifierContext> settingKeys = ctx.identifier().subList(firstSettingKeyIndex, ctx.identifier().size());
       final List<SQLParser.ExpressionContext> settingValues = ctx.expression();
 
+      final Set<String> seenKeys = new HashSet<>();
       for (int i = 0; i < settingKeys.size() && i < settingValues.size(); i++) {
-        final Expression key = new Expression((Identifier) visit(settingKeys.get(i)));
+        final Identifier keyId = (Identifier) visit(settingKeys.get(i));
         final Expression value = (Expression) visit(settingValues.get(i));
-        stmt.settings.put(key, value);
+        putSetting(stmt.settings, seenKeys, keyId, value, "REBUILD INDEX");
       }
     }
 
     return stmt;
+  }
+
+  /**
+   * Adds one {@code WITH} setting to a DDL statement's {@code Map<Expression, Expression> settings}, refusing a
+   * duplicate key. Shared by every statement that carries such a map - {@code REBUILD INDEX}, {@code REBUILD TYPE},
+   * {@code IMPORT DATABASE}, {@code EXPORT DATABASE} and {@code BACKUP DATABASE} - so a repeated setting is treated
+   * the same way whichever of the five statements it is written in (issue #6409, item 2). Before this, only
+   * {@code REBUILD TYPE} refused a repeat; the other four silently accepted it, last one wins.
+   * <p>
+   * The dedup key is the LOWERCASED setting name, not {@link Expression} identity: identity is case-sensitive
+   * (issue #6401), so {@code batchSize} and {@code BATCHSIZE} would otherwise land as two separate map entries. That
+   * matches how {@code REBUILD INDEX} and {@code REBUILD TYPE} already recognise a setting, with
+   * {@code equalsIgnoreCase}. The other three don't read case-insensitively - {@code BackupDatabaseStatement}'s
+   * switch is exact-case, and {@code Import}/{@code ExportDatabaseStatement} hand the key through as-is to the
+   * integration-module setter - so for them this is a deliberate defensive choice, not a fix for an existing
+   * case-insensitive read: refusing the case-only repeat is still better than silently keeping whichever spelling the
+   * map iterates last.
+   * <p>
+   * The key itself is always built as {@code new Expression(Identifier)} - never the raw-{@code value} shape
+   * {@code IMPORT}/{@code EXPORT}/{@code BACKUP DATABASE} used to use (issue #6409, item 1) - so every reader can
+   * recover the setting name the same way: {@code entry.getKey().toString()}.
+   */
+  private static void putSetting(final Map<Expression, Expression> settings, final Set<String> seenKeys, final Identifier keyId,
+      final Expression value, final String statementName) {
+    final String keyName = keyId.getStringValue().toLowerCase(Locale.ENGLISH);
+    if (!seenKeys.add(keyName))
+      throw new CommandSQLParsingException(
+          statementName + " WITH clause has duplicate setting '" + keyId.getStringValue() + "'. Each setting must appear at most once.");
+    settings.put(new Expression(keyId), value);
   }
 
   /**
@@ -6056,19 +6204,11 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     stmt.typeName = (Identifier) visit(bodyCtx.typeName);
     stmt.polymorphic = bodyCtx.POLYMORPHIC() != null;
     if (bodyCtx.WITH() != null) {
-      // Track which settingKey strings we've already seen so a duplicate (e.g. WITH batchSize=1, batchSize=2)
-      // doesn't silently shadow the first via Map.put. Bare Expression equality on the key would only catch
-      // exact AST matches; using the lowercased identifier string also catches case variants.
       final Set<String> seenKeys = new HashSet<>();
       for (int i = 0; i < bodyCtx.settingValue.size(); i++) {
         final Identifier keyId = (Identifier) visit(bodyCtx.settingKey.get(i));
-        final String keyName = keyId.getStringValue().toLowerCase(Locale.ENGLISH);
-        if (!seenKeys.add(keyName))
-          throw new CommandSQLParsingException(
-              "REBUILD TYPE WITH clause has duplicate setting '" + keyId.getStringValue()
-                  + "'. Each setting must appear at most once.");
         final Expression value = (Expression) visit(bodyCtx.settingValue.get(i));
-        stmt.settings.put(new Expression(keyId), value);
+        putSetting(stmt.settings, seenKeys, keyId, value, "REBUILD TYPE");
       }
     }
     return stmt;
@@ -7275,7 +7415,7 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
   /**
    * Visit CHECK DATABASE statement.
    * Grammar: CHECK DATABASE (TYPE ident (COMMA ident)*)? (BUCKET (ident|int) (COMMA (ident|int))*)?
-   * (RECORD rid (COMMA rid)*)? (FIX)? (COMPRESS)?
+   * (RECORD rid (COMMA rid)*)? (FIX)? (DELETE ORPHANS)? (RECLAIM UNREFERENCED FILES)? (DEEP)? (COMPRESS)?
    */
   @Override
   public CheckDatabaseStatement visitCheckDatabaseStmt(final SQLParser.CheckDatabaseStmtContext ctx) {
@@ -7328,6 +7468,23 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     // Parse FIX flag
     if (checkCtx.FIX() != null) {
       stmt.fix = true;
+    }
+
+    // Parse DELETE ORPHANS flag (#6090): opt-in reclaim of edge records no vertex's edge list references.
+    // ORPHANS alone identifies the clause - it is the only place the token appears in this statement.
+    if (checkCtx.ORPHANS() != null) {
+      stmt.deleteOrphans = true;
+    }
+
+    // Parse RECLAIM UNREFERENCED FILES flag (#6189): opt-in reclaim of files no schema component was ever built
+    // for. RECLAIM alone identifies the clause - it is the only place the token appears in this statement.
+    if (checkCtx.RECLAIM() != null) {
+      stmt.reclaimUnreferencedFiles = true;
+    }
+
+    // Parse DEEP flag (#6360): the tier that decodes the data rather than reconciling what describes it.
+    if (checkCtx.DEEP() != null) {
+      stmt.deep = true;
     }
 
     // Parse COMPRESS flag
@@ -7450,16 +7607,11 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
 
     // Parse WITH settings
     if (importCtx.settingList() != null) {
+      final Set<String> seenKeys = new HashSet<>();
       for (final SQLParser.SettingContext settingCtx : importCtx.settingList().setting()) {
         final Identifier key = (Identifier) visit(settingCtx.identifier());
         final Expression value = (Expression) visit(settingCtx.expression());
-
-        // Store as Expression with key/value
-        // ImportDatabaseStatement uses .execute() on the value Expression
-        final Expression keyExpr = new Expression();
-        keyExpr.value = key.getStringValue();
-
-        stmt.settings.put(keyExpr, value);
+        putSetting(stmt.settings, seenKeys, key, value, "IMPORT DATABASE");
       }
     }
 
@@ -7483,16 +7635,11 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
 
     // Parse WITH settings
     if (exportCtx.settingList() != null) {
+      final Set<String> seenKeys = new HashSet<>();
       for (final SQLParser.SettingContext settingCtx : exportCtx.settingList().setting()) {
         final Identifier key = (Identifier) visit(settingCtx.identifier());
         final Expression value = (Expression) visit(settingCtx.expression());
-
-        // Store as Expression with key/value
-        // ExportDatabaseStatement uses .execute() on the value Expression
-        final Expression keyExpr = new Expression();
-        keyExpr.value = key.getStringValue();
-
-        stmt.settings.put(keyExpr, value);
+        putSetting(stmt.settings, seenKeys, key, value, "EXPORT DATABASE");
       }
     }
 
@@ -7539,16 +7686,11 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
 
     // Parse WITH settings
     if (backupCtx.settingList() != null) {
+      final Set<String> seenKeys = new HashSet<>();
       for (final SQLParser.SettingContext settingCtx : backupCtx.settingList().setting()) {
         final Identifier key = (Identifier) visit(settingCtx.identifier());
         final Expression value = (Expression) visit(settingCtx.expression());
-
-        // Store as Expression with key/value
-        // BackupDatabaseStatement uses .execute() on the value Expression, so no need to extract .value
-        final Expression keyExpr = new Expression();
-        keyExpr.value = key.getStringValue();
-
-        stmt.settings.put(keyExpr, value);
+        putSetting(stmt.settings, seenKeys, key, value, "BACKUP DATABASE");
       }
     }
 

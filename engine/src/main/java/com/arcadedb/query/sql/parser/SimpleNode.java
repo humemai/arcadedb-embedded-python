@@ -20,6 +20,7 @@
 /* JavaCCOptions:MULTI=true,NODE_USES_PARSER=false,VISITOR=true,TRACK_TOKENS=true,NODE_PREFIX=O,NODE_EXTENDS=,NODE_FACTORY=,SUPPORT_USERTYPE_VISIBILITY_PUBLIC=true */
 package com.arcadedb.query.sql.parser;
 
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -125,6 +126,13 @@ public abstract class SimpleNode implements Node {
 
     final Object[] otherElements = ((SimpleNode) other).getIdentityElements();
 
+    // Every override in the codebase today returns a fixed-length array literal, so this never trips - but nothing
+    // enforces that, and a future override built conditionally (e.g. appending an optional element) would otherwise
+    // throw ArrayIndexOutOfBoundsException out of equals(), which is not a place callers expect to have to handle one
+    // (issue #6409, item 4).
+    if (ownElements.length != otherElements.length)
+      return false;
+
     for (int i = 0; i < ownElements.length; i++)
       if (!Objects.equals(ownElements[i], otherElements[i]))
         return false;
@@ -132,6 +140,15 @@ public abstract class SimpleNode implements Node {
     return true;
   }
 
+  /**
+   * The other half of {@link #equals(Object)}, and it has to be computed over the same thing: the CONTENTS of
+   * {@code getIdentityElements()}, element by element, exactly as the comparison above walks them.
+   * <p>
+   * {@link Arrays#hashCode(Object[])} is what does that. {@code Objects.hashCode(elements)} - which is what used to
+   * be here - has no varargs overload to bind to, so the array bound to {@code Objects.hashCode(Object)} and the
+   * answer was the array's IDENTITY hash: a fresh one on every call, since {@code getIdentityElements()} allocates,
+   * so a node did not even agree with itself twice in a row (issue #6401, item 4).
+   */
   @Override
   public int hashCode() {
     final Object[] elements = getIdentityElements();
@@ -139,7 +156,7 @@ public abstract class SimpleNode implements Node {
       // NOT IMPLEMENTED, USE THE DEFAULT IMPLEMENTATION
       return super.hashCode();
 
-    return Objects.hashCode(elements);
+    return Arrays.hashCode(elements);
   }
 
   protected Object[] getIdentityElements() {

@@ -44,22 +44,27 @@ import com.arcadedb.query.sql.executor.IteratorResultSet;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.query.sql.parser.Expression;
 import com.arcadedb.query.sql.parser.FromClause;
 import com.arcadedb.query.sql.parser.FromItem;
+import com.arcadedb.query.sql.parser.Identifier;
+import com.arcadedb.query.sql.parser.Limit;
+import com.arcadedb.query.sql.parser.MatchStatement;
 import com.arcadedb.query.sql.parser.Projection;
 import com.arcadedb.query.sql.parser.ProjectionItem;
 import com.arcadedb.query.sql.parser.SelectStatement;
 import com.arcadedb.query.sql.parser.Statement;
+import com.arcadedb.query.sql.parser.WhereClause;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.Property;
 import com.arcadedb.schema.Type;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.monitor.QueryProfile;
 import com.arcadedb.server.monitor.ServerQueryProfiler;
+import com.arcadedb.server.network.PreAuthConnectionGate;
 import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.micrometer.core.instrument.Metrics;
-import com.arcadedb.utility.CodeUtils;
 import com.arcadedb.utility.DateUtils;
 import com.arcadedb.utility.FileUtils;
 import com.arcadedb.utility.Pair;
@@ -67,12 +72,12 @@ import com.arcadedb.utility.Pair;
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -103,9 +108,14 @@ public class PostgresNetworkExecutor extends Thread {
   public static final String PG_SERVER_VERSION = "12.0";
 
   private static final int                                            BUFFER_LENGTH    = 32 * 1024;
+  /**
+   * The cap PostgreSQL itself puts on a startup packet ({@code PQ_STARTUP_MSG_LIMIT} in {@code pqcomm.c}).
+   */
+  private static final int                                            MAX_STARTUP_MESSAGE_LENGTH = 10000;
   private static final Map<Long, Pair<Long, PostgresNetworkExecutor>> ACTIVE_SESSIONS  = new ConcurrentHashMap<>();
   /** Bind-message parameter length denoting a NULL value (wire value -1, read unsigned). */
   private static final long                                           NULL_PARAM_LENGTH = 0xFFFFFFFFL;
+  private static final Object[]                                       NO_PARAMETERS     = new Object[0];
 
   private final ArcadeDBServer              server;
   private final ChannelBinaryServer         channel;
@@ -114,14 +124,17 @@ public class PostgresNetworkExecutor extends Thread {
   private final boolean                     DEBUG                 = GlobalConfiguration.POSTGRES_DEBUG.getValueAsBoolean();
   private final boolean                     QUOTED_IDENTIFIERS    = GlobalConfiguration.POSTGRES_QUOTED_IDENTIFIERS.getValueAsBoolean();
   private final Map<String, Object>         connectionProperties  = new HashMap<>();
-  private final Set<String>                 ignoreQueriesAppNames = new HashSet<>(//
-      List.of("dbvis", "Database Navigator - Pool"));
-  private final Set<String>                 ignoreQueries         = new HashSet<>(//
-      List.of(//
-          "select distinct PRIVILEGE_TYPE as PRIVILEGE_NAME from INFORMATION_SCHEMA.USAGE_PRIVILEGES order by PRIVILEGE_TYPE asc",//
-          "SELECT oid, typname FROM pg_type"));
+  // The exact query spellings to answer with nothing, and the application_name values that gated them, used
+  // to be listed here: see PostgresCatalog, which answers those questions by shape for every client (#6412).
 
   private volatile boolean shutdown = false;
+
+  /**
+   * The listener's permit for a connection that has not authenticated yet, handed back the moment it does -
+   * or when it goes away without ever doing so (issue #6412). Null when the connection was not created by a
+   * listener that caps them.
+   */
+  private final PreAuthConnectionGate.Ticket preAuthTicket;
 
   private Database database;
   private int      nextByte                   = 0;
@@ -143,34 +156,88 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   public PostgresNetworkExecutor(final ArcadeDBServer server, final Socket socket, final Database database) throws IOException {
+    this(server, socket, database, null);
+  }
+
+  public PostgresNetworkExecutor(final ArcadeDBServer server, final Socket socket, final Database database,
+      final PreAuthConnectionGate.Ticket preAuthTicket) throws IOException {
     setName(Constants.PRODUCT + "-postgres/" + socket.getInetAddress());
     this.server = server;
     this.channel = new ChannelBinaryServer(socket, server.getConfiguration());
     this.database = database;
+    this.preAuthTicket = preAuthTicket;
+
+    // Bound the pre-authentication window (issue #6377). One thread and one file descriptor are committed
+    // per accepted connection, before anyone has proved who they are, and the listener caps neither; without
+    // a read timeout a client that connects and then says nothing - or trickles bytes arbitrarily slowly -
+    // holds both for as long as it likes. Lifted back to infinite once the database is open (see
+    // markAuthenticated), because an authenticated client is expected to keep a long-lived, often idle
+    // connection between statements. This is the same setSoTimeout(NETWORK_SOCKET_TIMEOUT)-then-
+    // setSoTimeout(0) idiom RedisNetworkExecutor (#5912) and BoltNetworkExecutor (#5978) already use.
+    final int handshakeTimeout = GlobalConfiguration.NETWORK_SOCKET_TIMEOUT.getValueAsInteger();
+    if (handshakeTimeout > 0)
+      channel.socket.setSoTimeout(handshakeTimeout);
+  }
+
+  /**
+   * Lifts the pre-authentication read timeout armed in the constructor (issue #6377).
+   */
+  private void markAuthenticated() {
+    releasePreAuthTicket();
+    try {
+      channel.socket.setSoTimeout(0);
+    } catch (final SocketException e) {
+      // setSoTimeout() only throws on an already-broken/closed socket: there is nothing left to hold open in
+      // that case, so logging and moving on - rather than failing the whole authentication - is safe. The
+      // connection dies on its next read or write either way.
+      LogManager.instance().log(this, Level.FINE, "PSQL: unable to lift the idle read timeout after authentication", e);
+    }
   }
 
   public void close() {
     shutdown = true;
+    releasePreAuthTicket();
     if (channel != null)
       channel.close();
+  }
+
+  /**
+   * Hands the listener's pre-authentication permit back. Idempotent, so authenticating and then closing -
+   * the normal life of a connection - releases exactly one permit.
+   */
+  private void releasePreAuthTicket() {
+    if (preAuthTicket != null)
+      preAuthTicket.release();
   }
 
   @Override
   public void run() {
     ProtocolContext.set("postgres");
     try {
-      if (!readStartupMessage(true))
+      try {
+        if (!readStartupMessage(true))
+          return;
+
+        writeMessage("request for password", () -> channel.writeUnsignedInt(3), 'R', 8);
+
+        // The password read blocks on the socket, under the handshake timeout armed in the constructor: a
+        // client that connects, receives the password request and then goes silent is closed by that timeout
+        // (issue #6377). It used to need a deadline of its own here, because readMessage could not block
+        // (issue #6410).
+        if (!readMessage("password", (type, length) -> userPassword = readString(), 'p'))
+          return;
+
+        if (!openDatabase())
+          return;
+      } catch (final PostgresProtocolException e) {
+        // A client that never finished the handshake is a non-event: it gets no error message it could read
+        // anyway, and the connection is closed by the enclosing finally.
+        LogManager.instance().log(this, Level.FINE, "PSQL: connection closed before authentication completed: %s", e,
+            e.getMessage());
         return;
+      }
 
-      writeMessage("request for password", () -> channel.writeUnsignedInt(3), 'R', 8);
-
-      waitForAMessage();
-
-      if (!readMessage("password", (type, length) -> userPassword = readString(), 'p'))
-        return;
-
-      if (!openDatabase())
-        return;
+      markAuthenticated();
 
       writeMessage("authentication ok", () -> channel.writeUnsignedInt(0), 'R', 8);
 
@@ -194,7 +261,10 @@ public class PostgresNetworkExecutor extends Thread {
         while (!shutdown) {
           try {
 
-            readMessage("any", (type, length) -> {
+            // False means the connection is finished - the client closed it, or it was closed under this
+            // thread's blocked read. There is nothing left to read from it, so the loop must not go round
+            // again (issue #6410): before the read blocked, false only meant "no byte yet".
+            if (!readMessage("any", (type, length) -> {
               consecutiveErrors = 0;
 
               switch (type) {
@@ -214,7 +284,8 @@ public class PostgresNetworkExecutor extends Thread {
               default -> throw new PostgresProtocolException("Message '" + type + "' not managed");
               }
 
-            }, 'P', 'B', 'E', 'Q', 'S', 'D', 'C', 'H', 'X');
+            }, 'P', 'B', 'E', 'Q', 'S', 'D', 'C', 'H', 'X'))
+              return;
 
           } catch (final Exception e) {
             setErrorInTx();
@@ -314,9 +385,10 @@ public class PostgresNetworkExecutor extends Thread {
         portal.executed = true;
         if (portal.isExpectingResult) {
           portal.cachedResultSet = browseAndCacheResultSet(resultSet, 0);
-          portal.columns = getColumns(portal.cachedResultSet);
+          portal.columns = getColumns(portal.cachedResultSet, resolveQueryTargetType(portal));
           if (portal.columns.isEmpty() && portal.cachedResultSet.isEmpty()) {
-            final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(portal.query);
+            final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(portal.query, portal.language,
+                getParams(portal), portal.sqlStatement);
             if (schemaColumns != null)
               portal.columns = schemaColumns;
           }
@@ -337,8 +409,8 @@ public class PostgresNetworkExecutor extends Thread {
 
       // Now send RowDescription or NoData
       // For SELECT queries, we need to determine the columns from the type schema
-      if (portal.isExpectingResult && portal.columns == null) {
-        portal.columns = getColumnsFromQuerySchema(portal.query);
+      if (portal.isExpectingResult && portal.columns == null && !portal.catalogQuery) {
+        portal.columns = getColumnsFromQuerySchema(portal.query, portal.sqlStatement);
       }
 
       if (portal.columns != null && !portal.columns.isEmpty()) {
@@ -384,7 +456,14 @@ public class PostgresNetworkExecutor extends Thread {
         if (!portal.executed) {
           final long engineStart = System.nanoTime();
           ResultSet resultSet;
-          if (portal.sqlStatement != null) {
+          if (portal.catalogQuery) {
+            // Deferred from parseCommand because the query's filters are bound parameters (issue #6412).
+            final CatalogAnswer catalogAnswer = handleCatalogQuery(portal.query, getParams(portal));
+            resultSet = new IteratorResultSet(
+                (catalogAnswer != null ? catalogAnswer.rows() : Collections.<Result>emptyList()).iterator());
+            if (catalogAnswer != null)
+              portal.columns = catalogAnswer.columns();
+          } else if (portal.sqlStatement != null) {
             final Object[] parameters = portal.parameterValues != null ? portal.parameterValues.toArray() : new Object[0];
             final long metricsStart = QueryMetricsRecorder.Holder.startNanos();
             try {
@@ -403,9 +482,12 @@ public class PostgresNetworkExecutor extends Thread {
             // But always use columns from actual result for DataRows consistency
             if (!portal.rowDescriptionSent) {
               final long serStart = System.nanoTime();
-              portal.columns = getColumns(portal.cachedResultSet);
+              // A catalog answer already carries the columns it must be announced under.
+              if (!portal.catalogQuery || portal.columns == null)
+                portal.columns = getColumns(portal.cachedResultSet, resolveQueryTargetType(portal));
               if (portal.columns.isEmpty() && portal.cachedResultSet.isEmpty()) {
-                final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(portal.query);
+                final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(portal.query, portal.language,
+                    getParams(portal), portal.sqlStatement);
                 if (schemaColumns != null)
                   portal.columns = schemaColumns;
               }
@@ -421,7 +503,7 @@ public class PostgresNetworkExecutor extends Thread {
         if (portal.isExpectingResult && portal.cachedResultSet != null && !portal.cachedResultSet.isEmpty()) {
           final long serStart = System.nanoTime();
           // Query returned results - send them
-          final Map<String, PostgresType> dataRowColumns = getColumns(portal.cachedResultSet);
+          final Map<String, PostgresType> dataRowColumns = getColumns(portal.cachedResultSet, resolveQueryTargetType(portal));
 
           if (DEBUG)
             LogManager.instance().log(this, Level.INFO,
@@ -490,6 +572,7 @@ public class PostgresNetworkExecutor extends Thread {
     QueryProfile.pushCurrent(profile);
     Query query = null;
     String queryText = null;
+    CatalogAnswer catalogAnswer = null;
     try {
       final long deserStart = System.nanoTime();
       queryText = readString().trim();
@@ -512,9 +595,17 @@ public class PostgresNetworkExecutor extends Thread {
       if (DEBUG)
         LogManager.instance().log(this, Level.INFO, "PSQL: query -> %s ", query);
 
+      // Reused below for both the schema-fallback and the target-type resolution, but only set in the one
+      // branch that reaches database.command(...) below: none of SET/SAVEPOINT/RELEASE/ROLLBACK TO/SHOW/a
+      // system query/BEGIN are valid SQL productions (no bare "SET"/"SHOW" statement exists in SQLParser.g4),
+      // so parsing any of them here would be a guaranteed parse-and-fail on every one of those statements -
+      // exactly the ones connection setup (JDBC drivers, psql, poolers) sends most.
+      Statement parsedStatement = null;
+
       final long engineStart = System.nanoTime();
       final ResultSet resultSet;
       final String upperCaseText = query.query.toUpperCase(Locale.ENGLISH);
+      final PostgresSystemQuery systemQuery = PostgresSystemQuery.parse(query.query);
       if (upperCaseText.startsWith("SET ")) {
         setConfiguration(query.query);
         resultSet = new IteratorResultSet(createResultSet("STATUS", "Setting ignored").iterator());
@@ -522,12 +613,9 @@ public class PostgresNetworkExecutor extends Thread {
           upperCaseText.startsWith("RELEASE ") ||
           upperCaseText.startsWith("ROLLBACK TO ")) {
         resultSet = new IteratorResultSet(Collections.emptyIterator());
-      } else if ("SELECT VERSION()".equalsIgnoreCase(query.query) ||
-          "SELECT PG_CATALOG.VERSION()".equalsIgnoreCase(query.query))
-        resultSet = new IteratorResultSet(createResultSet("version", buildServerVersionString()).iterator());
-      else if ("SELECT CURRENT_SCHEMA()".equalsIgnoreCase(query.query) ||
-          "SELECT PG_CATALOG.CURRENT_SCHEMA()".equalsIgnoreCase(query.query))
-        resultSet = new IteratorResultSet(createResultSet("current_schema", database.getName()).iterator());
+      } else if (systemQuery != null)
+        resultSet = new IteratorResultSet(
+            createResultSet(systemQuery.columnName, systemQueryValue(systemQuery.function)).iterator());
       else if ("SHOW TRANSACTION ISOLATION LEVEL".equals(upperCaseText)) {
         final Database.TRANSACTION_ISOLATION_LEVEL dbIsolationLevel = database.getTransactionIsolationLevel();
         final String level = dbIsolationLevel.name().replace('_', ' ');
@@ -539,14 +627,14 @@ public class PostgresNetworkExecutor extends Thread {
         explicitTransactionStarted = true;
         database.begin();
         resultSet = new IteratorResultSet(Collections.emptyIterator());
-      } else if (ignoreQueries.contains(query.query))
-        resultSet = new IteratorResultSet(Collections.emptyIterator());
-      else {
-        // Check for pg_type/pg_catalog queries from JDBC drivers
-        final List<Result> pgTypeResult = handlePgTypeQuery(query.query);
-        if (pgTypeResult != null) {
-          resultSet = new IteratorResultSet(pgTypeResult.iterator());
+      } else {
+        // A query about the emulated system catalog, which every client sends and which ArcadeDB's own SQL
+        // engine has no tables for (issue #6412).
+        catalogAnswer = handleCatalogQuery(query.query);
+        if (catalogAnswer != null) {
+          resultSet = new IteratorResultSet(catalogAnswer.rows().iterator());
         } else {
+          parsedStatement = "sql".equalsIgnoreCase(query.language) ? parseStatement(query.query) : null;
           resultSet = database.command(query.language, query.query, server.getConfiguration());
         }
       }
@@ -554,9 +642,11 @@ public class PostgresNetworkExecutor extends Thread {
       profile.addEngineNanos(System.nanoTime() - engineStart);
 
       final long serStart = System.nanoTime();
-      Map<String, PostgresType> columns = getColumns(cachedResultSet);
+      Map<String, PostgresType> columns = catalogAnswer != null ? catalogAnswer.columns()
+          : getColumns(cachedResultSet, resolveQueryTargetType(parsedStatement));
       if (columns.isEmpty() && cachedResultSet.isEmpty()) {
-        final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(query.query);
+        final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(query.query, query.language, NO_PARAMETERS,
+            parsedStatement);
         if (schemaColumns != null)
           columns = schemaColumns;
       }
@@ -663,123 +753,59 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   /**
-   * Handles PostgreSQL system catalog queries (pg_type, pg_catalog) from JDBC drivers.
-   * These queries are used by JDBC drivers to introspect types, especially for arrays.
-   *
-   * @param query The SQL query to check
-   * @return A list of results if this is a pg_type query we handle, null otherwise
+   * The answer to a catalog query: the rows to send, and the columns to announce them under. The columns are
+   * carried rather than inferred from the rows so that an answer with no rows in it still describes itself,
+   * and in the order the client projected - a DataRow is read positionally.
    */
-  private List<Result> handlePgTypeQuery(final String query) {
-    final String upperQuery = query.toUpperCase();
+  private record CatalogAnswer(List<Result> rows, Map<String, PostgresType> columns) {
+  }
 
-    // Check if this is a pg_type/pg_catalog query
-    if (!upperQuery.contains("PG_TYPE") && !upperQuery.contains("PG_CATALOG")) {
+  /**
+   * Answers a query about the emulated PostgreSQL system catalog, which is how every client - not only the
+   * ones that were named in an application_name allow-list (issue #6412) - finds out what is in the database
+   * it just connected to.
+   * <p>
+   * Two recognisers share the work: {@link PostgresTypeCatalog} for {@code pg_type}, whose element-type
+   * self-join is a shape no plain projection can express, and {@link PostgresCatalog} for the rest. A shape
+   * neither of them will answer gets the empty result set that a pg_catalog query it did not understand has
+   * always been given, rather than being handed to ArcadeDB's SQL engine, which has no such tables and would
+   * answer with a syntax error.
+   *
+   * @param parameters the values bound to the query's placeholders, empty at Parse time and supplied at
+   *                   Execute time, when the client has sent them
+   *
+   * @return the answer, or null when the query is not about the catalog at all and must be executed normally
+   */
+  private CatalogAnswer handleCatalogQuery(final String query, final Object... parameters) {
+    if (!PostgresCatalog.mightBeCatalogQuery(query))
       return null;
-    }
 
     if (DEBUG)
-      LogManager.instance().log(this, Level.INFO, "PSQL: handling pg_type query: %s (thread=%s)",
-          query, Thread.currentThread().threadId());
+      LogManager.instance().log(this, Level.INFO, "PSQL: handling catalog query: %s (thread=%s)", query,
+          Thread.currentThread().threadId());
 
-    // Handle common JDBC driver queries for array type information
-    // Query pattern: SELECT e.typdelim, e.typname FROM pg_catalog.pg_type t, pg_catalog.pg_type e WHERE t.oid = <oid> AND t.typelem = e.oid
-    // or: SELECT typelem FROM pg_type WHERE oid = <oid>
-    // or: SELECT ... FROM pg_type WHERE typname = '<name>'
+    final List<Result> types = toResults(PostgresTypeCatalog.resolve(query));
+    if (types != null)
+      return new CatalogAnswer(types, getColumns(types));
 
-    // Extract OID from the query if present
-    Pattern oidPattern = Pattern.compile("(?:t\\.oid|oid)\\s*=\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
-    Matcher oidMatcher = oidPattern.matcher(query);
+    final PostgresCatalog.Answer answer = PostgresCatalog.resolve(query, database, userName, parameters);
+    if (answer != null && answer.rows != null)
+      return new CatalogAnswer(toResults(answer.rows), answer.columns);
 
-    if (oidMatcher.find()) {
-      int oid = Integer.parseInt(oidMatcher.group(1));
+    if (answer == PostgresCatalog.DECLINED || PostgresCatalog.containsIgnoreCase(query, "pg_catalog")
+        || PostgresCatalog.containsIgnoreCase(query, "pg_type"))
+      return new CatalogAnswer(Collections.emptyList(), Map.of());
 
-      // Map array type OIDs to their element type information
-      // PostgreSQL array types and their element types:
-      // 1007 = int4[] -> 23 = int4, 1009 = text[] -> 25 = text, etc.
-      String elemTypeName = null;
-      String typDelim = ",";
-      int elemOid = 0;
+    return null;
+  }
 
-      switch (oid) {
-        case 1007 -> { elemTypeName = "int4"; elemOid = 23; }      // int4[]
-        case 1009 -> { elemTypeName = "text"; elemOid = 25; }      // text[]
-        case 1016 -> { elemTypeName = "int8"; elemOid = 20; }      // int8[]
-        case 1021 -> { elemTypeName = "float4"; elemOid = 700; }   // float4[]
-        case 1022 -> { elemTypeName = "float8"; elemOid = 701; }   // float8[]
-        case 1000 -> { elemTypeName = "bool"; elemOid = 16; }      // bool[]
-        case 1003 -> { elemTypeName = "char"; elemOid = 18; }      // char[]
-        case 199 -> { elemTypeName = "json"; elemOid = 114; }      // json[]
-        case 1043 -> { elemTypeName = "varchar"; elemOid = 0; }    // varchar (not an array)
-        default -> { elemTypeName = "text"; elemOid = 25; }        // Default to text for unknown arrays
-      }
-
-      // Determine what columns the query is requesting
-      final Map<String, Object> map = new HashMap<>();
-
-      if (upperQuery.contains("TYPELEM")) {
-        map.put("typelem", elemOid);
-      }
-      if (upperQuery.contains("TYPDELIM")) {
-        map.put("typdelim", typDelim);
-      }
-      if (upperQuery.contains("TYPNAME") || upperQuery.contains("E.TYPNAME")) {
-        map.put("typname", elemTypeName);
-      }
-      if (upperQuery.contains("TYPARRAY")) {
-        // typarray is the OID of the array type for this scalar type
-        // For scalar types, return the corresponding array OID
-        map.put("typarray", oid);
-      }
-      if (upperQuery.contains("TYPTYPE")) {
-        map.put("typtype", "b"); // 'b' = base type
-      }
-      if (upperQuery.contains("TYPINPUT")) {
-        map.put("typinput", "array_in");
-      }
-
-      // Only return a result if we matched an array type and have data to return
-      if (!map.isEmpty() && elemOid > 0) {
-        final Result result = new ResultInternal(map);
-        return Collections.singletonList(result);
-      }
-    }
-
-    // Handle query by type name pattern
-    Pattern namePattern = Pattern.compile("typname\\s*=\\s*'([^']+)'", Pattern.CASE_INSENSITIVE);
-    Matcher nameMatcher = namePattern.matcher(query);
-    if (nameMatcher.find()) {
-      String typeName = nameMatcher.group(1);
-
-      // Map common type names to their OIDs
-      final Map<String, Object> map = new HashMap<>();
-      switch (typeName.toLowerCase()) {
-        case "_int4" -> { map.put("oid", 1007); map.put("typelem", 23); }
-        case "_int8" -> { map.put("oid", 1016); map.put("typelem", 20); }
-        case "_text" -> { map.put("oid", 1009); map.put("typelem", 25); }
-        case "_float4" -> { map.put("oid", 1021); map.put("typelem", 700); }
-        case "_float8" -> { map.put("oid", 1022); map.put("typelem", 701); }
-        case "_bool" -> { map.put("oid", 1000); map.put("typelem", 16); }
-        case "int4" -> { map.put("oid", 23); map.put("typelem", 0); }
-        case "int8" -> { map.put("oid", 20); map.put("typelem", 0); }
-        case "text" -> { map.put("oid", 25); map.put("typelem", 0); }
-        case "varchar" -> { map.put("oid", 1043); map.put("typelem", 0); }
-        default -> {
-          // Return empty result for unknown types
-          return Collections.emptyList();
-        }
-      }
-
-      if (!map.isEmpty()) {
-        map.put("typname", typeName);
-        map.put("typdelim", ",");
-        final Result result = new ResultInternal(map);
-        return Collections.singletonList(result);
-      }
-    }
-
-    // For other pg_type queries we don't specifically handle, return empty result
-    // This prevents errors from trying to query non-existent tables
-    return Collections.emptyList();
+  private static List<Result> toResults(final List<Map<String, Object>> rows) {
+    if (rows == null)
+      return null;
+    final List<Result> results = new ArrayList<>(rows.size());
+    for (final Map<String, Object> row : rows)
+      results.add(new ResultInternal(row));
+    return results;
   }
 
   /**
@@ -802,6 +828,17 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   private Map<String, PostgresType> getColumns(final List<Result> resultSet) {
+    return getColumns(resultSet, null);
+  }
+
+  /**
+   * @param queryTargetType the schema type the query's FROM target names, or null when it is not a plain
+   *                        "FROM &lt;type&gt;" or was not resolved. Falls back {@link #getDeclaredProperty} to
+   *                        this type when a row is not itself an element - which a query that projects specific
+   *                        columns ("SELECT col FROM Type") produces for every row, since only the projected
+   *                        values travel with it, not the backing element.
+   */
+  private Map<String, PostgresType> getColumns(final List<Result> resultSet, final DocumentType queryTargetType) {
     final Map<String, PostgresType> columns = new LinkedHashMap<>();
 
     boolean atLeastOneElement = false;
@@ -825,9 +862,15 @@ public class PostgresNetworkExecutor extends Thread {
           // Prefer the declared "LIST OF <type>" (issue #5289) so a column's OID does not depend on whether
           // the first row's list happens to be empty.
           if (value instanceof Collection<?> collection && collection.isEmpty()) {
-            final PostgresType declaredType = getDeclaredListType(row, p);
+            final PostgresType declaredType = getDeclaredListType(row, p, queryTargetType);
             if (declaredType != null)
               pgType = declaredType;
+          } else if (pgType == PostgresType.DATE && isDeclaredAsDatetime(row, p, queryTargetType)) {
+            // java.util.Date is the default Java runtime type of both Type.DATE and Type.DATETIME* (issue
+            // #6447), so getTypeForValue cannot tell them apart from the value alone and always answers DATE.
+            // Prefer the schema's declared type when it can be found, the same way the empty-list case above
+            // prefers the declared "LIST OF" over a value-based guess.
+            pgType = PostgresType.TIMESTAMP;
           }
 
           if (pgType.isArrayType() || pgType.isNativeScalarType() || pgType == PostgresType.JSON)
@@ -848,19 +891,71 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   /**
-   * Returns the array type declared by the schema for a LIST property, or null when the row is not a schema
-   * element or the property is not a declared LIST.
+   * Memoized on the portal (issue #6447): a portal can be described and executed - possibly executed
+   * repeatedly, for a cursor-based fetch with a LIMIT - several times over its lifetime, and every one of
+   * those calls resolves the same FROM-target type, so it is resolved at most once per portal rather than
+   * once per call.
    */
-  private PostgresType getDeclaredListType(final Result row, final String propertyName) {
-    final Document element = row.getElement().orElse(null);
-    if (element == null)
+  private DocumentType resolveQueryTargetType(final PostgresPortal portal) {
+    if (!portal.queryTargetTypeResolved) {
+      portal.queryTargetType = resolveQueryTargetType(portal.sqlStatement);
+      portal.queryTargetTypeResolved = true;
+    }
+    return portal.queryTargetType;
+  }
+
+  /**
+   * The schema type a SELECT statement's simple FROM target names, or null when the target is not a plain
+   * "FROM &lt;type&gt;" (a subquery, a function call, a RID, a MATCH, ...) or does not resolve to a known type.
+   * Resolved once per query and passed into {@link #getColumns(List, DocumentType)} as the fallback source for
+   * a row that is not itself an element (issue #6447).
+   */
+  private DocumentType resolveQueryTargetType(final Statement statement) {
+    if (!(statement instanceof SelectStatement select))
       return null;
 
-    final DocumentType documentType = element.getType();
+    final FromClause target = select.getTarget();
+    final FromItem item = target != null ? target.getItem() : null;
+    if (item == null || item.getIdentifier() == null)
+      return null;
+
+    // getTypeOrNull, not getType: the identifier is very often not a registered type name at all (a bucket, a
+    // catalog target, a typo, a RID-producing expression, ...), which getType() reports by throwing - control
+    // flow this resolution runs on every query and so should not pay exception overhead for.
+    return database.getSchema().getTypeOrNull(item.getIdentifier().getStringValue());
+  }
+
+  /**
+   * Returns the schema property backing {@code propertyName}, or null when it cannot be found. {@code row}
+   * itself is an element - and so carries its own {@link DocumentType} - only for a whole-entity projection
+   * ("SELECT FROM Type" or "SELECT *"); a query that projects specific columns ("SELECT col FROM Type") produces
+   * rows that carry only the projected values, so {@code queryTargetType} - the schema type the query's FROM
+   * target names, resolved once by the caller - is the fallback for that (very common) case. Shared lookup
+   * behind {@link #getDeclaredListType} and {@link #isDeclaredAsDatetime}, both of which prefer the schema's
+   * declared type over a guess made from a single sample value.
+   * <p>
+   * {@code propertyName} is the row's own column name, which for an aliased or computed projection ({@code
+   * SELECT amount AS x FROM Type}) is the alias, not the source property - so the lookup misses and the caller
+   * falls back to a value-only guess for that column. The "look up by row column name" pattern is inherited
+   * from #5289's {@link #getDeclaredListType}, which has the identical gap for an empty aliased LIST; the
+   * {@code queryTargetType} fallback added here for #6447 does not close it either. Resolving an alias back to
+   * its source property would need to walk the SELECT projection's expression tree, a materially larger piece
+   * of work than either fix.
+   */
+  private Property getDeclaredProperty(final Result row, final String propertyName, final DocumentType queryTargetType) {
+    final Document element = row.getElement().orElse(null);
+    final DocumentType documentType = element != null ? element.getType() : queryTargetType;
     if (documentType == null)
       return null;
 
-    final Property property = documentType.getPolymorphicPropertyIfExists(propertyName);
+    return documentType.getPolymorphicPropertyIfExists(propertyName);
+  }
+
+  /**
+   * Returns the array type declared by the schema for a LIST property, or null when it is not a declared LIST.
+   */
+  private PostgresType getDeclaredListType(final Result row, final String propertyName, final DocumentType queryTargetType) {
+    final Property property = getDeclaredProperty(row, propertyName, queryTargetType);
     if (property == null || property.getType() != Type.LIST)
       return null;
 
@@ -868,20 +963,45 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   /**
+   * True when the schema declares {@code propertyName} as one of the DATETIME variants (issue #6447). Used to
+   * disambiguate a sampled {@code java.util.Date} value, which is the default Java runtime type of both
+   * Type.DATE and every Type.DATETIME* and so cannot tell them apart on its own.
+   */
+  private boolean isDeclaredAsDatetime(final Result row, final String propertyName, final DocumentType queryTargetType) {
+    final Property property = getDeclaredProperty(row, propertyName, queryTargetType);
+    if (property == null)
+      return false;
+
+    return switch (property.getType()) {
+      case DATETIME, DATETIME_MICROS, DATETIME_NANOS, DATETIME_SECOND -> true;
+      default -> false;
+    };
+  }
+
+  /**
    * Extract column schema from a SELECT query by parsing the type name and querying for a sample row.
    * This is used during DESCRIBE Statement to return RowDescription before the query is executed.
    * ArcadeDB is schema-less so we need to query actual data to discover dynamically-added properties.
    */
-  private Map<String, PostgresType> getColumnsFromQuerySchema(final String query) {
+  private Map<String, PostgresType> getColumnsFromQuerySchema(final String query, final Statement alreadyParsed) {
     if (query == null || query.isEmpty()) {
       return null;
     }
 
+    // the caller may already hold the parsed statement for this very text: parsing it a second time buys nothing
+    final Statement parsed = alreadyParsed != null ? alreadyParsed : parseStatement(query);
+
     // Prefer the parsed statement: it resolves the FROM target reliably, including the subquery
     // wrapper Spark uses for its schema probe (issue #5368)
-    final SelectStatement select = parseSelectStatement(query);
-    if (select != null)
-      return getColumnsFromSelect(select);
+    if (parsed instanceof SelectStatement || parsed instanceof MatchStatement) {
+      try {
+        return getColumnsFromStatement(parsed);
+      } catch (final Exception e) {
+        if (DEBUG)
+          LogManager.instance().log(this, Level.WARNING, "PSQL: cannot resolve the columns of '%s': %s", query, e.getMessage());
+        return null;
+      }
+    }
 
     // Not parsable as an ArcadeDB SELECT: fall back to the textual FROM-target extraction
     // Patterns: "SELECT FROM TypeName", "SELECT * FROM TypeName", "SELECT ... FROM TypeName"
@@ -916,24 +1036,101 @@ public class PostgresNetworkExecutor extends Thread {
    * discovered from a sample row or from the declared schema, or a nested subquery, resolved recursively so
    * that a probe like {@code SELECT * FROM (SELECT name FROM Character) SPARK_GEN_SUBQ_0 WHERE 1=0} (the
    * shape Spark generates, issue #5368) exposes what the innermost query really projects. Each level then
-   * narrows the columns with its own projection list.
+   * narrows the columns with its own projection list. When the target carries no discoverable schema the
+   * projection list alone names the columns (issue #6156).
    */
   private Map<String, PostgresType> getColumnsFromSelect(final SelectStatement select) {
     final FromClause target = select.getTarget();
     final FromItem item = target != null ? target.getItem() : null;
-    if (item == null)
-      return null;
 
     Map<String, PostgresType> columns = null;
-    if (item.getStatement() instanceof SelectStatement subQuery)
-      columns = getColumnsFromSelect(subQuery);
-    else if (item.getIdentifier() != null)
-      columns = getColumnsFromType(item.getIdentifier().getStringValue());
+    if (item != null) {
+      if (item.getStatement() != null)
+        columns = getColumnsFromStatement(item.getStatement());
+      else if (item.getIdentifier() != null)
+        columns = getColumnsFromType(item.getIdentifier().getStringValue());
+    }
 
-    if (columns == null || columns.isEmpty())
-      return columns;
+    if (columns != null && !columns.isEmpty()) {
+      final Map<String, PostgresType> projected = applyProjection(select.getProjection(), columns);
+      if (projected != null && !projected.isEmpty())
+        return projected;
+    }
 
-    return applyProjection(select.getProjection(), columns);
+    // The row source is not a schema type: no FROM at all, a RID, a function call such as shortestPath(), a
+    // TRAVERSE. Nothing can be discovered from the schema, but an explicit projection list still names every
+    // column the query produces, which is what Spark's probe needs (issue #6156).
+    return getColumnsFromProjection(select.getProjection());
+  }
+
+  /**
+   * Resolves the columns announced by a parsed statement. Only the two statements that project a row shape of
+   * their own are described here: SELECT through its FROM target and projection, MATCH through its RETURN list.
+   */
+  private Map<String, PostgresType> getColumnsFromStatement(final Statement statement) {
+    if (statement instanceof SelectStatement select)
+      return getColumnsFromSelect(select);
+    if (statement instanceof MatchStatement match)
+      return getColumnsFromMatch(match);
+    return null;
+  }
+
+  /**
+   * Columns announced by a MATCH statement: one per RETURN item, named after its alias or, when there is none,
+   * after the expression's default alias - exactly the naming the executor applies. Types are unknowable without
+   * running the pattern, so they are announced as text.
+   */
+  private Map<String, PostgresType> getColumnsFromMatch(final MatchStatement match) {
+    final List<Expression> returnItems = match.getReturnItems();
+    if (returnItems == null || returnItems.isEmpty())
+      return null;
+
+    final List<Identifier> returnAliases = match.getReturnAliases();
+    final Map<String, PostgresType> columns = new LinkedHashMap<>();
+    for (int i = 0; i < returnItems.size(); i++) {
+      final Identifier alias = returnAliases != null && i < returnAliases.size() ? returnAliases.get(i) : null;
+      final String name = alias != null ? alias.getStringValue() : defaultAliasOf(returnItems.get(i));
+      if (name == null)
+        // cannot tell what this item is named: announcing a partial row would be worse than announcing nothing
+        return null;
+      columns.put(name, PostgresType.VARCHAR);
+    }
+
+    return columns;
+  }
+
+  /**
+   * Columns named by an explicit projection list, used when the row source itself carries no discoverable schema.
+   * Returns null as soon as an item does not name a column on its own - a {@code *} or an exclusion, which both
+   * need the row source, or an {@code expand()}, which replaces the row with whatever it expands.
+   */
+  private Map<String, PostgresType> getColumnsFromProjection(final Projection projection) {
+    if (projection == null || projection.getItems() == null || projection.getItems().isEmpty())
+      return null;
+
+    if (projection.isExpand())
+      return null;
+
+    final Map<String, PostgresType> columns = new LinkedHashMap<>();
+    for (final ProjectionItem item : projection.getItems()) {
+      if (item.isAll() || item.exclude || item.getExpression() == null)
+        return null;
+
+      final String alias = item.getProjectionAliasAsString();
+      if (alias == null)
+        return null;
+
+      columns.put(alias, PostgresType.VARCHAR);
+    }
+
+    return columns.isEmpty() ? null : columns;
+  }
+
+  private String defaultAliasOf(final Expression expression) {
+    if (expression == null)
+      return null;
+    final Identifier defaultAlias = expression.getDefaultAlias();
+    return defaultAlias != null ? defaultAlias.getStringValue() : null;
   }
 
   /**
@@ -959,7 +1156,7 @@ public class PostgresNetworkExecutor extends Thread {
 
       if (!sampleRows.isEmpty()) {
         // Use the sample row to discover columns
-        final Map<String, PostgresType> cols = getColumns(sampleRows);
+        final Map<String, PostgresType> cols = getColumns(sampleRows, docType);
         if (DEBUG)
           LogManager.instance().log(this, Level.INFO,
               "PSQL: getColumnsFromType('%s') -> sampleQuery='%s', found %d rows, columns=%s (thread=%s)",
@@ -1010,6 +1207,11 @@ public class PostgresNetworkExecutor extends Thread {
     if (projection == null || projection.getItems() == null || projection.getItems().isEmpty())
       return columns;
 
+    if (projection.isExpand())
+      // expand() throws the row away and returns what it expands instead, so the target's columns say nothing
+      // about the result. Announcing them would be worse than announcing nothing (issue #6156).
+      return null;
+
     final Map<String, PostgresType> projected = new LinkedHashMap<>();
     for (final ProjectionItem item : projection.getItems()) {
       if (item.isAll()) {
@@ -1041,13 +1243,15 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   /**
-   * Parses the query with the ArcadeDB SQL parser, returning null when it is not a parsable SELECT.
+   * Parses the query with the ArcadeDB SQL parser, returning null when it is not parsable.
    */
-  private SelectStatement parseSelectStatement(final String query) {
+  private Statement parseStatement(final String query) {
+    if (query == null || query.isEmpty())
+      return null;
+
     try {
       final SQLQueryEngine sqlEngine = (SQLQueryEngine) database.getQueryEngine("sql");
-      final Statement statement = sqlEngine.parse(query, (DatabaseInternal) database);
-      return statement instanceof SelectStatement select ? select : null;
+      return sqlEngine.parse(query, (DatabaseInternal) database);
     } catch (final Exception e) {
       if (DEBUG)
         LogManager.instance().log(this, Level.WARNING, "PSQL: cannot parse query '%s': %s", query, e.getMessage());
@@ -1056,16 +1260,175 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   /**
-   * Schema-discovery fallback for SELECT queries that returned 0 rows. RowDescription must still
-   * carry column metadata so JDBC clients (Spark/PySpark probe schema with WHERE 1=0) can build
-   * a typed result set. Returns null when the query is not a SELECT or no schema match is found,
-   * letting the caller fall through to the empty-RowDescription default.
+   * Schema-discovery fallback for queries that returned 0 rows. RowDescription must still carry column metadata
+   * so JDBC clients - Spark and PySpark probe a schema with {@code WHERE 1=0}, Tableau and several JDBC/BI tools
+   * with {@code LIMIT 0} - can build a typed result set. Returns null when no schema match is found, letting the
+   * caller fall through to the empty-RowDescription default.
+   * <p>
+   * Two answers are available, and which one is asked first is decided by how the probe is spelled: a replay of
+   * the query without the clause that empties it ({@link #sampleProbeColumns}) or a static resolution of the row
+   * source ({@link #getColumnsFromQuerySchema}). See {@link ProbeSpelling}.
    */
-  private Map<String, PostgresType> resolveEmptyResultSchemaColumns(final String query) {
-    if (query == null || !query.toUpperCase(Locale.ENGLISH).trim().startsWith("SELECT"))
+  private Map<String, PostgresType> resolveEmptyResultSchemaColumns(final String query, final String language,
+      final Object[] parameters, final Statement alreadyParsed) {
+    if (query == null)
       return null;
-    final Map<String, PostgresType> schemaColumns = getColumnsFromQuerySchema(query);
-    return schemaColumns != null && !schemaColumns.isEmpty() ? schemaColumns : null;
+
+    // Only the SQL engine is described here: the parser below, and every shape it recognizes, is SQL's
+    if (language != null && !"sql".equalsIgnoreCase(language))
+      return null;
+
+    // the extended protocol parsed this very text when it prepared the portal: reuse it instead of parsing twice
+    final Statement parsed = alreadyParsed != null ? alreadyParsed : parseStatement(query);
+
+    final ProbeSpelling probe = probeSpelling(parsed);
+
+    // A constant-false filter has no purpose other than probing, so it is answered by the replay first: replaying
+    // the statement without it is the only way to learn the columns of a row source that is not a schema type - a
+    // graph function, a TRAVERSE, a constant table (issue #6156) - and it is the most faithful answer for the
+    // shapes the schema can describe too, because the columns and their types come from the very rows the
+    // un-probed query would return.
+    if (probe == ProbeSpelling.CONSTANT_FALSE_FILTER) {
+      final Map<String, PostgresType> sampled = sampleProbeColumns(parsed, parameters);
+      if (sampled != null && !sampled.isEmpty())
+        return sampled;
+    }
+
+    if (query.toUpperCase(Locale.ENGLISH).trim().startsWith("SELECT") || parsed instanceof MatchStatement) {
+      final Map<String, PostgresType> schemaColumns = getColumnsFromQuerySchema(query, parsed);
+      if (schemaColumns != null && !schemaColumns.isEmpty())
+        return schemaColumns;
+    }
+
+    // LIMIT 0 is the other spelling of a probe (issue #6185), but unlike a constant-false filter it is also how a
+    // client asks an expensive query for nothing at all. So it earns the replay - which evaluates the projection
+    // for real, once - only where nothing else can answer: after the static resolution above has come back empty.
+    if (probe == ProbeSpelling.LIMIT_ZERO) {
+      final Map<String, PostgresType> sampled = sampleProbeColumns(parsed, parameters);
+      if (sampled != null && !sampled.isEmpty())
+        return sampled;
+    }
+
+    return null;
+  }
+
+  /**
+   * How a statement says, in its own text, that it cannot return a row. Both spellings mark a schema probe, and
+   * the caller replays either of them, but they do not deserve the replay equally - see
+   * {@link #resolveEmptyResultSchemaColumns}, which orders them against the static resolution.
+   */
+  private enum ProbeSpelling {
+    NOT_A_PROBE, CONSTANT_FALSE_FILTER, LIMIT_ZERO
+  }
+
+  /**
+   * Reads off the statement, or a subquery it selects from, whether it is empty by construction and how it says
+   * so - the same question {@code SelectExecutionPlanner.emptyByConstructionReason} asks when it folds the fetch
+   * away. A constant-false filter wins over a {@code LIMIT 0} found at another level, because it is the spelling
+   * that can have no other purpose.
+   * <p>
+   * Nothing here evaluates a function or reads a bound parameter: {@code WhereClause.isAlwaysFalse} folds only
+   * comparisons between literals, and {@link Limit#isAlwaysEmpty()} only a literal {@code LIMIT 0}. This is asked
+   * of every query that comes back empty, the vast majority of which are not probes at all.
+   */
+  private ProbeSpelling probeSpelling(final Statement parsed) {
+    if (!(parsed instanceof SelectStatement select))
+      return ProbeSpelling.NOT_A_PROBE;
+
+    // the database has to be on the context: the constant-folding below needs it
+    final CommandContext context = createProbeContext();
+
+    ProbeSpelling spelling = ProbeSpelling.NOT_A_PROBE;
+    for (SelectStatement level = select; level != null; level = selectedSubQuery(level)) {
+      if (isAlwaysFalseFilter(level.getWhereClause(), context))
+        return ProbeSpelling.CONSTANT_FALSE_FILTER;
+
+      final Limit limit = level.getLimit();
+      if (limit != null && limit.isAlwaysEmpty())
+        spelling = ProbeSpelling.LIMIT_ZERO;
+    }
+
+    return spelling;
+  }
+
+  /**
+   * Runs the probe again with the clauses that empty it removed, and reports the columns of the first row it
+   * returns. This is what makes a probe describable no matter how its rows are computed: whatever the un-probed
+   * query would send on the wire is exactly what gets announced. Returns null when the replay finds no row.
+   * <p>
+   * Only a statement the caller has already classified as a probe ({@link #probeSpelling}) reaches this, so the
+   * AST deep copy below is never paid for by a query that legitimately returns no rows - the common case on this
+   * path by a wide margin.
+   * <p>
+   * Note that the replay evaluates the query's projection for real, once, on one row. The original probe never
+   * did: its filter, or its LIMIT 0, discards every row before the projection runs. So a projected function that
+   * has a side effect - a sequence's {@code next()}, a user-defined function that writes - is invoked once per
+   * probe that takes this path. The alternative is to describe a computed projection by guessing, which is what
+   * left this whole family of queries undescribable in the first place; the statically-resolvable shapes are
+   * answered without a replay by {@link #getColumnsFromQuerySchema} whenever it can name their columns.
+   */
+  private Map<String, PostgresType> sampleProbeColumns(final Statement parsed, final Object[] parameters) {
+    if (!(parsed instanceof SelectStatement select))
+      return null;
+
+    try {
+      // the database has to be on the context: the replay runs against it
+      final CommandContext context = createProbeContext();
+
+      final SelectStatement sample = select.copy();
+      stripProbe(sample, context);
+
+      final ResultSet resultSet = sample.execute(database, parameters != null ? parameters : NO_PARAMETERS, context);
+      final List<Result> sampleRows = browseAndCacheResultSet(resultSet, 1, false);
+      return sampleRows.isEmpty() ? null : getColumns(sampleRows, resolveQueryTargetType(select));
+    } catch (final Exception e) {
+      if (DEBUG)
+        LogManager.instance().log(this, Level.WARNING, "PSQL: cannot replay the schema probe '%s': %s", parsed, e.getMessage());
+      return null;
+    }
+  }
+
+  private CommandContext createProbeContext() {
+    final BasicCommandContext context = new BasicCommandContext();
+    context.setConfiguration(server.getConfiguration());
+    context.setDatabase(database);
+    return context;
+  }
+
+  /**
+   * Turns a copy of the probe into the query it is a probe of, in place: the constant-false filters go, and so do
+   * the clauses that only choose which rows come back - the {@code LIMIT 0} of a probe spelled that way among them.
+   * Dropping ORDER BY, SKIP and LIMIT costs nothing - the columns of a row do not depend on where it sits in the
+   * result - and it keeps the replay from materializing and sorting a whole result set just to hand over its first
+   * row.
+   * <p>
+   * A whole WHERE clause goes, not just the constant-false term inside it, so {@code WHERE 1=0 AND name = :n}
+   * samples the unfiltered target. That rests on the caller reading nothing but column names and types off the
+   * sampled row ({@link #getColumns}): the row itself never reaches the wire. Should RowDescription ever start
+   * carrying anything derived from sample <i>values</i>, the predicate dropped here would begin to matter and
+   * only the constant-false term could be removed.
+   */
+  private void stripProbe(final SelectStatement select, final CommandContext context) {
+    if (isAlwaysFalseFilter(select.getWhereClause(), context))
+      select.setWhereClause(null);
+
+    select.orderBy = null;
+    select.skip = null;
+    select.limit = null;
+
+    final SelectStatement subQuery = selectedSubQuery(select);
+    if (subQuery != null)
+      stripProbe(subQuery, context);
+  }
+
+  private boolean isAlwaysFalseFilter(final WhereClause where, final CommandContext context) {
+    return where != null && where.isAlwaysFalse(context);
+  }
+
+  private SelectStatement selectedSubQuery(final SelectStatement select) {
+    final FromClause target = select.getTarget();
+    final FromItem item = target != null ? target.getItem() : null;
+    return item != null && item.getStatement() instanceof SelectStatement subQuery ? subQuery : null;
   }
 
   private void writeRowDescription(final Map<String, PostgresType> columns) {
@@ -1460,25 +1823,17 @@ public class PostgresNetworkExecutor extends Thread {
       }
 
       final String upperCaseText = portal.query.toUpperCase(Locale.ENGLISH);
+      final PostgresSystemQuery systemQuery = PostgresSystemQuery.parse(portal.query);
 
-      if (portal.query.isEmpty() ||//
-          (ignoreQueriesAppNames.contains(connectionProperties.get("application_name")) &&//
-              ignoreQueries.contains(portal.query))) {
-        // RETURN EMPTY RESULT
-        portal.executed = true;
-        portal.cachedResultSet = new ArrayList<>();
-      } else if (upperCaseText.startsWith("SAVEPOINT ") ||
+      if (upperCaseText.startsWith("SAVEPOINT ") ||
           upperCaseText.startsWith("RELEASE ") ||
           upperCaseText.startsWith("ROLLBACK TO ")) {
         portal.ignoreExecution = true;
       } else if (upperCaseText.startsWith("SET ")) {
         setConfiguration(portal.query);
         portal.ignoreExecution = true;
-      } else if ("SELECT VERSION()".equals(upperCaseText) || "SELECT PG_CATALOG.VERSION()".equals(upperCaseText)) {
-        createResultSet(portal, "version", buildServerVersionString());
-
-      } else if ("SELECT CURRENT_SCHEMA()".equals(upperCaseText) || "SELECT PG_CATALOG.CURRENT_SCHEMA()".equals(upperCaseText)) {
-        createResultSet(portal, "current_schema", database.getName());
+      } else if (systemQuery != null) {
+        createResultSet(portal, systemQuery.columnName, systemQueryValue(systemQuery.function));
 
       } else if ("SHOW TRANSACTION ISOLATION LEVEL".equals(upperCaseText)) {
         final Database.TRANSACTION_ISOLATION_LEVEL dbIsolationLevel = database.getTransactionIsolationLevel();
@@ -1489,131 +1844,23 @@ public class PostgresNetworkExecutor extends Thread {
         final String varName = portal.query.substring(5).trim().toLowerCase(Locale.ENGLISH);
         createResultSet(portal, varName, getShowConfigValue(varName));
 
-      } else if ("dbvis".equals(connectionProperties.get("application_name"))) {
-        // SPECIAL CASES
-        if ("SELECT nspname AS TABLE_SCHEM, NULL AS TABLE_CATALOG FROM pg_catalog.pg_namespace  WHERE nspname <> 'pg_toast' AND (nspname !~ '^pg_temp_'  OR nspname = (pg_catalog.current_schemas(true))[1]) AND (nspname !~ '^pg_toast_temp_'  OR nspname = replace((pg_catalog.current_schemas(true))[1], 'pg_temp_', 'pg_toast_temp_'))  ORDER BY TABLE_SCHEM".equals(portal.query)
-            || "SELECT     COLLATION_SCHEMA,     COLLATION_NAME FROM     INFORMATION_SCHEMA.COLLATIONS".equals(portal.query)) {
-          // SPECIAL CASE DB VISUALIZER
-
-          portal.executed = true;
-          portal.cachedResultSet = new ArrayList<>();
-
-          final Map<String, Object> map = new HashMap<>();
-          map.put("TABLE_CATALOG", null);
-          map.put("TABLE_SCHEM", "");
-
-          final Result result = new ResultInternal(map);
-          portal.cachedResultSet.add(result);
-
-          portal.columns = new HashMap<>();
-          portal.columns.put("TABLE_CATALOG", PostgresType.VARCHAR);
-          portal.columns.put("TABLE_SCHEM", PostgresType.VARCHAR);
-
-        } else if (portal.query.contains("ORDER BY TABLE_TYPE,TABLE_SCHEM,TABLE_NAME ")) {
-          portal.executed = true;
-          portal.cachedResultSet = new ArrayList<>();
-          for (final DocumentType t : database.getSchema().getTypes()) {
-            final Map<String, Object> map = new HashMap<>();
-            map.put("TABLE_CAT", "");
-            map.put("TABLE_SCHEM", "");
-            map.put("TABLE_TYPE", "TABLE");
-            map.put("TABLE_NAME", t.getName());
-            map.put("REMARKS", "");
-            map.put("TYPE_CAT", "");
-            map.put("TYPE_SCHEM", "");
-            map.put("TYPE_NAME", "");
-            map.put("SELF_REFERENCING_COL_NAME", "");
-            map.put("REF_GENERATION", "");
-
-            final Result result = new ResultInternal(map);
-            portal.cachedResultSet.add(result);
-
-            portal.columns = new HashMap<>();
-            portal.columns.put("TABLE_CAT", PostgresType.VARCHAR);
-            portal.columns.put("TABLE_SCHEM", PostgresType.VARCHAR);
-            portal.columns.put("TABLE_TYPE", PostgresType.VARCHAR);
-            portal.columns.put("TABLE_NAME", PostgresType.VARCHAR);
-            portal.columns.put("REMARKS", PostgresType.VARCHAR);
-            portal.columns.put("TYPE_CAT", PostgresType.VARCHAR);
-            portal.columns.put("TYPE_SCHEM", PostgresType.VARCHAR);
-            portal.columns.put("TYPE_NAME", PostgresType.VARCHAR);
-            portal.columns.put("SELF_REFERENCING_COL_NAME", PostgresType.VARCHAR);
-            portal.columns.put("REF_GENERATION", PostgresType.VARCHAR);
-          }
-        }
-      } else if ("select distinct GRANTEE as USER_NAME, 'N' as IS_EXPIRED, 'N' as IS_LOCKED from INFORMATION_SCHEMA.USAGE_PRIVILEGES order by GRANTEE asc".equals(portal.query)) {
-        portal.executed = true;
-        portal.cachedResultSet = new ArrayList<>();
-        final Map<String, Object> map = new HashMap<>();
-        map.put("USER_NAME", "root");
-        map.put("IS_EXPIRED", 'N');
-        map.put("IS_LOCKED", 'N');
-        final Result result = new ResultInternal(map);
-        portal.cachedResultSet.add(result);
-
-        portal.columns = new HashMap<>();
-        portal.columns.put("USER_NAME", PostgresType.VARCHAR);
-        portal.columns.put("IS_EXPIRED", PostgresType.CHAR);
-        portal.columns.put("IS_LOCKED", PostgresType.CHAR);
-
-      } else if ("select CHARACTER_SET_NAME as CHARSET_NAME, -1 as MAX_LENGTH from INFORMATION_SCHEMA.CHARACTER_SETS order by CHARACTER_SET_NAME asc".equals(portal.query)) {
-        portal.executed = true;
-        portal.cachedResultSet = new ArrayList<>();
-        final Map<String, Object> map = new HashMap<>();
-        map.put("CHARSET_NAME", "UTF-8");
-        map.put("MAX_LENGTH", -1);
-        final Result result = new ResultInternal(map);
-        portal.cachedResultSet.add(result);
-
-        portal.columns = new HashMap<>();
-        portal.columns.put("CHARSET_NAME", PostgresType.VARCHAR);
-        portal.columns.put("MAX_LENGTH", PostgresType.INTEGER);
-      } else if (//
-          "select NSPNAME as SCHEMA_NAME, case when lower(NSPNAME)='pg_catalog' then 'Y' else 'N' end as IS_PUBLIC, case when lower(NSPNAME)='information_schema' then 'Y' else 'N' end as IS_SYSTEM, 'N' as IS_EMPTY from PG_CATALOG.PG_NAMESPACE order by NSPNAME asc".equals(portal.query)
-              || "select SCHEMA_NAME, case when lower(SCHEMA_NAME)='pg_catalog' then 'Y' else 'N' end as IS_PUBLIC, case when lower(SCHEMA_NAME)='information_schema' then 'Y' else 'N' end as IS_SYSTEM, 'N' as IS_EMPTY from INFORMATION_SCHEMA.SCHEMATA order by SCHEMA_NAME asc".equals(portal.query)) {
-
-        portal.executed = true;
-        portal.cachedResultSet = new ArrayList<>();
-
-        for (final String dbName : server.getDatabaseNames()) {
-          final Map<String, Object> map = new HashMap<>();
-          map.put("SCHEMA_NAME", dbName);
-          map.put("IS_PUBLIC", "Y");
-          map.put("IS_SYSTEM", "N");
-          map.put("IS_EMPTY", "N");
-          final Result result = new ResultInternal(map);
-          portal.cachedResultSet.add(result);
-        }
-
-        portal.columns = new HashMap<>();
-        portal.columns.put("SCHEMA_NAME", PostgresType.VARCHAR);
-        portal.columns.put("IS_PUBLIC", PostgresType.CHAR);
-        portal.columns.put("IS_SYSTEM", PostgresType.CHAR);
-        portal.columns.put("IS_EMPTY", PostgresType.CHAR);
-      } else if ("SELECT nspname AS TABLE_SCHEM, NULL AS TABLE_CATALOG FROM pg_catalog.pg_namespace  WHERE nspname <> 'pg_toast' AND (nspname !~ '^pg_temp_'  OR nspname = (pg_catalog.current_schemas(true))[1]) AND (nspname !~ '^pg_toast_temp_'  OR nspname = replace((pg_catalog.current_schemas(true))[1], 'pg_temp_', 'pg_toast_temp_'))  AND nspname LIKE E'%' ORDER BY TABLE_SCHEM".equals(portal.query)) {
-
-        portal.executed = true;
-        portal.cachedResultSet = new ArrayList<>();
-
-        for (final DocumentType t : database.getSchema().getTypes()) {
-          final Map<String, Object> map = new HashMap<>();
-          map.put("TABLE_SCHEM", t.getName());
-          map.put("TABLE_CATALOG", database.getName());
-          final Result result = new ResultInternal(map);
-          portal.cachedResultSet.add(result);
-        }
-
-        portal.columns = new HashMap<>();
-        portal.columns.put("TABLE_SCHEM", PostgresType.VARCHAR);
-        portal.columns.put("TABLE_CATALOG", PostgresType.VARCHAR);
       } else {
-        // Check for pg_type/pg_catalog queries from JDBC drivers (extended query protocol)
-        final List<Result> pgTypeResult = handlePgTypeQuery(portal.query);
-        if (pgTypeResult != null) {
-          // pg_type query handled - set up the portal with results
+        // A query about the emulated system catalog. Every family of these used to be matched by string
+        // equality here, several of them only when application_name was literally "dbvis", so the same
+        // question asked by any other client fell through to ArcadeDB's SQL engine and failed (issue #6412).
+        //
+        // One that carries parameters cannot be answered yet: the JDBC driver puts the name patterns of its
+        // table and column lists in them, and their values only arrive with the Bind message. It is marked
+        // here and answered in executeCommand, with the values in hand.
+        final CatalogAnswer catalogAnswer = handleCatalogQuery(portal.query);
+        if (catalogAnswer != null && actualParamCount > 0) {
+          // Recognised, but its filters are bound parameters whose values only arrive with Bind: the answer
+          // computed here would ignore them, so it is thrown away and recomputed in executeCommand.
+          portal.catalogQuery = true;
+        } else if (catalogAnswer != null) {
           portal.executed = true;
-          portal.cachedResultSet = pgTypeResult;
-          portal.columns = getColumns(pgTypeResult);
+          portal.cachedResultSet = catalogAnswer.rows();
+          portal.columns = catalogAnswer.columns();
         } else {
           switch (portal.language) {
           case "sql":
@@ -1683,6 +1930,21 @@ public class PostgresNetworkExecutor extends Thread {
     connectionProperties.put(paramName, parts[1]);
   }
 
+  /**
+   * The value of an emulated system-information function (issue #5290). {@code current_schema} answers the
+   * database name rather than PostgreSQL's {@code public}, and {@code current_database} answers the same
+   * name: ArcadeDB has one namespace per database, so the distinction PostgreSQL draws between a catalog
+   * and a schema inside it has nothing on this side to map onto, and a client using either to qualify a
+   * name needs the one name that works.
+   */
+  private String systemQueryValue(final PostgresSystemQuery.Function function) {
+    return switch (function) {
+      case VERSION -> buildServerVersionString();
+      case CURRENT_SCHEMA, CURRENT_DATABASE, CURRENT_CATALOG -> database.getName();
+      case CURRENT_USER, SESSION_USER, CURRENT_ROLE, USER -> userName;
+    };
+  }
+
   private String buildServerVersionString() {
     return "PostgreSQL " + PG_SERVER_VERSION + " (ArcadeDB " + Constants.getRawVersion() + ")";
   }
@@ -1747,6 +2009,14 @@ public class PostgresNetworkExecutor extends Thread {
   private boolean readStartupMessage(final boolean no2ssl) {
     try {
       final long len = channel.readUnsignedInt();
+      // The declared length used to be read and then ignored, so the parameter loop below ran until the
+      // client chose to stop it and every pair it sent was retained (issue #6377). PostgreSQL rejects an
+      // over-long startup packet outright rather than counting what is inside it, and this does the same:
+      // one rule bounds the pair count, the total bytes and the time spent reading them, and it is the
+      // client's own declared length that is being held to, not a limit invented here.
+      if (len < 8 || len > MAX_STARTUP_MESSAGE_LENGTH)
+        throw new PostgresProtocolException("Invalid startup message length " + len);
+
       final long protocolVersion = channel.readUnsignedInt();
       if (protocolVersion == 80877103) {
         // REQUEST FOR SSL, NOT SUPPORTED
@@ -1784,35 +2054,56 @@ public class PostgresNetworkExecutor extends Thread {
       }
 
       if (len > 8) {
-        while (readNextByte() != 0) {
-          reuseLastByte();
-
-          final String paramName = readString();
-          final String paramValue = readString();
-
-          switch (paramName) {
-          case "user":
-            userName = paramValue;
-            break;
-          case "database":
-            databaseName = paramValue;
-            break;
-          case "options":
-            // DEPRECATED, IGNORE IT
-            break;
-          case "replication":
-            // NOT SUPPORTED, IGNORE IT
-            break;
-          }
-
-          connectionProperties.put(paramName, paramValue);
-        }
+        final byte[] body = new byte[(int) (len - 8)];
+        channel.readBytes(body);
+        readStartupParameters(body);
       }
     } catch (final IOException e) {
       setErrorInTx();
       throw new PostgresProtocolException("Error on parsing startup message", e);
     }
     return true;
+  }
+
+  /**
+   * Reads the {@code name\0value\0...\0} parameter section of a startup message out of the bytes the
+   * message declared, rather than off the socket until the client sends a terminator (issue #6377).
+   */
+  private void readStartupParameters(final byte[] body) {
+    int pos = 0;
+    while (pos < body.length && body[pos] != 0) {
+      final int nameEnd = indexOfTerminator(body, pos);
+      final String paramName = new String(body, pos, nameEnd - pos, DatabaseFactory.getDefaultCharset());
+      pos = nameEnd + 1;
+
+      final int valueEnd = indexOfTerminator(body, pos);
+      final String paramValue = new String(body, pos, valueEnd - pos, DatabaseFactory.getDefaultCharset());
+      pos = valueEnd + 1;
+
+      switch (paramName) {
+      case "user":
+        userName = paramValue;
+        break;
+      case "database":
+        databaseName = paramValue;
+        break;
+      case "options":
+        // DEPRECATED, IGNORE IT
+        break;
+      case "replication":
+        // NOT SUPPORTED, IGNORE IT
+        break;
+      }
+
+      connectionProperties.put(paramName, paramValue);
+    }
+  }
+
+  private static int indexOfTerminator(final byte[] body, final int from) {
+    for (int i = from; i < body.length; i++)
+      if (body[i] == 0)
+        return i;
+    throw new PostgresProtocolException("Unterminated string in startup message");
   }
 
   /**
@@ -1906,13 +2197,27 @@ public class PostgresNetworkExecutor extends Thread {
     }
   }
 
+  /**
+   * Reads the client's next message, blocking on the socket until its first byte arrives (issue #6410).
+   * <p>
+   * This used to open with {@code if (!channel.inputHasData()) { sleep(100); return false; }}, which made
+   * every idle connection wake its thread ten times a second to ask an empty socket whether anything had
+   * turned up - and a Postgres client pool is expected to hold long-lived, mostly-idle connections, so the
+   * cost was 10 wakeups per second per pooled connection, for no work. It also meant the end of the stream
+   * was never read: a client that went away left its thread polling a socket that would never produce
+   * another byte, because {@code available()} answers 0 for a closed peer exactly as it does for an idle one.
+   * <p>
+   * Blocking is safe on both of the paths that have to keep working. A server-side {@link #close()} - the
+   * cancel-request path uses it on another connection's executor - closes the socket, and closing a socket
+   * breaks a thread blocked reading it. A client that closes cleanly produces the EOF the arm below already
+   * handled. Before authentication the socket carries the handshake timeout armed in the constructor, so a
+   * silent client is bounded by it rather than by a poll loop of this method's own (issue #6377).
+   *
+   * @return false when the connection is finished - end of stream, or a socket closed under it - in which
+   * case the caller must stop reading from it. True when a message was read and dispatched.
+   */
   private boolean readMessage(final String messageName, final ReadMessageCallback callback, final char... expectedMessageCodes) {
     try {
-      if (!channel.inputHasData()) {
-        CodeUtils.sleep(100);
-        return false;
-      }
-
       final char type = (char) readNextByte();
       final long length = channel.readUnsignedInt();
 
@@ -1945,6 +2250,11 @@ public class PostgresNetworkExecutor extends Thread {
       return false;
     } catch (final IOException e) {
       setErrorInTx();
+      if (shutdown)
+        // The socket was closed under the blocked read, by this executor's own close() - the cancel-request
+        // path calls it from another connection's thread. That is a shutdown, not a protocol error, and it
+        // must not be logged as one.
+        return false;
       throw new PostgresProtocolException("Error on reading " + messageName + " message: " + e.getMessage(), e);
     }
   }
@@ -1957,16 +2267,6 @@ public class PostgresNetworkExecutor extends Thread {
     }
 
     return nextByte = channel.readUnsignedByte();
-  }
-
-  private void waitForAMessage() {
-    while (!channel.inputHasData()) {
-      try {
-        Thread.sleep(100);
-      } catch (final InterruptedException interruptedException) {
-        throw new PostgresProtocolException("Error on reading from the channel");
-      }
-    }
   }
 
   private void reuseLastByte() {
@@ -2118,9 +2418,15 @@ public class PostgresNetworkExecutor extends Thread {
   /**
    * Session commands such as {@code SET search_path TO "$user", public} are handled by the protocol itself and never
    * reach the SQL engine, so their double quotes must be left alone.
+   * <p>
+   * The emulated system-information queries are in the same category, and for the same reason: rewriting the
+   * quotes in {@code SELECT current_schema() AS "schema"} left an alias in back-ticks that
+   * {@link PostgresSystemQuery} no longer recognised, and the query fell through to a SQL engine that has no
+   * such function (issue #5290).
    */
   private static boolean isSessionCommand(final String queryText) {
-    return queryText.regionMatches(true, 0, "SET ", 0, 4) || queryText.regionMatches(true, 0, "SHOW ", 0, 5);
+    return queryText.regionMatches(true, 0, "SET ", 0, 4) || queryText.regionMatches(true, 0, "SHOW ", 0, 5)
+        || PostgresSystemQuery.parse(queryText) != null;
   }
 
   private void emptyQueryResponse() {

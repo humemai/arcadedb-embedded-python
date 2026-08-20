@@ -50,11 +50,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * apply in {@code Dictionary.getIdByName}, which is the corruption issue #4122 was about and the reason the
  * HTTP endpoint relays the payload to the leader instead of loading it locally.
  * <p>
- * {@code GraphBatchLoad} had no such guard: it took the load wherever the client happened to connect. It cannot
- * relay the way HTTP does, because the HA plugin exposes the leader's HTTP address only and relaying a bulk load
- * through a follower would double the traffic of the transport chosen to avoid exactly that, so it refuses -
- * before writing anything, and naming the leader, so the caller can redirect rather than reconcile a load that
- * got half-way.
+ * {@code GraphBatchLoad} had no such guard: it took the load wherever the client happened to connect. It does not
+ * relay the way HTTP does, because relaying a bulk load through a follower would double the traffic of the
+ * transport chosen to avoid exactly that, so it refuses - before writing anything, and naming the leader, so the
+ * caller can redirect rather than reconcile a load that got half-way. That the named address is one the caller can
+ * actually dial is issue #6091, covered by {@link Issue6091GraphBatchLoadLeaderRedirectIT}.
  * <p>
  * What makes this worth a cluster test rather than a unit test is the second assertion: the same load, over the
  * same RPC, must still succeed against the leader. A guard that refused everywhere would pass a test that only

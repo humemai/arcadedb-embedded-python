@@ -19,10 +19,12 @@
 package com.arcadedb.query.sql.executor;
 
 import com.arcadedb.ContextConfiguration;
+import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Document;
 import com.arcadedb.exception.CommandSQLParsingException;
+import com.arcadedb.utility.TimeBoundRegex;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -36,17 +38,43 @@ import java.util.Set;
  * @author Luca Garulli (l.garulli--(at)--arcadedata.com)
  */
 public class BasicCommandContext implements CommandContext {
-  protected       DatabaseInternal     database;
-  protected       boolean              recordMetrics           = false;
-  protected       CommandContext       parent;
-  protected       CommandContext       child;
-  protected       Map<String, Object>  variables;
-  protected       QueryStatistics      statistics;
-  protected       Map<String, Object>  cachedValues;
-  protected       Map<String, Object>  inputParameters;
-  protected       ContextConfiguration configuration           = new ContextConfiguration();
-  protected final Set<String>          declaredScriptVariables = new HashSet<>();
-  protected       boolean              profiling               = false;
+  protected          DatabaseInternal     database;
+  protected          boolean              recordMetrics           = false;
+  protected          CommandContext       parent;
+  protected          CommandContext       child;
+  protected          Map<String, Object>  variables;
+  protected          QueryStatistics      statistics;
+  protected          Map<String, Object>  cachedValues;
+  protected          Map<String, Object>  inputParameters;
+  protected          ContextConfiguration configuration           = new ContextConfiguration();
+  protected final    Set<String>          declaredScriptVariables = new HashSet<>();
+  protected          boolean              profiling               = false;
+  /**
+   * {@link Long#MIN_VALUE} means "not resolved yet" for the two fields below.
+   * <p>
+   * The three resolvers that read them do a lazy check-then-set on a volatile without synchronizing, and the
+   * race that allows is tolerated deliberately: two threads resolving concurrently walk the same parent chain
+   * and read the same configuration, so they converge on equivalent values, and the loser's write is equivalent
+   * to the winner's. Locking here would put a monitor on a path taken once per batch by every guarded loop in
+   * the engine to protect a computation that is idempotent by construction. The one value that is <em>not</em>
+   * idempotent - the clock read - is why {@link #copy()} resolves before copying rather than letting each
+   * worker resolve its own.
+   * <p>
+   * The sentinel is outside the value domain rather than a plausible instant, so that no legitimate value can
+   * be mistaken for "unresolved": a pinned deadline of {@code 0} means "already expired", which a caller may
+   * well want and which a {@code 0} sentinel would have silently discarded on the next read.
+   */
+  private static final long               UNRESOLVED              = Long.MIN_VALUE;
+  /** {@code arcadedb.command.timeout} in ms. See {@link #getCommandTimeout()}. */
+  protected volatile long                 commandTimeout          = UNRESOLVED;
+  /** Absolute epoch-millis deadline. See {@link #getCommandDeadline()}. */
+  protected volatile long                 commandDeadline         = UNRESOLVED;
+  /** What to call the bound above when a check aborts on it. See {@link #getCommandDeadlineDescription()}. */
+  protected volatile String               commandDeadlineDescription;
+  /** Whether reaching the bound above yields rather than fails. See {@link #isCommandDeadlinePartial()}. */
+  protected volatile boolean              commandDeadlinePartial  = false;
+  /** Absolute {@link System#nanoTime()} deadline for regex evaluation. See {@link #getRegexDeadline()}. */
+  protected volatile long                 regexDeadline           = UNRESOLVED;
 
   @Override
   public Object getVariablePath(final String name) {
@@ -255,6 +283,78 @@ public class BasicCommandContext implements CommandContext {
   }
 
   @Override
+  public long getCommandTimeout() {
+    if (commandTimeout == UNRESOLVED) {
+      if (parent != null)
+        commandTimeout = parent.getCommandTimeout();
+      else {
+        final DatabaseInternal db = getDatabase();
+        commandTimeout = db == null ? 0L : db.getConfiguration().getValueAsLong(GlobalConfiguration.COMMAND_TIMEOUT);
+      }
+    }
+    return commandTimeout;
+  }
+
+  @Override
+  public long getCommandDeadline() {
+    if (commandDeadline == UNRESOLVED) {
+      if (parent != null) {
+        commandDeadlinePartial = parent.isCommandDeadlinePartial();
+        commandDeadline = parent.getCommandDeadline();
+      } else {
+        final long timeout = getCommandTimeout();
+        // The clock is read here and never again: everything downstream compares against this one instant, so
+        // a statement cannot buy itself more time by nesting.
+        commandDeadline = timeout > 0 ? System.currentTimeMillis() + timeout : Long.MAX_VALUE;
+      }
+    }
+    return commandDeadline;
+  }
+
+  @Override
+  public String getCommandDeadlineDescription() {
+    if (commandDeadlineDescription == null) {
+      if (parent != null)
+        commandDeadlineDescription = parent.getCommandDeadlineDescription();
+      else
+        // Built here rather than at resolution time: the description is read only when a check aborts, so a
+        // command that finishes never pays for the string.
+        commandDeadlineDescription = GlobalConfiguration.COMMAND_TIMEOUT.getKey() + " of " + getCommandTimeout() + "ms";
+    }
+    return commandDeadlineDescription;
+  }
+
+  @Override
+  public void setCommandDeadline(final long deadlineEpochMillis, final String description,
+      final boolean yieldPartialResults) {
+    this.commandDeadline = deadlineEpochMillis;
+    this.commandDeadlineDescription = description;
+    this.commandDeadlinePartial = yieldPartialResults;
+  }
+
+  @Override
+  public boolean isCommandDeadlinePartial() {
+    // The flag qualifies the instant, so it is resolved with it and never separately: a context that inherited
+    // its deadline from a parent must inherit what reaching it means, or a RETURN clause would abort a nested
+    // plan with an exception it promised not to raise.
+    getCommandDeadline();
+    return commandDeadlinePartial;
+  }
+
+  @Override
+  public long getRegexDeadline() {
+    if (regexDeadline == UNRESOLVED) {
+      if (parent != null)
+        regexDeadline = parent.getRegexDeadline();
+      else
+        // Same lazy check-then-set on a volatile as the two resolvers above, and tolerated for the same reason.
+        regexDeadline = TimeBoundRegex.newDeadline(
+            GlobalConfiguration.COMMAND_REGEX_TIMEOUT.getValueAsLong(getDatabase()));
+    }
+    return regexDeadline;
+  }
+
+  @Override
   public CommandContext incrementVariable(String name) {
     if (name != null) {
       if (name.startsWith("$"))
@@ -409,6 +509,17 @@ public class BasicCommandContext implements CommandContext {
     copy.parent = parent;
     copy.child = child;
     copy.profiling = profiling;
+    // The deadline is the command's, not the context's: a parallel bucket-scan worker that gets its own copy
+    // must share the budget rather than restart it. Resolved here rather than copied as-is, because copying an
+    // unresolved deadline is the same thing as not copying one - every worker would then read the clock for
+    // itself and a type scanned across N buckets would get N budgets (issue #6266).
+    copy.commandTimeout = getCommandTimeout();
+    copy.commandDeadlinePartial = isCommandDeadlinePartial();
+    copy.commandDeadline = getCommandDeadline();
+    copy.commandDeadlineDescription = commandDeadlineDescription;
+    // Same argument for the regex bound, which used to live in cachedValues - a map copy() deliberately does not
+    // share - and so restarted per worker (issue #6304). Free when the setting is disabled: no clock is read.
+    copy.regexDeadline = getRegexDeadline();
     // Share the same statistics accumulator so mutations performed through the copied context
     // aggregate into one place instead of silently vanishing.
     copy.statistics = statistics;

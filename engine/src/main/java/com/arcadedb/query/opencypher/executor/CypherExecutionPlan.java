@@ -26,6 +26,7 @@ import com.arcadedb.database.RID;
 import com.arcadedb.function.StatelessFunction;
 import com.arcadedb.function.graph.IdFunction;
 import com.arcadedb.graph.Vertex;
+import com.arcadedb.log.LogManager;
 import com.arcadedb.query.opencypher.ast.ArithmeticExpression;
 import com.arcadedb.query.opencypher.ast.BooleanCoercionExpression;
 import com.arcadedb.query.opencypher.ast.BooleanExpression;
@@ -134,6 +135,7 @@ import com.arcadedb.query.sql.executor.QueryStatistics;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.query.sql.executor.WorkGuard;
 import com.arcadedb.query.sql.parser.ExplainResultSet;
 
 import java.util.ArrayList;
@@ -146,6 +148,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.logging.Level;
 
 /**
  * Execution plan for a Cypher query.
@@ -295,9 +298,12 @@ public class CypherExecutionPlan {
     final boolean hasWriteOps = !statement.isReadOnly();
 
     if (hasWriteOps) {
-      // Materialize the ResultSet to force write operation execution
+      // Materialize the ResultSet to force write operation execution. The drain is the statement, so the
+      // command deadline is tested here too - nothing downstream of it can (issue #6266).
+      final WorkGuard guard = WorkGuard.forCommandDeadline(context);
       final List<ResultInternal> materializedResults = new ArrayList<>();
       while (resultSet.hasNext()) {
+        guard.check();
         materializedResults.add((ResultInternal) resultSet.next());
       }
       // Surface the CRUD-count accumulator built up by the mutation steps (CreateStep, SetStep,
@@ -305,9 +311,18 @@ public class CypherExecutionPlan {
       // write statement, even if it performed no actual mutation (containsUpdates() is false then).
       final QueryStatistics stats = context.getStatistics();
 
+      // A bare CALL (no YIELD/RETURN, e.g. a write-classified custom function or write procedure) is its
+      // own projection: CallStep already yields its implicit "all columns" row, so a missing RETURN clause
+      // here does not mean "side effects only" the way it does for CREATE/SET/DELETE/MERGE/REMOVE. Issue #6446.
+      // Deliberately scoped to a CALL that is the statement's ONLY clause: a CALL chained after other
+      // clauses (e.g. WITH ... CALL proc() YIELD x, or multiple chained CALLs), still with no trailing
+      // RETURN, is a separate, narrower gap left for #6450 rather than widened here.
+      final List<ClauseEntry> clauses = statement.getClausesInOrder();
+      final boolean bareCallOwnsProjection = clauses.size() == 1 && clauses.get(0).getType() == ClauseEntry.ClauseType.CALL;
+
       // If no RETURN clause (or GQL FINISH was used), return empty results
       // (write side effects still happened). Issue #3365 section 1.3.
-      if (statement.getReturnClause() == null || statement.hasFinishClause()) {
+      if (statement.hasFinishClause() || (statement.getReturnClause() == null && !bareCallOwnsProjection)) {
         final IteratorResultSet empty = new IteratorResultSet(Collections.<Result>emptyList().iterator());
         empty.setStatistics(stats);
         return empty;
@@ -320,18 +335,35 @@ public class CypherExecutionPlan {
 
     // Read-only path: GQL FINISH still suppresses any rows the MATCH would have produced.
     if (statement.hasFinishClause()) {
-      while (resultSet.hasNext())
+      final WorkGuard guard = WorkGuard.forCommandDeadline(context);
+      while (resultSet.hasNext()) {
+        guard.check();
         resultSet.next();
+      }
       return new IteratorResultSet(Collections.<Result>emptyList().iterator());
     }
 
     return resultSet;
   }
 
+  /**
+   * Makes a nested plan share the enclosing command's deadline instead of starting a fresh budget from now.
+   * Without this a statement could buy itself unlimited time by nesting: every {@code CALL { }} body, every
+   * correlated {@code COUNT { }} probe and every UNION branch runs on a context of its own (issue #6266).
+   * <p>
+   * What reaching the deadline means travels with it: an outer {@code TIMEOUT n RETURN} must end the nested
+   * plan's rows too, not abort it with the exception the clause promised not to raise (issue #6304).
+   */
+  private static void inheritCommandDeadline(final BasicCommandContext context, final CommandContext outerContext) {
+    if (outerContext != null)
+      context.setCommandDeadline(outerContext.getCommandDeadline(), outerContext.getCommandDeadlineDescription(),
+          outerContext.isCommandDeadlinePartial());
+  }
+
   private boolean canUseOptimizedPhysicalPlan() {
     return physicalPlan != null && physicalPlan.getRootOperator() != null
         && !statement.hasUnwindBeforeMatch() && !statement.hasSubquery()
-        && !statement.hasWithBeforeMatch() && !statement.hasVariableLengthPath()
+        && !statement.hasWithBeforeMatch()
         && !statement.hasWriteBeforeMatch();
   }
 
@@ -359,13 +391,16 @@ public class CypherExecutionPlan {
       ctx.setDatabase(database);
       ctx.setInputParameters(parameters);
       setupFunctionResolver(ctx);
+      inheritCommandDeadline(ctx, outerContext);
 
       // Execute each branch with the seed row, collect all results
+      final WorkGuard unionGuard = WorkGuard.forCommandDeadline(ctx);
       final List<ResultInternal> allResults = new ArrayList<>();
       final Set<String> seen = removeDuplicates ? new HashSet<>() : null;
       for (final CypherExecutionPlan branchPlan : branchPlans) {
         final ResultSet rs = branchPlan.executeWithSeedRow(seedRow, outerContext);
         while (rs.hasNext()) {
+          unionGuard.check();
           final Result row = rs.next();
           if (removeDuplicates) {
             final String key = buildResultKey(row);
@@ -390,6 +425,7 @@ public class CypherExecutionPlan {
     // fully read-only CALL, violating the "read queries allocate nothing" constraint.
     if (outerContext != null && !statement.isReadOnly())
       context.setStatistics(outerContext.getStatistics());
+    inheritCommandDeadline(context, outerContext);
 
     // Create a seed step that returns the seed row
     final AbstractExecutionStep seedStep = new AbstractExecutionStep(context) {
@@ -441,13 +477,15 @@ public class CypherExecutionPlan {
    * @param outerContext the enclosing command context, may be null
    */
   public long countRows(final Result seedRow, final CommandContext outerContext) {
-    final Long pushedDown = tryCountRowsPushDown(seedRow);
+    final Long pushedDown = tryCountRowsPushDown(seedRow, outerContext);
     if (pushedDown != null)
       return pushedDown;
 
+    final WorkGuard guard = WorkGuard.forCommandDeadline(outerContext);
     long count = 0L;
     try (final ResultSet resultSet = executeWithSeedRow(seedRow, outerContext)) {
       while (resultSet.hasNext()) {
+        guard.check();
         resultSet.next();
         count++;
       }
@@ -463,7 +501,7 @@ public class CypherExecutionPlan {
    * produces, and a push-down never produces them, so the arithmetic that would relate the two is not the one
    * {@link #applySkipAndLimit} does to the single row a count comes back as.
    */
-  private Long tryCountRowsPushDown(final Result seedRow) {
+  private Long tryCountRowsPushDown(final Result seedRow, final CommandContext outerContext) {
     if (statement instanceof UnionStatement)
       return null;
 
@@ -485,6 +523,7 @@ public class CypherExecutionPlan {
     context.setDatabase(database);
     context.setInputParameters(parameters);
     setupFunctionResolver(context);
+    inheritCommandDeadline(context, outerContext);
 
     final AbstractExecutionStep countStep = tryCountPushDown(context, true, correlation);
     if (countStep == null)
@@ -676,6 +715,9 @@ public class CypherExecutionPlan {
     explainOutput.append("OpenCypher Native Execution Plan\n");
     explainOutput.append("=================================\n\n");
 
+    // The chain described below, kept so a client reading the plan as data sees what the text shows.
+    List<ExecutionStep> describedSteps = Collections.emptyList();
+
     // The push-down is asked FIRST because execute() asks it first: it replaces the whole chain, so a query it
     // claims never reaches the optimizer, and describing that query by the physical plan the optimizer built for it
     // names a plan the engine does not run. That gap predates this issue, which widens it by routing the plainest
@@ -686,6 +728,7 @@ public class CypherExecutionPlan {
       explainOutput.append("Execution Plan:\n");
       appendStepChain(explainOutput, countPushDown);
       explainOutput.append("\n");
+      describedSteps = stepChainOf(countPushDown);
     }
 
     if (canUseOptimizedPhysicalPlan()) {
@@ -697,13 +740,146 @@ public class CypherExecutionPlan {
       explainOutput.append("\n");
       explainOutput.append(String.format("Total Estimated Cost: %.2f\n", physicalPlan.getTotalEstimatedCost()));
       explainOutput.append(String.format("Total Estimated Rows: %d\n", physicalPlan.getTotalEstimatedCardinality()));
+      if (countPushDown == null) {
+        // Not a second optimization: buildExecutionStepsWithOptimizer wraps THIS plan's physicalPlan - the same
+        // instance the text above is printed from - so the structured steps and the text cannot describe two
+        // different plans.
+        try {
+          describedSteps = stepChainOf(stepsForDescription());
+          appendStepsAfterTheOptimizedMatch(explainOutput, describedSteps);
+        } catch (final Exception e) {
+          explainOutput.append("\n");
+          appendPlanBuildFailure(explainOutput, e);
+        }
+      }
+    } else if (isUnion()) {
+      // A UNION has no plan of its own to be optimized or not: the planner leaves its physicalPlan null and plans
+      // each branch on its own, so a branch below can perfectly well be the optimizer's while the union is not.
+      // Saying "not yet supported by optimizer" here contradicted the `+ OPTIMIZED MATCH` printed underneath it.
+      explainOutput.append("Using Per-Branch Planning (UNION)\n\n");
+      explainOutput.append("Reason: each branch of a UNION is planned on its own - see the branches below\n\n");
+      describedSteps = appendPlanDescription(explainOutput);
     } else if (countPushDown == null) {
       explainOutput.append("Using Traditional Execution (Non-Optimized)\n\n");
-      explainOutput.append("Reason: Query pattern not yet supported by optimizer\n");
-      explainOutput.append("Execution will use step-by-step interpretation\n");
+      explainOutput.append("Reason: Query pattern not yet supported by optimizer\n\n");
+      describedSteps = appendPlanDescription(explainOutput);
     }
 
-    return new ExplainResultSet(new OpenCypherExplainExecutionPlan(explainOutput.toString()));
+    return new ExplainResultSet(new OpenCypherExplainExecutionPlan(explainOutput.toString(), describedSteps, -1));
+  }
+
+  /** Whether this plan is a UNION, which has no plan of its own: it runs the plan of each of its branches. */
+  private boolean isUnion() {
+    return unionSubqueryPlans != null && !unionSubqueryPlans.isEmpty();
+  }
+
+  /**
+   * Describes the chain this plan would run, and returns it.
+   * <p>
+   * EXPLAIN used to stop at the reason above, which left the one command whose entire purpose is inspecting a plan
+   * WITHOUT running it strictly less informative than PROFILE - and PROFILE is no workaround for a slow query, nor
+   * for a writing one, since it executes (issue #6323). The steps are the ones {@link #execute()} builds, and they
+   * are built and never pulled: construction reads the schema, the work is all in {@code syncPull}.
+   * <p>
+   * A UNION is answered branch by branch, so it is described branch by branch: each sub-plan describes the chain it
+   * would run, which for a branch the optimizer claims is that branch's own answer.
+   */
+  private List<ExecutionStep> appendPlanDescription(final StringBuilder output) {
+    if (isUnion()) {
+      output.append("Execution Plan:\n");
+      output.append("+ UNION").append(unionRemoveDuplicates ? "" : " ALL")
+          .append(" (").append(unionSubqueryPlans.size()).append(" queries)\n");
+
+      final List<ExecutionStep> allSteps = new ArrayList<>();
+      for (int i = 0; i < unionSubqueryPlans.size(); i++) {
+        output.append("  Branch ").append(i + 1).append(":\n");
+        final StringBuilder branchOutput = new StringBuilder();
+        allSteps.addAll(unionSubqueryPlans.get(i).appendPlanDescription(branchOutput));
+        output.append(branchOutput.toString().indent(2));
+      }
+      return allSteps;
+    }
+
+    final AbstractExecutionStep rootStep;
+    try {
+      rootStep = stepsForDescription();
+    } catch (final Exception e) {
+      appendPlanBuildFailure(output, e);
+      return Collections.emptyList();
+    }
+
+    if (rootStep == null) {
+      // The statement built no chain at all, which execute() answers with an empty result set. This used to read
+      // "Execution will use step-by-step interpretation" - a route-selection message, true when this branch was
+      // reached without ever building anything, and misleading now that it means there was nothing to describe.
+      output.append("No execution steps: this statement produces no rows to execute\n");
+      return Collections.emptyList();
+    }
+
+    output.append("Execution Plan:\n");
+    appendStepChain(output, rootStep);
+    return stepChainOf(rootStep);
+  }
+
+  /**
+   * Reports a plan that could not be built as part of the description, rather than as a failed EXPLAIN or as
+   * nothing at all.
+   * <p>
+   * EXPLAIN answers a question about a query, so a query that cannot be planned is an answer to it: the statement
+   * would fail the same way when run, and naming the failure beats both raising it - which would leave the user
+   * with no plan and no reason - and swallowing it into a log line nobody has enabled (issue #6323). The stack
+   * trace still goes to the log, since only the message belongs in a plan.
+   * <p>
+   * The message tells the caller nothing running the same statement would not: {@link #execute()} builds this very
+   * chain and lets what it throws reach the client. EXPLAIN needs no privilege beyond running the query it
+   * describes, so there is no audience here that could not have obtained the same message by asking directly.
+   */
+  private void appendPlanBuildFailure(final StringBuilder output, final Exception cause) {
+    LogManager.instance().log(this, Level.FINE, "Error on building the execution plan to describe it", cause);
+    output.append("Execution plan not available: ")
+        .append(cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName())
+        .append("\n");
+  }
+
+  /**
+   * The step chain this query would run, built only to be described, or null when the statement produces none.
+   * Building it is the same work {@link #execute()} does before pulling anything, so it fails on the statements
+   * that would fail there: the callers report that failure instead of propagating it.
+   */
+  private AbstractExecutionStep stepsForDescription() {
+    final BasicCommandContext context = new BasicCommandContext();
+    context.setDatabase(database);
+    context.setInputParameters(parameters);
+    setupFunctionResolver(context);
+    return canUseOptimizedPhysicalPlan() ? buildExecutionStepsWithOptimizer(context) : buildExecutionSteps(context);
+  }
+
+  /**
+   * Appends the steps that run after the optimized MATCH, which the physical plan does not describe.
+   * <p>
+   * The optimizer claims the MATCH pattern only: RETURN, ORDER BY, LIMIT and every write clause stay execution
+   * steps appended to the operator chain. Printing the physical plan alone therefore answered
+   * {@code EXPLAIN MATCH (n) WHERE ... DELETE n} with a scan and no mention of the delete (issue #6323). The first
+   * element of the chain is the operator wrapper the physical plan above already describes, so it is skipped.
+   */
+  private static void appendStepsAfterTheOptimizedMatch(final StringBuilder output, final List<ExecutionStep> chain) {
+    if (chain.size() < 2)
+      return;
+
+    output.append("\nSteps After the Optimized Match:\n");
+    for (final ExecutionStep step : chain.subList(1, chain.size())) {
+      output.append(((AbstractExecutionStep) step).prettyPrint(0, 2));
+      output.append("\n");
+    }
+  }
+
+  /** A step chain as a first-step-first list, which is the order it is read in and the reverse of how it is linked. */
+  private static List<ExecutionStep> stepChainOf(final AbstractExecutionStep rootStep) {
+    final List<ExecutionStep> stepChain = new ArrayList<>();
+    for (AbstractExecutionStep current = rootStep; current != null; current = (AbstractExecutionStep) current.getPrev())
+      stepChain.add(current);
+    Collections.reverse(stepChain);
+    return stepChain;
   }
 
   /**
@@ -726,13 +902,8 @@ public class CypherExecutionPlan {
 
   /** Appends a step chain first-step-first, which is the order it is read in and the reverse of how it is linked. */
   private static void appendStepChain(final StringBuilder output, final AbstractExecutionStep rootStep) {
-    final List<AbstractExecutionStep> stepChain = new ArrayList<>();
-    for (AbstractExecutionStep current = rootStep; current != null; current = (AbstractExecutionStep) current.getPrev())
-      stepChain.add(current);
-    Collections.reverse(stepChain);
-
-    for (final AbstractExecutionStep step : stepChain) {
-      output.append(step.prettyPrint(0, 2));
+    for (final ExecutionStep step : stepChainOf(rootStep)) {
+      output.append(((AbstractExecutionStep) step).prettyPrint(0, 2));
       output.append("\n");
     }
   }
@@ -804,6 +975,9 @@ public class CypherExecutionPlan {
     if (errorMessage != null)
       profileOutput.append(String.format("\nError: %s\n", errorMessage));
 
+    // Collect execution steps for structured plan data
+    final List<ExecutionStep> executionSteps = stepChainOf(rootStep);
+
     // Asked before canUseOptimizedPhysicalPlan() for the reason explain() asks it first: the push-down replaced the
     // chain, so the optimizer's physical plan is not what ran (issue #5715).
     if (countPushedDown) {
@@ -818,23 +992,14 @@ public class CypherExecutionPlan {
       profileOutput.append(physicalPlan.getRootOperator().explain(0));
       profileOutput.append(String.format("\nEstimated Cost: %.2f\n", physicalPlan.getTotalEstimatedCost()));
       profileOutput.append(String.format("Estimated Rows: %d\n", physicalPlan.getTotalEstimatedCardinality()));
+      if (!countPushedDown)
+        appendStepsAfterTheOptimizedMatch(profileOutput, executionSteps);
     } else if (!countPushedDown) {
       profileOutput.append("\nExecution Plan (Traditional):\n");
       if (rootStep != null)
         appendStepChain(profileOutput, rootStep);
       else
         profileOutput.append("No execution steps generated\n");
-    }
-
-    // Collect execution steps for structured plan data
-    final List<ExecutionStep> executionSteps = new ArrayList<>();
-    if (rootStep != null) {
-      AbstractExecutionStep current = rootStep;
-      while (current != null) {
-        executionSteps.add(current);
-        current = (AbstractExecutionStep) current.getPrev();
-      }
-      Collections.reverse(executionSteps);
     }
 
     results.setPlan(new OpenCypherExplainExecutionPlan(profileOutput.toString(), executionSteps, endTime - startTime));
@@ -1234,11 +1399,7 @@ public class CypherExecutionPlan {
             entryIndex += 2; // skip both the next OPTIONAL MATCH and the WITH clause
             // Update boundVariables from the WITH clause
             final WithClause nextWith = ((ClauseEntry) clausesInOrder.get(entryIndex)).getTypedClause();
-            boundVariables.clear();
-            for (final ReturnClause.ReturnItem item : nextWith.getItems()) {
-              final String alias = item.getAlias();
-              boundVariables.add(alias != null ? alias : item.getExpression().getText());
-            }
+            applyProjectionToScope(nextWith.getItems(), boundVariables);
             break;
           }
 
@@ -1250,11 +1411,7 @@ public class CypherExecutionPlan {
             entryIndex++; // skip the WITH clause (already handled)
             // Update boundVariables from the WITH clause
             final WithClause nextWith = ((ClauseEntry) clausesInOrder.get(entryIndex)).getTypedClause();
-            boundVariables.clear();
-            for (final ReturnClause.ReturnItem item : nextWith.getItems()) {
-              final String alias = item.getAlias();
-              boundVariables.add(alias != null ? alias : item.getExpression().getText());
-            }
+            applyProjectionToScope(nextWith.getItems(), boundVariables);
             break;
           }
         }
@@ -1264,12 +1421,8 @@ public class CypherExecutionPlan {
       case WITH:
         final WithClause withClause = entry.getTypedClause();
         currentStep = buildWithStep(withClause, currentStep, context, functionFactory);
-        // WITH resets the scope: only WITH output variables are in scope afterwards
-        boundVariables.clear();
-        for (final ReturnClause.ReturnItem item : withClause.getItems()) {
-          final String alias = item.getAlias();
-          boundVariables.add(alias != null ? alias : item.getExpression().getText());
-        }
+        // An explicit WITH resets the scope to its own output variables; WITH * forwards the incoming one
+        applyProjectionToScope(withClause.getItems(), boundVariables);
         break;
 
       case MERGE:
@@ -1624,6 +1777,37 @@ public class CypherExecutionPlan {
   }
 
   /**
+   * Applies a {@code WITH} projection to the set of variables in scope after it.
+   * <p>
+   * An explicit projection list resets the scope to exactly what it names, which is what makes a variable the
+   * following clauses do not import unavailable. {@code WITH *} names nothing: it forwards the incoming scope
+   * unchanged, so the names stay bound (#6311). Treating its single {@code "*"} item as if it were a projected
+   * variable used to leave the scope holding the literal name {@code *} and nothing else, which is how a
+   * variable shared with a following MATCH stopped being recognised as already bound - and a shared variable
+   * that is not recognised is a Cartesian product rather than a join. A {@code WITH *, expr AS alias} both
+   * forwards and adds.
+   * <p>
+   * The star is recognised by {@link ReturnClause.ReturnItem#isStar()}, not by the projected name being {@code *}:
+   * a user can write a variable called {@code `*`}, and {@code WITH n AS `*`} is an ordinary projection that resets
+   * the scope to that one name, not a star that forwards it (issue #6334).
+   */
+  private static void applyProjectionToScope(final List<ReturnClause.ReturnItem> items, final Set<String> scope) {
+    boolean forwardsAll = false;
+    final List<String> projected = new ArrayList<>(items.size());
+    for (final ReturnClause.ReturnItem item : items) {
+      if (item.isStar())
+        forwardsAll = true;
+      else {
+        final String alias = item.getAlias();
+        projected.add(alias != null ? alias : item.getExpression().getText());
+      }
+    }
+    if (!forwardsAll)
+      scope.clear();
+    scope.addAll(projected);
+  }
+
+  /**
    * Builds execution step for a MATCH clause.
    * Backward-compatible overload without bound variable tracking.
    */
@@ -1724,14 +1908,17 @@ public class CypherExecutionPlan {
         }
 
         // Handle zero-length named paths: p = (n)
+        // Note: matchChainStart must stay pointed at matchStep (the actual chain head that
+        // OptionalMatchStep feeds each input row into) - it was already correctly assigned above.
+        // Reassigning it to zeroPathStep here would make OptionalMatchStep call
+        // zeroPathStep.setPrevious(...) directly, discarding the setPrevious(currentStep) link to
+        // matchStep below and leaving zeroPathStep with no previous step (issue #6378).
         final String singlePathVar = pathPattern.hasPathVariable() ? pathPattern.getPathVariable() : null;
         if (singlePathVar != null) {
           matchVariables.add(singlePathVar);
           final ZeroLengthPathStep zeroPathStep = new ZeroLengthPathStep(variable, singlePathVar, context);
           zeroPathStep.setPrevious(currentStep);
           currentStep = zeroPathStep;
-          if (isOptional && matchChainStart == matchStep)
-            matchChainStart = zeroPathStep;
         }
       } else if (pathPattern instanceof ShortestPathPattern) {
         // Handle shortestPath or allShortestPaths patterns
@@ -1899,11 +2086,11 @@ public class CypherExecutionPlan {
         // For the first hop, use sourceVar; for subsequent hops, use the previous targetVar
         String currentSourceVar = sourceVar;
 
-        // Smart GAV eligibility: for each anonymous hop, check if its edge types overlap
-        // with any other hop's types in the same pattern. If disjoint, null relVar enables
-        // fast path (GAV/CSR). If overlapping, generate an internal anonymous variable to
-        // force edge-loading for cross-hop uniqueness checking.
-        final boolean[] hopNeedsEdgeTracking = computeHopEdgeTrackingNeeds(pathPattern);
+        // Smart GAV eligibility: for each anonymous hop, check whether any other hop of the same MATCH
+        // clause - this pattern part or another one across a comma - could be the same physical edge. If
+        // none can, a null relVar enables the fast path (GAV/CSR). If one can, generate an internal
+        // anonymous variable to force edge-loading, so relationship uniqueness has something to compare.
+        final boolean[] hopNeedsEdgeTracking = computeHopEdgeTrackingNeeds(pathPatterns, patternIndex);
 
         for (int i = 0; i < pathPattern.getRelationshipCount(); i++) {
           final RelationshipPattern relPattern = pathPattern.getRelationship(i);
@@ -1969,6 +2156,21 @@ public class CypherExecutionPlan {
             // Check if this hop requires IN traversal on a unidirectional edge.
             // Unidirectional edges don't store incoming links, so we must restructure:
             // instead of (bound)-[IN]->(target), scan target type and go (target)-[OUT]->(bound).
+            // #6311: the names a hop must identity-check its target against are the ones the row already
+            // carries when the hop RUNS: everything bound before this MATCH plus everything this MATCH has
+            // bound so far (earlier comma-separated patterns, earlier hops). Snapshot them here rather than
+            // handing the step the planner's live `boundVariables` set: that set is mutated after the clause
+            // is planned - which is what used to supply this clause's own variables - and a following WITH
+            // clears it, so the join on a variable shared between two patterns of the SAME MATCH silently
+            // degraded into a Cartesian product the moment a `WITH *` followed.
+            //
+            // The snapshot also carries this hop's own target and relationship names, added just above. That is
+            // deliberate and costs nothing: the check reads a name only when the row ALSO already holds a vertex
+            // under it, and a name this hop is about to bind for the first time is absent from the row. Excluding
+            // them would instead need the set rebuilt per hop in the opposite order, for no gain.
+            final Set<String> targetIdentityVars = new HashSet<>(boundVariables);
+            targetIdentityVars.addAll(matchVariables);
+
             final Direction effectiveDir = directionOverride != null ? directionOverride : relPattern.getDirection();
             final boolean needsReverseOnUnidirectional = !reversed
                 && effectiveDir == Direction.IN
@@ -1978,7 +2180,7 @@ public class CypherExecutionPlan {
             if (needsReverseOnUnidirectional) {
               // Restructure: scan target type with MatchNodeStep, then traverse OUT to validate
               // against the bound source. The bound source becomes the "target" of the relationship.
-              final Set<String> boundWithSource = new HashSet<>(boundVariables);
+              final Set<String> boundWithSource = new HashSet<>(targetIdentityVars);
               boundWithSource.add(effectiveSourceVar);
               final MatchNodeStep scanStep = new MatchNodeStep(effectiveTargetVar, effectiveTargetNode, context);
               if (isOptional && matchChainStart == null) {
@@ -1996,7 +2198,7 @@ public class CypherExecutionPlan {
               // Normal case: pass target node pattern for label filtering, bound variables for identity
               // checking, and a snapshot for relationship uniqueness scoping.
               nextStep = new MatchRelationshipStep(effectiveSourceVar, relVar, effectiveTargetVar, relPattern,
-                  pathVariable, effectiveTargetNode, boundVariables, new HashSet<>(boundVariables),
+                  pathVariable, effectiveTargetNode, targetIdentityVars, new HashSet<>(boundVariables),
                   directionOverride, context);
             }
           }
@@ -2525,8 +2727,8 @@ public class CypherExecutionPlan {
               // For the first hop, use sourceVar; for subsequent hops, use the previous targetVar
               String currentSourceVar = sourceVar;
 
-              // Smart GAV eligibility: same analysis as ordered path
-              final boolean[] hopNeedsEdgeTrackingLegacy = computeHopEdgeTrackingNeeds(pathPattern);
+              // Smart GAV eligibility: same clause-scoped analysis as the ordered path
+              final boolean[] hopNeedsEdgeTrackingLegacy = computeHopEdgeTrackingNeeds(pathPatterns, patternIndex);
 
               for (int i = 0; i < pathPattern.getRelationshipCount(); i++) {
                 final RelationshipPattern relPattern = pathPattern.getRelationship(i);
@@ -2555,9 +2757,15 @@ public class CypherExecutionPlan {
                   nextStep = new ExpandPathStep(currentSourceVar, pathVariable, relVar, targetVar, relPattern, false,
                       targetNode, pathPattern.getEffectivePathMode(), computePrevVarsForVlp(pathPattern, i, legacyBoundVariables), context);
                 } else {
-                  // Fixed-length relationship - pass path variable, target node pattern, and bound variables
+                  // Fixed-length relationship - pass path variable, target node pattern, and bound variables.
+                  // #6311: the same snapshot rule as the ordered builder above - the hop identity-checks its
+                  // target against what the row carries when it RUNS, so it gets the names bound before this
+                  // MATCH plus the ones this MATCH has bound so far (this hop's own included, harmlessly - see
+                  // the note there), never the planner's live set, which a following WITH empties.
+                  final Set<String> targetIdentityVars = new HashSet<>(legacyBoundVariables);
+                  targetIdentityVars.addAll(matchVariables);
                   nextStep = new MatchRelationshipStep(currentSourceVar, relVar, targetVar, relPattern, pathVariable,
-                      targetNode, legacyBoundVariables, context);
+                      targetNode, targetIdentityVars, context);
                 }
 
                 // Update source for next hop in multi-hop patterns
@@ -3626,8 +3834,12 @@ public class CypherExecutionPlan {
     if (!(nodeStep instanceof MatchNodeStep))
       nodeStep = new MatchNodeStep(anchorVar, anchorNode, context);
 
-    // Determine target label for filtering (the counted node's label, if any)
+    // Determine target label for filtering (the counted node's label, if any). The step keys the
+    // filter on one name, which is not what a conjunction or a disjunction asks for, so a label set
+    // that name cannot stand for declines the push-down (issue #6322).
     final NodePattern countedNode = anchorNode == sourceNode ? targetNode : sourceNode;
+    if (!hasPushDownRepresentableLabel(countedNode))
+      return null;
     final String targetLabel = countedNode.hasLabels() ? countedNode.getLabels().get(0) : null;
 
     final CountEdgesReturnStep countStep = new CountEdgesReturnStep(
@@ -3904,7 +4116,7 @@ public class CypherExecutionPlan {
     // Collect projected variable names from WITH items
     final Set<String> projectedVars = new LinkedHashSet<>();
     for (final ReturnClause.ReturnItem item : withClause.getItems()) {
-      if ("*".equals(item.getOutputName()))
+      if (item.isStar())
         return currentStep; // WITH * keeps everything
       projectedVars.add(item.getOutputName());
     }
@@ -3997,83 +4209,84 @@ public class CypherExecutionPlan {
   }
 
   /**
-   * Checks whether an edge variable is actually referenced in the query outside its
-   * MATCH pattern declaration. If the variable appears only in the pattern (e.g.,
-   * {@code [r:KNOWS]}) but is never used elsewhere, it can be treated as anonymous
-   * for GAV/fast-path purposes.
-
-
-
-
-  /**
-   * Determines which hops in a path pattern need edge tracking for Cypher's relationship
-   * uniqueness constraint. A hop needs tracking only if its edge types could overlap with
-   * another hop's types in the same pattern AND the overlapping hops could match the same
-   * physical edge. Two hops with the same edge type but type-disjoint source or target
-   * vertex labels cannot match the same edge.
+   * Determines which hops of one comma-separated pattern part have to bind their edge so that Cypher's
+   * relationship uniqueness can be enforced.
    * <p>
-   * Rules:
+   * Uniqueness is scoped to the whole MATCH clause, not to one pattern part: two parts separated by a comma
+   * are one pattern and may never bind the same relationship (two separate MATCH clauses may - that is the
+   * documented difference between the comma and a second MATCH). The check itself is a comparison against the
+   * edges the row already carries, so a hop that is never asked to bind its edge is invisible to it. Scoping
+   * this analysis to a single part therefore did not merely miss an optimisation, it dropped the constraint:
+   * a part that cannot collide with itself - a single hop, typically - bound nothing, and the hop of a later
+   * part had nothing to compare against (issue #6310).
+   * <p>
+   * A hop is left free - which is what keeps it on the GAV/CSR fast path - only when no other hop in the
+   * clause can be the same physical edge:
    * <ul>
-   *   <li>Single-hop pattern → no tracking needed (no other hop to conflict with)</li>
-   *   <li>Untyped hop (matches all edge types) → always needs tracking</li>
-   *   <li>Typed hop whose types are disjoint from all other hops → no tracking</li>
-   *   <li>Typed hop with type overlap but disjoint vertex labels on the edge endpoints → no tracking</li>
-   *   <li>Typed hop with type overlap and compatible vertex labels → needs tracking</li>
+   *   <li>the only hop in the clause has nothing to collide with;</li>
+   *   <li>two hops whose edge types are disjoint in the schema are always different edges. An edge has
+   *   exactly one type, so a hop's type list is a disjunction: the pair is disjoint only when every
+   *   combination is. Subtyping counts as overlap - {@code [:BASE]} and {@code [:SUB]} both match a
+   *   {@code SUB} edge;</li>
+   *   <li>two hops whose OUT or IN endpoint patterns are type-disjoint cannot be the same edge either,
+   *   whatever their types.</li>
    * </ul>
    *
-   * @param pathPattern the path pattern to analyze
-   * @return boolean array, true at index i if hop i needs edge tracking
+   * @param clausePatterns the comma-separated pattern parts of the MATCH clause being planned
+   * @param patternIndex   index in {@code clausePatterns} of the part being planned
+   *
+   * @return boolean array, true at index i if hop i of that part must bind its edge
    */
-  private boolean[] computeHopEdgeTrackingNeeds(final PathPattern pathPattern) {
-    final int hopCount = pathPattern.getRelationshipCount();
-    final boolean[] needs = new boolean[hopCount];
-    if (hopCount <= 1)
-      return needs; // single-hop: all false
+  private boolean[] computeHopEdgeTrackingNeeds(final List<PathPattern> clausePatterns, final int patternIndex) {
+    final PathPattern pathPattern = clausePatterns.get(patternIndex);
+    final boolean[] needs = new boolean[pathPattern.getRelationshipCount()];
 
-    // Collect edge types per hop (null = untyped, matches all)
-    final List<String>[] hopTypes = new List[hopCount];
-    boolean hasUntyped = false;
-    for (int i = 0; i < hopCount; i++) {
-      final RelationshipPattern rel = pathPattern.getRelationship(i);
-      if (rel.hasTypes())
-        hopTypes[i] = rel.getTypes();
-      else {
-        hopTypes[i] = null;
-        hasUntyped = true;
-      }
-    }
-
-    for (int i = 0; i < hopCount; i++) {
-      if (hopTypes[i] == null) {
-        // Untyped hop: overlaps with everything
-        needs[i] = true;
-        continue;
-      }
-      if (hasUntyped) {
-        // Another hop is untyped → overlaps with us
-        needs[i] = true;
-        continue;
-      }
-      // Check if our types overlap with any other hop's types
-      for (int j = 0; j < hopCount; j++) {
-        if (i == j)
-          continue;
-        // Both typed: check intersection
-        for (final String type : hopTypes[i]) {
-          if (hopTypes[j].contains(type)) {
-            // Same edge type — check if the hops are guaranteed to match different
-            // physical edges based on their vertex endpoint labels
-            if (areHopsDisjointByEndpointLabels(pathPattern, i, j))
-              continue; // Disjoint endpoints → skip this overlap
+    for (int i = 0; i < needs.length; i++) {
+      for (int p = 0; p < clausePatterns.size() && !needs[i]; p++) {
+        final PathPattern other = clausePatterns.get(p);
+        for (int j = 0; j < other.getRelationshipCount(); j++) {
+          if (p == patternIndex && i == j)
+            continue;
+          if (hopsCanMatchTheSameEdge(pathPattern, i, other, j)) {
             needs[i] = true;
             break;
           }
         }
-        if (needs[i])
-          break;
       }
     }
     return needs;
+  }
+
+  /**
+   * Whether two hops of the same MATCH clause could bind the same physical edge, and so have to be compared
+   * against each other for relationship uniqueness. Conservative: it answers yes unless the schema proves
+   * otherwise, because a wrong no silently returns rows Cypher forbids.
+   */
+  private boolean hopsCanMatchTheSameEdge(final PathPattern patternI, final int hopI, final PathPattern patternJ,
+      final int hopJ) {
+    final RelationshipPattern relI = patternI.getRelationship(hopI);
+    final RelationshipPattern relJ = patternJ.getRelationship(hopJ);
+
+    // A hop capped at zero edges - [*0..0] - binds none, so it has nothing to share with anybody.
+    if (bindsNoEdge(relI) || bindsNoEdge(relJ))
+      return false;
+
+    if (relI.hasTypes() && relJ.hasTypes() && edgeTypesAreDisjoint(relI.getTypes(), relJ.getTypes()))
+      return false;
+
+    return !areHopsDisjointByEndpointLabels(patternI, hopI, patternJ, hopJ);
+  }
+
+  /**
+   * Whether no edge in the schema can satisfy both type lists. An edge carries exactly one type, so each list
+   * is a disjunction and the two are disjoint only when every pair of alternatives is.
+   */
+  private boolean edgeTypesAreDisjoint(final List<String> typesI, final List<String> typesJ) {
+    for (final String typeI : typesI)
+      for (final String typeJ : typesJ)
+        if (!labelsAreTypeDisjoint(typeI, typeJ))
+          return false;
+    return true;
   }
 
   /**
@@ -4100,8 +4313,9 @@ public class CypherExecutionPlan {
   }
 
   /**
-   * Checks if two hops with the same edge type are guaranteed to match different physical edges
-   * based on the vertex labels at their edge endpoints.
+   * Checks if two hops of the same MATCH clause - each one identified by its pattern part and its index
+   * inside it, so the pair may straddle a comma - are guaranteed to match different physical edges based
+   * on the vertex labels at their edge endpoints.
    * <p>
    * An edge has exactly one OUT vertex and one IN vertex. If we can prove that the OUT vertex
    * (or IN vertex) for hop i must be of a different type than for hop j, the edges are distinct.
@@ -4111,21 +4325,34 @@ public class CypherExecutionPlan {
    *   <li>OUT direction: edge OUT = source node (node[i]), edge IN = target node (node[i+1])</li>
    *   <li>IN direction: edge OUT = target node (node[i+1]), edge IN = source node (node[i])</li>
    *   <li>BOTH direction: cannot determine mapping → conservative (not disjoint)</li>
+   *   <li>a hop that can span more than one edge: the mapping describes the whole path, not one edge
+   *   → conservative (not disjoint)</li>
    * </ul>
    */
-  private boolean areHopsDisjointByEndpointLabels(final PathPattern pathPattern, final int hopI, final int hopJ) {
-    final Direction dirI = pathPattern.getRelationship(hopI).getDirection();
-    final Direction dirJ = pathPattern.getRelationship(hopJ).getDirection();
+  private boolean areHopsDisjointByEndpointLabels(final PathPattern patternI, final int hopI,
+      final PathPattern patternJ, final int hopJ) {
+    final RelationshipPattern relI = patternI.getRelationship(hopI);
+    final RelationshipPattern relJ = patternJ.getRelationship(hopJ);
+
+    // A variable-length hop's endpoint patterns constrain its first and last edge only: everything in
+    // between starts and ends at a node the pattern says nothing about, so proving the declared endpoints
+    // disjoint proves nothing about those edges. Only a hop pinned to a single edge can be argued about
+    // this way; the type proof above stays valid, since every edge of the hop must match its type list.
+    if (spansMoreThanOneEdge(relI) || spansMoreThanOneEdge(relJ))
+      return false;
+
+    final Direction dirI = relI.getDirection();
+    final Direction dirJ = relJ.getDirection();
 
     // BOTH direction: can't determine which node is the edge's OUT/IN vertex
     if (dirI == Direction.BOTH || dirJ == Direction.BOTH)
       return false;
 
     // Map pattern nodes to edge endpoints based on direction
-    final NodePattern edgeOutI = dirI == Direction.OUT ? pathPattern.getNode(hopI) : pathPattern.getNode(hopI + 1);
-    final NodePattern edgeOutJ = dirJ == Direction.OUT ? pathPattern.getNode(hopJ) : pathPattern.getNode(hopJ + 1);
-    final NodePattern edgeInI = dirI == Direction.OUT ? pathPattern.getNode(hopI + 1) : pathPattern.getNode(hopI);
-    final NodePattern edgeInJ = dirJ == Direction.OUT ? pathPattern.getNode(hopJ + 1) : pathPattern.getNode(hopJ);
+    final NodePattern edgeOutI = dirI == Direction.OUT ? patternI.getNode(hopI) : patternI.getNode(hopI + 1);
+    final NodePattern edgeOutJ = dirJ == Direction.OUT ? patternJ.getNode(hopJ) : patternJ.getNode(hopJ + 1);
+    final NodePattern edgeInI = dirI == Direction.OUT ? patternI.getNode(hopI + 1) : patternI.getNode(hopI);
+    final NodePattern edgeInJ = dirJ == Direction.OUT ? patternJ.getNode(hopJ + 1) : patternJ.getNode(hopJ);
 
     // If the OUT vertex labels are type-disjoint, the edges are different
     if (nodeLabelsAreTypeDisjoint(edgeOutI, edgeOutJ))
@@ -4135,21 +4362,82 @@ public class CypherExecutionPlan {
     return nodeLabelsAreTypeDisjoint(edgeInI, edgeInJ);
   }
 
+  /** Whether the hop is pinned to zero edges, and so binds none at all. */
+  private static boolean bindsNoEdge(final RelationshipPattern rel) {
+    final Integer maxHops = rel.getMaxHops();
+    return rel.isVariableLength() && maxHops != null && maxHops == 0;
+  }
+
+  /** Whether the hop can bind more than one edge, so its declared endpoints are not one edge's endpoints. */
+  private static boolean spansMoreThanOneEdge(final RelationshipPattern rel) {
+    if (!rel.isVariableLength())
+      return false;
+    final Integer maxHops = rel.getMaxHops();
+    return maxHops == null || maxHops > 1;
+  }
+
   /**
    * Checks whether two node patterns have labels that are type-disjoint in the schema,
-   * meaning no vertex can match both labels simultaneously.
+   * meaning no vertex can match both patterns simultaneously.
    * <p>
    * Two labels are disjoint if neither is a supertype/subtype of the other AND no type
    * in the schema is a subtype of both (which would allow a vertex to match both labels).
+   * <p>
+   * A node can write more than one label, and this is the one place where reading only the first of
+   * them can go wrong in <em>either</em> direction, because the answer is a proof rather than a
+   * filter: the caller uses it to conclude that two hops cannot be the same edge, so a wrong "yes"
+   * drops matches (issue #6322). The two spellings are therefore taken apart:
+   * <ul>
+   *   <li>{@code (a:A:B)} requires both, so proving <em>any</em> of its labels disjoint from any of
+   *   the other node's requirements proves the nodes disjoint;</li>
+   *   <li>{@code (a:A|B)} requires either, so the pattern is only disjoint when <em>every</em>
+   *   alternative is.</li>
+   * </ul>
+   * Reading the first label alone answers the conjunction too narrowly, which merely misses an
+   * opportunity, and the disjunction too widely, which is the wrong answer.
    */
   private boolean nodeLabelsAreTypeDisjoint(final NodePattern node1, final NodePattern node2) {
     if (!node1.hasLabels() || !node2.hasLabels())
       return false; // Without labels, can't prove disjointness
 
-    // Use the first label from each node for the check
-    final String label1 = node1.getLabels().get(0);
-    final String label2 = node2.getLabels().get(0);
+    // Every alternative of node1 must be disjoint from every alternative of node2. A conjunction is
+    // a single alternative listing all its labels; a disjunction is one alternative per label.
+    for (final List<String> alternative1 : labelAlternatives(node1))
+      for (final List<String> alternative2 : labelAlternatives(node2))
+        if (!alternativesAreTypeDisjoint(alternative1, alternative2))
+          return false;
 
+    return true;
+  }
+
+  /**
+   * The label sets a node pattern accepts: one set holding every label for a conjunction, one
+   * single-label set per alternative for a disjunction.
+   */
+  private static List<List<String>> labelAlternatives(final NodePattern node) {
+    if (!node.isLabelDisjunction())
+      return List.of(node.getLabels());
+
+    final List<List<String>> alternatives = new ArrayList<>(node.getLabels().size());
+    for (final String label : node.getLabels())
+      alternatives.add(List.of(label));
+    return alternatives;
+  }
+
+  /**
+   * Whether two conjunctions of labels cannot be satisfied by the same vertex, which holds as soon as
+   * one label of the first is type-disjoint from one label of the second.
+   */
+  private boolean alternativesAreTypeDisjoint(final List<String> labels1, final List<String> labels2) {
+    for (final String label1 : labels1)
+      for (final String label2 : labels2)
+        if (labelsAreTypeDisjoint(label1, label2))
+          return true;
+    return false;
+  }
+
+  /** Whether no vertex in the schema can carry both labels. */
+  private boolean labelsAreTypeDisjoint(final String label1, final String label2) {
     if (label1.equals(label2))
       return false; // Same label → not disjoint
 
@@ -4596,6 +4884,10 @@ public class CypherExecutionPlan {
 
     for (int i = 0; i <= hopCount; i++) {
       final NodePattern node = pathPattern.getNode(i);
+      // One name per hop is all the operator carries, and a conjunction or a disjunction is not one
+      // name; rather than count a set the pattern did not describe, decline (issue #6322).
+      if (!hasPushDownRepresentableLabel(node))
+        return null;
       nodeLabels[i] = node.hasLabels() ? node.getLabels().get(0) : null;
     }
 
@@ -4809,18 +5101,32 @@ public class CypherExecutionPlan {
     if (centralVar == null)
       return null; // no variable appears in multiple patterns
 
-    // Find the label for the central variable
+    // Find the label for the central variable. The variable is written once per arm and the
+    // operator enumerates one type of central node, so every occurrence has to agree on it: a label
+    // set the single name cannot stand for, or two occurrences naming different types, declines the
+    // push-down and leaves the query to the ordinary pipeline, which applies each of them (#6322).
+    // An inline property filter or dynamic label on any occurrence is just as unenforceable as a
+    // rejected label set - the operator has no way to check either - so it declines the push-down
+    // too, exactly as the arm-endpoint loop below does (#6431). In practice this is caught earlier
+    // by hasInlineNodePropertyOrDynamicLabel() in tryOptimizeCountStar (#5071); this check exists so
+    // the detector is correct standing alone, not only in combination with that outer guard.
     for (final MatchClause mc : statement.getMatchClauses()) {
       if (!mc.hasPathPatterns()) continue;
       for (final PathPattern pp : mc.getPathPatterns())
         for (int i = 0; i <= pp.getRelationshipCount(); i++) {
           final NodePattern node = pp.getNode(i);
-          if (centralVar.equals(node.getVariable()) && node.hasLabels()) {
-            centralLabel = node.getLabels().get(0);
-            break;
-          }
+          if (!centralVar.equals(node.getVariable()))
+            continue;
+          if (node.hasProperties() || node.hasDynamicLabels())
+            return null;
+          if (!node.hasLabels())
+            continue;
+          if (!hasPushDownRepresentableLabel(node))
+            return null;
+          if (labelsConflict(centralLabel, node.getLabels().get(0)))
+            return null;
+          centralLabel = node.getLabels().get(0);
         }
-      if (centralLabel != null) break;
     }
 
     final ArrayList<DegreeProductOp.Arm> armList = new ArrayList<>();
@@ -4859,6 +5165,21 @@ public class CypherExecutionPlan {
           return null;
 
         final int totalHops = pathPattern.getRelationshipCount();
+
+        // Every non-central node of the arm - the far endpoint and any interior node of a multi-hop
+        // arm alike - is a label, inline property filter, or dynamic label the degree product cannot
+        // enforce: it counts degree off the arm's edge types and directions alone, with no field on
+        // Arm for a per-hop endpoint type or filter, so (:Author), (:Author {status:'active'}) and ()
+        // built the same operator and the same, over-counted, answer. Decline the push-down rather
+        // than silently drop the filter, exactly as the central variable's own check already does
+        // above (issue #6337 for labels, #6431 for properties/dynamic labels, both siblings of #6322).
+        for (int i = 0; i <= totalHops; i++) {
+          if (i == centralNodeIdx)
+            continue;
+          final NodePattern node = pathPattern.getNode(i);
+          if (node.hasLabels() || node.hasProperties() || node.hasDynamicLabels())
+            return null;
+        }
 
         if (centralNodeIdx == 0) {
           final DegreeProductOp.Arm arm = buildArmForward(pathPattern, 0, totalHops, isOptional);
@@ -5080,15 +5401,23 @@ public class CypherExecutionPlan {
         : probeDir == Direction.IN ? Vertex.DIRECTION.IN : Vertex.DIRECTION.BOTH;
 
     // Get the two shared endpoint variables from probe pattern
-    final String probeVar1 = probePattern.getFirstNode().getVariable();
-    final String probeVar2 = probePattern.getLastNode().getVariable();
+    final NodePattern probeNode1 = probePattern.getFirstNode();
+    final NodePattern probeNode2 = probePattern.getLastNode();
+    final String probeVar1 = probeNode1.getVariable();
+    final String probeVar2 = probeNode2.getVariable();
     if (probeVar1 == null || probeVar2 == null)
       return null;
+    if (!hasPushDownRepresentableLabel(probeNode1) || !hasPushDownRepresentableLabel(probeNode2))
+      return null;
+
+    // The two patterns name the same two variables, so a label written on the probe side constrains the arm
+    // that ends there just as one written on the build side does. Reading only the build side dropped it
+    // silently, on the CSR path and the OLTP one alike (issue #6304).
+    final String probeLabel1 = probeNode1.hasLabels() ? probeNode1.getLabels().get(0) : null;
+    final String probeLabel2 = probeNode2.hasLabels() ? probeNode2.getLabels().get(0) : null;
 
     // Build pattern: extract chain and find which hops reach the shared endpoints
     final int buildHops = buildPattern.getRelationshipCount();
-    final String[] buildEdgeTypes = new String[buildHops];
-    final Vertex.DIRECTION[] buildDirections = new Vertex.DIRECTION[buildHops];
 
     // Find the build chain's start node (a non-shared variable, e.g., "c" in Q2)
     // The shared variables (probeVar1, probeVar2) should appear as targets of hops
@@ -5115,6 +5444,8 @@ public class CypherExecutionPlan {
 
     // Determine the build chain start label
     final NodePattern startNode = buildPattern.getNode(startNodeIdx);
+    if (!hasPushDownRepresentableLabel(startNode))
+      return null;
     final String buildStartLabel = startNode.hasLabels() ? startNode.getLabels().get(0) : null;
     if (buildStartLabel == null)
       return null;
@@ -5137,6 +5468,8 @@ public class CypherExecutionPlan {
       bwdDir.add(d == Direction.OUT ? Vertex.DIRECTION.OUT
           : d == Direction.IN ? Vertex.DIRECTION.IN : Vertex.DIRECTION.BOTH);
       final NodePattern targetNode = buildPattern.getNode(i);
+      if (!hasPushDownRepresentableLabel(targetNode))
+        return null;
       bwdLabels.add(targetNode.hasLabels() ? targetNode.getLabels().get(0) : null);
       final String nodeVar = targetNode.getVariable();
       if (nodeVar != null && (nodeVar.equals(probeVar1) || nodeVar.equals(probeVar2))) {
@@ -5160,6 +5493,8 @@ public class CypherExecutionPlan {
       fwdDir.add(d == Direction.OUT ? Vertex.DIRECTION.OUT
           : d == Direction.IN ? Vertex.DIRECTION.IN : Vertex.DIRECTION.BOTH);
       final NodePattern targetNode = buildPattern.getNode(i + 1);
+      if (!hasPushDownRepresentableLabel(targetNode))
+        return null;
       fwdLabels.add(targetNode.hasLabels() ? targetNode.getLabels().get(0) : null);
       final String nodeVar = targetNode.getVariable();
       if (nodeVar != null && (nodeVar.equals(probeVar1) || nodeVar.equals(probeVar2))) {
@@ -5192,8 +5527,41 @@ public class CypherExecutionPlan {
       arm2Labels = bwdLabels.toArray(new String[0]);
     }
 
+    // Each arm's last hop lands on a shared variable, which is the one the probe pattern may also have
+    // labelled. Both labels are in force, and the operator carries one per hop: when the two disagree the
+    // filter is their intersection, which one name cannot express, so the push-down declines and the ordinary
+    // pipeline - which evaluates both - answers instead.
+    if (labelsConflict(arm1Labels[arm1Labels.length - 1], probeLabel1)
+        || labelsConflict(arm2Labels[arm2Labels.length - 1], probeLabel2))
+      return null;
+    if (probeLabel1 != null)
+      arm1Labels[arm1Labels.length - 1] = probeLabel1;
+    if (probeLabel2 != null)
+      arm2Labels[arm2Labels.length - 1] = probeLabel2;
+
     return new PairHashJoinOp(buildStartLabel, arm1ET, arm1Dir, arm1Labels,
         arm2ET, arm2Dir, arm2Labels, probeEdgeType, probeDirection);
+  }
+
+  /**
+   * Whether a count push-down can express this node's labels as the single name it keys a bucket set on.
+   * <p>
+   * {@code (a:A:B)} keeps only what carries both and {@code (a:A|B)} keeps what carries either; taking the first
+   * of the list turns each of them into {@code (a:A)}, which is neither. An operator built on that filter counts
+   * a set the pattern did not describe, so the detector declines and leaves the query to the ordinary pipeline
+   * (issue #6304, extended to the remaining detectors by issue #6322).
+   * <p>
+   * The one place a multi-label node is <em>not</em> answered by declining is
+   * {@link #nodeLabelsAreTypeDisjoint(NodePattern, NodePattern)}, which produces a proof rather than a filter
+   * and takes the two spellings apart instead.
+   */
+  private static boolean hasPushDownRepresentableLabel(final NodePattern node) {
+    return !node.hasLabels() || (node.getLabels().size() == 1 && !node.isLabelDisjunction());
+  }
+
+  /** Whether two labels written on the same variable name different types, which no single label can stand for. */
+  private static boolean labelsConflict(final String a, final String b) {
+    return a != null && b != null && !a.equals(b);
   }
 
   /**
@@ -5264,6 +5632,10 @@ public class CypherExecutionPlan {
 
     for (int i = 0; i <= hopCount; i++) {
       final NodePattern node = pathPattern.getNode(i);
+      // One name per hop is all the operator carries, and a conjunction or a disjunction is not one
+      // name; rather than count a set the pattern did not describe, decline (issue #6322).
+      if (!hasPushDownRepresentableLabel(node))
+        return null;
       nodeLabels[i] = node.hasLabels() ? node.getLabels().get(0) : null;
     }
 

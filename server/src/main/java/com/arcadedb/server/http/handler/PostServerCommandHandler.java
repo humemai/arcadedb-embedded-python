@@ -18,6 +18,7 @@
  */
 package com.arcadedb.server.http.handler;
 
+import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
@@ -36,6 +37,7 @@ import com.arcadedb.server.backup.AutoBackupSchedulerPlugin;
 import com.arcadedb.server.backup.BackupRetentionManager;
 import com.arcadedb.server.HAReplicatedDatabase;
 import com.arcadedb.server.HAServerPlugin;
+import com.arcadedb.server.LeaderForwardContext;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
@@ -64,6 +66,7 @@ import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
@@ -72,6 +75,13 @@ import java.util.regex.Pattern;
 
 public class PostServerCommandHandler extends AbstractServerHttpHandler {
   private static final HttpClient HTTP_CLIENT           = HttpClient.newHttpClient();
+
+  /**
+   * Emits the "a peer forwarded a server command here and this node is not the leader either" notice only
+   * once (issue #6191). Per handler instance, so each server in an in-process cluster says it once.
+   */
+  private final AtomicBoolean forwardedAgainWarned = new AtomicBoolean(false);
+
   private static final String LIST_DATABASES       = "list databases";
   private static final String SHUTDOWN             = "shutdown";
   private static final String CREATE_DATABASE      = "create database";
@@ -411,6 +421,10 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
       try {
         final Class<?> clazz = Class.forName("com.arcadedb.integration.restore.Restore");
         final Object restorer = clazz.getConstructor(String.class, String.class).newInstance(url, tempDir.getAbsolutePath());
+        // SAME BOOLEAN validateClientRestoreImportUrl ALREADY VALIDATED THIS URL AGAINST: THE FETCH INSIDE
+        // FullRestoreFormat MUST AGREE WITH THIS SERVER'S OWN CONFIGURATION RATHER THAN FALLING BACK TO THE STATIC
+        // DEFAULT, OR A PER-SERVER OVERRIDE THAT LET THE COMMAND THROUGH WOULD STILL HAVE THE FETCH REFUSE IT.
+        clazz.getMethod("setAllowLocalUrls", boolean.class).invoke(restorer, isRestoreImportLocalUrlsAllowed());
 
         // Set a logger with SSE callback for progress
         final Class<?> loggerClass = Class.forName("com.arcadedb.integration.importer.ConsoleLogger");
@@ -445,6 +459,7 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
     try {
       final Class<?> clazz = Class.forName("com.arcadedb.integration.restore.Restore");
       final Object restorer = clazz.getConstructor(String.class, String.class).newInstance(url, tempDir.getAbsolutePath());
+      clazz.getMethod("setAllowLocalUrls", boolean.class).invoke(restorer, isRestoreImportLocalUrlsAllowed());
       clazz.getMethod("restoreDatabase").invoke(restorer);
     } catch (final ClassNotFoundException | NoSuchMethodException | IllegalAccessException
                    | InstantiationException e) {
@@ -504,7 +519,7 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
    * private, loopback, link-local, site-local, multicast, wildcard or unresolvable host is rejected.
    */
   private void validateClientRestoreImportUrl(final String url) {
-    if (httpServer.getServer().getConfiguration().getValueAsBoolean(GlobalConfiguration.SERVER_RESTORE_IMPORT_ALLOW_LOCAL_URLS))
+    if (isRestoreImportLocalUrlsAllowed())
       return;
 
     final URI uri;
@@ -530,6 +545,18 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
     if (isBlockedHost(host))
       throw new SecurityException("Restore/import from private, loopback or link-local hosts is blocked. Enable '"
           + GlobalConfiguration.SERVER_RESTORE_IMPORT_ALLOW_LOCAL_URLS.getKey() + "' to override");
+  }
+
+  /**
+   * The single source of truth for {@link GlobalConfiguration#SERVER_RESTORE_IMPORT_ALLOW_LOCAL_URLS} on this server
+   * instance, read from the server's own (possibly per-instance-overridden) {@link
+   * com.arcadedb.ContextConfiguration} rather than the static default. {@link #validateClientRestoreImportUrl} and
+   * {@link #performRestore} must agree on this value: the pre-check here decides whether to accept the command at
+   * all, and the actual fetch inside {@code FullRestoreFormat} decides whether to follow it, and letting them read
+   * from two different configuration sources would let one permit what the other refuses on the very same server.
+   */
+  private boolean isRestoreImportLocalUrlsAllowed() {
+    return httpServer.getServer().getConfiguration().getValueAsBoolean(GlobalConfiguration.SERVER_RESTORE_IMPORT_ALLOW_LOCAL_URLS);
   }
 
   /**
@@ -605,6 +632,10 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
       try {
         final Class<?> clazz = Class.forName("com.arcadedb.integration.importer.Importer");
         final Object importer = clazz.getConstructor(Database.class, String.class).newInstance(database, url);
+        // SAME BOOLEAN validateClientRestoreImportUrl ALREADY VALIDATED THIS URL AGAINST: THE FETCH INSIDE
+        // SourceDiscovery MUST AGREE WITH THIS SERVER'S OWN CONFIGURATION RATHER THAN FALLING BACK TO THE STATIC
+        // DEFAULT, OR A PER-SERVER OVERRIDE THAT LET THE COMMAND THROUGH WOULD STILL HAVE THE FETCH REFUSE IT (#6474).
+        clazz.getMethod("setAllowLocalUrls", boolean.class).invoke(importer, isRestoreImportLocalUrlsAllowed());
 
         // Set a logger with SSE callback
         final Class<?> loggerClass = Class.forName("com.arcadedb.integration.importer.ConsoleLogger");
@@ -669,8 +700,12 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
       return null;
     }
 
-    // Synchronous fallback
-    try (final var rs = database.command("sql", "import database " + url)) {
+    // Synchronous fallback. Threads the same resolved boolean validateClientRestoreImportUrl() already validated
+    // this URL against into the SQL command's execution context, so ImportDatabaseStatement's deep fetch cannot
+    // disagree with the pre-check that accepted the command (#6474, mirroring the setAllowLocalUrls call above).
+    final ContextConfiguration importConfiguration = new ContextConfiguration();
+    importConfiguration.setValue(GlobalConfiguration.SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS, !isRestoreImportLocalUrlsAllowed());
+    try (final var rs = database.command("sql", "import database " + url, importConfiguration, Map.of())) {
       // try-with-resources releases the execution-plan state held by the import ResultSet.
     }
     return new ExecutionResponse(200, new JSONObject().put("result", "ok").toString());
@@ -694,10 +729,19 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
       exchange.startBlocking();
   }
 
+  /**
+   * An SSE event is two writes plus a flush, and the stream it goes to is the exchange's own - shared, and not safe
+   * for concurrent use. More than one thread reaches here: the import path polls {@code ImporterContext} for progress
+   * on a thread of its own while the importer logs on another, and since #6086 a parallel restore logs one line per
+   * archive entry from its worker pool. Without the lock two events interleave into a single corrupt {@code data:}
+   * frame - which the client cannot parse - rather than merely arriving in an unexpected order.
+   */
   private static void sendSSE(final OutputStream out, final JSONObject data) {
     try {
-      out.write(("data: " + data + "\n\n").getBytes(StandardCharsets.UTF_8));
-      out.flush();
+      synchronized (out) {
+        out.write(("data: " + data + "\n\n").getBytes(StandardCharsets.UTF_8));
+        out.flush();
+      }
     } catch (final IOException ignored) {
       // Client disconnected
     }
@@ -1206,9 +1250,40 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
     if (ha == null || ha.isLeader())
       return null;
 
+    // A peer already forwarded this command to what it believed was the leader and it arrived here, on a node
+    // that is not the leader either. Forwarding it on would send it round the cycle that wrong address
+    // created; refuse in one hop with the typed error instead (issue #6191).
+    if (LeaderForwardContext.isAlreadyForwarded()) {
+      // Also said once in this node's log: the refusal goes back to the peer and from there to the client, so
+      // otherwise the only node that can name the misconfiguration never mentions it.
+      if (forwardedAgainWarned.compareAndSet(false, true))
+        LogManager.instance().log(this, Level.WARNING,
+            "A cluster peer forwarded a server command to this node as the leader, but this node is not the leader. "
+                + "Unless leadership just moved, the HTTP address that peer resolved for the leader does not identify "
+                + "it: declare every node's HTTP port explicitly with the 'host:raftPort:httpPort' syntax in %s. The "
+                + "command is refused rather than forwarded on. This notice is logged only once.",
+            GlobalConfiguration.HA_SERVER_LIST.getKey());
+      throw new ServerIsNotTheLeaderException(
+          "Refusing to forward a server command that a cluster peer already forwarded to the leader: it arrived on "
+              + "this node, which is not the leader. Either leadership moved while the request was in flight - retry - "
+              + "or the HTTP address that peer resolved for the leader does not identify it, which is what declaring "
+              + "every node's HTTP port ('host:raftPort:httpPort') in " + GlobalConfiguration.HA_SERVER_LIST.getKey()
+              + " prevents", ha.getLeaderName());
+    }
+
     final String leaderHttpAddress = ha.getLeaderAddress();
     if (leaderHttpAddress == null)
       throw new ServerIsNotTheLeaderException("Leader address is unknown", ha.getLeaderName());
+
+    // Dialing an address that resolves to this node comes straight back here, and this node is not the
+    // leader. That is what the derive fallback produces when the peers share a host and no HTTP port is
+    // declared: it pairs the leader's Raft host with THIS node's HTTP port (issue #6191).
+    if (ha.isOwnHttpAddress(leaderHttpAddress))
+      throw new ServerIsNotTheLeaderException(
+          "Cannot forward the server command: the HTTP address resolved for the leader (" + leaderHttpAddress
+              + ") is this node's own, and this node is not the leader. Declare every node's HTTP port explicitly with "
+              + "the 'host:raftPort:httpPort' syntax in " + GlobalConfiguration.HA_SERVER_LIST.getKey(),
+          ha.getLeaderName());
 
     final HeaderValues authValues = exchange.getRequestHeaders().get("Authorization");
     final String authHeader = authValues != null ? authValues.getFirst() : null;
@@ -1225,8 +1300,15 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
       final String userName = user != null ? user.getName() : null;
       if (userName != null)
         builder.header("X-ArcadeDB-Forwarded-User", userName);
-      if (clusterToken != null && !clusterToken.isBlank())
+      if (clusterToken != null && !clusterToken.isBlank()) {
         builder.header("X-ArcadeDB-Cluster-Token", clusterToken);
+        // One hop only: whichever node this address really names refuses the command if it is not the leader,
+        // instead of resolving the same address and forwarding it again (issue #6191). Sent only alongside
+        // the cluster token, because that is the only form in which the receiving node trusts it - see
+        // LeaderForwardContext. The other branch below relays the client's own credentials and carries no
+        // marker; its loop protection is the self-address check above.
+        builder.header(LeaderForwardContext.FORWARDED_TO_LEADER_HEADER, "true");
+      }
     } else if (authHeader != null) {
       // Basic or API token: stateless, forward as-is
       builder.header("Authorization", authHeader);

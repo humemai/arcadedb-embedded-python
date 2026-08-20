@@ -29,6 +29,7 @@ import com.arcadedb.schema.DocumentType;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -457,14 +458,39 @@ class DictionaryMultiPageTest extends TestHelper {
    * without the ones before it, is how the count gets ahead of the file.
    * <p>
    * Runs against its own database, dropped at the end, because it deliberately leaves the page count inconsistent.
+   * <p>
+   * The FILE's own size is asserted next to the component's page count, and it is not redundant (issue #6341): this test
+   * failed once in a full-suite run with the assertion below reporting nothing raised at all, and the two are the only
+   * premises it rests on. Stating both means the next such run says WHICH one stopped being true instead of leaving that to
+   * be inferred from a guard that did not fire.
+   * <p>
+   * The file premise is DRAINED before it is asserted (issue #6351). The append above commits, which advances the component's
+   * page count and hands the page to the flush thread; the file only grows when that thread gets to it. Asserting the file
+   * without waiting would be asserting a race, and it is the very race #6351 was about - it is the one shape that produces
+   * exactly the "nothing raised at all" this test once reported, because the load used to decide whether there was anything to
+   * read from the file's size. {@link DictionaryFileSizeLagTest} covers a file behind its committed count on purpose; here the
+   * file is meant to hold page 0, so wait until it does.
    */
   @Test
-  void aDictionaryPageThatIsClaimedButMissingFailsLoudly() {
+  void aDictionaryPageThatIsClaimedButMissingFailsLoudly() throws IOException {
     final Database other = TestHelper.createDatabase(getDatabasePath() + "_claimedButMissing");
     try {
       final Dictionary dictionary = other.getSchema().getDictionary();
       dictionary.getIdByName("aNameOnPageZero", true);
       assertThat(dictionary.getTotalPages()).isEqualTo(1);
+      assertThat(((DatabaseInternal) other).getPageManager().waitAllPagesOfDatabaseAreFlushed(other)).isTrue();
+      // Issue #6415: this premise has failed intermittently on CI's full-suite unit-tests lane (getTotalPages()
+      // 0 instead of 1) right after the drain above reported success, with no local repro found across 3300+
+      // iterations and 2 full engine-module runs. Read the raw OS file length too, bypassing the FileChannel
+      // entirely: if a recurrence shows this ALSO at 0, the write itself never reached disk (a flush-pipeline
+      // bug); if this shows the correct 65536 while the channel disagrees, the two disagree only through
+      // PaginatedComponentFile's own view (a channel visibility/caching bug) - the two hypotheses the original
+      // investigation could not distinguish between without exactly this data point.
+      final long rawOsFileLength = dictionary.getComponentFile().getOSFile().length();
+      assertThat(dictionary.getComponentFile().getTotalPages())
+          .as("the premise: the file really holds page 0 and nothing after it (raw OS file length observed as %d bytes)",
+              rawOsFileLength)
+          .isEqualTo(1L);
 
       // CLAIM TWO PAGES THAT WERE NEVER WRITTEN
       dictionary.updatePageCount(3);
@@ -473,6 +499,44 @@ class DictionaryMultiPageTest extends TestHelper {
           .isInstanceOf(DatabaseMetadataException.class)
           .hasMessageContaining("is truncated")
           .hasMessageContaining("page 1 of 3");
+    } finally {
+      other.drop();
+    }
+  }
+
+  /**
+   * The other half of the same guarantee, and the shape the page-manager read cannot refuse (issue #6341): a page the count
+   * claims that is a HOLE INSIDE the file rather than one past its end.
+   * <p>
+   * A partial replication replay - the very scenario the guard's own comment names as how the count gets ahead of the file -
+   * leaves a hole rather than a short file: writing page N at offset {@code N * pageSize} extends the file over every page it
+   * skipped. Those pages read back as zeroes, a zero page declares a content size of zero, and the load used to take that for a
+   * legal empty page - zero names from it, and every name after it renumbered down by however many the skipped page held. The
+   * page-manager read answers happily for all of them, because they ARE inside the file: only the bytes say otherwise.
+   * <p>
+   * Runs against its own database, dropped at the end, because it deliberately leaves the dictionary unreadable.
+   */
+  @Test
+  void aDictionaryPageInsideTheFileThatWasNeverWrittenFailsLoudly() {
+    final Database other = TestHelper.createDatabase(getDatabasePath() + "_holeInTheFile");
+    try {
+      final DatabaseInternal db = (DatabaseInternal) other;
+      final Dictionary dictionary = db.getSchema().getDictionary();
+      dictionary.getIdByName("aNameOnPageZero", true);
+
+      final int skipped = dictionary.getTotalPages();   // THE HOLE: NEVER WRITTEN, YET COVERED BY THE FILE AFTERWARDS
+      final int written = skipped + 1;
+
+      assertThatThrownBy(() -> applyReplicatedDictionaryPage(db, dictionary, written, "replicatedName"))
+          .isInstanceOf(DatabaseMetadataException.class)
+          .hasMessageContaining("is truncated")
+          .hasMessageContaining("page " + skipped + " of " + (written + 1))
+          .hasMessageContaining("was never written");
+
+      // AND THE IN-RAM VIEW IS THE ONE FROM BEFORE THE REFUSED LOAD, NOT A HALF-BUILT ONE: reload() PUBLISHES THE NEW SNAPSHOT
+      // ONLY ONCE EVERY PAGE HAS BEEN READ, SO REFUSING TO READ ONE LEAVES THE NAMES ALREADY IN USE RESOLVING AS THEY DID
+      assertThat(dictionary.getIdByName("aNameOnPageZero", false)).isZero();
+      assertThat(dictionary.getNameById(0)).isEqualTo("aNameOnPageZero");
     } finally {
       other.drop();
     }
@@ -490,17 +554,37 @@ class DictionaryMultiPageTest extends TestHelper {
     final int entriesBefore = dictionary.getDictionaryMap().size();
     final int newPageNumber = dictionary.getTotalPages();
 
-    // BUILD THE PAGE IMAGE THE LEADER WOULD HAVE SHIPPED: THE 4 BYTE LEGACY COUNTER FOLLOWED BY ONE NAME
     final String replicated = "replicatedName";
+    assertThat(applyReplicatedDictionaryPage(db, dictionary, newPageNumber, replicated)).isTrue();
+
+    assertThat(dictionary.getTotalPages()).isEqualTo(newPageNumber + 1);
+    assertThat(dictionary.getDictionaryMap()).hasSize(entriesBefore + 1);
+    assertThat(dictionary.getIdByName(replicated, false)).isEqualTo(entriesBefore);
+    assertThat(dictionary.getNameById(entriesBefore)).isEqualTo(replicated);
+
+    // AND THE NEXT LOCALLY ADDED NAME CONTINUES AFTER IT INSTEAD OF OVERWRITING IT
+    assertThat(dictionary.getIdByName("afterReplication", true)).isEqualTo(entriesBefore + 1);
+    assertThat(dictionary.getNameById(entriesBefore)).isEqualTo(replicated);
+  }
+
+  /**
+   * Applies the WAL entry a leader would have shipped for ONE new dictionary page holding ONE name: the 4 byte legacy counter
+   * every page carries, followed by the name. {@code pageNumber} is deliberately the caller's, so a test can ship the page the
+   * follower expects next or one further along - which is what leaves a hole behind it.
+   *
+   * @return what {@code applyChanges} reported, i.e. whether anything was changed.
+   */
+  private boolean applyReplicatedDictionaryPage(final DatabaseInternal db, final Dictionary dictionary, final int pageNumber,
+      final String name) throws Exception {
     final Binary image = new Binary();
     image.putInt(0);
-    image.putBytes(replicated.getBytes(DatabaseFactory.getDefaultCharset()));
+    image.putBytes(name.getBytes(DatabaseFactory.getDefaultCharset()));
     image.flip();
     final byte[] content = image.toByteArray();
 
     final WALFile.WALPage walPage = new WALFile.WALPage();
     walPage.fileId = dictionary.getFileId();
-    walPage.pageNumber = newPageNumber;
+    walPage.pageNumber = pageNumber;
     walPage.currentPageVersion = 1;
     walPage.changesFrom = BasePage.PAGE_HEADER_SIZE;
     walPage.changesTo = BasePage.PAGE_HEADER_SIZE + content.length - 1;
@@ -512,15 +596,6 @@ class DictionaryMultiPageTest extends TestHelper {
     walTx.timestamp = System.currentTimeMillis();
     walTx.pages = new WALFile.WALPage[] { walPage };
 
-    assertThat(db.getTransactionManager().applyChanges(walTx, Collections.emptyMap(), false)).isTrue();
-
-    assertThat(dictionary.getTotalPages()).isEqualTo(newPageNumber + 1);
-    assertThat(dictionary.getDictionaryMap()).hasSize(entriesBefore + 1);
-    assertThat(dictionary.getIdByName(replicated, false)).isEqualTo(entriesBefore);
-    assertThat(dictionary.getNameById(entriesBefore)).isEqualTo(replicated);
-
-    // AND THE NEXT LOCALLY ADDED NAME CONTINUES AFTER IT INSTEAD OF OVERWRITING IT
-    assertThat(dictionary.getIdByName("afterReplication", true)).isEqualTo(entriesBefore + 1);
-    assertThat(dictionary.getNameById(entriesBefore)).isEqualTo(replicated);
+    return db.getTransactionManager().applyChanges(walTx, Collections.emptyMap(), false);
   }
 }

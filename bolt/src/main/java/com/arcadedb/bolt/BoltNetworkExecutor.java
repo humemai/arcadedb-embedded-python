@@ -57,8 +57,8 @@ import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.EdgeType;
 import com.arcadedb.schema.Property;
 import com.arcadedb.schema.Schema;
-import com.arcadedb.schema.VertexType;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.network.PreAuthConnectionGate;
 import com.arcadedb.server.HAServerPlugin;
 import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
@@ -88,7 +88,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.logging.Level;
 
 import static com.arcadedb.query.opencypher.executor.steps.FinalProjectionStep.PROJECTION_NAME_METADATA;
@@ -125,6 +124,11 @@ public class BoltNetworkExecutor extends Thread {
   private final ArcadeDBServer      server;
   private volatile Socket           socket; // Reassigned to the SSLSocket once TLS negotiation completes
   private final BoltSslHelper       sslHelper;
+  /**
+   * The listener's permit for a connection that has not authenticated yet, handed back the moment it does -
+   * or when it goes away without ever doing so (issue #6412).
+   */
+  private final PreAuthConnectionGate.Ticket preAuthTicket;
   private       BoltChunkedInput    input;
   private       BoltChunkedOutput   output;
   private final boolean             debug;
@@ -166,11 +170,17 @@ public class BoltNetworkExecutor extends Thread {
 
   public BoltNetworkExecutor(final ArcadeDBServer server, final Socket socket, final BoltNetworkListener listener,
       final BoltSslHelper sslHelper) {
+    this(server, socket, listener, sslHelper, null);
+  }
+
+  public BoltNetworkExecutor(final ArcadeDBServer server, final Socket socket, final BoltNetworkListener listener,
+      final BoltSslHelper sslHelper, final PreAuthConnectionGate.Ticket preAuthTicket) {
     super("BOLT-" + socket.getRemoteSocketAddress());
     this.server = server;
     this.socket = socket;
     this.listener = listener;
     this.sslHelper = sslHelper;
+    this.preAuthTicket = preAuthTicket;
     this.debug = GlobalConfiguration.BOLT_DEBUG.getValueAsBoolean();
     // NOTE: transport (TLS) negotiation and the socket I/O streams are intentionally set up in run(), on this
     // per-connection thread, so a slow/failed/hostile TLS handshake can never block the shared accept thread.
@@ -256,8 +266,20 @@ public class BoltNetworkExecutor extends Thread {
       LogManager.instance().log(this, Level.SEVERE, "BOLT connection error", e);
     } finally {
       ProtocolContext.clear();
+      // Whatever ended the loop, the listener's permit must go back: a connection that dies without ever
+      // authenticating would otherwise keep its slot for the life of the server (issue #6412).
+      releasePreAuthTicket();
       cleanup();
     }
+  }
+
+  /**
+   * Hands the listener's pre-authentication permit back. Idempotent, so authenticating and then terminating -
+   * the normal life of a connection - releases exactly one permit.
+   */
+  private void releasePreAuthTicket() {
+    if (preAuthTicket != null)
+      preAuthTicket.release();
   }
 
   /**
@@ -1048,7 +1070,8 @@ public class BoltNetworkExecutor extends Thread {
     final List<Map<String, Object>> servers = new ArrayList<>();
 
     final HAServerPlugin ha = server.getHA();
-    final HAServerPlugin.BoltRoutingTable table = ha != null ? ha.getBoltRoutingTable() : null;
+    final HAServerPlugin.RoutingTable table = ha != null ?
+        ha.getRoutingTable(HAServerPlugin.ROUTING_PROTOCOL.BOLT) : null;
 
     if (table != null) {
       // HA cluster with a known leader: the leader is the writer and a router, followers are readers and
@@ -1064,14 +1087,16 @@ public class BoltNetworkExecutor extends Thread {
       servers.add(roleEntry(readers.isEmpty() ? List.of(writer) : readers, "READ"));
       servers.add(roleEntry(routers, "ROUTE"));
     } else {
-      // No known leader. Advertise this node using the actual bound Bolt port of this connection rather
-      // than the global default.
+      // No usable routing table. Advertise this node using the actual bound Bolt port of this connection
+      // rather than the global default.
       final String address = getBoltAddress(socket.getLocalPort());
       if (ha != null) {
-        // HA is active but the leader is not known yet (e.g. mid-election): advertise this node as reader
-        // and router only - never writer, since it may be a follower. The driver keeps reading and
-        // re-routes after the TTL, receiving a writer once the leader is known, instead of sending a write
-        // to a follower and getting an error.
+        // HA is active but the cluster cannot name a writer to advertise: either no leader is known yet
+        // (mid-election), or the leader's address cannot be told apart from a follower's because the nodes
+        // share a host and no bolt: port was declared (issue #6183). Either way this node goes out as reader
+        // and router only - never writer, since it may be a follower. The driver keeps reading and re-routes
+        // after the TTL, receiving a writer once the cluster can name one, instead of sending a write to a
+        // follower and getting an error.
         servers.add(roleEntry(List.of(address), "READ"));
         servers.add(roleEntry(List.of(address), "ROUTE"));
       } else {
@@ -1171,7 +1196,7 @@ public class BoltNetworkExecutor extends Thread {
    * Returns true if the query was handled as a system query, false if it should be executed normally.
    */
   private boolean handleSystemQuery(final String query) throws IOException {
-    final String normalized = query.trim().toLowerCase().replaceAll("\\s+", " ");
+    final String normalized = BoltSystemProcedures.normalize(query);
 
     if (normalized.contains("dbms.components")) {
       // CALL dbms.components() - returns server version info
@@ -1246,70 +1271,17 @@ public class BoltNetworkExecutor extends Thread {
       syntheticResults = new ArrayList<>();
       return true;
 
-    } else if (normalized.contains("db.labels") && normalized.contains("db.relationshiptypes")
-        && normalized.contains("db.propertykeys")) {
-      // Combined UNION query from Neo4j Desktop: collects labels, relationship types, property keys as lists
-      currentFields = List.of("result");
-      syntheticResults = new ArrayList<>();
-      if (database != null) {
-        // Labels (vertex types, excluding composite ~ types)
-        final List<Object> labels = new ArrayList<>();
-        for (final DocumentType type : database.getSchema().getTypes())
-          if (type instanceof VertexType && !type.getName().contains("~"))
-            labels.add(type.getName());
-        syntheticResults.add(List.of((Object) labels));
-
-        // Relationship types (edge types)
-        final List<Object> relTypes = new ArrayList<>();
-        for (final DocumentType type : database.getSchema().getTypes())
-          if (type instanceof EdgeType)
-            relTypes.add(type.getName());
-        syntheticResults.add(List.of((Object) relTypes));
-
-        // Property keys (from all non-composite types)
-        final Set<String> allKeys = new TreeSet<>();
-        for (final DocumentType type : database.getSchema().getTypes())
-          if (!type.getName().contains("~"))
-            allKeys.addAll(type.getPropertyNames());
-        syntheticResults.add(List.of((Object) new ArrayList<>(allKeys)));
-      }
-      return true;
-
-    } else if (normalized.contains("db.labels")) {
-      // CALL db.labels() - return vertex type names (excluding composite types with ~)
-      currentFields = List.of("label");
-      syntheticResults = new ArrayList<>();
-      if (database != null) {
-        for (final DocumentType type : database.getSchema().getTypes())
-          if (type instanceof VertexType && !type.getName().contains("~"))
-            syntheticResults.add(List.of(type.getName()));
-      }
-      return true;
-
-    } else if (normalized.contains("db.relationshiptypes")) {
-      // CALL db.relationshipTypes() - return edge type names
-      currentFields = List.of("relationshipType");
-      syntheticResults = new ArrayList<>();
-      if (database != null) {
-        for (final DocumentType type : database.getSchema().getTypes())
-          if (type instanceof EdgeType)
-            syntheticResults.add(List.of(type.getName()));
-      }
-      return true;
-
-    } else if (normalized.contains("db.propertykeys")) {
-      // CALL db.propertyKeys() - return all property key names
-      currentFields = List.of("propertyKey");
-      syntheticResults = new ArrayList<>();
-      if (database != null) {
-        final Set<String> allKeys = new TreeSet<>();
-        for (final DocumentType type : database.getSchema().getTypes()) {
-          if (!type.getName().contains("~"))
-            allKeys.addAll(type.getPropertyNames());
-        }
-        for (final String key : allKeys)
-          syntheticResults.add(List.of(key));
-      }
+    } else if (BoltSystemProcedures.isSchemaProcedureQuery(normalized)) {
+      // CALL db.labels() / db.relationshipTypes() / db.propertyKeys(), plus the combined UNION form Neo4j
+      // Desktop sends. Answered from CypherProcedureRegistry, so the Bolt wire and the native Cypher CALL
+      // path run the very same procedure and cannot drift apart (issue #6151). A null answer means the call
+      // is not ours to serve - it carries arguments the registry entries do not accept - so it falls through
+      // to the engine, which reports the same arity error it reports for any other client.
+      final BoltSystemProcedures.Served served = BoltSystemProcedures.serveSchemaProcedure(database, normalized);
+      if (served == null)
+        return false;
+      currentFields = served.fields();
+      syntheticResults = served.rows();
       return true;
 
     } else if (normalized.startsWith("show index")
@@ -1768,6 +1740,7 @@ public class BoltNetworkExecutor extends Thread {
    * keep applying past a successful HELLO/LOGON.
    */
   private void markAuthenticated() {
+    releasePreAuthTicket();
     try {
       socket.setSoTimeout(0);
     } catch (final SocketException e) {

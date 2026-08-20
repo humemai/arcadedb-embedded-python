@@ -23,7 +23,7 @@ import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
-import com.arcadedb.utility.NumberUtils;
+import com.arcadedb.query.sql.executor.WorkGuard;
 
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -91,11 +91,12 @@ public class AlgoKNN extends AbstractAlgoProcedure {
   public Stream<Result> execute(final Object[] args, final Result inputRow, final CommandContext context) {
     validateArgs(args);
 
-    final int rawK             = args.length > 0 && args[0] instanceof Number num ? NumberUtils.saturateToInt(num) : 10;
+    final int rawK             = args.length > 0 && args[0] instanceof Number num ? extractCount(num, "k") : 10;
     final String[] relTypes    = args.length > 1 ? extractRelTypes(args[1]) : null;
     final Vertex.DIRECTION dir = args.length > 2 ? parseDirection(extractString(args[2], "direction")) : Vertex.DIRECTION.BOTH;
 
     final Database db = context.getDatabase();
+    final WorkGuard guard = newWorkGuard(context);
 
     final GraphData graph = loadGraph(db, null, relTypes, context);
 
@@ -109,9 +110,12 @@ public class AlgoKNN extends AbstractAlgoProcedure {
     final int k = Math.min(rawK, n);
     final int[][] adj = graph.adjacency(dir, relTypes);
 
-    // Build BitSets for O(1) intersection
+    // Build BitSets for O(1) intersection: a nodeCount x nodeCount bit matrix, reserved before the first BitSet
+    // is allocated and built under the checkpoint, because the build is itself O(n²/64) (issue #6375).
+    graph.memory().reserve(bitsetMatrixBytes(n, n), "the neighbour bitsets", n + " x " + n + " nodes");
     final BitSet[] neighborSets = new BitSet[n];
     for (int i = 0; i < n; i++) {
+      guard.checkPeriodically(i);
       neighborSets[i] = new BitSet(n);
       for (final int j : adj[i])
         neighborSets[i].set(j);
@@ -120,6 +124,10 @@ public class AlgoKNN extends AbstractAlgoProcedure {
     final List<Result> results = new ArrayList<>();
 
     for (int u = 0; u < n; u++) {
+      // Every node is compared against every other, so this is O(V²) bit-set intersections with nothing but the
+      // graph to size it (issue #6302). One u is already a full pass over the other n - 1 nodes, which is more
+      // than enough to swallow an unthrottled check.
+      guard.check();
       if (adj[u].length == 0)
         continue;
 

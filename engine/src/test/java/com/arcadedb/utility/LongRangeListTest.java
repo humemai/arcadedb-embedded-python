@@ -21,6 +21,8 @@ package com.arcadedb.utility;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -71,16 +73,26 @@ class LongRangeListTest {
 
   /**
    * A billion-element range must cost nothing: it is only start, step and size. Building the same list eagerly
-   * would need tens of GB of heap, so completing within the timeout is the proof that nothing is materialised.
+   * would need tens of GB of heap, so returning quickly is the proof that nothing is materialised.
+   * <p>
+   * That claim is asserted on the stall-discounted clock rather than by the {@code @Timeout} (issue #6270): every
+   * operation here is O(1) arithmetic, so the honest budget is microseconds and a 5 s discounted bound is three
+   * orders of magnitude tighter than the 10 s annotation it replaces - while being immune to the stop-the-world
+   * pause that made that annotation a coin flip late in a shared-JVM run. The annotation stays behind it as the
+   * hang detector, because a materialised range does not merely take longer, it never finishes.
    */
   @Test
-  @Timeout(value = 10, unit = TimeUnit.SECONDS)
+  @Timeout(value = 60, unit = TimeUnit.SECONDS)
   void hugeRangeIsFreeOfHeap() {
+    final StallAwareStopwatch stopwatch = StallAwareStopwatch.start();
+
     final LongRangeList list = new LongRangeList(0L, 1L, 1_000_000_000);
     assertThat(list.size()).isEqualTo(1_000_000_000);
     assertThat(list.get(999_999_999)).isEqualTo(999_999_999L);
     assertThat(list.contains(123_456_789L)).isTrue();
     assertThat(list.indexOf(123_456_789L)).isEqualTo(123_456_789);
+
+    stopwatch.assertStayedUnder(5_000L, "a constant-cost lazy range, not a materialised billion-element list");
   }
 
   @Test
@@ -100,6 +112,34 @@ class LongRangeListTest {
     assertThat(list.lastIndexOf(9L)).isEqualTo(3);
   }
 
+  /**
+   * {@code indexOf} answers the {@link List} contract, which is {@code equals()}, and no {@code Long} equals a
+   * {@code BigInteger} or a {@code BigDecimal}. Truncating them to a long said otherwise, and said it wrongly:
+   * every value congruent to an element modulo 2^64 answered as that element.
+   */
+  @Test
+  void indexOfRejectsTheTypesThatNoElementCanEqual() {
+    final LongRangeList list = new LongRangeList(0L, 3L, 5); // 0, 3, 6, 9, 12
+    assertThat(list.indexOf(BigInteger.valueOf(9))).isEqualTo(-1);
+    assertThat(list.indexOf(new BigDecimal("9"))).isEqualTo(-1);
+    assertThat(list.indexOf(BigInteger.ONE.shiftLeft(64).add(BigInteger.valueOf(9)))).isEqualTo(-1);
+    assertThat(list.contains(BigInteger.valueOf(9))).isFalse();
+  }
+
+  /** Membership by value, which is what a caller whose own equality coerces numerically needs (issue #6323). */
+  @Test
+  void containsLongAnswersByValue() {
+    final LongRangeList list = new LongRangeList(0L, 3L, 5); // 0, 3, 6, 9, 12
+    assertThat(list.containsLong(9L)).isTrue();
+    assertThat(list.containsLong(12L)).isTrue();
+    assertThat(list.containsLong(10L)).isFalse();
+    assertThat(list.containsLong(15L)).isFalse();
+    assertThat(list.containsLong(-3L)).isFalse();
+    assertThat(new LongRangeList(10L, -2L, 6).containsLong(0L)).isTrue();  // 10, 8, 6, 4, 2, 0
+    assertThat(new LongRangeList(10L, -2L, 6).containsLong(-2L)).isFalse();
+    assertThat(new LongRangeList(Long.MIN_VALUE, 1L, 10).containsLong(Long.MAX_VALUE)).isFalse();
+  }
+
   /** The distance from the start overflows a long: the lookup must not wrap around into a false positive. */
   @Test
   void containsHandlesOverflowingDistance() {
@@ -113,6 +153,36 @@ class LongRangeListTest {
     final List<Long> sub = new LongRangeList(0L, 2L, 100).subList(10, 13);
     assertThat(sub).isInstanceOf(LongRangeList.class).containsExactly(20L, 22L, 24L);
     assertThat(new LongRangeList(0L, 1L, 5).subList(2, 2)).isEmpty();
+  }
+
+  /**
+   * A range read backwards is still an arithmetic progression, so it must come back as one: copying it is what
+   * put the heap exhaustion back into {@code reverse()} (issue #6353).
+   */
+  @Test
+  void reversedIsStillALazyRange() {
+    assertThat(new LongRangeList(0L, 1L, 5).reversed()).isInstanceOf(LongRangeList.class)
+        .containsExactly(4L, 3L, 2L, 1L, 0L);
+    assertThat(new LongRangeList(0L, 3L, 4).reversed()).isInstanceOf(LongRangeList.class)
+        .containsExactly(9L, 6L, 3L, 0L);
+    assertThat(new LongRangeList(10L, -3L, 4).reversed()).isInstanceOf(LongRangeList.class)
+        .containsExactly(1L, 4L, 7L, 10L);
+    // Reversing twice is the identity, and the empty and single-element cases are their own reverse.
+    assertThat(new LongRangeList(10L, -3L, 4).reversed().reversed()).containsExactly(10L, 7L, 4L, 1L);
+    assertThat(new LongRangeList(0L, 1L, 0).reversed()).isInstanceOf(LongRangeList.class).isEmpty();
+    assertThat(new LongRangeList(7L, 2L, 1).reversed()).isInstanceOf(LongRangeList.class).containsExactly(7L);
+  }
+
+  /**
+   * {@code Long.MIN_VALUE} has no positive counterpart, so the reversed step is not representable. Only a
+   * two-element range can carry that step - a third element would need {@code 2 * |step|} to fit in a long - so
+   * the answer is materialised rather than wrapped around into a wrong range.
+   */
+  @Test
+  void reversedFallsBackWhenTheStepCannotBeNegated() {
+    final LongRangeList list = new LongRangeList(Long.MAX_VALUE, Long.MIN_VALUE, 2);
+    assertThat(list).containsExactly(Long.MAX_VALUE, -1L);
+    assertThat(list.reversed()).containsExactly(-1L, Long.MAX_VALUE);
   }
 
   @Test

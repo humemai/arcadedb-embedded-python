@@ -417,6 +417,22 @@ public enum GlobalConfiguration {
   ASYNC_TX_BATCH_SIZE("arcadedb.asyncTxBatchSize", SCOPE.DATABASE,
       "Maximum number of operations to commit in batch by async thread", Integer.class, 1024 * 10),
 
+  ASYNC_COMMAND_POOL_THREADS("arcadedb.asyncCommandPoolThreads", SCOPE.JVM,
+      """
+      Maximum number of threads in the JVM-wide pool that runs the DDL dispatched through the asynchronous API - \
+      notably a CREATE INDEX or REBUILD INDEX sent over HTTP POST /command with awaitResponse=false. Only DDL is \
+      routed here, because only DDL cannot run on a per-database async worker: it has to quiesce those very workers \
+      to scan the data, which cannot be done from one of them. Everything else keeps running on \
+      arcadedb.asyncWorkerThreads. 0 = available cores (min 2)""",
+      Integer.class, 0),
+
+  ASYNC_COMMAND_QUEUE_SIZE("arcadedb.asyncCommandQueueSize", SCOPE.JVM,
+      """
+      Size of the bounded queue in front of the asynchronous DDL pool. When it is full the statement runs on the \
+      submitting thread instead of being refused, so a client that asked not to wait may end up waiting; the \
+      pool=async_command caller-runs gauge is where that shows up. 0 = 1024""",
+      Integer.class, 1024),
+
   REBUILD_REPARTITION_MAX_BUFFERED_RIDS("arcadedb.rebuild.repartition.maxBufferedRids", SCOPE.DATABASE,
       """
       Maximum number of misplaced RIDs the REBUILD TYPE WITH repartition = true command may buffer in heap \
@@ -436,7 +452,9 @@ public enum GlobalConfiguration {
       transaction, which in HA becomes one Raft log entry: keeping the batch small keeps that entry small so the \
       leader's per-follower append pipeline returns to sending heartbeats between batches instead of stalling on a \
       single multi-MB entry (issue #4817, which caused leader churn, an interrupted commit and a partial truncate). \
-      Larger values reduce commit overhead on single-node setups at the cost of bigger transactions.""",
+      Larger values reduce commit overhead on single-node setups at the cost of bigger transactions. Ignored when \
+      TRUNCATE runs inside a transaction the caller opened: there the deletes belong to that transaction and are \
+      committed by it, so a ROLLBACK puts every record back (issue #6220).""",
       Integer.class, 1000),
 
   CHECK_DATABASE_REPAIR_BATCH_PAGES("arcadedb.checkDatabaseRepairBatchPages", SCOPE.DATABASE,
@@ -466,16 +484,46 @@ public enum GlobalConfiguration {
       spanning several pages). Leave headroom when picking a value close to the replicated-entry limit.""",
       Integer.class, 256),
 
-  PAGE_FLUSH_QUEUE("arcadedb.pageFlushQueue", SCOPE.DATABASE, "Size of the asynchronous page flush queue", Integer.class, 512),
+  CHECK_DATABASE_ADJACENCY_CACHE_ENTRIES("arcadedb.checkDatabaseAdjacencyCacheEntries", SCOPE.DATABASE,
+      """
+      Maximum number of adjacency-list entries CHECK DATABASE keeps materialised while answering its back-reference \
+      probes (issue #6062). The check asks, once per edge, whether the NEIGHBOUR's edge list names that edge \
+      (checkEdges) and whether the far vertex of every adjacency entry points back (checkVertices). Both questions \
+      are a linear walk of the neighbour's chunk chain, and nothing used to be remembered between two probes of the \
+      same list, so a hub of degree D was walked D times by each of them: O(D²) on exactly the vertex the check \
+      exists to survive, with every walk risking a page read once the graph exceeds the page cache. A 657GB database \
+      with hubs in the hundreds of thousands of edges measured 80 hours for one CHECK DATABASE FIX. With the cache, \
+      the first probe of a list materialises it into primitive hash sets and every later probe of it is a hash \
+      lookup, so a pass walks each list once instead of once per incident edge. Counted in ENTRIES rather than in \
+      lists because that is what the memory is proportional to and because one super-node can be larger than every \
+      other list in the database put together; the least-recently-probed list is evicted when the budget is \
+      exceeded, so hubs - the lists that pay for themselves - are the ones that stay. A single list larger than the \
+      whole budget is never cached and is answered by the original walk. At the default of 1 million entries the \
+      footprint is roughly 20MB. 0 disables the cache and restores the pre-#6062 probe, which is the escape hatch \
+      if the memory is unwelcome on a small heap; the check reports what the setting bought under the \
+      adjacencyProbes / adjacencyProbeListWalks / adjacencyEntriesScanned keys.""",
+      Integer.class, 1_000_000),
+
+  PAGE_FLUSH_QUEUE("arcadedb.pageFlushQueue", SCOPE.DATABASE,
+      """
+      Maximum number of page batches EACH database may have waiting in the asynchronous flush pipeline. A committer of \
+      a database that has reached it waits - before taking the page-manager lock, never inside it - until one of that \
+      database's own batches is written; the committers of every other database are admitted straight through. This \
+      was a single JVM-wide bound before issue #6281, which is what let one database's write burst against a slow \
+      volume throttle the commits of unrelated databases on idle ones. Values below 1 are raised to 1: this is now \
+      the only bound on the pipeline, so a budget of 0 would refuse every publication for ever.\
+      """, Integer.class, 512),
 
   FLUSH_SUSPEND_MAX_DEFERRED_RAM("arcadedb.flushSuspendMaxDeferredRAM", SCOPE.DATABASE,
       """
       Maximum amount of RAM (in MB) of dirty pages the page-flush thread may defer in memory while flushing \
       is suspended (during an HA snapshot ship or a full backup, when the on-disk files must stay stable). \
-      Once the deferred backlog crosses this cap the flush thread stops draining its bounded queue, so \
-      committing threads are throttled instead of the deferred backlog growing without limit and exhausting \
-      the heap (issue #4728: a busy leader shipping a multi-GB snapshot OOM'd). Set to 0 to disable the cap \
-      (unbounded, pre-4728 behavior).""",
+      Once the deferred backlog crosses this cap the committing threads of the SUSPENDED databases are \
+      throttled, instead of the deferred backlog growing without limit and exhausting the heap (issue #4728: \
+      a busy leader shipping a multi-GB snapshot OOM'd). The cap is JVM-wide because the heap it bounds is, \
+      but the throttling is not: a database that is not suspended is never held by it, since its pages go \
+      straight to disk and relieve the backlog rather than add to it (issue #6200). Set to 0 to disable the \
+      cap (unbounded, pre-4728 behavior).""",
       Long.class, 512),
 
   PAGE_SNAPSHOT_ENABLED("arcadedb.pageSnapshotEnabled", SCOPE.DATABASE,
@@ -553,7 +601,7 @@ public enum GlobalConfiguration {
       Long.class, 16L * 1024 * 1024),
 
   GRAPH_SUPERNODE_THRESHOLD("arcadedb.graph.supernodeThreshold", SCOPE.DATABASE,
-      "Approximate number of edges (per vertex, per direction) after which the vertex's edge list is promoted to the striped super-node layout, spreading further appends over multiple files so concurrent insertions on the same hot vertex do not contend. FORWARD-INCOMPATIBLE ON FIRST USE: promotion writes a new record type (the stripe directory), so once any vertex promotes, the database can no longer be opened by releases older than 26.8.1; promotion is one-way. This ordering guarantee applies only to the OLTP edge-list read walks (edgeIterator/vertexIterator/ridIterator): iteration order on promoted vertices is APPROXIMATELY newest-first instead of exactly newest-first, the stripe chains are interleaved so the newest edge is always within the first 'supernodeStripes' entries and an edge of recency rank r is returned at a position of order r, but only the order WITHIN a stripe is exact - an application needing an exact order must sort or use an index. That rank-fidelity itself only holds for the first 'supernodeInterleaveRounds x supernodeStripes' entries of a read; past that, the walk falls back to concatenating whatever is left of each chain (see GRAPH_SUPERNODE_INTERLEAVE_ROUNDS). It does NOT hold for a query the planner routes through a GraphAnalyticalView (e.g. GAVExpandAll): a view returns neighbours ordered by internal dense node ID, which carries no relationship to recency. 0 disables promotion entirely (databases stay fully readable by older versions)",
+      "Approximate number of edges (per vertex, per direction) after which the vertex's edge list is promoted to the striped super-node layout, spreading further appends over multiple files so concurrent insertions on the same hot vertex do not contend. FORWARD-INCOMPATIBLE ON FIRST USE: promotion writes a new record type (the stripe directory), so once any vertex promotes, the database can no longer be opened by releases older than 26.8.1; promotion is one-way. This ordering guarantee applies only to the OLTP edge-list read walks (edgeIterator/vertexIterator/ridIterator): iteration order on promoted vertices is APPROXIMATELY newest-first instead of exactly newest-first, the stripe chains are interleaved so the newest edge is always within the first 'supernodeStripes' entries and an edge of recency rank r is returned at a position of order r, but only the order WITHIN a stripe is exact - an application needing an exact order must sort or use an index. That rank-fidelity holds for the whole read: the first 'supernodeInterleaveRounds x supernodeStripes' entries are taken one per stripe per turn and past that the rotation widens into geometrically growing batches, which costs the position of an entry a bounded factor rather than the relation to its rank (see GRAPH_SUPERNODE_INTERLEAVE_ROUNDS). It does NOT hold for a query the planner routes through a GraphAnalyticalView (e.g. GAVExpandAll): a view returns neighbours ordered by internal dense node ID, which carries no relationship to recency. 0 disables promotion entirely (databases stay fully readable by older versions)",
       Integer.class, 4096),
 
   GRAPH_EDGE_LIST_INITIAL_CHUNK_SIZE("arcadedb.graph.edgeListInitialChunkSize", SCOPE.DATABASE,
@@ -565,7 +613,7 @@ public enum GlobalConfiguration {
       Integer.class, 16),
 
   GRAPH_SUPERNODE_INTERLEAVE_ROUNDS("arcadedb.graph.supernodeInterleaveRounds", SCOPE.DATABASE,
-      "Number of round-robin ROUNDS (one entry taken from every stripe chain per round) a super-node read walk (edgeIterator/vertexIterator/ridIterator) keeps interleaved before degrading the rest of the walk to plain concatenation of whatever is left in each chain. The interleaved (approximately newest-first) order only helps a caller reading a bounded prefix - paging, a query with a small LIMIT; a caller still reading past 'rounds x supernodeStripes' entries is doing a full walk, where the order is not going to be consulted and the interleaving's resident chunk page per stripe (as opposed to one, for a single cursor draining a chain at a time) is a pure locality cost paid for nothing (#6048). The degrade point scales with the live stripe count of the generation being walked, not with the vertex's total degree, so the extra cost a full walk pays for the ordered prefix is bounded regardless of how large the super-node grows. 0 disables interleaving entirely (immediate concatenation, the pre-#6044 order); a negative value behaves the same as 0 rather than being rejected",
+      "Number of round-robin ROUNDS (one entry taken from every stripe chain per round) a super-node read walk (edgeIterator/vertexIterator/ridIterator) keeps at one entry per turn before WIDENING the rotation. Taking one entry per turn reconstructs the approximately newest-first order but keeps a resident chunk page per stripe and hops between files on every entry, which a caller reading a bounded prefix (paging, a query with a small LIMIT) never notices and a full walk pays for its whole degree (#6048). Past 'rounds x supernodeStripes' entries of a generation the walk therefore keeps rotating but takes 'rounds' entries from each chain per turn, doubling that batch on every completed round: the chain switches over a walk of D entries drop from D to about supernodeStripes x log(D), and each visit becomes a sequential run through a chain once the batch outgrows a chunk, while an edge of recency rank r still comes back at a position of order r for the WHOLE walk instead of only for the first 'rounds x supernodeStripes' entries (#6064) - so a large-but-bounded LIMIT keeps the ordering in proportion to what it asked for without the threshold having to be raised globally. The widening point scales with the live stripe count of the generation being walked, not with the vertex's total degree, so the extra cost a full walk pays for the ordered prefix is bounded regardless of how large the super-node grows. 0 disables interleaving entirely (immediate concatenation, the pre-#6044 order); a negative value behaves the same as 0 rather than being rejected",
       Integer.class, 64),
 
   BACKUP_ENABLED("arcadedb.backup.enabled", SCOPE.DATABASE,
@@ -612,6 +660,23 @@ public enum GlobalConfiguration {
       the range is open-ended upwards, and any non-positive value simply disables the throttle rather than being \
       invalid.""",
       Integer.class, 0),
+
+  RESTORE_THREADS("arcadedb.restore.threads", SCOPE.JVM,
+      """
+      Number of threads used to restore a full backup. ZIP entries are independent files, so they are inflated and \
+      written concurrently, one entry per thread. -1 (the default) sizes the pool automatically at the available \
+      processors capped at 8; 0 selects the legacy single-threaded stream walk, kept as an escape hatch. Unlike a \
+      backup, a restore does not run alongside the database it is working on - that database does not exist yet - \
+      which is why the automatic sizing claims whole cores rather than half of them. The parallel path needs random \
+      access to the archive and is therefore used only for a plain local file: an archive read over http(s) is a \
+      one-shot stream and an encrypted one is a single cipher stream, and both fall back to the sequential walk \
+      automatically, whatever this setting says. Peak heap is bounded by construction at one copy buffer per thread \
+      (256 KB) plus the JDK inflater's own buffer, so under 3 MB at 8 threads. Parallelism is per entry: a database \
+      made of one dominant file cannot be split, because a ZIP entry is a single deflate stream that has to be \
+      inflated serially.""",
+      // SAME BOUND AS RestoreSettings.MAX_RESTORE_THREADS, WHICH THE CLI AND THE Restore API VALIDATE AGAINST. THE
+      // ENGINE CANNOT DEPEND ON THE INTEGRATION MODULE, SO THE LITERAL IS REPEATED: CHANGE ONE AND CHANGE THE OTHER
+      Integer.class, -1, integerRangeAsStrings(-1, 256)),
 
   // SQL
   SQL_STATEMENT_CACHE("arcadedb.sqlStatementCache", SCOPE.DATABASE, "Maximum number of parsed statements to keep in cache",
@@ -673,6 +738,23 @@ public enum GlobalConfiguration {
       NAT, multicast and reserved ranges. Set to an empty string to disable IP filtering (not recommended).""",
       String.class, IPAddressBlocklist.DEFAULT_RESERVED_RANGES),
 
+  OPENCYPHER_LABEL_WRITE_DEGREE_WARNING("arcadedb.opencypher.labelWriteDegreeWarning", SCOPE.DATABASE,
+      """
+      Degree above which a Cypher label write (SET n:Label / REMOVE n:Label) logs a warning. A record's type comes from the \
+      bucket it lives in, so a label change is not a metadata edit: the vertex is rewritten under the new type and every \
+      incident edge is re-created in both directions, which makes the write O(degree) and gives the vertex and all of its \
+      edges new RIDs. On a supernode that is the difference between a millisecond and a stall, and nothing in the query says \
+      so. The warning reports the node, the two types and how many edges were rewritten. Set to 0 to disable it.""",
+      Integer.class, 10_000),
+
+  OPENCYPHER_LABEL_WRITE_DEGREE_LIMIT("arcadedb.opencypher.labelWriteDegreeLimit", SCOPE.DATABASE,
+      """
+      Maximum degree of a vertex a Cypher label write (SET n:Label / REMOVE n:Label) is allowed to rewrite. Above it the \
+      command fails instead of paying the O(degree) rewrite described in arcadedb.opencypher.labelWriteDegreeWarning. \
+      Disabled by default (0): the rewrite is slow, not wrong, so refusing it is opt-in. Enabling it costs one extra \
+      edge-list walk per label write, to answer the question before any record has moved.""",
+      Integer.class, 0),
+
   OPENCYPHER_ID_BUCKET_BITS("arcadedb.opencypher.idBucketBits", SCOPE.JVM,
       """
       Number of bits reserved for the bucketId when packing a RID into the numeric value returned by the OpenCypher id() function (and SQL's .asCypherRID() method). \
@@ -683,7 +765,19 @@ public enum GlobalConfiguration {
       Integer.class, 16, integerRangeAsStrings(1, 31)),
 
   // COMMAND
-  COMMAND_TIMEOUT("arcadedb.command.timeout", SCOPE.DATABASE, "Default timeout for commands (in ms)", Long.class, 0),
+  COMMAND_TIMEOUT("arcadedb.command.timeout", SCOPE.DATABASE, """
+      Maximum time in ms a single command may run before being aborted with a TimeoutException. The deadline is \
+      taken once, when execution starts, and is shared by everything the statement does - a CALL subquery, a \
+      correlated COUNT { }, a UNION branch and a CALL algo.* procedure all run against the same instant rather than \
+      each starting a fresh budget. It is checked inside the scan, expansion and filter loops, so a statement that \
+      produces no row for minutes is bounded too, not only one that streams rows. Covers SQL and openCypher, \
+      including SELECT/UPDATE/DELETE/MATCH/TRAVERSE and the openCypher algo.* procedures. A per-statement SQL \
+      TIMEOUT clause is enforced alongside it and the earlier of the two wins, so a statement may ask for less \
+      time than this setting allows but not for more. Gremlin and the other polyglot scripting \
+      engines are NOT covered - they have their own arcadedb.polyglotCommand.timeout - and neither is regular \
+      expression backtracking, which arcadedb.command.regexTimeout bounds separately. Set to 0 (the default) to \
+      disable.""",
+      Long.class, 0),
 
   COMMAND_REGEX_TIMEOUT("arcadedb.command.regexTimeout", SCOPE.DATABASE, """
       Maximum time in ms a single regular expression evaluation may run before being aborted (an entire scan, for a \
@@ -692,10 +786,12 @@ public enum GlobalConfiguration {
       matchers, and schema-level REGEXP property validation. java.util.regex backtracking does not poll interrupts or \
       deadlines, so a pathological pattern (catastrophic backtracking) keeps its worker thread busy regardless of \
       arcadedb.command.timeout; this dedicated bound protects against that even when arcadedb.command.timeout is disabled \
-      (0), which is the default. MATCHES/=~ share one deadline across an entire query execution (not per row), and \
-      full-text/PromQL/REGEXP-validation share one deadline across an entire scan (not per item) - a large, legitimately \
-      slow (non-catastrophic) operation can hit this bound too, so raise it for workloads that need more than 1s. Set to \
-      0 to disable (not recommended).""",
+      (0), which is the default. Every entry point reached through a command context - MATCHES, =~, PromQL's matchers \
+      and the text.regexReplace()/.normalize() functions - shares ONE deadline for the whole command: not one per row, \
+      not one per function, and not one per worker of a parallel type scan. Full-text search and REGEXP property \
+      validation run outside a command context and share one deadline across an entire scan (not per item). A large, \
+      legitimately slow (non-catastrophic) operation can hit this bound too, so raise it for workloads that need more \
+      than 1s. Set to 0 to disable (not recommended).""",
       Long.class, 1000),
 
   COMMAND_WARNINGS_EVERY("arcadedb.command.warningsEvery", SCOPE.JVM,
@@ -747,10 +843,13 @@ public enum GlobalConfiguration {
   QUERY_MAX_RANGE_SIZE("arcadedb.queryMaxRangeSize", SCOPE.DATABASE, """
       Maximum number of elements a range() expression is allowed to produce. If exceeded, the query is rejected with a \
       client error before any element is generated. Negative number means no limit (the hard limit of 2147483647 elements, \
-      the maximum size of a Java list, still applies). The range itself is lazy and takes no heap, but its elements are \
-      materialised as soon as the range is copied, sorted or serialised in a response, so this setting caps the memory a \
-      single query can request that way. When left at the default it auto-scales with the JVM max heap (never below \
-      1000000 elements), keeping the worst-case materialisation of a range to a fraction of the heap.""",
+      the maximum size of a Java list, still applies). The range itself is lazy and takes no heap, and the operations \
+      whose answer is still an arithmetic progression keep it that way: slicing, tail(), reverse(), coll.sort(), \
+      coll.distinct(), coll.toSet(), coll.flatten() and cutting either end with coll.remove(). Its elements are \
+      materialised only when the answer cannot be a range - inserting into one, merging two of them, concatenating with \
+      +, or serialising the range in a response - so this setting caps the memory a single query can request that way. \
+      When left at the default it auto-scales with the JVM max heap (never below 1000000 elements), keeping the \
+      worst-case materialisation of a range to a fraction of the heap.""",
       Long.class, 10_000_000L, null, value -> {
         // Auto-scale the default with the JVM max heap. A materialised element costs ~24 bytes (boxed Long plus the
         // reference that holds it) and rendering it in a JSON response costs about as much again, so heap/160 keeps
@@ -791,6 +890,36 @@ public enum GlobalConfiguration {
       more than a handful of levels, so the default is deliberately generous while staying far below the point \
       where the stack is at risk. Raise it only if a legitimate, deeply-nested or very long generated query needs it.""",
       Integer.class, 200),
+
+  CYPHER_ALGO_MAX_WORKING_MEMORY("arcadedb.cypher.algoMaxWorkingMemory", SCOPE.DATABASE,
+      """
+      Maximum heap, in bytes, that a single call to an OpenCypher algorithm procedure may reserve for the dense \
+      working set it builds beside the graph: the random-walk buffers of algo.node2vec (walksPerNode x nodeCount \
+      walks of walkLength steps) and algo.randomWalk (a single walk of steps entries), algo.slpa's label memory \
+      (one row of iterations entries per node), the nodeCount x dimension embedding matrices of algo.node2vec, \
+      algo.fastrp, algo.hashgnn and algo.graphsage, the nodeCount x nodeCount matrices of algo.apsp, \
+      algo.simRank, algo.maxFlow and algo.kShortestPaths, and the terminals x nodeCount tables and \
+      terminal-pair arrays of algo.steinerTree. None of these has a graph-derived ceiling to clamp against - \
+      unlike a top-k bound, which is capped by the node count - so a large but perfectly in-range int, a \
+      terminal list of any length, or simply a large graph, would otherwise reach the allocator unchecked, or \
+      wrap the int product on the way there and surface as a NegativeArraySizeException from inside the \
+      algorithm. Every estimate is computed in saturating long arithmetic and reserved BEFORE anything is \
+      allocated, and reservations accumulate over the call, so what is bounded is the working set of the whole \
+      call rather than one allocation of it: a call over the budget is rejected as a client error naming the \
+      component and the knobs that produced the estimate, together with this setting. Negative number means no \
+      limit. When left at the default it auto-scales with the JVM max heap (one eighth of it, never below 64MB), \
+      so the working set of a legitimate large run stays a fraction of the heap it shares with the rest of the \
+      query.""",
+      Long.class, 64 * 1024 * 1024L, null, value -> {
+        // Auto-scale the default with the JVM max heap: one eighth of it, never below the 64MB floor so that a
+        // typical run (a few million walk entries, or a mid-sized graph at the default embedding dimension)
+        // keeps working on small footprints.
+        final long maxHeap = Runtime.getRuntime().maxMemory();
+        if (maxHeap == Long.MAX_VALUE)
+          // Heap is unbounded (no -Xmx): keep the conservative floor rather than an effectively unlimited cap.
+          return 64 * 1024 * 1024L;
+        return Math.max(64 * 1024 * 1024L, maxHeap / 8);
+      }),
 
   // GRAPHQL
   GRAPHQL_MAX_NESTING_DEPTH("arcadedb.graphql.maxNestingDepth", SCOPE.DATABASE,
@@ -1008,6 +1137,14 @@ public enum GlobalConfiguration {
 
   NETWORK_SOCKET_TIMEOUT("arcadedb.network.socketTimeout", SCOPE.SERVER, "TCP/IP Socket timeout (in ms)", Integer.class, 30000),
 
+  NETWORK_MAX_PREAUTH_CONNECTIONS("arcadedb.network.maxPreAuthConnections", SCOPE.SERVER, """
+      Maximum number of connections a binary wire-protocol listener (Postgres, Redis, BOLT) may hold in the phase
+      before authentication. Each accepted socket costs one thread and one file descriptor before the client has
+      proved who it is, and the handshake timeout (arcadedb.network.socketTimeout) only bounds how long each one
+      may stay there, not how many there can be. Past this cap the listener closes further connections
+      immediately and goes back to accepting. The cap is per listener, so a flood against one protocol cannot use
+      up the budget that lets clients of another log in. 0 means unlimited.""", Integer.class, 500),
+
   NETWORK_USE_SSL("arcadedb.ssl.enabled", SCOPE.SERVER, "Use SSL for client connections", Boolean.class, false),
 
   NETWORK_SSL_KEYSTORE("arcadedb.ssl.keyStore", SCOPE.SERVER, "Path where the SSL certificates are stored", String.class, null),
@@ -1164,8 +1301,28 @@ public enum GlobalConfiguration {
       its own LIMIT clause, are both honored as written and are never capped by this value. When this default \
       does cut a result short the response reports `"truncated": true` next to `returned` and `limit`, and the \
       server logs a warning: the truncation is never silent (issue #5711). Set to -1 or 0 for unlimited \
-      (WARNING: removes the protection against materializing an unbounded result set in memory). Default is 20000""",
+      (WARNING: removes the protection against materializing an unbounded result set in memory). A value above \
+      'arcadedb.server.httpQueryMaxResultRows' - including unlimited - is lowered to it, so the two settings \
+      cannot disagree and a caller that states no limit is never refused, only truncated. Default is 20000""",
       Integer.class, 20_000),
+
+  SERVER_HTTP_QUERY_MAX_RESULT_ROWS("arcadedb.server.httpQueryMaxResultRows", SCOPE.SERVER,
+      """
+      Hard ceiling on the number of rows the HTTP query/command endpoints materialize into a single response. \
+      Where 'arcadedb.server.httpQueryDefaultLimit' caps only the callers that state no limit of their own, this \
+      ceiling also bounds the ones that do: a request `limit` at or below it - and a LIMIT the query itself \
+      carries - is honored as written, while a larger value, or an explicitly unlimited `limit` of -1/0, cannot \
+      push a single response past it. A result that would exceed the ceiling fails the request with HTTP 413 \
+      naming this setting, exactly as the gRPC unary ExecuteQuery path answers RESOURCE_EXHAUSTED, rather than \
+      silently truncating: a truncated response indistinguishable from a complete one is the defect issue #5711 \
+      fixed. A caller that states no limit at all is never refused: 'arcadedb.server.httpQueryDefaultLimit' is \
+      itself lowered to this ceiling, so such a caller gets the ordinary reported truncation instead. Note that \
+      this bounds the SIZE of a response, not the peak cost of refusing one - the rows are serialized up to the \
+      ceiling before the result is found to exceed it - nor the work a command does before returning: a write \
+      that returns its rows applies to every matching record, and is then rolled back with the refusal. Set to \
+      -1 or 0 for unlimited (WARNING: removes the protection against materializing an unbounded result set in \
+      memory). Default is 1000000""",
+      Integer.class, 1_000_000),
 
   SERVER_HTTP_STREAMING_READ_TIMEOUT("arcadedb.server.httpStreamingReadTimeout", SCOPE.SERVER,
       """
@@ -1299,7 +1456,10 @@ public enum GlobalConfiguration {
       it is rejected with a state-machine error that makes the leader step down; the write then fails with \
       ReplicatedEntryTooLargeException naming this setting. The size compared against it is the COMPRESSED \
       WAL of the transaction, so text/JSON payloads shrink far below their raw size while incompressible \
-      ones (binary blobs, base64, encrypted fields, float vectors) map roughly 1:1. Raise it when single \
+      ones (binary blobs, base64, encrypted fields, float vectors) map roughly 1:1. Compression does NOT \
+      make the transaction unbounded, though (issue #5933): every node has to materialize the WAL in full to \
+      apply it, so a second, fixed ceiling of 64MB applies to the UNCOMPRESSED WAL of one entry regardless of \
+      this setting, and a transaction above it is rejected with the same exception. Raise it when single \
       transactions or records are bigger than the default, and raise arcadedb.ha.writeBufferSize with it \
       (it must stay >= this value + 8 bytes). Cost of raising it: a directly-allocated write buffer of \
       writeBufferSize per server, plus up to this many bytes of heap per follower appender during catch-up. \
@@ -1832,6 +1992,13 @@ public enum GlobalConfiguration {
       without it, an unauthenticated client could grow that stack unboundedly with a stream of nesting markers. \
       Default is 1000, generous for any real BOLT message.""",
       Integer.class, 1000),
+
+  // gRPC
+  GRPC_PORT("arcadedb.grpc.port", SCOPE.SERVER, """
+      TCP/IP port number used for incoming connections for the gRPC plugin. Registered here, rather than read as a \
+      bare key by the plugin alone, because HA has to know the port a peer's gRPC endpoint listens on to advertise a \
+      dialable address for it (see the 'grpc' field of arcadedb.ha.serverList). Default is 50051""",
+      Integer.class, 50051),
 
   // REDIS
   REDIS_PORT("arcadedb.redis.port", SCOPE.SERVER,

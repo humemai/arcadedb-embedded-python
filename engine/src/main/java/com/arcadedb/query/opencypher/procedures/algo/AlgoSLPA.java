@@ -23,6 +23,7 @@ import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
+import com.arcadedb.query.sql.executor.WorkGuard;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -94,7 +95,7 @@ public class AlgoSLPA extends AbstractAlgoProcedure {
     final Map<String, Object> config = args.length > 0 ? extractMap(args[0], "config") : null;
 
     final int iterations = config != null && config.get("iterations") instanceof Number num ?
-        extractInt(num, "iterations") : 20;
+        extractInt(num, "iterations", 1) : 20;
     final double threshold = config != null && config.get("threshold") instanceof Number num ?
         num.doubleValue() : 0.1;
     final long seedVal = config != null && config.get("seed") instanceof Number num ?
@@ -104,6 +105,7 @@ public class AlgoSLPA extends AbstractAlgoProcedure {
     final String[] relTypes = config != null ? extractRelTypes(config.get("relTypes")) : null;
 
     final Database db = context.getDatabase();
+    final WorkGuard guard = newWorkGuard(context);
 
     final GraphData graph = loadGraph(db, null, relTypes, context);
 
@@ -111,16 +113,34 @@ public class AlgoSLPA extends AbstractAlgoProcedure {
     final int n = graph.nodeCount;
     if (n == 0)
       return Stream.empty();
-    final int[][] adj = graph.adjacency(Vertex.DIRECTION.BOTH);
 
     // Memory: memory[v] is a list of labels heard by v (including its initial label)
-    // Using int[] lists backed by arrays for performance
+    // Using int[] lists backed by arrays for performance.
+    //
+    // Unlike the other iteration knobs, SLPA's `iterations` buys heap as well as time: every node keeps one row of
+    // `iterations + 1` ints, so the matrix is nodeCount x (iterations + 1) and a value that merely looks large -
+    // {iterations: 1000000} on a 10k-node graph is 40 GB - reaches the allocator with nothing between it and the
+    // heap. The footprint is reserved against the call's working-memory budget, in saturating long arithmetic,
+    // BEFORE the first row is allocated; `iterations + 1` is computed in long because at
+    // Integer.MAX_VALUE the int form wraps to Integer.MIN_VALUE and died as a bare NegativeArraySizeException.
+    final long rowCapacity = iterations + 1L;
+    graph.memory().reserve(matrixBytes(n, rowCapacity, INT_BYTES), "the label memory",
+        "iterations=" + iterations + " over " + n + " nodes");
+    if (rowCapacity > Integer.MAX_VALUE)
+      throw new IllegalArgumentException(getName() + "(): iterations=" + iterations + " needs " + rowCapacity
+          + " label entries per node, more than the " + Integer.MAX_VALUE + " a Java array can hold");
+
+    final int[][] adj = graph.adjacency(Vertex.DIRECTION.BOTH);
+
     final int[][] memory     = new int[n][];
     final int[]   memorySize = new int[n];
 
     // Each node starts with a unique label equal to its index
     for (int i = 0; i < n; i++) {
-      memory[i] = new int[iterations + 1];
+      // Allocating and zeroing nodeCount x (iterations + 1) ints is the same product the budget prices, and it
+      // happens before the first propagation round - so it needs its own checkpoint (issue #6295).
+      guard.checkPeriodically(i);
+      memory[i] = new int[(int) rowCapacity];
       memory[i][0] = i;
       memorySize[i] = 1;
     }
@@ -131,13 +151,20 @@ public class AlgoSLPA extends AbstractAlgoProcedure {
       order[i] = i;
 
     for (int t = 0; t < iterations; t++) {
+      // iterations is a caller-supplied knob and this kernel has no convergence test at all, so it always runs the
+      // full count: the guard is the only thing that can end a run the caller no longer wants.
+      guard.check();
       // Shuffle node order each round
       for (int i = n - 1; i > 0; i--) {
+        guard.checkPeriodically(i);
         final int j = rng.nextInt(i + 1);
         final int tmp = order[i]; order[i] = order[j]; order[j] = tmp;
       }
 
-      for (final int listener : order) {
+      for (int idx = 0; idx < n; idx++) {
+        // A single round walks the whole graph, so on a large one the checkpoint belongs inside the round too.
+        guard.checkPeriodically(idx);
+        final int listener = order[idx];
         if (adj[listener].length == 0)
           continue;
 
@@ -151,18 +178,26 @@ public class AlgoSLPA extends AbstractAlgoProcedure {
         }
 
         // Listener adds the most-frequent heard label to its memory
-        final int mostFreq = mostFrequent(heard, heardCount, rng);
+        final int mostFreq = mostFrequent(heard, heardCount, rng, guard);
         memory[listener][memorySize[listener]++] = mostFreq;
       }
     }
 
     // Post-processing: keep only labels with relative frequency >= threshold
     // Pre-compute communities for all nodes (pure int/map work, no vertex loading)
+    //
+    // Outside the propagation rounds, so the checkpoint inside them never sees this: nodeCount x (iterations + 1)
+    // boxed map merges, which is the same product the label memory is priced on. The budget bounds the heap that
+    // product costs and says nothing about the time, so at a raised arcadedb.cypher.algoMaxWorkingMemory this
+    // grows without any checkpoint behind it (issue #6295). The counter spans both loops for the same reason it
+    // does in algo.hashgnn: a per-node check is too coarse when one node remembers a million labels.
     @SuppressWarnings("unchecked")
     final List<Long>[] allCommunities = new List[n];
+    int postStep = 0;
     for (int i = 0; i < n; i++) {
       final Map<Integer, Integer> freq = new HashMap<>();
       for (int j = 0; j < memorySize[i]; j++) {
+        guard.checkPeriodically(postStep++);
         final int label = memory[i][j];
         freq.merge(label, 1, Integer::sum);
       }
@@ -185,12 +220,20 @@ public class AlgoSLPA extends AbstractAlgoProcedure {
     });
   }
 
-  /** Returns the most-frequent element in arr[0..len), breaking ties randomly. */
-  private int mostFrequent(final int[] arr, final int len, final Random rng) {
+  /**
+   * Returns the most-frequent element in arr[0..len), breaking ties randomly.
+   * <p>
+   * The scan is O(len²) in the listener's degree, so one supernode's turn is a whole quadratic pass between two
+   * of the caller's per-node checkpoints - 4e8 comparisons at degree 20 000. The guard comes in with the array
+   * for that reason (issue #6295): the checkpoint on the outer scan bounds the abort latency by 1024 x len
+   * rather than by len², and costs one flag test per candidate where each candidate already costs a full pass.
+   */
+  private int mostFrequent(final int[] arr, final int len, final Random rng, final WorkGuard guard) {
     // Frequency map using arrays (avoid HashMap allocation for small len)
     int bestLabel = arr[0], bestCount = 0;
     // Simple O(len^2) scan — len = number of neighbours, typically small
     for (int i = 0; i < len; i++) {
+      guard.checkPeriodically(i);
       int count = 0;
       for (int j = 0; j < len; j++)
         if (arr[j] == arr[i]) count++;

@@ -22,6 +22,7 @@ import com.arcadedb.database.Database;
 import com.arcadedb.database.RID;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.query.sql.executor.CommandContext;
+import com.arcadedb.query.sql.executor.WorkGuard;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 
@@ -47,6 +48,12 @@ import java.util.stream.Stream;
  * YIELD path, steps
  * RETURN path
  * </pre>
+ * </p>
+ * <p>
+ * {@code steps} sizes the walk buffer directly and has no graph-derived ceiling, so its footprint is reserved
+ * against {@link com.arcadedb.GlobalConfiguration#CYPHER_ALGO_MAX_WORKING_MEMORY} before anything is allocated,
+ * and the walk itself honours thread interruption and {@code arcadedb.command.timeout} so that raising that
+ * budget does not also raise an unabortable worst case.
  * </p>
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
@@ -106,14 +113,28 @@ public class AlgoRandomWalk extends AbstractAlgoProcedure {
     if (srcIdx < 0)
       return Stream.empty();
 
-    // Walk — use int[] array (all primitives, zero boxing)
-    final int[] walk = new int[steps + 1];
+    // Walk — use int[] array (all primitives, zero boxing). The buffer is sized straight off `steps`, which has
+    // no graph-derived ceiling, so its footprint is checked against the walk-memory budget before allocating and
+    // `steps + 1` is computed in long: at Integer.MAX_VALUE the int form wraps to Integer.MIN_VALUE and the
+    // allocation died with a bare NegativeArraySizeException.
+    final long walkCapacity = steps + 1L;
+    graph.memory().reserve(walkCapacity * INT_BYTES, "the random walk buffer", "steps=" + steps);
+    if (walkCapacity > Integer.MAX_VALUE)
+      throw new IllegalArgumentException(getName() + "(): steps=" + steps + " needs " + walkCapacity
+          + " walk entries, more than the " + Integer.MAX_VALUE + " a Java array can hold");
+
+    final int[] walk = new int[(int) walkCapacity];
     walk[0] = srcIdx;
     int walkLen = 1;
 
     final Random rnd = new Random(seed);
+    final WorkGuard guard = newWorkGuard(context);
     int cur = srcIdx;
     for (int step = 0; step < steps; step++) {
+      // The walk-memory budget bounds `steps` only as long as nobody raises it - and the setting explicitly
+      // accepts "negative = no limit". A memory bound is not a time bound, so the walk carries its own
+      // checkpoint rather than a caveat saying it does not.
+      guard.checkPeriodically(step);
       final int[] neighbors = adj[cur];
       if (neighbors.length == 0)
         break;

@@ -23,6 +23,8 @@ import com.arcadedb.exception.CommandSemanticException;
 import com.arcadedb.function.cypher.CypherFunctionHelper;
 import com.arcadedb.function.math.RoundFunction;
 import com.arcadedb.query.opencypher.ast.*;
+import com.arcadedb.query.opencypher.procedures.CypherProcedure;
+import com.arcadedb.query.opencypher.procedures.CypherProcedureRegistry;
 
 import java.util.*;
 
@@ -224,9 +226,16 @@ public class CypherSemanticValidator {
       case FOREACH -> forget(((ForeachClause) entry.getTypedClause()).getVariable(), scope, declaredHere);
       case CALL -> {
         final CallClause callClause = entry.getTypedClause();
-        if (callClause.hasYield())
-          for (final CallClause.YieldItem item : callClause.getYieldItems())
-            forget(item.getOutputName(), scope, declaredHere);
+        if (callClause.hasYield()) {
+          if (callClause.isYieldAll()) {
+            final List<String> yieldAllFields = resolveYieldAllFieldNames(callClause);
+            if (yieldAllFields != null)
+              for (final String field : yieldAllFields)
+                forget(field, scope, declaredHere);
+          } else
+            for (final CallClause.YieldItem item : callClause.getYieldItems())
+              forget(item.getOutputName(), scope, declaredHere);
+        }
       }
       case SUBQUERY -> {
         // What a nested CALL subquery returns enters this scope under a kind this phase does not track back through
@@ -266,13 +275,14 @@ public class CypherSemanticValidator {
 
     for (final ReturnClause.ReturnItem item : withClause.getItems()) {
       final Expression expr = item.getExpression();
-      if (expr instanceof StarExpression
-          || (expr instanceof VariableExpression variable && "*".equals(variable.getVariableName()))) {
+      if (item.isStar()) {
         star = true;
         continue;
       }
+      // A projection whose output is literally named "*" (WITH n AS `*`) is an ordinary projection carrying an
+      // unusual name, not the star: it must be carried like any other (issue #6334).
       final String outputName = item.getOutputName();
-      if (outputName == null || "*".equals(outputName))
+      if (outputName == null)
         continue;
 
       final VarType projected = projectedVarType(expr, scope);
@@ -353,6 +363,27 @@ public class CypherSemanticValidator {
   private static void forget(final String name, final Map<String, VarType> scope, final Set<String> declaredHere) {
     scope.remove(name);
     declaredHere.remove(name);
+  }
+
+  /**
+   * Resolves the concrete field names a {@code CALL proc() YIELD *} puts into scope (issue #6148).
+   * <p>
+   * {@code YIELD *} carries no {@link CallClause.YieldItem}s of its own ({@link CallClause#getYieldItems()} is
+   * empty even though {@link CallClause#isYieldAll()} is true), so the three CALL-handling switches in this class
+   * cannot learn what it exports the same way they learn from an explicit {@code YIELD a, b}. What it exports is
+   * exactly the calling procedure's declared {@link CypherProcedure#getYieldFields()} - the same registry
+   * {@code CallStep} consults to run the call - so this looks the procedure up there rather than guessing.
+   * <p>
+   * Returns {@code null}, not an empty list, when the name does not resolve to a registered procedure (a custom
+   * {@code DEFINE FUNCTION}, an arbitrary SQL function, or a genuinely unknown name): none of those have a
+   * statically declared output signature, so callers fall back to today's behavior for them instead of treating an
+   * unresolvable {@code YIELD *} as exporting nothing.
+   */
+  private static List<String> resolveYieldAllFieldNames(final CallClause callClause) {
+    if (!callClause.isYieldAll())
+      return null;
+    final CypherProcedure procedure = CypherProcedureRegistry.get(callClause.getProcedureName());
+    return procedure != null ? procedure.getYieldFields() : null;
   }
 
   // ==============================
@@ -538,9 +569,7 @@ public class CypherSemanticValidator {
           // Check for WITH * — passes all variables through
           boolean hasWildcard = false;
           for (final ReturnClause.ReturnItem item : withClause.getItems()) {
-            if (item.getExpression() instanceof StarExpression ||
-                (item.getExpression() instanceof VariableExpression &&
-                    "*".equals(((VariableExpression) item.getExpression()).getVariableName()))) {
+            if (item.isStar()) {
               hasWildcard = true;
               break;
             }
@@ -550,9 +579,7 @@ public class CypherSemanticValidator {
             // First validate all extra item expressions against the incoming scope (no scope
             // mutation during validation — aliases must not be visible to sibling expressions).
             for (final ReturnClause.ReturnItem item : withClause.getItems()) {
-              if (item.getExpression() instanceof StarExpression ||
-                  (item.getExpression() instanceof VariableExpression &&
-                      "*".equals(((VariableExpression) item.getExpression()).getVariableName())))
+              if (item.isStar())
                 continue;
               checkExpressionScope(item.getExpression(), scope);
             }
@@ -641,9 +668,15 @@ public class CypherSemanticValidator {
         case CALL:
           // Procedure CALL with YIELD — exported yield variables enter scope
           final CallClause callClause = entry.getTypedClause();
-          if (callClause != null && callClause.hasYield())
-            for (final CallClause.YieldItem item : callClause.getYieldItems())
-              scope.add(item.getOutputName());
+          if (callClause != null && callClause.hasYield()) {
+            if (callClause.isYieldAll()) {
+              final List<String> yieldAllFields = resolveYieldAllFieldNames(callClause);
+              if (yieldAllFields != null)
+                scope.addAll(yieldAllFields);
+            } else
+              for (final CallClause.YieldItem item : callClause.getYieldItems())
+                scope.add(item.getOutputName());
+          }
           break;
         case SUBQUERY:
           // CALL { ... RETURN x AS y } — exported return variables enter outer scope
@@ -743,8 +776,7 @@ public class CypherSemanticValidator {
     final Set<String> imported = new HashSet<>();
     for (final ReturnClause.ReturnItem item : withClause.getItems()) {
       final Expression expr = item.getExpression();
-      if (expr instanceof StarExpression ||
-          (expr instanceof VariableExpression && "*".equals(((VariableExpression) expr).getVariableName())))
+      if (item.isStar())
         return new HashSet<>(outerScope);
       final String name = item.getAlias() != null ?
           item.getAlias() :
@@ -1648,6 +1680,7 @@ public class CypherSemanticValidator {
   }
 
   private void validateCreatePathPattern(final PathPattern path) {
+    checkNoLabelDisjunction(path, "CREATE");
     for (final RelationshipPattern rel : path.getRelationships()) {
       // CREATE relationships must specify exactly one type
       if (!rel.hasTypes())
@@ -1665,6 +1698,7 @@ public class CypherSemanticValidator {
   }
 
   private void validateMergePathPattern(final PathPattern path) {
+    checkNoLabelDisjunction(path, "MERGE");
     for (final RelationshipPattern rel : path.getRelationships()) {
       // MERGE relationships must specify exactly one type
       if (!rel.hasTypes())
@@ -1678,6 +1712,31 @@ public class CypherSemanticValidator {
     }
     // MERGE cannot have null property values
     checkMergeNullProperties(path);
+  }
+
+  /**
+   * A label disjunction says which labels a node may have, which is a question only a read can answer: there is no
+   * node a write could produce that satisfies "A or B" without picking one. Neo4j refuses a label expression in
+   * CREATE and MERGE for that reason, and so does this - it used to be accepted and then quietly given conjunction
+   * meaning, which made {@code MERGE (n:A|B {k:'x'})} miss an existing {@code :B} node and create a second one under
+   * an invented {@code A~B} composite type instead of matching it (issue #6338).
+   */
+  private void checkNoLabelDisjunction(final PathPattern path, final String clause) {
+    if (path == null)
+      return;
+    for (final NodePattern node : path.getNodes()) {
+      // On the flag alone, never on how many labels came back with it. The flag means a '|' was written, while the
+      // static list can hold fewer than two of them: a Cypher 25 dynamic $(expression) alternative is collected
+      // separately and is not in it, so (n:A|$(x)) would slip past a count-based guard - which is the one shape
+      // where letting a label expression through would matter most, the labels not even being known until runtime.
+      if (!node.isLabelDisjunction())
+        continue;
+      final List<String> labels = node.getLabels();
+      throw new CommandParsingException("UnexpectedSyntax: Label expressions are not allowed in " + clause
+          + ", only in MATCH and in expressions: '|' says which labels a node MAY have, which is not something a "
+          + "write can act on"
+          + (labels.size() > 1 ? ". Use ':" + String.join(":", labels) + "' to give the node all of them" : ""));
+    }
   }
 
   private void checkMergeNullProperties(final PathPattern path) {
@@ -1760,14 +1819,8 @@ public class CypherSemanticValidator {
     if (statement.getReturnClause() == null)
       return;
     for (final ReturnClause.ReturnItem item : statement.getReturnClause().getReturnItems())
-      if (isStarItem(item) && !statementDeclaresAnyVariable(statement))
+      if (item.isStar() && !statementDeclaresAnyVariable(statement))
         throw new CommandParsingException("NoVariablesInScope: RETURN * is not allowed when there are no variables in scope");
-  }
-
-  private static boolean isStarItem(final ReturnClause.ReturnItem item) {
-    return item.getExpression() instanceof StarExpression ||
-        (item.getExpression() instanceof VariableExpression &&
-            "*".equals(((VariableExpression) item.getExpression()).getVariableName()));
   }
 
   /**
@@ -1822,7 +1875,7 @@ public class CypherSemanticValidator {
       case WITH -> {
         final WithClause withClause = entry.getTypedClause();
         for (final ReturnClause.ReturnItem item : withClause.getItems())
-          if (!isStarItem(item) && item.getOutputName() != null && !"*".equals(item.getOutputName()))
+          if (!item.isStar() && item.getOutputName() != null)
             return true;
       }
       case UNWIND -> {
@@ -1835,10 +1888,17 @@ public class CypherSemanticValidator {
       }
       case CALL -> {
         final CallClause callClause = entry.getTypedClause();
-        if (callClause.hasYield())
-          for (final CallClause.YieldItem item : callClause.getYieldItems())
-            if (item.getOutputName() != null)
+        if (callClause.hasYield()) {
+          if (callClause.isYieldAll()) {
+            final List<String> yieldAllFields = resolveYieldAllFieldNames(callClause);
+            if (yieldAllFields != null && !yieldAllFields.isEmpty())
               return true;
+          } else {
+            for (final CallClause.YieldItem item : callClause.getYieldItems())
+              if (item.getOutputName() != null)
+                return true;
+          }
+        }
       }
       case SUBQUERY -> {
         // What a CALL { } subquery returns becomes an ordinary variable of the enclosing scope, exactly like WITH.
@@ -1940,16 +2000,21 @@ public class CypherSemanticValidator {
       checkDuplicateAliases(withClause.getItems());
   }
 
+  /**
+   * The {@code *} of {@code WITH *} / {@code RETURN *} projects no column of its own and so cannot collide with one;
+   * it is recognised by {@link ReturnClause.ReturnItem#isStar()} rather than by its name, because a projection can
+   * legitimately be aliased to the literal name {@code *} with backticks, and two of those DO collide (issue #6334).
+   */
   private void checkDuplicateAliases(final List<ReturnClause.ReturnItem> items) {
     final Set<String> seen = new HashSet<>();
     for (final ReturnClause.ReturnItem item : items) {
+      if (item.isStar())
+        continue;
       String name = item.getAlias();
       if (name == null && item.getExpression() instanceof VariableExpression)
         name = ((VariableExpression) item.getExpression()).getVariableName();
-      if (name != null && !"*".equals(name)) {
-        if (!seen.add(name))
-          throw new CommandParsingException("ColumnNameConflict: Column name '" + name + "' is defined more than once");
-      }
+      if (name != null && !seen.add(name))
+        throw new CommandParsingException("ColumnNameConflict: Column name '" + name + "' is defined more than once");
     }
   }
 

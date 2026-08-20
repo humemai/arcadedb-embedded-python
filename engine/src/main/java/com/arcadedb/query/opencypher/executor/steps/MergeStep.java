@@ -18,9 +18,11 @@
  */
 package com.arcadedb.query.opencypher.executor.steps;
 
+import com.arcadedb.database.Database;
 import com.arcadedb.database.Document;
 import com.arcadedb.database.Identifiable;
 import com.arcadedb.database.MutableDocument;
+import com.arcadedb.database.Record;
 import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.exception.TimeoutException;
@@ -38,6 +40,7 @@ import com.arcadedb.query.opencypher.ast.Direction;
 import com.arcadedb.query.opencypher.ast.SetClause;
 import com.arcadedb.query.opencypher.executor.CypherFunctionFactory;
 import com.arcadedb.query.opencypher.executor.ExpressionEvaluator;
+import com.arcadedb.query.opencypher.executor.LabelReplacements;
 import com.arcadedb.query.opencypher.parser.CypherASTBuilder;
 import com.arcadedb.query.opencypher.temporal.TemporalUtil;
 import com.arcadedb.query.sql.executor.AbstractExecutionStep;
@@ -48,7 +51,6 @@ import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.index.TypeIndex;
 import com.arcadedb.schema.DocumentType;
-import com.arcadedb.schema.VertexType;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -58,6 +60,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Execution step for MERGE clause.
@@ -91,6 +94,10 @@ public class MergeStep extends AbstractExecutionStep {
       private int bufferIndex = 0;
       private boolean finished = false;
       private boolean mergedStandalone = false;
+      // Tracks the vertices an ON CREATE/ON MATCH SET n:Label replaced, so a node relabelled while processing one
+      // row is not still the deleted original when a later row - or a second alias of the same row - reaches it.
+      // Same reasoning, and same class, as SetStep and RemoveStep (issues #6312, #6313).
+      private final LabelReplacements labelReplacements = new LabelReplacements();
 
       @Override
       public boolean hasNext() {
@@ -132,7 +139,7 @@ public class MergeStep extends AbstractExecutionStep {
               if (context.isProfiling())
                 rowCount++;
 
-              final List<Result> mergedResults = executeMerge(inputResult);
+              final List<Result> mergedResults = executeMerge(inputResult, labelReplacements);
               buffer.addAll(mergedResults);
             } finally {
               if (context.isProfiling())
@@ -151,7 +158,7 @@ public class MergeStep extends AbstractExecutionStep {
               if (context.isProfiling())
                 rowCount++;
 
-              final List<Result> mergedResults = executeMerge(null);
+              final List<Result> mergedResults = executeMerge(null, labelReplacements);
               buffer.addAll(mergedResults);
               mergedStandalone = true;
             } finally {
@@ -174,11 +181,21 @@ public class MergeStep extends AbstractExecutionStep {
    * Executes the MERGE operation: tries to match all, creates if none found.
    * In Cypher, MERGE returns ALL matching elements (one row per match),
    * or creates one element if no match exists.
+   * <p>
+   * Uses {@code database.transaction()} to get the same automatic retry on MVCC conflicts
+   * ({@code NeedRetryException}/{@code ConcurrentModificationException}) that {@code CreateStep}
+   * already has (issue #6367). {@code joinCurrentTx=true} means this joins an already-active
+   * transaction (an explicit {@code BEGIN}, or the HTTP auto-commit wrapper in
+   * {@code DatabaseAbstractHandler}) exactly as the previous raw {@code begin()}/{@code commit()}
+   * did - no behavior change there. The difference is when MERGE owns its transaction outright
+   * (the normal case for an unwrapped autocommit caller, e.g. Bolt's {@code handleRun}): a
+   * transient conflict is now retried up to {@link com.arcadedb.GlobalConfiguration#TX_RETRIES}
+   * instead of propagating on the first attempt.
    *
    * @param inputResult input result from previous step (may be null for standalone MERGE)
    * @return list of results containing matched or created elements
    */
-  private List<Result> executeMerge(final Result inputResult) {
+  private List<Result> executeMerge(final Result inputResult, final LabelReplacements labelReplacements) {
     final PathPattern pathPattern = mergeClause.getPathPattern();
 
     // Cypher null-propagation: a named path variable that was explicitly bound
@@ -188,14 +205,27 @@ public class MergeStep extends AbstractExecutionStep {
     if (inputResult != null && hasNullBoundPathVariable(pathPattern, inputResult))
       return List.of();
 
-    // Check if we're already in a transaction
-    final boolean wasInTransaction = context.getDatabase().isTransactionActive();
+    final Database database = context.getDatabase();
+    final QueryStatistics stats = context.getStatistics();
+    final QueryStatistics statsSnapshot = stats.copy();
+    // labelReplacements is step-wide (shared across every row this MergeStep processes, see the field
+    // Javadoc), so only the entries a FAILED attempt of THIS row added must be undone on retry - entries
+    // an earlier, already-committed row recorded are still live and must survive. Snapshotting here,
+    // once per row before the first attempt, and restoring it at the top of every attempt (including the
+    // first, a no-op there) does exactly that.
+    final LabelReplacements.Snapshot labelReplacementsSnapshot = labelReplacements.copy();
+    final AtomicReference<List<Result>> resultsRef = new AtomicReference<>();
 
-    try {
-      // Begin transaction if not already active
-      if (!wasInTransaction) {
-        context.getDatabase().begin();
-      }
+    database.transaction(() -> {
+      // database.transaction retries this block on MVCC/duplicate-key conflict; reset the counters
+      // to the pre-attempt snapshot so a retried attempt does not double-count matches/creations,
+      // mirroring CreateStep.createPatterns().
+      stats.restore(statsSnapshot);
+      // A failed attempt's ON CREATE/ON MATCH SET n:Label (applySetClause's LABELS branch) can call
+      // labelReplacements.replace(), which both writes records and remembers the move. The transaction
+      // rollback undoes the writes; without this, the stale mapping would still point the retried
+      // attempt at a vertex whose creation was just rolled back.
+      labelReplacements.restore(labelReplacementsSnapshot);
 
       // Create base result and copy input properties if present
       final ResultInternal baseResult = new ResultInternal();
@@ -224,24 +254,15 @@ public class MergeStep extends AbstractExecutionStep {
         if (r instanceof ResultInternal)
           ((ResultInternal) r).removeProperty("  wasCreated");
         if (wasCreated && mergeClause.hasOnCreateSet())
-          applySetClause(mergeClause.getOnCreateSet(), (ResultInternal) r);
+          applySetClause(mergeClause.getOnCreateSet(), (ResultInternal) r, labelReplacements);
         else if (!wasCreated && mergeClause.hasOnMatchSet())
-          applySetClause(mergeClause.getOnMatchSet(), (ResultInternal) r);
+          applySetClause(mergeClause.getOnMatchSet(), (ResultInternal) r, labelReplacements);
       }
 
-      // Commit transaction if we started it
-      if (!wasInTransaction) {
-        context.getDatabase().commit();
-      }
+      resultsRef.set(results);
+    }, true);
 
-      return results;
-    } catch (final Exception e) {
-      // Rollback if we started the transaction
-      if (!wasInTransaction && context.getDatabase().isTransactionActive()) {
-        context.getDatabase().rollback();
-      }
-      throw e;
-    }
+    return resultsRef.get();
   }
 
   /**
@@ -916,12 +937,11 @@ public class MergeStep extends AbstractExecutionStep {
    * property constraints.
    */
   private boolean matchesNodePattern(final Vertex vertex, final NodePattern nodePattern, final Result result) {
-    if (nodePattern.hasLabels()) {
-      for (final String label : nodePattern.getLabels()) {
-        if (!Labels.hasLabel(vertex, label))
-          return false;
-      }
-    }
+    // Through the one helper, so this reads a disjunction the way every other pattern does (issue #6338). A MERGE
+    // pattern cannot actually carry one - the validator refuses a label expression here, as Neo4j does, because the
+    // create half of MERGE has no way to act on "A or B" - but the check does not get to be the odd one out.
+    if (!Labels.matches(vertex, nodePattern.getLabels(), nodePattern.isLabelDisjunction()))
+      return false;
     if (nodePattern.hasProperties()) {
       final Map<String, Object> props = evaluateProperties(nodePattern.getProperties(), result);
       if (!matchesProperties(vertex, props))
@@ -1014,38 +1034,23 @@ public class MergeStep extends AbstractExecutionStep {
         ? evaluateProperties(nodePattern.getProperties(), result)
         : null;
 
-    if (!nodePattern.hasLabels()) {
-      for (final DocumentType type : context.getDatabase().getSchema().getTypes()) {
-        if (type instanceof VertexType) {
-          @SuppressWarnings("unchecked")
-          final Iterator<Identifiable> iter = (Iterator<Identifiable>) (Object) context.getDatabase().iterateType(type.getName(), false);
-          while (iter.hasNext()) {
-            final Identifiable id = iter.next();
-            if (id instanceof Vertex vertex)
-              if (evaluatedProperties == null || matchesProperties(vertex, evaluatedProperties))
-                matches.add(vertex);
-          }
-        }
-      }
-      return matches;
-    }
+    final List<String> labels = nodePattern.hasLabels() ? nodePattern.getLabels() : null;
 
-    final List<String> labels = nodePattern.getLabels();
-
-    if (labels.size() > 1) {
-      final String firstLabel = labels.get(0);
-      if (!context.getDatabase().getSchema().existsType(firstLabel))
-        return matches;
-      @SuppressWarnings("unchecked")
-      final Iterator<Identifiable> iterator = (Iterator<Identifiable>) (Object) context.getDatabase().iterateType(firstLabel, true);
-      while (iterator.hasNext()) {
-        final Identifiable identifiable = iterator.next();
-        if (identifiable instanceof Vertex vertex) {
-          final List<String> vertexLabels = Labels.getLabels(vertex);
-          if (vertexLabels.containsAll(labels))
-            if (evaluatedProperties == null || matchesProperties(vertex, evaluatedProperties))
-              matches.add(vertex);
-        }
+    if (labels == null || labels.size() > 1) {
+      // No label is every vertex; more than one is a conjunction. The disjunction flag is passed rather than
+      // hardcoded, but it can only arrive false here: CypherSemanticValidator.checkNoLabelDisjunction refuses
+      // (n:A|B) in MERGE at parse time, because "A or B" says which labels a node MAY have and a write has to
+      // know which type to create (issue #6338). Which types can carry every label is decided by Labels, the one
+      // place that knows what a label list means, instead of scanning the first label and comparing label lists
+      // per record: a type extending a composite carries its labels without listing them as its own supertypes,
+      // and MERGE missed such a node and created a duplicate beside the one MATCH found (issue #6352).
+      final Iterator<Record> candidates = Labels.iterateMatchingVertices(context.getDatabase(), labels,
+          nodePattern.isLabelDisjunction());
+      while (candidates.hasNext()) {
+        final Record record = candidates.next();
+        if (record instanceof Vertex vertex)
+          if (evaluatedProperties == null || matchesProperties(vertex, evaluatedProperties))
+            matches.add(vertex);
       }
       return matches;
     }
@@ -1145,13 +1150,15 @@ public class MergeStep extends AbstractExecutionStep {
    * @return created vertex
    */
   private Vertex createVertex(final NodePattern nodePattern, final Result result) {
-    final List<String> labels = nodePattern.hasLabels()
-        ? nodePattern.getLabels()
-        : List.of("Vertex");
-
-    // Get or create the appropriate type (composite if multiple labels)
-    final String typeName = Labels.ensureCompositeType(
-        context.getDatabase().getSchema(), labels);
+    // No label written: land in the reserved sentinel directly, bypassing ensureCompositeType - see
+    // CreateStep.createVertex for why (issue #6395 review).
+    final String typeName;
+    if (nodePattern.hasLabels()) {
+      typeName = Labels.ensureCompositeType(context.getDatabase().getSchema(), nodePattern.getLabels());
+    } else {
+      typeName = Labels.NO_LABEL_TYPE;
+      context.getDatabase().getSchema().getOrCreateVertexType(Labels.NO_LABEL_TYPE);
+    }
 
     final MutableVertex vertex = context.getDatabase().newVertex(typeName);
 
@@ -1290,13 +1297,20 @@ public class MergeStep extends AbstractExecutionStep {
   /**
    * Applies a SET clause to the result (used for ON CREATE SET / ON MATCH SET).
    *
-   * @param setClause the SET clause to apply
-   * @param result the result containing variables to update
+   * @param setClause          the SET clause to apply
+   * @param result             the result containing variables to update
+   * @param labelReplacements  the vertices a label write earlier in this step replaced, and the machinery to
+   *                           perform the next one
    */
   @SuppressWarnings("unchecked")
-  private void applySetClause(final SetClause setClause, final Result result) {
+  private void applySetClause(final SetClause setClause, final Result result,
+      final LabelReplacements labelReplacements) {
     if (setClause == null || setClause.isEmpty())
       return;
+
+    // A node an earlier row of this MERGE relabelled reaches this row as the deleted original: point every alias
+    // of it - the MERGE's own variable and anything the input row bound to the same node - at the replacement.
+    labelReplacements.redirect(result);
 
     for (final SetClause.SetItem item : setClause.getItems()) {
       final String variable = item.getVariable();
@@ -1397,29 +1411,28 @@ public class MergeStep extends AbstractExecutionStep {
         case LABELS: {
           if (!(obj instanceof Vertex vertex))
             break;
-          final List<String> existingLabels = Labels.getLabels(vertex);
-          final List<String> allLabels = new ArrayList<>(existingLabels);
+          vertex = labelReplacements.resolve(vertex);
+          // Same rule as SET: the new type is built from the vertex's OWN labels, so an inherited label is not
+          // re-listed in place of the subtype that carries it, and a label the vertex already answers to adds
+          // nothing (issue #6363).
+          final DocumentType currentType = vertex.getType();
+          final List<String> allLabels = new ArrayList<>(Labels.getOwnLabels(vertex));
           int newLabelsCount = 0;
           for (final String label : item.getLabels())
-            if (!allLabels.contains(label)) {
+            if (!currentType.instanceOf(label) && !allLabels.contains(label)) {
               allLabels.add(label);
               newLabelsCount++;
             }
           final String newTypeName = Labels.ensureCompositeType(
               context.getDatabase().getSchema(), allLabels);
           if (!vertex.getTypeName().equals(newTypeName)) {
-            final MutableVertex newVertex = context.getDatabase().newVertex(newTypeName);
-            for (final String prop : vertex.getPropertyNames())
-              newVertex.set(prop, vertex.get(prop));
-            newVertex.save();
+            // The record moves, so the same shared rewrite SET and REMOVE use: it carries the edges over with
+            // their properties, migrates a self-loop once and onto the replacement rather than onto the record
+            // about to be deleted, and records what moved so every alias can follow it.
+            labelReplacements.replace(vertex, newTypeName);
             if (newLabelsCount > 0)
               context.getStatistics().addLabelsAdded(newLabelsCount);
-            for (final Edge edge : vertex.getEdges(Vertex.DIRECTION.OUT))
-              newVertex.newEdge(edge.getTypeName(), edge.getVertex(Vertex.DIRECTION.IN));
-            for (final Edge edge : vertex.getEdges(Vertex.DIRECTION.IN))
-              edge.getVertex(Vertex.DIRECTION.OUT).newEdge(edge.getTypeName(), newVertex);
-            vertex.delete();
-            ((ResultInternal) result).setProperty(variable, newVertex);
+            labelReplacements.redirect(result);
           }
           break;
         }
@@ -1444,7 +1457,7 @@ public class MergeStep extends AbstractExecutionStep {
     builder.append(ind);
     builder.append("+ MERGE");
     if (context.isProfiling()) {
-      builder.append(" (").append(getCostFormatted()).append(")");
+      builder.append(" (").append(getCostFormatted());
       if (rowCount > 0)
         builder.append(", ").append(getRowCountFormatted());
       builder.append(")");

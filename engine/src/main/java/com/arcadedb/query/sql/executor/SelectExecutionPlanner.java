@@ -18,7 +18,6 @@
  */
 package com.arcadedb.query.sql.executor;
 
-import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Identifiable;
@@ -76,7 +75,6 @@ import com.arcadedb.query.sql.parser.SuffixIdentifier;
 import com.arcadedb.query.sql.parser.Statement;
 import com.arcadedb.query.sql.parser.TraverseStatement;
 import com.arcadedb.query.sql.parser.SubQueryCollector;
-import com.arcadedb.query.sql.parser.Timeout;
 import com.arcadedb.query.sql.parser.WhereClause;
 import com.arcadedb.engine.timeseries.AggregationType;
 import com.arcadedb.engine.timeseries.ColumnDefinition;
@@ -147,11 +145,22 @@ public class SelectExecutionPlanner {
     info.unwind = this.statement.getUnwind() == null ? null : this.statement.getUnwind().copy();
     info.skip = this.statement.getSkip();
     info.limit = this.statement.getLimit();
+    // Only the statement's own clause. SELECT used to synthesize a Timeout out of arcadedb.command.timeout when
+    // the statement carried none, which was how the setting reached SELECT at all before #6266 - and it made
+    // SELECT the odd one out in three ways: MATCH, TRAVERSE and UPDATE synthesize nothing, so EXPLAIN showed a
+    // "+ TIMEOUT" step for one statement kind and not the others under the same setting; and when the bound
+    // fired, the message named it a "TIMEOUT clause" on a statement whose author wrote no clause. The setting is
+    // now carried by the command deadline, which every guard reads and no statement kind can miss (issue #6304).
     info.timeout = this.statement.getTimeout() == null ? null : this.statement.getTimeout().copy();
-    if (info.timeout == null && context.getDatabase().getConfiguration().getValueAsLong(GlobalConfiguration.COMMAND_TIMEOUT) > 0) {
-      info.timeout = new Timeout();
-      info.timeout.setValue(context.getDatabase().getConfiguration().getValueAsLong(GlobalConfiguration.COMMAND_TIMEOUT));
-    }
+
+    // A filter that keeps every record (WHERE 1=1, WHERE true) says nothing the statement did not already say, so it
+    // is dropped here rather than pushed into the fetch: everything downstream - the projected properties computed
+    // just below, the choice between FetchFromTypeWithFilterStep and FetchFromTypeExecutionStep, the hardwired
+    // count(*) plan - then sees the statement it would have seen without a WHERE at all. Decided off the clauses as
+    // the statement wrote them, before optimizeQuery() rearranges them into index searches, and only for
+    // literal-only comparisons, so the verdict holds for every execution that reuses the cached plan.
+    if (info.whereClause != null && info.whereClause.isAlwaysTrue(context))
+      info.whereClause = null;
 
     info.projectedProperties = computeProjectedProperties(info);
   }
@@ -242,9 +251,13 @@ public class SelectExecutionPlanner {
     if (info.expand && info.distinct)
       throw new CommandExecutionException("Cannot execute a statement with DISTINCT expand(), please use a subquery");
 
+    // A statement whose own text proves that it cannot return a row is answered without touching the storage. This is
+    // read off the clauses as the statement wrote them, before optimizeQuery() rearranges them into index searches.
+    final String emptyReason = emptyByConstructionReason(context);
+
     optimizeQuery(info, context);
 
-    if (handleHardwiredOptimizations(selectExecutionPlan, context))
+    if (emptyReason == null && handleHardwiredOptimizations(selectExecutionPlan, context))
       return selectExecutionPlan;
 
     handleGlobalLet(selectExecutionPlan, info, context);
@@ -266,26 +279,87 @@ public class SelectExecutionPlanner {
 
     handleFetchFromTarget(selectExecutionPlan, info, context);
 
-    if (info.globalLetPresent)
-      // do the raw fetch remotely, then do the rest on the coordinator
+    if (emptyReason != null)
+      foldEmptyByConstruction(selectExecutionPlan, info, context, emptyReason);
+    else {
+      if (info.globalLetPresent)
+        // do the raw fetch remotely, then do the rest on the coordinator
+        buildExecutionPlan(selectExecutionPlan, info);
+
+      handleLet(selectExecutionPlan, info, context);
+
+      handleWhere(selectExecutionPlan, info, context);
+
       buildExecutionPlan(selectExecutionPlan, info);
 
-    handleLet(selectExecutionPlan, info, context);
+      handleProjectionsBlock(selectExecutionPlan, info, context);
 
-    handleWhere(selectExecutionPlan, info, context);
-
-    buildExecutionPlan(selectExecutionPlan, info);
-
-    handleProjectionsBlock(selectExecutionPlan, info, context);
-
-    if (info.timeout != null)
-      selectExecutionPlan.chain(new AccumulatingTimeoutStep(info.timeout, context));
+      chainTimeout(selectExecutionPlan, info, context);
+    }
 
     if (useCache && !context.isProfiling() && statement.executionPlanCanBeCached() && selectExecutionPlan.canBeCached()
         && db.getExecutionPlanCache().getLastInvalidation() < planningStart)
       db.getExecutionPlanCache().put(statement.getOriginalStatement(), selectExecutionPlan);
 
     return selectExecutionPlan;
+  }
+
+  /**
+   * Tells whether the statement cannot return a row no matter what the database contains, and why - the reason is
+   * what the plan prints in place of the fetch it does not do. {@code null} means "not decidable from the statement",
+   * which is the answer for everything but the two shapes below.
+   * <p>
+   * Both are how a client asks for a query's columns without asking for its rows: Spark and several BI tools over the
+   * Postgres wire send one such probe per pushed-down query, against the real target (issue #6174).
+   * <p>
+   * The two reasons are not decided the same way. A constant-false filter is folded only when the statement itself
+   * says so, never through a function - see {@link Expression#isLiteral()}. A {@code LIMIT 0} truncates the result to
+   * nothing whatever the filter would have done, so the filter is simply not evaluated: a predicate that raises at
+   * runtime ({@code WHERE 1/0 = 1 LIMIT 0}) stops raising, which is the one way the difference can be observed.
+   */
+  private String emptyByConstructionReason(final CommandContext context) {
+    if (info.whereClause != null && info.whereClause.isAlwaysFalse(context))
+      return "the filter is false for every record";
+
+    if (info.limit != null && info.limit.isAlwaysEmpty())
+      return "LIMIT 0";
+
+    return null;
+  }
+
+  /**
+   * Replaces the target fetch with an {@link EmptySourceStep} and leaves the rest of the plan alone. The fetch has
+   * already been planned when this runs, and is discarded rather than skipped, so a statement that names a type that
+   * does not exist is still reported as such - only the scan goes.
+   * <p>
+   * Everything downstream of the fetch is kept and receives no row, which is exactly what it receives today from the
+   * filter step this fold removes: {@code SELECT count(*) FROM T WHERE 1=0} still counts to zero and still returns
+   * its one row, and the same clause with a GROUP BY still returns none. What the fold does skip is the per-record
+   * {@code LET} and the per-record work the projections would do, neither of which can be observed by a statement
+   * that returns no row. A {@code LET} evaluated once per statement is chained ahead of this step and still runs.
+   */
+  private void foldEmptyByConstruction(final SelectExecutionPlan plan, final QueryPlanningInfo info,
+      final CommandContext context, final String reason) {
+    // the fetch steps are dropped, not chained: close them so that a step which took something in its constructor
+    // (a sub-plan, an index reference) does not outlive the plan that will never run it
+    if (info.fetchExecutionPlan != null && !info.fetchExecutionPlan.getSteps().isEmpty())
+      info.fetchExecutionPlan.close();
+
+    info.fetchExecutionPlan = null;
+
+    plan.chain(new EmptySourceStep(context, reason));
+
+    handleProjectionsBlock(plan, info, context);
+
+    chainTimeout(plan, info, context);
+  }
+
+  /** Chains the statement's own {@code TIMEOUT} clause, last, so that it wraps everything the statement does. */
+  private static void chainTimeout(final SelectExecutionPlan plan, final QueryPlanningInfo info,
+      final CommandContext context) {
+    final TimeoutStep step = StatementTimeouts.stepFor(info.timeout, context);
+    if (step != null)
+      plan.chain(step);
   }
 
   public static void handleProjectionsBlock(final SelectExecutionPlan result, final QueryPlanningInfo info,
@@ -424,7 +498,24 @@ public class SelectExecutionPlanner {
       return false;
 
     result.chain(new CountFromTypeStep(info.target.toString(), info.projection.getAllAliases().getFirst(), context));
+    handleSkipAndLimitAfterHardwired(result, info, context);
     return true;
+  }
+
+  /**
+   * A hardwired plan replaces the whole step chain, so the SKIP and LIMIT of the statement have to be chained here or
+   * they are not chained at all - which is how {@code SELECT count(*) FROM T SKIP 1}, and equally
+   * {@code SELECT max(indexedProperty) FROM T SKIP 1}, used to hand back the very row they were told to skip. The
+   * single row these plans produce makes both steps cheap; {@code LIMIT 0} does not even reach this point,
+   * {@link #emptyByConstructionReason} claims it first.
+   */
+  private static void handleSkipAndLimitAfterHardwired(final SelectExecutionPlan result, final QueryPlanningInfo info,
+      final CommandContext context) {
+    if (info.skip != null)
+      result.chain(new SkipExecutionStep(info.skip, context));
+
+    if (info.limit != null)
+      result.chain(new LimitExecutionStep(info.limit, context));
   }
 
   private boolean handleHardwiredCountOnIndex(final SelectExecutionPlan result, final QueryPlanningInfo info,
@@ -446,12 +537,14 @@ public class SelectExecutionPlanner {
       return false;
     }
     result.chain(new CountFromIndexStep(targetIndex, info.projection.getAllAliases().getFirst(), context));
+    handleSkipAndLimitAfterHardwired(result, info, context);
     return true;
   }
 
   /**
    * returns true if the query is minimal, ie. no WHERE condition, no UNWIND, no GROUP/ORDER BY, no LET.
-   * SKIP/LIMIT are allowed because all hardwired optimizations (count, max, min) return a single row.
+   * SKIP/LIMIT are allowed because all hardwired optimizations (count, max, min) return a single row, and because
+   * the plan chains the two steps itself - see {@link #handleSkipAndLimitAfterHardwired}.
    */
   private boolean isMinimalQuery(final QueryPlanningInfo info) {
     return info.projectionAfterOrderBy == null && info.globalLetClause == null && info.perRecordLetClause == null
@@ -550,6 +643,7 @@ public class SelectExecutionPlanner {
 
     // Create the optimized execution step
     result.chain(new MaxMinFromIndexStep(index, info.projection.getAllAliases().getFirst(), maxMinInfo.isMax, context));
+    handleSkipAndLimitAfterHardwired(result, info, context);
     return true;
   }
 
@@ -2291,11 +2385,16 @@ public class SelectExecutionPlanner {
           continue;
         final int idx = idxBoxed;
 
-        if (literalSide == null || !literalSide.isEarlyCalculated(context))
-          continue;
-        // Plan-time pruning is unsafe when the literal is parameter-bound: the cached plan would
-        // reuse the first execution's bucket id for every subsequent binding.
-        if (literalSide.containsInputParameter())
+        // Only a literal is bound here, not everything Expression.isEarlyCalculated() would admit. The
+        // bucket derived below is baked into the plan, so the value it comes from must be fixed for the
+        // life of that plan and free to compute: a parameter is not (a cached plan would reuse the first
+        // execution's bucket id for every subsequent binding, which is what the isEarlyCalculated form
+        // used to exclude by hand), and a function call is neither - it would be invoked at plan time,
+        // once more than the query asked for, and a non-deterministic one would fix a bucket that its
+        // per-row value no longer agrees with. That the plan is not cached today when the WHERE holds a
+        // function is an accident of FunctionCall.isCacheable() being true only for traversals; pruning
+        // no longer leans on it. See issue #6179.
+        if (literalSide == null || !literalSide.isLiteral())
           continue;
 
         if (!bound[idx]) {
@@ -3414,7 +3513,7 @@ public class SelectExecutionPlanner {
       if (orderAsc != null && info.orderBy != null && fullySorted(info.orderBy, (AndBlock) desc.keyCondition, desc.getIndex()))
         info.orderApplied = true;
 
-        if (desc.getRemainingCondition() != null && !desc.getRemainingCondition().isEmpty()) {
+        if (needsFilterStep(desc.getRemainingCondition(), context)) {
         if (info.perRecordLetClause != null
             && refersToLet(Collections.singletonList(desc.getRemainingCondition()))) {
           SelectExecutionPlan stubPlan = new SelectExecutionPlan(context,
@@ -3540,12 +3639,22 @@ public class SelectExecutionPlanner {
       if (desc.requiresMultipleIndexLookups()) {
         subPlan.chain(new DistinctExecutionStep(context));
       }
-      if (desc.remainingCondition != null && !desc.remainingCondition.isEmpty()) {
+      if (needsFilterStep(desc.remainingCondition, context)) {
         subPlan.chain(new FilterStep(createWhereFrom(desc.remainingCondition), context));
       }
       subPlans.add(subPlan);
     }
     return new ParallelExecStep(subPlans, context);
+  }
+
+  /**
+   * Whether what an index search left behind still has to be evaluated per record. A residual that is empty, or true
+   * for every record, is no filter at all: {@code WHERE 1=1 AND indexedProperty = 'x'} hands the second term to the
+   * index and leaves the first behind, and evaluating it would cost the index plan the very step the whole where
+   * clause is spared in {@link #init(CommandContext)}.
+   */
+  private static boolean needsFilterStep(final BooleanExpression remainingCondition, final CommandContext context) {
+    return remainingCondition != null && !remainingCondition.isEmpty() && !remainingCondition.isAlwaysTrue(context);
   }
 
   private WhereClause createWhereFrom(final BooleanExpression remainingCondition) {
@@ -3796,6 +3905,21 @@ public class SelectExecutionPlanner {
   /**
    * given a full text index and a flat AND block, returns a descriptor on how to process it with an
    * index (index, index key and additional filters to apply after index fetch
+   * <p>
+   * Every {@code CONTAINSTEXT} the index covers is claimed, whichever properties they are and however few: a full-text index
+   * key is one query string per indexed property, not a composite key whose prefix has to be contiguous, and a multi-property
+   * index stores each token both field-qualified and unprefixed so a per-property lookup is exact. Requiring the FIRST index
+   * property to be constrained, and then every following one, meant a condition on one property of a two-property index fell
+   * back to a full scan - where {@code CONTAINSTEXT} silently changed from analyzer-token matching to
+   * {@code String.contains} - while a condition on BOTH was pushed down and then answered by the first one alone, with the
+   * second dropped from the filter as well (issue #6414, item 2). {@link FetchFromIndexStep} turns the claimed conditions
+   * into the positional key the index expects.
+   * <p>
+   * At most ONE condition per index property is claimed - the inner loop breaks after the first match - so a second
+   * condition on the same property stays in the residual filter and is answered by {@code String.contains} rather than by
+   * the index's analyzer. The positional key has one slot per property and cannot express two texts for one: within a
+   * property the terms of a single query text are OR-ed, while the {@code AND} between two conditions wants both. Serving
+   * it means one lookup per CONDITION rather than per property, which is issue #6427.
    *
    * @param context
    * @param index
@@ -3807,41 +3931,23 @@ public class SelectExecutionPlanner {
   private IndexSearchDescriptor buildIndexSearchDescriptorForFulltext(final CommandContext context, final Index index,
       final AndBlock block, final DocumentType clazz) {
     final List<String> indexFields = index.getPropertyNames();
-    final BinaryCondition keyCondition = new BinaryCondition();
-    final Identifier key = new Identifier("key");
-    keyCondition.setLeft(new Expression(key));
-    boolean found = false;
 
     final AndBlock blockCopy = block.copy();
-    Iterator<BooleanExpression> blockIterator;
-
     final AndBlock indexKeyValue = new AndBlock();
     final IndexSearchDescriptor result = new IndexSearchDescriptor();
     result.index = (RangeIndex) index;
     result.keyCondition = indexKeyValue;
+
     for (final String indexField : indexFields) {
-      blockIterator = blockCopy.getSubBlocks().iterator();
-      final boolean breakHere = false;
-      boolean indexFieldFound = false;
+      final String baseFieldName = Index.basePropertyName(indexField);
+      final Iterator<BooleanExpression> blockIterator = blockCopy.getSubBlocks().iterator();
       while (blockIterator.hasNext()) {
         final BooleanExpression singleExp = blockIterator.next();
         if (singleExp instanceof ContainsTextCondition textCondition) {
           final Expression left = textCondition.getLeft();
           // Get field name from expression - handle both simple identifiers (e.g. txt) and dotted
           // path expressions (e.g. lst.txt) used with BY ITEM nested property indexes
-          final String fieldName = left.getDefaultAlias().getStringValue();
-          // Strip modifiers to get base field name
-          String baseFieldName = indexField;
-          if (indexField.endsWith(" by key")) {
-            baseFieldName = indexField.substring(0, indexField.length() - 7);
-          } else if (indexField.endsWith(" by value")) {
-            baseFieldName = indexField.substring(0, indexField.length() - 9);
-          } else if (indexField.endsWith(" by item")) {
-            baseFieldName = indexField.substring(0, indexField.length() - 8);
-          }
-          if (baseFieldName.equals(fieldName)) {
-            found = true;
-            indexFieldFound = true;
+          if (baseFieldName.equals(left.getDefaultAlias().getStringValue())) {
             final ContainsTextCondition condition = new ContainsTextCondition();
             condition.setLeft(left);
             condition.setRight(textCondition.getRight().copy());
@@ -3851,20 +3957,13 @@ public class SelectExecutionPlanner {
           }
         }
       }
-      if (breakHere || !indexFieldFound) {
-        break;
-      }
     }
 
-    if (result.getSubBlocks().size() < index.getPropertyNames().size() && !index.supportsOrderedIterations())
-      // hash indexes do not support partial key match
+    if (indexKeyValue.getSubBlocks().isEmpty())
       return null;
 
-    if (found) {
-      result.remainingCondition = blockCopy;
-      return result;
-    }
-    return null;
+    result.remainingCondition = blockCopy;
+    return result;
   }
 
   /**
@@ -3888,15 +3987,7 @@ public class SelectExecutionPlanner {
     BinaryCondition additionalRangeCondition = null;
 
     for (String indexField : indexFields) {
-      // Strip modifiers to get base field name
-      String baseFieldName = indexField;
-      if (indexField.endsWith(" by key")) {
-        baseFieldName = indexField.substring(0, indexField.length() - 7);
-      } else if (indexField.endsWith(" by value")) {
-        baseFieldName = indexField.substring(0, indexField.length() - 9);
-      } else if (indexField.endsWith(" by item")) {
-        baseFieldName = indexField.substring(0, indexField.length() - 8);
-      }
+      final String baseFieldName = Index.basePropertyName(indexField);
 
       final boolean supportNull = index.getNullStrategy() == LSMTreeIndexAbstract.NULL_STRATEGY.INDEX;
       final boolean ciCollation = isIndexCaseInsensitive(index, indexFields.indexOf(indexField));

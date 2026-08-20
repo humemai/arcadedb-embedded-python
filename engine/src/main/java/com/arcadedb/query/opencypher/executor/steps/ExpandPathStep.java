@@ -37,6 +37,7 @@ import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.query.sql.executor.WorkGuard;
 
 import com.arcadedb.graph.Edge;
 
@@ -168,6 +169,9 @@ public class ExpandPathStep extends AbstractExecutionStep {
 
     final boolean hasPathVar = pathVariable != null && !pathVariable.isEmpty();
     final boolean hasRelVar = relationshipVariable != null && !relationshipVariable.isEmpty();
+    // Bounds this operator's row loop by the command deadline - see WorkGuard for why between-batches is
+    // not enough (issue #6266).
+    final WorkGuard guard = WorkGuard.forCommandDeadline(context);
 
     return new ResultSet() {
       private ResultSet prevResults = null;
@@ -206,6 +210,7 @@ public class ExpandPathStep extends AbstractExecutionStep {
         bufferIndex = 0;
 
         while (buffer.size() < n) {
+          guard.check();
           // Always use path traversal for correct Cypher edge-based relationship uniqueness
           if (currentPaths != null && currentPaths.hasNext()) {
             final long begin = context.isProfiling() ? System.nanoTime() : 0;
@@ -381,21 +386,7 @@ public class ExpandPathStep extends AbstractExecutionStep {
    * resolved against the current binding.
    */
   private boolean matchesTargetLabel(final Vertex vertex, final Result currentResult) {
-    final List<String> labels = resolveEffectiveLabels(currentResult);
-    if (labels.isEmpty())
-      return true;
-
-    if (targetNodePattern.isLabelDisjunction()) {
-      for (final String label : labels)
-        if (Labels.hasLabel(vertex, label))
-          return true;
-      return false;
-    }
-
-    for (final String label : labels)
-      if (!Labels.hasLabel(vertex, label))
-        return false;
-    return true;
+    return Labels.matches(vertex, resolveEffectiveLabels(currentResult), targetNodePattern.isLabelDisjunction());
   }
 
   /**
@@ -441,7 +432,7 @@ public class ExpandPathStep extends AbstractExecutionStep {
     builder.append("(").append(targetVariable).append(")");
     builder.append(" [").append(useBFS ? "BFS" : "DFS").append("]");
     if (context.isProfiling()) {
-      builder.append(" (").append(getCostFormatted()).append(")");
+      builder.append(" (").append(getCostFormatted());
       if (rowCount > 0)
         builder.append(", ").append(getRowCountFormatted());
       builder.append(")");

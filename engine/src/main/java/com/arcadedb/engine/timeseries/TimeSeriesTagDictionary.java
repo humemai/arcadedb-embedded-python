@@ -28,6 +28,7 @@ import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.MutablePage;
 import com.arcadedb.engine.PageId;
 import com.arcadedb.engine.PaginatedComponent;
+import com.arcadedb.engine.PaginatedComponentFile;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.schema.Type;
@@ -146,12 +147,16 @@ public class TimeSeriesTagDictionary extends PaginatedComponent {
   /**
    * Factory handler for loading an existing .tstd file during schema load. The in-RAM mapping is
    * rebuilt later by {@link #load()}, once the component is registered and the file id resolves.
+   * <p>
+   * The page size, version and mode {@code ComponentFactory} recovered from the file name are passed straight
+   * through (issue #6314); see {@link TimeSeriesBucket.PaginatedComponentFactoryHandler} for why re-deriving the
+   * page size from the live configuration instead is a silent misread rather than an exception.
    */
   public static class PaginatedComponentFactoryHandler implements ComponentFactory.PaginatedComponentFactoryHandler {
     @Override
     public PaginatedComponent createOnLoad(final DatabaseInternal database, final String name, final String filePath,
         final int id, final ComponentFile.MODE mode, final int pageSize, final int version) throws IOException {
-      return new TimeSeriesTagDictionary(database, name, filePath, id);
+      return new TimeSeriesTagDictionary(database, name, filePath, id, mode, pageSize, version);
     }
   }
 
@@ -168,13 +173,24 @@ public class TimeSeriesTagDictionary extends PaginatedComponent {
   }
 
   /**
-   * Opens an existing tag dictionary.
+   * Opens an existing tag dictionary on the id, page size and version its own file name carries (issue #6314).
    */
-  public TimeSeriesTagDictionary(final DatabaseInternal database, final String name, final String filePath, final int id)
-      throws IOException {
-    super(database, name, filePath, id, ComponentFile.MODE.READ_WRITE,
-        database.getConfiguration().getValueAsInteger(GlobalConfiguration.BUCKET_DEFAULT_PAGE_SIZE), CURRENT_VERSION);
+  public TimeSeriesTagDictionary(final DatabaseInternal database, final String name, final String filePath, final int id,
+      final ComponentFile.MODE mode, final int pageSize, final int version) throws IOException {
+    super(database, name, filePath, id, mode, pageSize, version);
     this.maxSize = database.getConfiguration().getValueAsInteger(GlobalConfiguration.TIMESERIES_TAG_DICTIONARY_MAX_SIZE);
+  }
+
+  /**
+   * Opens a second view over a file that is ALREADY registered with the file manager, taking the id, the page size,
+   * the version AND the mode from that file rather than re-deriving any of them (issues #6314 and #6340). Every one
+   * of the four is a property of the file and of nothing else, so this is the only form a caller in that position
+   * should need - and the mode was the last one still guessed here, hard-coded to {@code READ_WRITE} in the middle
+   * of three values that were read off the file, because {@code ComponentFile} had no accessor for it.
+   */
+  public TimeSeriesTagDictionary(final DatabaseInternal database, final String name, final PaginatedComponentFile file)
+      throws IOException {
+    this(database, name, file.getFilePath(), file.getFileId(), file.getMode(), file.getPageSize(), file.getVersion());
   }
 
   /**
@@ -202,15 +218,44 @@ public class TimeSeriesTagDictionary extends PaginatedComponent {
       return dictionary;
     }
 
-    final TimeSeriesTagDictionary dictionary =
+    // A file already registered under this component name is what this dictionary must be BUILT ON, id, page size
+    // and version and all. The id-allocating constructor would take a fresh file id from the manager and then be
+    // handed this very file anyway - getOrCreateFile() is keyed by the component name - leaving the component
+    // addressing pages of an id that is not the file it holds, which is unusable in either direction. The page
+    // size has to come from the same place for the same reason (issue #6314): the live bucketDefaultPageSize is
+    // whatever this run was configured with, not what the file on disk was written at.
+    final ComponentFile existingFile = database.getFileManager().getFileByComponentName(name);
+
+    // "Registered but not paginated" is unreachable today - PaginatedComponentFile is the only ComponentFile the
+    // engine ever constructs - and the branch below is written so it STAYS that way loudly. Falling through to the
+    // create-fresh arm on a registered name would be the silent outcome: it takes a new file id, gets handed this
+    // very file back by name, and dies on the #6283 id guard several frames later with a message about ids that
+    // says nothing about the real cause. This whole change is about turning that class of mismatch into a
+    // statement, so the assumption is one here too rather than an instanceof quietly deciding it.
+    if (existingFile != null && !(existingFile instanceof PaginatedComponentFile))
+      throw new IllegalStateException(
+          "The file registered under component name '" + name + "' is a " + existingFile.getClass().getSimpleName()
+              + " ('" + existingFile.getFilePath() + "'), but a tag dictionary can only be built on a paginated file");
+
+    final TimeSeriesTagDictionary dictionary = existingFile != null ?
+        new TimeSeriesTagDictionary(database, name, (PaginatedComponentFile) existingFile) :
         new TimeSeriesTagDictionary(database, name, database.getDatabasePath() + "/" + name);
+
+    // Registered BEFORE it is initialised, and it has to be: initHeaderPage() commits, and a commit
+    // resolves the component to bump its page count through schema.getFileById(), which throws on an id
+    // the schema does not know. The half-built component is not exposed by that: openOrCreate() runs from
+    // the TimeSeriesEngine constructor, under the schema DDL that creates or opens the type, before a
+    // single shard of it exists - so nothing can hold this type's dictionary id yet, and the only other
+    // caller is a test-only TimeSeriesShard constructor.
     schema.registerFile(dictionary);
 
-    if (dictionary.getTotalPages() > 0)
-      // The component was absent from the schema but its file is on disk. Adopt what is there:
-      // writing a fresh header would silently reset the id space and orphan every id already stored
-      // in a data page.
-      dictionary.load();
+    final StoredHeader header = dictionary.readStoredHeader();
+    if (header != null)
+      // The component was absent from the schema but its file already carries an initialised header.
+      // Adopt what is there: writing a fresh header would silently reset the id space and orphan every
+      // id already stored in a data page. The test is on the header itself and not on getTotalPages(),
+      // which under-reports for as long as the pages sit in the flush queue (issue #6198).
+      dictionary.load(header);
     else {
       dictionary.initHeaderPage();
       dictionary.loaded = true;
@@ -268,10 +313,29 @@ public class TimeSeriesTagDictionary extends PaginatedComponent {
   }
 
   public synchronized void load() throws IOException {
-    if (getTotalPages() == 0) {
+    load(readStoredHeader());
+  }
+
+  /**
+   * Rebuilds from a header already read, so a caller that had to read it to decide whether to reload -
+   * {@link #resolveMiss} - does not pay for a second lookup. Passing the checked header also ties the
+   * rebuild to it: the walk is guaranteed to cover the id that header was measured against.
+   *
+   * @param header the header page contents, or {@code null} when the file carries none
+   */
+  private synchronized void load(final StoredHeader header) throws IOException {
+    if (header == null) {
+      // No initialised header, so nothing has ever been stored in this file
       loaded = true;
       return;
     }
+
+    // Header first (see readStoredHeader()), pages after, in two steps rather than one. What makes that
+    // safe is that the format is strictly append-only: the counts are a lower bound that an append
+    // landing in between can only raise, and the bytes of the entries they cover never change. So the
+    // walk below rebuilds a valid prefix, and the entries it missed are picked up by the next reload.
+    final int storedEntries = header.entryCount();
+    final int pages = header.dataPageCount();
 
     // A read transaction of our own, so this can be called from inside a scan. It must be the only one
     // rolled back at the end: load() is reachable from resolveMiss() mid-query, and discarding the
@@ -279,9 +343,6 @@ public class TimeSeriesTagDictionary extends PaginatedComponent {
     database.begin();
     try {
       final TransactionContext tx = database.getTransaction();
-      final BasePage headerPage = tx.getPage(new PageId(database, fileId, 0), pageSize);
-      final int storedEntries = headerPage.readInt(HEADER_ENTRY_COUNT_OFFSET);
-      final int pages = headerPage.readInt(HEADER_DATA_PAGE_COUNT);
 
       final String[] values = new String[storedEntries + 1];
       values[EMPTY_ID] = "";
@@ -291,11 +352,13 @@ public class TimeSeriesTagDictionary extends PaginatedComponent {
       // absent - which on the ingest path means interning a second id for a value that already has one.
       final ConcurrentHashMap<String, Integer> rebuilt = new ConcurrentHashMap<>();
       int id = 1;
-      for (int pageNum = 1; pageNum <= pages; pageNum++) {
+      for (int pageNum = 1; pageNum <= pages && id <= storedEntries; pageNum++) {
         final BasePage page = tx.getPage(new PageId(database, fileId, pageNum), pageSize);
         final int pageEntries = page.readInt(DATA_ENTRY_COUNT_OFFSET);
         int offset = DATA_ENTRIES_OFFSET;
-        for (int i = 0; i < pageEntries; i++) {
+        // Bounded by the declared entry count and not by the page's own counter alone: that is what keeps
+        // an append committing between the two steps from overrunning the array sized for the first one.
+        for (int i = 0; i < pageEntries && id <= storedEntries; i++) {
           final int len = page.readShort(offset) & 0xFFFF;
           final byte[] bytes = new byte[len];
           if (len > 0)
@@ -320,6 +383,12 @@ public class TimeSeriesTagDictionary extends PaginatedComponent {
       if (database.isTransactionActive())
         database.rollback();
     }
+
+    // The file demonstrably holds these pages, whatever this instance's counter was seeded with. This
+    // matters beyond reporting: appendEntries() allocates a data page as new when the counter says the
+    // page number is past the end, which over an under-reported counter would overwrite a populated page.
+    // updatePageCount() only ever raises the counter, so this cannot pull back an instance already ahead.
+    updatePageCount(pages + 1);
   }
 
   /**
@@ -363,17 +432,19 @@ public class TimeSeriesTagDictionary extends PaginatedComponent {
     if (id < 0 || id <= entryCount)
       return null;
 
-    // Reload only when the pages really do hold the id, which is what tells a stale map apart from a
-    // corrupt id: without this a scan carrying a corrupt id would re-read every page on every row.
-    // The test is against the count stored in the header - one already-cached page read - and not
-    // against the last reload, because a leader interns for as long as it ingests: keying on the
-    // reload would self-heal for the first wave of ids and then never again.
-    if (id > peekStoredEntryCount())
-      return null;
-
     try {
-      load();
+      // Reload only when the pages really do hold the id, which is what tells a stale map apart from a
+      // corrupt id: without this a scan carrying a corrupt id would re-read every page on every row.
+      // The test is against the count stored in the header - one already-cached page read - and not
+      // against the last reload, because a leader interns for as long as it ingests: keying on the
+      // reload would self-heal for the first wave of ids and then never again.
+      final StoredHeader header = readStoredHeader();
+      if (header == null || id > header.entryCount())
+        return null;
+
+      load(header);
     } catch (final IOException e) {
+      // A read path declines the value rather than failing the scan around it.
       LogManager.instance().log(this, Level.WARNING,
           "Error reloading TimeSeries tag dictionary '%s' while resolving id %d: %s", e, getName(), id, e.getMessage());
       return null;
@@ -384,27 +455,43 @@ public class TimeSeriesTagDictionary extends PaginatedComponent {
   }
 
   /**
-   * Entry count as stored in the header page, which is what an id arriving from outside this instance
-   * has to be measured against. Read in a transaction of its own, like {@link #load()}, since this is
-   * reachable from inside a scan. A header that cannot be read degrades to the in-RAM count, so the
-   * caller declines to reload rather than reloading once per row.
+   * Reads the header page and returns {@code { stored entry count, data page count }}, or {@code null}
+   * when this file carries no initialised header - which is the only thing that means "nothing has ever
+   * been stored here".
+   * <p>
+   * <b>The header page is the authority, not {@link #getTotalPages()}</b> (issue #6198). That counter is
+   * per-instance: it is seeded from the physical file size at construction and afterwards only the
+   * component <em>registered with the schema</em> gets it bumped at commit. So an instance built over a
+   * file whose committed pages are still in the flush queue reads zero pages for a file that holds
+   * several, and gating on it conflated "this instance has loaded nothing" with "the file holds
+   * nothing" - disabling the self-heal in {@link #resolveMiss} exactly in the state it exists for, and
+   * letting {@link #openOrCreate} write a fresh header over a populated file. Reading page 0 has neither
+   * blind spot: the read cache and the flush queue sit in front of the disk, so a committed page is
+   * visible whether or not it has reached the file, and the magic tells an initialised header from a
+   * page that is not there at all.
+   * <p>
+   * Read straight through the page manager rather than in a transaction of its own: this is reachable
+   * from inside a scan, where opening one is both a cost and a hazard, and the page is never fabricated
+   * ({@code createIfNotExists} false), so probing a file that has no page 0 leaves no phantom behind.
+   * <p>
+   * A failure to read a header that is there is not "there is no header": it is thrown, so a caller that
+   * cannot cope with an empty dictionary ({@link #load()}, {@link #openOrCreate}) fails loudly instead of
+   * publishing an empty mapping over the real one. {@link #resolveMiss} is the caller that does cope, and
+   * it catches.
    */
-  private int peekStoredEntryCount() {
-    if (getTotalPages() == 0)
-      return entryCount;
+  private StoredHeader readStoredHeader() throws IOException {
+    final BasePage headerPage = database.getPageManager()
+        .getImmutablePage(new PageId(database, fileId, 0), pageSize, true, false);
+    if (headerPage == null || headerPage.readInt(HEADER_MAGIC_OFFSET) != MAGIC_VALUE)
+      return null;
+    return new StoredHeader(headerPage.readInt(HEADER_ENTRY_COUNT_OFFSET), headerPage.readInt(HEADER_DATA_PAGE_COUNT));
+  }
 
-    database.begin();
-    try {
-      return database.getTransaction().getPage(new PageId(database, fileId, 0), pageSize)
-          .readInt(HEADER_ENTRY_COUNT_OFFSET);
-    } catch (final IOException e) {
-      LogManager.instance().log(this, Level.WARNING,
-          "Error reading the header of TimeSeries tag dictionary '%s': %s", e, getName(), e.getMessage());
-      return entryCount;
-    } finally {
-      if (database.isTransactionActive())
-        database.rollback();
-    }
+  /**
+   * What the header page says the file holds: the two counters every decision in this class is made
+   * against, named rather than carried as a pair of positional ints.
+   */
+  private record StoredHeader(int entryCount, int dataPageCount) {
   }
 
   /**
@@ -505,6 +592,121 @@ public class TimeSeriesTagDictionary extends PaginatedComponent {
    */
   public void setMaxSize(final int maxSize) {
     this.maxSize = maxSize;
+  }
+
+  /**
+   * Validates everything this format asserts about itself and returns one line per problem, empty when there is
+   * none - the shape {@code IndexInternal.checkIntegrity()} uses, so {@code DatabaseChecker} folds the answers of
+   * every storage kind the same way (issue #6340).
+   * <p>
+   * What it can find that nothing else does: a dictionary is the only thing that can turn a 4-byte id in a
+   * mutable row back into the tag it stands for, so a truncated or unwalkable one does not fail a query - it makes
+   * every tag written since the damage read back as {@code null}, silently, on every row. The entry count in page
+   * 0 and the per-page counters are reconcilable against the entries themselves, which is what lets that be said
+   * before a reader trips over it.
+   * <p>
+   * The walk is the same one {@link #load(StoredHeader)} does and costs the same: one page read per data page,
+   * with the entries decoded only far enough to step over them.
+   * <p>
+   * Held under {@link #internLock} for the same reason the shard check holds its append lock: the counters are
+   * raised by a live writer, so reading page 0 and then walking the pages without it would report a healthy
+   * dictionary as short by exactly the entries an intern committed in between. Interning is contended only during
+   * warm-up, so this blocks nothing in steady state.
+   */
+  public List<String> checkIntegrity() throws IOException {
+    internLock.lock();
+    try {
+      return checkIntegrityUnderLock();
+    } finally {
+      internLock.unlock();
+    }
+  }
+
+  private List<String> checkIntegrityUnderLock() throws IOException {
+    final List<String> problems = new ArrayList<>();
+
+    final long fileSize = getComponentFile().getSize();
+    if (fileSize % pageSize != 0)
+      problems.add("the file is " + fileSize + " bytes, which is not a whole number of " + pageSize
+          + "-byte pages: it was written at a different page size, or its tail was truncated");
+
+    final BasePage headerPage = database.getPageManager()
+        .getImmutablePage(new PageId(database, fileId, 0), pageSize, true, false);
+    if (headerPage == null || headerPage.readInt(HEADER_MAGIC_OFFSET) != MAGIC_VALUE) {
+      if (fileSize > 0)
+        problems.add("the file holds " + fileSize + " bytes but page 0 does not carry the 'TSTD' magic: the header "
+            + "page is missing or was overwritten, so every tag id in this type's rows is unresolvable");
+      return problems;
+    }
+
+    final int formatVersion = headerPage.readByte(HEADER_FORMAT_VERSION_OFFSET) & 0xFF;
+    if (formatVersion != version)
+      problems.add("page 0 declares format version " + formatVersion + " but the file name says version " + version);
+
+    final int declaredEntries = headerPage.readInt(HEADER_ENTRY_COUNT_OFFSET);
+    final int declaredPages = headerPage.readInt(HEADER_DATA_PAGE_COUNT);
+    if (declaredEntries < 0 || declaredPages < 0) {
+      problems.add("page 0 declares " + declaredEntries + " entries over " + declaredPages
+          + " data page(s), and a count cannot be negative");
+      return problems;
+    }
+
+    final int capacity = pageSize - BasePage.PAGE_HEADER_SIZE - DATA_ENTRIES_OFFSET;
+    int entries = 0;
+    // Whether every page page 0 announces was walked to its end. The total below is a statement about ALL of them,
+    // so a walk that stopped partway cannot make it: what it counted is a prefix, and reporting a prefix as the
+    // whole restates one finding as two.
+    boolean walkedEveryEntry = true;
+
+    for (int pageNumber = 1; pageNumber <= declaredPages; pageNumber++) {
+      final BasePage page = database.getPageManager()
+          .getImmutablePage(new PageId(database, fileId, pageNumber), pageSize, true, false);
+      if (page == null) {
+        problems.add("page 0 declares " + declaredPages + " data page(s) but page " + pageNumber
+            + " is not in the file: every id stored on it is unresolvable");
+        walkedEveryEntry = false;
+        break;
+      }
+
+      final int pageEntries = page.readInt(DATA_ENTRY_COUNT_OFFSET);
+      final int pageUsed = page.readInt(DATA_USED_BYTES_OFFSET);
+      if (pageEntries < 0 || pageUsed < 0 || pageUsed > capacity) {
+        problems.add("data page " + pageNumber + " declares " + pageEntries + " entries over " + pageUsed
+            + " byte(s), which a page of capacity " + capacity + " cannot hold");
+        walkedEveryEntry = false;
+        continue;
+      }
+
+      // Walked rather than trusted: the counters and the bytes have to agree, and it is the bytes a reader
+      // actually steps through - an entry whose length prefix overruns the used region makes every entry after
+      // it on the page resolve to something else.
+      int offset = 0;
+      int walked = 0;
+      while (walked < pageEntries) {
+        if (offset + 2 > pageUsed) {
+          problems.add("data page " + pageNumber + " declares " + pageEntries + " entries but only " + walked
+              + " fit in the " + pageUsed + " byte(s) it declares as used");
+          walkedEveryEntry = false;
+          break;
+        }
+        final int length = page.readShort(DATA_ENTRIES_OFFSET + offset) & 0xFFFF;
+        if (length > TimeSeriesBucket.MAX_STRING_BYTES || offset + 2 + length > pageUsed) {
+          problems.add("entry " + walked + " of data page " + pageNumber + " declares a length of " + length
+              + " byte(s), which runs past the " + pageUsed + " byte(s) the page declares as used");
+          walkedEveryEntry = false;
+          break;
+        }
+        offset += 2 + length;
+        walked++;
+      }
+      entries += walked;
+    }
+
+    if (walkedEveryEntry && entries != declaredEntries)
+      problems.add("page 0 declares " + declaredEntries + " entries but its " + declaredPages
+          + " data page(s) hold " + entries + ": the ids above " + entries + " resolve to nothing");
+
+    return problems;
   }
 
   // --- Private helpers ---

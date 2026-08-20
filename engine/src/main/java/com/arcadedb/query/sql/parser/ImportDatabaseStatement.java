@@ -20,6 +20,7 @@
 /* ParserGeneratorCCOptions:MULTI=true,NODE_USES_PARSER=false,VISITOR=true,TRACK_TOKENS=true,NODE_PREFIX=,NODE_EXTENDS=,NODE_FACTORY=,SUPPORT_CLASS_VISIBILITY_PUBLIC=true */
 package com.arcadedb.query.sql.parser;
 
+import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Identifiable;
@@ -74,12 +75,25 @@ public class ImportDatabaseStatement extends SimpleExecStatement {
       final Database effectiveDb = db instanceof DatabaseInternal di ? di.getWrappedDatabaseInstance() : db;
       final Object importer = clazz.getConstructor(Database.class, String.class).newInstance(effectiveDb, url != null ? url.getUrlString() : null);
 
+      // Threads this command's resolved SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS through to the importer's deep
+      // fetch explicitly, rather than letting SourceDiscovery re-derive it from the static GlobalConfiguration value
+      // on its own. context.getConfiguration() falls back to that same static value when no caller overrode it (a
+      // client-issued 'IMPORT DATABASE ...' reaches here with no override and sees no behaviour change), but when
+      // PostServerCommandHandler's 'import database' server command already validated the URL against its own,
+      // possibly per-instance-overridden SERVER_RESTORE_IMPORT_ALLOW_LOCAL_URLS, it passes the resolved answer down
+      // via the ContextConfiguration it hands to database.command(...) so the two layers cannot disagree (#6474).
+      // This is NOT settable through the statement's own 'WITH ...' settings map below: those settings map to
+      // ImporterSettings fields one at a time by name, and allowLocalUrls is deliberately not one of them, or any
+      // client able to run IMPORT DATABASE could self-authorize past the SSRF guard from SQL text alone.
+      final boolean blockLocalNetworks = context.getConfiguration().getValue(GlobalConfiguration.SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS);
+      clazz.getMethod("setAllowLocalUrls", boolean.class).invoke(importer, !blockLocalNetworks);
+
       // TRANSFORM SETTINGS
       final Map<String, String> settingsToString = new HashMap<>();
       for (final Map.Entry<Expression, Expression> entry : settings.entrySet()) {
         final Object valueResult = entry.getValue().execute((Identifiable) null, context);
         final String valueStr = valueResult != null ? valueResult.toString() : entry.getValue().toString();
-        settingsToString.put(entry.getKey().value.toString(), valueStr);
+        settingsToString.put(entry.getKey().toString(), valueStr);
       }
 
       clazz.getMethod("setSettings", Map.class).invoke(importer, settingsToString);
@@ -116,20 +130,15 @@ public class ImportDatabaseStatement extends SimpleExecStatement {
     builder.append("IMPORT DATABASE ");
     if (url != null)
       url.toString(params, builder);
-    if (!settings.isEmpty()) {
-      builder.append(" WITH ");
-      boolean first = true;
-      for (final Map.Entry<Expression, Expression> entry : settings.entrySet()) {
-        if (!first)
-          builder.append(", ");
-        first = false;
-        builder.append(entry.getKey().value);
-        builder.append(" = ");
-        entry.getValue().toString(params, builder);
-      }
-    }
+    appendWithSettings(settings, params, builder);
   }
 
+  /**
+   * Compares {@code settings} too, not just {@code url}: for {@code IMPORT DATABASE} the settings ARE the statement
+   * (a CSV import has no URL at all, only {@code WITH vertices=..., edges=...}), so leaving them out of identity
+   * made two imports with completely different sources compare equal (found reviewing #6409, item 3's sweep - the
+   * same over-match direction {@link CaseExpression} had, on a statement rather than an expression node).
+   */
   @Override
   public boolean equals(final Object o) {
     if (this == o)
@@ -137,18 +146,22 @@ public class ImportDatabaseStatement extends SimpleExecStatement {
     if (o == null || getClass() != o.getClass())
       return false;
     final ImportDatabaseStatement that = (ImportDatabaseStatement) o;
-    return Objects.equals(url, that.url);
+    return Objects.equals(url, that.url) && Objects.equals(settings, that.settings);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(url);
+    return Objects.hash(url, settings);
   }
 
   @Override
   public Statement copy() {
     final ImportDatabaseStatement result = new ImportDatabaseStatement();
     result.url = this.url;
+    // WITHOUT THIS, A COPY SILENTLY DROPS EVERY 'WITH ...' SETTING - THE SAME DEFECT BackupDatabaseStatement HAD
+    // (#6080). FOR IMPORT THE SETTINGS ARE THE STATEMENT: WITHOUT THEM AN 'IMPORT DATABASE WITH vertices=...' HAS NO
+    // SOURCE AT ALL
+    result.settings.putAll(this.settings);
     return result;
   }
 }

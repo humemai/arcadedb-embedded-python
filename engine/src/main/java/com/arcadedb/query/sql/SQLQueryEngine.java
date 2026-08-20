@@ -39,6 +39,7 @@ import com.arcadedb.function.sql.DefaultSQLFunctionFactory;
 import com.arcadedb.function.sql.SQLFunctionAbstract;
 import com.arcadedb.query.sql.method.DefaultSQLMethodFactory;
 import com.arcadedb.query.sql.parser.Limit;
+import com.arcadedb.query.sql.parser.DDLStatement;
 import com.arcadedb.query.sql.parser.Statement;
 import com.arcadedb.utility.Callable;
 import com.arcadedb.utility.MultiIterator;
@@ -113,6 +114,30 @@ public class SQLQueryEngine implements QueryEngine {
     return statement.execute(executionDatabase(), parameters, context);
   }
 
+  /**
+   * Like {@link #command(String, ContextConfiguration, Map)}, but also seeds the execution's {@link CommandContext}
+   * with {@code variables}, resolvable in the statement as {@code $name}. {@code parameters} alone cannot do that:
+   * it only feeds {@link CommandContext#setInputParameters}, which backs {@code :name}/{@code ?} bind parameters -
+   * a store {@code SuffixIdentifier}'s {@code $name} resolution never consults, since that reads exclusively from
+   * {@link CommandContext#getVariable}. A caller that wants a bound value navigable as {@code $name.field} - a
+   * trigger body binding the record it fired for, for instance - needs this overload; one that only needs
+   * {@code :name}/{@code ?} substitution can keep using the {@code parameters}-only form.
+   */
+  public ResultSet command(final String query, final ContextConfiguration configuration, final Map<String, Object> parameters,
+      final Map<String, Object> variables) {
+    final Statement statement = parse(query, database);
+    statement.setLimit(new Limit().setValue((int) database.getResultSetLimit()));
+
+    final CommandContext context = new BasicCommandContext();
+    context.setInputParameters(parameters);
+    context.setConfiguration(configuration);
+    if (variables != null)
+      for (final Map.Entry<String, Object> entry : variables.entrySet())
+        context.setVariable(entry.getKey(), entry.getValue());
+
+    return statement.execute(executionDatabase(), parameters, context);
+  }
+
   @Override
   public ResultSet command(final String query, ContextConfiguration configuration, final Object... parameters) {
     final Statement statement = parse(query, database);
@@ -126,7 +151,9 @@ public class SQLQueryEngine implements QueryEngine {
    * The database a statement executes against, and therefore the one {@code CommandContext.getDatabase()} returns.
    * <p>
    * Statements that commit mid-execution - {@code TRUNCATE TYPE}/{@code BUCKET} batching every
-   * {@link com.arcadedb.GlobalConfiguration#TRUNCATE_BATCH_SIZE} records, {@code REBUILD INDEX}, {@code BatchStep} -
+   * {@link com.arcadedb.GlobalConfiguration#TRUNCATE_BATCH_SIZE} records <i>when no transaction was active and the
+   * statement therefore owns one</i> (issue #6220 - inside a caller's transaction it commits nothing),
+   * {@code REBUILD INDEX}, {@code BatchStep} -
    * call {@code commit()} on whatever this returns. Handing them the raw instance means those commits go straight to
    * {@code LocalDatabase.commit()}, which on an HA leader applies the pages locally and never proposes them to Raft:
    * followers then trail by exactly those page versions and the next replicated entry touching one of them fails the
@@ -294,6 +321,15 @@ public class SQLQueryEngine implements QueryEngine {
 
   public Statement parse(final String query, final DatabaseInternal database) {
     return database.getStatementCache().get(query);
+  }
+
+  /**
+   * Free, and that is why SQL can answer it (issue #6324, item 5): the parse is a {@code StatementCache} lookup that
+   * the execution about to follow will repeat with the same key.
+   */
+  @Override
+  public DDLClassification classifyDDL(final String query) {
+    return parse(query, database) instanceof DDLStatement ? DDLClassification.DDL : DDLClassification.NOT_DDL;
   }
 
   public static String validateVariableName(String varName) {

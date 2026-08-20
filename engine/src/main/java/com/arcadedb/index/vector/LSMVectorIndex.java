@@ -178,6 +178,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
   // getMostRecentFileName(). Every node names the index after the file it holds, so the leader has to
   // follow its own rename or its schema stops matching the followers that rebuilt it from that file.
   private volatile String              indexName;
+  /** The wrapper this bucket sub-index is registered under - see {@link #getTypeIndex()}. */
+  private          TypeIndex           typeIndex;
   protected     LSMVectorIndexMutable  mutable;
   private final ReentrantReadWriteLock lock;
   LSMVectorIndexMetadata metadata; // Package-private for Phase 2 access from ArcadePageVectorValues and
@@ -590,7 +592,6 @@ public class LSMVectorIndex implements Index, IndexInternal {
         previousMutable = mutable;
         previousCompacted = compactedSubIndex;
         mutable = newMutable;
-        indexName = newMutable.getName();
         compactedSubIndex = null;
         currentInsertPageNum = newPages.size() - 1;
         currentMutablePages.set(1);
@@ -600,6 +601,17 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // which the index answers offsets into a file that no longer exists - a search landing there reads another
         // entry's bytes, or the dropped compacted component through a null reference.
         publishLocationIndex(liveEntries);
+
+        // The rename and the schema re-keying are ONE step and must stay adjacent: `indexName` is volatile and read
+        // without this lock (getName(), which is what TransactionIndexContext keys a lane by), so between these two
+        // statements the index answers to a name the schema does not know yet - a milder recurrence of the very bug
+        // this fixes. Nothing separates them today and nothing should: the registry is keyed by the name the index
+        // answers to, and everything that resolves an index by name goes through it - index maintenance queued on
+        // the transaction above all, which is silently discarded when the name it was queued under is no longer
+        // registered (issue #6105).
+        final String previousIndexName = indexName;
+        indexName = newMutable.getName();
+        ((LocalSchema) database.getSchema()).indexRenamed(previousIndexName, this);
 
         ((LocalSchema) database.getSchema()).setMigratedFileId(oldFileId, newFileId);
         database.getSchema().getEmbedded().saveConfiguration();
@@ -1402,24 +1414,61 @@ public class LSMVectorIndex implements Index, IndexInternal {
               "Loaded graph from disk for index: %s, graphSize=%d, ordinalToVectorIdLength=%d, vectorIndexSize=%d",
               indexName, graphSize, rebuiltOrdinalToVectorId.length, vectorIndex.size());
 
-          // CRITICAL FIX FOR #3722: Check if persisted graph is stale (has fewer vectors than currently active).
-          // This happens when vectors were added after the graph was last built and persisted.
-          // On database restart, deltaVectors (volatile) are lost and graphState is set to IMMUTABLE,
-          // so rebuildGraphBeforeSearch() never triggers. Search can only find nodes in the stale graph.
+          // CRITICAL FIX FOR #3722: a persisted graph with fewer nodes than there are active vectors is stale -
+          // vectors were added after it was last built and persisted. On database restart deltaVectors (volatile)
+          // are lost and graphState is set to IMMUTABLE, so rebuildGraphBeforeSearch() never triggers and search
+          // can only find nodes in the stale graph.
           //
-          // This is a COUNT comparison, not a content one: a persisted graph whose node count merely happens to
-          // match the current live count is treated as up to date even if it was built for a different generation
-          // of the live set. A renumbering compaction (issue #5870) makes that coincidence more likely to matter,
-          // not less - every post-compaction generation's ids are densely [0, N), so two different generations of
-          // the same index are far more likely to independently land on matching lengths than the old sparse,
-          // monotonically-growing ids ever were. Whether a real crash window can pair a stale graph with a live
-          // set of the same size this way is tracked, not confirmed, in issue #6106.
-          if (graphSize < rebuiltOrdinalToVectorId.length) {
+          // ISSUE #6106: that comparison is about how MANY vectors there are, and reusing the graph needs to know
+          // WHICH ones. The graph is addressed by ordinal, and ordinal i means a record only through the array
+          // rebuilt just above; pair a graph with an array from another generation of the live set and every node
+          // answers for a record it was never built from - a wrong-but-plausible result, not a failure. Counts
+          // cannot separate the two: since the renumbering compaction of issue #5870 every generation's ids are
+          // densely [0, N), so two generations holding different records routinely produce arrays of identical
+          // length. The manifest written next to the graph records the correspondence itself, and comparing
+          // against it is what makes the reuse safe rather than merely plausible.
+          final LSMVectorIndexGraphManifest.Content persistedManifest = graphFile.getManifest().read();
+
+          final String staleReason;
+          if (persistedManifest == null) {
+            // No manifest: a graph persisted by a version older than this check, or one whose persist was
+            // interrupted before it could write one. Judge it the historical way, by node count, rather than
+            // forcing every existing index to rebuild on the first open after an upgrade - but widen the
+            // comparison to ANY difference, because a graph larger than the live set lines its ordinals up no
+            // better than a smaller one: everything past the end of the rebuilt array is dropped as out of
+            // bounds, and everything before it can still address the wrong record.
+            staleReason = graphSize != rebuiltOrdinalToVectorId.length ?
+                "it has no manifest and holds %d nodes against %d active vectors".formatted(graphSize,
+                    rebuiltOrdinalToVectorId.length) :
+                null;
+            if (staleReason == null) {
+              // Also counted, not only logged: a WARNING is easy to miss, and "is this index still on the weaker
+              // comparison?" is a question an operator should be able to ask the stats rather than the log file.
+              metrics.incrementUnverifiedGraphReuses();
+              LogManager.instance().log(this, Level.WARNING,
+                  "Vector index %s is reusing a persisted graph that carries no manifest: its %d nodes match the "
+                      + "live vector count, but nothing on disk says they describe these records (issue #6106). "
+                      + "The next graph persist writes one; REBUILD INDEX forces it now",
+                  indexName, graphSize);
+            }
+          } else if (persistedManifest.vectorCount() != rebuiltOrdinalToVectorId.length
+              || persistedManifest.fingerprint() != LSMVectorIndexGraphManifest.fingerprintOf(
+              rebuiltOrdinalToVectorId, vectorIndex::getRid)) {
+            staleReason = "it was built over %d records the manifest fingerprints as %s, not over the %d now live".formatted(
+                persistedManifest.vectorCount(), Long.toHexString(persistedManifest.fingerprint()),
+                rebuiltOrdinalToVectorId.length);
+          } else if (graphSize != rebuiltOrdinalToVectorId.length) {
+            // The manifest agrees with the live set but the pages do not: a truncated or otherwise damaged
+            // persist. Nothing here can repair it, so rebuild.
+            staleReason = "the pages hold %d nodes while its manifest and the live set both say %d".formatted(
+                graphSize, rebuiltOrdinalToVectorId.length);
+          } else
+            staleReason = null;
+
+          if (staleReason != null) {
             LogManager.instance().log(this, Level.INFO,
-                """
-                Persisted graph is stale for index %s: graph has %d nodes but %d active vectors exist - \
-                rebuilding from scratch (fixes issue #3722: missing vectors after database restart)""",
-                indexName, graphSize, rebuiltOrdinalToVectorId.length);
+                "Persisted graph is not usable for index %s: %s - rebuilding from scratch (issues #3722, #6106)",
+                indexName, staleReason);
             // Don't use the stale graph — fall through to buildGraphFromScratch() below
           } else {
             // Graph is up to date — use it
@@ -2473,6 +2522,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
           database.getTransaction().setUseWAL(false);
         };
 
+        // Flipped the moment the manifest certifies the committed pages. Everything after that point - the
+        // OnDiskGraphIndex reload, the PQ persist - is about making THIS session faster, not about what is on
+        // disk, so a failure there must not un-certify a graph that committed correctly and cost the next open a
+        // rebuild it does not need.
+        boolean graphCertified = false;
+
         try {
           gf.writeGraph(graphIndex, vectors, chunkSizeMB, chunkCallback, earlyPq, earlyPqVectors);
 
@@ -2492,6 +2547,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
                 .log(this, Level.FINE, "Vector graph persisted (transaction managed by caller) for index: %s",
                     indexName);
           }
+
+          // Only now that the pages are committed may the manifest vouch for them (issue #6106). Written after the
+          // commit and never before: a manifest that outlived a persist which did not complete would be the one
+          // thing able to certify a graph nobody built.
+          writeGraphManifest(gf, finalActiveVectorIds);
+          graphCertified = true;
 
           // When storeVectorsInGraph is enabled, reload the graph as OnDiskGraphIndex so the
           // current session benefits from inline vector storage immediately. This is safe because
@@ -2540,6 +2601,19 @@ public class LSMVectorIndex implements Index, IndexInternal {
               // Ignore rollback errors
             }
           }
+          // This method swallows the failure and lets the index keep running without a persisted graph, so what is
+          // left on the pages outlives this process. It could be the previous generation intact (the write never
+          // touched a page), a partial rewrite whose earlier chunks already committed, or anything between - so the
+          // manifest has to refuse it. Leaving no manifest instead would read as "unverifiable" on the next open
+          // and fall back to the node-count comparison, which is what issue #6106 is about.
+          //
+          // Unless the graph already got its manifest: past that point the pages are a committed generation the
+          // manifest correctly describes, and a PQ or reload failure says nothing about them.
+          //
+          // writeGraph() marks its own failures the same way before rethrowing, so this repeats that one small
+          // write when the failure came from in there. Cheap, and on a path already logged as SEVERE.
+          if (!graphCertified)
+            gf.getManifest().markUnusable("graph persist failed: " + e);
           LogManager.instance().log(this, Level.SEVERE,
               "PERSIST: Failed to persist graph for %s (nodes=%d, storeVectorsInGraph=%b, txStatus=%s): %s - %s",
               indexName,
@@ -2635,6 +2709,39 @@ public class LSMVectorIndex implements Index, IndexInternal {
             + "defined only for normalized vectors, so search quality is degraded: normalize the vectors on ingest or "
             + "recreate the index with COSINE. This is reported once per index",
         indexName, nonUnit, sampled, nonUnit * 100 / sampled);
+  }
+
+  /**
+   * Refuses whatever is on the graph pages after a build that did not finish. The alternative - leaving no
+   * manifest - reads as "persisted by an older version" on the next open and falls back to the node-count
+   * comparison, which is exactly the check issue #6106 replaces.
+   *
+   * @param cause what went wrong; recorded in the manifest for a human, nothing reads it back
+   */
+  private void markGraphManifestUnusable(final Exception cause) {
+    if (graphFile != null)
+      graphFile.getManifest().markUnusable("index build failed: " + cause);
+  }
+
+  /**
+   * Records, next to the graph pages that have just been committed, which records that graph was built over
+   * (issue #6106). Call this only after the commit: the manifest is the one thing able to certify a graph, so it
+   * must never outlive a persist that did not complete.
+   * <p>
+   * The RIDs come from the live location index rather than from the build snapshot because a vector id's RID is
+   * fixed for the life of that id - an update issues a new id rather than re-pointing an existing one - so the two
+   * cannot disagree. An id whose location has since gone reads as absent here and is equally absent from the array
+   * the load path rebuilds, which makes the graph fail the check and be rebuilt: the conservative direction.
+   *
+   * @param persistedTo            the component the graph was written to
+   * @param graphOrdinalToVectorId ordinal &rarr; vector id array the graph was built with
+   */
+  private void writeGraphManifest(final LSMVectorIndexGraphFile persistedTo, final int[] graphOrdinalToVectorId) {
+    if (persistedTo == null || graphOrdinalToVectorId == null || graphOrdinalToVectorId.length == 0)
+      return;
+
+    persistedTo.getManifest().write(graphOrdinalToVectorId.length,
+        LSMVectorIndexGraphManifest.fingerprintOf(graphOrdinalToVectorId, vectorIndex::getRid));
   }
 
   private long getTxChunkSize() {
@@ -4244,7 +4351,20 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
       // Rows the caller can receive at most: limit groups of groupSize each. Used as the floor on the
       // beam exactly the way the ungrouped path uses k, so the two efSearch policies stay in step.
-      final int maxRows = limit * groupSize;
+      //
+      // Issue #6066: the product is taken in long and clamped to the candidates this index can address, for
+      // the same reason the ungrouped path clamps k (issue #5924). Neither factor is bounded anywhere on the
+      // way in - this method is public API and the SQL layer's over-fetch cap only guards the
+      // `vector.neighbors` entry point - and maxRows is an eager allocation size (`new ArrayList<>(maxRows)`
+      // below). A plain int multiplication fails in both directions: limit=groupSize=50_000 is 2.5e9, which
+      // wraps to a negative capacity and kills the search with an "Illegal Capacity" that names neither
+      // input, and a product that does not wrap is still a capacity no heap can serve. The clamp cannot cost
+      // a row - a grouped search cannot return more rows than the index holds vectors, and a beam wider than
+      // the graph has nothing extra to look at. A stale read of vectorIndex.size()/deltaVectors.size() here
+      // only makes it slightly conservative, never unsafe, which is why it is taken outside the read lock
+      // below exactly as the ungrouped clamp is.
+      final int maxRows = (int) Math.min((long) limit * groupSize,
+          Math.max(vectorIndex.size(), 0) + (long) deltaVectors.size());
       boolean readLockHeld = false;
       lock.readLock().lock();
       readLockHeld = true;
@@ -4285,7 +4405,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
           else if (metadata.efSearch != 100)
             effectiveEfSearch = Math.max(maxRows, metadata.efSearch);
           else
-            effectiveEfSearch = graphSize < 10_000 ? Math.max(maxRows, 100) : Math.max(maxRows * 2, 20);
+            // The doubling is the second multiplication issue #6066 covers. maxRows is already clamped to the
+            // index's own vector count, so it can only overflow on an index past ~1.07e9 vectors in one
+            // bucket, but the long is free and the alternative is a negative beam width.
+            effectiveEfSearch = graphSize < 10_000 ?
+                Math.max(maxRows, 100) :
+                (int) Math.min(Integer.MAX_VALUE, Math.max((long) maxRows * 2, 20));
 
           final int candidateBudget = Math.min(graphSize,
               (int) Math.min(Integer.MAX_VALUE, (long) effectiveEfSearch * GROUPED_SEARCH_CANDIDATE_BUDGET_FACTOR));
@@ -5217,12 +5342,23 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
   @Override
   public void setTypeIndex(final TypeIndex typeIndex) {
-    // Not applicable for this index type
+    this.typeIndex = typeIndex;
   }
 
+  /**
+   * The wrapper this bucket sub-index belongs to, like every other index family answers - {@link
+   * com.arcadedb.index.sparsevector.LSMSparseVectorIndex} included. It used to answer null ("not applicable for this
+   * index type"), which was never true: a vector index IS registered under a {@link TypeIndex}, and the null made two
+   * callers do the wrong thing (issue #6359).
+   * <p>
+   * {@code LocalSchema.dropIndexInternal} skips {@code parentTypeIndex.removeIndexOnBucket(...)} when this is null, so
+   * a dropped vector sub-index stayed listed by its wrapper - a reference to an index that no longer exists, on every
+   * path that drops one. And {@code LocalDocumentType.addSuperType} compares it to decide whether a super type's
+   * index is already propagated to a bucket, so it never recognised one and minted a duplicate on every attempt.
+   */
   @Override
   public TypeIndex getTypeIndex() {
-    return null;
+    return typeIndex;
   }
 
   @Override
@@ -5707,6 +5843,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
         final File graphIndexFile = graphFile.getOSFile();
         if (graphIndexFile.exists())
           graphIndexFile.delete();
+        // And the sidecar that describes it: left behind, it would be read as vouching for whatever graph file a
+        // later index happened to create under the same name (issue #6106).
+        graphFile.getManifest().invalidate();
       }
 
       // NOTE: Metadata is now embedded in the schema JSON via toJSON() and is automatically
@@ -5811,9 +5950,17 @@ public class LSMVectorIndex implements Index, IndexInternal {
     this.metadata = (LSMVectorIndexMetadata) metadata;
   }
 
+  /**
+   * {@code buildIndexBatchSize} is IGNORED here, and deliberately: this build chunks by BYTES
+   * ({@code arcadedb.vectorIndex.txChunkSizeMB}), not by record count, so a record count means nothing to it. The
+   * permission to commit at all arrives as its own parameter (issue #6324, item 1) - reading it off the batch size
+   * would make a user's {@code REBUILD INDEX ... WITH batchSize = 0} silently turn the chunking off for the whole
+   * rebuild.
+   */
   @Override
-  public long build(final int buildIndexBatchSize, final BuildIndexCallback callback) {
-    return build(callback, null);
+  public long build(final int buildIndexBatchSize, final boolean sharesCallerTransaction,
+      final BuildIndexCallback callback) {
+    return build(callback, null, !sharesCallerTransaction);
   }
 
   /**
@@ -5826,6 +5973,25 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * @return Total number of records indexed
    */
   public long build(final BuildIndexCallback callback, final GraphBuildCallback graphCallback) {
+    return build(callback, graphCallback, true);
+  }
+
+  /**
+   * Build the vector index with optional graph building progress callback.
+   * Uses WAL bypass and transaction chunking for efficient bulk loading.
+   *
+   * @param callback             Callback for document indexing progress
+   * @param graphCallback        Callback for graph building progress
+   * @param chunkedCommitAllowed whether the build owns the transaction it runs in and may therefore commit it
+   *                             periodically to bound its size. False when the build is sharing a transaction opened
+   *                             by a caller - a {@code CREATE INDEX} inside an open transaction - where committing
+   *                             would publish the caller's unfinished work halfway through a DDL statement
+   *                             (issue #6324, item 1)
+   *
+   * @return Total number of records indexed
+   */
+  public long build(final BuildIndexCallback callback, final GraphBuildCallback graphCallback,
+      final boolean chunkedCommitAllowed) {
     final long totalRecords;
 
     lock.writeLock().lock();
@@ -5851,16 +6017,20 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
           try {
             // PHASE 2: Bulk load vector data with chunking
-            totalRecords = bulkLoadVectorData(callback);
+            totalRecords = bulkLoadVectorData(callback, chunkedCommitAllowed);
 
             // PHASE 3: Build and persist graph with chunking
             if (vectorIndex.size() > 0 && graphState == GraphState.LOADING) {
-              buildGraphWithChunking(graphCallback);
+              buildGraphWithChunking(graphCallback, chunkedCommitAllowed);
             }
 
             // PHASE 4: Final commit and mark READY
             if (startedTransaction)
               db.getWrappedDatabaseInstance().commit();
+
+            // buildGraphWithChunking() rewrites the graph pages inside this transaction, which drops the manifest;
+            // only here, past the commit, is there a persisted graph to vouch for again (issue #6106).
+            writeGraphManifest(graphFile, ordinalToVectorId);
 
             persistBuildState(BUILD_STATE.READY);
 
@@ -5872,6 +6042,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             if (startedTransaction && db.getTransaction().getStatus() == TransactionContext.STATUS.BEGUN)
               db.getWrappedDatabaseInstance().rollback();
 
+            markGraphManifestUnusable(e);
             persistBuildState(BUILD_STATE.INVALID);
 
             LogManager.instance().log(this, Level.SEVERE,
@@ -5883,6 +6054,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             if (startedTransaction && db.getTransaction().getStatus() == TransactionContext.STATUS.BEGUN)
               db.getWrappedDatabaseInstance().rollback();
 
+            markGraphManifestUnusable(e);
             persistBuildState(BUILD_STATE.INVALID);
 
             LogManager.instance().log(this, Level.SEVERE,
@@ -5910,11 +6082,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * Bulk load vector data with transaction chunking to avoid memory/size limits.
    * Called during index build with WAL disabled.
    *
-   * @param callback Callback for document indexing progress
+   * @param callback             Callback for document indexing progress
+   * @param chunkedCommitAllowed whether this build owns its transaction and may commit it at a chunk boundary
    *
    * @return Total number of vectors loaded
    */
-  private long bulkLoadVectorData(final BuildIndexCallback callback) {
+  private long bulkLoadVectorData(final BuildIndexCallback callback, final boolean chunkedCommitAllowed) {
     final AtomicInteger total = new AtomicInteger();
     final long LOG_INTERVAL = 10000;
     final long startTime = System.currentTimeMillis();
@@ -5937,7 +6110,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // Scan the bucket and index all documents
     db.scanBucket(db.getSchema().getBucketById(metadata.associatedBucketId).getName(), record -> {
       // Add to index
-      db.getIndexer().addToIndex(LSMVectorIndex.this, record.getIdentity(), (Document) record);
+      // !chunkedCommitAllowed IS "this build shares a transaction it did not open": the two are exact inverses on
+      // every path into this method, and a build that owns its transaction has nothing for that transaction to
+      // correct.
+      final Document source = IndexInternal.buildSourceRecord(db, record, !chunkedCommitAllowed);
+      db.getIndexer().addToIndex(LSMVectorIndex.this, record.getIdentity(), source);
       total.incrementAndGet();
 
       // Estimate bytes written (rough approximation)
@@ -5955,7 +6132,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       }
 
       // Chunk boundary: commit and start new transaction
-      if (bytesInCurrentChunk.get() >= chunkSizeBytes) {
+      if (chunkedCommitAllowed && bytesInCurrentChunk.get() >= chunkSizeBytes) {
         LogManager.instance().log(this, Level.INFO,
             "Committing chunk: %.1fMB written, %d vectors...",
             bytesInCurrentChunk.get() / (1024.0 * 1024.0), total.get());
@@ -5968,7 +6145,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       }
 
       if (callback != null)
-        callback.onDocumentIndexed((Document) record, total.get());
+        callback.onDocumentIndexed(source, total.get());
 
       return true;
     });
@@ -5985,17 +6162,23 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * Build graph from vectors and persist with chunking support.
    * Called during index build with WAL disabled.
    *
-   * @param graphCallback Callback for graph building progress
+   * @param graphCallback        Callback for graph building progress
+   * @param chunkedCommitAllowed whether this build owns the transaction it runs in and may therefore commit it at a
+   *                             chunk boundary. False when the build joined a caller's transaction (issue #6324,
+   *                             item 1): the graph is then written in one go, which is the same trade the caller
+   *                             already made by opening a transaction around the writes being indexed
    */
-  private void buildGraphWithChunking(final GraphBuildCallback graphCallback) throws IOException {
+  private void buildGraphWithChunking(final GraphBuildCallback graphCallback, final boolean chunkedCommitAllowed)
+      throws IOException {
     LogManager.instance().log(this, Level.INFO,
         "LSM Vector graph building with transaction chunking for: %s", indexName);
 
     final DatabaseInternal db = getDatabase();
 
     // Get chunk size from configuration (default 50MB). Guard against accidental 0/negative to ensure chunked graph
-    // persistence.
-    final long chunkSizeMB = getTxChunkSize();
+    // persistence. Zero when the build may not commit, which is writeGraph's own documented way of saying "no
+    // chunking" and therefore leaves the chunk callback unreachable rather than merely unused.
+    final long chunkSizeMB = chunkedCommitAllowed ? getTxChunkSize() : 0L;
 
     // Track if we started the transaction (for graph building)
     final boolean startedTransaction = db.getTransaction().getStatus() != TransactionContext.STATUS.BEGUN;

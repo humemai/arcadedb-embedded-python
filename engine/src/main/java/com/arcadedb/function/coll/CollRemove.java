@@ -18,8 +18,10 @@
  */
 package com.arcadedb.function.coll;
 
-import com.arcadedb.exception.CommandExecutionException;
+import com.arcadedb.exception.CommandSemanticException;
+import com.arcadedb.function.cypher.CypherFunctionHelper;
 import com.arcadedb.query.sql.executor.CommandContext;
+import com.arcadedb.utility.LongRangeList;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,6 +29,10 @@ import java.util.List;
 /**
  * coll.remove(list, index, [count]) - Returns a new list with element(s) removed starting at the given index.
  * If count is not provided, removes one element.
+ * <p>
+ * Removing a prefix or a suffix of a range leaves an arithmetic progression, so those two cases are answered in
+ * constant space rather than by copying a list that costs no heap while it stays lazy (issue #6353). Cutting out
+ * of the middle does not: the result is two progressions, which a Cypher LIST cannot be, so it is materialised.
  *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
@@ -53,22 +59,32 @@ public class CollRemove extends AbstractCollFunction {
 
   @Override
   public Object execute(final Object[] args, final CommandContext context) {
-    if (args.length < 2)
-      throw new CommandExecutionException("coll.remove() requires at least 2 arguments (list, index)");
+    checkArity(args);
     final List<Object> list = asList(args[0]);
     if (list == null)
       return null;
-    if (args[1] == null)
+    final Number indexArg = CypherFunctionHelper.requireNumberArgument(args[1], getName());
+    if (indexArg == null)
       return null;
 
-    final int index = ((Number) args[1]).intValue();
+    final int index = indexArg.intValue();
     if (index < 0)
-      throw new CommandExecutionException("coll.remove() does not support negative index: " + index);
+      throw new CommandSemanticException(getName() + "() does not support negative index: " + index);
     if (index >= list.size())
-      throw new CommandExecutionException("coll.remove() index " + index + " is out of range for list of size " + list.size());
-    if (args.length > 2 && args[2] == null)
+      throw new CommandSemanticException(getName() + "() index " + index + " is out of range for list of size " + list.size());
+    final Number countArg = args.length > 2 ? CypherFunctionHelper.requireNumberArgument(args[2], getName()) : null;
+    if (args.length > 2 && countArg == null)
       return null;
-    final int count = args.length > 2 ? ((Number) args[2]).intValue() : 1;
+    final int count = countArg != null ? countArg.intValue() : 1;
+    final LongRangeList range = asRange(list);
+    if (range != null) {
+      // The loop below stops at the end of the list, so it removes min(count, size - index) elements.
+      final int removed = Math.min(Math.max(count, 0), range.size() - index);
+      if (index == 0)
+        return range.subList(removed, range.size());
+      if (index + removed >= range.size())
+        return range.subList(0, index);
+    }
     final List<Object> result = new ArrayList<>(list);
     for (int i = 0; i < count && index < result.size(); i++)
       result.remove(index);

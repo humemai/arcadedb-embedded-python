@@ -19,21 +19,16 @@
 package com.arcadedb.schema;
 
 import com.arcadedb.database.DatabaseInternal;
-import com.arcadedb.database.async.DatabaseAsyncExecuteAlone;
-import com.arcadedb.database.async.DatabaseAsyncExecutorImpl;
+import com.arcadedb.database.async.AsyncQuiesce;
 import com.arcadedb.engine.Bucket;
 import com.arcadedb.exception.DatabaseMetadataException;
 import com.arcadedb.exception.SchemaException;
 import com.arcadedb.index.Index;
 import com.arcadedb.index.IndexInternal;
-import com.arcadedb.log.LogManager;
 import com.arcadedb.security.SecurityDatabaseUser;
 
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.logging.Level;
 
 /**
  * Builder class for bucket indexes.
@@ -68,25 +63,43 @@ public class BucketIndexBuilder extends IndexBuilder<Index> {
     return typeName;
   }
 
+  /** Creates the sub-index on this builder's bucket, resolving the bucket from the type by name. */
+  private Index createIndexOnBucket(final LocalSchema schema, final LocalDocumentType type, final Type[] keyTypes,
+      final boolean build) {
+    Bucket bucket = null;
+    for (final Bucket b : type.getBuckets(true)) {
+      if (bucketName.equals(b.getName())) {
+        bucket = b;
+        break;
+      }
+    }
+
+    return schema.createBucketIndex(type, keyTypes, bucket, typeName, indexType, unique, pageSize, nullStrategy,
+        callback, propertyNames, null, batchSize, metadata, build);
+  }
+
   @Override
   public Index create() {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
 
-    final int totalThreads = database.async().getThreadCount();
-    final CountDownLatch semaphoreToStart = new CountDownLatch(totalThreads);
-    final CountDownLatch semaphoreAfterFinish = new CountDownLatch(1);
-
-    try {
-      for (int i = 0; i < totalThreads; i++) {
-        ((DatabaseAsyncExecutorImpl) database.async()).scheduleTask(i, new DatabaseAsyncExecuteAlone(semaphoreAfterFinish, () -> {
-          try {
-            semaphoreToStart.countDown();
-            semaphoreAfterFinish.await(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
-          } catch (InterruptedException e) {
-            // SHUTDOWN IN PROGRESS
-          }
-        }), true, 100);
-      }
+    // The FOURTH way into a bucket scan, and the one issue #6281's first pass missed. TypeIndexBuilder holds the same
+    // quiescence before delegating to LocalSchema, and so does REBUILD INDEX - but this builder is reachable on its
+    // own through the public Schema.buildBucketIndex(...), which is how CHECK DATABASE ... FIX rebuilds an index it
+    // found damaged (DatabaseChecker). Reached that way it would scan a bucket that does not yet contain whatever an
+    // async worker is still holding in its open batch, and produce the same silently incomplete index #6281 is about.
+    // Holding it twice on the paths that already do is free: quiescence is reentrant per thread.
+    //
+    // A QUIESCENCE AND NOT JUST THE BARRIER OF #6281 (issue #6303, item 2). The barrier answers about the past, and
+    // that is only half of what a build needs: the other half is that nothing writes DURING the scan. This method
+    // used to reach for that half with a pause task per worker, scheduled and forgotten - the boolean scheduleTask
+    // returns was discarded and nothing waited for a worker to actually reach the pause - so a task already queued
+    // ahead of the pause could still be writing while the scan ran, and a worker could park holding an uncommitted
+    // batch. quiesceAsync() commits each worker's batch and does not return until every one of them has confirmed it
+    // is parked.
+    //
+    // Note it does NOT call database.async(), which CREATES the executor: the old code did, so building an index on a
+    // database that had never touched the async API started a full set of worker threads only to park them.
+    try (final AsyncQuiesce asyncPaused = database.quiesceAsync()) {
 
       final LocalSchema schema = database.getSchema().getEmbedded();
 
@@ -128,38 +141,47 @@ public class BucketIndexBuilder extends IndexBuilder<Index> {
         metadata.typeIndexName = indexName;
       }
 
+      // Asked before the transactions below, while the answer is still about the transaction that was already there
+      // (issue #6324, item 1). See IndexBuilder#buildSharesCallerTransaction.
+      final boolean sharesCallerTransaction = buildSharesCallerTransaction();
+
       return schema.recordFileChanges(() -> {
         final AtomicReference<Index> result1 = new AtomicReference<>();
+
+        if (!sharesCallerTransaction) {
+          // ONE TRANSACTION, exactly as before issue #6324: with nothing of anybody else's to see, creating and
+          // building in one go is both simpler and one commit cheaper.
+          database.transaction(() -> {
+            result1.set(createIndexOnBucket(schema, type, keyTypes, true));
+            schema.saveConfiguration();
+          }, false, maxAttempts, null, error -> dropPartiallyBuiltIndex(schema, result1.get()));
+          return result1.get();
+        }
+
+        // TWO TRANSACTIONS, for the reasons spelled out at the same split in TypeIndexBuilder#create: the component
+        // is created and COMMITTED on its own, because the schema entry that names it is written regardless of what
+        // the caller's transaction does; the build then joins the caller's transaction, because a scan reads the
+        // transaction it runs in and that is the only way it sees records the caller has written and not committed.
         database.transaction(() -> {
-
-          Bucket bucket = null;
-          final List<Bucket> buckets = type.getBuckets(true);
-          for (final Bucket b : buckets) {
-            if (bucketName.equals(b.getName())) {
-              bucket = b;
-              break;
-            }
-          }
-
-          final Index index = schema.createBucketIndex(type, keyTypes, bucket, typeName, indexType, unique, pageSize, nullStrategy,
-              callback, propertyNames, null, batchSize, metadata);
-          result1.set(index);
-
+          result1.set(createIndexOnBucket(schema, type, keyTypes, false));
           schema.saveConfiguration();
+        }, false, maxAttempts, null, error -> dropPartiallyBuiltIndex(schema, result1.get()));
 
-        }, false, maxAttempts, null, error -> {
-          final Index indexToRemove = result1.get();
-          if (indexToRemove != null) {
-            ((IndexInternal) indexToRemove).drop();
-          }
-        });
+        // Cleaned up from a try/catch of its own rather than from the transaction's error callback, because that
+        // callback is NOT reached on every failure: a NeedRetryException or a DuplicatedKeyException raised inside a
+        // JOINED transaction is rethrown immediately by LocalDatabase.transaction (issue #661 - retrying would roll
+        // back a transaction it does not own), skipping the callback entirely. And a duplicate is exactly what this
+        // build can now hit, since it sees the caller's own pending writes. buildCreatedIndex has already flipped the
+        // index to AVAILABLE by then, so leaving it behind would register a half-built index that answers queries.
+        try {
+          database.transaction(() -> buildCreatedIndex(result1.get(), true), true, maxAttempts, null, null);
+        } catch (final RuntimeException e) {
+          dropPartiallyBuiltIndex(schema, result1.get());
+          throw e;
+        }
+
         return result1.get();
       });
-
-    } finally {
-      // RE-ENABLE THE THREAD POOL
-      LogManager.instance().log(this, Level.FINE, "Resuming asynch threads");
-      semaphoreAfterFinish.countDown();
     }
   }
 }

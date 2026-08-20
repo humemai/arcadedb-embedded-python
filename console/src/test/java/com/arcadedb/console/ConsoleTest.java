@@ -44,6 +44,7 @@ import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -184,6 +185,49 @@ class ConsoleTest {
     }
   }
 
+  /**
+   * Issue https://github.com/ArcadeData/arcadedb/issues/6372: an empty line in a script loaded with LOAD must not echo an
+   * empty prompt of its own - only the real commands are echoed.
+   */
+  @Test
+  void loadScriptWithEmptyLinesDoesNotEchoEmptyPrompts() throws Exception {
+    assertThat(console.parse("connect " + DB_NAME)).isTrue();
+
+    final File script = new File("./target/issue-6372.sql");
+    try {
+      Files.writeString(script.toPath(), """
+          CREATE DOCUMENT TYPE Loaded;
+
+
+          INSERT INTO Loaded SET id = 1;
+
+          INSERT INTO Loaded SET id = 2
+          """);
+
+      final StringBuilder buffer = new StringBuilder();
+      console.setOutput(output -> buffer.append(output));
+
+      assertThat(console.parse("load " + script.getAbsolutePath())).isTrue();
+
+      final String output = buffer.toString();
+      assertThat(output).doesNotContain("ERROR");
+
+      // ONLY THE 3 REAL COMMANDS (CREATE, INSERT, INSERT) MUST BE ECHOED WITH A PROMPT - THE 3 EMPTY LINES IN
+      // BETWEEN MUST NOT PRODUCE A PROMPT OF THEIR OWN
+      final String marker = "{" + DB_NAME + "}> ";
+      int promptCount = 0;
+      for (int idx = output.indexOf(marker); idx != -1; idx = output.indexOf(marker, idx + marker.length()))
+        ++promptCount;
+      assertThat(promptCount).isEqualTo(3);
+
+      buffer.setLength(0);
+      assertThat(console.parse("select count(*) as count from Loaded")).isTrue();
+      assertThat(buffer.toString()).contains("2");
+    } finally {
+      script.delete();
+    }
+  }
+
   @Test
   void listDatabases() throws Exception {
     assertThat(console.parse("list databases;")).isTrue();
@@ -289,6 +333,74 @@ class ConsoleTest {
   void systemPropertyArgumentWithoutKeyDoesNotCrash() throws Exception {
     assertThatCode(() -> Console.execute(new String[] { "-D", "-b" })).doesNotThrowAnyException();
     assertThatCode(() -> Console.execute(new String[] { "-D=value", "-b" })).doesNotThrowAnyException();
+  }
+
+  /**
+   * Issue https://github.com/ArcadeData/arcadedb/issues/6392: SET used to split the argument on every '=', so a value that
+   * contains one (a connection string, a base64 padding, a date pattern) was rejected as a syntax error. It is the same rule
+   * already fixed for the `-D<key>=<value>` arguments in #5928.
+   */
+  @Test
+  void setKeepsAValueContainingTheSeparator() throws Exception {
+    try {
+      assertThat(console.parse("set " + GlobalConfiguration.SERVER_BACKUP_DIRECTORY.getKey() + " = ./target/backups?a=b")).isTrue();
+      assertThat(GlobalConfiguration.SERVER_BACKUP_DIRECTORY.getValueAsString()).isEqualTo("./target/backups?a=b");
+    } finally {
+      GlobalConfiguration.SERVER_BACKUP_DIRECTORY.reset();
+    }
+  }
+
+  /**
+   * Issue https://github.com/ArcadeData/arcadedb/issues/6392: an empty value dropped the trailing token, leaving a single part
+   * that was rejected instead of clearing the setting.
+   */
+  @Test
+  void setAcceptsAnEmptyValue() throws Exception {
+    try {
+      assertThat(console.parse("set " + GlobalConfiguration.SERVER_BACKUP_DIRECTORY.getKey() + " =")).isTrue();
+      assertThat(GlobalConfiguration.SERVER_BACKUP_DIRECTORY.getValueAsString()).isEmpty();
+    } finally {
+      GlobalConfiguration.SERVER_BACKUP_DIRECTORY.reset();
+    }
+  }
+
+  @Test
+  void setStillWorksWithAPlainValue() throws Exception {
+    assertThatCode(() -> console.parse("set limit = 7")).doesNotThrowAnyException();
+  }
+
+  /**
+   * Issue https://github.com/ArcadeData/arcadedb/issues/6392: what is still malformed must stay malformed, and the message says
+   * which half is missing so the user does not have to guess.
+   */
+  @Test
+  void setWithoutTheSeparatorIsRejected() {
+    assertThatThrownBy(() -> console.parse("set limit")).isInstanceOf(ConsoleException.class)
+        .hasMessageContaining("Invalid syntax for SET, use");
+  }
+
+  @Test
+  void setWithoutAKeyIsRejected() {
+    assertThatThrownBy(() -> console.parse("set = 7")).isInstanceOf(ConsoleException.class).hasMessageContaining("missing name");
+    assertThatThrownBy(() -> console.parse("set    = 7")).isInstanceOf(ConsoleException.class).hasMessageContaining("missing name");
+  }
+
+  /**
+   * The setting names are ASCII, so their case must fold in English: with a Turkish default locale the dotless lowercase of 'I'
+   * used to make `LIMIT` miss its own branch and fall through to the global configuration.
+   */
+  @Test
+  void setNameIsFoldedInEnglishWhateverTheDefaultLocale() throws Exception {
+    final Locale defaultLocale = Locale.getDefault();
+    final StringBuilder buffer = new StringBuilder();
+    console.setOutput(output -> buffer.append(output));
+    try {
+      Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+      console.parse("set LIMIT = 7");
+    } finally {
+      Locale.setDefault(defaultLocale);
+    }
+    assertThat(buffer.toString()).contains("Set new limit to 7");
   }
 
   /**

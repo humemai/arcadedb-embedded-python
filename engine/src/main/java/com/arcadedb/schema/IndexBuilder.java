@@ -19,7 +19,9 @@
 package com.arcadedb.schema;
 
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.TransactionContext;
 import com.arcadedb.index.Index;
+import com.arcadedb.index.IndexException;
 import com.arcadedb.index.IndexInternal;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
 import com.arcadedb.serializer.json.JSONObject;
@@ -365,5 +367,78 @@ public abstract class IndexBuilder<T extends Index> {
 
   public JSONObject getUserMetadata() {
     return userMetadata;
+  }
+
+  /**
+   * Whether the build about to run should share the transaction already open on this thread - the decision issue
+   * #6324 item 1 is about, written once here so a third {@link IndexBuilder} subclass cannot get it subtly different.
+   * <p>
+   * Two conditions, and the second is the one that is easy to get wrong. The index family has to be able to use a
+   * shared transaction at all ({@link Schema.INDEX_TYPE#buildCanShareCallerTransaction}); and the open transaction has
+   * to actually HOLD uncommitted work, because that is the entire reason for sharing it. An EMPTY transaction has
+   * nothing for the scan to see, so joining it buys nothing and costs the build its chunked commit - and empty is
+   * exactly what a transaction opened as scaffolding looks like. {@code DatabaseAsyncExecutorImpl.runCommand} opens
+   * one around every dispatched command because {@code requiresActiveTx()} defaults to true, so without this test a
+   * {@code CREATE INDEX} sent with {@code awaitResponse=false} - the case issue #6303 item 3 and #6324 item 5 exist
+   * to make work - would build the whole index in one uncommitted transaction, whatever batch size it was given.
+   * <p>
+   * Asked BEFORE the build opens anything, because afterwards there is always a transaction and the answer is always
+   * yes.
+   */
+  protected boolean buildSharesCallerTransaction() {
+    return indexType != null && indexType.buildCanShareCallerTransaction() && callerTransactionHasChanges(database);
+  }
+
+  /**
+   * The half of the decision that is about the TRANSACTION rather than about the index family, exposed on its own for
+   * the call site that does not go through a builder at all: {@link LocalDocumentType#addSuperType} propagates a whole
+   * set of a super type's indexes by calling {@link LocalSchema#createBucketIndex} directly, so it asks this once,
+   * before it opens anything, and pairs it with {@code buildCanShareCallerTransaction()} per index. Issue #6359 item 1
+   * is that call site arriving back at the defect #6324 item 1 fixed, and the predicate lives here so a third spelling
+   * of it cannot drift from the other two.
+   * <p>
+   * Timing is the whole trap: inside the component-creation transaction there is ALWAYS one open, it is EMPTY, and the
+   * answer would always be no.
+   */
+  static boolean callerTransactionHasChanges(final DatabaseInternal database) {
+    if (!database.isTransactionActive())
+      return false;
+    final TransactionContext tx = database.getTransactionIfExists();
+    return tx != null && tx.hasChanges();
+  }
+
+  /**
+   * Populates an index that was created EMPTY - the second half of the two-transaction split of issue #6324, item 1.
+   * The comment at the build loop in {@link TypeIndexBuilder#create()} says why the two halves cannot share one
+   * transaction.
+   * <p>
+   * The status step is what the split costs. Creating an index without building it parks it at {@code UNAVAILABLE},
+   * so nothing can read a half-populated index, while {@code build()} insists on starting from {@code AVAILABLE} and
+   * puts it back there itself. The window in between is invisible: both halves run under the schema's write lock,
+   * inside {@code recordFileChanges}.
+   */
+  protected void buildCreatedIndex(final Index index, final boolean sharesCallerTransaction) {
+    buildCreatedIndex(index, batchSize, sharesCallerTransaction, callback);
+  }
+
+  /** @see #buildCreatedIndex(Index, boolean) - the builder-less form, for the same reason as the predicate above. */
+  static void buildCreatedIndex(final Index index, final int batchSize, final boolean sharesCallerTransaction,
+      final Index.BuildIndexCallback callback) {
+    final IndexInternal internal = (IndexInternal) index;
+    if (!internal.setStatus(new IndexInternal.INDEX_STATUS[] { IndexInternal.INDEX_STATUS.UNAVAILABLE },
+        IndexInternal.INDEX_STATUS.AVAILABLE))
+      throw new IndexException("Cannot build the index '" + index.getName() + "' because it is not available");
+    internal.build(batchSize, sharesCallerTransaction, callback);
+  }
+
+  /**
+   * Takes away an index that could not be built. The FULL removal, not just the component's own {@code drop()}: on the
+   * two-transaction path the component is already committed and attached to its type, so leaving it behind would
+   * answer lookups with an empty index. This is the cleanup {@code LocalSchema.createBucketIndex} did while the build
+   * still ran inside it (issue #6324, item 1) - an index that could not be built must be GONE, and the caller told so.
+   */
+  static void dropPartiallyBuiltIndex(final LocalSchema schema, final Index index) {
+    if (index != null && schema.existsIndex(index.getName()))
+      schema.dropIndex(index.getName());
   }
 }

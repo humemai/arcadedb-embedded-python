@@ -93,7 +93,7 @@ public class ExportDatabaseStatement extends SimpleExecStatement {
       final Map<String, String> settingsToString = new HashMap<>();
       for (final Map.Entry<Expression, Expression> entry : settings.entrySet()) {
         final Object executedValue = entry.getValue().execute((Identifiable) null, context);
-        settingsToString.put(entry.getKey().value.toString(), executedValue != null ? executedValue.toString() : entry.getValue().toString());
+        settingsToString.put(entry.getKey().toString(), executedValue != null ? executedValue.toString() : entry.getValue().toString());
       }
       clazz.getMethod("setSettings", Map.class).invoke(exporter, settingsToString);
 
@@ -122,17 +122,29 @@ public class ExportDatabaseStatement extends SimpleExecStatement {
     builder.append("EXPORT DATABASE ");
     if (url != null)
       url.toString(params, builder);
+    appendWithSettings(settings, params, builder);
   }
 
+  /**
+   * {@code settings} belongs here too, not just {@code url}: two exports to the same URL with different
+   * {@code WITH} settings (format, overwrite, ...) are different statements. {@link BackupDatabaseStatement} already
+   * includes its {@code settings} the same way; this one didn't (found reviewing #6409, item 3's sweep).
+   */
   @Override
   protected Object[] getIdentityElements() {
-    return new Object[] { url };
+    return new Object[] { url, settings };
   }
 
   @Override
   public Statement copy() {
     final ExportDatabaseStatement result = new ExportDatabaseStatement();
     result.url = this.url;
+    // WITHOUT THESE, A COPY SILENTLY DROPS EVERY 'WITH ...' SETTING AND FALLS BACK TO THE DEFAULT FORMAT - THE SAME
+    // DEFECT BackupDatabaseStatement HAD (#6080). COPY THE WHOLE STATE, NOT THE URL ALONE, SO THE COPY STAYS CORRECT
+    // THE MOMENT THIS STATEMENT REACHES A PATH THAT COPIES IT
+    result.format = this.format;
+    result.overwrite = this.overwrite;
+    result.settings.putAll(this.settings);
     return result;
   }
 
