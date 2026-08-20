@@ -611,6 +611,7 @@ if bool(_LOCAL_WHEEL) != bool(_LOCAL_SERVER_IMAGE):
         "Build both from one commit: bindings/python/scripts/build.sh for the wheel, and\n"
         "package/src/main/docker/Dockerfile over package/target/arcadedb-*.dir for the server."
     )
+_LOCAL_ENGINE_COMMIT = os.environ.get("ARCADEDB_ENGINE_COMMIT", "").strip() or None
 if _LOCAL_SERVER_IMAGE:
     _swapped = 0
     for _name, _cfg in BACKENDS.items():
@@ -1043,7 +1044,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         os.unlink(stale)  # belt-and-braces vs stale out-file reads
     total_mem = mem_bytes(MEM_BY_SCALE[scale])
     heap = HEAP_BY_SCALE[scale]
-    row = {"run_id": run_id, "lane": job["lane"], "backend": job["backend"],
+    # ENGINE PROVENANCE. A locally built wheel reports version "26.9.1.dev0" no matter which commit it
+    # came from, so two engines a day apart are indistinguishable in engine_version. Since the project page
+    # now tracks main rather than a release, the commit is the only thing that identifies what was measured
+    # -- and it is resolvable, because our fork is public. Stamped on every row.
+    row = {"run_id": run_id, "engine_commit": _LOCAL_ENGINE_COMMIT,
+           "lane": job["lane"], "backend": job["backend"],
            "workload": job["workload"], "scale": scale, "rep": rep, "tier": tier,
            "cpuset": cpuset, "topology": be["topology"],
            # HEAP ONLY WHERE THERE IS A JVM. This used to be recorded for
