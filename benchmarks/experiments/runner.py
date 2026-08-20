@@ -45,8 +45,10 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 "large": "48g",
                 # LDBC-SNB tiers (l2 lane, BENCH_GRAPH_SOURCE=ldbc)
                 "sf1": "8g", "sf10": "24g",
-                # DEEP-10M dense tier (l3d). 44g since 2026-08-17, and the
-                # reason is measured rather than estimated.
+                # DEEP-10M dense tier (l3d). 36g. The cap went 36g -> 44g ->
+                # 52g and back to 36g in f92935d5a8, and the diagnosis that
+                # drove it was WRONG. The history below is kept as a record;
+                # read the correction at the end of this comment first.
                 #
                 # At 36g the EMBEDDED arm could not finish: the graph build
                 # reached 93.8% (9,365,625 of 9,990,000) with the JVM heap at
@@ -81,6 +83,37 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 # than a reservation, so comparators that used less are
                 # unaffected, and a per-backend cap would be the unfairness
                 # this is fixing. 52g of 61.3 GiB still runs serial.
+                #
+                # THAT PLAN WAS NOT CARRIED OUT: f92935d5a8 bounded the build
+                # cache instead and restored 36g/24g, which is the value below.
+                #
+                # CORRECTION, 2026-08-20. The diagnosis above is wrong. The
+                # stall at 9,365,625 of 9,990,000 with -Xmx full is not one
+                # build's demand, it is a SECOND build. ArcadeDB #6489 (our PR
+                # #6490): a build that leaves ANY node unreachable merges those
+                # orphans into the pending-mutation list and derives graphState
+                # from the merged list, so a build that succeeded, persisted and
+                # has mutationsSinceSerialize == 0 is still left MUTABLE, and
+                # flush() -- which close() calls, though not only close() --
+                # rebuilds the entire graph. At 24g/36g on 26.8.1 build #1 peaks
+                # 21,851 of 24,576 MB and COMPLETES; the redundant build dies at
+                # 24,554 MB. The run that settled this had BENCH_SKIP_CLOSE=1
+                # and still OOM'd inside a second full build. With #6490: one
+                # build, peak 22,664 MB, close 0.158 s, recall@10 0.9506, rc=0,
+                # same envelope. THE TIER NEVER NEEDED A BIGGER HEAP OR CAP.
+                #
+                # Nor was it squeezed at 36g. "peak_mib_sum hit exactly 36864"
+                # above reads as a ceiling, but the 24g/36g deep10m rows in
+                # results/runs.jsonl peak at 28,916-29,065 MiB of ANON against a
+                # 24,576 MiB heap -- about 4.3 GiB of non-heap anon -- with
+                # peak_mib_sum 36,362-36,516 MiB. The rest is page cache, which
+                # expands into whatever the cap leaves and is reclaimable. The
+                # cap binds through page cache, not through anon.
+                #
+                # DO NOT RETROFIT THE PUBLISHED NUMBERS. Every published deep10m
+                # row was measured on an engine carrying #6489, so 36g/24g is
+                # genuinely what those runs required. Re-measure at the next
+                # stable re-pin carrying #6490; change nothing before that.
                 "deep10m": "36g",
                 "e2": "12g", "tpch1": "16g",
                 # TPC-H SF10 (~10 GB). SF1 is 1 GB, which reads as a toy
@@ -90,10 +123,17 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "medium": 6 * 3600, "large": 24 * 3600,
-                    # deep10m at 8h, not 6: the 36g build died ~25 min short
-                    # of finishing, so a near-miss cost a whole cell. The cap
-                    # rise should make it moot, and a watchdog that only fires
-                    # on a real hang is the point of having one.
+                    # deep10m at 8h, not 6, and not for the reason given here
+                    # until 2026-08-20. The run that "died ~25 min short" was a
+                    # diagnostic arm (auto-sized build cache at a 36g heap),
+                    # reverted in f92935d5a8, and what died in it was the
+                    # redundant SECOND graph build 26.8.1 performs (#6489), not
+                    # a first build that needed more time. No cap rise is
+                    # pending; the tier is back at 36g/24g. Recorded deep10m
+                    # builds under this table are 2,772-2,840 s embedded and
+                    # 3,701-3,736 s served, so 8h is headroom rather than a
+                    # measured requirement -- and a watchdog that only fires on
+                    # a real hang is the point of having one.
                     "sf1": 3600, "sf10": 8 * 3600, "deep10m": 8 * 3600,
                     "e2": 3600, "tpch1": 3 * 3600,
                     "tpch10": 8 * 3600}
@@ -110,13 +150,17 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # -Xms=-Xmx, so the heap is committed up front and the
                  # headroom is real, not notional.
                  #
-                 # Every tier is heap = 50% of cap. deep10m is the exception
-                 # at 67% (24g in 36g), which is where the degree-matched
-                 # build actually peaks.
+                 # Every tier is heap = 50% of cap. deep10m is the exception at
+                 # 67% (24g in 36g), and the heap side of that is demand: the
+                 # degree-matched fp32 build peaks at 21,851 of the 24,576 MB
+                 # heap (89%) on 26.8.1. Holding 0.50 would mean a 48g cap for a
+                 # heap the build already fills.
                  #
                  # This comment used to justify that with "the build peaks
                  # near 19 GB, and 16g OOMed". That claim was WITHDRAWN after
-                 # #5412 made the build cache auto-size; the paper now states
+                 # #3144 made the build cache auto-size (this line used to name
+                 # #5412, which is the SEARCH-side shared vector cache); the
+                 # paper now states
                  # twice that both quantizations build inside 16 GiB. Left as
                  # a record because the number outlived its evidence in three
                  # places at once, here, in the Fig. 6 annotation, and in the
@@ -125,18 +169,30 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # The served arm's headroom is no longer 3g: it now gets the
                  # full 36g cap rather than 0.75 of it, so 12g against a 24g
                  # heap.
-                 # DEEP-10M NEEDS MORE THAN 24g OF JAVA HEAP, measured twice.
-                 # The HNSW graph build over 9.99M x 128 at maxConnections=32
+                 # WITHDRAWN 2026-08-20. This block used to open with "DEEP-10M
+                 # NEEDS MORE THAN 24g OF JAVA HEAP, measured twice". It does
+                 # not. The build over 9.99M x 128 at maxConnections=32 that
                  # reached 93.8% and stalled with -Xmx24g full at 98.2%, under
-                 # BOTH a 36g and a 44g container cap -- at 44g the container
-                 # used only 28.65 of 44 GiB, so the cgroup was never the
-                 # constraint and a JVM cannot grow past -Xmx however much room
-                 # it has. 36g is deliberately generous rather than minimal:
-                 # the point is to let the build COMPLETE and record what it
-                 # actually peaks at, instead of clipping it a third time and
-                 # measuring the ceiling again. peak_anon on a completed cell
-                 # is then the real demand, which is the number worth reporting
-                 # and the one engine #3144 asked for.
+                 # both a 36g and a 44g cap, was a SECOND build of the same
+                 # graph: #6489 leaves an index that orphaned any node marked
+                 # MUTABLE, and flush() rebuilds on that flag alone. Build #1
+                 # peaks 21,851 of 24,576 MB and completes; with our PR #6490
+                 # the whole tier runs once at peak 22,664 MB inside this same
+                 # 24g heap, close 0.158 s, recall@10 0.9506, rc=0. "Measured
+                 # twice" measured the same defect twice.
+                 #
+                 # 24g stays because it is where a completed degree-matched
+                 # build peaks, not because a larger heap was ever required.
+                 # peak_anon on a completed cell is the real demand, which is
+                 # the number worth reporting and the one engine #3144 asked
+                 # for -- but note that peak tracks the heap it is given: the
+                 # same tier peaked 20,603-20,772 MiB of anon at a 16g heap
+                 # and 28,916-29,065 MiB at this one. Quoted in MiB, the unit
+                 # runs.jsonl records, because converting invites the error
+                 # this line originally shipped with: those two figures were
+                 # first written as "20.6-20.8 GiB" and "28.9-29.1 GiB", which
+                 # is the MiB values relabelled. They are 20.1-20.3 and
+                 # 28.2-28.4 GiB.
                  "sf1": "4g", "sf10": "12g", "deep10m": "24g", "e2": "6g", "tpch1": "8g",
                     "tpch10": "16g"}
 def heap_policy(scale):
@@ -144,23 +200,27 @@ def heap_policy(scale):
 
     THE RATIO WAS AN UNWRITTEN RULE AND I BROKE IT WITHOUT NOTICING. Every
     tier sat at exactly heap = 0.50 * cap -- all ten of them -- and the
-    deep10m fix moved it to 0.69 while the comment two lines above talked
-    about something else entirely. Nothing checked, so nothing said.
+    deep10m escalation moved it to 0.69 (36g in 52g) while the comment two
+    lines above talked about something else entirely. Nothing checked, so
+    nothing said. That escalation was reverted in f92935d5a8: deep10m now sits
+    at 0.67 (24g in 36g) and is still the only tier off 0.50.
 
     WHY THE FIX IS NOT "RESTORE 0.50". Heap demand scales with the DATA, not
-    with the cap we happen to pick. The DEEP-10M graph build peaks at 40.49
-    GiB of anon (measured, on the first cell that ever completed), so a 0.50
-    ratio would need an 81 GiB cap on a 61.3 GiB host: unsatisfiable at any
-    cap this machine can give. A ratio that cannot be met is not a fairness
-    rule, it is a rule that gets quietly broken.
+    with the cap we happen to pick. The DEEP-10M fp32 build peaks at 21,851 of
+    a 24,576 MB heap, so the heap cannot come down; holding 0.50 would mean a
+    48g cap bought for page cache the build does not need.
 
     THE RULE THAT SURVIVES CONTACT: heap = cap - reserve, where the reserve
     covers what must coexist with the heap inside one cgroup -- JVM non-heap
     (metaspace, code cache, thread stacks, direct buffers, GC structures) and,
     in an EMBEDDED cell, the Python driver and the corpus array it holds. At
-    deep10m that reserve measured ~6-8 GiB (40.49 GiB peak anon against a 36g
-    heap). At the small tiers cap - reserve lands at or below 0.50 anyway, so
-    the old ratio falls out rather than being imposed.
+    deep10m that reserve measures ~4.3 GiB of ANON: the 24g/36g rows in
+    results/runs.jsonl peak at 28,916-29,065 MiB against a 24,576 MiB heap, and
+    the rest of the 12 GiB gap is reclaimable page cache. The "~6-8 GiB (40.49
+    GiB peak anon against a 36g heap)" this paragraph used to give described the
+    reverted 52g/36g configuration and matches no entry in this table. At the
+    small tiers cap - reserve lands at or below 0.50 anyway, so the old ratio
+    falls out rather than being imposed.
 
     This function does not CHANGE any heap. It states the policy, computes
     what the table actually does, and names the deviations, so a tier that
@@ -175,8 +235,12 @@ def heap_policy(scale):
         return None, cap, None, "no JVM heap at this tier"
     ratio = heap / cap
     # The reserve an embedded cell needs beside the heap. 8 GiB at the tiers
-    # that stage a large corpus in the driver, 4 GiB elsewhere; both are
-    # bounded below by what deep10m measured.
+    # that stage a large corpus in the driver, 4 GiB elsewhere. deep10m
+    # measures ~4.3 GiB of non-heap ANON (peak_anon 28,916-29,065 MiB against a
+    # 24,576 MiB heap), so 8 GiB is a page-cache-inclusive allowance, not the
+    # anon floor it used to be described as. NOTE: this value is computed and
+    # never read -- the verdict below reports cap - heap directly -- so a tier
+    # can depart from the stated reserve without the printed policy saying so.
     reserve = 8.0 if scale in ("deep10m", "medium", "tpch10", "sf10") else 4.0
     verdict = "ratio 0.50" if abs(ratio - 0.50) < 0.01 else (
         f"DEVIATES from 0.50 (heap = cap - {cap - heap:.0f}g)")

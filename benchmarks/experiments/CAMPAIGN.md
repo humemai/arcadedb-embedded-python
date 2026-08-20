@@ -85,6 +85,19 @@ embedded arms, N=1 per cell, at four tiers:
 to 93 s.** Closing is 28-171 ms. Neither is an obstacle, and both are now
 measured rather than assumed (#154, #155).
 
+**That close bound covers the graph and sparse lanes only.** Every row above is
+L2 or L3s; no dense cell is in the table, and on 26.8.1 a dense close is not a
+flush. Upstream #6489 (our PR #6490): a build that leaves ANY node
+graph-unreachable merges those orphans into the pending-mutation list, so
+`graphState` stays MUTABLE after a build that succeeded and persisted, and
+`flush()`, which `close()` calls, tests `graphState` alone. The close therefore
+re-runs the whole graph build. At deep10m the redundant rebuild fires even
+without a close: the run that settled this had `BENCH_SKIP_CLOSE=1` and still
+OOM'd inside a second full build. With #6490 the same deep10m cell closes in
+0.158 s. `l3d_dense.py` records the mechanism beside its `BENCH_SKIP_CLOSE`
+switch. Read "closing is cheap" as a statement about the lanes in the table,
+not about a vector index.
+
 **The cold-drift hazard is a small-tier artifact, and the last row is the one
 that matters.** At sf1/sf10/tiny the reopened pass is 19-29% *faster* than the
 post-build pass on ArcadeDB against 1-6% on LadybugDB, which is what a lazy
@@ -99,6 +112,13 @@ cost (l3s medium is 8.84M docs and ~30 GiB). A single measurement at a tier
 whose working set exceeds the page cache decides it. Until then the split stays
 unadopted, because the failure mode is silent: it would move our own rows and
 not the comparators', in the direction that flatters us.
+
+On 26.8.1 there is a second reason, and it is arithmetic rather than judgement:
+the split closes each cell inside the parallel phase, and #6489 makes a dense
+close a full second graph build. At deep10m that is a 24g heap and hours of CPU
+running beside a neighbour cell, which is the memory bind of point 1 and not an
+exception to it. A release carrying #6490 removes that objection but not the
+N=1 one.
 
 Two findings fall out of the same table and stand on their own:
 
@@ -162,7 +182,7 @@ respectively). Non-JVM comparators have no equivalent knob, which is why heap
 sizing is a documented resource-fitting override rather than a per-engine
 advantage.
 
-**heap = 0.50 x cap, and deep10m is the one exception at 0.69.** The runner
+**heap = 0.50 x cap, and deep10m is the one exception at 0.67** (24g in 36g). The runner
 prints this table at startup and marks any deviation, because the ratio was an
 unwritten rule until it was broken and nothing said so.
 
@@ -222,6 +242,32 @@ miss straight from an index page and keeps a small bound. That asymmetry is
 also why #3144 was closed on INT8 evidence with "fp32 preload noted as
 follow-up" -- the fp32 half was never measured until it measured itself as a
 six-hour timeout.
+
+AND THE TIER WAS BUILDING THE GRAPH TWICE. Separate defect, found 2026-08-20,
+and not the build cache above. Upstream #6489 (our PR #6490): a build that
+leaves ANY node graph-unreachable merges those orphans into the
+pending-mutation list, so `graphState` is left MUTABLE even though the build
+succeeded, persisted and has zero pending writes. `flush()` tests `graphState`
+alone and `close()` calls `flush()`, so the graph is built again -- and the
+rebuild cannot repair the cause: three consecutive runs orphaned MORE on the
+second pass (323 -> 338, 289 -> 333, 302 -> 346).
+
+Measured on 26.8.1 at this tier's standard 36g/24g envelope: build #1 peaks at
+21,851 of 24,576 MB and COMPLETES, then the redundant build dies with
+OutOfMemoryError at 24,554 MB. With #6490: one build, peak 22,664 MB, `close_s`
+0.158, recall@10 0.9506, rc=0, same envelope.
+
+So the cost of the auto-sizing default priced above has never been isolated:
+the stall it is priced against is the second build, and the 36g-heap arm that
+"completes in 2640 s at 40.5 GiB of anon" was almost certainly completing two.
+Re-measure on a release carrying #6490 before quoting that cost again.
+
+What this does NOT change: 0.50 is not restored, because a single build still
+peaks well above the 18g that ratio would give, so 24g in 36g is what the tier
+needs. Every published deep10m number was measured on 26.8.1, which has the
+defect, so the envelope was genuinely required for those runs and no measured
+value moves. What it does mean is that a deep10m failure attributed to "the
+build" has to say WHICH build, because 26.8.1 runs two.
 
 ## 4. Monitoring
 

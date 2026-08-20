@@ -298,6 +298,12 @@ class ArcadeEmbedded(Base):
         # the percentage is therefore the knob that could make AUTO-SIZING work
         # rather than the knob that bypasses it, which is the difference
         # between testing Luca's mechanism and routing around it.
+        #
+        # HOW SHORT IS NOT SETTLED (2026-08-20). The stall that made the default
+        # look fatal was a SECOND build of the same graph (#6489, see the close()
+        # comment below), so the 5.36 GiB cache and the redundant build were
+        # never separated. Re-run this ablation on a release carrying #6490
+        # before quoting a cost for the default.
         pct = os.environ.get("BENCH_DENSE_BUILD_CACHE_PCT", "").strip()
         if pct:
             extra = f"{extra} -Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent={pct}"
@@ -826,23 +832,33 @@ def main():
     # the row cannot be told apart from a lane that never settles.
     # BENCH_SKIP_CLOSE=1 runs the cell WITHOUT closing the database.
     #
-    # It exists for exactly one question: is the fp32 deep10m failure a BUILD
-    # cost or a CLOSE cost? Since #5747 (fixed in main, NOT in the 26.8.1 we
-    # pin) LSMVectorIndex.flush() rebuilds the graph whenever graphState is
-    # LOADING -- which means "not resident", not "not on disk" -- so a close
-    # constructs a second graph while the first index and its caches are still
-    # referenced. close_s tracks build_s on every dense embedded arm, and the
-    # one OutOfMemoryError we saw was thrown INSIDE close().
+    # It existed for one question -- is the fp32 deep10m failure a BUILD cost or
+    # a CLOSE cost -- and it ANSWERED it on 2026-08-20: a BUILD cost belonging to
+    # a second build nobody asked for. Keeping the flag because the question
+    # recurs, but the reasoning it was written with was wrong twice over and the
+    # correction is the useful part:
     #
-    # If the cell completes with the close skipped, the build never needed more
-    # heap and the whole "26.8.1 needs 36g" conclusion is the close bug. The arm
-    # RECORDS that it skipped, because a cell that silently omits a phase is
-    # not comparable with one that does not.
+    # NOT #5747, and the OOM was NOT inside close(). #5747 was the LOADING path
+    # ("a session that never searched pays a rebuild on close"), fixed by our own
+    # PR #5787 and never what this tier hit. The real cause is #6489: a build
+    # that leaves ANY node unreachable merges those orphans into the
+    # pending-mutation list, so graphState is MUTABLE even though the build
+    # succeeded, persisted, and has zero pending writes -- and flush() tests
+    # graphState alone. The run that settled it (qI) had close SKIPPED and still
+    # OOM'd, inside a SECOND full build.
+    #
+    # What the tier actually does on 26.8.1 at the standard 24g/36g envelope:
+    # build #1 peaks 21,851/24,576 MB and COMPLETES, then a redundant build dies
+    # at 24,554 MB. With #6490 applied: one build, peak 22,664 MB, close 0.158 s,
+    # recall 0.9506, rc=0, same envelope. The tier never needed a bigger heap.
+    #
+    # The arm RECORDS that it skipped, because a cell that silently omits a phase
+    # is not comparable with one that does not.
     if os.environ.get("BENCH_SKIP_CLOSE") == "1":
         out["close_s"] = None
         out["close_skipped"] = True
         out["close_skip_reason"] = ("diagnostic: isolating build cost from the "
-                                    "#5747 close-time graph rebuild")
+                                    "#6489 redundant graph rebuild")
     else:
         _t = time.perf_counter()
         b.close()

@@ -14,7 +14,9 @@ three and four passes. REMEMBERED means nothing will catch the next violation.
 
 Companion documents: FAIRNESS.md (F1-F9 and their incident histories),
 PUBLISHING.md (page policy), READING-RESULTS.md (how to read results/ without
-repeating a stale note), CAMPAIGN_2026-07.md (canonical-row definition).
+repeating a stale note), CAMPAIGN.md (how a campaign is run; the July 2026
+record it replaced is in git history). The canonical-row definition is section 1
+below.
 
 ---
 
@@ -207,6 +209,7 @@ still to do.
 | ArcadeDB (L2 OLAP) | Graph Analytical View, `UPDATE MODE OFF`, build counted; `BENCH_GAV=0` ablation published | operating-point | ArcadeDB's documented OLAP answer, priced separately, with the view-off arm published. | DISCLOSED: page conditions, paper, `gav` on every row |
 | ArcadeDB (L3s) | int8 posting quantization (the engine default); fp32 arm prices it | operating-point | The headline arm is the default. The ablation is the only quantization axis available. | DISCLOSED: T4 caption, `SPARSE_PRECISION` |
 | ArcadeDB vs dense comparators | `M=32` (maxConnections) against `M=16` (doubled at base) | operating-point | Numerically equal settings build graphs of half the degree, so the lane matches effective base degree. 32 is also 26.8.1's own default, so only the comparator side is set. Getting it wrong once published "0.951 vs 0.971, a small deficit". | FULLY DISCLOSED: paper, T5 caption, page, per-row stamps, F7 |
+| ArcadeDB dense (L3d, E2) | `neighborOverflowFactor` left at the engine default 1.2 | not an override, declined deliberately | Raising it to 2.0 cuts graph-unreachable nodes 3.5x (299 -> 85 at 50k) with build time, peak RSS and recall flat. Declined because no hnswlib-family comparator has the knob, so it would move only our graph, in our favour. Unlike the `maxConnections` row above, which converts units rather than tunes. `l3d_dense.py` never sets it. | FAIRNESS.md F7, DECISIONS.md #45 |
 | Elasticsearch (L3s) | `index_options {"prune": false}` | operating-point | ES 9.1+ prunes on ELSERv2 thresholds; on SPLADE that costs the recall in section 1, and the default's bias ran in our favor. | FULLY DISCLOSED: paper subsection, page condition, `es_prune` on every row |
 | ArcadeDB native TS | `TS_TAGS=1` reduced schema; unbounded last-point query | operating-point | Applied to all three engines. The published unbounded form is the faster one for us: 0.720 ms against 0.860 ms for the 1-hour window (`TS_LAST_WINDOW_S=3600`), measured as a pair in the same rep. | DISCLOSED: schema-fidelity paragraph in the paper, which states both numbers |
 | Milvus | `DEPLOY_MODE=STANDALONE`, embedded etcd, vendor's own `embedEtcd.yaml` | resource fitting | Single-container deployment plumbing; the mounted file is Milvus's own default. | not stated, low severity |

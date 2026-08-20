@@ -36,9 +36,16 @@ detectable as a partial cpuset such as `0-5`.
 
 **F3. Same memory envelope per (lane, scale).** Every backend at a tier gets
 the same `--memory`/`--memory-swap` cap and, for JVM engines, the same heap.
-A client/server backend gets the envelope **split**, not doubled:
-`server = 0.75 * total`, `client = total - server`, so the pair sums to what
-an embedded cell gets in one container.
+A client/server backend used to get the envelope **split**, not doubled
+(`server = 0.75 * total`, `client = total - server`), and every split-bearing
+row now in `results/` was measured that way. Since `c1cbf44721` (2026-08-14)
+the server gets the **full tier cap** and the client its own `BENCH_CLIENT_MEM`
+budget on top, stamped `mem_split="full+client"`: the embedded arm never paid
+the split, and the headline ArcadeDB number in every table is the embedded arm,
+so the old rule charged the deployment axis for a memory difference as well.
+`BENCH_SERVER_MEM_FRACTION` restores the old behaviour for a reproduction. See
+PROTOCOL.md section 7, which also records that the paper and the T5 caption
+still assert 0.75.
 
 "Same heap" means the heap the engine RAN, not the heap the cell asked for,
 and those were different for a year. `runner.py` templated `{heap}` into every
@@ -132,6 +139,22 @@ and the same integer therefore builds two different graphs. Comparing them at
 one nominal `M` compares an accident of naming. Recorded per row as
 `degree_param` plus `degree_family` so the check reads the number in the unit
 its own engine meant.
+
+*The other construction knob, and why it is NOT matched.* ArcadeDB builds
+through jvector, which also exposes `neighborOverflowFactor` (engine default
+1.2): how far above `maxConnections` a neighbour list may grow during
+construction before pruning. Raising it to 2.0 cuts graph-unreachable nodes
+3.5x at no measurable cost (50k x 128, `maxConnections=32`: 299 orphans at 1.2,
+85 at 2.0, build time and peak RSS flat, recall unchanged). It stays at the
+default anyway. Cheap is not the test; "is there a matched value on the other
+side" is, and there is none, because no hnswlib-family comparator has this
+knob. Setting it would move our graph alone, in our favour, which is exactly
+what separates it from the `maxConnections` 32-vs-16 correction: that one
+converts units between two engines that mean different things by the same
+integer. `l3d_dense.py` never set it, so nothing changed. Recorded as
+DECISIONS.md #45; the orphans themselves are a jvector property, so if 1.2 is
+too low it is ArcadeData's default to raise and we inherit it at the next
+stable re-pin.
 
 **F8. The cpuset must equalise USE, not only the resource.** F1 gives every
 engine the same 12 threads. That is not the same as every engine *taking* the
