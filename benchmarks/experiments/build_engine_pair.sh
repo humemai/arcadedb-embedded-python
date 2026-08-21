@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# Build a MATCHED (server image, embedded wheel) pair from one upstream commit,
+# and PROVE they match by reading the commit out of the artifacts themselves.
+#
+# WHY THIS EXISTS. The campaign pins ArcadeDB by commit, because a local build
+# reports version "26.9.1.dev0" whichever commit produced it. Until now the
+# pairing was asserted by a launcher comment ("wheel AND server image both from
+# <sha>") and enforced only by runner.py refusing one env var without the other,
+# which proves they were PASSED together and nothing about what is inside them.
+#
+# That gap was not theoretical. On 2026-08-21 the image tagged
+# `arcadedb-local:3ec4f07e0` was found to contain jars stamped
+# 26556a16c336cbe04704632f666b443308986ed7 -- 24 commits away from its own tag.
+# Every row of that campaign carried engine_commit=3ec4f07e0. The tag lied and
+# nothing could have caught it, because nothing read the artifact.
+#
+# THE FIX IS THAT THE COMMIT IS IN THE BYTES. Every arcadedb-*.jar carries
+# `com/arcadedb/arcadedb.properties` holding the full 40-char sha, written by
+# buildnumber-maven-plugin (engine/pom.xml:89-101) from the git checkout at
+# build time. It works on upstream's published images too. So the check is not
+# "did we tag it right" but "what does the artifact say it is", asked in three
+# places and required to agree.
+#
+# Docker LABELS are deliberately not the check. A label is written by whoever
+# ran the build and would have reproduced the exact lie above.
+#
+# Usage:
+#   ./build_engine_pair.sh <commit-ish>     build the pair and verify
+#   ./build_engine_pair.sh --verify <sha>   re-verify existing artifacts only
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+BUILD_IMAGE="arcadedb-build:maven25-git"
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+say() { echo ">>> $*"; }
+
+# Read the engine commit out of a jar's own bytes. One implementation, three
+# call sites, because a verification that reads the artifact differently in
+# each place is not one verification.
+props_from_jar_dir() {   # <dir containing arcadedb-engine-*.jar>
+  local jar; jar=$(ls "$1"/arcadedb-engine-*.jar 2>/dev/null | head -1)
+  [ -n "$jar" ] || return 1
+  unzip -p "$jar" com/arcadedb/arcadedb.properties 2>/dev/null
+}
+
+sha_from_props() { sed -n 's/^buildNumber *= *//p' | tr -d '[:space:]'; }
+
+verify_sha() {  # <label> <40-char sha found> <expected>
+  local what="$1" got="$2" want="$3"
+  [ -n "$got" ] || die "$what: no buildNumber in arcadedb.properties. The build lost git, and a jar that cannot say what it is must not be published."
+  [[ "$got" =~ ^[0-9a-f]{40}$ ]] || die "$what: buildNumber '$got' is not a 40-char sha"
+  [ "$got" = "$want" ] || die "$what: contains $got but expected $want. This is the failure that shipped arcadedb-local:3ec4f07e0 holding 26556a16c jars."
+  echo "    OK  $what -> ${got:0:9}"
+}
+
+# ---------------------------------------------------------------- verify only
+if [ "${1:-}" = "--verify" ]; then
+  SHA_SHORT="${2:?usage: --verify <sha>}"
+  SHA=$(git -C "$REPO" rev-parse "$SHA_SHORT")
+  IMG="arcadedb-local:${SHA:0:9}"
+  say "verifying pair at $SHA"
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+  docker run --rm --entrypoint sh "$IMG" \
+    -c 'unzip -p /home/arcadedb/lib/arcadedb-engine-*.jar com/arcadedb/arcadedb.properties' \
+    > "$tmp/img.props" 2>/dev/null || die "cannot read $IMG"
+  verify_sha "server image $IMG" "$(sha_from_props < "$tmp/img.props")" "$SHA"
+
+  W=$(ls -t "$REPO"/bindings/python/dist/*.whl 2>/dev/null | head -1)
+  [ -n "$W" ] || die "no wheel in bindings/python/dist"
+  (cd "$tmp" && unzip -q -o "$W")
+  verify_sha "wheel $(basename "$W")" \
+    "$(props_from_jar_dir "$tmp/arcadedb_embedded/jars" | sha_from_props)" "$SHA"
+
+  # The embedded arm does NOT run $ARCADEDB_WHEEL. It runs whatever wheel was
+  # baked into dbbench:arcadedb the last time build_images.sh ran, so a stale
+  # bench image passes every other check while measuring a different engine
+  # from the server arm beside it. That is the exact F5 failure the pairing
+  # exists to prevent, so it is checked here rather than assumed.
+  if docker image inspect dbbench:arcadedb >/dev/null 2>&1; then
+    docker run --rm --entrypoint sh dbbench:arcadedb -c \
+      'unzip -p $(python3 -c "import arcadedb_embedded,os;print(os.path.dirname(arcadedb_embedded.__file__))")/jars/arcadedb-engine-*.jar com/arcadedb/arcadedb.properties' \
+      > "$tmp/bench.props" 2>/dev/null \
+      && verify_sha "bench image dbbench:arcadedb" "$(sha_from_props < "$tmp/bench.props")" "$SHA" \
+      || echo "    WARN dbbench:arcadedb unreadable; rebuild it before running"
+  else
+    echo "    WARN dbbench:arcadedb absent; build_images.sh must run before the campaign"
+  fi
+  say "PAIR VERIFIED at $SHA"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------- build
+SHA_IN="${1:?usage: build_engine_pair.sh <commit-ish>}"
+SHA=$(git -C "$REPO" rev-parse "$SHA_IN") || die "unknown commit $SHA_IN"
+SHORT="${SHA:0:9}"
+IMG="arcadedb-local:$SHORT"
+DEST="${BUILD_DEST:-$HOME/engine-builds/$SHORT}"
+
+say "commit  $SHA"
+say "image   $IMG"
+say "workdir $DEST"
+
+# The build container needs git, or buildnumber-maven-plugin fails the build
+# outright: engine/pom.xml configures no revisionOnScmFailure. Bake it once
+# rather than installing on every build, so the toolchain is a pinned artifact
+# too. NOTE: `yum install` in this image exits 0 without installing, so an
+# `A || B` fallback silently keeps the broken half. Use dnf.
+if ! docker image inspect "$BUILD_IMAGE" >/dev/null 2>&1; then
+  say "baking $BUILD_IMAGE (maven + git)"
+  printf 'FROM maven:3.9-amazoncorretto-25\nRUN dnf install -y git && dnf clean all\n' \
+    | docker build -q -t "$BUILD_IMAGE" - >/dev/null
+fi
+
+mkdir -p "$DEST/home"
+WT="$DEST/src"
+if [ ! -d "$WT/.git" ]; then
+  say "cloning at $SHORT"
+  rm -rf "$WT"
+  # A CLONE, not `git worktree add`. In a worktree, .git is a FILE holding an
+  # absolute host path into the parent repo's .git/worktrees/, which is not
+  # mounted into the container: git inside sees a dangling gitdir, the SCM
+  # lookup fails, and the build dies (or worse, stamps a junk revision and
+  # destroys the only provenance field we have). --local hardlinks the object
+  # store, so this costs almost nothing.
+  git clone --local --no-checkout "$REPO" "$WT" >/dev/null 2>&1
+  git -C "$WT" checkout --detach "$SHA" >/dev/null 2>&1
+fi
+[ "$(git -C "$WT" rev-parse HEAD)" = "$SHA" ] || die "clone is not at $SHA"
+[ -z "$(git -C "$WT" status --porcelain)" ] || die "clone is dirty; a build from a dirty tree cannot be identified by its commit"
+
+say "maven package (skipping tests)"
+# -u so output is owned by the caller; HOME must be writable and NOT /root,
+# which is mode 0750 root:root in this image, so a non-root uid cannot even
+# traverse it. studio's frontend-maven-plugin also needs a writable HOME for
+# its npm cache.
+docker run --rm -u "$(id -u):$(id -g)" \
+  -e HOME=/var/maven -e MAVEN_CONFIG=/var/maven/.m2 \
+  -e MAVEN_OPTS=-Duser.home=/var/maven \
+  -v "$DEST/home":/var/maven \
+  -v "$WT":/src -w /src \
+  --cpuset-cpus "${BUILD_CPUSET:-0-11}" \
+  "$BUILD_IMAGE" \
+  mvn -B -DskipTests -Dmaven.javadoc.skip=true clean package -pl package -am \
+  > "$DEST/maven.log" 2>&1 || { tail -30 "$DEST/maven.log"; die "maven failed, see $DEST/maven.log"; }
+
+CTX=$(ls -d "$WT"/package/target/arcadedb-*.dir 2>/dev/null | grep -v -- '-base\|-headless\|-minimal' | head -1)
+[ -n "$CTX" ] || die "no assembly directory under package/target"
+LIB=$(ls -d "$CTX"/arcadedb-*/lib | head -1)
+say "assembly $CTX ($(ls "$LIB"/*.jar | wc -l) jars)"
+
+# V0 FIRST, on the build tree, before anything is tagged. If the jars cannot
+# name their own commit there is nothing worth building an image from.
+verify_sha "build tree" "$(props_from_jar_dir "$LIB" | sha_from_props)" "$SHA"
+
+say "docker build $IMG"
+docker build -q -t "$IMG" \
+  --label "org.opencontainers.image.revision=$SHA" \
+  "$CTX" >/dev/null
+
+say "wheel with JAR_LIB_DIR=$LIB"
+# ABSOLUTE path required: build.sh cd's into bindings/python before parsing
+# args, so a relative JAR_LIB_DIR resolves against the wrong directory.
+JAR_LIB_DIR="$LIB" bash "$REPO/bindings/python/scripts/build.sh" > "$DEST/wheel.log" 2>&1 \
+  || { tail -30 "$DEST/wheel.log"; die "wheel build failed, see $DEST/wheel.log"; }
+
+say "verifying"
+"$0" --verify "$SHA"
+
+cat > "$DEST/manifest.json" <<JSON
+{
+  "engine_commit": "$SHA",
+  "engine_commit_short": "$SHORT",
+  "server_image": "$IMG",
+  "jar_count": $(ls "$LIB"/*.jar | wc -l),
+  "assembly": "$CTX"
+}
+JSON
+say "manifest at $DEST/manifest.json"
+say "stamp rows with ARCADEDB_ENGINE_COMMIT=$SHORT"
