@@ -242,6 +242,21 @@ number. What remains:
    works on a stopped container — but it must be stated on the row rather than
    left looking like a settled reading, since `disk_settled` stays null.
 
+**This change is bigger than it looks and must not be rushed into a live
+campaign.** An adversarial review of a first design (2026-08-21) found that a
+barrier-and-watcher approach deadlocks every cell in every lane; that removing
+`tries` from the signature TypeErrors at four call sites; that declaring the
+anchor dict beside the thread start NameErrors on the three early-return paths
+runner.py:1113-1116 already documents against; and, worst, that giving the dense
+lane an ArcadeDB settle step via `idx.compact()` would be a SILENT NO-OP,
+because `LSMVectorIndex.compact()` returns false unless a compaction was
+already scheduled and nothing schedules one. That item would have shipped as
+"ArcadeDB now takes its settle step" while doing nothing at all.
+
+So land it deliberately, before the full multi-lane campaign, never between
+reps of a running one. Disk is not a published column today, and measuring it
+at a slightly wrong point costs far less than breaking every cell.
+
 ## 4b. GAV is measured with the view ON and OFF, everywhere
 
 The Graph Analytical View is an ArcadeDB-only accelerator, so an unablated number
