@@ -473,6 +473,58 @@ def check_protocol_overlays():
     return 0
 
 
+def check_close_cost(rows):
+    """F11: close must be O(what was written), not O(what is stored).
+
+    DECISIONS #50. This is a REGRESSION gate rather than a fairness one, and it
+    lives here because this is where the numbered invariants are. Two ways to
+    fail, and they catch different defects:
+
+      1. A clean close over 100 ms. Grounded twice: close should not cost more
+         than getting started, and JVM startup on these hosts is ~160 ms; and
+         it should sit under the ~100 ms at which a script stops feeling
+         instant.
+      2. A clean close that GROWS with row count while nothing was written.
+         That is the O(stored) shape and it is always a defect, whatever the
+         absolute number. This is the one that would have caught #5747 and
+         #6489 while their absolute values were still small.
+
+    The engine has produced three defects in this family (#5747, #6489 which
+    was ours, #5872), which is why a number that can slide between releases
+    with nobody watching gets a gate instead of a column.
+    """
+    lc = [r for r in rows if r.get("lane") == "lifecycle"
+          and r.get("clean_close_ms") is not None]
+    if not lc:
+        print("\n== F11 close cost ==\n  NOT CHECKED: no lifecycle rows")
+        return 0
+    print("\n== F11 close cost: O(written), not O(stored), under 100 ms ==")
+    bad = 0
+    by_sit = collections.defaultdict(dict)
+    for r in lc:
+        by_sit[r["workload"]][r.get("scale")] = r["clean_close_ms"]
+        if r["clean_close_ms"] > 100.0:
+            print(f"  BAD: {r['workload']}/{r.get('scale')} clean close "
+                  f"{r['clean_close_ms']:.1f} ms exceeds the 100 ms budget")
+            bad += 1
+    # The shape test. Rows are the same situation at two sizes with nothing
+    # written in either, so any growth beyond noise is growth in what is
+    # STORED. 1.5x over 10x the data is the tolerance: the flat situations in
+    # the matrix move by well under that, and the two that scale move by 10x
+    # or more, so nothing sits near the line.
+    for sit, sizes in sorted(by_sit.items()):
+        if "lc10k" in sizes and "lc100k" in sizes:
+            small, big = sizes["lc10k"], sizes["lc100k"]
+            if small > 0 and big / small > 1.5:
+                print(f"  BAD: {sit} clean close grows {big / small:.1f}x "
+                      f"({small:.1f} -> {big:.1f} ms) over 10x the rows, with "
+                      f"nothing written. That is O(stored).")
+                bad += 1
+    if not bad:
+        print(f"  ok {len(lc)} lifecycle row(s), none over budget, none scaling")
+    return bad
+
+
 def main():
     try:
         rows = _canonical()
@@ -480,6 +532,7 @@ def main():
         print(f"cannot load canonical rows: {e}")
         return 2
     bad = check_cpuset(rows) + check_envelope(rows) + check_degree(rows)
+    bad += check_close_cost(rows)
     check_protocol_overlays()
     bad += report_producers(rows)
     print(f"\n{bad} fairness invariant failure(s)")
