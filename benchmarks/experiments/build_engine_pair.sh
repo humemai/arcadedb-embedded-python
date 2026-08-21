@@ -164,6 +164,19 @@ fi
 [ "$(git -C "$WT" rev-parse HEAD)" = "$SHA" ] || die "clone is not at $SHA"
 [ -z "$(git -C "$WT" status --porcelain)" ] || die "clone is dirty; a build from a dirty tree cannot be identified by its commit"
 
+# Skip maven when the assembly already carries this exact commit. The check is
+# the same one V0 uses -- the jar's own buildNumber -- so "already built" means
+# the same thing here as "verified" does below, rather than being a timestamp
+# heuristic that could skip a stale tree.
+CTX_PRE=$(ls -d "$WT"/package/target/arcadedb-*.dir 2>/dev/null | grep -v -- '-base\|-headless\|-minimal' | head -1)
+if [ -n "$CTX_PRE" ] && [ "$(props_from_jar_dir "$(ls -d "$CTX_PRE"/arcadedb-*/lib 2>/dev/null | head -1)" 2>/dev/null | sha_from_props)" = "$SHA" ]; then
+  say "assembly already at $SHORT, skipping maven (BUILD_FORCE=1 to rebuild)"
+  [ -z "${BUILD_FORCE:-}" ] || { say "BUILD_FORCE set, rebuilding"; NEED_MVN=1; }
+else
+  NEED_MVN=1
+fi
+
+if [ -n "${NEED_MVN:-}" ]; then
 say "maven package (skipping tests)"
 # -u so output is owned by the caller; HOME must be writable and NOT /root,
 # which is mode 0750 root:root in this image, so a non-root uid cannot even
@@ -178,6 +191,7 @@ docker run --rm -u "$(id -u):$(id -g)" \
   "$BUILD_IMAGE" \
   mvn -B -DskipTests -Dmaven.javadoc.skip=true clean package -pl package -am \
   > "$DEST/maven.log" 2>&1 || { tail -30 "$DEST/maven.log"; die "maven failed, see $DEST/maven.log"; }
+fi
 
 CTX=$(ls -d "$WT"/package/target/arcadedb-*.dir 2>/dev/null | grep -v -- '-base\|-headless\|-minimal' | head -1)
 [ -n "$CTX" ] || die "no assembly directory under package/target"
