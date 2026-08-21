@@ -9,6 +9,7 @@ rerun this script after the October freeze re-measure.
 
 Outputs: ../latex/tables/t{2,3,4,5}_*.tex + tables_summary.md (prose crib).
 """
+import collections
 import json
 import os
 import re
@@ -38,6 +39,37 @@ _DEV_RE = re.compile(r"dev\d|SNAPSHOT", re.I)
 # test could never see, which is two different builds sharing one version
 # string. Unset, behaviour is exactly as before: every pre-release row drops.
 _PINNED_COMMIT = os.environ.get("BENCH_ENGINE_COMMIT", "").strip().lower()
+
+# THE CORPUS EACH PUBLISHED TIER IS MEASURED ON, as (n_docs, dims).
+#
+# Two different corpora have shared one scale name. The sparse lane's synthetic
+# generator (sparse_common: 30,000 dims, medium = 10,000,000 docs) was retired
+# in favour of the real Big-ANN'23 corpus (bigann_sparse: 30,109 dims, medium =
+# 8,841,823 docs), and rows from both survive in runs.jsonl under scale
+# "medium". They do not collide on the canonical key, which already contains
+# n_docs -- BOTH are admitted, and a consumer that groups without n_docs then
+# pools them. export_web.py did exactly that, publishing a Qdrant p50 of 10.533
+# ms that is the median across a ~5.2 cluster and a ~16.1 cluster and belongs
+# to no run that happened, under a label reading "8.84M".
+#
+# The fingerprint is (n_docs, dims) and not n_docs alone, because at tiny and
+# small BOTH corpora hold 100,000 and 1,000,000 docs. n_docs alone is vacuous
+# at two tiers of three; dims is what separates them there.
+#
+# Literals, not imports from the lane modules: run_gates() launches the
+# checkers with sys.executable, and `python3 -c "import bigann_sparse"` fails
+# on numpy outside the venv. fairness_check F10b compares these against the
+# modules so the duplication is checked rather than trusted.
+PAPER_CORPUS = {
+    ("l3s", "tiny"):   (100_000, 30_109),
+    ("l3s", "small"):  (1_000_000, 30_109),
+    ("l3s", "medium"): (8_841_823, 30_109),
+}
+
+# Reset per load_canonical() call, never cumulative: claims_check calls the
+# loader eleven times in one process, and a counter that survives the call
+# reports 110 exclusions where ten happened.
+CORPUS_EXCLUDED = collections.Counter()
 
 
 def _commit_matches(row_commit):
@@ -112,7 +144,8 @@ NAMES = {
 }
 
 
-def load_canonical():
+def load_canonical(apply_corpus=True):
+    CORPUS_EXCLUDED.clear()
     # Dedupe on PAYLOAD fields, never run_id: pre-2026-07-21 run_ids were not
     # scale-qualified, so different scales collided under one id (the 100k
     # sparse tier was invisible under run_id-keyed dedupe).
@@ -185,6 +218,24 @@ def load_canonical():
         # reason -- a row that cannot be published must not be able to shadow.
         if r["lane"] == "l3s" and r.get("recall_at_10") is None:
             continue
+        # THE ROW MUST BE ON THE CORPUS ITS TIER PUBLISHES. See PAPER_CORPUS:
+        # a retired synthetic corpus shares scale names with the real one, and
+        # both survive the canonical key because that key contains n_docs and
+        # so admits each as its own cell. The pooling happens downstream, in
+        # any consumer that groups without n_docs, which is why the rule
+        # belongs here rather than in one consumer.
+        #
+        # apply_corpus=False still COUNTS but does not drop, so fairness F10
+        # can see the pooled population it exists to fail on instead of
+        # inspecting a set the filter has already cleaned.
+        want = PAPER_CORPUS.get((r["lane"], r["scale"]))
+        if want is not None:
+            got = (r.get("n_docs"), r.get("dims"))
+            if got != want:
+                CORPUS_EXCLUDED[(r["lane"], r["scale"], r["backend"],
+                                 str(got))] += 1
+                if apply_corpus:
+                    continue
         # Elasticsearch must prove the heap it ran, not assert it. Until
         # 2026-08-08 runner.py hardcoded "ES_JAVA_OPTS=-Xms2g -Xmx4g" for this
         # backend alone, so ES ran 4g at tiny, small AND medium while its
@@ -550,10 +601,11 @@ def sparse_table(rows):
             lines.append(r"\addlinespace")
         for j, (sc, lab) in enumerate(tiers):
             g = [r for r in l3s if r["backend"] == be and r["scale"] == sc]
-            if sc == "medium":
-                # medium holds two corpora: the retired synthetic 10M and
-                # Big-ANN's 8.84M. Mixing them is the #5411 error in table form.
-                g = [r for r in g if r.get("n_docs") == 8_841_823]
+            # medium holds two corpora: the retired synthetic 10M and
+            # Big-ANN's 8.84M. Mixing them is the #5411 error in table form.
+            # The n_docs == 8_841_823 filter that used to stand here is now
+            # PAPER_CORPUS in load_canonical, which covers every tier and every
+            # consumer instead of the one tier someone thought to hardcode.
             if be == "arcadedb_sparse_embedded":
                 g = arc[sc]
             # The system name labels its block once; repeating it down three
