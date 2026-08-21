@@ -98,9 +98,20 @@ if [ "${1:-}" = "--verify" ]; then
 
   W=$(ls -t "$REPO"/bindings/python/dist/*.whl 2>/dev/null | head -1)
   [ -n "$W" ] || die "no wheel in bindings/python/dist"
-  (cd "$tmp" && unzip -q -o "$W")
-  verify_sha "wheel $(basename "$W")" \
-    "$(props_from_jar_dir "$tmp/arcadedb_embedded/jars" | sha_from_props)" "$SHA"
+  # Read the engine jar straight out of the wheel: a wheel is a zip holding a
+  # zip, and unpacking 67 MiB to disk to look at one file inside one jar is
+  # both slower and one more place for a stale extraction to be read by
+  # mistake.
+  verify_sha "wheel $(basename "$W")" "$(python3 - "$W" <<'PY' | sha_from_props
+import sys, io, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+jn = [n for n in z.namelist() if "arcadedb-engine-" in n and n.endswith(".jar")]
+if not jn:
+    print("READ_FAILED: no engine jar in wheel", file=sys.stderr); sys.exit(3)
+inner = zipfile.ZipFile(io.BytesIO(z.read(jn[0])))
+sys.stdout.write(inner.read("com/arcadedb/arcadedb.properties").decode())
+PY
+)" "$SHA"
 
   # The embedded arm does NOT run $ARCADEDB_WHEEL. It runs whatever wheel was
   # baked into dbbench:arcadedb the last time build_images.sh ran, so a stale
