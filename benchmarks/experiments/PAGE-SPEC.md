@@ -129,7 +129,7 @@ a p50.
 
 | id | title | rows | columns |
 |---|---|---|---|
-| `lifecycle` | **NEW** — open and close cost | empty, doc, doc_idx{1,10,30}, hash, fulltext, geo, sparse, ts, graph, graph_gav, vector, vector2, mixed | open ms, close ms clean / read / write, at 10k and 100k |
+| `lifecycle` | **NEW** — open and close cost | empty, doc, doc_idx{1,10,30}, hash, fulltext, geo, sparse, ts, graph, graph_gav, vector, vector2, mixed | **cold open ms**, warm open ms, close ms clean / read / write, at 10k and 100k |
 | `ops_build` | **NEW** — load and build cost | every engine, every lane | build s, rows/s |
 | `ops_recovery` | **NEW** — crash recovery | ArcadeDB, 2 WAL settings | trials, contiguous, duplicates, recovery s |
 | `ops_failover` | **NEW** — Raft failover | 3-node ArcadeDB | trials, acked writes present, ambiguous, election s, failover s |
@@ -199,7 +199,10 @@ caveat to write around):
   the 5.9x traversal speedup is paid with a full graph scan per session, which
   wins over a long session and loses over a short one. That belongs beside the
   5.9x, and the fix (lazy-on-first-use, or persist the CSR) is upstream work.
-- Cold open, first open after boot with nothing in page cache, is untested.
+- Cold open is now measurable: `pagecache.evict()` drops a database's files with
+  `posix_fadvise(DONTNEED)` and verifies with `mincore` that they left. No root,
+  and it evicts only the named files, so the rest of the host stays warm and the
+  number means "this database is cold" rather than "the machine is cold".
 
 ---
 
