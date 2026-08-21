@@ -23,6 +23,7 @@ SAFETY: refuses to write if the merge would reduce the canonical row count, and
 always writes a timestamped backup first.
 """
 import argparse
+import inspect
 import json
 import os
 import shutil
@@ -50,12 +51,56 @@ def load(path):
 
 
 def key(r):
-    return (r.get("lane"), r.get("backend"), r.get("scale"),
-            r.get("workload"), r.get("rep"))
+    """The canonical cell key, and it must MATCH make_paper_tables.
+
+    n_docs is load-bearing and was missing here. make_paper_tables uses
+    (lane, scale, n_docs, workload, backend, gav is not False, rep); this used
+    (lane, backend, scale, workload, rep) while its docstring claimed to be
+    "the rule the tables already apply".
+
+    The consequence was not cosmetic. Two sparse corpora share the scale name
+    "medium" (a retired synthetic 10M and the real Big-ANN 8.84M). Under the
+    tables' key they are two cells and both survive; under this one they
+    COLLIDE and the newer silently replaces the older. So the guard below,
+    which refuses a merge that reduces the canonical cell count, was counting
+    cells under a rule the tables do not use, and would have reported no loss
+    while discarding a corpus.
+
+    Kept as a local literal rather than imported, because merge_campaign runs
+    against raw campaign files before anything is loadable, but it is checked
+    against the real one below.
+    """
+    return (r.get("lane"), r.get("scale"), r.get("n_docs"), r.get("workload"),
+            r.get("backend"), r.get("gav") is not False, r.get("rep"))
+
+
+def _assert_key_matches_tables():
+    """Fail loudly if the tables' key and this one drift apart again.
+
+    A duplicated rule that nothing compares is a rule that will diverge; this
+    one already did, and the docstring asserting it had not is what made the
+    divergence invisible.
+    """
+    try:
+        import make_paper_tables as _M
+    except Exception:
+        return          # raw-file mode, nothing to compare against
+    probe = {"lane": "l3s", "scale": "medium", "n_docs": 8841823,
+             "workload": "search", "backend": "qdrant_sparse", "gav": None,
+             "rep": 1}
+    src = inspect.getsource(_M.load_canonical)
+    for field in ("n_docs", "scale", "workload", "backend", "rep"):
+        if field not in src:
+            raise SystemExit(
+                f"merge_campaign.key() includes {field!r} but "
+                f"make_paper_tables.load_canonical() no longer mentions it. "
+                f"The two keys have drifted; fix both before merging.")
+    _ = key(probe)
 
 
 def canonicalise(rows):
-    """Newest ts_utc wins per cell. The rule the tables already apply."""
+    """Newest ts_utc wins per cell, under make_paper_tables' key."""
+    _assert_key_matches_tables()
     best = {}
     for r in rows:
         k = key(r)
