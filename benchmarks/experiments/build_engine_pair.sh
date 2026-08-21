@@ -226,11 +226,21 @@ docker build -q -t "$IMG" -f "$DF" \
   --label "org.opencontainers.image.revision=$SHA" \
   "$CTX" >/dev/null
 
-say "wheel with JAR_LIB_DIR=$LIB"
-# ABSOLUTE path required: build.sh cd's into bindings/python before parsing
-# args, so a relative JAR_LIB_DIR resolves against the wrong directory.
-JAR_LIB_DIR="$LIB" bash "$REPO/bindings/python/scripts/build.sh" > "$DEST/wheel.log" 2>&1 \
+say "wheel with jar dir $LIB"
+# JAR_LIB_DIR IS THE THIRD POSITIONAL ARGUMENT, NOT AN ENVIRONMENT VARIABLE.
+# build.sh:37-39 reads PLATFORM=$1, PYTHON_VERSION=$2, JAR_LIB_DIR=$3. Exporting
+# it as an env var is silently ignored and the build falls through to "Using
+# JARs from ArcadeDB image", producing a wheel from a moving upstream tag while
+# every log line still says the build succeeded. That is precisely how a wheel
+# and a server image drift apart, and V0 caught it here: the wheel came out
+# holding 9d154222c against an image holding 472e5bddf.
+#
+# Absolute path required as well: build.sh cd's into bindings/python before
+# parsing args, so a relative path resolves against the wrong directory.
+bash "$REPO/bindings/python/scripts/build.sh" "" "3.12" "$LIB" > "$DEST/wheel.log" 2>&1 \
   || { tail -30 "$DEST/wheel.log"; die "wheel build failed, see $DEST/wheel.log"; }
+grep -q "Using provided JAR directory\|pre-staged" "$DEST/wheel.log" \
+  || die "build.sh did not take the local jars (see $DEST/wheel.log). It printed: $(grep -m1 'JARs from' "$DEST/wheel.log")"
 
 say "verifying"
 "$0" --verify "$SHA"
