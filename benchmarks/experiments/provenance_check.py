@@ -691,6 +691,60 @@ def check_schema_homogeneity(rows):
     return bad
 
 
+def check_engine_commit_matches_build(rows):
+    """Does the commit we STAMPED match the commit the engine REPORTS?
+
+    A row carries engine_commit because a launcher exported
+    ARCADEDB_ENGINE_COMMIT, which records what someone believed they were
+    running. A served ArcadeDB row ALSO carries the sha the engine itself
+    reports, inside engine_version:
+
+        server:26.9.1-SNAPSHOT (build 472e5bddf1f99.../1787342478923/UNKNOWN)
+
+    written by buildnumber-maven-plugin from the checkout that produced the
+    jars. One is a claim, the other is evidence, and until now nothing compared
+    them.
+
+    They disagreed. Campaign qN ran arcadedb-local:3ec4f07e0, an image whose
+    jars are stamped 26556a16c, and every row it wrote carries
+    engine_commit=3ec4f07e0 beside an engine_version reading
+    "build 26556a16c...". The evidence to catch a 24-commit mislabel was on
+    every server row for the whole campaign and no check read it.
+
+    Embedded rows report only a package version and carry no build sha, so
+    they are NOT CHECKED here rather than passed: the wheel's own jar has the
+    same property and build_engine_pair.sh --verify reads it, which is where
+    that arm is covered.
+    """
+    print("\n== engine_commit against the sha the engine reports ==")
+    bad = checked = unchecked = 0
+    for r in rows:
+        stamped = str(r.get("engine_commit") or "").strip().lower()
+        if not stamped:
+            continue
+        m = re.search(r"build ([0-9a-f]{8,40})", str(r.get("engine_version") or ""))
+        if not m:
+            unchecked += 1
+            continue
+        checked += 1
+        reported = m.group(1).lower()
+        n = min(len(stamped), len(reported), 40)
+        if stamped[:n] != reported[:n]:
+            print(f"  BAD: {r.get('lane')}/{r.get('scale')}/{r.get('backend')} "
+                  f"rep {r.get('rep')} stamped {stamped[:9]} but the engine "
+                  f"reports {reported[:9]}")
+            bad += 1
+    if not checked:
+        print("  NOT CHECKED: no row carries both an engine_commit and a "
+              "build sha in its engine_version")
+    else:
+        print(f"  {checked} row(s) checked, {bad} disagreement(s); "
+              f"{unchecked} row(s) carry no build sha (embedded arms report "
+              f"only a package version and are covered by "
+              f"build_engine_pair.sh --verify)")
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--table", help="check only this table (e.g. T5)")
@@ -838,7 +892,17 @@ def main():
     print("\n=== schema homogeneity: one lane, one set of measured fields ===")
     try:
         import make_paper_tables as _M
-        bad_schema = check_schema_homogeneity(_M.load_canonical())
+        _canon = _M.load_canonical()
+        bad_schema = check_schema_homogeneity(_canon)
+        # Read the RAW rows, not the canonical ones: a mislabelled build is
+        # exactly the kind of row the canonical filters may drop, and a
+        # provenance check that only inspects what survived cannot report on
+        # what did not.
+        _raw = [json.loads(l) for l in
+                open(os.path.join(RESULTS, "runs.jsonl")) if l.strip()]
+        for _extra in sorted(glob.glob(os.path.join(RESULTS, "runs_engine_*.jsonl"))):
+            _raw += [json.loads(l) for l in open(_extra) if l.strip()]
+        bad_schema += check_engine_commit_matches_build(_raw)
     except Exception as _e:
         bad_schema = 0
         print(f"  NOT CHECKED: {_e.__class__.__name__}: {_e}")
