@@ -274,6 +274,10 @@ SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0")) or
 # ---------------------------------------------------------------- backends
 # Each backend: image (bench image for the workload driver), topology, and for
 # client_server: the server image + readiness probe + env.
+# The build-cache bound the dense lane applies, read here too so the SERVER arm gets the same policy
+# as the embedded one (see the server_env comment below). Default matches l3d_dense.py's own default.
+DENSE_BUILD_CACHE = os.environ.get("BENCH_DENSE_BUILD_CACHE", "100000").strip()
+
 BACKENDS = {
     "arcadedb_embedded": {
         "topology": "embedded",
@@ -290,9 +294,19 @@ BACKENDS = {
         # default GC (G1) so the embedded-vs-server axis isolates transport,
         # not GC choice.
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+                       # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
+                       # -Darcadedb.vectorIndex.graphBuildCacheSize to the embedded JVM and this did not, so
+                       # the two ArcadeDB deployments ran DIFFERENT cache policies: embedded bounded at
+                       # 100,000, server on engine auto-sizing. The comment above says this axis isolates
+                       # transport; it could not, because the cache differed too. It stayed invisible while
+                       # auto-sizing budgeted off TOTAL heap and cached the whole corpus anyway, then
+                       # upstream #6513 made it budget off AVAILABLE heap and the server arm's deep10m build
+                       # went 3,256 s -> 16,981 s (5.2x) against an unchanged embedded arm. The engine change
+                       # is real; it landed on a configuration we never meant to run.
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
-                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
+                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
+                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
@@ -367,9 +381,19 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+                       # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
+                       # -Darcadedb.vectorIndex.graphBuildCacheSize to the embedded JVM and this did not, so
+                       # the two ArcadeDB deployments ran DIFFERENT cache policies: embedded bounded at
+                       # 100,000, server on engine auto-sizing. The comment above says this axis isolates
+                       # transport; it could not, because the cache differed too. It stayed invisible while
+                       # auto-sizing budgeted off TOTAL heap and cached the whole corpus anyway, then
+                       # upstream #6513 made it budget off AVAILABLE heap and the server arm's deep10m build
+                       # went 3,256 s -> 16,981 s (5.2x) against an unchanged embedded arm. The engine change
+                       # is real; it landed on a configuration we never meant to run.
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
-                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
+                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
+                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
@@ -465,9 +489,19 @@ BACKENDS = {
         # default GC (G1) so the embedded-vs-server axis isolates transport,
         # not GC choice.
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+                       # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
+                       # -Darcadedb.vectorIndex.graphBuildCacheSize to the embedded JVM and this did not, so
+                       # the two ArcadeDB deployments ran DIFFERENT cache policies: embedded bounded at
+                       # 100,000, server on engine auto-sizing. The comment above says this axis isolates
+                       # transport; it could not, because the cache differed too. It stayed invisible while
+                       # auto-sizing budgeted off TOTAL heap and cached the whole corpus anyway, then
+                       # upstream #6513 made it budget off AVAILABLE heap and the server arm's deep10m build
+                       # went 3,256 s -> 16,981 s (5.2x) against an unchanged embedded arm. The engine change
+                       # is real; it landed on a configuration we never meant to run.
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
-                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
+                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
+                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
@@ -524,9 +558,19 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+                       # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
+                       # -Darcadedb.vectorIndex.graphBuildCacheSize to the embedded JVM and this did not, so
+                       # the two ArcadeDB deployments ran DIFFERENT cache policies: embedded bounded at
+                       # 100,000, server on engine auto-sizing. The comment above says this axis isolates
+                       # transport; it could not, because the cache differed too. It stayed invisible while
+                       # auto-sizing budgeted off TOTAL heap and cached the whole corpus anyway, then
+                       # upstream #6513 made it budget off AVAILABLE heap and the server arm's deep10m build
+                       # went 3,256 s -> 16,981 s (5.2x) against an unchanged embedded arm. The engine change
+                       # is real; it landed on a configuration we never meant to run.
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
-                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000"],
+                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
+                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
