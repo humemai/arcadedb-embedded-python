@@ -203,7 +203,15 @@ say "assembly $CTX ($(ls "$LIB"/*.jar | wc -l) jars)"
 verify_sha "build tree" "$(props_from_jar_dir "$LIB" | sha_from_props)" "$SHA"
 
 say "docker build $IMG"
-docker build -q -t "$IMG" \
+# The assembly directory holds only arcadedb-<version>/; the Dockerfile is
+# copied in by a maven docker profile that a plain `package` does not run, so
+# point at the source one and keep the assembly as the context. The Dockerfile
+# COPYs ./arcadedb-* relative to the context, so this is the same build the
+# profile would have produced.
+DF="$CTX/Dockerfile"
+[ -f "$DF" ] || DF="$WT/package/src/main/docker/Dockerfile"
+[ -f "$DF" ] || die "no Dockerfile in $CTX nor at package/src/main/docker/"
+docker build -q -t "$IMG" -f "$DF" \
   --label "org.opencontainers.image.revision=$SHA" \
   "$CTX" >/dev/null
 
