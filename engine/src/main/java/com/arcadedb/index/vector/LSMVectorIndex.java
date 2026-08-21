@@ -1286,7 +1286,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
     try {
       final DatabaseInternal db = getDatabase();
       final String graphFileName = indexName + "_" + LSMVectorIndexGraphFile.FILE_EXT;
-      final String graphFilePath = mutable.getFilePath() + "_" + LSMVectorIndexGraphFile.FILE_EXT;
+      // Derive from the BARE index path, exactly as the creating constructor does. mutable.getFilePath()
+      // already carries the ".<fileId>.<pageSize>.v<version>.lsmvecidx" suffix, and ComponentFile derives a
+      // component's registered name from its path, so appending here produced the name
+      // "<index>.<fileId>.<pageSize>.v<version>.lsmvecidx_vecgraph". discoverAndLoadGraphFile() looks for
+      // "<mutable.getName()>_vecgraph", which that can never match, so the file was written, never found
+      // again, and re-created on every open.
+      final String graphFilePath =
+          db.getDatabasePath() + File.separator + indexName + "_" + LSMVectorIndexGraphFile.FILE_EXT;
       this.graphFile = new LSMVectorIndexGraphFile(db, graphFileName, graphFilePath,
           db.getMode(), mutable.getPageSize());
       this.graphFile.setMainIndex(this);
@@ -2579,9 +2586,32 @@ public class LSMVectorIndex implements Index, IndexInternal {
         lock.writeLock().unlock();
       }
 
+      // COMPACT INDEX just renamed this index above (rewriteDataFileWithLiveEntries sets indexName to the new
+      // mutable's name), but getOrCreateGraphFile() only derives a fresh path when graphFile is null: left
+      // alone, it would silently overwrite the pre-compaction graph file in place, still registered under a
+      // name discoverAndLoadGraphFile() can no longer find on the next open - the one orphan and one avoidable
+      // rebuild issue #6495's fix otherwise still leaves behind. Dropping the reference here, immediately
+      // before it is read, makes the persist step below register a fresh file under the CURRENT name instead,
+      // so the very next open finds it - zero rebuilds, zero orphans - exactly like the mutable/compacted
+      // components a compaction replaces just above. Unlike those two, the stale file is NOT torn down here:
+      // it stays the only usable persisted graph until the replacement is CERTIFIED (graphCertified, set once
+      // writeGraphManifest() has vouched for committed pages), not merely once getOrCreateGraphFile() hands
+      // back an empty file object. A write or commit failure in between restores this reference instead (see
+      // the catch block below and the graphCertified check further down), so a failed persist still leaves
+      // something usable on disk rather than nothing.
+      final LSMVectorIndexGraphFile staleGraphFileFromCompaction = locationIndexAlreadyPublished ? graphFile : null;
+      if (staleGraphFileFromCompaction != null)
+        graphFile = null;
+
       // Persist graph to disk IMMEDIATELY in its own transaction
       // This ensures the graph is available on next database open (fast restart)
       final LSMVectorIndexGraphFile gf = getOrCreateGraphFile();
+      if (gf == null && staleGraphFileFromCompaction != null)
+        // getOrCreateGraphFile() could not create a replacement at all: keep serving this session from the
+        // stale, pre-compaction file rather than losing the graph outright. It stays orphaned under its old
+        // name, exactly as before this change, and is picked up again the next time something finds graphFile
+        // null.
+        this.graphFile = staleGraphFileFromCompaction;
       if (gf != null) {
         final int totalNodes = graphIndex.getIdUpperBound();
         LogManager.instance().log(this, Level.FINE, "Writing vector graph to disk for index: %s (nodes=%d)",
@@ -2645,6 +2675,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
           // thing able to certify a graph nobody built.
           writeGraphManifest(gf, finalActiveVectorIds);
           graphCertified = true;
+
+          // The replacement is certified now, so the stale pre-compaction file it supersedes is safe to drop -
+          // outside any lock, because a reader that already captured it must be able to finish (see
+          // dropReplacedComponent()). Doing this only now, rather than as soon as gf existed, is what keeps a
+          // write or commit failure above from deleting the one persisted graph the index still has.
+          if (staleGraphFileFromCompaction != null)
+            dropReplacedComponent(staleGraphFileFromCompaction);
 
           // When storeVectorsInGraph is enabled, reload the graph as OnDiskGraphIndex so the
           // current session benefits from inline vector storage immediately. This is safe because
@@ -2710,8 +2747,20 @@ public class LSMVectorIndex implements Index, IndexInternal {
           //
           // writeGraph() marks its own failures the same way before rethrowing, so this repeats that one small
           // write when the failure came from in there. Cheap, and on a path already logged as SEVERE.
-          if (!graphCertified)
+          if (!graphCertified) {
             gf.getManifest().markUnusable("graph persist failed: " + e);
+            // The replacement never got certified, so it was never dropped above either: restore the stale
+            // file as the active graph rather than leaving the index with no usable persisted graph at all.
+            // gf itself is now unreachable from any field - drop it here (outside any lock, same reasoning as
+            // dropReplacedComponent()'s other callers) rather than leaving an uncertified, unusable file behind
+            // as a second orphan alongside the very one this whole rebuild was trying to eliminate. The stale
+            // file stays orphaned under its old (pre-compaction) name; the next build attempt finds graphFile
+            // null again and retries under the current one.
+            if (staleGraphFileFromCompaction != null) {
+              this.graphFile = staleGraphFileFromCompaction;
+              dropReplacedComponent(gf);
+            }
+          }
           LogManager.instance().log(this, Level.SEVERE,
               "PERSIST: Failed to persist graph for %s (nodes=%d, storeVectorsInGraph=%b, txStatus=%s): %s - %s",
               indexName,
@@ -4335,6 +4384,31 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
         final RandomAccessVectorValues vectors = searchVectorValues(ordinalMap);
 
+        // Issue #6502 pre-filter plan: below VECTOR_INDEX_PREFILTER_MAX_SELECTIVITY (see its javadoc for why the
+        // graph walk gets more expensive, not less, as the allow-list narrows), score the allow-list directly via
+        // collectAllowedOrdinals/scoreOrdinal/bruteForceScan - the same walk the issue #3722 shortfall fallback
+        // already uses - instead of duplicating it.
+        if (allowedRIDs != null && !allowedRIDs.isEmpty()) {
+          // Clamped to 1.0: the setting is documented as a fraction of the index, and an operator-supplied value
+          // above that would route every allow-list query - however wide - through the ordinal-resolution walk
+          // instead of the graph, which is exactly the pathology this plan exists to avoid on the OTHER side of
+          // the crossover.
+          final float maxSelectivity = Math.min(1f, getDatabase().getConfiguration()
+              .getValueAsFloat(GlobalConfiguration.VECTOR_INDEX_PREFILTER_MAX_SELECTIVITY));
+          // Persisted/graph vectors only, same as the shortfall-budget calculation below - the delta buffer is not
+          // in this count. Under a large buffer relative to the graph this can overstate the allow-list's
+          // selectivity against the true live set and bias toward the graph walk; per the shortfall calculation's
+          // own comment, that only ever costs a missed optimization, never a wrong answer.
+          final int availableVectors = Math.min(ordinalMap.length, vectorIndex.size());
+          if (maxSelectivity > 0f && allowedRIDs.size() <= availableVectors * maxSelectivity) {
+            metrics.incrementPreFilterSearches();
+            final List<Pair<RID, Float>> results = new ArrayList<>(k);
+            mergeWithDeltaScan(queryVectorFloat, k, allowedRIDs, results);
+            bruteForceScan(queryVectorFloat, k, allowedRIDs, results, vectors, ordinalMap);
+            return results;
+          }
+        }
+
         // Only live vectors may enter the result heap. Accepting tombstones lets a query aimed at a deleted
         // neighbourhood fill its beam with them and stop, which is what returned an empty list (issue #5558).
         final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, ordinalMap, vectorIndex);
@@ -4443,12 +4517,22 @@ public class LSMVectorIndex implements Index, IndexInternal {
         final int availableVectors = Math.min(ordinalMap.length, vectorIndex.size());
         final int expectedResults = Math.min(k, availableVectors);
         if (results.size() < expectedResults) {
-          LogManager.instance()
-              .log(this, Level.WARNING,
-                  """
-                  Graph search returned only %d results (expected %d, available %d) for index %s - \
-                  falling back to brute-force scan (graph may need rebuilding)""",
-                  results.size(), expectedResults, availableVectors, indexName);
+          // Issue #6502: see shortfallIsAllowListDriven's javadoc for why this is split.
+          if (shortfallIsAllowListDriven(allowedRIDs, expectedResults))
+            LogManager.instance()
+                .log(this, Level.FINE,
+                    """
+                    Graph search returned only %d results (expected %d, available %d) for index %s - the RID \
+                    allow-list has only %d entries, which is fewer than requested, so completing the answer with a \
+                    brute-force scan of the allow-list is expected, not a sign the graph needs rebuilding""",
+                    results.size(), expectedResults, availableVectors, indexName, allowedRIDs.size());
+          else
+            LogManager.instance()
+                .log(this, Level.WARNING,
+                    """
+                    Graph search returned only %d results (expected %d, available %d) for index %s - \
+                    falling back to brute-force scan (graph may need rebuilding)""",
+                    results.size(), expectedResults, availableVectors, indexName);
           metrics.incrementBruteForceScans();
           bruteForceScan(queryVectorFloat, k, allowedRIDs, results, vectors, ordinalMap);
         }
@@ -4472,6 +4556,20 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final long elapsed = System.currentTimeMillis() - startTime;
       metrics.addSearchLatency(elapsed);
     }
+  }
+
+  /**
+   * Issue #6502: tells apart the two reasons the issue #3722 shortfall fallback can fire, so the log line does not
+   * blame the graph for a shortfall the allow-list itself made unavoidable. An allow-list narrower than
+   * {@code expectedResults} can never be filled from the graph regardless of graph quality - that is a property of
+   * the filter, and expected. Anything else reaching the fallback (no allow-list, or one wide enough to skip the
+   * pre-filter plan and still come up short) is a genuine sign the graph search underperformed.
+   * <p>
+   * Extracted to a pure, testable predicate rather than left inline: a logic inversion here would silently swap
+   * which condition gets the (rare, expected) FINE line and which keeps the WARNING an operator watches for.
+   */
+  static boolean shortfallIsAllowListDriven(final Set<RID> allowedRIDs, final int expectedResults) {
+    return allowedRIDs != null && !allowedRIDs.isEmpty() && allowedRIDs.size() < expectedResults;
   }
 
   /**
