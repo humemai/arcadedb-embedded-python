@@ -39,13 +39,43 @@ say() { echo ">>> $*"; }
 # Read the engine commit out of a jar's own bytes. One implementation, three
 # call sites, because a verification that reads the artifact differently in
 # each place is not one verification.
+#
+# python3 -m zipfile, NOT unzip. mini has no unzip, and the first version of
+# this script used it: the read failed, the error went to /dev/null, and the
+# check reported "no buildNumber -- the build lost git" for a build that was
+# perfectly fine. A missing tool must not be able to impersonate a finding, so
+# this uses the interpreter the harness already depends on everywhere.
+read_jar_props() {   # <path to a jar>
+  python3 - "$1" <<'PY'
+import sys, zipfile
+try:
+    with zipfile.ZipFile(sys.argv[1]) as z:
+        sys.stdout.write(z.read("com/arcadedb/arcadedb.properties").decode())
+except Exception as e:
+    print("READ_FAILED: %s" % e, file=sys.stderr)
+    sys.exit(3)
+PY
+}
+
 props_from_jar_dir() {   # <dir containing arcadedb-engine-*.jar>
   local jar; jar=$(ls "$1"/arcadedb-engine-*.jar 2>/dev/null | head -1)
-  [ -n "$jar" ] || return 1
-  unzip -p "$jar" com/arcadedb/arcadedb.properties 2>/dev/null
+  [ -n "$jar" ] || { echo "NO_JAR_IN: $1" >&2; return 1; }
+  read_jar_props "$jar"
 }
 
 sha_from_props() { sed -n 's/^buildNumber *= *//p' | tr -d '[:space:]'; }
+
+# Copy a jar OUT of an image and read it on the host: the image is a pinned
+# upstream artifact and may contain neither unzip nor python3, and installing
+# into it to inspect it would change the thing being inspected.
+props_from_image() {   # <image>
+  local out; out=$(mktemp)
+  docker run --rm --entrypoint sh "$1" \
+    -c 'cat /home/arcadedb/lib/arcadedb-engine-*.jar' > "$out" 2>/dev/null \
+    || { rm -f "$out"; echo "IMAGE_READ_FAILED: $1" >&2; return 1; }
+  read_jar_props "$out"; local rc=$?
+  rm -f "$out"; return $rc
+}
 
 verify_sha() {  # <label> <40-char sha found> <expected>
   local what="$1" got="$2" want="$3"
@@ -63,9 +93,7 @@ if [ "${1:-}" = "--verify" ]; then
   say "verifying pair at $SHA"
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
-  docker run --rm --entrypoint sh "$IMG" \
-    -c 'unzip -p /home/arcadedb/lib/arcadedb-engine-*.jar com/arcadedb/arcadedb.properties' \
-    > "$tmp/img.props" 2>/dev/null || die "cannot read $IMG"
+  props_from_image "$IMG" > "$tmp/img.props" || die "cannot read $IMG"
   verify_sha "server image $IMG" "$(sha_from_props < "$tmp/img.props")" "$SHA"
 
   W=$(ls -t "$REPO"/bindings/python/dist/*.whl 2>/dev/null | head -1)
@@ -80,11 +108,16 @@ if [ "${1:-}" = "--verify" ]; then
   # from the server arm beside it. That is the exact F5 failure the pairing
   # exists to prevent, so it is checked here rather than assumed.
   if docker image inspect dbbench:arcadedb >/dev/null 2>&1; then
-    docker run --rm --entrypoint sh dbbench:arcadedb -c \
-      'unzip -p $(python3 -c "import arcadedb_embedded,os;print(os.path.dirname(arcadedb_embedded.__file__))")/jars/arcadedb-engine-*.jar com/arcadedb/arcadedb.properties' \
-      > "$tmp/bench.props" 2>/dev/null \
-      && verify_sha "bench image dbbench:arcadedb" "$(sha_from_props < "$tmp/bench.props")" "$SHA" \
-      || echo "    WARN dbbench:arcadedb unreadable; rebuild it before running"
+    # The bench image DOES ship python3 (it runs the drivers), so ask it for
+    # the jar bytes and read them here.
+    if docker run --rm --entrypoint sh dbbench:arcadedb -c \
+         'cat $(python3 -c "import arcadedb_embedded,os;print(os.path.dirname(arcadedb_embedded.__file__))")/jars/arcadedb-engine-*.jar' \
+         > "$tmp/bench.jar" 2>/dev/null && [ -s "$tmp/bench.jar" ]; then
+      verify_sha "bench image dbbench:arcadedb" \
+        "$(read_jar_props "$tmp/bench.jar" | sha_from_props)" "$SHA"
+    else
+      echo "    WARN dbbench:arcadedb unreadable; rebuild it before running"
+    fi
   else
     echo "    WARN dbbench:arcadedb absent; build_images.sh must run before the campaign"
   fi
