@@ -125,6 +125,14 @@ def build(situation, n, heap):
         c("sql", "CREATE VERTEX TYPE P")
         c("sql", "CREATE PROPERTY P.id INTEGER")
         c("sql", "CREATE EDGE TYPE E")
+        # A TEMPORARY index on P.id, dropped before the measurement.
+        # Without it each CREATE EDGE ... FROM (SELECT ... WHERE id = ?) is a
+        # full scan, so building 4n edges is O(n^2): at 10,000 vertices that is
+        # 400 million row visits and the build never finished. The index makes
+        # it O(n log n) and is dropped afterwards, so what gets MEASURED is
+        # still a graph with no index on it -- doc_idx10 is where index cost is
+        # priced, and leaving one here would smear the two situations together.
+        c("sql", "CREATE INDEX ON P (id) UNIQUE")
         _bulk(db, "CREATE VERTEX P SET id = %d", n)
         # A fanout of 4, not a ring: a ring gives one two-hop path per vertex,
         # too little work for an accelerator to matter either way.
@@ -136,6 +144,7 @@ def build(situation, n, heap):
             if (i + 1) % 2000 == 0:
                 db.commit(); db.begin()
         db.commit()
+        c("sql", "DROP INDEX `P[id]`")
         if situation == "graph_gav":
             c("sql", "CREATE GRAPH ANALYTICAL VIEW lcv VERTEX TYPES (P) "
                      "EDGE TYPES (E) PROPERTIES (id) UPDATE MODE OFF")
@@ -155,9 +164,20 @@ def build(situation, n, heap):
         c("sql", "CREATE INDEX ON S (tokens, weights) LSM_SPARSE_VECTOR "
                  'METADATA { "dimensions": 30000 }')
     elif situation == "ts":
-        c("sql", "CREATE TIMESERIES TYPE T")
-        c("sql", "CREATE PROPERTY T.value DOUBLE")
-        _bulk(db, "INSERT INTO T SET timestamp = %d, value = 1.0", n)
+        # A TIMESERIES type declares its timestamp, tags and fields inline; it
+        # is not a document type with properties added afterwards, and
+        # "CREATE TIMESERIES TYPE T" alone fails with "requires a TIMESTAMP
+        # column". Shape taken from the engine's own tests
+        # (server/src/test/.../PostTimeSeriesWriteHandlerIT).
+        c("sql", "CREATE TIMESERIES TYPE T TIMESTAMP ts "
+                 "TAGS (sensor STRING) FIELDS (value DOUBLE)")
+        db.begin()
+        for i in range(n):
+            c("sql", f"INSERT INTO T SET ts = {1_700_000_000_000 + i * 1000}, "
+                     f"sensor = 's0', value = 1.0")
+            if (i + 1) % 5000 == 0:
+                db.commit(); db.begin()
+        db.commit()
     else:
         raise SystemExit(f"unknown situation {situation}")
     db.close()
