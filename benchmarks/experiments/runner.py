@@ -43,6 +43,10 @@ SAMPLE_INTERVAL = 0.25
 CPUSET = os.environ.get("BENCH_CPUSET", "0-11")
 MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 "large": "48g",
+                # Lifecycle tiers (l5). Small caps on purpose: this lane
+                # measures open and close, not throughput, and a large
+                # heap would only make the JVM slower to start.
+                "lc10k": "8g", "lc100k": "8g",
                 # LDBC-SNB tiers (l2 lane, BENCH_GRAPH_SOURCE=ldbc)
                 "sf1": "8g", "sf10": "24g",
                 # DEEP-10M dense tier (l3d). 36g. The cap went 36g -> 44g ->
@@ -277,6 +281,23 @@ SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0")) or
 # The build-cache bound the dense lane applies, read here too so the SERVER arm gets the same policy
 # as the embedded one (see the server_env comment below). Default matches l3d_dense.py's own default.
 DENSE_BUILD_CACHE = os.environ.get("BENCH_DENSE_BUILD_CACHE", "100000").strip()
+
+# WHERE THE LIFECYCLE LANE PUTS ITS DATABASE, and why it is a host path.
+#
+# A cold open is measured by evicting the database from the page cache with
+# posix_fadvise. That cannot work on a container's own writable layer (both
+# hosts run docker's overlayfs driver) nor on tmpfs (/tmp is tmpfs on both), so
+# the database has to live on a real filesystem bind-mounted in. /var/tmp is
+# ext4 on the laptop and on mini.
+#
+# This is deliberately NOT forwarded into the container and NOT in the env
+# allowlist. The container path is hardcoded /lcdb in the driver, which asserts
+# the filesystem type before building and refuses rather than reporting a cold
+# column it cannot honestly produce. One variable naming both sides would let a
+# host path be read inside the container, where it would resolve to the overlay
+# layer and silently fabricate the number.
+LC_HOST_DIR = os.path.abspath(os.environ.get(
+    "BENCH_LC_HOST_DIR", "/var/tmp/arcadedb-lifecycle"))
 
 BACKENDS = {
     "arcadedb_embedded": {
@@ -688,6 +709,15 @@ LANES = {
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "surrealdb_e2", "composed_qdrant_neo4j"],
            ["hybrid", "atomicity"]),
+    # L5 measures OPEN and CLOSE, which every embedded deployment does and no
+    # benchmark measures. Situations ride the WORKLOAD axis, so each is its own
+    # cell and a slow one cannot hide inside a mean. One backend: this lane
+    # compares ArcadeDB against ITSELF across what a database contains, so a
+    # comparator column would be meaningless.
+    "lifecycle": ("l5_lifecycle.py",
+                  ["arcadedb_embedded"],
+                  ["empty", "doc", "doc_idx10", "graph", "graph_gav",
+                   "vector", "sparse", "ts"]),
     "l3s": ("l3_sparse.py",
             ["arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32",
              "arcadedb_sparse_embedded_nocompact", "arcadedb_sparse_server",
@@ -1232,8 +1262,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                + (["-e", f"ARCADEDB_HEAP={heap}"]
                   if "arcadedb" in job["backend"] else [])
                + ["-e", f"RUN_LABEL={run_id}",
-                  "-v", f"{HERE}:/work", "-w", "/work", "-v", f"{DATA}:/data:ro",
-                  be["image"], "python", job["script"],
+                  "-v", f"{HERE}:/work", "-w", "/work", "-v", f"{DATA}:/data:ro"]
+               # The lifecycle lane's database must live on a real filesystem
+               # so a cold open can be produced by evicting it. See LC_HOST_DIR.
+               + (["-v", f"{LC_HOST_DIR}:/lcdb"]
+                  if job["lane"] == "lifecycle" else [])
+               + [be["image"], "python", job["script"],
                   "--backend", job["backend"], "--workload", job["workload"],
                   "--scale", scale, "--out", f"/work/results/raw/{run_id}.json"])
         cli_cid = sh(cmd)
@@ -1567,6 +1601,14 @@ def main():
     net_name = "dbbench"
     subprocess.run(["docker", "network", "create", net_name], capture_output=True)
     sweep_orphans()
+
+    if "lifecycle" in lanes:
+        # Create it HERE, on the host, before any container starts. Docker will
+        # happily create a missing bind-mount source as a root-owned directory,
+        # which the container's non-root user then cannot write, and the cell
+        # would fail deep inside the driver instead of at the mount.
+        os.makedirs(LC_HOST_DIR, exist_ok=True)
+        print(f"lifecycle database dir: {LC_HOST_DIR}")
 
     jobs = build_jobs(lanes, workloads)
     if args.backends:
