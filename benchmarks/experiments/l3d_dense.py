@@ -397,7 +397,16 @@ class ArcadeServer(Base):
                   METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
                   "maxConnections": {M}, "beamWidth": {EF_CONSTRUCTION},
                   "storeVectorsInGraph": false, "addHierarchy": true }}''',
-                  timeout=6 * 3600)  # synchronous 10M HNSW build exceeds 30min
+                  # A CLIENT TIMEOUT IS NOT A MEASUREMENT. At deep10m under the
+                  # bounded 100k cache this fired at 6h with the server still
+                  # working: its log showed insertion completing in 17,511 s and
+                  # the optimization phase starting, so the row recorded rc=1
+                  # for a build that was progressing normally. Four more reps
+                  # would have spent 24 hours reproducing that. 12h is chosen to
+                  # sit above the slowest build we have observed rather than
+                  # near it, because the cost of a too-short timeout is a whole
+                  # cell and the cost of a too-long one is only lateness.
+                  timeout=12 * 3600)
 
     def search(self, qvec, k):
         w = ", ".join("%.9g" % x for x in qvec)  # see build(): float32 round-trip
