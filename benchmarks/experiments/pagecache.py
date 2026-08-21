@@ -41,6 +41,24 @@ _libc.mincore.argtypes = [ctypes.c_void_p, ctypes.c_size_t,
 _PROT_READ = 1
 _MAP_SHARED = 1
 
+# WHERE THIS WORKS, verified 2026-08-21 on both hosts.
+#
+# The database being measured must sit on a real filesystem. Two placements
+# silently defeat eviction and would fabricate a cold number rather than fail:
+#
+#   - a container's own writable layer. Both hosts run docker's `overlayfs`
+#     storage driver, and fadvise against an overlay upper layer does not
+#     evict what a read will fault back in.
+#   - tmpfs. /tmp is tmpfs on BOTH the laptop and mini, and tmpfs pages ARE
+#     memory: there is nothing to evict and nothing to re-read.
+#
+# So a lifecycle cell bind-mounts a host directory on ext4 (/var/tmp is ext4
+# on both) and the driver asserts the filesystem type before building. Verified
+# end to end inside python:3.12-slim on mini with -v /var/tmp/...:/lcdb:
+# 8192/8192 pages resident, then 0/8192 after evict().
+#
+# A caller that cannot make that assertion should not report a cold column.
+
 
 def resident_pages(path):
     """(resident, total) pages of `path` currently in the page cache."""
