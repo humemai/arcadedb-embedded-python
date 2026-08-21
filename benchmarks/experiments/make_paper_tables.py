@@ -22,6 +22,38 @@ from decimal import Decimal, ROUND_HALF_UP
 # is a version nobody thought to enumerate.
 _DEV_RE = re.compile(r"dev\d|SNAPSHOT", re.I)
 
+# The commit this campaign froze, as a short or full sha. When set, a
+# pre-release engine becomes publishable IF AND ONLY IF the row identifies
+# itself by commit and that commit is this one.
+#
+# WHY THIS EXISTS. The version test below is a STALENESS guard wearing a
+# release-policy costume: what it actually caught was 20 canonical rows still
+# carrying an old dev build after a re-measure. Under commit pinning
+# (DECISIONS #49) every local build reports "26.9.1.dev0" whichever commit
+# produced it, so the version test would reject the entire campaign while
+# still not distinguishing this build from last week's.
+#
+# Matching on engine_commit is strictly stronger than matching on version: it
+# rejects the stale dev rows the old test was written for AND the case the old
+# test could never see, which is two different builds sharing one version
+# string. Unset, behaviour is exactly as before: every pre-release row drops.
+_PINNED_COMMIT = os.environ.get("BENCH_ENGINE_COMMIT", "").strip().lower()
+
+
+def _commit_matches(row_commit):
+    """Does this row's engine_commit identify the pinned build?
+
+    Compared on the first 9 hex characters, because the harness stamps a short
+    sha while a jar's arcadedb.properties carries all 40, and a campaign that
+    fails its own gate on sha length would be fixed by loosening the gate.
+    """
+    if not _PINNED_COMMIT:
+        return False
+    rc = str(row_commit or "").strip().lower()
+    if len(rc) < 9:
+        return False
+    return rc[:9] == _PINNED_COMMIT[:9]
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
 # The paper source is deliberately not in this repository. Point
@@ -134,7 +166,8 @@ def load_canonical():
         # T4's explicit n_docs == 8_841_823 filter kept them off the page, but
         # that is one hard-coded line standing between a dev number and a
         # table, and it only covers the tier someone thought to hard-code.
-        if _DEV_RE.search(str(r.get("engine_version", ""))):
+        if _DEV_RE.search(str(r.get("engine_version", ""))) \
+                and not _commit_matches(r.get("engine_commit")):
             continue
         # A sparse cell with no recall number cannot be published -- the paper
         # reports recall beside every latency -- and the reason one is missing
