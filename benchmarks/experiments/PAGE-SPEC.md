@@ -264,6 +264,23 @@ then the two arms are told apart by an absence.
 have built the view anyway and written rows labelled as the ablation, rc=0,
 indistinguishable from a real one.
 
+**The ablation must use the lane's real query set, not a stand-in.** Measured
+2026-08-21 on a 100k-vertex, 400k-edge synthetic graph at engine `3ec4f07e0`:
+an openCypher two-hop count (`MATCH (a:P)-[:E]->(b:P)-[:E]->(c:P) RETURN
+count(*)`) is **7% SLOWER** with the view than without, stable across session
+lengths 1, 2, 3 and 5 (1.08x, 1.06x, 1.07x, 1.07x). The published 5.9x speedup
+comes from the lane's property-aggregation queries over neighbourhoods, which
+is a different access pattern. So the view's benefit is query-shape dependent,
+and a probe that substitutes a convenient query measures nothing about the
+view the page publishes.
+
+What the same measurement DOES establish, and what belongs beside the 5.9x: the
+view's fixed cost per session is real and large. A session that opens and closes
+without querying at all costs **414.6 ms with the view against 11.5 ms without,
+36x**, because the CSR is rebuilt by a full graph scan on every open
+(`CSRBuilder: 100000 nodes, 400000 edges, 4.2 MB, 384-622 ms` on every open).
+The 5.9x is a within-session property that each open re-pays.
+
 ---
 
 ## 5. Blocked cells — what may not be published today
