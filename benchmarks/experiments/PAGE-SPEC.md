@@ -134,7 +134,7 @@ a p50.
 | `ops_recovery` | **NEW** — crash recovery | ArcadeDB, 2 WAL settings | trials, contiguous, duplicates, recovery s |
 | `ops_failover` | **NEW** — Raft failover | 3-node ArcadeDB | trials, acked writes present, ambiguous, election s, failover s |
 | `ops_start` | **NEW** — cold start | ArcadeDB emb / srv, LadybugDB, Qdrant, sqlite-vec | create+DDL s, reopen ms, connect s |
-| `ops_disk` | **NEW** — on-disk footprint | every engine, every lane | bytes after build |
+| `ops_disk` | **NEW** — on-disk footprint | every engine, every lane | bytes after the engine's own settle step (see §4a) |
 
 `lifecycle` is both a page table and a regression gate — see §4.
 `ops_disk` needs `runner.container_disk` wired; it is implemented and carried by
@@ -203,6 +203,66 @@ caveat to write around):
   `posix_fadvise(DONTNEED)` and verifies with `mincore` that they left. No root,
   and it evicts only the named files, so the rest of the host stays warm and the
   number means "this database is cold" rather than "the machine is cold".
+
+---
+
+## 4a. When on-disk size is measured
+
+On-disk size is not fixed at the moment a database closes, and a number that
+depends on when we looked is the same class of defect as the memory column. It
+drifts three ways: delayed block allocation (down-counts what is still dirty),
+background compaction retiring obsolete segments (drifts DOWN, sometimes minutes
+later), and WAL truncation after checkpoint.
+
+`container_disk()` already handles most of this — it syncs first, samples until
+two consecutive readings agree within 1%, measures the writable layer AND the
+volumes (PostgreSQL reported `SizeRw` unchanged from empty while 1,017.5 MiB sat
+in its volume), reads volume destinations from the daemon rather than a guessed
+path table, and returns `settled=False` with both readings rather than a bare
+number. What remains:
+
+1. **Measure at the point the build timer stops**, immediately after the engine's
+   own documented settle step (forcemerge / flush / green-wait / `COMPACT INDEX`
+   / `CHECKPOINT`) — the same step the build is already timed to. That is the one
+   moment every engine is in a defined, documented, reproducible state. Measuring
+   "size at time T after close" makes the number a function of each engine's
+   compaction schedule rather than of the data, so an engine that compacts eagerly
+   prints a smaller index than one that defers, at identical content.
+2. **A post-query reading is a second column, not the headline.** It answers a
+   different question — does querying grow it? — and must not be compared against
+   another engine's post-build number.
+3. **`settled=False` blocks publication.** Today it is a note. A cell that never
+   converged is not a measurement.
+4. **The settle budget must exceed a compaction cycle.** `tries=3, settle_s=3.0`
+   is a 9-second window against a process the docstring says can land "minutes
+   later", so two readings can agree inside a compaction pause and record a false
+   settle. Raise the budget and record how long convergence took.
+5. **The embedded arm currently takes one sample** (`tries=1`) against a stopped
+   container. Defensible — a dead process cannot compact, and `inspect --size`
+   works on a stopped container — but it must be stated on the row rather than
+   left looking like a settled reading, since `disk_settled` stays null.
+
+## 4b. GAV is measured with the view ON and OFF, everywhere
+
+The Graph Analytical View is an ArcadeDB-only accelerator, so an unablated number
+is a claim about a configuration rather than about the engine. Every graph OLAP
+cell runs BOTH arms:
+
+    {embedded, server} x {SF1, SF10} x {BENCH_GAV=1, BENCH_GAV=0}   = 8 cells
+
+Frozen data covers **one** of those eight (embedded SF10, `gav=False`). The view's
+build cost is charged to the arm that builds it, and published as a column.
+
+Labelling: `l2_graph.main()` stamps `out["gav"]` as a real boolean and sets
+`backend_arm="nogav"` for the off arm, which is correct. But every GAV-ON row in
+the frozen set carries `gav=''` because it predates that stamping, and `''` is
+also what every non-graph lane carries — so an empty string means both "view on"
+and "view irrelevant here". The next campaign fixes this by construction; until
+then the two arms are told apart by an absence.
+
+`BENCH_GAV` is in the runner's env allowlist. It was once missing, which would
+have built the view anyway and written rows labelled as the ablation, rc=0,
+indistinguishable from a real one.
 
 ---
 
