@@ -302,13 +302,54 @@ The 5.9x is a within-session property that each open re-pays.
 
 | what | why | clears when |
 |---|---|---|
-| `l3s` medium, Milvus + Qdrant | pools the July synthetic-10M campaign (`n_docs=10000000`, 100 queries) with the August real-8.84M one under one "8.84M" label; the published median belongs to no run | re-keyed on corpus and re-run |
+| ~~`l3s` medium, Milvus + Qdrant~~ | ~~pools two corpora~~ | **CLEARED 2026-08-21**: `PAPER_CORPUS` in `load_canonical` admits only the corpus each tier publishes, fingerprinted on `(n_docs, dims)`. Rows still need re-publishing |
 | `l3d` deep10m, all comparators | `tier=sweep`, envelope 28g/16g against ArcadeDB's 36g/24g, `version_name: null` | re-run at paper tier, matched envelope, pinned versions |
 | `f6_memory_ceiling` | draws no ArcadeDB bar | ArcadeDB deep10m memory rows exist |
-| `l4` ratios | QuestDB's WAL-apply poll is inside its timed ingest; roughly half the measured ingest is poll | re-timed with the poll outside |
+| `l4` ratios | QuestDB's WAL-apply poll was inside its timed ingest. **Code fixed 2026-08-22** (`QuestTS.settle()` runs outside the timer); the published rows still carry the old timing | l4 is re-run |
+| `l4` ArcadeDB native TIMESERIES row | comes from `l4_native_probe.py`, a BESPOKE PROBE, not the lane script, and runs two opt-in fast paths (`TS_PRIMITIVE=1`, `TS_NUMPY=1`) that no comparator gets. FAIRNESS F6b is precisely "bespoke drivers investigate, lane scripts publish". The 1.86M pts/s headline is a probe number sitting in a table of lane numbers | the native arm is promoted into `l4_tsbs.py` as a fourth backend and re-run, or the row is withdrawn |
 | any peak-memory comparison across ArcadeDB variants | `-Xms=-Xmx` commits the heap, so the column measures reservation, not demand | never — state it beside every such column |
 | `postgres_tuned` | has never run: 0 rows, display name only | it runs |
 | `hosts_recorded` | 100 container IDs annotated "(host unknown)" | a real machine block is published |
+
+---
+
+## 5a. What still needs measuring
+
+Ordered by whether a published cell depends on it.
+
+**Blocking a cell that is on the page today:**
+
+| measurement | cost | why |
+|---|---|---|
+| l4 re-run with the corrected ingest timer | ~2 h | the code is fixed; the rows are not |
+| native TIMESERIES promoted to the lane, then re-run | ~4 h | a probe number cannot sit in a lane table (F6b) |
+| dense comparators at deep10m, paper tier, matched envelope, pinned versions | ~2-3 d | three independent disqualifiers on the current rows |
+| `f3` sparse per-query re-run with `engine_commit` stamped | ~4 h | unblocks the best unbuilt figure |
+
+**New tables the page does not have yet:**
+
+| measurement | cost | status |
+|---|---|---|
+| lifecycle: cold/warm open, close x3 modes, 8 situations, 2 sizes | ~3 h | lane BUILT and smoke-tested; needs a campaign run on the frozen pair |
+| on-disk footprint | free | lands automatically now; qO rows already carry `disk_data_mb` |
+| crash recovery, Raft failover, cold start | free | measured, never published |
+| load and build cost table | free | in frozen rows already |
+| atomicity table (torn counts) | free | in frozen rows already |
+| ingest A/B, jpype size sweep, nocompact ablation, l2olap SF1 | free | in frozen rows already |
+
+**Ablations, worth running but blocking nothing:**
+
+| measurement | cost | why |
+|---|---|---|
+| `graphBuildCacheMaxHeapPercent` sweep at `small` (10/25/40/60, both quantizations, N=3) | ~2 h | we publish the engine default with no evidence it is good. Stage 1 only; escalate to deep10m only if the curve has shape |
+| GAV on/off at the missing 7 of 8 cells | ~4 h | an ArcadeDB-only accelerator with one ablation cell is a configuration claim |
+| int8 disk overhead (#3143 revisit) | ~1 h | our own issue, closed COMPLETED in May, yet int8 measures 13% MORE disk than fp32 at deep10m (8773.8 vs 7744.6 MB) |
+| pgvector arm | ~2-3 d | the most conspicuous absence |
+| single-engine E2 alternative (Neo4j native vector index) | ~2-3 d | tests the "any other pair" claim |
+
+**Deliberately not measured:** concurrency. It needs a non-Python load generator,
+our own harness is censored above ~4 clients by GIL queueing, and a bad
+concurrency table is worse than a disclosed absence.
 
 ---
 
