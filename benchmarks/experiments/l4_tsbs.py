@@ -171,7 +171,27 @@ class QuestTS:
         if buf:
             s.sendall(("\n".join(buf) + "\n").encode())
         s.close()
-        # wait for WAL apply: poll count until stable
+
+    def settle(self):
+        """Wait for WAL apply. Called by the driver AFTER the ingest timer stops.
+
+        THIS USED TO RUN INSIDE ingest(), AND THEREFORE INSIDE THE TIMER. The
+        loop cannot exit in under 3 s (it needs three consecutive equal counts a
+        second apart), so roughly half of QuestDB's measured 5.99 s ingest was
+        this poll, and the published pts/s was deflated by it. PROTOCOL section
+        7 recorded the defect and its size: the headline ratio "would fall near
+        2x" from 4.3x once this moves out.
+
+        The rule it now follows, which is the one the lane needs to be
+        internally consistent: EVERY arm's ingest timer stops when the engine
+        has ACCEPTED the data, and any background catch-up is settled outside
+        the timer. For the synchronous arms (ArcadeDB document path, DuckDB)
+        accepted and queryable are the same instant, so nothing moves. For the
+        async ones there is a gap, and both must treat it the same way:
+        l4_native_probe stops at wait_completion() and settles afterwards, and
+        this now matches it. Timing one async engine to "accepted" and another
+        to "queryable" prices two different operations under one column name.
+        """
         last, stable = -1, 0
         for _ in range(120):
             try:
@@ -228,6 +248,14 @@ def main():
     dt = time.perf_counter() - t0
     out["ingest_s"] = round(dt, 2)
     out["ingest_pts_per_s"] = round(len(pts) / dt, 1)
+
+    # The engine's own catch-up, priced but not charged to the ingest rate.
+    # An arm with no catch-up records 0.0 rather than nothing, so a row can
+    # never be read as "settled" merely because the field is absent.
+    _t = time.perf_counter()
+    if hasattr(b, "settle"):
+        b.settle()
+    out["engine_settle_s"] = round(time.perf_counter() - _t, 3)
 
     # Optional settle between ingest and query, OUTSIDE the ingest timer.
     # Default 0 keeps every arm exactly as it was, because a settle given to
