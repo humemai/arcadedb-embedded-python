@@ -790,10 +790,23 @@ LANES = {
     # scripts publish", and until now this lane had no lane script in the
     # runner's sense at all: it was never registered, so F6b has never judged a
     # single l4 row.
+    # THE NATIVE ARMS ARE DECLARED IN BACKENDS AND DELIBERATELY NOT LISTED HERE
+    # YET. Moving ArcadeTSNative out of l4_native_probe.py is a separate change
+    # because reproducing the row it publishes needs FOUR knobs pinned away from
+    # the driver's own defaults, three of them non-default:
+    #     TS_PRIMITIVE=1   (default 0)   the opt-in primitive batch path
+    #     TS_SETTLE_S=0    (default 30)  every published row says settle_s 0.0
+    #     TS_LAST_AB=1     (default 0)   the only source of q_last_unbounded_ms
+    #     TS_NUMPY=1       (default 1)   the one that already matches
+    # Under a CLOSED env allowlist the in-script defaults are what run, so a
+    # careless move publishes a 30 s settle (FAIRNESS violation 3, reintroduced
+    # by the change meant to close it) and drops the unbounded last-point the
+    # page reports, silently substituting the windowed 0.86 ms. Land the three
+    # arms that need no such pinning first, then move the native ones with their
+    # own verification.
     "l4": ("l4_tsbs.py",
-           ["arcadedb_ts_native", "arcadedb_ts_native_plain", "arcadedb_ts_doc",
-            "questdb", "duckdb"],
-           ["ingest", "query"]),
+           ["arcadedb_ts_doc", "questdb", "duckdb"],
+           ["ingest"]),
 }
 
 
