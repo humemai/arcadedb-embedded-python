@@ -47,6 +47,16 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 # measures open and close, not throughput, and a large
                 # heap would only make the JVM slower to start.
                 "lc10k": "8g", "lc100k": "8g",
+                # Time series (l4). 16g/8g, the same shape as small and tpch1.
+                # The driver parses the whole TSBS line-protocol corpus into
+                # Python before ingesting, so the cell holds the corpus AND the
+                # engine, and the 8 GiB reserve is what that staging costs.
+                # DELIBERATELY NOT a wider cap: at 20g the tier came out at ratio
+                # 0.40 and print_heap_policy called it a DEVIATION. deep10m is
+                # the only tier that deviates and it carries a long justification
+                # for doing so; a second one with no argument behind it is how a
+                # policy stops meaning anything.
+                "ts100": "16g",
                 # LDBC-SNB tiers (l2 lane, BENCH_GRAPH_SOURCE=ldbc)
                 "sf1": "8g", "sf10": "24g",
                 # DEEP-10M dense tier (l3d). 36g. The cap went 36g -> 44g ->
@@ -127,6 +137,10 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "medium": 6 * 3600, "large": 24 * 3600,
+                    # Time series (l4). 2.59M points; the slowest arm observed
+                    # is the document path at ~65 s of ingest, so an hour is
+                    # generous without being unable to fail.
+                    "ts100": 3600,
                     # Lifecycle tiers (l5). Generous against the observed cost:
                     # the slowest lc10k situation builds in ~9 s and the whole
                     # cell runs in under a minute, but `vector` and `graph_gav`
@@ -154,6 +168,9 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # open and close, not throughput, and a larger heap only makes
                  # the JVM slower to start without changing what is measured.
                  "lc10k": "4g", "lc100k": "4g",
+                 # Time series (l4). 8g of heap inside a 20g cap: the rest is the
+                 # staged corpus in the driver, which is not heap.
+                 "ts100": "8g",
                  # THE HEAP LIVES INSIDE THE CAP. cgroup v2 bounds the whole
                  # container (anon + page cache), so a heap that approaches
                  # MEM_BY_SCALE does not raise OutOfMemoryError -- the kernel
@@ -256,7 +273,7 @@ def heap_policy(scale):
     # anon floor it used to be described as. NOTE: this value is computed and
     # never read -- the verdict below reports cap - heap directly -- so a tier
     # can depart from the stated reserve without the printed policy saying so.
-    reserve = 8.0 if scale in ("deep10m", "medium", "tpch10", "sf10") else 4.0
+    reserve = 8.0 if scale in ("deep10m", "medium", "tpch10", "sf10", "ts100") else 4.0
     verdict = "ratio 0.50" if abs(ratio - 0.50) < 0.01 else (
         f"DEVIATES from 0.50 (heap = cap - {cap - heap:.0f}g)")
     return heap, cap, ratio, verdict
@@ -345,6 +362,27 @@ BACKENDS = {
     "duckdb": {
         "topology": "embedded",
         "image": "dbbench:duckdb",
+    },
+    # ---- l4 time series -------------------------------------------------
+    # THE ARCADEDB ARMS ARE THREE, NOT ONE, and the split is the point. The
+    # native TIMESERIES arm publishes its headline with two opt-in fast paths
+    # (TS_PRIMITIVE, TS_NUMPY) that no comparator has an equivalent for, which
+    # is precisely why FAIRNESS F6b bites. Disclosing them is weaker than
+    # pricing them, and this project already prices its ArcadeDB-only knobs by
+    # ablation elsewhere (GAV on/off, sparse int8/fp32). So the fast paths get
+    # their own arm and the knobs become a measured number instead of a
+    # footnote.
+    "arcadedb_ts_doc": {"topology": "embedded", "image": "dbbench:arcadedb"},
+    "arcadedb_ts_native": {"topology": "embedded", "image": "dbbench:arcadedb"},
+    "arcadedb_ts_native_plain": {"topology": "embedded", "image": "dbbench:arcadedb"},
+    "questdb": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        # 9.1.1. Verified pullable: `docker manifest inspect` resolves this
+        # digest, so it is a registry manifest digest and not a local-only one.
+        "server_image": "questdb/questdb@sha256:e62916bd62087cc48ab56f10b72a183e8f6aa987b4d46e0f316be083bbee2373",
+        "server_port": 9000,
+        "ready_regex": r"server-main enjoy|A O K|http server started",
     },
     "postgres": {
         "topology": "client_server",
@@ -744,7 +782,16 @@ LANES = {
              "arcadedb_dense_embedded_int8", "qdrant_dense_int8",
              "milvus_dense_int8"],
             ["search"]),
-    # l4 timeseries: added as adapters land.
+    # L4 TIME SERIES. Promoted from two ad-hoc scripts (l4_tsbs.py invoked by
+    # hand, plus l4_native_probe.py, a bespoke probe that produced the published
+    # 1.86M pts/s row). FAIRNESS F6b is "bespoke drivers investigate, lane
+    # scripts publish", and until now this lane had no lane script in the
+    # runner's sense at all: it was never registered, so F6b has never judged a
+    # single l4 row.
+    "l4": ("l4_tsbs.py",
+           ["arcadedb_ts_native", "arcadedb_ts_native_plain", "arcadedb_ts_doc",
+            "questdb", "duckdb"],
+           ["ingest", "query"]),
 }
 
 
@@ -1245,6 +1292,16 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    "BENCH_DENSE_BUILD_CACHE", "BENCH_DENSE_BUILD_CACHE_PCT",
                    "BENCH_SKIP_CLOSE",
                    "BENCH_TPC_DATA", "BENCH_TPC_SF", "BENCH_GAV",
+                   # l4 time series. BENCH_TS_LAST_AB and BENCH_TS_SETTLE_S are
+                   # not conveniences: the driver's in-script defaults (AB off,
+                   # 30 s settle) are BOTH different from what the published rows
+                   # ran with (AB on, 0 s), and this tuple is CLOSED, so a knob
+                   # absent here silently runs the in-script default. Leaving
+                   # them out would drop q_last_unbounded_ms from every row and
+                   # reintroduce FAIRNESS violation 3 in the same change that
+                   # exists to close a fairness violation.
+                   "BENCH_TSBS_DATA", "BENCH_TSBS_LP", "BENCH_TS_LIMIT",
+                   "BENCH_TS_TAGS", "BENCH_TS_SETTLE_S", "BENCH_TS_LAST_AB",
                    "BENCH_NEO4J_PAGECACHE"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
