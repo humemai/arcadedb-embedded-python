@@ -33,6 +33,41 @@ those two would refuse.
 
 ---
 
+## 0a. The machine
+
+Every published number is measured on **mini**. The laptop is a development
+host: it compiles, it runs probes, and nothing it produces reaches the page.
+
+| | mini (bench host) | laptop (dev only) |
+|---|---|---|
+| CPU | 12th Gen Intel Core i9-12900HK | Intel Core Ultra X9 388H |
+| topology | 1 socket, 14 cores, 20 threads: 6 P-cores with SMT (12 threads) + 8 E-cores | 16 cores, 16 threads, no SMT |
+| `cpuset 0-11` | the 12 P-core threads, verified by max frequency: cpu0-11 report 4900 MHz, cpu12-19 report 3800 MHz | n/a |
+| RAM | 61 GiB | 30 GiB |
+| storage | Samsung SSD 980 PRO 2 TB NVMe (root, `/home`, `/var/tmp`, all bench data) | Samsung MZVL22T0HDLB 1.9 TB NVMe |
+| OS / kernel | Ubuntu 26.04 LTS, 7.0.0-30-generic | Ubuntu 26.04 LTS, 7.0.0-29-generic |
+| Docker | 29.7.2 | |
+
+Three things about that table are load-bearing and must be said on the page,
+not just recorded here:
+
+**`cpuset 0-11` is 12 THREADS on 6 PHYSICAL CORES, not 12 cores.** SMT is on
+(`/sys/devices/system/cpu/smt/control` = `on`). A reader who assumes 12 physical
+cores will over-estimate what a parallel build had available, and every
+"12-core" phrasing in our own prose is wrong.
+
+**Frequency is not pinned.** The governor is `powersave` and turbo is ENABLED
+(`intel_pstate/no_turbo` = 0), so a long build and a short query do not see the
+same clock. This is a mobile-class part in a small chassis, so sustained
+all-core work throttles in a way a server part would not. It is why every
+published number runs SERIAL: co-scheduling on this host does not merely add
+noise, it changes the clock the other cell sees.
+
+**The 7.3 TB disk is not the bench disk.** `/dev/sda` is rotational and mounted
+at `/mnt/hdd8tb` for backups. Everything measured lives on the NVMe. A reader
+seeing a spinning disk in a machine listing would reasonably discount every I/O
+number, so the split has to be explicit.
+
 ## 1. Engine identity: commit, not version
 
 ArcadeDB is pinned by **upstream commit SHA**, not by a release number. The
