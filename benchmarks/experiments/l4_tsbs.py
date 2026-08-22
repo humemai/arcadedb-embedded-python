@@ -19,8 +19,18 @@ import os
 import statistics
 import time
 
-LP = os.environ.get("TSBS_LP", "/data/tsbs/cpu_influx.lp")
-LIMIT = int(os.environ.get("TSBS_LIMIT", "0"))  # 0 = all
+# THE CORPUS. BENCH_-prefixed because runner.py's env allowlist is a CLOSED
+# tuple: a variable not in it is dropped at the container boundary and the
+# in-script default silently runs instead. The old TSBS_ names are still read as
+# a fallback so ts5414_driver.py, qlast_ab.py and ts_stride_probe.py keep working.
+LP = os.environ.get("BENCH_TSBS_LP") or os.environ.get(
+    "TSBS_LP", "/data/tsbs/cpu_influx.lp")
+LIMIT = int(os.environ.get("BENCH_TS_LIMIT") or os.environ.get("TSBS_LIMIT", "0"))
+
+# THE TIER. One today. It exists so the lane has a scale axis at all: every
+# registered lane has one, PAPER_SCALES keys on it, and load_canonical drops a
+# row whose scale is not listed for its lane.
+SCALE_POINTS = {"ts100": 2_592_000}
 QITER = 10
 HOST = "host_42"
 T0 = 1767225600  # 2026-01-01T00:00:00Z epoch seconds
@@ -46,7 +56,7 @@ def parse_lp():
 
 
 class ArcadeTS:
-    name = "arcadedb"
+    name = "arcadedb_ts_doc"
 
     def connect(self):
         import arcadedb_embedded as arcadedb
@@ -146,7 +156,16 @@ class QuestTS:
     def connect(self):
         import socket
         import psycopg
-        host = os.environ.get("QUEST_HOST", "localhost")
+        # BENCH_SERVER_HOST is what runner.py sets for a client_server cell.
+        # Refuse rather than fall back to localhost: a silent fallback would
+        # connect to nothing, or worse to a leftover container, and report the
+        # result as a measurement.
+        host = os.environ.get("BENCH_SERVER_HOST") or os.environ.get("QUEST_HOST")
+        if not host:
+            raise SystemExit(
+                "l4/questdb: neither BENCH_SERVER_HOST nor QUEST_HOST is set. "
+                "This arm needs a server container; it cannot measure anything "
+                "by defaulting to localhost.")
         self._ilp_host = host
         self.cx = psycopg.connect(
             f"host={host} port=8812 dbname=qdb user=admin password=quest",
@@ -230,17 +249,41 @@ class QuestTS:
         self.cx.close()
 
 
+# Backends whose cell runs a SEPARATE server container, so run_conditions reads
+# the driver's cgroup and not the engine's. Kept as data beside the adapters so
+# adding a served arm cannot forget to update the role test.
+_CLIENT_SERVER = {"questdb"}
+
 BACKENDS = {c.name: c for c in (ArcadeTS, DuckTS, QuestTS)}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", required=True, choices=list(BACKENDS))
+    # The runner passes both on every cell. --workload is accepted and does not
+    # branch: this lane measures ingest AND queries in one pass over one built
+    # database, so splitting it into two cells would either build twice or carry
+    # state between cells, and both are worse than one cell reporting both.
+    # It rides the axis because runner.build_jobs crosses backends x workloads
+    # and a lane with no workload produces no jobs.
+    ap.add_argument("--workload", default="ingest")
+    ap.add_argument("--scale", default="ts100", choices=list(SCALE_POINTS))
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
     pts = parse_lp()
-    out = {"n_points": len(pts), "backend": args.backend}
+    # n_docs, not just n_points: BOTH canonical keys include n_docs
+    # (make_paper_tables and merge_campaign), and PAPER_CORPUS fingerprints a
+    # tier on it. Without it two TSBS corpora of different sizes would collide
+    # on one key, which is the defect that pooled two sparse campaigns.
+    out = {"n_points": len(pts), "n_docs": len(pts), "backend": args.backend,
+           "scale": args.scale, "workload": args.workload}
+    want = SCALE_POINTS[args.scale]
+    if LIMIT == 0 and len(pts) != want:
+        raise SystemExit(
+            f"l4: {args.scale} expects {want:,} points and the corpus at {LP} "
+            f"holds {len(pts):,}. A tier that silently measures a different "
+            f"corpus than its name claims is the sparse-pooling defect again.")
     b = BACKENDS[args.backend]()
     b.connect()
     t0 = time.perf_counter()
@@ -314,7 +357,10 @@ def main():
     # under a role that says so rather than silently implying otherwise.
     try:
         import bench_common
-        role = "driver" if args.backend == "questdb" else "engine"
+        # ROLE IS DERIVED FROM TOPOLOGY, not from a backend literal. The old
+        # `== "questdb"` test broke the moment backends were renamed, and a
+        # wrong role is invisible: it just mislabels whose cgroup was read.
+        role = "driver" if args.backend in _CLIENT_SERVER else "engine"
         out.update(bench_common.run_conditions(lane="l4", backend=args.backend,
                                                role=role))
         # Same reasoning as backend_version above, from the other side: on a
@@ -322,7 +368,12 @@ def main():
         # not the engine measured. Move it to a name that says so, so the only
         # version field a reader can mistake for the engine under test is the
         # one that IS the engine under test.
-        if args.backend != "arcadedb":
+        # startswith, NOT an equality test against one literal. With the arms
+        # renamed to arcadedb_ts_doc / arcadedb_ts_native / _plain, `!=
+        # "arcadedb"` is true for ALL of them, so every ArcadeDB row would lose
+        # engine_version -- the field load_canonical's dev guard reads, the one
+        # export_web falls back to, and the one the page prints as version_name.
+        if not args.backend.startswith("arcadedb"):
             out["harness_arcadedb_version"] = out.pop("engine_version", None)
     except Exception as e:                     # never lose a measured result
         out["conditions_error"] = f"{e.__class__.__name__}: {e}"
