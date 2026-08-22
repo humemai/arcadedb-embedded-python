@@ -127,6 +127,13 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "medium": 6 * 3600, "large": 24 * 3600,
+                    # Lifecycle tiers (l5). Generous against the observed cost:
+                    # the slowest lc10k situation builds in ~9 s and the whole
+                    # cell runs in under a minute, but `vector` and `graph_gav`
+                    # at lc100k are the two that historically scaled badly, and
+                    # a timeout that clips the situation the lane exists to
+                    # catch would report a defect as an infrastructure failure.
+                    "lc10k": 1800, "lc100k": 7200,
                     # deep10m at 8h, not 6, and not for the reason given here
                     # until 2026-08-20. The run that "died ~25 min short" was a
                     # diagnostic arm (auto-sized build cache at a 36g heap),
@@ -143,6 +150,10 @@ TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     "tpch10": 8 * 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  "large": "24g",
+                 # Lifecycle tiers (l5): small heaps on purpose. The lane times
+                 # open and close, not throughput, and a larger heap only makes
+                 # the JVM slower to start without changing what is measured.
+                 "lc10k": "4g", "lc100k": "4g",
                  # THE HEAP LIVES INSIDE THE CAP. cgroup v2 bounds the whole
                  # container (anon + page cache), so a heap that approaches
                  # MEM_BY_SCALE does not raise OutOfMemoryError -- the kernel
