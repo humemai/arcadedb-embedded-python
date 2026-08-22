@@ -26,6 +26,7 @@ FAIRNESS.md; this file enforces the parts a machine can.
 Exit status is 1 if any invariant fails, so it can gate a regeneration.
 """
 import collections
+import statistics
 import glob
 import json
 import os
@@ -500,12 +501,23 @@ def check_close_cost(rows):
         return 0
     print("\n== F11 close cost: O(written), not O(stored), under 100 ms ==")
     bad = 0
-    by_sit = collections.defaultdict(dict)
+    # AGGREGATE BY MEDIAN, per (situation, scale). The first version of this
+    # assigned into a dict per row, so with N reps it kept whichever rep came
+    # last and compared two arbitrary single measurements. On the first real
+    # data it reported `sparse` growing 4.5x when the medians are 3.90 -> 3.96
+    # ms, a 1.02x. A gate that fires on one noisy rep trains its reader to
+    # ignore it, which is worse than not having it.
+    cells = collections.defaultdict(list)
     for r in lc:
-        by_sit[r["workload"]][r.get("scale")] = r["clean_close_ms"]
-        if r["clean_close_ms"] > 100.0:
-            print(f"  BAD: {r['workload']}/{r.get('scale')} clean close "
-                  f"{r['clean_close_ms']:.1f} ms exceeds the 100 ms budget")
+        cells[(r["workload"], r.get("scale"))].append(r["clean_close_ms"])
+    by_sit = collections.defaultdict(dict)
+    for (sit, scale), vals in sorted(cells.items()):
+        med = statistics.median(vals)
+        by_sit[sit][scale] = med
+        if med > 100.0:
+            print(f"  BAD: {sit}/{scale} clean close {med:.1f} ms median of "
+                  f"{len(vals)} exceeds the 100 ms budget "
+                  f"[{min(vals):.1f}-{max(vals):.1f}]")
             bad += 1
     # The shape test. Rows are the same situation at two sizes with nothing
     # written in either, so any growth beyond noise is growth in what is
@@ -517,8 +529,8 @@ def check_close_cost(rows):
             small, big = sizes["lc10k"], sizes["lc100k"]
             if small > 0 and big / small > 1.5:
                 print(f"  BAD: {sit} clean close grows {big / small:.1f}x "
-                      f"({small:.1f} -> {big:.1f} ms) over 10x the rows, with "
-                      f"nothing written. That is O(stored).")
+                      f"({small:.1f} -> {big:.1f} ms medians) over 10x the "
+                      f"rows, with nothing written. That is O(stored).")
                 bad += 1
     if not bad:
         print(f"  ok {len(lc)} lifecycle row(s), none over budget, none scaling")
