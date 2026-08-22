@@ -668,6 +668,14 @@ class Milvus(Base):
 class ArcadeEmbeddedInt8(ArcadeEmbedded):
     """ArcadeDB with LSM_VECTOR INT8 quantization, its documented compact mode."""
     name = "arcadedb_dense_embedded_int8"
+    # DECLARED, not inferred from the environment. See the stamping site: the
+    # row's quantization used to be read from BENCH_DENSE_QUANT before connect(),
+    # while this arm sets that variable inside build(), which runs later. Every
+    # int8 row therefore recorded "fp32" while genuinely building an INT8 index.
+    # The measurements were right and the label was wrong, which is the harder
+    # defect to notice: nothing fails, the arm just stops being distinguishable
+    # from the fp32 one in any check or table keyed on quantization.
+    quantization = "INT8"
 
     def build(self, vecs):
         # resolve_quant reads BENCH_DENSE_QUANT; set it for this arm only so
@@ -805,8 +813,12 @@ def main():
         out["graph_build_cache_policy"] = (
             "engine auto (whole corpus up to 25% of heap)" if _bc == 0
             else "bounded to the engine's pre-#3144 default")
+    # The ARM's own declaration wins over the environment. An adapter that
+    # quantizes knows it; reading an env var here samples whatever happens to be
+    # set at this instant, which for an arm that sets it later is the wrong
+    # answer and a silent one.
     out["quantization"] = canonical_quant_label(
-        os.environ.get("BENCH_DENSE_QUANT", ""))
+        getattr(b, "quantization", None) or os.environ.get("BENCH_DENSE_QUANT", ""))
     t0 = time.perf_counter()
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
