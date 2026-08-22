@@ -14,8 +14,8 @@ those two would refuse.
 ## 0. The four rules every published cell obeys
 
 1. **Serial, full cpuset.** Every published latency, throughput, percentile and
-   memory cell runs one at a time on `cpuset 0-11` (all 12 P-threads), `workers=1`,
-   `tier=paper`. Parallel shards exist for sweeps and exploration only and may
+   memory cell runs one at a time on mini's `cpuset 0-11` (the 12 P-core THREADS
+   on 6 physical P-cores; see 0a), `workers=1`, `tier=paper`. Parallel shards exist for sweeps and exploration only and may
    never reach the page. Enforced: `runner.py` refuses `workers != 1` at paper
    tier; `load_canonical` drops partial cpusets.
    *Known violation to clear: the 30 dense `deep10m` comparator rows are
@@ -344,7 +344,7 @@ The 5.9x is a within-session property that each open re-pays.
 | `l4` ArcadeDB native TIMESERIES row | comes from `l4_native_probe.py`, a BESPOKE PROBE, not the lane script, and runs two opt-in fast paths (`TS_PRIMITIVE=1`, `TS_NUMPY=1`) that no comparator gets. FAIRNESS F6b is precisely "bespoke drivers investigate, lane scripts publish". The 1.86M pts/s headline is a probe number sitting in a table of lane numbers | the native arm is promoted into `l4_tsbs.py` as a fourth backend and re-run, or the row is withdrawn |
 | any peak-memory comparison across ArcadeDB variants | `-Xms=-Xmx` commits the heap, so the column measures reservation, not demand | never — state it beside every such column |
 | `postgres_tuned` | has never run: 0 rows, display name only | it runs |
-| `hosts_recorded` | 100 container IDs annotated "(host unknown)" | a real machine block is published |
+| `hosts_recorded` | 100 container IDs annotated "(host unknown)"; a row records a container id, not a host | do not render it. Publish the 0a machine block instead, which is read from `lscpu`/`lsblk` rather than derived from a row |
 
 ---
 
@@ -413,7 +413,11 @@ New gates, each closing a failure found in the 2026-08-21 review:
 
 Once, at the end, linked from every table: the global conditions; the
 environment table (`cpuset`, `mem_cap`, `server_mem_cap`, `mem_split`, `heap`,
-`server_heap`); the host machine; the overrides table from `PROTOCOL.md` §7 with
+`server_heap`); the machine block from 0a, stating that the cpuset is 12 threads
+on 6 physical cores, that the governor is `powersave` with turbo enabled so
+frequency is not pinned, and that the bench disk is NVMe while the same machine
+holds a rotational disk used only for backups; the overrides table from
+`PROTOCOL.md` §7 with
 a column saying **which way each override moves the number**; engine identity
 per §1; repetition counts per table; ground truth (how recall@10 is computed and
 against which truth); outcome accounting; a dated changelog; and "Reproducing
