@@ -178,11 +178,32 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
     final DeltaOverlay                   overlay;
     final long                           buildTimestamp;
     final long                           buildDurationMs;
+    // The database's last committed transaction id as of the start of the scan that produced this CSR (see
+    // #6583). Persisted alongside the CSR as its freshness certificate: on a later open, if the database's last
+    // committed transaction id still equals this value, nothing was committed in between, so the persisted CSR is
+    // still exactly correct and can be reused without a rescan. -1 for a snapshot that must never be persisted
+    // (not applicable — no build has produced one yet).
+    final long                           asOfTransactionId;
+    // True when this snapshot was loaded from a persisted CSR file rather than produced by a scan of the graph.
+    // Exposed via isRestoredFromPersistedCsr() — mainly for tests and operational visibility.
+    final boolean                        restoredFromDisk;
+    // The vertex/edge/property scope actually scanned into this snapshot. Usually identical to the enclosing
+    // view's own vertexTypes/edgeTypes/propertyFilter/edgePropertyFilter fields, EXCEPT when produced by the
+    // public two-arg build(vertexTypes, edgeTypes), which lets a caller rescan a NAMED view with a scope
+    // narrower than it was constructed with — those fields are final and never updated to match. Recorded here
+    // (rather than read from the view's fields) so persistCsrIfPossible() can write a certificate that describes
+    // what this snapshot actually covers, not what the view was originally configured for (#6583 review).
+    final String[]                       vertexTypes;
+    final String[]                       edgeTypes;
+    final String[]                       propertyFilter;
+    final String[]                       edgePropertyFilter;
 
     Snapshot(final Map<String, CSRAdjacencyIndex> csrPerType, final NodeIdMapping nodeMapping,
         final ColumnStore[] bucketColumns, final Map<String, ColumnStore> edgeColumnStores,
         final Map<String, int[]> bwdToFwd,
-        final DeltaOverlay overlay, final long buildTimestamp, final long buildDurationMs) {
+        final DeltaOverlay overlay, final long buildTimestamp, final long buildDurationMs,
+        final long asOfTransactionId, final boolean restoredFromDisk,
+        final String[] vertexTypes, final String[] edgeTypes, final String[] propertyFilter, final String[] edgePropertyFilter) {
       this.csrPerType = csrPerType;
       this.nodeMapping = nodeMapping;
       this.bucketColumns = bucketColumns;
@@ -191,11 +212,18 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
       this.overlay = overlay;
       this.buildTimestamp = buildTimestamp;
       this.buildDurationMs = buildDurationMs;
+      this.asOfTransactionId = asOfTransactionId;
+      this.restoredFromDisk = restoredFromDisk;
+      this.vertexTypes = vertexTypes;
+      this.edgeTypes = edgeTypes;
+      this.propertyFilter = propertyFilter;
+      this.edgePropertyFilter = edgePropertyFilter;
     }
 
     Snapshot withOverlay(final DeltaOverlay newOverlay) {
       return new Snapshot(csrPerType, nodeMapping, bucketColumns, edgeColumnStores, bwdToFwd,
-          newOverlay, buildTimestamp, buildDurationMs);
+          newOverlay, buildTimestamp, buildDurationMs, asOfTransactionId, restoredFromDisk,
+          vertexTypes, edgeTypes, propertyFilter, edgePropertyFilter);
     }
 
   }
@@ -215,6 +243,20 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
   private volatile Status            status    = Status.NOT_BUILT;
   private volatile CountDownLatch    readyLatch = new CountDownLatch(1);
   private volatile Throwable         buildError;
+  // True from the moment restoreFromDiskOrBuildAsync() finds a plausible persisted CSR (see #6632) until
+  // whatever touches the view first — checkBuilt() or awaitReady() — resolves it. Written before `status`
+  // is flipped to READY (see restoreFromDiskOrBuildAsync()) and read without synchronization elsewhere, so
+  // its value is guaranteed visible to any thread that observes that READY write — the same plain-volatile
+  // publish pattern `snapshot`+`status` already rely on throughout this class (e.g. build()).
+  private volatile boolean           pendingDiskRestore;
+  // True for the FULL duration of a dispatched deferred restore, including a buildAsync() fallback if the
+  // restore turns out unusable — see dispatchDeferredRestore(). Unlike pendingDiskRestore (cleared the
+  // instant the FIRST caller dispatches the work, not when the work finishes), this is what checkBuilt()
+  // gates its wait on: it stays true until the view actually settles, so a second concurrent caller landing
+  // after dispatch but before completion still waits instead of throwing (review on PR #6633), while a
+  // caller that hits a genuinely unrelated BUILDING view — a brand-new one built directly via buildAsync(),
+  // which never sets this flag at all — keeps that method's own documented fail-fast contract unchanged.
+  private volatile boolean           deferredRestoreInFlight;
 
   // Incremental auto-update
   private DeltaCollector         deltaCollector;
@@ -290,18 +332,40 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
    * @param edgeTypes   edge type names to include (null = all)
    */
   public synchronized void build(final String[] vertexTypes, final String[] edgeTypes) {
+    // A direct build() (e.g. REBUILD GRAPH ANALYTICAL VIEW) supersedes any not-yet-resolved deferred
+    // restore-from-disk (see #6632): without clearing this, a later awaitReady() call would still see
+    // pendingDiskRestore == true and dispatch dispatchDeferredRestore(), re-reading a possibly-superseded
+    // persisted file (or a wholly redundant rebuild) right after this scan already produced a fresh,
+    // authoritative snapshot.
+    pendingDiskRestore = false;
     final CountDownLatch latch = new CountDownLatch(1);
     readyLatch = latch;
     status = Status.BUILDING;
     buildError = null;
     try {
+      // Unlike buildAsync()/onRelevantCommit()/applyDelta()'s rebuild - each of which calls database.begin() on a
+      // fresh worker thread AFTER sampling asOfTransactionId, so the scan's transaction cannot have cached
+      // anything before that point - this method runs the scan on whatever transaction is already active on the
+      // CALLING thread (e.g. REBUILD GRAPH ANALYTICAL VIEW / a caller invoking build() directly inside its own
+      // transaction), or with none active at all. Under the default READ_COMMITTED that's harmless (no per-page
+      // caching, every read is current). Under REPEATABLE_READ, a transaction that was already open - and may
+      // already have cached some of the pages this scan is about to read - can miss a commit that landed between
+      // its own begin() and this sample, while asOfTransactionId (sampled here) claims coverage through it. The
+      // certificate would then be wrong in the direction that matters: a "complete" persisted CSR that is
+      // actually missing something. Since there is no way from here to know which pages (if any) that ambient
+      // transaction already cached, treat the certificate as unusable whenever that risk exists at all, rather
+      // than trying to bound it: asOfTransactionId=-1 makes persistCsrIfPossible() skip persisting this snapshot
+      // (see its existing "< 0" guard), the same way a snapshot that must never be persisted already reads.
+      final boolean certificateMayBeUnsound = database.isTransactionActive()
+          && database.getTransactionIsolationLevel() == Database.TRANSACTION_ISOLATION_LEVEL.REPEATABLE_READ;
+      final long asOfTransactionId = certificateMayBeUnsound ? -1L : currentLastTransactionId();
       final long buildStart = System.currentTimeMillis();
       final CSRBuilder builder = new CSRBuilder(database, propertyFilter, edgePropertyFilter, propertySampleSize);
       final CSRBuilder.CSRResult result = builder.build(vertexTypes, edgeTypes);
       final long durationMs = System.currentTimeMillis() - buildStart;
 
       // Atomic swap — readers see all-or-nothing
-      this.snapshot = snapshotFromResult(result, durationMs);
+      this.snapshot = snapshotFromResult(result, durationMs, asOfTransactionId, vertexTypes, edgeTypes, propertyFilter, edgePropertyFilter);
       this.status = Status.READY;
       this.notifyAll();
       invalidateGraphStatisticsCache();
@@ -326,6 +390,10 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
   public synchronized void buildAsync() {
     if (!buildQueued.compareAndSet(false, true))
       return; // a build is already queued or running
+    // See build(vertexTypes, edgeTypes)'s identical guard: supersedes any not-yet-resolved deferred
+    // restore-from-disk (see #6632). Also reached, harmlessly, from dispatchDeferredRestore()'s own
+    // fallback call - pendingDiskRestore is already false there by the time it calls this.
+    pendingDiskRestore = false;
     final CountDownLatch latch = new CountDownLatch(1);
     readyLatch = latch;
     status = Status.BUILDING;
@@ -337,6 +405,7 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
       getExecutor().execute(() -> {
         BUILD_PERMITS.acquireUninterruptibly();
         try {
+          final long asOfTransactionId = currentLastTransactionId();
           // The build thread needs its own read transaction for database iteration
           database.begin();
           try {
@@ -346,7 +415,7 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
             final long durationMs = System.currentTimeMillis() - buildStart;
 
             synchronized (GraphAnalyticalView.this) {
-              this.snapshot = snapshotFromResult(result, durationMs);
+              this.snapshot = snapshotFromResult(result, durationMs, asOfTransactionId, vertexTypes, edgeTypes, propertyFilter, edgePropertyFilter);
               this.status = Status.READY;
               GraphAnalyticalView.this.notifyAll();
               if (deltaCollector == null)
@@ -400,10 +469,15 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
 
   /**
    * Waits until the view reaches READY status or the timeout expires.
+   * <p>
+   * If the view is still a deferred restore-from-disk (see #6632), this is one of the two ways — the
+   * other being a real query, via {@link #checkBuilt()} — that dispatches it: an explicit status wait is
+   * a legitimate signal that the caller wants the view actually resolved, not just optimistically READY.
    *
    * @return true if the view is READY, false if the timeout elapsed or the build failed
    */
   public boolean awaitReady(final long timeout, final TimeUnit unit) {
+    triggerDeferredDiskRestoreIfPending();
     final long deadlineNanos = System.nanoTime() + unit.toNanos(timeout);
     try {
       while (true) {
@@ -442,9 +516,13 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
    * Call this when the view is no longer needed (user-initiated removal).
    */
   public void drop() {
-    shutdown();
-    if (name != null)
+    // Dropped views have no schema definition left to restore against, so persisting the CSR here
+    // would just be written and immediately deleted below.
+    shutdown(false);
+    if (name != null) {
       GraphAnalyticalViewPersistence.remove(database, name);
+      GraphAnalyticalViewCSRPersistence.delete(database, name);
+    }
   }
 
   /**
@@ -457,8 +535,17 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
    * (or even closed the database) and crash with a misleading SEVERE log line.
    */
   public void shutdown() {
+    shutdown(true);
+  }
+
+  private void shutdown(final boolean persistCsr) {
     awaitInFlightTasks(SHUTDOWN_AWAIT_MS);
     synchronized (this) {
+      // Runs the persist-to-disk write (when eligible) while holding this instance's monitor: any concurrent
+      // awaitReady()/getStatus() caller blocks for the duration of the write, not just of a scan - accepted
+      // because it only happens once per close and is gated by GAV_PERSIST_CSR.
+      if (persistCsr)
+        persistCsrIfPossible();
       unregisterChangeListeners();
       GraphTraversalProviderRegistry.unregister(database, this);
       if (name != null)
@@ -1116,6 +1203,16 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
     return snapshot != null;
   }
 
+  /**
+   * Returns true when the current CSR was loaded from a persisted file (see #6583) rather than produced by a scan
+   * of the graph on this open. Mainly useful for tests and operational visibility (e.g. confirming that a reopen
+   * skipped the O(V+E) rebuild).
+   */
+  public boolean isRestoredFromPersistedCsr() {
+    final Snapshot snap = this.snapshot;
+    return snap != null && snap.restoredFromDisk;
+  }
+
   public boolean isReady() {
     final Status s = status;
     if (s == Status.READY)
@@ -1400,10 +1497,346 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
 
   // --- Private helpers ---
 
-  private static Snapshot snapshotFromResult(final CSRBuilder.CSRResult result, final long durationMs) {
+  private static Snapshot snapshotFromResult(final CSRBuilder.CSRResult result, final long durationMs, final long asOfTransactionId,
+      final String[] builtVertexTypes, final String[] builtEdgeTypes, final String[] builtPropertyFilter,
+      final String[] builtEdgePropertyFilter) {
     return new Snapshot(result.getCsrPerType(), result.getMapping(), result.getBucketColumns(),
         result.getEdgeColumnStores(), result.getBwdToFwd(),
-        null, System.currentTimeMillis(), durationMs);
+        null, System.currentTimeMillis(), durationMs, asOfTransactionId, false,
+        builtVertexTypes, builtEdgeTypes, builtPropertyFilter, builtEdgePropertyFilter);
+  }
+
+  /**
+   * The database's last committed transaction id, sampled before a CSR scan starts (see {@link
+   * Snapshot#asOfTransactionId}). Reading it before {@code database.begin()} for the scan — rather than after — is
+   * what makes the certificate sound: whatever the scan reads, it reads no earlier than this point, so "nothing
+   * committed since this value" on a later open implies "nothing committed since the scan ran", regardless of the
+   * read transaction's own isolation semantics.
+   */
+  private long currentLastTransactionId() {
+    return ((DatabaseInternal) database).getTransactionManager().getLastTransactionId();
+  }
+
+  /**
+   * Persists the current CSR to disk (see #6583) so the next open can reuse it instead of rescanning the graph,
+   * when doing so is both possible and safe:
+   * <ul>
+   *   <li>the view is named — an anonymous view has no schema definition to restore against on a later open, so
+   *       there would be nothing to reload the file for</li>
+   *   <li>status is READY with a valid certificate — a STALE view's on-disk certificate would already be
+   *       superseded by the very commit that made it STALE, so persisting it would only cost a write that the
+   *       next open's certificate check is guaranteed to reject; BUILDING has no completed snapshot yet</li>
+   *   <li>the overlay (if any) has no pending changes — the certificate vouches only for the base CSR, so a
+   *       SYNCHRONOUS view with buffered overlay deltas would silently drop them if reloaded from this file</li>
+   * </ul>
+   * Called from {@link #shutdown()} while holding this instance's monitor, after any in-flight build/compaction
+   * has settled. Failures are logged and otherwise ignored: the next open simply falls back to a full rebuild,
+   * exactly as it always has.
+   */
+  private void persistCsrIfPossible() {
+    if (name == null || status != Status.READY)
+      return;
+    // The certificate is only sound where TransactionManager.getLastTransactionId() reflects every commit that
+    // could have touched the covered types. That holds for a standalone database or an HA leader (the only paths
+    // that call getNextTransactionId()), but not for a follower: TransactionManager.applyChanges(), the path
+    // replicated commits are applied through, never advances that counter, so a follower's certificate would
+    // freeze at whatever value it had when this snapshot was built, then "match" on every later reopen no matter
+    // how much further replicated data has landed since - the same failure shape as the lost-recency-marker case,
+    // but permanent rather than self-healing. Leader-only mirrors the existing precedent for HA-unsafe derived
+    // state (see TimeSeriesMaintenanceScheduler.runMaintenance()) with no compile dependency on the HA module.
+    final DatabaseInternal dbInternal = (DatabaseInternal) database;
+    if (dbInternal.isReplicated() && !dbInternal.isLeader())
+      return;
+    final Snapshot snap = this.snapshot;
+    if (snap == null || snap.asOfTransactionId < 0)
+      return;
+    if (snap.overlay != null && snap.overlay.hasChanges())
+      return;
+    // Nothing has changed since this exact snapshot was loaded from disk on this open (no overlay changes,
+    // per the check above, and a fresh scan always produces a new Snapshot instance) — the file on disk
+    // already matches it byte-for-byte, so writing it again would be pure waste.
+    if (snap.restoredFromDisk)
+      return;
+    if (!database.getConfiguration().getValueAsBoolean(GlobalConfiguration.GAV_PERSIST_CSR))
+      return;
+    try {
+      // Written from snap's OWN recorded scope, not this.vertexTypes/edgeTypes/propertyFilter/edgePropertyFilter:
+      // the public two-arg build(vertexTypes, edgeTypes) can rescan a named view with a scope narrower than it
+      // was constructed with, and those fields (final, never updated) would then describe more than snap actually
+      // covers - the header must match what was actually scanned, or a later reopen could restore a snapshot that
+      // silently under-covers what the view claims to (#6583 review).
+      GraphAnalyticalViewCSRPersistence.save(database, name, snap.vertexTypes, snap.edgeTypes, snap.propertyFilter,
+          snap.edgePropertyFilter, snap);
+    } catch (final OutOfMemoryError | Exception e) {
+      // OutOfMemoryError is caught deliberately, matching load()'s equivalent guard: save() assembles the whole
+      // CSR payload into one contiguous byte[] (and a second one if encryption is configured) before writing
+      // anything, right at shutdown()/database.close() after a build/rescan has already put memory pressure on
+      // the JVM. Left uncaught, an OOM here would propagate out of GraphAnalyticalViewRegistry.shutdownAll()'s
+      // per-view loop with no try/catch of its own, aborting it and leaking every view after this one in
+      // iteration order (unregisterChangeListeners()/GraphTraversalProviderRegistry.unregister() never run for
+      // them) - directly contradicting this method's own "failures are logged and otherwise ignored" contract.
+      LogManager.instance().log(this, Level.WARNING, "GraphAnalyticalView '%s': failed to persist CSR to disk", e, name);
+    }
+  }
+
+  /**
+   * Used by {@link GraphAnalyticalViewBuilder#restoreFromDiskOrBuildAsync} on database open (see #6583,
+   * #6632). Before #6632 this eagerly called {@link #tryRestoreFromPersistedCsr()} right here, which reads
+   * and deserializes the whole persisted CSR — a real, if bounded, cost (hundreds of ms to ~1s at 10M
+   * vertices, per #6632's own measurements) that a session which never queries the view paid for nothing.
+   * When a persisted file plausibly applies, this instead marks the view READY without touching the file
+   * and defers the actual read to whatever happens first: a real query ({@link #checkBuilt()}) or an
+   * explicit {@link #awaitReady} call — so a session that opens and closes without ever touching the view
+   * now costs what the no-view baseline costs, not what a restore costs.
+   * <p>
+   * When no persisted file could plausibly apply — disabled, an HA follower, an unreliable recency signal,
+   * or simply nothing on disk — falls back to the unchanged, already-async {@link #buildAsync()}
+   * immediately instead of deferring: a full scan is expensive regardless of whether it's queried, so
+   * there's nothing to gain by delaying its (already background) start, and every ms of head start
+   * shortens how long a soon-arriving query has to wait for it.
+   */
+  void restoreFromDiskOrBuildAsync() {
+    if (mayHavePersistedCsr()) {
+      // Order matters: a concurrent reader that observes status==READY (a volatile read) is guaranteed,
+      // by plain volatile publish semantics, to also observe every plain write that preceded it on this
+      // thread — including pendingDiskRestore — so checkBuilt()/awaitReady() can never see READY paired
+      // with a stale pendingDiskRestore=false. Same pattern build() already relies on for snapshot+status.
+      pendingDiskRestore = true;
+      status = Status.READY;
+    } else
+      buildAsync();
+  }
+
+  /**
+   * Cheap, synchronous check: does a persisted CSR file plausibly apply right now? Mirrors every guard in
+   * {@link #tryRestoreFromPersistedCsr()} except the (expensive) definition/certificate read — a "yes"
+   * here is a hint, not a promise: {@link #tryRestoreFromPersistedCsr()} re-verifies everything itself,
+   * from scratch, whenever the deferred restore actually runs, and correctly falls back to a rebuild if
+   * anything no longer holds by then (including a commit that landed while the restore was pending, since
+   * nothing is watching for one — see {@link #restoreFromDiskOrBuildAsync()}).
+   * <p>
+   * KEEP IN SYNC with {@link #tryRestoreFromPersistedCsr()}'s own guard clauses (review on PR #6633): a
+   * drift between the two can't corrupt data — {@code tryRestoreFromPersistedCsr()} always has the final,
+   * authoritative say — but it would either waste a lazy round-trip that immediately falls back to a
+   * rebuild, or skip the lazy fast path entirely for a case that would have actually succeeded.
+   */
+  private boolean mayHavePersistedCsr() {
+    if (name == null)
+      return false;
+    if (!database.getConfiguration().getValueAsBoolean(GlobalConfiguration.GAV_PERSIST_CSR))
+      return false;
+    final DatabaseInternal dbInternal = (DatabaseInternal) database;
+    if (dbInternal.isReplicated() && !dbInternal.isLeader())
+      return false;
+    if (!dbInternal.getTransactionManager().isRecencySignalReliable())
+      return false;
+    return GraphAnalyticalViewCSRPersistence.fileFor(database, name).isFile();
+  }
+
+  /**
+   * Cheap fast-path check before {@link #dispatchDeferredRestore()}: avoids paying for that method's
+   * {@code synchronized} entry (and the monitor contention that would imply under concurrent callers) on
+   * every {@link #checkBuilt()}/{@link #awaitReady} call once nothing is pending anymore, which is the
+   * overwhelmingly common case after the first caller resolves it.
+   */
+  private void triggerDeferredDiskRestoreIfPending() {
+    if (pendingDiskRestore)
+      dispatchDeferredRestore();
+  }
+
+  /**
+   * Dispatches the deferred restore-or-build (see #restoreFromDiskOrBuildAsync()) exactly once, the first
+   * time either {@link #checkBuilt()} or {@link #awaitReady} needs it resolved. A no-op once already
+   * dispatched (including by a concurrent caller — the double-checked {@code pendingDiskRestore} flag is
+   * the single point of truth for "has this already been kicked off").
+   * <p>
+   * The whole method is {@code synchronized}, mirroring {@link #buildAsync()} and {@link
+   * #onRelevantCommit()} exactly: {@code inFlightTasks.incrementAndGet()} and the executor dispatch happen
+   * while still holding {@code this}'s monitor, so {@link #shutdown()}'s {@code awaitInFlightTasks()} can
+   * never observe {@code inFlightTasks == 0} in the gap between deciding to dispatch and the counter
+   * actually reflecting it — the same race {@code awaitInFlightTasks()}'s own javadoc calls out ("counter is
+   * incremented synchronously when a task is scheduled"). An earlier version of this method incremented the
+   * counter just outside the synchronized block and reopened exactly that gap (review on PR #6633).
+   */
+  private synchronized void dispatchDeferredRestore() {
+    if (!pendingDiskRestore)
+      return;
+    pendingDiskRestore = false;
+    // Stays true for the FULL chain, including a buildAsync() fallback the dispatched task below waits out
+    // itself — not just until the outer task hands off to it — so checkBuilt() only ever waits for work
+    // this method actually started, never for an unrelated buildAsync()/onRelevantCommit() rebuild on a
+    // brand-new view built directly (which keeps its own documented fail-fast contract unchanged).
+    deferredRestoreInFlight = true;
+    final CountDownLatch latch = new CountDownLatch(1);
+    readyLatch = latch;
+    status = Status.BUILDING;
+    inFlightTasks.incrementAndGet();
+    try {
+      getExecutor().execute(() -> {
+        try {
+          BUILD_PERMITS.acquireUninterruptibly();
+          final boolean restored;
+          try {
+            restored = tryRestoreFromPersistedCsr();
+          } finally {
+            BUILD_PERMITS.release();
+          }
+          if (!restored) {
+            // No usable file after all (vanished, corrupted, or invalidated by a commit that landed while
+            // this was pending and unwatched) — fall back exactly as the eager #6583 path always did.
+            // Waited out here (this virtual thread parking costs nothing) rather than left to complete on
+            // its own dispatched task, so deferredRestoreInFlight stays true for the fallback's own
+            // duration too, not just for the near-instant hand-off to it.
+            buildAsync();
+            awaitDeferredDiskRestoreSettled();
+          }
+        } catch (final Exception e) {
+          // tryRestoreFromPersistedCsr() only catches around its own load() call, so anything else
+          // unexpected (e.g. the database closing mid-check) would otherwise leave status stuck at
+          // BUILDING forever - awaitDeferredDiskRestoreSettled()'s loop would then busy-spin on every
+          // future checkBuilt() call (its latch is already counted down, so await() returns instantly,
+          // and status never leaves BUILDING to end the loop). Mirrors buildAsync()'s own catch exactly.
+          synchronized (this) {
+            buildError = e;
+            status = snapshot != null ? Status.STALE : Status.NOT_BUILT;
+            notifyAll();
+          }
+          if (isBenignShutdownError(e))
+            LogManager.instance().log(this, Level.FINE,
+                "Deferred restore of GraphAnalyticalView '%s' aborted because the database is closing", name);
+          else
+            LogManager.instance().log(this, Level.WARNING, "Failed to resolve deferred restore for GraphAnalyticalView '%s'", e, name);
+        } finally {
+          deferredRestoreInFlight = false;
+          latch.countDown();
+          taskCompleted();
+        }
+      });
+    } catch (final RejectedExecutionException e) {
+      // Mirrors buildAsync()'s equivalent handler exactly (review on PR #6633): buildError/notifyAll()
+      // were missing here, and status was unconditionally NOT_BUILT even when a prior snapshot exists
+      // (e.g. a rebuild superseded by this same dispatch, or a stale-but-still-served one) - both quietly
+      // made getBuildError()/isReady()'s STALE+useWhenStale path less reliable for this rejection path
+      // than for every other one in this class.
+      deferredRestoreInFlight = false;
+      buildError = e;
+      status = snapshot != null ? Status.STALE : Status.NOT_BUILT;
+      notifyAll();
+      latch.countDown();
+      taskCompleted();
+      LogManager.instance().log(this, Level.WARNING,
+          "GraphAnalyticalView '%s': deferred restore-from-disk rejected (executor shut down)", name);
+    }
+  }
+
+  /**
+   * Blocks the calling thread until a BUILDING view settles to READY/STALE/NOT_BUILT, with no timeout.
+   * Used by {@link #checkBuilt()} (whose caller has no fallback once it is already there) and, internally,
+   * by {@link #dispatchDeferredRestore()} itself to wait out its own {@link #buildAsync()} fallback. Tolerant
+   * of {@code readyLatch} being swapped mid-wait (e.g. {@link #dispatchDeferredRestore}'s own latch being
+   * superseded by a nested {@link #buildAsync()} fallback's own): re-reads both fields together on every
+   * iteration, same as {@link #awaitReady}'s loop.
+   */
+  private void awaitDeferredDiskRestoreSettled() {
+    try {
+      while (true) {
+        final Status currentStatus;
+        final CountDownLatch latch;
+        synchronized (this) {
+          currentStatus = status;
+          latch = readyLatch;
+        }
+        if (currentStatus != Status.BUILDING)
+          return;
+        latch.await();
+      }
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
+  }
+
+  /**
+   * Attempts to load a persisted CSR from disk instead of scanning the graph (see #6583). Returns true and leaves
+   * the view READY with the loaded snapshot when a file exists, its definition matches this view's configuration,
+   * and its freshness certificate (the database's last committed transaction id at persist time) still matches the
+   * database's current last committed transaction id — i.e. nothing was committed in between. Returns false
+   * (leaving the view's state untouched) for a missing file, a mismatched definition or certificate, or any read
+   * failure, so the caller can fall back to {@link #buildAsync()} exactly as it would have without this path.
+   * <p>
+   * The guard clauses below are mirrored (cheaply, without the file read) by {@link #mayHavePersistedCsr()} —
+   * KEEP THEM IN SYNC (review on PR #6633).
+   */
+  synchronized boolean tryRestoreFromPersistedCsr() {
+    if (name == null)
+      return false;
+    if (!database.getConfiguration().getValueAsBoolean(GlobalConfiguration.GAV_PERSIST_CSR))
+      return false;
+    // Mirrors the same leader-only gate in persistCsrIfPossible(): a follower's certificate can never be trusted
+    // (its TransactionManager counter is frozen against replicated commits), so this file - if one even exists,
+    // e.g. left over from a promotion/demotion - must never be restored on this node either. Checked before
+    // isRecencySignalReliable() purely because it is the cheaper of the two disqualifying checks.
+    final DatabaseInternal dbInternal = (DatabaseInternal) database;
+    if (dbInternal.isReplicated() && !dbInternal.isLeader())
+      return false;
+    // The certificate is a plain equality check against the database's last committed transaction id, which is
+    // only sound while that counter's own history is verifiably continuous. If this open couldn't reconstruct it
+    // from real evidence (a lost/corrupt recency marker with no WAL left to recover it from - a clean close
+    // removes the WAL, so the marker is the sole durable record at that point), the counter silently restarts
+    // and will climb back through every value it held before, including one a stale file on disk might still
+    // carry as its certificate. Refusing the fast path here until a fresh, trustworthy certificate is written at
+    // this session's own close is the same "no manifest reads as unverifiable, not as valid" rule #6106 already
+    // established for the vector index's correspondence artifact.
+    if (!dbInternal.getTransactionManager().isRecencySignalReliable())
+      return false;
+    final long currentTxId = currentLastTransactionId();
+    final Snapshot restored;
+    try {
+      restored = GraphAnalyticalViewCSRPersistence.load(database, name, vertexTypes, edgeTypes, propertyFilter,
+          edgePropertyFilter, currentTxId);
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.WARNING, "GraphAnalyticalView '%s': failed to load persisted CSR from disk", e, name);
+      return false;
+    }
+    if (restored == null)
+      return false;
+
+    // Reuse whichever latch is already installed rather than publishing a new one: the view is registered
+    // before this method runs (directly, as the first status transition on a freshly built view; or via
+    // dispatchDeferredRestore(), which installs its own before calling this - see #6632), so a concurrent
+    // awaitReady() caller may already be waiting on that installed latch. Counting down a *new* instance
+    // instead would leave that caller hanging until its timeout even though the view is READY.
+    final CountDownLatch latch = readyLatch;
+    this.snapshot = restored;
+    this.status = Status.READY;
+    this.notifyAll();
+    latch.countDown();
+    invalidateGraphStatisticsCache();
+    if (deltaCollector == null)
+      registerChangeListeners();
+
+    // A commit to a covered type landing between sampling currentTxId (above) and the listener registration
+    // just above this line would be invisible to the restored snapshot (no scan ran to absorb it, unlike
+    // buildAsync(), whose real scan runs AFTER its own sample so a racing commit is already captured in what
+    // it reads) and invisible to onRelevantCommit()/applyDelta() too (the listeners were not live yet when it
+    // happened). This specific few-instruction window is still only defensive - no existing test hits it -
+    // but the surrounding claim that this whole method is unreachable outside LocalDatabase.open() no longer
+    // holds since #6632 (review on PR #6633): dispatchDeferredRestore()'s background task also calls this
+    // method, well after open() has returned and the caller can freely commit against it. The COARSER case -
+    // a commit landing before this method is even dispatched, caught by the certificate mismatch in
+    // GraphAnalyticalViewCSRPersistence.load() above rather than by this specific check - is genuinely
+    // reachable and exercised by csrLazyPendingRestoreCatchesAnInterveningCommitBeforeFirstQuery. Marking
+    // STALE here mirrors exactly what onRelevantCommit() does for a real relevant commit under
+    // OFF/SYNCHRONOUS mode: conservative, but never wrong.
+    if (currentLastTransactionId() != currentTxId) {
+      LogManager.instance().log(this, Level.WARNING,
+          "GraphAnalyticalView '%s': a commit landed while restoring its CSR from disk; marking it STALE rather than risk missing it",
+          name);
+      status = Status.STALE;
+    }
+
+    LogManager.instance().log(this, Level.INFO,
+        "GraphAnalyticalView '%s': restored CSR from disk (asOfTransactionId=%d), skipping full rebuild", name, currentTxId);
+    return true;
   }
 
   private void registerChangeListeners() {
@@ -1443,6 +1876,7 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
         getExecutor().execute(() -> {
           BUILD_PERMITS.acquireUninterruptibly();
           try {
+            final long asOfTransactionId = currentLastTransactionId();
             database.begin();
             try {
               final long buildStart = System.currentTimeMillis();
@@ -1454,7 +1888,7 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
               // that would be lost by an unconditional swap.
               synchronized (GraphAnalyticalView.this) {
                 if (updateMode == UpdateMode.ASYNCHRONOUS) {
-                  this.snapshot = snapshotFromResult(result, durationMs);
+                  this.snapshot = snapshotFromResult(result, durationMs, asOfTransactionId, vertexTypes, edgeTypes, propertyFilter, edgePropertyFilter);
                   this.status = Status.READY;
                 } else
                   LogManager.instance().log(this, Level.INFO,
@@ -1552,6 +1986,7 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
         getExecutor().execute(() -> {
           BUILD_PERMITS.acquireUninterruptibly();
           try {
+            final long asOfTransactionId = currentLastTransactionId();
             database.begin();
             try {
               final long buildStart = System.currentTimeMillis();
@@ -1570,7 +2005,7 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
                   LogManager.instance().log(this, Level.INFO,
                       "GraphAnalyticalView '%s': compaction result discarded (delta buffer overflowed during rebuild)", name);
                 } else {
-                  Snapshot fresh = snapshotFromResult(result, durationMs);
+                  Snapshot fresh = snapshotFromResult(result, durationMs, asOfTransactionId, vertexTypes, edgeTypes, propertyFilter, edgePropertyFilter);
 
                   // Re-apply any deltas that arrived during the rebuild.
                   // These may not be in the fresh CSR (committed after the CSR scan of their bucket).
@@ -1935,9 +2370,34 @@ public class GraphAnalyticalView implements GraphTraversalProvider {
   /**
    * Checks the view is built and returns a consistent snapshot for the caller to use.
    * All public methods should capture this once and use it throughout their execution.
+   * <p>
+   * If the view is still a deferred restore-from-disk (see #6632), a real query is the other legitimate
+   * trigger for it (alongside an explicit {@link #awaitReady} call): unlike a caller that merely polls
+   * {@link #getStatus()}, this method's caller has no OLTP fallback once it is already here, so this
+   * blocks (no timeout — same contract {@link #build()} already has for a cold view) until the deferred
+   * work resolves one way or another.
+   * <p>
+   * Gates the wait on {@code deferredRestoreInFlight} rather than on {@code pendingDiskRestore}: the latter
+   * is a "has this been dispatched yet" flag that {@link #triggerDeferredDiskRestoreIfPending} clears for
+   * every caller the instant the FIRST one dispatches it, not a "is work still in flight" flag. Gating on
+   * it directly would let a second, concurrent caller land here after dispatch but before completion, see
+   * {@code pendingDiskRestore == false}, and fall straight through to the exception below despite the view
+   * being legitimately mid-restore rather than actually broken. Gating on plain {@code status == BUILDING}
+   * instead would fix that but over-reach: it would also make this method block, with no timeout, for a
+   * brand-new view whose {@link #buildAsync()} was called directly and hasn't completed yet — a real,
+   * unrelated (and, per that method's own javadoc, documented as non-blocking) scenario this fix has no
+   * business changing. {@code deferredRestoreInFlight} stays true for the exact duration of the work THIS
+   * mechanism started (including a {@link #buildAsync()} fallback if the restore itself turns out unusable —
+   * see {@link #dispatchDeferredRestore()}), so it correctly waits for that and only that.
    */
   private Snapshot checkBuilt() {
-    final Snapshot snap = this.snapshot;
+    Snapshot snap = this.snapshot;
+    if (snap == null) {
+      triggerDeferredDiskRestoreIfPending(); // no-op if not applicable, or another thread already dispatched it
+      if (deferredRestoreInFlight)
+        awaitDeferredDiskRestoreSettled();
+      snap = this.snapshot;
+    }
     if (snap == null)
       throw new IllegalStateException("GraphAnalyticalView has not been built yet. Call build() first.");
     return snap;

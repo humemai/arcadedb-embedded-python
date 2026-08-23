@@ -24,6 +24,7 @@ import com.arcadedb.server.BaseGraphServerTest;
 import com.arcadedb.server.http.handler.OpenApiSpecGenerator;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.PathItem;
+import io.swagger.v3.oas.models.headers.Header;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.Operation;
 import io.swagger.v3.oas.models.responses.ApiResponses;
@@ -439,6 +440,7 @@ class OpenApiSpecGenerationIT extends BaseGraphServerTest {
       "GET /api/v1/ts/{database}/prom/api/v1/series",
       // AI
       "GET /api/v1/ai/config", "POST /api/v1/ai/activate", "POST /api/v1/ai/chat",
+      "POST /api/v1/ai/chat/stream",
       "POST /api/v1/ai/analyze-profiler", "GET /api/v1/ai/chats",
       "GET /api/v1/ai/chats/{id}", "PUT /api/v1/ai/chats/{id}", "DELETE /api/v1/ai/chats/{id}");
 
@@ -487,14 +489,14 @@ class OpenApiSpecGenerationIT extends BaseGraphServerTest {
   }
 
   @Test
-  void specDocumentsExactlyTheExpectedSixtyThreeOperations() throws Exception {
+  void specDocumentsExactlyTheExpectedSixtyFourOperations() throws Exception {
     final OpenAPI openAPI = new OpenAPIV3Parser().readContents(getOpenApiSpec()).getOpenAPI();
     final List<String> declared = declaredOperations(openAPI);
 
     assertThat(EXPECTED_OPERATIONS)
         .as("the inventory itself must hold no duplicate")
         .doesNotHaveDuplicates()
-        .hasSize(63);
+        .hasSize(64);
 
     assertThat(declared)
         .as("operations missing from the specification")
@@ -561,7 +563,7 @@ class OpenApiSpecGenerationIT extends BaseGraphServerTest {
         .as("client generators derive a method name per operationId, so a collision breaks codegen")
         .doesNotHaveDuplicates()
         .doesNotContainNull()
-        .hasSize(63);
+        .hasSize(64);
   }
 
   @Test
@@ -617,6 +619,31 @@ class OpenApiSpecGenerationIT extends BaseGraphServerTest {
             .as("%s %s is authenticated, so it must declare 401", path, op.getOperationId())
             .contains("401");
       }
+    }));
+  }
+
+  /**
+   * {@code AbstractServerHttpHandler} sets {@link IdempotencyCache#HEADER_REQUEST_ID} on every
+   * response it writes, generating a value when the caller sent none (#6563). A generated client
+   * can only see that header if every response in the spec declares it.
+   */
+  @Test
+  void everyResponseDeclaresTheRequestIdHeader() throws Exception {
+    final OpenAPI openAPI = new OpenAPIV3Parser().readContents(getOpenApiSpec()).getOpenAPI();
+
+    openAPI.getPaths().forEach((path, item) -> item.readOperations().forEach(op -> {
+      assertThat(op.getResponses())
+          .as("%s %s has no responses", path, op.getOperationId())
+          .isNotNull().isNotEmpty();
+
+      op.getResponses().forEach((code, response) -> {
+        final Map<String, Header> headers = response.getHeaders();
+        assertThat(headers)
+            .as("%s %s's %s response is missing the %s header that AbstractServerHttpHandler sets "
+                    + "unconditionally on every response", path, op.getOperationId(), code,
+                IdempotencyCache.HEADER_REQUEST_ID)
+            .containsKey(IdempotencyCache.HEADER_REQUEST_ID);
+      });
     }));
   }
 
