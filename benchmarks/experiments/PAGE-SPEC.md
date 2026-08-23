@@ -376,8 +376,8 @@ Ordered by whether a published cell depends on it.
 
 | measurement | cost | why |
 |---|---|---|
-| `graphBuildCacheMaxHeapPercent` sweep at `small` (10/25/40/60, both quantizations, N=3) | ~2 h | we publish the engine default with no evidence it is good. Stage 1 only; escalate to deep10m only if the curve has shape |
-| GAV on/off at the missing 7 of 8 cells | ~4 h | an ArcadeDB-only accelerator with one ablation cell is a configuration claim |
+| ~~`graphBuildCacheMaxHeapPercent` sweep~~ | done | **ANSWERED 2026-08-23.** 25% is the right default and the page can now say so with evidence instead of publishing it as "whatever the engine does". At deep10m: 10% costs **10,786 s** against 25%'s **2,274 s**, a 4.7x penalty, while 40% and 60% are slightly WORSE than 25% (2,421 and 2,423) because the extra cache takes heap the build needs. Query p50 and recall are flat throughout (7.4-8.4 ms, 0.952-0.955), so the knob touches build only. NOTE the staging lesson: the same sweep at `small` looked FLAT across all four percentages, because auto-sizing granted the whole 1,000,000-vector corpus at every one of them. A tier that cannot exercise a knob reports a plateau that says nothing. |
+| ~~GAV on/off at the missing 7 of 8 cells~~ | done | **MEASURED 2026-08-23**, all 8 cells at N=5. The view is worth 2.50x to 6.55x at SF10 depending on the query and 1.50x to 3.70x at SF1, so the benefit GROWS with the graph and the single "5.9x" the page prints is one query's number out of a range. View build is 2.06 s at SF10 against 1,771 ms saved per pass of the three queries, so it amortises in about one pass. |
 | int8 disk overhead (#3143 revisit) | ~1 h | our own issue, closed COMPLETED in May, yet int8 measures 13% MORE disk than fp32 at deep10m (8773.8 vs 7744.6 MB) |
 | pgvector arm | ~2-3 d | the most conspicuous absence |
 | single-engine E2 alternative (Neo4j native vector index) | ~2-3 d | tests the "any other pair" claim |
