@@ -30,6 +30,16 @@ those two would refuse.
 4. **One corpus per table.** Every row in a table describes the same dataset at
    the same size. A table whose rows disagree on `n_docs` (or the lane's size
    field) is a defect, not a comparison.
+5. **The config PROFILE is recorded on every row.** ArcadeDB ships profiles that
+   rewrite defaults wholesale: one sets `VECTOR_INDEX_GRAPH_BUILD_CACHE_SIZE=-1`
+   with both cache heap percentages at 50, another pins both caches to a flat
+   10,000, against a default of `graphBuildCacheSize=0` (auto) and
+   `graphBuildCacheMaxHeapPercent=25`. Heap and cpuset are already recorded; the
+   profile is not, and it can move a build by 4.7x on its own (10% vs 25% at
+   deep10m: 10,786 s vs 2,274 s). Two rows under different profiles are not
+   comparable and nothing in the row currently says so. Also: the percentage only
+   applies on the AUTO path, so quoting it for a run that pinned an absolute
+   cache size is wrong.
 
 ---
 
@@ -443,6 +453,7 @@ Ordered by whether a published cell depends on it.
 | lifecycle: cold/warm open, close x3 modes, 8 situations, 2 sizes | ~3 h | lane BUILT and smoke-tested; needs a campaign run on the frozen pair |
 | on-disk footprint | free | lands automatically now; qO rows already carry `disk_data_mb` |
 | crash recovery, Raft failover, cold start | free | measured, never published |
+| **import / export** | ~1 d, lane to build | **The largest blind spot on the page.** Nothing here measures `IMPORT DATABASE` / `EXPORT DATABASE` or backup+restore, and for an embedded engine those are lifecycle operations a user hits as often as open and close. Examples 15 and 16 already contrast import-database against transactional ingest, so the shape exists; it is not a lane and produces no rows. GATED, though: upstream #6471 (JSONL export silently skips un-serializable records with no aggregate error) and #6460 (JSONL import does not remap LINK-typed values, fix in flight as #6654) are open CORRECTNESS bugs. Benchmarking a path that silently drops records would produce a throughput number for the wrong work. Build the lane, but publish only once those two land |
 | load and build cost table | free | in frozen rows already |
 | atomicity table (torn counts) | free | in frozen rows already |
 | ingest A/B, jpype size sweep, nocompact ablation, l2olap SF1 | free | in frozen rows already |
