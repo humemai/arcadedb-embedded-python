@@ -42,7 +42,7 @@ host: it compiles, it runs probes, and nothing it produces reaches the page.
 |---|---|---|
 | CPU | 12th Gen Intel Core i9-12900HK | Intel Core Ultra X9 388H |
 | topology | 1 socket, 14 cores, 20 threads: 6 P-cores with SMT (12 threads) + 8 E-cores | 16 cores, 16 threads, no SMT |
-| `cpuset 0-11` | the 12 P-core threads, verified by max frequency: cpu0-11 report 4900 MHz, cpu12-19 report 3800 MHz | n/a |
+| `cpuset 0-11` | the 12 P-core threads, verified by max frequency: cpu0-11 report 4900 MHz, cpu12-19 report 3800 MHz | **NOT the P-cores here.** The kernel reports `cpu_core = 0-3`, `cpu_atom = 4-15`, and max frequency agrees: cpu0-3 at 5100-5200 MHz, cpu4-11 at 4000, cpu12-15 at 3700. `0-11` on this machine is 4 P + 8 E, mixed. Laptop probes pin `0-3`. |
 | RAM | 61 GiB | 30 GiB |
 | storage | Samsung SSD 980 PRO 2 TB NVMe (root, `/home`, `/var/tmp`, all bench data) | Samsung MZVL22T0HDLB 1.9 TB NVMe |
 | OS / kernel | Ubuntu 26.04 LTS, 7.0.0-30-generic | Ubuntu 26.04 LTS, 7.0.0-29-generic |
@@ -55,6 +55,14 @@ not just recorded here:
 (`/sys/devices/system/cpu/smt/control` = `on`). A reader who assumes 12 physical
 cores will over-estimate what a parallel build had available, and every
 "12-core" phrasing in our own prose is wrong.
+
+**`cpuset 0-11` means something DIFFERENT on the two machines, which is a trap
+we walked into.** On mini it is the P-core threads. On the laptop the kernel
+says `cpu_core = 0-3` and `cpu_atom = 4-15`, so the same string selects 4 P-cores
+plus 8 E-cores. Laptop probes that used `0-11` "for consistency with mini" were
+measuring a heterogeneous set, which is fine for a ratio and misleading for a
+latency. Laptop probes pin `0-3`; anything published re-runs on mini anyway, so
+the two never need to mean the same thing, only to be stated.
 
 **Frequency is not pinned.** The governor is `powersave` and turbo is ENABLED
 (`intel_pstate/no_turbo` = 0), so a long build and a short query do not see the
@@ -164,7 +172,7 @@ a p50.
 
 | id | title | rows | columns |
 |---|---|---|---|
-| `lifecycle` | **NEW** — open and close cost | empty, doc, doc_idx{1,10,30}, hash, fulltext, geo, sparse, ts, graph, graph_gav, vector, vector2, mixed | **cold open ms**, warm open ms, close ms clean / read / write, at 10k and 100k |
+| `lifecycle` | **NEW** — session cost, open to close | empty, doc, doc_idx{1,10,30}, hash, fulltext, geo, sparse, ts, graph, graph_gav, vector, vector2, mixed | cold-start decomposition (4 columns, below), then per scenario: open ms, **action ms**, close ms, **session ms**, at 10k / 100k / 1M |
 | `ops_build` | **NEW** — load and build cost | every engine, every lane | build s, rows/s |
 | `ops_recovery` | **NEW** — crash recovery | ArcadeDB, 2 WAL settings | trials, contiguous, duplicates, recovery s |
 | `ops_failover` | **NEW** — Raft failover | 3-node ArcadeDB | trials, acked writes present, ambiguous, election s, failover s |
@@ -174,6 +182,44 @@ a p50.
 `lifecycle` is both a page table and a regression gate — see §4.
 `ops_disk` needs `runner.container_disk` wired; it is implemented and carried by
 zero frozen rows.
+
+**The seven scenarios, because "open and close cost" was too few questions.**
+A database is not only opened and closed; it is built, read, written to, and
+reopened after someone else wrote. Those states cost wildly different amounts
+and the difference is the whole finding, so each is its own row:
+
+| scenario | what it asks |
+|---|---|
+| `build` | create, load, create the index/view, close. The session that OWNS the build, and where a close-time rebuild doubles it (#6489). |
+| `clean` | reopen, touch nothing, close. The case #6583/#6632 argued about. |
+| `read` | reopen, run one query, close. |
+| `write` | reopen, commit one row into a scratch type, close. Held CONSTANT across situations, so it prices "what does committing anything cost". |
+| `write_own` | reopen, commit into the situation's OWN structure, close. The constant write leaves a vector index clean; only this dirties it. |
+| `write_own_read` | write then read in one session. Neither half alone shows the cost (#6641). |
+| `stale` / `stale_read` | reopen a database a PREVIOUS session wrote to, so a persisted derived structure is invalid on arrival. |
+| `drop` | reopen, drop the accelerator, close. Single cycle, never a median: the second cycle would find nothing to drop and quietly average in a no-op. |
+
+**Time the actions, not just the ends.** An earlier version of this lane timed
+`open` and `close` and discarded the middle, which is exactly where a
+query-triggered rebuild lands: it reported ~5 ms open and ~300 ms close for a
+session that actually cost 4.3 s. Every scenario reports
+`open + action + close = session`, and the page quotes the session.
+
+**Cold start is four numbers, not one.** "JVM startup" was being used for three
+different quantities. Measured in a fresh subprocess, per situation:
+
+| column | this machine | what it is |
+|---|---|---|
+| `import_ms` | ~105 ms | interpreter + module import |
+| `jvm_start_ms` | ~470 ms | `start_jvm()` alone, no database |
+| `first_open_ms` | ~400 ms | first `open_database()`, JVM already up |
+| `cold_process_ms` | ~1,000 ms | what a CLI actually waits for |
+
+For scale, a bare JVM here is **~115 ms** and adding all 65 jars to the
+classpath costs **~15 ms**. So roughly 900 ms of the cold second is the BINDING
+path, not the JVM and not the classpath. A page that quotes a 4 ms warm open
+without this is off by two orders of magnitude for anything CLI-shaped, and
+embedded use is mostly CLI-shaped.
 
 ---
 
