@@ -179,7 +179,14 @@ fi
 # the same one V0 uses -- the jar's own buildNumber -- so "already built" means
 # the same thing here as "verified" does below, rather than being a timestamp
 # heuristic that could skip a stale tree.
-CTX_PRE=$(ls -d "$WT"/package/target/arcadedb-*.dir 2>/dev/null | grep -v -- '-base\|-headless\|-minimal' | head -1)
+# `|| true` is load-bearing under `set -euo pipefail`. On a FRESH workdir there is
+# no package/target yet, so `ls -d` exits non-zero; `2>/dev/null` hides its message
+# but not its status, pipefail promotes it to the pipeline's status, and the
+# assignment then kills the script BEFORE the build it was about to do. The script
+# therefore only ever worked on a tree some earlier build had already populated,
+# which is exactly not the case for a newly pinned commit. Found when qW aborted
+# on mini four seconds in, with no error text, on a commit it had never built.
+CTX_PRE=$(ls -d "$WT"/package/target/arcadedb-*.dir 2>/dev/null | grep -v -- '-base\|-headless\|-minimal' | head -1 || true)
 if [ -n "$CTX_PRE" ] && [ "$(props_from_jar_dir "$(ls -d "$CTX_PRE"/arcadedb-*/lib 2>/dev/null | head -1)" 2>/dev/null | sha_from_props)" = "$SHA" ]; then
   say "assembly already at $SHORT, skipping maven (BUILD_FORCE=1 to rebuild)"
   [ -z "${BUILD_FORCE:-}" ] || { say "BUILD_FORCE set, rebuilding"; NEED_MVN=1; }
