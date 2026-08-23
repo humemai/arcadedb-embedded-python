@@ -206,9 +206,15 @@ defect and this engine has produced three of them (#5747, #6489, #5872).
 > Close should be **O(what was written), not O(what is stored)**, and on the
 > order of **100 ms**.
 
-Grounded twice: close should not cost more than getting started (JVM startup is
-~160 ms here), and it should sit under the ~100 ms at which a script stops
-feeling instant.
+Grounded twice: close should not cost more than getting started (JVM startup
+measured **219 ms** on 2026-08-23, read from `RuntimeMXBean.getUptime()` at the
+moment before the first database call), and it should sit under the ~100 ms at
+which a script stops feeling instant.
+
+**Quote JVM startup next to every session number.** At these magnitudes it is
+the larger figure: a 5 ms `open()` inside a process that took 219 ms to reach
+its first database call is not a 5 ms cost to anyone launching a CLI, and
+printing the `open()` alone flatters every embedded number on the page.
 
 `lifecycle` runs as a gate, not just a report. It FAILS when:
 - a situation's close time grows with row count while nothing was written
@@ -229,11 +235,23 @@ own fixes and the first honest answer to "what does it cost to close".
 caveat to write around):
 - 0.40 ms per index on close, independent of index content, vanishing on tmpfs
   → it is I/O, and 30 indexes is not an unusual schema.
-- The Graph Analytical View is REBUILT on every open, not loaded: only the
-  definition is persisted and the CSR is re-derived by scanning the graph. So
-  the 5.9x traversal speedup is paid with a full graph scan per session, which
-  wins over a long session and loses over a short one. That belongs beside the
-  5.9x, and the fix (lazy-on-first-use, or persist the CSR) is upstream work.
+- ~~The Graph Analytical View is REBUILT on every open~~ **CLOSED 2026-08-23,
+  both halves of the fix we asked for shipped the same day.** [#6583](https://github.com/ArcadeData/arcadedb/issues/6583)
+  (ours) → Luca's [#6588](https://github.com/ArcadeData/arcadedb/pull/6588)
+  persists the CSR with a freshness certificate; his
+  [#6632](https://github.com/ArcadeData/arcadedb/issues/6632) → [#6633](https://github.com/ArcadeData/arcadedb/pull/6633)
+  then made the read lazy-on-first-use, unconditionally. Measured on the merged
+  commit at 10M vertices / 40M edges, a session that never queries the view now
+  pays **+0.77 ms** at open against **+1027.46 ms** before. The page must stop
+  saying the speedup is paid with a per-session scan; it is not.
+- **The cost moved rather than vanished, and this is the number the page now
+  owes.** Filed as [#6641](https://github.com/ArcadeData/arcadedb/issues/6641).
+  With no snapshot at open there is nothing for a commit to mark STALE, so the
+  view stays READY, is handed to the query, and the query waits out a full
+  O(V+E) rebuild. Measured at 300k vertices: a session that writes and then
+  reads costs **1,270.62 ms** against a **84.80 ms** baseline, and the identical
+  session that only writes costs 76.83 ms. The tax is specifically write-then-read,
+  which the old "rebuilt on every open" framing does not describe.
 - Cold open is now measurable: `pagecache.evict()` drops a database's files with
   `posix_fadvise(DONTNEED)` and verifies with `mincore` that they left. No root,
   and it evicts only the named files, so the rest of the host stays warm and the

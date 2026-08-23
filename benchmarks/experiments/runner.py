@@ -46,7 +46,7 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 # Lifecycle tiers (l5). Small caps on purpose: this lane
                 # measures open and close, not throughput, and a large
                 # heap would only make the JVM slower to start.
-                "lc10k": "8g", "lc100k": "8g",
+                "lc10k": "8g", "lc100k": "8g", "lc1m": "24g",
                 # LDBC-SNB tiers (l2 lane, BENCH_GRAPH_SOURCE=ldbc)
                 "sf1": "8g", "sf10": "24g",
                 # DEEP-10M dense tier (l3d). 36g. The cap went 36g -> 44g ->
@@ -133,7 +133,9 @@ TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     # at lc100k are the two that historically scaled badly, and
                     # a timeout that clips the situation the lane exists to
                     # catch would report a defect as an infrastructure failure.
-                    "lc10k": 1800, "lc100k": 7200,
+                    # lc1m: a vector rebuild at 1M is minutes, and the write and
+                    # write_read modes pay one per cycle, so this needs room.
+                    "lc10k": 1800, "lc100k": 7200, "lc1m": 28800,
                     # deep10m at 8h, not 6, and not for the reason given here
                     # until 2026-08-20. The run that "died ~25 min short" was a
                     # diagnostic arm (auto-sized build cache at a 36g heap),
@@ -153,7 +155,7 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # Lifecycle tiers (l5): small heaps on purpose. The lane times
                  # open and close, not throughput, and a larger heap only makes
                  # the JVM slower to start without changing what is measured.
-                 "lc10k": "4g", "lc100k": "4g",
+                 "lc10k": "4g", "lc100k": "4g", "lc1m": "16g",
                  # THE HEAP LIVES INSIDE THE CAP. cgroup v2 bounds the whole
                  # container (anon + page cache), so a heap that approaches
                  # MEM_BY_SCALE does not raise OutOfMemoryError -- the kernel

@@ -41,6 +41,7 @@ import argparse
 import json
 import os
 import statistics as st
+import subprocess
 import sys
 import time
 
@@ -52,7 +53,7 @@ DIM = 64
 ITERS = int(os.environ.get("BENCH_LC_ITERS", "3"))
 WARMUP = int(os.environ.get("BENCH_LC_WARMUP", "1"))
 
-SCALE_ROWS = {"lc10k": 10_000, "lc100k": 100_000}
+SCALE_ROWS = {"lc10k": 10_000, "lc100k": 100_000, "lc1m": 1_000_000}
 
 SITUATIONS = ["empty", "doc", "doc_idx10", "graph", "graph_gav",
               "vector", "sparse", "ts"]
@@ -93,7 +94,10 @@ def _rm(p):
 
 
 def build(situation, n, heap):
-    """Create the database for `situation` at `n` rows, then close it."""
+    """Create the database for `situation` at `n` rows, then close it.
+
+    Returns the build session's close time in ms.
+    """
     import arcadedb_embedded as arcadedb
     _rm(DB)
     db = arcadedb.create_database(
@@ -180,7 +184,13 @@ def build(situation, n, heap):
         db.commit()
     else:
         raise SystemExit(f"unknown situation {situation}")
+    # The BUILD SESSION's own close, timed separately. This is the session that
+    # created the structure, and it is where a close-time rebuild doubles the
+    # cost of building (#6489). A reopen cannot show it: by then the structure
+    # is already on disk and clean.
+    _bt = time.perf_counter()
     db.close()
+    return (time.perf_counter() - _bt) * 1000
 
 
 def _bulk(db, tmpl, n, nargs=1):
@@ -273,6 +283,42 @@ def _write(db, situation):
     db.commit()
 
 
+def _write_own(db, situation):
+    """Write into the situation's OWN structure, which the constant Scratch write never does.
+
+    `_write` deliberately inserts into Scratch so every situation commits the same thing, which is the
+    right control for "what does committing anything cost". But it leaves a vector index CLEAN: no
+    vector was added, so nothing marks the graph mutable and no rebuild is owed. That makes the
+    constant-write mode blind to the one case that actually costs seconds. This mode asks the other
+    question: what does writing into the indexed structure itself cost.
+    """
+    _WRITE_SEQ[0] += 1
+    i = 10_000_000 + _WRITE_SEQ[0]
+    db.begin()
+    if situation == "vector":
+        v = ", ".join("0.25" for _ in range(DIM))
+        db.command("sql", f"INSERT INTO V SET id = {i}, emb = [{v}]")
+    elif situation in ("graph", "graph_gav"):
+        db.command("sql", f"INSERT INTO P SET id = {i}")
+    elif situation in ("doc", "doc_idx10"):
+        db.command("sql", f"INSERT INTO D SET p0 = {i}")
+    elif situation == "sparse":
+        db.command("sql", f"INSERT INTO S SET id = {i}")
+    elif situation == "ts":
+        db.command("sql", f"INSERT INTO T SET ts = {1_800_000_000_000 + i}, sensor = 's0', value = 1.0")
+    else:
+        db.command("sql", f"INSERT INTO Scratch SET n = {i}")
+    db.commit()
+
+
+def _drop(db, situation):
+    """Drop the situation's accelerator. Only meaningful where there is one."""
+    if situation == "graph_gav":
+        db.command("sql", "DROP GRAPH ANALYTICAL VIEW lcv")
+    elif situation == "vector":
+        db.command("sql", "DROP INDEX `V[emb]`")
+
+
 def cycle(situation, mode, cold=False):
     """One open/close cycle. Returns (open_ms, close_ms)."""
     import arcadedb_embedded as arcadedb
@@ -287,20 +333,33 @@ def cycle(situation, mode, cold=False):
         _read(db, situation)
     elif mode == "write":
         _write(db, situation)
+    elif mode == "write_read":
+        # The order that matters: a commit invalidates a persisted derived
+        # structure, and the read that follows is what pays to rebuild it.
+        # Neither half alone shows the cost (#6641).
+        _write(db, situation)
+        _read(db, situation)
+    elif mode == "write_own":
+        _write_own(db, situation)
+    elif mode == "write_own_read":
+        _write_own(db, situation)
+        _read(db, situation)
+    elif mode == "drop":
+        _drop(db, situation)
     t2 = time.perf_counter()
     db.close()
     t3 = time.perf_counter()
-    return (t1 - t0) * 1000, (t3 - t2) * 1000
+    return (t1 - t0) * 1000, (t3 - t2) * 1000, (t2 - t1) * 1000
 
 
 def measure(situation, mode, cold=False):
-    o, c = [], []
+    o, c, w = [], [], []
     for i in range(WARMUP + ITERS):
-        a, b = cycle(situation, mode, cold=cold)
+        a, b, act = cycle(situation, mode, cold=cold)
         if i < WARMUP:
             continue
-        o.append(a); c.append(b)
-    return st.median(o), st.median(c)
+        o.append(a); c.append(b); w.append(act)
+    return st.median(o), st.median(c), st.median(w)
 
 
 def main():
@@ -316,8 +375,36 @@ def main():
     heap = os.environ.get("BENCH_HEAP", "8g")
 
     t0 = time.perf_counter()
-    build(args.workload, n, heap)
+    build_close_ms = build(args.workload, n, heap)
     build_s = round(time.perf_counter() - t0, 3)
+
+    # JVM BOOT, measured in a FRESH PROCESS, because it cannot be measured in this one: build()
+    # above already started the JVM, so any "first open" timed here is a warm open wearing the wrong
+    # name. An earlier version of this lane did exactly that and reported 18-52 ms for something that
+    # is an order of magnitude larger.
+    #
+    # What a cold caller actually pays is the whole process: interpreter start, import, JPype's JVM
+    # boot, then the open. That is what this subprocess times, from its own first line.
+    _boot = subprocess.run(
+        [sys.executable, "-c",
+         "import time; _t0 = time.perf_counter()\n"
+         "from arcadedb_embedded.jvm import start_jvm\n"
+         "import arcadedb_embedded as a\n"
+         "_ti = time.perf_counter()\n"
+         "start_jvm()\n"
+         "_tj = time.perf_counter()\n"
+         "db = a.open_database(%r)\n"
+         "_to = time.perf_counter()\n"
+         "db.close()\n"
+         "print('%%.3f %%.3f %%.3f %%.3f' %% ((_ti-_t0)*1000, (_tj-_ti)*1000, (_to-_tj)*1000, "
+         "(time.perf_counter()-_t0)*1000))"
+         % DB],
+        capture_output=True, text=True, timeout=900)
+    if _boot.returncode == 0 and _boot.stdout.strip():
+        import_ms, jvm_start_ms, first_open_ms, cold_proc_ms = (
+            float(x) for x in _boot.stdout.strip().split()[-4:])
+    else:
+        import_ms = jvm_start_ms = first_open_ms = cold_proc_ms = -1.0
 
     out = bench_common.run_conditions(
         lane="lifecycle", backend=args.backend, workload=args.workload,
@@ -328,17 +415,59 @@ def main():
     # cached: running it after the warm modes would measure an eviction of a
     # database that several cycles had just re-warmed, which is the same
     # number by construction but a weaker claim.
-    o, c = measure(args.workload, "clean", cold=True)
+    o, c, w = measure(args.workload, "clean", cold=True)
     out["cold_open_ms"], out["cold_close_ms"] = round(o, 3), round(c, 3)
+    out["build_close_ms"] = round(build_close_ms, 3)
+    # The cold start decomposed, because "JVM boot" was being used for three different things.
+    # Measured on this machine: a bare JVM is ~115 ms, so jvm_start_ms above that is JPype's overhead,
+    # and first_open_ms is ArcadeDB's own initialisation with the JVM already up.
+    out["import_ms"] = round(import_ms, 3)               # interpreter + module import
+    out["jvm_start_ms"] = round(jvm_start_ms, 3)         # start_jvm() alone, no database
+    out["first_open_ms"] = round(first_open_ms, 3)       # first open, JVM already up
+    out["cold_process_ms"] = round(cold_proc_ms, 3)      # what a CLI actually waits for
 
-    for mode in ("clean", "read", "write"):
-        o, c = measure(args.workload, mode)
+    for mode in ("clean", "read", "write", "write_read", "write_own", "write_own_read"):
+        o, c, w = measure(args.workload, mode)
         out[f"{mode}_open_ms"] = round(o, 3)
         out[f"{mode}_close_ms"] = round(c, 3)
+        out[f"{mode}_action_ms"] = round(w, 3)
+        # The session is what a caller actually waits for. Reporting open and close
+        # alone hides a rebuild triggered BETWEEN them, which is exactly where the
+        # GAV and vector costs land.
+        out[f"{mode}_session_ms"] = round(o + w + c, 3)
 
     # The invariant, evaluated where the number is produced rather than left to
     # a downstream reader: close should be O(what was written), so a clean
     # close (nothing written) over 100 ms is a finding regardless of size.
+    # JVM boot is what the first open carries beyond a warm one. Recorded as a
+    # first-class column so no table can quote an open() without it.
+    # Kept for continuity with earlier runs, but it is a COLD START penalty, not JVM boot: it is the
+    # whole cold process minus a warm session. jvm_start_ms above is the JVM boot proper.
+    out["cold_start_penalty_ms"] = round(
+        max(0.0, out["cold_process_ms"] - (out["clean_open_ms"] + out["clean_close_ms"])), 3)
+
+    # A stale reopen: the PREVIOUS session committed, so any persisted derived
+    # structure is invalid on this open. Measured separately because it is the
+    # case #6641 is about and no other mode reaches it.
+    _sw = cycle(args.workload, "write_own")
+    o, c, w = measure(args.workload, "clean")
+    out["stale_open_ms"], out["stale_close_ms"] = round(o, 3), round(c, 3)
+    o, c, w = measure(args.workload, "read")
+    out["stale_read_open_ms"], out["stale_read_close_ms"] = round(o, 3), round(c, 3)
+    out["stale_read_action_ms"] = round(w, 3)
+    out["stale_read_session_ms"] = round(o + w + c, 3)
+
+    # DROP is destructive and therefore cannot be a median: the second cycle
+    # would find nothing to drop and would time an open/close instead, quietly
+    # averaging a no-op into the number. One cycle, labelled as one, and last
+    # because it leaves the database without the structure every other mode
+    # above was measuring.
+    if args.workload in ("graph_gav", "vector"):
+        o, c, w = cycle(args.workload, "drop")
+        out["drop_open_ms"], out["drop_close_ms"] = round(o, 3), round(c, 3)
+        out["drop_action_ms"] = round(w, 3)
+        out["drop_is_single_cycle"] = True
+
     out["close_over_budget"] = out["clean_close_ms"] > 100.0
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
