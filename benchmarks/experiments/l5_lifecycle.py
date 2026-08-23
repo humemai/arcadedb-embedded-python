@@ -51,9 +51,15 @@ import pagecache
 DB = "/lcdb/lc"          # a HOST directory bind-mounted here; see _assert_fs
 DIM = 64
 ITERS = int(os.environ.get("BENCH_LC_ITERS", "3"))
+# Which scenarios to run. At very large scales the write modes trigger a full
+# index rebuild PER CYCLE, which is hours; the untriggered ones still answer
+# "does merely having this thing cost more as it grows".
+MODES = [m for m in os.environ.get(
+    "BENCH_LC_MODES", "clean,read,write,write_own,write_own_read").split(",") if m]
 WARMUP = int(os.environ.get("BENCH_LC_WARMUP", "1"))
 
-SCALE_ROWS = {"lc10k": 10_000, "lc100k": 100_000, "lc1m": 1_000_000}
+SCALE_ROWS = {"lc10k": 10_000, "lc100k": 100_000, "lc1m": 1_000_000,
+              "lc10m": 10_000_000}
 
 SITUATIONS = ["empty", "doc", "doc_idx10", "graph", "graph_gav",
               "vector", "sparse", "ts"]
@@ -449,20 +455,21 @@ def main():
     # A stale reopen: the PREVIOUS session committed, so any persisted derived
     # structure is invalid on this open. Measured separately because it is the
     # case #6641 is about and no other mode reaches it.
-    _sw = cycle(args.workload, "write_own")
-    o, c, w = measure(args.workload, "clean")
-    out["stale_open_ms"], out["stale_close_ms"] = round(o, 3), round(c, 3)
-    o, c, w = measure(args.workload, "read")
-    out["stale_read_open_ms"], out["stale_read_close_ms"] = round(o, 3), round(c, 3)
-    out["stale_read_action_ms"] = round(w, 3)
-    out["stale_read_session_ms"] = round(o + w + c, 3)
+    if "write_own" in MODES:
+        _sw = cycle(args.workload, "write_own")
+        o, c, w = measure(args.workload, "clean")
+        out["stale_open_ms"], out["stale_close_ms"] = round(o, 3), round(c, 3)
+        o, c, w = measure(args.workload, "read")
+        out["stale_read_open_ms"], out["stale_read_close_ms"] = round(o, 3), round(c, 3)
+        out["stale_read_action_ms"] = round(w, 3)
+        out["stale_read_session_ms"] = round(o + w + c, 3)
 
     # DROP is destructive and therefore cannot be a median: the second cycle
     # would find nothing to drop and would time an open/close instead, quietly
     # averaging a no-op into the number. One cycle, labelled as one, and last
     # because it leaves the database without the structure every other mode
     # above was measuring.
-    if args.workload in ("graph_gav", "vector"):
+    if args.workload in ("graph_gav", "vector") and "drop" not in os.environ.get("BENCH_LC_SKIP", ""):
         o, c, w = cycle(args.workload, "drop")
         out["drop_open_ms"], out["drop_close_ms"] = round(o, 3), round(c, 3)
         out["drop_action_ms"] = round(w, 3)
