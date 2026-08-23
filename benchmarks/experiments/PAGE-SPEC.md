@@ -252,10 +252,21 @@ defect and this engine has produced three of them (#5747, #6489, #5872).
 > Close should be **O(what was written), not O(what is stored)**, and on the
 > order of **100 ms**.
 
-Grounded twice: close should not cost more than getting started (JVM startup
-measured **219 ms** on 2026-08-23, read from `RuntimeMXBean.getUptime()` at the
-moment before the first database call), and it should sit under the ~100 ms at
-which a script stops feeling instant.
+Grounded twice: close should not cost more than getting started, and it should
+sit under the ~100 ms at which a script stops feeling instant.
+
+**"Getting started" is two numbers, not one**, and older notes quoting a single
+~160 ms conflated them (that figure is also unsourced and was not taken on mini;
+see the annotation in `.notes/papers/icde-2027/lifecycle-open-close.md`).
+Measured 2026-08-24 on an idle laptop, `26.9.1.dev0`, n=5:
+
+| path | to its first engine call |
+|---|---|
+| Java process | **~219 ms** (`RuntimeMXBean.getUptime()` before the first call) |
+| Python process | **~1,000 ms** = import ~105 + `start_jvm()` ~470 + first `open_database()` ~400 |
+
+Compare a bare `java -version` on the same machine: **~115 ms**. The page's story
+is embedded PYTHON, so the second row is the one its close budget answers to.
 
 **Quote JVM startup next to every session number.** At these magnitudes it is
 the larger figure: a 5 ms `open()` inside a process that took 219 ms to reach
