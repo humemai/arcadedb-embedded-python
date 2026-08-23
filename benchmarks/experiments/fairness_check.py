@@ -494,12 +494,22 @@ def check_close_cost(rows):
     was ours, #5872), which is why a number that can slide between releases
     with nobody watching gets a gate instead of a column.
     """
+    # THE SESSION, not just the close. F11 originally watched clean_close alone,
+    # and PR #6588 upstream is the proof that this is not enough: persisting the
+    # analytical view's CSR moved its cost from close to open, 4032 -> 5.95 ms
+    # closing and 4.94 -> 241.84 ms opening at a million vertices. A close-only
+    # gate goes GREEN on that, and would equally go green on a change that moved
+    # cost the other way and made a session slower overall. What a caller pays is
+    # open plus close, so that is what gets budgeted.
     lc = [r for r in rows if r.get("lane") == "lifecycle"
           and r.get("clean_close_ms") is not None]
+    for r in lc:
+        r["_session_ms"] = (r["clean_close_ms"]
+                            + (r.get("clean_open_ms") or 0.0))
     if not lc:
         print("\n== F11 close cost ==\n  NOT CHECKED: no lifecycle rows")
         return 0
-    print("\n== F11 close cost: O(written), not O(stored), under 100 ms ==")
+    print("\n== F11 session cost (open+close): O(written), not O(stored), under 100 ms ==")
     bad = 0
     # AGGREGATE BY MEDIAN, per (situation, scale). The first version of this
     # assigned into a dict per row, so with N reps it kept whichever rep came
@@ -509,14 +519,14 @@ def check_close_cost(rows):
     # ignore it, which is worse than not having it.
     cells = collections.defaultdict(list)
     for r in lc:
-        cells[(r["workload"], r.get("scale"))].append(r["clean_close_ms"])
+        cells[(r["workload"], r.get("scale"))].append(r["_session_ms"])
     by_sit = collections.defaultdict(dict)
     for (sit, scale), vals in sorted(cells.items()):
         med = statistics.median(vals)
         by_sit[sit][scale] = med
         if med > 100.0:
-            print(f"  BAD: {sit}/{scale} clean close {med:.1f} ms median of "
-                  f"{len(vals)} exceeds the 100 ms budget "
+            print(f"  BAD: {sit}/{scale} clean session (open+close) {med:.1f} ms "
+                  f"median of {len(vals)} exceeds the 100 ms budget "
                   f"[{min(vals):.1f}-{max(vals):.1f}]")
             bad += 1
     # The shape test. Rows are the same situation at two sizes with nothing
@@ -528,7 +538,7 @@ def check_close_cost(rows):
         if "lc10k" in sizes and "lc100k" in sizes:
             small, big = sizes["lc10k"], sizes["lc100k"]
             if small > 0 and big / small > 1.5:
-                print(f"  BAD: {sit} clean close grows {big / small:.1f}x "
+                print(f"  BAD: {sit} clean session grows {big / small:.1f}x "
                       f"({small:.1f} -> {big:.1f} ms medians) over 10x the "
                       f"rows, with nothing written. That is O(stored).")
                 bad += 1
