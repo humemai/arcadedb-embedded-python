@@ -55,9 +55,15 @@ case "$_pin" in
   *dev*|*rc[0-9]*|*a[0-9]*|*b[0-9]*|*SNAPSHOT*)
     if [ -z "${BENCH_ALLOW_DEV:-}" ]; then
       echo "REFUSING: ArcadeDB pin '$_pin' is a pre-release." >&2
-      echo "Published rows must come from a stable release; the table loader" >&2
-      echo "rejects dev builds, so this would produce rows no table admits." >&2
-      echo "Set BENCH_ALLOW_DEV=1 if you are debugging rather than publishing." >&2
+      echo "A pre-release is publishable ONLY under commit pinning: load_canonical" >&2
+      echo "admits a dev build if and only if the row carries engine_commit and it" >&2
+      echo "matches the campaign's pinned commit (make_paper_tables._commit_matches)." >&2
+      echo "Every LOCAL build reports 26.9.1.dev0 whichever commit produced it, so" >&2
+      echo "a commit-pinned campaign necessarily trips this guard." >&2
+      echo "" >&2
+      echo "So: BENCH_ALLOW_DEV=1 is correct for a commit-pinned campaign whose rows" >&2
+      echo "stamp engine_commit, and wrong for anything that does not. It is not a" >&2
+      echo "debugging-only hatch any more, which is what this message used to say." >&2
       exit 1
     fi
     echo "WARNING: building a PRE-RELEASE image ($_pin); these rows cannot be published" >&2 ;;
