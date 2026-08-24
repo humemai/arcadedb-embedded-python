@@ -109,6 +109,113 @@ class ArcadeTS:
         self.db.close()
 
 
+class ArcadeNativeTS(ArcadeTS):
+    """ArcadeDB's native TIMESERIES type, promoted from l4_native_probe.py into the lane.
+
+    FAIRNESS F6b is "bespoke drivers investigate, lane scripts publish". The 1.86M pts/s
+    time-series headline came from l4_native_probe.py, a bespoke probe, and sat in a table
+    whose other rows came from this lane. That is the violation the page recorded against
+    itself. This arm is that probe's ingest path, running under the lane's contract: same
+    corpus, same timer, same settle discipline, same stamped conditions.
+
+    It is a SEPARATE ARM, not a replacement for arcadedb_ts_doc. The document path is what
+    a user gets from ordinary SQL; this is what the engine can do when asked in its own
+    idiom. Publishing only the faster one would answer a question nobody asked, and
+    publishing only the slower one would understate the engine. The page carries both and
+    says which is which.
+
+    The two fast paths stay OPT-IN and are declared on the row rather than read from the
+    environment behind the reader's back: an arm that quietly enables a flag no comparator
+    has is exactly how the probe number became unpublishable in the first place.
+    """
+
+    name = "arcadedb_ts_native"
+
+    # Declared, not inherited from os.environ at call time. l3d taught us this: an arm that
+    # reads a knob at ingest and stamps it earlier records a value that was never used.
+    PRIMITIVE = os.environ.get("TS_PRIMITIVE", "1") == "1"
+    NUMPY_COLS = os.environ.get("TS_NUMPY", "1") == "1"
+    CHUNK = int(os.environ.get("TS_CHUNK", "100000"))
+    SHARDS = int(os.environ.get("TS_SHARDS", "4"))
+
+    def declared(self):
+        """What this arm turned on, for the row. The page must be able to say that this
+        number used engine fast paths the comparators do not have."""
+        return {"ts_primitive": self.PRIMITIVE, "ts_numpy": self.NUMPY_COLS,
+                "ts_chunk": self.CHUNK, "ts_shards": self.SHARDS,
+                "ts_path": "native_timeseries"}
+
+    def ingest(self, pts):
+        db = self.db
+        # A TIMESERIES type, not a DOCUMENT type. append_samples() casts the target to
+        # LocalTimeSeriesType, so inheriting the document arm's schema throws
+        # ClassCastException at the first batch. This is the whole point of the arm: the
+        # native path is a different STORAGE MODEL, not the same one with a faster writer.
+        db.command("sql",
+                   "CREATE TIMESERIES TYPE Point TIMESTAMP ts "
+                   "TAGS (host STRING) "
+                   "FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) "
+                   f"SHARDS {self.SHARDS}")
+        ex = db.async_executor()
+        for lo in range(0, len(pts), self.CHUNK):
+            chunk = pts[lo:lo + self.CHUNK]
+            ts_col = [p[1] * 1000 for p in chunk]      # ms, as the engine expects
+            host_col = [p[0] for p in chunk]
+            uu_col = [p[2] for p in chunk]
+            us_col = [p[3] for p in chunk]
+            ui_col = [p[4] for p in chunk]
+            if self.NUMPY_COLS:
+                import numpy as _np
+                ts_col = _np.asarray(ts_col, dtype=_np.int64)
+                uu_col = _np.asarray(uu_col, dtype=_np.float64)
+                us_col = _np.asarray(us_col, dtype=_np.float64)
+                ui_col = _np.asarray(ui_col, dtype=_np.float64)
+            # Released wheels have no primitive= keyword; only send it when asked.
+            kw = {"primitive": True} if self.PRIMITIVE else {}
+            ex.append_samples("Point", ts_col, host_col, uu_col, us_col, ui_col, **kw)
+        ex.wait_completion()
+
+    # QUERIES MUST BE OVERRIDDEN TOO. The inherited document-path SQL runs without error
+    # against a TIMESERIES type and returns ZERO ROWS: q_range_rows and q_global_rows both
+    # came back 0 on the first smoke run while ingest reported a healthy 806k pts/s. A row
+    # like that publishes a fast ingest beside two queries that measured nothing, which is
+    # worse than a failure because nothing in it looks wrong.
+    #
+    # Timestamps are stored in MILLISECONDS by the TS engine, so the epoch-second bounds
+    # the document arm uses have to be scaled; that alone is enough to select no rows.
+    def q_last(self):
+        a = T0 * 1000
+        return self.db.query("sql",
+            f"SELECT ts, uu FROM Point WHERE host = '{HOST}' "
+            f"AND ts BETWEEN {a} AND {(T0 + 86400 * 40) * 1000} "
+            f"ORDER BY ts DESC LIMIT 1").to_list()
+
+    def q_range(self):
+        a, b = T0 * 1000, (T0 + 3600) * 1000
+        return self.db.query("sql",
+            f"SELECT ts.timeBucket('1m', ts) AS m, max(uu) AS v FROM Point "
+            f"WHERE host = '{HOST}' AND ts BETWEEN {a} AND {b - 1} "
+            f"GROUP BY m ORDER BY m").to_list()
+
+    def q_global(self):
+        a, b = T0 * 1000, (T0 + 43200) * 1000
+        return self.db.query("sql",
+            f"SELECT ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point "
+            f"WHERE ts BETWEEN {a} AND {b - 1} "
+            f"GROUP BY h ORDER BY h").to_list()
+
+    def settle(self):
+        """OUTSIDE the ingest timer, like every other arm's settle.
+
+        wait_completion() returns when the async ingest is accepted, not when background
+        sealing has caught up. QuestDB's WAL-apply poll used to sit INSIDE its timer, which
+        is the defect this lane just fixed; putting this one inside would re-create it for
+        ArcadeDB and in the direction that flatters us.
+        """
+        import time
+        time.sleep(float(os.environ.get("TS_SETTLE_S", "5")))
+
+
 class DuckTS:
     name = "duckdb"
 
@@ -254,7 +361,7 @@ class QuestTS:
 # adding a served arm cannot forget to update the role test.
 _CLIENT_SERVER = {"questdb"}
 
-BACKENDS = {c.name: c for c in (ArcadeTS, DuckTS, QuestTS)}
+BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeNativeTS, DuckTS, QuestTS)}
 
 
 def main():
@@ -363,6 +470,11 @@ def main():
         role = "driver" if args.backend in _CLIENT_SERVER else "engine"
         out.update(bench_common.run_conditions(lane="l4", backend=args.backend,
                                                role=role))
+        # Declared by the arm, not read from os.environ here: a row must record the
+        # knobs the run actually used, not the ones set at the moment it was stamped.
+        # (l3d recorded quantization=fp32 on int8 rows for exactly that reason.)
+        if hasattr(b, "declared"):
+            out.update(b.declared())
         # Same reasoning as backend_version above, from the other side: on a
         # comparator row engine_version names the wheel this harness imported,
         # not the engine measured. Move it to a name that says so, so the only

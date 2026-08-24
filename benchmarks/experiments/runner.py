@@ -805,7 +805,12 @@ LANES = {
     # arms that need no such pinning first, then move the native ones with their
     # own verification.
     "l4": ("l4_tsbs.py",
-           ["arcadedb_ts_doc", "questdb", "duckdb"],
+           # arcadedb_ts_native promoted from l4_native_probe.py (FAIRNESS F6b:
+           # bespoke drivers investigate, lane scripts publish). Both ArcadeDB
+           # arms run: the document path is what ordinary SQL gives you, the
+           # native path is the engine asked in its own idiom, and the page
+           # prints both rather than choosing the flattering one.
+           ["arcadedb_ts_doc", "arcadedb_ts_native", "questdb", "duckdb"],
            ["ingest"]),
 }
 
