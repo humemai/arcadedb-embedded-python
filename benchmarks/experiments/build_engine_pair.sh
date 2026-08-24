@@ -77,6 +77,20 @@ props_from_image() {   # <image>
   rm -f "$out"; return $rc
 }
 
+# THE SHA THE JARS WILL ACTUALLY CARRY. buildnumber-maven-plugin runs
+#   git log -1 --no-merges --format=format:%H
+# so on a MERGE commit it reports the last non-merge ancestor, never the merge
+# itself. Our sync-upstream.sh produces a merge commit every time it runs, so
+# pinning a campaign to a freshly synced HEAD made verification impossible: the
+# tree was correct, the jars were correct, and the comparison could not succeed.
+#
+# Resolve the requested commit the same way the plugin will, and compare against
+# THAT. This weakens nothing: the point of the check is that the artifact matches
+# the tree it was built from, and --no-merges is how the tree reports itself.
+stamp_sha_for() {  # <commit-ish> -> the sha buildnumber-maven-plugin will write
+  git -C "$REPO" log -1 --no-merges --format=format:%H "$1"
+}
+
 verify_sha() {  # <label> <40-char sha found> <expected>
   local what="$1" got="$2" want="$3"
   [ -n "$got" ] || die "$what: no buildNumber in arcadedb.properties. The build lost git, and a jar that cannot say what it is must not be published."
@@ -88,7 +102,7 @@ verify_sha() {  # <label> <40-char sha found> <expected>
 # ---------------------------------------------------------------- verify only
 if [ "${1:-}" = "--verify" ]; then
   SHA_SHORT="${2:?usage: --verify <sha>}"
-  SHA=$(git -C "$REPO" rev-parse "$SHA_SHORT")
+  SHA=$(stamp_sha_for "$SHA_SHORT")
   IMG="arcadedb-local:${SHA:0:9}"
   say "verifying pair at $SHA"
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -138,7 +152,9 @@ fi
 
 # ---------------------------------------------------------------------- build
 SHA_IN="${1:?usage: build_engine_pair.sh <commit-ish>}"
-SHA=$(git -C "$REPO" rev-parse "$SHA_IN") || die "unknown commit $SHA_IN"
+git -C "$REPO" rev-parse --verify "$SHA_IN" >/dev/null 2>&1 || die "unknown commit $SHA_IN"
+SHA=$(stamp_sha_for "$SHA_IN")
+[ -n "$SHA" ] || die "no non-merge commit reachable from $SHA_IN"
 SHORT="${SHA:0:9}"
 IMG="arcadedb-local:$SHORT"
 DEST="${BUILD_DEST:-$HOME/engine-builds/$SHORT}"
