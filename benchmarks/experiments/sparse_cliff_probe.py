@@ -57,6 +57,20 @@ def main():
     for qi, (idx, vals) in enumerate(queries[:20]):  # warmup, untimed
         be.search(idx, vals, K)
 
+    # PROVENANCE ON EVERY ROW. f3_sparse_perquery refuses to draw while any row
+    # lacks engine_version, and every row here lacked it: the figure sat in the
+    # paper long after the tier was re-measured, depicting a 228 ms median against
+    # a released engine that answers the same tier at 11.3 ms (DECISIONS #43).
+    # A per-query probe is exactly where this matters, because the rows outlive
+    # the build that produced them and nothing else in the file dates them.
+    stamp = {}
+    try:
+        import bench_common
+        stamp = bench_common.run_conditions(lane="sparse_cliff", backend=be.name,
+                                            role="engine", scale=SCALE, n_docs=N_DOCS)
+    except Exception as e:                      # never lose a measured result
+        stamp = {"conditions_error": f"{e.__class__.__name__}: {e}"}
+
     recs = []
     with open(out_path, "w") as f:
         for qi, (idx, vals) in enumerate(queries):
@@ -67,6 +81,7 @@ def main():
             rec = {"q": qi, "ms": round(ms, 3), "nnz": len(idx),
                    "sum_df": int(tdf.sum()), "max_df": int(tdf.max()),
                    "max_df_frac": round(float(tdf.max()) / N_DOCS, 4)}
+            rec.update(stamp)
             recs.append(rec)
             f.write(json.dumps(rec) + "\n")
             if (qi + 1) % 100 == 0:
