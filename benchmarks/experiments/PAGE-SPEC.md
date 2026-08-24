@@ -30,7 +30,22 @@ those two would refuse.
 4. **One corpus per table.** Every row in a table describes the same dataset at
    the same size. A table whose rows disagree on `n_docs` (or the lane's size
    field) is a defect, not a comparison.
-5. **The config PROFILE is recorded on every row.** ArcadeDB ships profiles that
+5. **A knob the campaign sets must reach the cell, and this is checked.**
+   `runner.py`'s env passthrough is a CLOSED tuple, and its own comment says what
+   happens to anything missing: "a knob absent here silently runs the in-script
+   default." On 2026-08-24 that cost us the entire lifecycle table.
+   `BENCH_LC_ITERS` and `BENCH_LC_WARMUP` were absent, so every cell ran the
+   lane's defaults of 3 and 1 while the campaign exported 5 and 2 and every
+   report said n=5. `BENCH_LC_MODES` was dropped the same way, so a 10M cell
+   asked for two cheap scenarios ran all five.
+   The check is mechanical and takes a second: diff every lane's
+   `environ.get("UPPER_CASE")` against what the runner delivers. Run it when a
+   lane gains a knob. The audit that followed found six more undelivered knobs,
+   including `BENCH_DENSE_QUANT`, which selects int8 against fp32, and
+   `BENCH_DUCKDB_THREADS`, which is a fairness knob. None had been set by a
+   campaign, so no published row was wrong, but they were latent in exactly the
+   way `BENCH_LC_ITERS` was latent until someone used it.
+6. **The config PROFILE is recorded on every row.** ArcadeDB ships profiles that
    rewrite defaults wholesale: one sets `VECTOR_INDEX_GRAPH_BUILD_CACHE_SIZE=-1`
    with both cache heap percentages at 50, another pins both caches to a flat
    10,000, against a default of `graphBuildCacheSize=0` (auto) and

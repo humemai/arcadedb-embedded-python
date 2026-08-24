@@ -1320,6 +1320,23 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # including the ones that rebuild the index per cycle.
                    "BENCH_LC_ITERS", "BENCH_LC_WARMUP",
                    "BENCH_LC_MODES", "BENCH_LC_SKIP",
+                   # Knobs the LANES read that this tuple could not deliver. Audited
+                   # 2026-08-24 by diffing every lane's environ.get() against what the
+                   # runner sends. No campaign had set any of them, so no published row
+                   # is wrong; they were latent, in the same way BENCH_LC_ITERS was
+                   # latent until a campaign set it and got the default anyway.
+                   #
+                   # BENCH_DENSE_QUANT is the sharpest: it selects int8 against fp32,
+                   # and a campaign setting it would have measured fp32 while the
+                   # launcher believed otherwise. BENCH_DUCKDB_THREADS is a FAIRNESS
+                   # knob, which is worse than a performance one to lose silently.
+                   "BENCH_DENSE_QUANT", "BENCH_DENSE_COMPARATOR_M",
+                   "BENCH_DUCKDB_THREADS", "BENCH_ES_PRUNE",
+                   "ARCADEDB_JVM_EXTRA", "ARCADEDB_EXTRA_JVM_ARGS",
+                   # l4's native-path fast paths. The lane arm's defaults are ON, so
+                   # its rows are right today, but a campaign could not turn them OFF
+                   # to produce the ablation the page needs.
+                   "TS_PRIMITIVE", "TS_NUMPY", "TS_CHUNK", "TS_SHARDS", "TS_SETTLE_S",
                    # l4 time series. BENCH_TS_LAST_AB and BENCH_TS_SETTLE_S are
                    # not conveniences: the driver's in-script defaults (AB off,
                    # 30 s settle) are BOTH different from what the published rows
