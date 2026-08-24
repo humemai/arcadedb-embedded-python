@@ -378,7 +378,15 @@ def main():
 
     fs = _assert_fs()
     n = SCALE_ROWS[args.scale]
-    heap = os.environ.get("BENCH_HEAP", "8g")
+    # ARCADEDB_HEAP is what runner.py exports and what bench_common STAMPS on the
+    # row. This lane alone read BENCH_HEAP, which the runner never sets, so it ran
+    # at this 8g default at every scale while the row claimed HEAP_BY_SCALE's value:
+    # a 24g label on an 8g run at lc10m, which then GC-thrashed at 8160/8192 MB and
+    # managed 400 vectors in 21 seconds. That is precisely the failure runner.py's
+    # own comment records for Elasticsearch, "a 4g run wearing a 16g label".
+    #
+    # BENCH_HEAP is still honoured, second, so a direct invocation can override.
+    heap = os.environ.get("ARCADEDB_HEAP") or os.environ.get("BENCH_HEAP", "8g")
 
     t0 = time.perf_counter()
     build_close_ms = build(args.workload, n, heap)
