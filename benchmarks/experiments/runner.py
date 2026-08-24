@@ -1312,6 +1312,14 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    "BENCH_DENSE_BUILD_CACHE", "BENCH_DENSE_BUILD_CACHE_PCT",
                    "BENCH_SKIP_CLOSE",
                    "BENCH_TPC_DATA", "BENCH_TPC_SF", "BENCH_GAV",
+                   # lifecycle. ABSENT UNTIL NOW, and the tuple being closed meant
+                   # every cell silently ran the lane's in-script defaults: ITERS=3
+                   # and WARMUP=1, while the campaign scripts set 5 and 2 and every
+                   # report said n=5. BENCH_LC_MODES was ignored the same way, so a
+                   # 10M cell asked for the two cheap scenarios ran all five,
+                   # including the ones that rebuild the index per cycle.
+                   "BENCH_LC_ITERS", "BENCH_LC_WARMUP",
+                   "BENCH_LC_MODES", "BENCH_LC_SKIP",
                    # l4 time series. BENCH_TS_LAST_AB and BENCH_TS_SETTLE_S are
                    # not conveniences: the driver's in-script defaults (AB off,
                    # 30 s settle) are BOTH different from what the published rows
