@@ -380,6 +380,42 @@ def measure(situation, mode, cold=False):
     return st.median(o), st.median(c), st.median(w)
 
 
+def measure_stale(situation, mode):
+    """Like measure(), but RE-DIRTIES before every cycle.
+
+    The stale block used to create the staleness once and then read it
+    WARMUP + ITERS times. That is not a repeated measurement of a stale reopen,
+    it is one stale reopen followed by six warm ones - and because measure()
+    discards the first WARMUP cycles, the discarded ones were exactly the stale
+    ones and the reported median was systematically the WARM case.
+
+    Caught 2026-08-25 by replaying the mode sequence outside the harness at
+    N=20,000: the seven stale_read actions came out 83.5, 2325.4, 63.4, 56.2,
+    57.6, 54.3, 53.7 ms. The staleness is consumed in cycles 0 and 1, the two
+    cycles that are thrown away, and the median of the kept cycles (56.2 ms) is
+    a clean read against a graph the engine's own log reports as up to date -
+    a fake 45x against the honest number.
+
+    Whether the laundering fires depends on whether anything repairs and
+    persists the derived structure between cycles, which depends on the engine
+    version, the scale, and on background rebuild scheduling. That is exactly
+    the kind of dependency a measurement must not have, so the fix is
+    structural: every cycle pays for its own staleness, the same way
+    write_own_read re-dirties at the top of each of its cycles.
+
+    THIS IS AN INSTRUMENT CHANGE. stale_* columns produced before 2026-08-25
+    are not comparable with ones produced after it.
+    """
+    o, c, w = [], [], []
+    for i in range(WARMUP + ITERS):
+        cycle(situation, "write_own")        # a separate session commits...
+        a, b, act = cycle(situation, mode)   # ...and THIS one arrives to find it stale
+        if i < WARMUP:
+            continue
+        o.append(a); c.append(b); w.append(act)
+    return st.median(o), st.median(c), st.median(w)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", required=True)
@@ -479,13 +515,15 @@ def main():
     # structure is invalid on this open. Measured separately because it is the
     # case #6641 is about and no other mode reaches it.
     if "write_own" in MODES:
-        _sw = cycle(args.workload, "write_own")
-        o, c, w = measure(args.workload, "clean")
+        o, c, w = measure_stale(args.workload, "clean")
         out["stale_open_ms"], out["stale_close_ms"] = round(o, 3), round(c, 3)
-        o, c, w = measure(args.workload, "read")
+        o, c, w = measure_stale(args.workload, "read")
         out["stale_read_open_ms"], out["stale_read_close_ms"] = round(o, 3), round(c, 3)
         out["stale_read_action_ms"] = round(w, 3)
         out["stale_read_session_ms"] = round(o + w + c, 3)
+        # Says which instrument produced them, so a reader never has to date the
+        # row against a commit to know whether the laundering above applies.
+        out["stale_redirties_every_cycle"] = True
 
     # DROP is destructive and therefore cannot be a median: the second cycle
     # would find nothing to drop and would time an open/close instead, quietly
