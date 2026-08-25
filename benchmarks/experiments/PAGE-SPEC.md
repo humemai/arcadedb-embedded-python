@@ -27,6 +27,15 @@ those two would refuse.
 3. **One engine commit per table.** Every ArcadeDB row in one table comes from the
    same upstream commit, stamped as `engine_commit`. Comparators are digest-pinned
    images. See §1.
+   **ENFORCED at production time since 2026-08-25**, because it was not before and
+   that cost a day. `build_engine_pair.sh` ended by PRINTING "stamp rows with
+   ARCADEDB_ENGINE_COMMIT=<sha>" -- an instruction to a human -- and four separate
+   runs came back rc=0 with `engine_commit=None` on every row: 118 lifecycle rows
+   worth ~18 h of bench time, 20 l4 rows, and 1,000 sparse_cliff rows that were
+   themselves a re-run whose only purpose was to add that field. `runner.py` now
+   REFUSES a paper-tier ArcadeDB run when the variable is unset, before any cell
+   starts, and `bench_common.run_conditions()` reads it so bespoke probes carry it
+   too. A rule the page depends on may not be a reminder.
 4. **One corpus per table.** Every row in a table describes the same dataset at
    the same size. A table whose rows disagree on `n_docs` (or the lane's size
    field) is a defect, not a comparison.
@@ -289,7 +298,7 @@ Six maximum. A figure per table is a gallery, not an argument.
 | `f4_one_vs_n` | published, needs fix | ArcadeDB vs best specialist at equal recall, log ratio. MUST include the two worst rows (graph analytics 0.11x, tabular OLAP 0.0015x) or stop calling itself the whole evaluation. |
 | `f7_e2_hybrid` | published | cross-model transaction latency |
 | `f8_deployment` | published | embedded vs server across result sizes |
-| `f3_sparse_perquery` | blocked on data | per-query latency vs summed posting length, Spearman 0.95. Unblocks when sparse_cliff rows carry `engine_commit`. |
+| `f3_sparse_perquery` | blocked on data | per-query latency vs summed posting length, Spearman 0.95. `engine_commit` now lands (2026-08-25, 1,000 rows at `5010b306c9`, checked by reading the rows back rather than trusting rc=0). Re-running once at the new pin so the figure and the lifecycle table describe the same engine. |
 | `f6_memory_ceiling` | BLOCKED | peak anon at DEEP-10M. Draws NO ArcadeDB bar today. Needs ArcadeDB `peak_anon_mib_sum` at deep10m AND comparators re-run at matched envelope. |
 | `f9_build_cost` | **NEW** | build seconds per engine per lane, log scale. The largest ArcadeDB deficit on the page and currently only trailing columns. |
 | `f10_lifecycle` | **NEW, candidate** | close ms vs rows, per situation, log-log. Only if `lifecycle` shows the O(stored) shape after the current fixes; if close is flat everywhere the table suffices. |
@@ -500,7 +509,7 @@ The 5.9x is a within-session property that each open re-pays.
 | ~~`l3s` medium, Milvus + Qdrant~~ | ~~pools two corpora~~ | **CLEARED 2026-08-21**: `PAPER_CORPUS` in `load_canonical` admits only the corpus each tier publishes, fingerprinted on `(n_docs, dims)`. Rows still need re-publishing |
 | `l3d` deep10m, all comparators | `tier=sweep`, envelope 28g/16g against ArcadeDB's 36g/24g, `version_name: null` | re-run at paper tier, matched envelope, pinned versions |
 | `f6_memory_ceiling` | draws no ArcadeDB bar | ArcadeDB deep10m memory rows exist |
-| `l4` ratios | QuestDB's WAL-apply poll was inside its timed ingest. **Code fixed 2026-08-22** (`QuestTS.settle()` runs outside the timer); the published rows still carry the old timing | l4 is re-run |
+| `l4` ratios | QuestDB's WAL-apply poll was inside its timed ingest. **Code fixed 2026-08-22** (`QuestTS.settle()` runs outside the timer); the published rows still carry the old timing | **Lane ran clean 2026-08-25, 20 rows 0 errors, all four arms — and every row carries `engine_commit=None`, so none may be published.** Re-run at the new pin in qAA |
 | `l4` ArcadeDB native TIMESERIES row | comes from `l4_native_probe.py`, a BESPOKE PROBE, not the lane script, and runs two opt-in fast paths (`TS_PRIMITIVE=1`, `TS_NUMPY=1`) that no comparator gets. FAIRNESS F6b is precisely "bespoke drivers investigate, lane scripts publish". The 1.86M pts/s headline is a probe number sitting in a table of lane numbers | the native arm is promoted into `l4_tsbs.py` as a fourth backend and re-run, or the row is withdrawn |
 | any peak-memory comparison across ArcadeDB variants | `-Xms=-Xmx` commits the heap, so the column measures reservation, not demand | never — state it beside every such column |
 | `postgres_tuned` | has never run: 0 rows, display name only | it runs |
