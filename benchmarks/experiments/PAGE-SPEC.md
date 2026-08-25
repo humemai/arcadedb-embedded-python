@@ -45,6 +45,25 @@ those two would refuse.
    `BENCH_DUCKDB_THREADS`, which is a fairness knob. None had been set by a
    campaign, so no published row was wrong, but they were latent in exactly the
    way `BENCH_LC_ITERS` was latent until someone used it.
+
+   **DELIVERY IS ONLY THE FIRST OF THREE.** 2026-08-25 found the other two, both
+   in knobs that rule 5 had already certified as delivered.
+   *(a) HONOURED.* `BENCH_LC_MODES` reached the cell and the cell ignored it:
+   `l5_lifecycle.py` looped a literal tuple of all six modes and read `MODES`
+   only for the stale block. No row was wrong, but a 10M vector cell ran 10.6 h
+   instead of ~53 min and the stage could not finish inside its timeout. Fixed in
+   `ae5257093`; an unknown mode is now a hard error, and the default is the old
+   tuple verbatim so earlier rows stay reproducible.
+   *(b) RESOLVED WHERE THE PROCESS RUNS.* `BENCH_DATA` was never exported by any
+   launcher, so `runner.py` mounted the in-repo `experiments/data` as `/data` and
+   every corpus lane was pointed at the wrong directory. l4 was the only victim
+   (20 cells, each dead in under a second), and an earlier instance had been
+   "fixed" by passing a HOST path into a container, which cannot resolve. Fixed
+   in `bfe88ea28`: the mount is printed in the preamble and a lane whose corpus
+   is missing is refused on the host.
+   So the rule is: a knob must be DELIVERED to the cell, HONOURED by the lane,
+   and RESOLVE to something that exists inside the container. Checking only the
+   first has now failed twice.
 6. **The config PROFILE is recorded on every row.** ArcadeDB ships profiles that
    rewrite defaults wholesale: one sets `VECTOR_INDEX_GRAPH_BUILD_CACHE_SIZE=-1`
    with both cache heap percentages at 50, another pins both caches to a flat
@@ -197,7 +216,7 @@ a p50.
 
 | id | title | rows | columns |
 |---|---|---|---|
-| `lifecycle` | **NEW** — session cost, open to close | empty, doc, doc_idx{1,10,30}, hash, fulltext, geo, sparse, ts, graph, graph_gav, vector, vector2, mixed | cold-start decomposition (4 columns, below), then per scenario: open ms, **action ms**, close ms, **session ms**, at 10k / 100k / 1M |
+| `lifecycle` | **NEW** — session cost, open to close | empty, doc, doc_idx{1,10,30}, hash, fulltext, geo, sparse, ts, graph, graph_gav, vector, vector2, mixed | cold-start decomposition (4 columns, below), then per scenario: open ms, **action ms**, close ms, **session ms**, at 10k / 100k / 1M / 10M |
 | `ops_build` | **NEW** — load and build cost | every engine, every lane | build s, rows/s |
 | `ops_recovery` | **NEW** — crash recovery | ArcadeDB, 2 WAL settings | trials, contiguous, duplicates, recovery s |
 | `ops_failover` | **NEW** — Raft failover | 3-node ArcadeDB | trials, acked writes present, ambiguous, election s, failover s |
@@ -205,6 +224,19 @@ a p50.
 | `ops_disk` | **NEW** — on-disk footprint | every engine, every lane | bytes after the engine's own settle step (see §4a) |
 
 `lifecycle` is both a page table and a regression gate — see §4.
+
+**Status 2026-08-25: the lane has produced its first paper-candidate sweep.**
+107 cells on mini through the wheel at engine pin `5010b306c9`, eight situations
+across 10k / 100k / 1M and four across 10M. Full matrix in
+`.notes/papers/icde-2027/lifecycle-open-close.md`, section "2026-08-25". The
+headline shape: everything is flat across a 1000x range except the vector index,
+which is the only situation that scales in BOTH directions — 1,378.8 ms to open
+at 10M ([#6722](https://github.com/ArcadeData/arcadedb/issues/6722)) and
+2,465,487 ms to close after one insert
+([#6067](https://github.com/ArcadeData/arcadedb/issues/6067)). A GAV under the
+identical trigger is 21.6 ms.
+`n` caveat the table must carry: 10M is n=1 for `vector`'s write-own column and
+n=3 for its cheap columns. Everything at 1M and below is n=3 or n=5.
 `ops_disk` needs `runner.container_disk` wired; it is implemented and carried by
 zero frozen rows.
 
@@ -290,6 +322,18 @@ Measured 2026-08-24 on an idle laptop, `26.9.1.dev0`, n=5:
 | Java process | **~219 ms** (`RuntimeMXBean.getUptime()` before the first call) |
 | Python process | **~1,000 ms** = import ~105 + `start_jvm()` ~470 + first `open_database()` ~400 |
 
+**And on MINI, which is the machine the page publishes.** Measured 2026-08-25 in
+the lifecycle lane, `start_jvm()` in a fresh subprocess, n=107 cells:
+
+| path | on mini |
+|---|---|
+| `start_jvm()` alone, no database | **175.8-196.2 ms**, flat in workload and scale |
+| whole cold Python process | **420-540 ms** for every workload except vector |
+| whole cold Python process, vector at 10M | **2,202 ms** |
+
+Mini is 2.6x faster than the laptop on `start_jvm()` (~180 vs ~470 ms), so no JVM
+figure may be quoted without its host. The page uses the mini column.
+
 Compare a bare `java -version` on the same machine: **~115 ms**. The page's story
 is embedded PYTHON, so the second row is the one its close budget answers to.
 
@@ -326,14 +370,30 @@ caveat to write around):
   commit at 10M vertices / 40M edges, a session that never queries the view now
   pays **+0.77 ms** at open against **+1027.46 ms** before. The page must stop
   saying the speedup is paid with a per-session scan; it is not.
-- **The cost moved rather than vanished, and this is the number the page now
-  owes.** Filed as [#6641](https://github.com/ArcadeData/arcadedb/issues/6641).
-  With no snapshot at open there is nothing for a commit to mark STALE, so the
-  view stays READY, is handed to the query, and the query waits out a full
-  O(V+E) rebuild. Measured at 300k vertices: a session that writes and then
-  reads costs **1,270.62 ms** against a **84.80 ms** baseline, and the identical
-  session that only writes costs 76.83 ms. The tax is specifically write-then-read,
-  which the old "rebuilt on every open" framing does not describe.
+- ~~**The cost moved rather than vanished**~~ **CLOSED 2026-08-24.**
+  [#6641](https://github.com/ArcadeData/arcadedb/issues/6641) (ours) → Luca's
+  [#6642](https://github.com/ArcadeData/arcadedb/pull/6642), merged the same day,
+  and the fix is the direction we proposed: kick the check off in the background
+  and let the triggering query fall back to OLTP immediately. Verified on main,
+  n=5: the first query after an invalidating commit is **3.0 ms** (range
+  2.7-308.7) against 5,613 ms unfixed, and the view reports `status=BUILDING` in
+  all five, so the rebuild genuinely went to the background. The 10M sweep
+  confirms it holds at scale: a GAV's write-own close is **21.6 ms** at 10M
+  vertices, flat against 9.5 ms at 10k.
+- **NEW 2026-08-25, and it is the OPEN half of the vector cost.**
+  [#6722](https://github.com/ArcadeData/arcadedb/issues/6722) (ours). Every
+  database open parses every page of every `LSM_VECTOR` index and rebuilds the
+  in-memory location map one entry at a time, for a session that may never
+  search. Warm open at 10M is **1,378.8 ms** against 1.1-1.3 ms for documents and
+  for a graph with a view. The diagnostic that identifies it is cold-vs-warm:
+  every other workload gets 40-55% back from the page cache and the vector index
+  gets 3-8%, so the cost is parse and map population, not I/O. The line
+  immediately below the call defers the GRAPH on purpose, which is what makes the
+  eager location scan a choice. Java repro reproduced on upstream `e215d61c1` at
+  0.25-0.39 us/vector.
+  **This is independent of #6067 and #6653 fixes neither.** The 10M vector row
+  shows both halves at once: 1,378.8 ms to open, and 41 minutes to close after a
+  single insert.
 - Cold open is now measurable: `pagecache.evict()` drops a database's files with
   `posix_fadvise(DONTNEED)` and verifies with `mincore` that they left. No root,
   and it evicts only the named files, so the rest of the host stays warm and the
