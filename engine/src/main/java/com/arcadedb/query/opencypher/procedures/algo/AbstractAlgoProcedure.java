@@ -788,6 +788,53 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
       return provider != null ? provider.getNeighborView(dir, relTypes) : null;
     }
 
+    /**
+     * Per-node degree in the given direction, for callers that need only the count - not the neighbour ids
+     * {@link #adjacency} would materialise to get it.
+     * <p>
+     * CSR-backed, this reads the count straight off {@link GraphTraversalProvider#getDegrees}, which for a
+     * {@code GraphAnalyticalView} is an O(1)-per-node offset subtraction rather than an O(degree) walk - no
+     * neighbour-id array is ever allocated. {@code getDegrees} takes one edge type at a time (issue #6316: its
+     * other caller, {@code DegreeProductOp}, also calls it once per type), so an "all/several types" request is
+     * resolved to the provider's materialised types and summed per type, the same resolution
+     * {@link #weightedAdjacency} uses for its columnar path.
+     */
+    public int[] degrees(final Vertex.DIRECTION dir, final String... relTypes) {
+      // Reserved before allocating, not after - the same "reserve while counting, not after" ordering
+      // weightedAdjacency uses for its own buffers.
+      memory.reserve(saturatingProduct(nodeCount, INT_BYTES), "the degree buffer", nodeCount + " nodes");
+      final int[] degrees = new int[nodeCount];
+      if (provider != null) {
+        final String[] types = relTypes != null && relTypes.length > 0 ? relTypes : provider.getMaterializedEdgeTypes();
+        // types empty/null here means the graph genuinely has no materialised edges of any type - loadGraph's
+        // findProvider already required this provider to be isReady() and to cover every requested type before
+        // selecting it, so an empty result is "no edges exist", not "the provider couldn't answer": degrees
+        // staying all-zero is the correct answer for that graph, not a silent wrong one.
+        if (types != null && types.length > 0) {
+          // perType is a second nodeCount-sized scratch buffer, previously allocated with no reservation of its
+          // own at all - reserved here, separately, right before it is actually needed.
+          memory.reserve(saturatingProduct(nodeCount, INT_BYTES), "the per-type degree scratch buffer", nodeCount + " nodes");
+          final int[] perType = new int[nodeCount];
+          for (final String type : types) {
+            // getDegrees() overwrites perType (it Arrays.fill(..., 0)s it before writing), never accumulates
+            // into it, so summing its result per type here is correct rather than double-counting.
+            provider.getDegrees(perType, dir, type);
+            for (int i = 0; i < nodeCount; i++)
+              degrees[i] += perType[i];
+          }
+        }
+        return degrees;
+      }
+      // countEdges() returns long, narrowed here without an overflow check: this array is int[] because every
+      // CSR-backed caller of GraphData is already int-indexed (dense node ids, CSR neighbour arrays), so the
+      // OLTP fallback matches that contract rather than carrying a long a single degree() consumer would need.
+      // A vertex with more than Integer.MAX_VALUE edges in one direction would already be precluded by the
+      // engine's other structural limits well before this cast could matter.
+      for (int i = 0; i < nodeCount; i++)
+        degrees[i] = (int) vertices.get(i).countEdges(dir, relTypes);
+      return degrees;
+    }
+
     public Vertex getVertex(final int i) {
       if (provider != null) {
         final RID rid = provider.getRID(i);
@@ -864,7 +911,18 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
     public WeightedAdjacency weightedAdjacency(final WorkGuard guard, final Vertex.DIRECTION dir,
         final String weightProperty, final String... relTypes) {
       if (weightProperty == null) {
+        // adjacency() already reserved neighbors' own footprint (issue #6317); what is new here is the parallel
+        // weights array beside it, one double per entry. Its total entry count is already known from neighbors,
+        // so unlike the columnar/record builds below - where entries accumulate as the walk goes - this can be
+        // reserved in one shot before allocating it, rather than incrementally.
         final int[][] neighbors = adjacency(dir, relTypes);
+        long totalEntries = 0;
+        for (int i = 0; i < nodeCount; i++)
+          totalEntries += neighbors[i].length;
+        memory.reserve(saturatingSum(saturatingProduct(nodeCount, MATRIX_ROW_OVERHEAD_BYTES),
+                saturatingProduct(totalEntries, DOUBLE_BYTES)), "the unit-weight array",
+            nodeCount + " nodes, " + totalEntries + " edge entries");
+
         final double[][] weights = new double[nodeCount][];
         for (int i = 0; i < nodeCount; i++) {
           guard.checkPeriodically(i);
@@ -891,21 +949,71 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
     }
 
     /**
+     * Charges {@code rows} row-header pairs (one each for {@code neighbors[i]} and {@code weights[i]}) and
+     * {@code entries} {@code (neighbour id, weight)} pairs to the call's budget.
+     * <p>
+     * {@code weightedAdjacency} used to reserve nothing for its own columnar/record builds at all - #6300's
+     * edge-count budget was {@code algo.mst}/{@code algo.msa}'s only protection against an oversized graph, and
+     * routing them onto this shared helper (issue #6316) silently lost it: the full {@code int[][]}/{@code
+     * double[][]} pair was materialised before either procedure's own {@code reserve()} call ran. This is the
+     * same "reserve while counting, not after" placement {@link #reserveAdjacency} uses for the plain adjacency
+     * build, so a graph too large for the weighted working set is refused mid-walk rather than after it.
+     */
+    private void reserveWeightedAdjacency(final long rows, final long entries) {
+      if (rows == 0 && entries == 0)
+        return;
+      memory.reserve(saturatingSum(saturatingProduct(rows, 2 * MATRIX_ROW_OVERHEAD_BYTES),
+              saturatingProduct(entries, INT_BYTES + DOUBLE_BYTES)), "the weighted adjacency list",
+          rows > 0 ? rows + " nodes, " + entries + " edge entries" : entries + " edge entries");
+    }
+
+    /**
      * Columnar build: one call per node into {@link GraphTraversalProvider#edgeWeightsOf}, which is where the
      * per-type, per-direction slicing that keeps a weight with its own edge lives. Nothing about that pairing is
      * re-derived here, so the CSR path of an {@code algo.*} procedure, of {@code astar} and of
      * {@code bellmanFord} cannot drift apart from one another.
+     * <p>
+     * {@code guard::checkPeriodically} is threaded into {@code edgeWeightsOf} itself rather than only checked
+     * between two calls to it: one call already returns a fully-built row for one node, so a single supernode
+     * would otherwise be one unabortable unit of work regardless of how tightly the per-node loop below is
+     * checkpointed (issue #6715). The memory side of the same gap - a supernode's row is fully allocated before
+     * {@link #reserveWeightedAdjacency} ever runs - cannot be closed the same way without handing this SPI a
+     * dependency on {@link MemoryBudget}, so what is priced here is the cumulative cost across nodes, the same
+     * bound {@link #reserveAdjacency} already gives the unweighted adjacency build; a single node whose row alone
+     * exceeds the budget is still refused, just after that one row is built rather than during it.
+     * <p>
+     * The entries-seen checkpoint interval is capped by {@link MemoryBudget#capacityFor}, recomputed after every
+     * reservation, against what is actually left of the configured budget - not only by
+     * {@code ADJACENCY_CHECKPOINT_ENTRIES / 3} (a third of {@link #adjacency}'s own constant, since a weighted
+     * entry costs {@code INT_BYTES + DOUBLE_BYTES} rather than {@code INT_BYTES} alone: reusing the unweighted
+     * constant outright would let a tight budget be overshot by three times as many bytes before a checkpoint
+     * ever fires). Capping only once before the loop would go stale as the budget fills up: capacity keeps
+     * shrinking with every reservation, so a threshold computed against the very first, most generous reading
+     * of it could let a later batch through that the remaining budget no longer has room for (issue #6715
+     * review).
      */
     private WeightedAdjacency weightedAdjacencyFromColumns(final WorkGuard guard, final Vertex.DIRECTION dir,
         final String weightProperty, final String[] types) {
+      // Reserved before the row-header arrays are allocated, matching adjacency()'s own ordering: the budget
+      // is refused before a single byte of them is on the heap, not after (issue #6715 review).
+      reserveWeightedAdjacency(nodeCount, 0);
       final int[][] neighbors = new int[nodeCount][];
       final double[][] weights = new double[nodeCount][];
+      final long maxEntryCheckpoint = ADJACENCY_CHECKPOINT_ENTRIES / 3;
+      long entries = 0;
       for (int i = 0; i < nodeCount; i++) {
         guard.checkPeriodically(i);
-        final NodeEdgeWeights edges = provider.edgeWeightsOf(i, dir, weightProperty, 1.0, types);
+        final NodeEdgeWeights edges = provider.edgeWeightsOf(i, dir, weightProperty, 1.0, guard::checkPeriodically, types);
         neighbors[i] = edges.neighbors();
         weights[i] = edges.weights();
+        entries += edges.neighbors().length;
+        final long entryCheckpoint = Math.min(maxEntryCheckpoint, memory.capacityFor(INT_BYTES + DOUBLE_BYTES));
+        if (entries >= entryCheckpoint || (i & 1023) == 1023) {
+          reserveWeightedAdjacency(0, entries);
+          entries = 0;
+        }
       }
+      reserveWeightedAdjacency(0, entries);
       return new WeightedAdjacency(neighbors, weights);
     }
 
@@ -916,6 +1024,7 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
      */
     private WeightedAdjacency weightedAdjacencyFromRecords(final WorkGuard guard, final Vertex.DIRECTION dir,
         final String weightProperty, final String[] relTypes) {
+      reserveWeightedAdjacency(nodeCount, 0);
       final int[][] neighbors = new int[nodeCount][];
       final double[][] weights = new double[nodeCount][];
       // One growable pair of scratch buffers for the whole graph rather than a list per node: the degree is
@@ -923,6 +1032,7 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
       int[] scratchNeighbors = new int[16];
       double[] scratchWeights = new double[16];
       int edgeStep = 0;
+      long entries = 0;
 
       for (int i = 0; i < nodeCount; i++) {
         final Vertex vertex = getVertex(i);
@@ -962,7 +1072,13 @@ public abstract class AbstractAlgoProcedure implements CypherProcedure {
         }
         neighbors[i] = Arrays.copyOf(scratchNeighbors, degree);
         weights[i] = Arrays.copyOf(scratchWeights, degree);
+        entries += degree;
+        if (entries >= ADJACENCY_CHECKPOINT_ENTRIES || (i & 1023) == 1023) {
+          reserveWeightedAdjacency(0, entries);
+          entries = 0;
+        }
       }
+      reserveWeightedAdjacency(0, entries);
       return new WeightedAdjacency(neighbors, weights);
     }
   }

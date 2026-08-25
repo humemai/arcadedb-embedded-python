@@ -30,6 +30,7 @@ import com.arcadedb.database.ProtocolContext;
 import com.arcadedb.database.QueryMetricsRecorder;
 import com.arcadedb.exception.ArithmeticErrorException;
 import com.arcadedb.exception.CauseChain;
+import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.CommandParsingException;
 import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.exception.ErrorCategory;
@@ -68,6 +69,7 @@ import io.micrometer.core.instrument.Metrics;
 import com.arcadedb.utility.DateUtils;
 import com.arcadedb.utility.FileUtils;
 import com.arcadedb.utility.Pair;
+import com.arcadedb.utility.StringUtils;
 
 import java.io.EOFException;
 import java.io.IOException;
@@ -116,11 +118,21 @@ public class PostgresNetworkExecutor extends Thread {
   /** Bind-message parameter length denoting a NULL value (wire value -1, read unsigned). */
   private static final long                                           NULL_PARAM_LENGTH = 0xFFFFFFFFL;
   private static final Object[]                                       NO_PARAMETERS     = new Object[0];
+  /** Case-insensitive {@code TO} separator for the {@code SET <param> TO <value>} syntax. */
+  private static final Pattern                                        SET_TO_SEPARATOR  = Pattern.compile("(?i)\\s+TO\\s+");
+  /** Case-insensitive {@code SESSION}/{@code LOCAL} scope modifier leading a {@code SET} command (issue #6701). */
+  private static final Pattern                                        SET_SCOPE_MODIFIER = Pattern.compile("(?i)^(?:SESSION|LOCAL)\\s+");
 
   private final ArcadeDBServer              server;
   private final ChannelBinaryServer         channel;
   private final byte[]                      buffer                = new byte[BUFFER_LENGTH];
   private final Map<String, PostgresPortal> portals               = new HashMap<>();
+  // Prepared statements registered by PARSE, keyed by statement name (issue #6660 / CodeRabbit on #6658).
+  // Read-only after PARSE creates the entry - bindCommand() clones from here via PostgresPortal.bindFrom()
+  // rather than handing out this same instance, so that two portal names bound from one statement (or the
+  // same portal name re-bound without a new Parse) never share mutable per-execution state. `portals` above
+  // holds only the independent, already-bound portals that describeCommand('P')/executeCommand() operate on.
+  private final Map<String, PostgresPortal> preparedStatements    = new HashMap<>();
   private final boolean                     DEBUG                 = GlobalConfiguration.POSTGRES_DEBUG.getValueAsBoolean();
   private final boolean                     QUOTED_IDENTIFIERS    = GlobalConfiguration.POSTGRES_QUOTED_IDENTIFIERS.getValueAsBoolean();
   private final Map<String, Object>         connectionProperties  = new HashMap<>();
@@ -346,6 +358,8 @@ public class PostgresNetworkExecutor extends Thread {
 
     if (closeType == 'P')
       getPortal(prepStatementOrPortal, true);
+    else if (closeType == 'S')
+      preparedStatements.remove(prepStatementOrPortal);
 
     if (DEBUG)
       LogManager.instance().log(this, Level.INFO, "PSQL: close '%s' type=%s (thread=%s)", prepStatementOrPortal, (char) closeType,
@@ -366,7 +380,13 @@ public class PostgresNetworkExecutor extends Thread {
     if (errorInTransaction)
       return;
 
-    final PostgresPortal portal = getPortal(portalName, false);
+    // Describe('S') names a PREPARED STATEMENT (registered by PARSE); Describe('P') names a bound PORTAL
+    // (registered by BIND) - two different registries since #6660 / CodeRabbit split them apart so portals
+    // stop sharing mutable state. A statement's column info, once resolved here from its schema, is a
+    // property of the statement itself (independent of any parameter values), so it is cached directly on
+    // the template - every portal bound from it afterwards inherits it via PostgresPortal.bindFrom(), the
+    // same way queryTargetType/aliasToSourceProperty are already memoized per statement.
+    final PostgresPortal portal = type == 'S' ? preparedStatements.get(portalName) : getPortal(portalName, false);
     if (portal == null) {
       writeNoData();
       return;
@@ -374,19 +394,30 @@ public class PostgresNetworkExecutor extends Thread {
 
     if (type == 'P') {
       if (portal.sqlStatement != null) {
-        final Object[] parameters = portal.parameterValues != null ? portal.parameterValues.toArray() : new Object[0];
-        final long metricsStart = QueryMetricsRecorder.Holder.startNanos();
-        final ResultSet resultSet;
-        try {
-          resultSet = portal.sqlStatement.execute(database, parameters, createCommandContext());
-        } finally {
-          QueryMetricsRecorder.Holder.record(metricsStart, database.getName(), portal.language, "command");
+        if (!portal.executed) {
+          // Guarded so a second Describe('P') on the same portal (or one arriving after an Execute already
+          // ran the statement) reuses the materialized result instead of running the statement again - issue
+          // #6458's follow-up Execute(s) depend on this same fullResultSet being run exactly once.
+          final Object[] parameters = portal.parameterValues != null ? portal.parameterValues.toArray() : new Object[0];
+          final long metricsStart = QueryMetricsRecorder.Holder.startNanos();
+          final ResultSet resultSet;
+          try {
+            resultSet = portal.sqlStatement.execute(database, parameters, createCommandContext());
+          } finally {
+            QueryMetricsRecorder.Holder.record(metricsStart, database.getName(), portal.language, "command");
+          }
+          portal.executed = true;
+          if (portal.isExpectingResult)
+            // Materializes the whole result now (issue #6458): Describe needs every row's columns, not just
+            // the first, to catch a property that only shows up on a later row (documents can be sparse) -
+            // and the portal keeps this list so the Execute(s) that follow slice it by their own row-limit
+            // instead of re-running the statement or losing what Describe already had to read.
+            portal.fullResultSet = browseAndCacheResultSet(resultSet, 0);
         }
-        portal.executed = true;
         if (portal.isExpectingResult) {
-          portal.cachedResultSet = browseAndCacheResultSet(resultSet, 0);
-          portal.columns = getColumns(portal.cachedResultSet, resolveQueryTargetType(portal), resolveAliasToSourceProperty(portal));
-          if (portal.columns.isEmpty() && portal.cachedResultSet.isEmpty()) {
+          final List<Result> forColumns = portal.fullResultSet != null ? portal.fullResultSet : Collections.emptyList();
+          portal.columns = getColumns(forColumns, resolveQueryTargetType(portal), resolveAliasToSourceProperty(portal));
+          if (portal.columns.isEmpty() && forColumns.isEmpty()) {
             final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(portal.query, portal.language,
                 getParams(portal), portal.sqlStatement);
             if (schemaColumns != null)
@@ -416,6 +447,11 @@ public class PostgresNetworkExecutor extends Thread {
       if (portal.columns != null && !portal.columns.isEmpty()) {
         writeRowDescription(portal.columns);
         portal.rowDescriptionSent = true;
+        // This IS the statement-level contract executeCommand() must honor for every future Bind/Execute of
+        // this statement, whatever row each one actually returns (issue #6725) - unlike portal.columns being
+        // non-null for some other reason (a catalog answer recomputed per-Bind, or bindCommand()'s fallback
+        // onto an already-executed portal), which carries no such promise.
+        portal.columnsDescribed = true;
       } else {
         // We can't determine columns at DESCRIBE time (e.g., INSERT without schema info)
         // Send NoData, but keep isExpectingResult = true so EXECUTE can handle it properly
@@ -439,7 +475,11 @@ public class PostgresNetworkExecutor extends Thread {
       if (errorInTransaction)
         return;
 
-      portal = getPortal(portalName, true);
+      // Do NOT remove the portal here (issue #6458): a limit-hit Execute suspends rather than finishes, and
+      // the follow-up Execute the client sends to continue fetching looks this same portal name up again.
+      // The portal is only ever discarded by an explicit Close ('C') message or by a later Bind reusing the
+      // name (closeCommand()/bindCommand()).
+      portal = getPortal(portalName, false);
       if (portal == null) {
         writeNoData();
         return;
@@ -476,28 +516,57 @@ public class PostgresNetworkExecutor extends Thread {
           }
           portal.executed = true;
           if (portal.isExpectingResult) {
-            portal.cachedResultSet = browseAndCacheResultSet(resultSet, limit);
+            // Materializes the whole result now (issue #6458), the same way Describe('P') does: a client that
+            // never Described this portal first (it already knows the row shape) reaches this branch instead,
+            // and every Execute on this portal from here on - including this one - slices fullResultSet by its
+            // own row-limit below rather than re-running the statement.
+            portal.fullResultSet = browseAndCacheResultSet(resultSet, 0);
             profile.addEngineNanos(System.nanoTime() - engineStart);
             // Only send RowDescription if not already sent during DESCRIBE
-            // But always use columns from actual result for DataRows consistency
             if (!portal.rowDescriptionSent) {
               final long serStart = System.nanoTime();
-              // A catalog answer already carries the columns it must be announced under.
-              if (!portal.catalogQuery || portal.columns == null)
-                portal.columns = getColumns(portal.cachedResultSet, resolveQueryTargetType(portal), resolveAliasToSourceProperty(portal));
-              if (portal.columns.isEmpty() && portal.cachedResultSet.isEmpty()) {
-                final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(portal.query, portal.language,
-                    getParams(portal), portal.sqlStatement);
-                if (schemaColumns != null)
-                  portal.columns = schemaColumns;
+              // portal.columnsDescribed means a real Describe('S') already told the client this exact
+              // shape/OIDs - and, for a schemaless type, a client that negotiated binary transfer off that
+              // promise cannot have it silently swapped for a differently-typed one here (issue #6725):
+              // re-deriving from this execution's own rows, which can differ in type per row for an
+              // undeclared property, would desync that client's decoder. Keep the promised columns and just
+              // mark this portal as having satisfied it, matching real PostgreSQL - a portal never gets a
+              // second RowDescription once its statement was already Described.
+              if (!portal.columnsDescribed) {
+                // A catalog answer already carries the columns it must be announced under (set on
+                // portal.columns above); only compute from the actual rows when there is none to fall back on.
+                if (!portal.catalogQuery || portal.columns == null)
+                  portal.columns = getColumns(portal.fullResultSet, resolveQueryTargetType(portal), resolveAliasToSourceProperty(portal));
+                if (portal.columns.isEmpty() && portal.fullResultSet.isEmpty()) {
+                  final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(portal.query, portal.language,
+                      getParams(portal), portal.sqlStatement);
+                  if (schemaColumns != null)
+                    portal.columns = schemaColumns;
+                }
+                writeRowDescription(portal.columns, portal.resultFormats);
               }
-              writeRowDescription(portal.columns, portal.resultFormats);
               portal.rowDescriptionSent = true;
               profile.addSerializationNanos(System.nanoTime() - serStart);
             }
           } else {
             profile.addEngineNanos(System.nanoTime() - engineStart);
           }
+        }
+
+        // Computes this Execute's slice of the portal's materialized result (issue #6458). Runs on every
+        // Execute, not only the one that just populated fullResultSet above: a follow-up Execute continuing a
+        // previously suspended fetch reaches here with portal.executed already true and fullResultSet already
+        // populated - by this same method on an earlier call, or by describeCommand() - and only needs the
+        // next slice, never a re-run of the statement.
+        if (portal.isExpectingResult && portal.fullResultSet != null) {
+          final int total = portal.fullResultSet.size();
+          final int start = portal.resultCursor;
+          final int end = limit > 0 ? Math.min(start + limit, total) : total;
+          portal.cachedResultSet = start < end ? new ArrayList<>(portal.fullResultSet.subList(start, end)) : Collections.emptyList();
+          portal.resultCursor = end;
+          // The protocol allows exactly one terminator after the data rows: PortalSuspended when this slice
+          // stopped on the row-limit with rows still left, CommandComplete once the portal is fully drained.
+          portal.suspended = limit > 0 && end < total;
         }
 
         if (portal.isExpectingResult && portal.cachedResultSet != null && !portal.cachedResultSet.isEmpty()) {
@@ -514,11 +583,15 @@ public class PostgresNetworkExecutor extends Thread {
                 portal.cachedResultSet.size(),
                 Thread.currentThread().threadId());
 
-          // If RowDescription wasn't sent during DESCRIBE (e.g., INSERT with RETURN),
-          // we need to send it now before the data rows
+          // If RowDescription wasn't sent during DESCRIBE (e.g., INSERT with RETURN), we need to send it now
+          // before the data rows. portal.columnsDescribed means a real Describe('S') already told the client
+          // this exact shape/OIDs (issue #6725) - keep it rather than silently swapping it for dataRowColumns,
+          // which a schemaless type's undeclared property can compute differently per row.
           if (!portal.rowDescriptionSent) {
-            portal.columns = dataRowColumns;
-            writeRowDescription(portal.columns, portal.resultFormats);
+            if (!portal.columnsDescribed) {
+              portal.columns = dataRowColumns;
+              writeRowDescription(portal.columns, portal.resultFormats);
+            }
             portal.rowDescriptionSent = true;
           }
 
@@ -535,7 +608,17 @@ public class PostgresNetworkExecutor extends Thread {
           // Use the columns that were sent in RowDescription for consistency
           final Map<String, PostgresType> columnsToUse = portal.columns != null ? portal.columns : dataRowColumns;
           writeDataRows(portal.cachedResultSet, columnsToUse, portal.resultFormats);
-          writeCommandComplete(portal.query, portal.cachedResultSet.size());
+          // Exactly one terminator after the data rows (issue #6458), never both, and always after the rows
+          // rather than before them: PortalSuspended when this slice stopped short of fullResultSet with the
+          // row-limit reached, CommandComplete once the portal is fully drained - tagged with resultCursor,
+          // the running total across every slice this portal has sent (matching PostgreSQL's own convention),
+          // when this portal is the paginated fullResultSet-backed kind; a portal whose cachedResultSet was
+          // set directly (a synthetic single-row answer - SHOW/catalog/etc.) never touches resultCursor, so it
+          // keeps reporting its own size exactly as before this fix.
+          if (portal.suspended)
+            portalSuspendedResponse();
+          else
+            writeCommandComplete(portal.query, portal.fullResultSet != null ? portal.resultCursor : portal.cachedResultSet.size());
           profile.addSerializationNanos(System.nanoTime() - serStart);
         } else {
           final long serStart = System.nanoTime();
@@ -668,7 +751,8 @@ public class PostgresNetworkExecutor extends Thread {
           resultSet = database.command(query.language, query.query, server.getConfiguration());
         }
       }
-      final List<Result> cachedResultSet = browseAndCacheResultSet(resultSet, 0);
+      final List<Result> cachedResultSet = browseAndCacheBoundedResultSet(resultSet,
+          GlobalConfiguration.POSTGRES_SIMPLE_QUERY_MAX_ROWS.getValueAsInteger());
       profile.addEngineNanos(System.nanoTime() - engineStart);
 
       final long serStart = System.nanoTime();
@@ -733,15 +817,17 @@ public class PostgresNetworkExecutor extends Thread {
   /**
    * Browse a result set and cache results up to the limit, then close the source ResultSet.
    * <p>
-   * <b>Ownership:</b> this method takes ownership of the supplied ResultSet and closes it
-   * before returning, in both the natural-exhaustion and the limit-hit paths. The portal
-   * keeps only the materialized {@code List<Result>} (see {@code PostgresPortal#cachedResultSet}),
-   * never a reference to the underlying ResultSet. Multi-batch portal-suspension fetching
-   * from a partially-consumed ResultSet is therefore not supported by this implementation -
-   * a follow-up Execute on the same portal re-uses the cached list rather than pulling the
-   * next chunk from the source. This is unchanged behaviour from before the #4197 audit; the
-   * audit only made the close explicit, releasing the execution plan and unblocking parallel-scan
-   * worker threads that would otherwise stay parked on a full bounded queue.
+   * <b>Ownership:</b> this method takes ownership of the supplied ResultSet and closes it before returning, in
+   * both the natural-exhaustion and the limit-hit paths. Both callers that matter for issue #6458 - Describe
+   * ('P') and the first Execute of a portal that was never Described - call this with {@code limit=0} to
+   * materialize the whole result into {@link PostgresPortal#fullResultSet}: Describe needs every row to
+   * discover every column (documents can be sparse), and Execute needs the complete list to slice by whatever
+   * row-limit each Execute call declares, including a follow-up one continuing a previously suspended fetch
+   * (see the pagination step in {@code executeCommand()}, which slices {@code fullResultSet} rather than
+   * calling this method again). The {@code limit>0} form remains for the unrelated internal callers that want
+   * a bounded sample and are happy to see the rest of the result set discarded - {@code sendSuspendedOnLimit}
+   * is {@code false} for all of them, so the always-{@code limit=0} callers are the only ones that can still
+   * reach that branch.
    *
    * @param resultSet           The result set to browse (this method closes it)
    * @param limit               Maximum number of results to cache (0 = unlimited)
@@ -765,6 +851,51 @@ public class PostgresNetworkExecutor extends Thread {
           break;
         }
       }
+      return cachedResultSet;
+    }
+  }
+
+  /**
+   * Browses and caches a result set for the simple-query ('Q' message) protocol path, refusing (rather than
+   * silently truncating) a result larger than {@code maxRows} - and stopping the scan as soon as that is known,
+   * rather than paying to read the rest of an oversized source just to reject it.
+   * <p>
+   * Unlike the extended query protocol - where a portal's {@code Execute} message carries its own client-chosen
+   * max-rows and a limit hit is a normal, expected {@code PortalSuspended} the client explicitly asked for by
+   * fetching in batches - the simple-query protocol has no such mechanism: a 'Q' message always means "give me
+   * the complete result". This path is also why the whole result had to be held in memory in the first place:
+   * determining the row description (the union of columns and their types across heterogeneous/schemaless rows)
+   * genuinely requires having seen every row before the first one can be sent, since Postgres's wire protocol
+   * fixes the column set in {@code RowDescription}, sent before any {@code DataRow}.
+   * <p>
+   * Aborting the scan early is safe for a write statement too: {@code UpdateExecutionPlan.executeInternal()} (and
+   * {@code DeleteExecutionPlan}, which extends it) fully executes every matched row's write and buffers the whole
+   * {@code RETURN AFTER}/{@code RETURN BEFORE} result internally <em>before</em> {@code UpdateStatement.execute()}
+   * / {@code DeleteStatement.execute()} ever return a {@link ResultSet} to this method - so by the time this loop
+   * runs, an {@code UPDATE}/{@code DELETE} ... {@code RETURN} statement has already fully applied every write
+   * regardless of how many rows of its result this loop goes on to pull. Stopping early here only shortens how
+   * much of that already-complete result gets copied into {@code cachedResultSet}; it can never leave a write
+   * half-done.
+   *
+   * @param maxRows the maximum number of rows to buffer, 0 = unlimited (matches {@link GlobalConfiguration#POSTGRES_SIMPLE_QUERY_MAX_ROWS})
+   */
+  private List<Result> browseAndCacheBoundedResultSet(final ResultSet resultSet, final int maxRows) {
+    try (resultSet) {
+      final List<Result> cachedResultSet = new ArrayList<>();
+      while (resultSet.hasNext()) {
+        final Result row = resultSet.next();
+        if (row == null)
+          continue;
+
+        cachedResultSet.add(row);
+
+        if (maxRows > 0 && cachedResultSet.size() > maxRows)
+          throw new CommandExecutionException(
+              "Result set exceeds the configured limit of " + maxRows + " rows for the Postgres simple-query protocol ("
+                  + GlobalConfiguration.POSTGRES_SIMPLE_QUERY_MAX_ROWS.getKey()
+                  + "); use the extended query protocol with a bounded portal fetch size for large result sets");
+      }
+
       return cachedResultSet;
     }
   }
@@ -1704,17 +1835,20 @@ public class PostgresNetworkExecutor extends Thread {
       final String portalName = readString();
       final String sourcePreparedStatement = readString();
 
-      // Look up the prepared statement (stored during PARSE)
-      // The portal name may be different (often empty for unnamed portal)
-      PostgresPortal portal = getPortal(sourcePreparedStatement, false);
-      if (portal == null) {
-        // Try with portal name as fallback for backwards compatibility
-        portal = getPortal(portalName, false);
-      }
-      if (portal == null) {
-        writeMessage("bind complete", null, '2', 4);
-        return;
-      }
+      // Look up the prepared statement (stored during PARSE) and create THIS Bind's own independent portal
+      // from it (issue #6660 / CodeRabbit review on #6658). PARSE's PostgresPortal is a read-only template
+      // from here on - bindFrom() copies what PARSE already fixed for the statement (query, sqlStatement,
+      // parameter types, and any response PARSE precomputed for BEGIN/COMMIT/ROLLBACK or a resolved catalog
+      // answer) into a fresh object, so that two portal names bound from the same statement - or the same
+      // portal name re-bound without a new Parse, which is exactly what asyncpg's/pgjdbc's statement caching
+      // does for a repeated query - never share mutable execution state (parameterValues, fullResultSet,
+      // resultCursor, suspended, rowDescriptionSent...). Without this, a later Bind on one portal name could
+      // silently reset or overwrite another already-bound (possibly suspended) portal from the same statement,
+      // since both names used to point at the very same object.
+      // If the prepared statement is missing/closed, use a consume-only throwaway portal to drain parameters
+      // off the wire and avoid channel framing corruption, without resurrecting any previously bound portal.
+      final PostgresPortal preparedStatement = preparedStatements.get(sourcePreparedStatement);
+      final PostgresPortal portal = preparedStatement != null ? PostgresPortal.bindFrom(preparedStatement) : new PostgresPortal("", "sql");
 
       if (DEBUG)
         LogManager.instance()
@@ -1830,14 +1964,20 @@ public class PostgresNetworkExecutor extends Thread {
         return;
       }
 
-      // Store the portal under the portal name (which may be empty for unnamed portal)
-      // This is necessary because EXECUTE looks up portals by portal name, not prepared statement name
-      // PostgreSQL protocol: PARSE creates "prepared statement", BIND creates "portal" from it
-      if (!portalName.equals(sourcePreparedStatement)) {
+      // Store this Bind's own portal under the portal name (which may be empty for unnamed portal) - always,
+      // even when portalName equals sourcePreparedStatement, since this is a fresh clone now rather than the
+      // statement's own template object (issue #6660 / CodeRabbit review on #6658).
+      // This is necessary because EXECUTE looks up portals by portal name, not prepared statement name.
+      // PostgreSQL protocol: PARSE creates "prepared statement", BIND creates "portal" from it.
+      // If the source prepared statement was closed or non-existent, invalidate/remove any previously bound
+      // portal under this name so Execute returns NoData.
+      if (preparedStatement != null) {
         portals.put(portalName, portal);
         if (DEBUG)
           LogManager.instance().log(this, Level.INFO, "PSQL: bind stored portal under name '%s' (thread=%s)",
               portalName, Thread.currentThread().threadId());
+      } else {
+        portals.remove(portalName);
       }
 
       writeMessage("bind complete", null, '2', 4);
@@ -1947,7 +2087,7 @@ public class PostgresNetworkExecutor extends Thread {
           // regardless of which of the three keywords the client actually sent (see queryCommand()).
           portal.query = "ROLLBACK";
           setEmptyResultSet(portal);
-          portals.put(portalName, portal);
+          preparedStatements.put(portalName, portal);
           writeMessage("parse complete", null, '1', 4);
         }
         return;
@@ -1966,7 +2106,14 @@ public class PostgresNetworkExecutor extends Thread {
           upperCaseText.startsWith("ROLLBACK TO ")) {
         portal.ignoreExecution = true;
       } else if (upperCaseText.startsWith("SET ")) {
-        setConfiguration(portal.query);
+        // Strip a trailing ';' before dispatch, mirroring what queryCommand() already does for its own
+        // queryText on the simple-query protocol - a Parse message keeps the terminator glued onto the
+        // text, which otherwise reaches setConfiguration() attached to the value (issue #6701).
+        // portal.query itself is left untouched: nothing downstream needs the terminator removed.
+        String setText = portal.query.trim();
+        if (setText.endsWith(";"))
+          setText = setText.substring(0, setText.length() - 1);
+        setConfiguration(setText);
         portal.ignoreExecution = true;
       } else if (systemQuery != null) {
         createResultSet(portal, systemQuery.columnName, systemQueryValue(systemQuery.function));
@@ -2035,7 +2182,7 @@ public class PostgresNetworkExecutor extends Thread {
         }
       }
 
-      portals.put(portalName, portal);
+      preparedStatements.put(portalName, portal);
 
       // ParseComplete
       writeMessage("parse complete", null, '1', 4);
@@ -2049,39 +2196,83 @@ public class PostgresNetworkExecutor extends Thread {
     }
   }
 
-  private void setConfiguration(final String query) {
+  /**
+   * Parses a Postgres {@code SET <param> = <value>} or {@code SET <param> TO <value>} command into its
+   * {@code {paramName, value}} pair, honoring the optional PostgreSQL {@code SESSION}/{@code LOCAL} scope
+   * modifiers (issue #6701): {@code SET SESSION datestyle = 'ISO'} and {@code SET LOCAL datestyle = 'ISO'}
+   * must resolve to the same {@code datestyle} parameter name as a plain {@code SET datestyle = 'ISO'}, not
+   * a literal {@code "session datestyle"}/{@code "local datestyle"} that no special case ever matches.
+   * ArcadeDB has no notion of transaction-scoped config distinct from session-scoped config, so both
+   * modifiers - and no modifier at all - end up folded into the same connection-wide
+   * {@link #connectionProperties} map; that already matches the de facto behavior of a plain {@code SET}
+   * today.
+   * <p>
+   * A command can only use one of the two separators, but its value may legitimately contain the other
+   * one as plain text (e.g. {@code SET search_path TO 'a=b'} or {@code SET x = 'a TO b'}), so this picks
+   * whichever separator - the first '=' or the first case-insensitive ' TO ' - occurs FIRST in the string
+   * and splits on that one only, leaving every other occurrence of either inside the value untouched
+   * (issue #6423). {@code paramName} is lower-cased for case-insensitive comparison; a quoted {@code value}
+   * has its surrounding quotes stripped. Returns null when the command has neither separator.
+   */
+  static String[] parseSetCommand(final String query) {
     final int setLength = "SET ".length();
     // Use original query to preserve case of values
-    final String q = query.substring(setLength);
+    String q = query.substring(setLength);
 
-    // Try to split by either '=' or ' TO ' (case-insensitive)
-    String[] parts = q.split("=");
-    if (parts.length < 2) {
-      // Try case-insensitive split for " TO "
-      parts = q.split("(?i)\\s+TO\\s+");
+    final Matcher scopeModifier = SET_SCOPE_MODIFIER.matcher(q);
+    if (scopeModifier.find())
+      q = q.substring(scopeModifier.end());
+
+    final int eqPos = q.indexOf('=');
+    final Matcher toMatcher = SET_TO_SEPARATOR.matcher(q);
+    final boolean toFound = toMatcher.find();
+
+    final String[] parts;
+    if (toFound && (eqPos < 0 || toMatcher.start() < eqPos))
+      parts = new String[] { q.substring(0, toMatcher.start()), q.substring(toMatcher.end()) };
+    else if (eqPos >= 0)
+      parts = StringUtils.splitKeyValue(q);
+    else
+      return null;
+
+    final String paramName = parts[0].trim().toLowerCase(Locale.ENGLISH);
+    if (paramName.isEmpty())
+      // An empty parameter name (e.g. "SET = somevalue") is as malformed as a missing separator.
+      return null;
+
+    String value = parts[1].trim();
+    if (value.startsWith("'") || value.startsWith("\"")) {
+      // A quoted value needs a matching closing delimiter: a single stray quote (e.g. "SET x = '") is a
+      // malformed command, not a closed quoted value, so it is rejected the same way a missing separator
+      // is - rather than throw StringIndexOutOfBoundsException on an unconditional substring(1, length - 1),
+      // or silently store a value still carrying its opening quote.
+      final char quote = value.charAt(0);
+      if (value.length() < 2 || value.charAt(value.length() - 1) != quote)
+        return null;
+      value = value.substring(1, value.length() - 1);
     }
 
-    if (parts.length < 2) {
+    return new String[] { paramName, value };
+  }
+
+  private void setConfiguration(final String query) {
+    final String[] parts = parseSetCommand(query);
+    if (parts == null) {
       LogManager.instance().log(this, Level.WARNING, "Invalid SET command format: %s", query);
       return;
     }
 
-    parts[0] = parts[0].trim();
-    parts[1] = parts[1].trim();
+    final String paramName = parts[0];
+    final String value = parts[1];
 
-    if (parts[1].startsWith("'") || parts[1].startsWith("\""))
-      parts[1] = parts[1].substring(1, parts[1].length() - 1);
-
-    // Use case-insensitive comparison for parameter names
-    final String paramName = parts[0].toLowerCase(Locale.ENGLISH);
     if ("datestyle".equals(paramName)) {
-      if ("ISO".equalsIgnoreCase(parts[1]))
+      if ("ISO".equalsIgnoreCase(value))
         database.getSchema().setDateTimeFormat(DateUtils.DATE_TIME_ISO_8601_FORMAT);
       else
-        LogManager.instance().log(this, Level.INFO, "datestyle '%s' not supported", parts[1]);
+        LogManager.instance().log(this, Level.INFO, "datestyle '%s' not supported", value);
     }
 
-    connectionProperties.put(paramName, parts[1]);
+    connectionProperties.put(paramName, value);
   }
 
   /**

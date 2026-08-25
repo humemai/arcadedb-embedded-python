@@ -205,7 +205,29 @@ public class LSMVectorIndex implements Index, IndexInternal {
   // Lightweight pointer index. Volatile and swapped as a whole (never cleared and refilled in place) so the
   // readers that take no lock - countEntries() and getStats() - always see a complete location set instead of a
   // rebuild in progress (issue #5568). Everything else reaches it through lock.readLock().
-  private volatile VectorLocationIndex           vectorIndex;
+  //
+  // Read through vectorIndex(), NOT directly: the field holds an EMPTY index until the first caller that actually
+  // needs the locations materialises it (issue #6722), and the accessor is what draws that line. The handful of
+  // sites that touch the field raw do so deliberately and say why - the loader filling it, the close-time
+  // predicates that must not force a materialisation, drop(), and the constructors.
+  private volatile VectorLocationIndex           residentLocations;
+  // false only between loadVectorsAfterSchemaLoad() finding pages worth reading and the first caller that needs
+  // their contents (issue #6722). Rebuilding the map eagerly cost one page parse and one map insert per indexed
+  // vector on EVERY open - ~1.4 s at 10M vectors - and charged it to sessions that never search the index; the
+  // graph, deferred at the very same call site since it was introduced, has never worked that way. An index
+  // created in this process has nothing on disk to materialise, so the field starts out true and the deferral
+  // applies only to the load path.
+  private volatile boolean                       locationsMaterialized    = true;
+  // Serializes the materialisation against concurrent first callers, and is NOT lock: the load is O(index size)
+  // page reads and holding the index-wide write lock across it would stall every other reader and writer for its
+  // whole duration - the same stall issue #5391 moved the graph-build validation off that lock for. Reentrant, so
+  // the defensive isHeldByCurrentThread() check below can tell a re-entrant call apart from a contended one.
+  private final    ReentrantLock                 locationsLoadLock        = new ReentrantLock();
+  // What loadVectorsAfterSchemaLoad() deferred: load the PQ codebooks together with the locations, or not at all.
+  private volatile boolean                       deferredPQLoad;
+  // Set if a materialisation ever ran while its own thread held the index-wide write lock, which is the one thing
+  // the dedicated load lock exists to prevent (PR #6731 review). Only a test reads it.
+  private volatile boolean                       materializedUnderWriteLock;
   private final    AtomicInteger                 nextId;
   private final    AtomicReference<INDEX_STATUS> status;
   // Set once the ignored location-cache limit has been reported, so a rebuild does not repeat the warning.
@@ -235,6 +257,16 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
   // Serializes graph builds for this index (issue #5391). Held only by builders, never by readers or writers.
   private final ReentrantLock graphBuildLock = new ReentrantLock();
+
+  // Set only inside flush()'s two SKIP branches (issue #6657) - never by the branch that actually attempts a
+  // synchronous build, successfully or not - so releaseBackgroundResources()'s recheck of the same flag (see
+  // there) can tell "flush() chose not to pay for a rebuild" apart from "flush() tried and either failed or got
+  // re-mutated mid-build", which also leaves graphState at MUTABLE but is a different story the recheck must not
+  // relabel as a deferral. Reset at the top of every flush(), so a stale true from an earlier close on this same
+  // instance can never leak into a later, unrelated one. Plain instance field, not persisted: unlike the manifest
+  // flag it gates, its only job is to bridge flush() and releaseBackgroundResources() within ONE close() call on
+  // ONE instance, which is exactly the lifetime a field has.
+  private volatile boolean flushDeferredRebuild = false;
 
   // Index-scoped cache of materialized vectors, shared by every search on this index (issue #5412).
   // Beam search resolves one vector per distance evaluation; before this cache lived at index scope, each
@@ -747,7 +779,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // A renumbering compaction (issue #5870) already reset `nextId` to the dense live count before calling this,
     // so on that path the two operands are equal and the max is a no-op - the dense count IS the carried sequence.
     rebuilt.setNextId(Math.max(rebuilt.getNextId(), nextId.get()));
-    vectorIndex = rebuilt;
+    residentLocations = rebuilt;
+    // The replacement is the complete live set, read from the pages by the caller that built it, so it satisfies
+    // the deferred load of issue #6722 outright - materialising afterwards would parse the same pages a second
+    // time and then overwrite this instance with the result. Ordered after the swap: a reader that sees the flag
+    // flip must see the instance it vouches for.
+    locationsMaterialized = true;
   }
 
   /**
@@ -915,7 +952,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
       this.lock = new ReentrantReadWriteLock();
       warnIfLocationCacheSizeConfigured(database);
-      this.vectorIndex = new VectorLocationIndex();
+      this.residentLocations = new VectorLocationIndex();
       this.ordinalToVectorId = new int[0];
       this.nextId = new AtomicInteger(0);
       this.status = new AtomicReference<>(INDEX_STATUS.AVAILABLE);
@@ -965,7 +1002,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     this.metadata = new LSMVectorIndexMetadata(null, new String[0], -1);
     this.lock = new ReentrantReadWriteLock();
     warnIfLocationCacheSizeConfigured(database);
-    this.vectorIndex = new VectorLocationIndex();
+    this.residentLocations = new VectorLocationIndex();
     this.ordinalToVectorId = new int[0];
     this.nextId = new AtomicInteger(0);
     this.status = new AtomicReference<>(INDEX_STATUS.AVAILABLE);
@@ -1082,11 +1119,77 @@ public class LSMVectorIndex implements Index, IndexInternal {
       this.metadata.buildState = BUILD_STATE.READY.name();
     }
 
-    // Only load vectors if we have valid metadata (dimensions > 0) and pages exist
+    // Only load vectors if we have valid metadata (dimensions > 0) and pages exist - and even then, only note
+    // that there is something to read. The parse itself is deferred to the first caller that needs a location
+    // (issue #6722): it is one page parse plus one map insert per indexed vector, it produces nothing the page
+    // cache can amortise across opens, and a session that opens the database to write one document or to read an
+    // unrelated type used to pay all of it. The graph is deferred at this very same call site for the same
+    // reason, so this makes the cheap half of the pair behave like the expensive half already does.
     if (metadata.dimensions > 0 && mutable.getTotalPages() > 0) {
+      this.deferredPQLoad = metadata.quantizationType == VectorQuantizationType.PRODUCT && pqFile != null;
+      this.locationsMaterialized = false;
+      LogManager.instance()
+          .log(this, Level.FINE,
+              "Deferring the vector location load of index %s to its first use (dimensions=%d, pages=%d, fileId=%d)",
+              null, indexName, metadata.dimensions, mutable.getTotalPages(), mutable.getFileId());
+    } else {
+      LogManager.instance()
+          .log(this, Level.FINE, "Skipping vector load for index %s (dimensions=%d, pages=%d)", null, indexName,
+              metadata.dimensions, mutable.getTotalPages());
+    }
+  }
+
+  /**
+   * The resident location index, materialised first if this is the first access since the database was opened.
+   * <p>
+   * Every reader and writer of the locations goes through here rather than through the field, which is what makes
+   * the deferral of issue #6722 structural instead of a rule each new call site has to remember. The steady-state
+   * cost is one volatile boolean read on a branch that predicts perfectly once the index has been materialised.
+   *
+   * @return the location index, fully populated
+   */
+  private VectorLocationIndex vectorIndex() {
+    if (!locationsMaterialized)
+      materializeLocations();
+    return residentLocations;
+  }
+
+  /**
+   * Parse the index pages into the resident location map, once, on whichever thread gets there first (issue #6722).
+   * <p>
+   * Everything this does used to run inside {@link #loadVectorsAfterSchemaLoad()}, on the thread opening the
+   * database; the only change is when. The failure handling is deliberately the same too: one attempt, a warning
+   * if it fails, and the index carries on with whatever was read - retrying on the next access would turn a
+   * corrupt page into a full re-parse per query instead of per open.
+   */
+  private void materializeLocations() {
+    // The loader reaches the location index through the field, not through vectorIndex(), so this cannot normally
+    // recurse. Kept anyway because a future call site inside the load would otherwise deadlock on a non-reentrant
+    // lock or, worse, load twice: a re-entrant caller is inside the population and must see the instance as it is.
+    // It says so at WARNING rather than returning quietly: handing back a half-filled map is the right thing to do
+    // for a caller that is inside the fill, but it is a silent under-materialisation for anyone else, and the
+    // comment above will not catch it if the invariant is ever broken (PR #6731 review).
+    if (locationsLoadLock.isHeldByCurrentThread()) {
+      LogManager.instance().log(this, Level.WARNING,
+          "Re-entrant materialisation of the location index of %s: a call site inside the load asked for the map "
+              + "it is filling, so it sees only what has been read so far", indexName);
+      return;
+    }
+
+    locationsLoadLock.lock();
+    try {
+      if (locationsMaterialized)
+        return; // another thread materialised it while this one waited
+
+      // The whole point of the dedicated lock is that this scan does NOT run inside the index-wide exclusive
+      // section, so record whether it did and let a test assert on it (PR #6731 review) - the invariant lives in
+      // the call sites, which is exactly the kind of thing that regresses silently when one of them moves.
+      if (lock.isWriteLockedByCurrentThread())
+        materializedUnderWriteLock = true;
+
       try {
         LogManager.instance()
-            .log(this, Level.FINE, "Loading vectors for index %s after schema load (dimensions=%d, pages=%d, fileId=%d)",
+            .log(this, Level.FINE, "Loading vectors for index %s on first use (dimensions=%d, pages=%d, fileId=%d)",
                 null, indexName, metadata.dimensions, mutable.getTotalPages(), mutable.getFileId());
 
         loadVectorsFromPages();
@@ -1095,10 +1198,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // Don't build it here - causes deadlock during database load when PageManager isn't fully ready
         LogManager.instance().log(this, Level.FINE,
             "Successfully loaded %d vector locations for index %s (graph will be lazy-loaded on first search)",
-            null, vectorIndex.size(), indexName);
+            null, residentLocations.size(), indexName);
 
-        // Load PQ data if PRODUCT quantization is enabled
-        if (metadata.quantizationType == VectorQuantizationType.PRODUCT && pqFile != null) {
+        // Load PQ data if PRODUCT quantization is enabled. Deferred together with the locations rather than
+        // separately: the ordinals a PQ search resolves are the ones this map hands out, so the two are only ever
+        // useful as a pair, and splitting them would buy a second lazy gate for no saving.
+        if (deferredPQLoad) {
           if (pqFile.loadPQ()) {
             this.pqVectors = pqFile.getPQVectors();
             this.productQuantization = pqFile.getProductQuantization();
@@ -1111,12 +1216,47 @@ public class LSMVectorIndex implements Index, IndexInternal {
         LogManager.instance()
             .log(this, Level.WARNING, "Could not load vectors from pages for index %s: %s", indexName, e.getMessage());
         this.graphState = GraphState.LOADING;
+      } finally {
+        // Written last, and volatile: a thread that reads it true has a happens-before edge on every entry the
+        // loop above put into the map, which is what lets vectorIndex()'s fast path hand the instance out with no
+        // lock at all. Set even when the load threw, so the one-attempt contract above holds.
+        this.locationsMaterialized = true;
       }
-    } else {
-      LogManager.instance()
-          .log(this, Level.FINE, "Skipping vector load for index %s (dimensions=%d, pages=%d)", null, indexName,
-              metadata.dimensions, mutable.getTotalPages());
+    } finally {
+      locationsLoadLock.unlock();
     }
+  }
+
+  /**
+   * Reserve the next vector id.
+   * <p>
+   * The sequence is derived from the highest id already on disk, and that high-water mark is something only the
+   * load knows: an id handed out before the locations have been materialised would restart at 0 and silently
+   * supersede the entries it collides with, so an insert into a reopened index loses a vector per insert instead
+   * of adding one (issue #6722). The gate is the whole point of routing every allocation through here.
+   *
+   * @return an id no live or tombstoned vector of this index has ever used
+   */
+  private int allocateVectorId() {
+    vectorIndex();
+    return nextId.getAndIncrement();
+  }
+
+  /**
+   * Whether this index holds any vector at all, answered without materialising the location map (issue #6722).
+   * <p>
+   * Exists for the close-time predicates: {@link #needsGraphBuild} runs on every {@link #flush()}, including the
+   * one a session that never touched this index still triggers on close, and forcing the deferred parse there
+   * would hand back at close exactly the cost the deferral removes from open. Before the locations are
+   * materialised nothing can have mutated them, so "does this index hold vectors" is precisely "does it have
+   * pages" - a counter rather than a scan. The two answers differ only for an index whose every entry is a
+   * tombstone, where this one is the conservative direction: it says yes, and the build it lets through finds
+   * nothing to do.
+   */
+  private boolean hasAnyVectors() {
+    if (locationsMaterialized)
+      return residentLocations.size() > 0;
+    return mutable.getTotalPages() > 0 || (compactedSubIndex != null && compactedSubIndex.getTotalPages() > 0);
   }
 
   /**
@@ -1321,7 +1461,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
   private void initializeGraphIndex() {
     // For newly created indexes (during constructor), build graph immediately
     // For loaded indexes, graph will be lazy-loaded on first search via ensureGraphAvailable()
-    if (vectorIndex.size() > 0 && graphState == GraphState.LOADING) {
+    if (vectorIndex().size() > 0 && graphState == GraphState.LOADING) {
       // Check if we can lazy-load from persisted graph
       final LSMVectorIndexGraphFile gf = graphFile;
       if (gf != null && gf.hasPersistedGraph()) {
@@ -1337,6 +1477,20 @@ public class LSMVectorIndex implements Index, IndexInternal {
   }
 
   /**
+   * A persisted graph {@link #ensureGraphAvailable()} decided is eligible for reuse as a prefix (issue #6655),
+   * carrying exactly what {@link #reuseStalePrefixGraph} needs to act on that decision after the write lock
+   * detecting it has been released.
+   *
+   * @param loadedGraph              the graph loaded from disk, already verified against the manifest
+   * @param liveOrdinalToVectorId    every live vector's id, in ordinal order - not only the ones the graph covers
+   * @param graphSize                how many of {@code liveOrdinalToVectorId}'s leading entries the graph covers
+   * @param vectorProp               the vector property name, for reading the gap vectors back
+   */
+  private record ReuseCandidate(ImmutableGraphIndex loadedGraph, int[] liveOrdinalToVectorId, int graphSize,
+                                 String vectorProp) {
+  }
+
+  /**
    * Ensure graph is available for searching. Lazy-loads from disk if needed.
    * This is the entry point for all search operations.
    */
@@ -1344,11 +1498,34 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (graphState != GraphState.LOADING)
       return; // Graph already available or being built
 
-    lock.writeLock().lock();
+    // Materialise the locations before graphBuildLock rather than through the vectorIndex() calls below, which
+    // run under it (issue #6722): the deferred parse is O(index size) page reads, and paying it inside the mutex
+    // would make every other builder on this index wait out a scan that has nothing to do with graph building.
+    vectorIndex();
+
+    // Serialize against buildGraphFromScratch() and other concurrent callers of this method, the same way
+    // buildGraphFromScratchWithRetry() serializes builders against each other (issue #6713). The persisted-graph
+    // validation below is O(live vector count) - for quantization types without inline storage it is one document
+    // lookup plus one property read per live vector - and used to run entirely under lock.writeLock(), stalling
+    // every reader and writer of the index for the whole scan on a session's first search that finds a persisted
+    // graph after a reopen, exactly the stall issue #5391 already moved buildGraphFromScratchExclusively's own
+    // validation loop off of. Builders wait on this mutex; searches and inserts never touch it, so serializing
+    // here does not reintroduce the stall. graphBuildLock is reentrant, so the fallback call to
+    // buildGraphFromScratch() at the end of this method - which acquires the same lock - is safe from here.
+    //
+    // Populated below when a stale persisted graph qualifies for reuse as a prefix (issue #6655) instead of
+    // falling through to a synchronous buildGraphFromScratch(); consumed after graphBuildLock is released.
+    // reuseStalePrefixGraph() does real per-vector I/O for the gap past graphSize, and that must not run while
+    // lock.writeLock() is held - it would stall every other reader and writer of this index for as long as the
+    // read takes, exactly the stall buildGraphFromScratchWithRetry()'s own javadoc moved the (much larger)
+    // full-rebuild validation off this same lock for (issue #5391; PR #6712 review).
+    ReuseCandidate prefixReuseCandidate = null;
+
+    graphBuildLock.lock();
     try {
-      // Double-check after acquiring lock
+      // Double-check after acquiring the lock
       if (graphState != GraphState.LOADING)
-        return; // Another thread already started building
+        return; // Another thread already resolved this while we waited for graphBuildLock
 
       // Try to load persisted graph from disk
       // IMPORTANT: If PRODUCT quantization is enabled but PQ file doesn't exist, we need to rebuild
@@ -1370,7 +1547,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // deleted vectors, the new ordinalToVectorId array will have different indices.
       // This causes NPE when JVector tries to access vectors using stale ordinals.
       // Solution: Rebuild graph from scratch if any deleted entries exist.
-      final boolean hasDeletedVectors = vectorIndex.getDeletedCount() > 0;
+      final boolean hasDeletedVectors = vectorIndex().getDeletedCount() > 0;
       if (hasDeletedVectors) {
         LogManager.instance().log(this, Level.INFO,
             """
@@ -1390,8 +1567,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
               metadata.propertyNames != null && !metadata.propertyNames.isEmpty() ?
                   metadata.propertyNames.getFirst() : "vector";
 
-          final int[] rebuiltOrdinalToVectorId = vectorIndex.getAllVectorIds().filter(id -> {
-            final long offsetAndFlag = vectorIndex.getOffsetAndFlag(id);
+          // One read of the location index for the whole walk, both because a per-element accessor call would
+          // re-check the materialisation flag on every live vector and because a compaction swaps the instance
+          // (issue #5568) - a filter that straddled the swap would mix two generations of offsets.
+          final VectorLocationIndex validationLocations = vectorIndex();
+          final int[] rebuiltOrdinalToVectorId = validationLocations.getAllVectorIds().filter(id -> {
+            final long offsetAndFlag = validationLocations.getOffsetAndFlag(id);
             if (offsetAndFlag == VectorLocationIndex.ABSENT) {
               return false;
             }
@@ -1412,7 +1593,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             } else {
               // Without quantization: validate by reading from document.
               try {
-                final RID rid = vectorIndex.getRid(id);
+                final RID rid = validationLocations.getRid(id);
                 if (rid == null)
                   return false;
                 final Record record = getDatabase().lookupByRID(rid, false);
@@ -1433,7 +1614,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           final int graphSize = loadedGraph != null ? loadedGraph.size() : 0;
           LogManager.instance().log(this, Level.INFO,
               "Loaded graph from disk for index: %s, graphSize=%d, ordinalToVectorIdLength=%d, vectorIndexSize=%d",
-              indexName, graphSize, rebuiltOrdinalToVectorId.length, vectorIndex.size());
+              indexName, graphSize, rebuiltOrdinalToVectorId.length, validationLocations.size());
 
           // CRITICAL FIX FOR #3722: a persisted graph with fewer nodes than there are active vectors is stale -
           // vectors were added after it was last built and persisted. On database restart deltaVectors (volatile)
@@ -1474,7 +1655,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             }
           } else if (persistedManifest.vectorCount() != rebuiltOrdinalToVectorId.length
               || persistedManifest.fingerprint() != LSMVectorIndexGraphManifest.fingerprintOf(
-              rebuiltOrdinalToVectorId, vectorIndex::getRid)) {
+              rebuiltOrdinalToVectorId, validationLocations::getRid)) {
             staleReason = "it was built over %d records the manifest fingerprints as %s, not over the %d now live".formatted(
                 persistedManifest.vectorCount(), Long.toHexString(persistedManifest.fingerprint()),
                 rebuiltOrdinalToVectorId.length);
@@ -1487,15 +1668,57 @@ public class LSMVectorIndex implements Index, IndexInternal {
             staleReason = null;
 
           if (staleReason != null) {
-            LogManager.instance().log(this, Level.INFO,
-                "Persisted graph is not usable for index %s: %s - rebuilding from scratch (issues #3722, #6106)",
-                indexName, staleReason);
-            // Don't use the stale graph — fall through to buildGraphFromScratch() below
+            // ISSUE #6655: a graph stale ONLY because more vectors were added since it was built - no deletions
+            // (guaranteed by the !hasDeletedVectors guard above) and, when a manifest is present, its fingerprint
+            // proves the graph's own ordinals [0, graphSize) still resolve to exactly the records they were built
+            // from - is not wrong, only behind. That is the identical staleness rebuildGraphBeforeSearch()'s async
+            // policy already tolerates mid-session (a graph missing the newest vectors, not one describing the
+            // wrong ones), so it is reused immediately instead of paying a synchronous full rebuild on the calling
+            // search thread for however large the WHOLE index has become - the reopen-time counterpart of #6067's
+            // close-time deferral, reached through the general stale-persisted-graph path rather than only the
+            // deferred-close one. A missing manifest cannot support this: the weak node-count comparison above
+            // proves nothing about WHICH records a same-sized graph describes, and a prefix of it proves even
+            // less. Below the async-rebuild threshold a synchronous rebuild is already cheap, so it is left alone.
+            // vectorIndex.size(), not graphIndex.size() as rebuildGraphBeforeSearch()'s analogous check uses:
+            // graphIndex is not yet set on this path (that is the whole point - the persisted graph has not been
+            // published to it yet), so the only live-vector count available here is the index's, which is also
+            // the more conservative of the two whenever they would differ (rebuiltOrdinalToVectorId.length can
+            // be smaller after validation filtering, never larger) - "is this worth deferring" errs towards yes.
+            final int[] prefix = persistedManifest != null && graphSize == persistedManifest.vectorCount()
+                && graphSize < rebuiltOrdinalToVectorId.length && graphSize > 0
+                && validationLocations.size() >= ASYNC_REBUILD_MIN_GRAPH_SIZE
+                && persistedManifest.fingerprint() == LSMVectorIndexGraphManifest.fingerprintOf(
+                Arrays.copyOf(rebuiltOrdinalToVectorId, graphSize), validationLocations::getRid) ?
+                rebuiltOrdinalToVectorId : null;
+
+            if (prefix != null) {
+              // Deliberately not done here: reuseStalePrefixGraph() does real I/O for the gap and must run
+              // unlocked (see the field javadoc above). Only the decision - not the read - belongs under this
+              // lock, same as every other branch in this method.
+              prefixReuseCandidate = new ReuseCandidate(loadedGraph, prefix, graphSize, vectorProp);
+            } else
+              LogManager.instance().log(this, Level.INFO,
+                  "Persisted graph is not usable for index %s: %s - rebuilding from scratch (issues #3722, #6106)",
+                  indexName, staleReason);
+            // Don't use the stale graph as IMMUTABLE — fall through to buildGraphFromScratch() below unless the
+            // prefix reuse above already queued a deferred reuse
           } else {
-            // Graph is up to date — use it
-            this.graphIndex = loadedGraph;
-            this.graphState = GraphState.IMMUTABLE;
-            this.ordinalToVectorId = rebuiltOrdinalToVectorId;
+            // Graph is up to date — publish it under a brief write lock (issue #6713), then finish PQ
+            // (if needed) unlocked, mirroring buildGraphFromScratchExclusively's own publish step.
+            lock.writeLock().lock();
+            try {
+              this.graphIndex = loadedGraph;
+              this.ordinalToVectorId = rebuiltOrdinalToVectorId;
+              if (graphState == GraphState.LOADING)
+                this.graphState = GraphState.IMMUTABLE;
+              // else: a concurrent put()/putBatch()/remove() already advanced graphState to MUTABLE while
+              // this validation ran unlocked. The freshly loaded graph is still a correct base for
+              // mergeWithDeltaScan() to merge against - it was built from a vectorIndex snapshot taken during
+              // that validation, and whatever changed since then is already in deltaVectors - but overwriting
+              // MUTABLE back to IMMUTABLE here would hide those pending deltas from search.
+            } finally {
+              lock.writeLock().unlock();
+            }
 
             // Build PQ if PRODUCT quantization is enabled but PQ file doesn't exist
             // This handles the case where graph was built before PRODUCT quantization was added
@@ -1506,7 +1729,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
                 // Create vector values from the loaded vectorIndex for PQ building
                 final RandomAccessVectorValues vectors = ArcadePageVectorValues.forGraphBuild(getDatabase(),
                     metadata.dimensions, vectorProp,
-                    snapshotOf(vectorIndex, ordinalToVectorId), ordinalToVectorId, this,
+                    snapshotOf(vectorIndex(), ordinalToVectorId), ordinalToVectorId, this,
                     computeGraphBuildCacheCapacity(ordinalToVectorId.length, false));
                 buildAndPersistPQ(vectors);
               } catch (final Exception e) {
@@ -1523,12 +1746,127 @@ public class LSMVectorIndex implements Index, IndexInternal {
         }
       }
 
+      // No persisted graph, load failed, or it was stale with no usable prefix - build from scratch.
+      // buildGraphFromScratch() acquires graphBuildLock itself; since it is reentrant this is safe to call
+      // while already holding it. Skipped when the stale graph was instead reused as a prefix above (issue
+      // #6655): that already put the index to work as MUTABLE, and a synchronous rebuild here would throw
+      // that work away and pay for it again.
+      if (prefixReuseCandidate == null)
+        buildGraphFromScratch();
     } finally {
-      lock.writeLock().unlock();
+      graphBuildLock.unlock();
     }
 
-    // No persisted graph or load failed - build from scratch
-    buildGraphFromScratch();
+    if (prefixReuseCandidate != null) {
+      // Unlocked with respect to lock.writeLock(): reuseStalePrefixGraph() does its own graphBuildLock-serialized
+      // I/O and a brief re-lock only to publish (see its javadoc).
+      reuseStalePrefixGraph(prefixReuseCandidate);
+    }
+  }
+
+  /**
+   * Reuse a persisted graph that {@link #ensureGraphAvailable()} found stale only because more vectors were added
+   * since it was built - no deletions, and its manifest-verified ordinals {@code [0, graphSize)} still resolve to
+   * exactly the records they were built from - instead of discarding it for a synchronous full rebuild (issue
+   * #6655).
+   * <p>
+   * Called UNLOCKED with respect to {@link #lock}: the gap past {@code graphSize} is read from disk (a page read,
+   * or a document lookup for the non-quantized case) via {@link ArcadePageVectorValues}, real per-vector I/O that
+   * must not run while {@code lock.writeLock()} is held - that would stall every other reader and writer of this
+   * index for as long as the read takes, exactly the stall {@link #buildGraphFromScratchWithRetry} moved the
+   * (much larger) full-rebuild validation off this same lock for (issue #5391). {@link #graphBuildLock} is what
+   * makes running unlocked safe here: it serializes this method against a concurrent {@code buildGraphFromScratch}
+   * and against a second concurrent caller that reached the same reuse decision (both publish
+   * {@link #graphIndex}/{@link #ordinalToVectorId}/{@link #graphState}, so they cannot be allowed to interleave),
+   * the identical role it already plays for {@code buildGraphFromScratchWithRetry}. Only the brief publish step at
+   * the end takes {@code lock.writeLock()}, to make the state change visible/consistent to concurrent readers -
+   * not to protect the read.
+   * <p>
+   * The vectors past {@code graphSize} are not yet in the graph, and are not in {@link #deltaVectors} either:
+   * that buffer is in-memory only (issue #3722) and this is a session that never wrote them, it is only now
+   * discovering them on reopen. Queuing them here - the same re-queue {@link #buildGraphFromScratch()} performs
+   * for a node its own build left unreachable - is what keeps every live vector searchable immediately through
+   * the ordinary delta scan, rather than trading this fix's latency win for a window where they silently do not
+   * come back.
+   *
+   * @param candidate the eligibility decision {@link #ensureGraphAvailable()} made under its write lock
+   */
+  private void reuseStalePrefixGraph(final ReuseCandidate candidate) {
+    final ImmutableGraphIndex loadedGraph = candidate.loadedGraph();
+    final int[] rebuiltOrdinalToVectorId = candidate.liveOrdinalToVectorId();
+    final int graphSize = candidate.graphSize();
+    final String vectorProp = candidate.vectorProp();
+
+    graphBuildLock.lock();
+    try {
+      // Double-check: graphState is volatile and this is the same fast-path re-check ensureGraphAvailable()
+      // itself does after acquiring a lock. Another thread may have already published - a concurrent
+      // buildGraphFromScratch(), or a second reuseStalePrefixGraph() call that queued behind this same mutex and
+      // ran first - while this call waited for graphBuildLock.
+      if (graphState != GraphState.LOADING)
+        return;
+
+      // Trimmed to the gap before it is handed anywhere else: snapshotOf() and computeGraphBuildCacheCapacity()
+      // both size their work off whatever array they are given, and only ordinals [graphSize, length) are ever
+      // read below. Handing them the full live-vector array (as an earlier version of this fix did) made the
+      // snapshot and the build reader's cache scale with the WHOLE index - exactly the O(index size) cost this
+      // fix exists to avoid - rather than with how much is actually missing from the graph (PR #6712 review).
+      final int[] gapOrdinalToVectorId = Arrays.copyOfRange(rebuiltOrdinalToVectorId, graphSize,
+          rebuiltOrdinalToVectorId.length);
+
+      final RandomAccessVectorValues vectors = ArcadePageVectorValues.forGraphBuild(getDatabase(),
+          metadata.dimensions, vectorProp,
+          snapshotOf(vectorIndex(), gapOrdinalToVectorId), gapOrdinalToVectorId, this,
+          computeGraphBuildCacheCapacity(gapOrdinalToVectorId.length, false));
+
+      // Collected into a local list first, exactly the way buildGraphFromScratchExclusively collects its own
+      // unreachable-node re-queue before its publish step: appended into the shared deltaVectors only once this
+      // method holds lock.writeLock() below, never while unlocked.
+      final List<DeltaVectorEntry> gapEntries = new ArrayList<>(gapOrdinalToVectorId.length);
+      for (int ordinal = 0; ordinal < gapOrdinalToVectorId.length; ordinal++) {
+        final int vectorId = gapOrdinalToVectorId[ordinal];
+        final RID rid = vectorIndex().getRid(vectorId);
+        if (rid == null)
+          continue; // gone since the array above was built; the next mutation or rebuild picks it up
+        final VectorFloat<?> vector = vectors.getVector(ordinal);
+        if (vector == null || (vectors instanceof final ArcadePageVectorValues pageValues
+            && pageValues.isDeletedSentinel(vector)))
+          continue;
+        gapEntries.add(new DeltaVectorEntry(vectorId, rid, vector));
+      }
+
+      // Publish. graphState stays LOADING for the whole unlocked read above - insert() does not wait on it - so
+      // a concurrent write could have landed on this index in the meantime and already appended its own entries
+      // to deltaVectors and its own count to mutationsSinceSerialize. addAll()/addAndGet() rather than a replace
+      // or a plain set() is what keeps those, instead of silently dropping them.
+      lock.writeLock().lock();
+      try {
+        this.graphIndex = loadedGraph;
+        this.ordinalToVectorId = Arrays.copyOf(rebuiltOrdinalToVectorId, graphSize);
+        this.deltaVectors.addAll(gapEntries);
+        this.graphState = GraphState.MUTABLE;
+        this.mutationsSinceSerialize.addAndGet(gapEntries.size());
+      } finally {
+        lock.writeLock().unlock();
+      }
+
+      metrics.incrementStalePrefixGraphReuses();
+      LogManager.instance().log(this, Level.INFO,
+          "Reusing persisted graph for index %s as a stale prefix: %d of %d live vectors are already in the "
+              + "graph, %d queued into the delta buffer pending an async rebuild (issue #6655)",
+          indexName, graphSize, rebuiltOrdinalToVectorId.length, gapEntries.size());
+    } finally {
+      graphBuildLock.unlock();
+    }
+
+    // Outside graphBuildLock, the same scope buildGraphFromScratchWithRetry leaves for what runs after it
+    // publishes: only the build/reuse itself needs to be serialized, not its follow-up work. Kicks the same
+    // async rebuild rebuildGraphBeforeSearch() would eventually trigger anyway, so the gap just queued above is
+    // closed promptly instead of waiting on the ordinary mutation threshold, and arms the inactivity timer as a
+    // fallback for when the async attempt is skipped (already in progress, or still cooling down from a prior
+    // OOM deferral - see isCoolingDownFromRebuildDeferral()).
+    startAsyncGraphRebuild();
+    scheduleInactivityRebuild();
   }
 
   /**
@@ -1787,6 +2125,12 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
   private void buildGraphFromScratchExclusively(final GraphBuildCallback graphCallback, final boolean compactDataFile,
       final boolean releaseResidentGraphFirst) {
+    // Everything below reads the location index, and the id snapshot a few lines down reads the id sequence the
+    // load derives from it, so materialise it up front (issue #6722) rather than at whichever of those happens to
+    // come first. A snapshot taken against an unmaterialised sequence would be 0, and every vector id would then
+    // compare as "added after this build started" and be dropped from the delta scan.
+    vectorIndex();
+
     // Reset live builder — full rebuild creates a new graph with different ordinal mapping
     if (liveBuilder != null) {
       try {
@@ -1855,7 +2199,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // CRITICAL FIX: Collect vectors DIRECTLY from pages instead of from vectorIndex.
     // This avoids race conditions where concurrent replication adds entries to vectorIndex
     // that don't yet exist on disk pages. We iterate pages and read what's actually persisted.
-    final Map<RID, VectorEntryForGraphBuild> ridToLatestVector = new HashMap<>(Math.max(16, vectorIndex.size() * 4 / 3));
+    final Map<RID, VectorEntryForGraphBuild> ridToLatestVector = new HashMap<>(Math.max(16, vectorIndex().size() * 4 / 3));
     final int[] totalEntriesRead = { 0 };
     final int[] filteredDeletedVectors = { 0 };
 
@@ -1922,7 +2266,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
                 try {
                   final float[] vector = VectorUtils.toFloatArray(vectorObj, metadata.encoding);
                   if (vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector)) {
-                    final int syntheticId = nextId.getAndIncrement();
+                    final int syntheticId = allocateVectorId();
                     ridToLatestVector.put(rid, new VectorEntryForGraphBuild(syntheticId, rid, false, -1));
                   }
                 } catch (final IllegalArgumentException ignored) {
@@ -1951,15 +2295,16 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // fallback could not trigger (e.g., typeName is null, countType failed, or the type has
     // multiple buckets making the count comparison unreliable).
     if (!documentScanPerformed) {
-      final int inMemorySize = vectorIndex.size();
+      final VectorLocationIndex recoveryLocations = vectorIndex();
+      final int inMemorySize = recoveryLocations.size();
       if (inMemorySize > ridToLatestVector.size()) {
         final int pageParsedCount = ridToLatestVector.size();
         // Recover entries from the in-memory vectorIndex that are missing from pages
-        vectorIndex.getAllVectorIds().forEach(vectorId -> {
-          final long offsetAndFlag = vectorIndex.getOffsetAndFlag(vectorId);
+        recoveryLocations.getAllVectorIds().forEach(vectorId -> {
+          final long offsetAndFlag = recoveryLocations.getOffsetAndFlag(vectorId);
           if (offsetAndFlag == VectorLocationIndex.ABSENT)
             return;
-          final RID rid = vectorIndex.getRid(vectorId);
+          final RID rid = recoveryLocations.getRid(vectorId);
           if (rid != null && !ridToLatestVector.containsKey(rid))
             ridToLatestVector.put(rid, new VectorEntryForGraphBuild(vectorId, rid,
                 VectorLocationIndex.isCompactedOf(offsetAndFlag), VectorLocationIndex.offsetOf(offsetAndFlag)));
@@ -2003,7 +2348,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
         vectorIds = finalActiveVectorIdsFromPages; // Use vector IDs from pages (may include doc-scan fallback)
       } else {
         // Build vector IDs from existing vectorIndex
-        vectorIds = vectorIndex.getAllVectorIds().filter(vectorIndex::isLive).sorted().toArray();
+        final VectorLocationIndex liveLocations = vectorIndex();
+        vectorIds = liveLocations.getAllVectorIds().filter(liveLocations::isLive).sorted().toArray();
 
         // Pages holding no live vector is the ordinary state of a brand new index, and of one whose records have
         // all been deleted: there the tombstones cancel every entry out. Neither says the database is going away,
@@ -2012,7 +2358,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // unreadable data file looks like. Report what was observed, never a cause that was not checked.
         LogManager.instance().log(this, vectorIds.length > 0 ? Level.WARNING : Level.FINE,
             "No live vector read from the pages of index %s (%d entries parsed): building the graph from the in-memory index instead (%d live of %d entries)",
-            indexName, totalEntriesRead[0], vectorIds.length, vectorIndex.size());
+            indexName, totalEntriesRead[0], vectorIds.length, liveLocations.size());
       }
     } finally {
       lock.writeLock().unlock();
@@ -2078,10 +2424,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
       int validationWrongDimensions = 0;
       int validationAllZeros = 0;
 
+      final VectorLocationIndex buildLocations = vectorIndex();
       for (int vectorId : vectorIds) {
-        final long offsetAndFlag = vectorIndex.getOffsetAndFlag(vectorId);
+        final long offsetAndFlag = buildLocations.getOffsetAndFlag(vectorId);
         if (offsetAndFlag != VectorLocationIndex.ABSENT) {
-          final RID vectorRid = vectorIndex.getRid(vectorId);
+          final RID vectorRid = buildLocations.getRid(vectorId);
           final boolean locationIsCompacted = VectorLocationIndex.isCompactedOf(offsetAndFlag);
           final long locationOffset = VectorLocationIndex.offsetOf(offsetAndFlag);
           if (vectorRid == null)
@@ -2523,7 +2870,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // score the same vector twice in the delta scan.
         if (vectorId >= deltaSnapshotId)
           continue;
-        final RID vectorRid = vectorIndex.getRid(vectorId);
+        final RID vectorRid = vectorIndex().getRid(vectorId);
         if (vectorRid == null)
           continue;
         // getVector() resolves the location through the build snapshot and never returns null: an unreadable
@@ -2898,7 +3245,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       return;
 
     persistedTo.getManifest().write(graphOrdinalToVectorId.length,
-        LSMVectorIndexGraphManifest.fingerprintOf(graphOrdinalToVectorId, vectorIndex::getRid));
+        LSMVectorIndexGraphManifest.fingerprintOf(graphOrdinalToVectorId, vectorIndex()::getRid));
   }
 
   private long getTxChunkSize() {
@@ -3098,8 +3445,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final int liveCacheSize = getGraphBuildCacheSize();
       liveVectorValues = new GrowableVectorValues(
           metadata.dimensions,
-          Math.max(1024, Math.min(vectorIndex.size(), liveCacheSize <= 0 ? vectorIndex.size() : liveCacheSize)),
-          vectorIndex,
+          Math.max(1024, Math.min(vectorIndex().size(), liveCacheSize <= 0 ? vectorIndex().size() : liveCacheSize)),
+          vectorIndex(),
           this,
           getDatabase(),
           vectorProp,
@@ -3107,7 +3454,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       );
 
       // Set the count to match existing vectors so size() reports correctly
-      final int maxId = vectorIndex.getMaxVectorId();
+      final int maxId = vectorIndex().getMaxVectorId();
       if (maxId >= 0) {
         // Touch the max ID to set the count correctly (GrowableVectorValues tracks max ordinal)
         liveVectorValues.addVector(maxId, liveVectorValues.getVector(maxId));
@@ -3131,8 +3478,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
       );
 
       LogManager.instance().log(this, Level.INFO,
-          "Live builder initialized (lazy-loading) for incremental inserts on index: %s (vectorIndex size=%d)",
-          indexName, vectorIndex.size());
+          "Live builder initialized (lazy-loading) for incremental inserts on index: %s (%d resident locations)",
+          indexName, vectorIndex().size());
 
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.WARNING,
@@ -3146,6 +3493,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
   /**
    * Minimum graph size to use async rebuild. Below this, synchronous rebuild is fast enough.
    * Above this threshold, a full rebuild can take seconds to minutes, so async is preferred.
+   * <p>
+   * Also the threshold {@link #flush()} uses to decide whether a close-time rebuild is cheap enough to run
+   * synchronously or should be deferred to the next SEARCH on this index instead (issue #6067) - opening the
+   * database alone never triggers it, only {@link #ensureGraphAvailable()}/{@link #rebuildGraphBeforeSearch()}
+   * do, and that deferred rebuild is itself still synchronous on whichever search first reaches it, not async.
    */
   private static final int ASYNC_REBUILD_MIN_GRAPH_SIZE = 1000;
   private static final int[] EMPTY_ORDINALS             = new int[0];
@@ -3317,7 +3669,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (resident == null)
       return true; // nothing built yet: this is a first build in all but name, and must not be declined
 
-    final long nodes = Math.max(resident.getIdUpperBound(), vectorIndex.getActiveCount());
+    final long nodes = Math.max(resident.getIdUpperBound(), vectorIndex().getActiveCount());
     final boolean inlineQuantization = metadata.quantizationType == VectorQuantizationType.INT8
         || metadata.quantizationType == VectorQuantizationType.BINARY;
     final long buildCacheCapacity = computeGraphBuildCacheCapacity((int) Math.min(nodes, Integer.MAX_VALUE / 2),
@@ -3396,7 +3748,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       LogManager.instance()
           .log(this, Level.FINE, "loadVectorsFromPages START: index=%s, totalPages=%d, vectorIndexSizeBefore=%d",
               null, indexName,
-              getTotalPages(), vectorIndex.size());
+              getTotalPages(), residentLocations.size());
 
       int entriesRead = 0;
       int maxVectorId = -1;
@@ -3418,11 +3770,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // Compute nextId from the maximum vector ID found across both files. Tombstoned ids are not resident
       // (issue #5516) but they were still handed out, so the location index's own high-water mark - which every
       // addOrUpdate advances, tombstones included - is what guarantees an id is never reused.
-      maxVectorId = vectorIndex.getAllVectorIds().max().orElse(-1);
-      nextId.set(Math.max(maxVectorId + 1, vectorIndex.getNextId()));
+      maxVectorId = residentLocations.getAllVectorIds().max().orElse(-1);
+      nextId.set(Math.max(maxVectorId + 1, residentLocations.getNextId()));
 
       LogManager.instance().log(this, Level.FINE,
-          "loadVectorsFromPages DONE: Loaded " + vectorIndex.size() + " vector locations (" + entriesRead
+          "loadVectorsFromPages DONE: Loaded " + residentLocations.size() + " vector locations (" + entriesRead
               + " total entries) for index: " + indexName + ", nextId=" + nextId.get() + ", fileId=" + getFileId() +
               ", totalPages="
               + getTotalPages() + (compactedSubIndex != null ?
@@ -3458,7 +3810,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
     final int entriesRead = LSMVectorIndexPageParser.parsePages(getDatabase(), fileId, totalPages, getPageSize(),
         isCompacted,
-        entry -> vectorIndex.addOrUpdate(entry.vectorId, entry.isCompacted, entry.absoluteFileOffset, entry.rid,
+        entry -> residentLocations.addOrUpdate(entry.vectorId, entry.isCompacted, entry.absoluteFileOffset, entry.rid,
             entry.deleted));
 
     LogManager.instance().log(this, Level.FINE,
@@ -3607,7 +3959,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       currentPage.writeInt(OFFSET_NUM_ENTRIES, numberOfEntries);
 
       // Add location to vectorIndex with absolute file offset (isCompacted=false for mutable file)
-      vectorIndex.addOrUpdate(id, false, entryFileOffset, rid, false);
+      vectorIndex().addOrUpdate(id, false, entryFileOffset, rid, false);
 
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "Error persisting vector with location", e);
@@ -4094,7 +4446,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
     final String vectorProp =
         metadata.propertyNames != null && !metadata.propertyNames.isEmpty() ? metadata.propertyNames.getFirst() : "vector";
-    return ArcadePageVectorValues.forSearch(getDatabase(), metadata.dimensions, vectorProp, vectorIndex, ordinalMap,
+    return ArcadePageVectorValues.forSearch(getDatabase(), metadata.dimensions, vectorProp, vectorIndex(), ordinalMap,
         this, getSearchVectorCache());
   }
 
@@ -4126,7 +4478,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final RandomAccessVectorValues values = searchVectorValues(ordinalMap);
       for (int ordinal = 0; ordinal < ordinalMap.length; ordinal++) {
         final int vectorId = ordinalMap[ordinal];
-        if (!rid.equals(vectorIndex.getRid(vectorId)))
+        if (!rid.equals(vectorIndex().getRid(vectorId)))
           continue;
         final VectorFloat<?> vector = values.getVector(ordinal);
         if (vector == null)
@@ -4196,7 +4548,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // tombstone in behind the buffer only makes the next rebuild republish the live entry the pages still
       // carry. It stays anyway, at the price of one bit, because it is what the line above says it does and
       // because the buffer and the tombstone set are maintained by different code paths.
-      if (vectorIndex.isDeleted(delta.vectorId))
+      if (vectorIndex().isDeleted(delta.vectorId))
         continue;
 
       final float score = metadata.similarityFunction.compare(queryVectorFloat, delta.vector);
@@ -4278,8 +4630,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // index, and sizing the array for it up front would allocate for entries that never materialize.
     int[] ordinals = new int[Math.min(allowedRIDs.size(), 256)];
     int count = 0;
+    final VectorLocationIndex locations = vectorIndex();
     for (final RID rid : allowedRIDs) {
-      for (final int vectorId : vectorIndex.getVectorIdsForRid(rid)) {
+      for (final int vectorId : locations.getVectorIdsForRid(rid)) {
         final int ordinal = Arrays.binarySearch(ordinalMap, vectorId);
         if (ordinal < 0)
           continue;
@@ -4303,7 +4656,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final List<Pair<RID, Float>> results, final RandomAccessVectorValues vectors, final int[] ordinalMap,
       final RidHashSet seenRIDs, final ArcadePageVectorValues pageValues) {
     final int vectorId = ordinalMap[ordinal];
-    final RID rid = vectorIndex.getRid(vectorId);
+    final RID rid = vectorIndex().getRid(vectorId);
     if (rid == null)
       return false;
     if (seenRIDs.contains(rid))
@@ -4336,7 +4689,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
   private boolean scoreOrdinalApproximate(final int ordinal, final ScoreFunction.ApproximateScoreFunction scoreFunction,
       final Set<RID> allowedRIDs, final List<Pair<RID, Float>> results, final int[] ordinalMap, final RidHashSet seenRIDs) {
     final int vectorId = ordinalMap[ordinal];
-    final RID rid = vectorIndex.getRid(vectorId);
+    final RID rid = vectorIndex().getRid(vectorId);
     if (rid == null)
       return false;
     if (seenRIDs.contains(rid))
@@ -4398,7 +4751,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // the delta buffer is not in this count. Under a large buffer relative to the graph this can overstate the
     // allow-list's selectivity against the true live set and bias toward the graph walk; per that calculation's
     // own reasoning, that only ever costs a missed optimization, never a wrong answer.
-    final int availableVectors = Math.min(ordinalMap.length, vectorIndex.size());
+    final int availableVectors = Math.min(ordinalMap.length, vectorIndex().size());
     return maxSelectivity > 0f && allowedRIDs.size() <= availableVectors * maxSelectivity;
   }
 
@@ -4488,13 +4841,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // saturates instead of wrapping) would otherwise attempt a multi-GB allocation. A stale read of
       // vectorIndex.size()/deltaVectors.size() here only makes the clamp slightly conservative, never
       // unsafe, so it deliberately isn't taken under the read lock below.
-      k = Math.min(k, Math.max(vectorIndex.size(), 0) + deltaVectors.size());
+      k = Math.min(k, Math.max(vectorIndex().size(), 0) + deltaVectors.size());
 
       boolean readLockHeld = false;
       lock.readLock().lock();
       readLockHeld = true;
       try {
-        if (graphIndex == null || vectorIndex.size() == 0) {
+        if (graphIndex == null || vectorIndex().size() == 0) {
           // No graph yet — still return delta-only results if available
           if (!deltaVectors.isEmpty()) {
             final VectorFloat<?> qvf = vts.createFloatVector(queryVector);
@@ -4532,7 +4885,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
         // Only live vectors may enter the result heap. Accepting tombstones lets a query aimed at a deleted
         // neighbourhood fill its beam with them and stop, which is what returned an empty list (issue #5558).
-        final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, ordinalMap, vectorIndex);
+        final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, ordinalMap, vectorIndex());
 
         // Use instance GraphSearcher with SearchScoreProvider for efSearch control. The searcher is borrowed from
         // the index-scoped pool so its scratch state survives across queries (issue #5413).
@@ -4604,7 +4957,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           final int ordinal = nodeScore.node;
           if (ordinal >= 0 && ordinal < ordinalMap.length) {
             final int vectorId = ordinalMap[ordinal];
-            final RID rid = vectorIndex.getRid(vectorId);
+            final RID rid = vectorIndex().getRid(vectorId);
             if (rid != null) {
               // Post-filter by allowed RIDs (JVector may include entry node despite Bits filter)
               if (allowedRIDs != null && !allowedRIDs.isEmpty() && !allowedRIDs.contains(rid))
@@ -4635,7 +4988,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // It also counts vectors still in the delta buffer, which the scan below cannot reach because it walks graph
         // ordinals - mergeWithDeltaScan has already covered those. So a search left short only by delta vectors can
         // still pay for a scan that finds nothing new. Bounded, rare, and now visible through bruteForceScans.
-        final int availableVectors = Math.min(ordinalMap.length, vectorIndex.size());
+        final int availableVectors = Math.min(ordinalMap.length, vectorIndex().size());
         final int expectedResults = Math.min(k, availableVectors);
         if (results.size() < expectedResults) {
           // Issue #6502: see shortfallIsAllowListDriven's javadoc for why this is split.
@@ -4800,7 +5153,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // only makes it slightly conservative, never unsafe, which is why it is taken outside the read lock
       // below exactly as the ungrouped clamp is.
       final int maxRows = (int) Math.min((long) limit * groupSize,
-          Math.max(vectorIndex.size(), 0) + (long) deltaVectors.size());
+          Math.max(vectorIndex().size(), 0) + (long) deltaVectors.size());
       boolean readLockHeld = false;
       lock.readLock().lock();
       readLockHeld = true;
@@ -4811,7 +5164,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // place under the write lock. Every candidate the cursor built below points back into it by position.
         final List<DeltaVectorEntry> deltaSnapshot = deltaVectors;
 
-        if (graphIndex == null || vectorIndex.size() == 0) {
+        if (graphIndex == null || vectorIndex().size() == 0) {
           // No graph to walk yet - but the delta buffer can still answer, which is the same courtesy
           // findNeighborsFromVector extends. Before issue #6501 this returned an empty list even when every vector
           // in the index was sitting in the buffer.
@@ -4845,7 +5198,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // group-aware filtering during traversal: Bits is score-blind, so doing so lets the HNSW walk
         // hand the per-group budget to whatever cluster the entry-point descent happened to land in
         // (issue #5761). The group cap is applied to the score-ordered output below instead.
-        final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, ordinalMap, vectorIndex);
+        final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, ordinalMap, vectorIndex());
 
         final GroupedSearchState state = new GroupedSearchState(limit, groupSize, maxRows, allowedRIDs,
             groupKeyResolver, queryVectorFloat, deltaSnapshot);
@@ -4968,7 +5321,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         continue;
       }
       final int vectorId = ordinalToVectorId[ordinal];
-      final RID rid = vectorIndex.getRid(vectorId);
+      final RID rid = vectorIndex().getRid(vectorId);
       if (rid == null) {
         state.deletedOrNull++;
         continue;
@@ -5247,7 +5600,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
         continue;
       // The same tombstone check mergeWithDeltaScan applies, asked of the tombstone set for the same reason - see
       // its javadoc for why a resident location cannot answer it and why it stays despite being unreachable today.
-      if (vectorIndex.isDeleted(entry.vectorId))
+      if (vectorIndex().isDeleted(entry.vectorId))
         continue;
       distances[kept] = scoreToDistance(metadata.similarityFunction,
           metadata.similarityFunction.compare(queryVectorFloat, entry.vector));
@@ -5295,8 +5648,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
    */
   public List<Pair<RID, Float>> findNeighborsFromVectorApproximate(final float[] queryVector, int k,
       final Set<RID> allowedRIDs) {
-    // Check if PQ is available
-    if (pqVectors == null || productQuantization == null) {
+    // Check if PQ is available. Through isPQSearchAvailable(), not the two fields directly: the codebooks are
+    // loaded with the locations and both are deferred to first use (issue #6722), so reading the fields here -
+    // ahead of the ensureGraphAvailable() below that would have materialised them - would see null on the first
+    // approximate search after a reopen and silently downgrade it to an exact one.
+    if (!isPQSearchAvailable()) {
       // Fall back to exact search
       LogManager.instance().log(this, Level.FINE,
           "PQ not available for index %s, falling back to exact search", indexName);
@@ -5332,11 +5688,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
       // Issue #5924: see findNeighborsFromVector's matching clamp - k drives the same eager
       // ArrayList/PriorityQueue allocation sizes below, so it needs the same bound.
-      k = Math.min(k, Math.max(vectorIndex.size(), 0) + deltaVectors.size());
+      k = Math.min(k, Math.max(vectorIndex().size(), 0) + deltaVectors.size());
 
       lock.readLock().lock();
       try {
-        if (graphIndex == null || vectorIndex.size() == 0) {
+        if (graphIndex == null || vectorIndex().size() == 0) {
           // No graph yet — still return delta-only results if available
           if (!deltaVectors.isEmpty()) {
             final VectorFloat<?> qvf = vts.createFloatVector(queryVector);
@@ -5383,7 +5739,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
         // Live-only (plus the optional RID allow-list): PQ scores a tombstone as happily as a live vector, so
         // without this the beam fills with nodes the post-filter below then drops (issue #5558).
-        final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, ordinalMap, vectorIndex);
+        final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, ordinalMap, vectorIndex());
 
         // Execute search using the PQ-based score provider
         // The graph structure is typically small enough to stay in OS page cache
@@ -5409,7 +5765,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           final int ordinal = nodeScore.node;
           if (ordinal >= 0 && ordinal < ordinalMap.length) {
             final int vectorId = ordinalMap[ordinal];
-            final RID rid = vectorIndex.getRid(vectorId);
+            final RID rid = vectorIndex().getRid(vectorId);
             if (rid != null) {
               final float distance = scoreToDistance(metadata.similarityFunction, nodeScore.score);
               results.add(new Pair<>(bindRid(rid), distance));
@@ -5451,6 +5807,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * @return true if PQ data is loaded and ready for zero-disk-I/O search
    */
   public boolean isPQSearchAvailable() {
+    vectorIndex(); // the PQ codebooks are loaded with the locations (issue #6722)
     return pqVectors != null && productQuantization != null;
   }
 
@@ -5460,6 +5817,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * @return Number of PQ-encoded vectors, or 0 if PQ is not available
    */
   public int getPQVectorCount() {
+    vectorIndex(); // the PQ codebooks are loaded with the locations (issue #6722)
     return pqVectors != null ? pqVectors.count() : 0;
   }
 
@@ -5636,11 +5994,19 @@ public class LSMVectorIndex implements Index, IndexInternal {
                 new Object[] { new ComparableVector(vector) }, rid);
 
       } else {
+        // Materialise the locations BEFORE taking the write lock (issue #6722; PR #6731 review). The deferred parse
+        // is O(index size) page reads, and the first write against a freshly reopened index is what triggers it, so
+        // running it inside the exclusive section would block every other reader and writer of this index for the
+        // whole scan - the stall the dedicated load lock exists to avoid, and the one #5391 moved the graph-build
+        // validation off this same lock for. Once materialised the flag never goes back, so this single call is
+        // what makes every allocateVectorId() below a plain volatile read.
+        vectorIndex();
+
         // No transaction OR during commit replay: apply immediately
         // During commit phases, TransactionIndexContext.commit() calls this method directly
         lock.writeLock().lock();
         try {
-          final int id = nextId.getAndIncrement();
+          final int id = allocateVectorId();
 
           // Persist vector to page (will be added to vectorIndex inside persistVectorWithLocation)
           persistVectorWithLocation(id, rid, vector);
@@ -5722,6 +6088,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
     final long startTime = System.currentTimeMillis();
 
+    // Materialise the locations BEFORE taking the write lock (issue #6722; PR #6731 review). The deferred parse
+    // is O(index size) page reads, and the first write against a freshly reopened index is what triggers it, so
+    // running it inside the exclusive section would block every other reader and writer of this index for the
+    // whole scan - the stall the dedicated load lock exists to avoid, and the one #5391 moved the graph-build
+    // validation off this same lock for. Once materialised the flag never goes back, so this single call is
+    // what makes every allocateVectorId() below a plain volatile read.
+    vectorIndex();
+
     lock.writeLock().lock();
     try {
       for (int i = 0; i < keysList.size(); i++) {
@@ -5755,7 +6129,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           continue;
         }
 
-        final int id = nextId.getAndIncrement();
+        final int id = allocateVectorId();
         persistVectorWithLocation(id, rid, vector);
 
         // Track in liveVectorValues for metadata consistency (O(1) - just a map put)
@@ -5816,6 +6190,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
               new Object[] { new ComparableVector(new float[metadata.dimensions]) }, rid);
 
     } else {
+      // Materialise the locations BEFORE taking the write lock (issue #6722; PR #6731 review). The deferred parse
+      // is O(index size) page reads, and the first write against a freshly reopened index is what triggers it, so
+      // running it inside the exclusive section would block every other reader and writer of this index for the
+      // whole scan - the stall the dedicated load lock exists to avoid, and the one #5391 moved the graph-build
+      // validation off this same lock for. Once materialised the flag never goes back, so this single call is
+      // what makes every vectorIndex() below a plain volatile read.
+      vectorIndex();
+
       // No transaction OR during commit replay: apply immediately
       // During commit phases, TransactionIndexContext.commit() calls this method directly
       lock.writeLock().lock();
@@ -5824,9 +6206,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
         // instead of scanning every vector id in the index (issue #5318): the old full scan made any record update on
         // a vector-indexed type O(index size), so bulk updates degraded quadratically.
         final List<Integer> deletedIds = new ArrayList<>();
-        for (final int vectorId : vectorIndex.getVectorIdsForRid(rid)) {
-          if (vectorIndex.isLocationOf(vectorId, rid)) {
-            vectorIndex.markDeleted(vectorId);
+        final VectorLocationIndex locations = vectorIndex();
+        for (final int vectorId : locations.getVectorIdsForRid(rid)) {
+          if (locations.isLocationOf(vectorId, rid)) {
+            locations.markDeleted(vectorId);
             deletedIds.add(vectorId);
             // Do not let the shared search cache pin a vector that no longer exists (issue #5412)
             final VectorCache cache = searchVectorCache;
@@ -5980,7 +6363,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // defensively, but on this backend it has nothing left to filter). Only the unbounded backend reaches here -
     // isCompactionDue() turns back a map that evicts, which is what would break that equivalence. Counting the
     // values instead would be a full map scan on every commit, which this check must not do.
-    final int liveVectors = vectorIndex.size();
+    final int liveVectors = vectorIndex().size();
     if (liveVectors < 1)
       return 0;
 
@@ -6005,7 +6388,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
   public long countEntries() {
     // Use vectorIndex which already applies LSM merge-on-read semantics
     // (latest entry for each RID, filtering out deleted entries)
-    return vectorIndex.getActiveCount();
+    return vectorIndex().getActiveCount();
   }
 
   @Override
@@ -6392,20 +6775,20 @@ public class LSMVectorIndex implements Index, IndexInternal {
   public void flush() {
     if (status.compareAndSet(INDEX_STATUS.AVAILABLE, INDEX_STATUS.UNAVAILABLE)) {
 
-      // Build and persist graph if it hasn't been built yet
-      // This ensures the graph is available on next database open (fast restart)
-      // Build graph if it's in LOADING (never built) or MUTABLE (has pending changes) state
-      //
-      // LOADING means "not loaded into memory", which is not the same as "not
-      // persisted on disk": the graph loads lazily on the first search, so a
-      // session that never searched leaves it LOADING even when a complete
-      // graph is already on disk, and rebuilding then only reproduces a file
-      // that already exists. initializeGraphIndex() already draws exactly this
-      // distinction with the same predicate.
+      // Build and persist graph if it hasn't been built yet. This ensures the graph is available on next
+      // database open (fast restart). See needsGraphBuild() for exactly which states count as "needs one".
       final LSMVectorIndexGraphFile gf = graphFile;
-      final boolean graphAlreadyOnDisk = gf != null && gf.hasPersistedGraph();
-      final boolean needsBuild = vectorIndex.size() > 0 && (graphState == GraphState.MUTABLE
-          || (graphState == GraphState.LOADING && !graphAlreadyOnDisk));
+      final boolean needsBuild = needsGraphBuild(gf);
+
+      // Reset before deciding: see the field javadoc for why releaseBackgroundResources() needs this to
+      // distinguish "this flush() skipped" from "this flush() attempted (and possibly failed)".
+      flushDeferredRebuild = false;
+
+      // needsGraphBuild() answers from page counters so that the overwhelmingly common close - nothing to build -
+      // never materialises the locations issue #6722 deferred. Past that point the choice is between building the
+      // whole graph here and recording a deferral, and both want the real live count, so the branches below do go
+      // through vectorIndex(). Its parse is a rounding error against the build it is deciding about, and getting
+      // it wrong would send a large index down the synchronous-build arm that issue #6067 exists to avoid.
 
       if (needsBuild && !valid) {
         // Background resources are already gone, so there is no build pool to run this on - and asking for one
@@ -6420,6 +6803,27 @@ public class LSMVectorIndex implements Index, IndexInternal {
                 + "stay on disk and are re-indexed on the next open. This means flush() was called after "
                 + "releaseBackgroundResources() - both close paths are supposed to do the reverse",
             indexName, mutationsSinceSerialize.get());
+        flushDeferredRebuild = true;
+        markCloseTimeRebuildDeferred(gf);
+      } else if (needsBuild && vectorIndex().size() >= ASYNC_REBUILD_MIN_GRAPH_SIZE) {
+        // A synchronous full rebuild here would block close() for as long as the whole rebuild takes - measured
+        // (issue #6067) at 43s for a single write to a 200k-vector index, scaling with total index size rather
+        // than with what was actually written, because there is no incremental persist: any rebuild is a full
+        // rebuild. The vectors themselves are already durably persisted (ordinary page/WAL writes, unrelated to
+        // the graph); only the graph TOPOLOGY is stale or absent. Leave graphState as-is - MUTABLE, or LOADING
+        // with no persisted graph - and defer the rebuild to whenever this index is next actually searched,
+        // reusing the exact lazy-load/staleness-detection path (ensureGraphAvailable()) that already handles a
+        // stale persisted graph on every ordinary reopen. A session that closes and reopens without searching
+        // this index never pays the cost at all; one that does pays it at the query instead of at close() - that
+        // follow-up rebuild is itself still synchronous on the search that triggers it (ensureGraphAvailable()'s
+        // stale-graph fallback is not gated by this same threshold), so this trades an unconditional cost on
+        // EVERY close() for a conditional one paid by at most one search, not for a non-blocking one.
+        LogManager.instance().log(this, Level.FINE,
+            "Deferring graph build on close for index %s: %d vectors is at or above the async rebuild threshold "
+                + "(%d), so the rebuild is deferred to the next search on this index instead of blocking close()",
+            indexName, vectorIndex().size(), ASYNC_REBUILD_MIN_GRAPH_SIZE);
+        flushDeferredRebuild = true;
+        markCloseTimeRebuildDeferred(gf);
       } else if (needsBuild) {
         try {
           LogManager.instance()
@@ -6440,10 +6844,74 @@ public class LSMVectorIndex implements Index, IndexInternal {
       } else {
         LogManager.instance()
             .log(this, Level.FINE, "Skipping graph build on close: vectorIndexSize=%d, graphState=%s",
-                vectorIndex.size(),
+                residentLocations.size(),
                 graphState);
       }
     }
+  }
+
+  /**
+   * {@code true} when the graph is behind the live vector set and a build has not been persisted for it yet.
+   * Shared between {@link #flush()} and {@link #releaseBackgroundResources()} (issue #6657's post-cancellation
+   * recheck) so the two cannot silently drift onto different predicates.
+   * <p>
+   * LOADING means "not loaded into memory", which is not the same as "not persisted on disk": the graph loads
+   * lazily on the first search, so a session that never searched leaves it LOADING even when a complete graph is
+   * already on disk, and rebuilding then only reproduces a file that already exists.
+   * {@code initializeGraphIndex()} already draws exactly this distinction with the same predicate.
+   */
+  private boolean needsGraphBuild(final LSMVectorIndexGraphFile gf) {
+    final boolean graphAlreadyOnDisk = gf != null && gf.hasPersistedGraph();
+    return hasAnyVectors() && (graphState == GraphState.MUTABLE
+        || (graphState == GraphState.LOADING && !graphAlreadyOnDisk));
+  }
+
+  /**
+   * Records, in the graph's manifest sidecar, that this close chose to skip a rebuild it would otherwise have run
+   * (issue #6657) - so {@link #getStats()} can answer "did the last close defer a rebuild" directly instead of an
+   * operator having to go looking for the {@code FINE} log line above. Deliberately a manifest write rather than an
+   * in-memory field: a fresh {@link LSMVectorIndex} instance is constructed on every database open (see the two
+   * {@code open()}/{@code create()} factory methods), so a plain field set here would be gone by the time anyone
+   * could read it - the whole point is to answer the question the moment BEFORE the next search would otherwise
+   * silently pay for it.
+   * <p>
+   * A no-op when {@code gf} is {@code null}: a never-yet-built index that was also never discovered on a previous
+   * load has no manifest path to write to. That index has no on-disk graph either, so the deferral is still fully
+   * recoverable - {@link #ensureGraphAvailable()} builds it from scratch on the next search - only the stats
+   * signal for the gap between reopen and that search is unavailable, which is the narrower of the two arms this
+   * covers.
+   * <p>
+   * Guarded by {@link #graphBuildLock} - {@code tryLock()}, not {@code lock()} - because every other writer of
+   * this manifest (the normal post-build persist, both {@code markUnusable} failure paths) already holds it via
+   * {@code buildGraphFromScratchWithRetry()}, and {@code LSMVectorIndexGraphManifest}'s own class javadoc requires
+   * callers not to write one manifest concurrently: {@code markCloseDeferred()}'s read-then-write is not atomic,
+   * so racing it against an in-flight build's completion write could clobber a just-persisted fresh
+   * manifest with stale pre-build values. An async rebuild can still be running when {@code close()} calls
+   * {@code flush()} - {@code releaseBackgroundResources()} is what cancels it, and {@code close()} runs that
+   * AFTER {@code flush()} (see the "flush FIRST, release SECOND" note below) - so the race is real, not
+   * theoretical. A plain {@code lock()} would fix that only by blocking this close on whatever that other build
+   * still has left to do, which is exactly the synchronous-close cost issue #6067/#6653 exists to avoid, so a
+   * held lock is skipped here rather than waited for. That skip is not the full story on its own, though: a build
+   * holding the lock might go on to complete (its own write then correctly clears this flag) or might instead be
+   * CANCELLED by {@link #releaseBackgroundResources()} right after this method returns - and a cancelled build's
+   * {@code CancellationException} path does not touch the manifest at all. {@link #releaseBackgroundResources()}
+   * calls this method again, unconditionally, after it has cancelled and joined any in-flight build, by which
+   * point {@code graphState} reliably says which of the two happened - that second call is the actual backstop
+   * for a skip here, not "the build's completion write" alone.
+   */
+  private void markCloseTimeRebuildDeferred(final LSMVectorIndexGraphFile gf) {
+    if (gf == null)
+      return;
+    if (graphBuildLock.tryLock()) {
+      try {
+        gf.getManifest().markCloseDeferred();
+      } finally {
+        graphBuildLock.unlock();
+      }
+    } else
+      LogManager.instance().log(this, Level.FINE,
+          "Not recording the close-time rebuild deferral for index %s: a graph build already holds the build "
+              + "lock and its own completion will supersede this note anyway", indexName);
   }
 
   /**
@@ -6548,14 +7016,57 @@ public class LSMVectorIndex implements Index, IndexInternal {
     final GraphSearcherPool searchers = searcherPool;
     if (searchers != null)
       searchers.clear();
+
+    // Issue #6657, closing a false-negative gap in the deferral flag above: flush() runs BEFORE this method, so
+    // an async rebuild that flush() found already holding graphBuildLock - and therefore skipped marking, trusting
+    // "its own completion write" to account for it - may have been CANCELLED by the shutdown just above rather
+    // than actually completing. A cancelled build's CancellationException path (see the catch block around it)
+    // does not touch the manifest at all, successful or not, so the flag would otherwise sit wherever the last
+    // real build left it - typically false - even though a rebuild is now genuinely owed. By this point that
+    // build has been cancelled and joined (or logged above as a rare straggler that outlived the join), so
+    // graphState reliably distinguishes "it finished" (no longer MUTABLE, needsGraphBuild() now false - that
+    // build's own write already cleared the flag, nothing to do) from "it did not" (still MUTABLE, mark it now).
+    //
+    // Gated on flushDeferredRebuild, not on needsGraphBuild() alone (review round 4): flush()'s OTHER branch -
+    // the one that actually ATTEMPTS a synchronous build rather than skipping - can also leave graphState at
+    // MUTABLE, either because the attempt failed (buildGraphFromScratchExclusively() then correctly writes
+    // closeDeferredRebuild=false via markUnusable()) or because new mutations arrived mid-build. Neither of those
+    // is "flush() chose to defer", and rechecking unconditionally would overwrite that correct false with a
+    // misleading true - mislabeling "close attempted a rebuild and it failed" as "close skipped the rebuild for
+    // performance". flushDeferredRebuild is set only inside flush()'s two skip branches and reset at the top of
+    // every flush(), so it answers exactly the question this recheck needs: did THIS close's flush() skip, not
+    // just "is a rebuild still owed for some reason". As a side effect this also keeps the recheck from ever
+    // firing on a path that never called flush() at all - LocalDatabase.closeInternal(true) (whole-database
+    // drop) and LocalDatabase.kill() (crash simulation) both call releaseBackgroundResources() without one.
+    //
+    // Idempotent with flush()'s own attempt above: on the ordinary path where that one already succeeded,
+    // markCloseDeferred()'s own already-true short-circuit turns this into a single extra read, not a rewrite -
+    // and only on the close of a large, recently-mutated index, not on every close.
+    //
+    // Known residual gap, same shape one layer further out: markCloseTimeRebuildDeferred()'s own tryLock() can
+    // still lose to a STRAGGLER build thread - one that outlived shutdownNow()'s 5s budget and the pool's
+    // awaitTermination() above (see the WARNING logged a few lines up) - if that straggler happens to be the one
+    // holding graphBuildLock at the exact moment this recheck runs. Narrow (needs both an unresponsive build AND
+    // it specifically being the lock holder right now) and not chased further: unlike the cancellation case this
+    // recheck exists for, there is no later "the build is definitely done by now" moment available to retry from
+    // inside this method. Same acceptance as the gf == null case in markCloseTimeRebuildDeferred()'s javadoc -
+    // documented rather than solved.
+    if (flushDeferredRebuild) {
+      final LSMVectorIndexGraphFile gfAfterRelease = graphFile;
+      if (needsGraphBuild(gfAfterRelease))
+        markCloseTimeRebuildDeferred(gfAfterRelease);
+    }
   }
 
   @Override
   public void drop() {
     lock.writeLock().lock();
     try {
-      // Clear all vector locations
-      vectorIndex.clear();
+      // Clear all vector locations. Raw, and it also closes the deferral (issue #6722): the files this index was
+      // going to parse are about to go away, so a materialisation triggered after this point would read a dropped
+      // file rather than produce anything useful.
+      residentLocations.clear();
+      locationsMaterialized = true;
       searchVectorCache = null; // Release the shared search cache (issue #5412)
       final GraphSearcherPool searchers = searcherPool;
       if (searchers != null)
@@ -6636,7 +7147,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     // Existing metrics. One read of the volatile field for the whole snapshot: a rebuild publishes a replacement
     // instance (issue #5568), and three separate reads could each land on a different generation and report three
     // numbers that never described the same index.
-    final VectorLocationIndex locations = vectorIndex;
+    final VectorLocationIndex locations = vectorIndex();
     stats.put("totalVectors", (long) locations.size());
     stats.put("activeVectors", locations.getActiveCount());
     // Ask the deleted-id set instead of subtracting: a tombstoned id keeps no resident location since issue #5516,
@@ -6652,6 +7163,16 @@ public class LSMVectorIndex implements Index, IndexInternal {
     stats.put("mutationsSinceRebuild", (long) mutationsSinceSerialize.get());
     stats.put("asyncRebuildInProgress", asyncRebuildInProgress ? 1L : 0L);
     stats.put("rebuildSnapshotGeneration", rebuildSnapshotGeneration);
+
+    // Whether the LAST close() skipped a rebuild it would otherwise have run (issue #6657), as opposed to
+    // graphState/mutationsSinceRebuild above, which cannot tell that apart from ordinary mid-session mutations.
+    // A small manifest read rather than a cached field: unlike the other stats above, this one specifically has
+    // to survive being read on a freshly reopened index, before that index's own first search - see
+    // markCloseTimeRebuildDeferred() for why a field would not.
+    final LSMVectorIndexGraphFile statsGraphFile = graphFile;
+    final LSMVectorIndexGraphManifest.Content manifestContent =
+        statsGraphFile != null ? statsGraphFile.getManifest().read() : null;
+    stats.put("closeTimeRebuildPending", manifestContent != null && manifestContent.closeDeferredRebuild() ? 1L : 0L);
 
     // Calculate mutations threshold (use configured value or default)
     final int defaultMutationsThreshold = getDatabase().getConfiguration()
@@ -6790,7 +7311,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
             totalRecords = bulkLoadVectorData(callback, chunkedCommitAllowed);
 
             // PHASE 3: Build and persist graph with chunking
-            if (vectorIndex.size() > 0 && graphState == GraphState.LOADING) {
+            if (vectorIndex().size() > 0 && graphState == GraphState.LOADING) {
               buildGraphWithChunking(graphCallback, chunkedCommitAllowed);
             }
 
@@ -6986,7 +7507,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // index comes out of a rebuild with its working set already resident instead of cold (issue #5412).
       final RandomAccessVectorValues vectors = ArcadePageVectorValues.forSearch(getDatabase(), metadata.dimensions,
           vectorProp,
-          vectorIndex, ordinalToVectorId, this, getSearchVectorCache());
+          vectorIndex(), ordinalToVectorId, this, getSearchVectorCache());
 
       // Single read, not a check-then-use, and this runs on the thread that owns the initial build while the
       // index is UNAVAILABLE (no concurrent COMPACT INDEX possible) - intentionally left out of #6536's
@@ -7058,7 +7579,28 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * Get the VectorLocationIndex (used by the tests to inspect the resident locations)
    */
   protected VectorLocationIndex getVectorIndex() {
-    return vectorIndex;
+    return vectorIndex();
+  }
+
+  /**
+   * Whether the deferred location load of issue #6722 has already happened - exposed so a test can tell "not
+   * materialised yet" apart from "materialised and empty", which {@link #countEntries()} cannot.
+   */
+  boolean areLocationsMaterializedForTest() {
+    return locationsMaterialized;
+  }
+
+  /** The location index as it stands, WITHOUT materialising it - the one raw read a test needs (issue #6722). */
+  VectorLocationIndex residentLocationsForTest() {
+    return residentLocations;
+  }
+
+  /**
+   * Whether any deferred materialisation on this instance ran while its thread held the index-wide write lock -
+   * the stall the dedicated load lock exists to prevent (issue #6722). Must stay false on every path.
+   */
+  boolean didMaterializeUnderWriteLockForTest() {
+    return materializedUnderWriteLock;
   }
 
   /**
@@ -7149,7 +7691,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
         // Update VectorLocationIndex with this entry's absolute file offset
         // LSM semantics: later entries override earlier ones
-        vectorIndex.addOrUpdate(id, isCompacted, entryFileOffset, rid, deleted);
+        vectorIndex().addOrUpdate(id, isCompacted, entryFileOffset, rid, deleted);
       }
 
       LogManager.instance()
@@ -7377,7 +7919,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     final long affordable = Math.max(MIN_SEARCH_CACHE_SIZE,
         heapBudget / VectorHeapBudget.bytesPerCachedVector(metadata.dimensions));
 
-    final long corpus = Math.max(MIN_SEARCH_CACHE_SIZE, vectorIndex.size());
+    final long corpus = Math.max(MIN_SEARCH_CACHE_SIZE, vectorIndex().size());
 
     return (int) Math.min(Math.min(affordable, corpus), Integer.MAX_VALUE / 2);
   }

@@ -18,7 +18,7 @@
  */
 package com.arcadedb.server.ai;
 
-import com.arcadedb.database.Database;
+import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.serializer.json.JSONArray;
@@ -26,6 +26,7 @@ import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.info.SchemaInfo;
 import com.arcadedb.server.info.ServerInfo;
+import com.arcadedb.server.security.DatabaseUserContext;
 import com.arcadedb.server.security.ServerSecurityUser;
 
 /**
@@ -88,35 +89,42 @@ public class ToolDispatcher {
     if (!user.canAccessToDatabase(databaseName))
       return errorJson("User '" + user.getName() + "' is not authorized to access database '" + databaseName + "'");
 
-    final Database database = server.getDatabase(databaseName);
+    final DatabaseInternal database = server.getDatabase(databaseName);
 
-    // Read-only: use query() (not command()). Writes will surface as the engine's
-    // "not idempotent" exception, which the LLM is prompted to recover by returning
-    // the command as a fenced block for the user to review.
-try (ResultSet rs = database.query(language, command)) {
-      final JSONArray records = new JSONArray();
-      long approxBytes = 0;
-      boolean truncated = false;
-      while (rs.hasNext()) {
-        final Result row = rs.next();
-        final JSONObject rowJson = new JSONObject(row.toJSON());
-        final int sz = rowJson.toString().length();
-        // Always allow the first row through so the LLM gets at least one record
-        // even when a single row is bigger than the budget.
-        if (approxBytes + sz > MAX_RESULT_BYTES && records.length() > 0) {
-          truncated = true;
-          break;
+    // Bind the authenticated principal for the duration of the read so the engine's per-type/bucket ACL
+    // layer enforces (LocalDatabase.checkPermissionsOnFile is a no-op when no principal is bound) - mirrors
+    // SchemaInfo.forUser's use of the same helper for the get_schema tool. Scoped per call rather than for
+    // the whole request because the tool argument above can name a database other than the chat's default
+    // one, and this dispatcher's worker thread is reused across requests.
+    return DatabaseUserContext.runAs(database, user, () -> {
+      // Read-only: use query() (not command()). Writes will surface as the engine's
+      // "not idempotent" exception, which the LLM is prompted to recover by returning
+      // the command as a fenced block for the user to review.
+      try (ResultSet rs = database.query(language, command)) {
+        final JSONArray records = new JSONArray();
+        long approxBytes = 0;
+        boolean truncated = false;
+        while (rs.hasNext()) {
+          final Result row = rs.next();
+          final JSONObject rowJson = new JSONObject(row.toJSON());
+          final int sz = rowJson.toString().length();
+          // Always allow the first row through so the LLM gets at least one record
+          // even when a single row is bigger than the budget.
+          if (approxBytes + sz > MAX_RESULT_BYTES && records.length() > 0) {
+            truncated = true;
+            break;
+          }
+          records.put(rowJson);
+          approxBytes += sz;
         }
-        records.put(rowJson);
-        approxBytes += sz;
+        final JSONObject envelope = new JSONObject();
+        envelope.put("user", user.getName());
+        envelope.put("result", records);
+        if (truncated)
+          envelope.put("truncated", true);
+        return envelope.toString();
       }
-      final JSONObject envelope = new JSONObject();
-      envelope.put("user", user.getName());
-      envelope.put("result", records);
-      if (truncated)
-        envelope.put("truncated", true);
-      return envelope.toString();
-    }
+    });
   }
 
   private String executeGetSchema(final JSONObject args) {

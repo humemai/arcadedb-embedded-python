@@ -137,7 +137,13 @@ public class SelectExecutionPlanner {
       info.projection.setDistinct(false);
     }
 
-    info.target = this.statement.getTarget();
+    // Copied like every other clause below: calculateTargetBuckets() (unconditional) and
+    // rewriteIndexChainsAsSubqueries() (only when a WHERE clause is present) can each rewrite a $var target's
+    // identifier into the resolved type name in place (#6669). Without the copy that write lands on the shared
+    // FromClause node StatementCache hands back for every execution of this SQL text, permanently pinning the
+    // cached Statement to whichever type the first execution resolved $var to - and racing any concurrent first
+    // execution on the same node.
+    info.target = this.statement.getTarget() == null ? null : this.statement.getTarget().copy();
     info.whereClause = this.statement.getWhereClause() == null ? null : this.statement.getWhereClause().copy();
     info.perRecordLetClause = this.statement.getLetClause() == null ? null : this.statement.getLetClause().copy();
     info.groupBy = this.statement.getGroupBy() == null ? null : this.statement.getGroupBy().copy();
@@ -297,9 +303,10 @@ public class SelectExecutionPlanner {
       chainTimeout(selectExecutionPlan, info, context);
     }
 
-    if (useCache && !context.isProfiling() && statement.executionPlanCanBeCached() && selectExecutionPlan.canBeCached()
-        && db.getExecutionPlanCache().getLastInvalidation() < planningStart)
-      db.getExecutionPlanCache().put(statement.getOriginalStatement(), selectExecutionPlan);
+    if (useCache && !context.isProfiling() && statement.executionPlanCanBeCached() && selectExecutionPlan.canBeCached())
+      // The planningStart < lastInvalidation re-check happens atomically inside put(), under the same lock as
+      // invalidate(), so a DDL racing this call can never be missed the way two separately-locked calls could (#6671).
+      db.getExecutionPlanCache().put(statement.getOriginalStatement(), selectExecutionPlan, planningStart);
 
     return selectExecutionPlan;
   }
@@ -562,26 +569,20 @@ public class SelectExecutionPlanner {
   }
 
   /**
-   * Returns the count(*) ProjectionItem if the aggregateProjection contains exactly one true aggregate and it is count(*),
-   * otherwise returns null. Non-aggregate pass-through alias items (added for non-aggregate projections) are ignored.
+   * Returns true if the aggregateProjection contains at least one true aggregate function (count(), sum(), avg(),
+   * min(), max(), ...). Used, together with the absence of a GROUP BY, to decide whether a
+   * {@link GuaranteeEmptyCountStep} is needed to guarantee the single row a scalar aggregation must produce even
+   * over an empty input (issue #6680).
    */
-  private static ProjectionItem findCountStarItem(final QueryPlanningInfo info, final CommandContext context) {
-    if (info.aggregateProjection == null)
-      return null;
+  private static boolean hasAggregateItem(final Projection aggregateProjection, final CommandContext context) {
+    if (aggregateProjection == null)
+      return false;
 
-    ProjectionItem countItem = null;
-    for (final ProjectionItem item : info.aggregateProjection.getItems()) {
-      if (!item.isAggregate(context))
-        continue;
-      if (countItem != null)
-        return null; // more than one aggregate function
-      final Expression exp = item.getExpression();
-      if (exp.getMathExpression() instanceof final BaseExpression base && base.isCount() && base.getModifier() == null)
-        countItem = item;
-      else
-        return null; // aggregate but not count(*)
+    for (final ProjectionItem item : aggregateProjection.getItems()) {
+      if (item.isAggregate(context))
+        return true;
     }
-    return countItem;
+    return false;
   }
 
   private boolean isCount(final Projection aggregateProjection, final Projection projection) {
@@ -777,9 +778,8 @@ public class SelectExecutionPlanner {
 
         result.chain(new AggregateProjectionCalculationStep(info.aggregateProjection, info.groupBy, aggregationLimit, context,
             info.timeout != null ? info.timeout.getVal().longValue() : -1));
-        final ProjectionItem countStarItem = findCountStarItem(info, context);
-        if (countStarItem != null && info.groupBy == null) {
-          result.chain(new GuaranteeEmptyCountStep(countStarItem, info.preAggregateProjection, context));
+        if (info.groupBy == null && hasAggregateItem(info.aggregateProjection, context)) {
+          result.chain(new GuaranteeEmptyCountStep(info.aggregateProjection, info.preAggregateProjection, context));
         }
       }
       result.chain(new ProjectionCalculationStep(info.projection, context));
