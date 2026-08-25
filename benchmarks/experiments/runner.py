@@ -743,6 +743,35 @@ if _LOCAL_SERVER_IMAGE:
 # checking. Substring match against the backend name.
 JVM_BACKENDS = ("arcadedb", "neo4j", "elasticsearch", "questdb")
 
+# What each lane reads out of /data, which is BENCH_DATA bind-mounted read-only.
+# Checked on the HOST before any cell starts.
+#
+# WHY: on 2026-08-24 a 20-cell l4 run died in under a second per cell on
+# FileNotFoundError: /data/tsbs/cpu_influx.lp. BENCH_DATA was never exported by
+# the launcher, so DATA fell back to the in-repo experiments/data -- which holds
+# only sparse/ -- and /data inside the container was not the corpus at all. The
+# launcher had "fixed" an earlier instance of this by passing a HOST path
+# through to the container, which cannot work and hid the real cause. A missing
+# corpus must be a refusal on the host, not a traceback in cell 20 of 20.
+#
+# Each entry is (guard, path-under-DATA). The guard returns False when the
+# caller has redirected that lane somewhere else, because a check that fires on
+# a legitimately overridden path is a check people learn to route around.
+def _unset(*names):
+    return lambda: not any(os.environ.get(n) for n in names)
+
+
+LANE_CORPUS = {
+    "l4":    (_unset("BENCH_TSBS_LP", "TSBS_LP"), "tsbs/cpu_influx.lp"),
+    "l1tpc": (_unset("BENCH_TPC_DATA"), "tpch"),
+    "l3d":   (_unset("BENCH_DENSE_DATA"), "dense"),
+    "l3s":   (lambda: os.environ.get("BENCH_SPARSE_SOURCE") != "bigann"
+              and not os.environ.get("BENCH_SPARSE_DATA"), "sparse"),
+    "l2":    (lambda: os.environ.get("BENCH_GRAPH_SOURCE") == "ldbc"
+              and not os.environ.get("BENCH_GRAPH_DATA"), "ldbc"),
+}
+
+
 LANES = {
     # lane -> (bench script, backends, workloads)
     "l1": ("l1_tabular.py",
@@ -1722,6 +1751,24 @@ def main():
         # would fail deep inside the driver instead of at the mount.
         os.makedirs(LC_HOST_DIR, exist_ok=True)
         print(f"lifecycle database dir: {LC_HOST_DIR}")
+
+    # The corpus mount, named out loud and checked. DATA is what /data IS; a
+    # lane that needs a corpus absent from it would otherwise fail one cell at a
+    # time with a path that looks right from inside the container.
+    print(f"corpus mount: {DATA} -> /data:ro"
+          f"{'' if os.environ.get('BENCH_DATA') else '  (BENCH_DATA unset, defaulted)'}")
+    _missing = sorted({os.path.join(DATA, sub)
+                       for l in lanes if l in LANE_CORPUS
+                       for guard, sub in [LANE_CORPUS[l]]
+                       if guard() and not os.path.exists(os.path.join(DATA, sub))})
+    if _missing:
+        sys.exit("corpus mount is missing what these lanes read:\n  "
+                 + "\n  ".join(_missing)
+                 + "\nSet BENCH_DATA to the host corpus root (currently "
+                 + (f"set to {os.environ['BENCH_DATA']}" if os.environ.get("BENCH_DATA")
+                    else "unset, so it defaulted to the in-repo data/")
+                 + "). Lane paths resolve INSIDE the container, so pointing a"
+                   " lane at a host path instead of fixing the mount cannot work.")
 
     jobs = build_jobs(lanes, workloads)
     if args.backends:
