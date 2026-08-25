@@ -54,8 +54,20 @@ ITERS = int(os.environ.get("BENCH_LC_ITERS", "3"))
 # Which scenarios to run. At very large scales the write modes trigger a full
 # index rebuild PER CYCLE, which is hours; the untriggered ones still answer
 # "does merely having this thing cost more as it grows".
+ALL_MODES = ("clean", "read", "write", "write_read", "write_own", "write_own_read")
+# The default is ALL_MODES verbatim: an unset knob must reproduce the runs that
+# were collected before this knob was honoured, byte for byte, or the filter
+# silently becomes an instrument change.
 MODES = [m for m in os.environ.get(
-    "BENCH_LC_MODES", "clean,read,write,write_own,write_own_read").split(",") if m]
+    "BENCH_LC_MODES", ",".join(ALL_MODES)).split(",") if m]
+_unknown = [m for m in MODES if m not in ALL_MODES]
+if _unknown:
+    raise SystemExit(f"BENCH_LC_MODES: unknown mode(s) {_unknown}; known: {list(ALL_MODES)}")
+# clean is not optional: cold_start_penalty_ms and close_over_budget are both
+# defined against it, and a filter that removed it would produce a row whose
+# invariant column silently disappeared rather than failing.
+if "clean" not in MODES:
+    MODES.insert(0, "clean")
 WARMUP = int(os.environ.get("BENCH_LC_WARMUP", "1"))
 
 SCALE_ROWS = {"lc10k": 10_000, "lc100k": 100_000, "lc1m": 1_000_000,
@@ -440,7 +452,10 @@ def main():
     out["first_open_ms"] = round(first_open_ms, 3)       # first open, JVM already up
     out["cold_process_ms"] = round(cold_proc_ms, 3)      # what a CLI actually waits for
 
-    for mode in ("clean", "read", "write", "write_read", "write_own", "write_own_read"):
+    # MODES, not a literal tuple. This loop ignored BENCH_LC_MODES until 2026-08-25,
+    # which cost a 10M vector cell 10.6 h per rep instead of the ~53 min the filter
+    # was asking for. No row was WRONG (the loop ran a superset), only unaffordable.
+    for mode in MODES:
         o, c, w = measure(args.workload, mode)
         out[f"{mode}_open_ms"] = round(o, 3)
         out[f"{mode}_close_ms"] = round(c, 3)
