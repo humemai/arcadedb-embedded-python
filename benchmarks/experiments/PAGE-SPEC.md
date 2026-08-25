@@ -244,6 +244,13 @@ at 10M ([#6722](https://github.com/ArcadeData/arcadedb/issues/6722)) and
 2,465,487 ms to close after one insert
 ([#6067](https://github.com/ArcadeData/arcadedb/issues/6067)). A GAV under the
 identical trigger is 21.6 ms.
+**SUPERSEDED THE SAME DAY.** #6067's close-time deferral reached main at 09:58
+UTC on 08-25 via [#6724](https://github.com/ArcadeData/arcadedb/pull/6724), so
+the 41-minute figure describes an engine that stopped shipping that morning. At
+the new pin, 1M vectors: open-insert-one-close is **99.5 ms** against 135,988 ms.
+The cost is not gone, it is conditional - the same session with a SEARCH in it is
+128,543 ms against 139,248 ms, i.e. 8% - so the page must quote the SESSION, not
+the close. See `lifecycle-open-close.md`, section "2026-08-25 evening".
 `n` caveat the table must carry: 10M is n=1 for `vector`'s write-own column and
 n=3 for its cheap columns. Everything at 1M and below is n=3 or n=5.
 `ops_disk` needs `runner.container_disk` wired; it is implemented and carried by
@@ -400,9 +407,14 @@ caveat to write around):
   immediately below the call defers the GRAPH on purpose, which is what makes the
   eager location scan a choice. Java repro reproduced on upstream `e215d61c1` at
   0.25-0.39 us/vector.
-  **This is independent of #6067 and #6653 fixes neither.** The 10M vector row
-  shows both halves at once: 1,378.8 ms to open, and 41 minutes to close after a
-  single insert.
+  **FIXED the same day** by his [#6731](https://github.com/ArcadeData/arcadedb/pull/6731).
+  Verified n=7 idle: open goes 8/14/47 -> 6/3/3 ms at 2k/50k/200k, flat in corpus
+  size, and at 1M on mini 90.3 -> 1.9 ms. #6067's close-time deferral landed the
+  same morning via #6724, so BOTH halves of the vector lifecycle cost are fixed
+  upstream and neither belongs on the page as an open defect.
+  What remains, and what the page should carry instead: a session that writes and
+  then searches still pays the rebuild, 128,543 ms at 1M, and the identical work
+  costs 2,032 ms if the session did not write. Being root-caused before filing.
 - Cold open is now measurable: `pagecache.evict()` drops a database's files with
   `posix_fadvise(DONTNEED)` and verifies with `mincore` that they left. No root,
   and it evicts only the named files, so the rest of the host stays warm and the
