@@ -728,6 +728,38 @@ if bool(_LOCAL_WHEEL) != bool(_LOCAL_SERVER_IMAGE):
         "package/src/main/docker/Dockerfile over package/target/arcadedb-*.dir for the server."
     )
 _LOCAL_ENGINE_COMMIT = os.environ.get("ARCADEDB_ENGINE_COMMIT", "").strip() or None
+
+
+def _require_engine_commit(tier, backends):
+    """Rule 3 is a PUBLISHING rule that nothing enforced at production time.
+
+    PAGE-SPEC rule 3: every ArcadeDB row in one table comes from the same
+    upstream commit, stamped as engine_commit. build_engine_pair.sh ends by
+    printing "stamp rows with ARCADEDB_ENGINE_COMMIT=<sha>" -- an instruction to
+    a human, which is the whole problem. On 2026-08-25 four separate runs came
+    back rc=0 with engine_commit None on every row: 118 lifecycle rows costing
+    ~18 h of bench time, 20 l4 rows, and 1,000 sparse_cliff rows that were
+    themselves a RE-RUN whose only purpose was to add this field. Each looked
+    like a success and none could be published.
+
+    So it is a refusal, not a reminder, and it fires before any cell runs rather
+    than after the machine has been busy overnight. Only at paper tier and only
+    for ArcadeDB backends: a sweep is allowed to be unstamped because a sweep may
+    not reach the page, and a comparator-only run has no ArcadeDB commit to name.
+    """
+    if tier != "paper" or _LOCAL_ENGINE_COMMIT:
+        return
+    arcade = sorted(b for b in backends if "arcadedb" in b or b == "arcadedb")
+    if not arcade:
+        return
+    sys.exit(
+        "ARCADEDB_ENGINE_COMMIT is unset and this is a PAPER-tier run of "
+        f"{arcade}.\n"
+        "Every row would be written with engine_commit=None, which PAGE-SPEC "
+        "rule 3 forbids publishing, and the run would still exit 0.\n"
+        "Export the pin the pair was built and VERIFIED at:\n"
+        "    ./build_engine_pair.sh --verify <sha> && export ARCADEDB_ENGINE_COMMIT=<sha>\n"
+        "Or pass --tier sweep if these rows are not for the page.")
 if _LOCAL_SERVER_IMAGE:
     _swapped = 0
     for _name, _cfg in BACKENDS.items():
@@ -1774,6 +1806,8 @@ def main():
     if args.backends:
         keep = set(args.backends.split(","))
         jobs = [j for j in jobs if j["backend"] in keep]
+    # After filtering, so the check sees the backends that will actually run.
+    _require_engine_commit(args.tier, {j["backend"] for j in jobs})
     only = {int(x) for x in args.only_reps.split(",") if x.strip()}
     cells = [(j, r) for j in jobs for r in range(1, args.reps + 1)
              if not only or r in only]
