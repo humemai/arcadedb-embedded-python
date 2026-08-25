@@ -140,6 +140,20 @@ def run_conditions(**extra):
         # looks like an old schema; an explicit None looks like what it is.
         "image": os.environ.get("BENCH_IMAGE"),
         "server_image": os.environ.get("BENCH_SERVER_IMAGE"),
+        # WHICH ENGINE COMMIT. Same rule as image above, and the same failure.
+        # runner.py stamps this from ARCADEDB_ENGINE_COMMIT (runner.py:730) onto
+        # every lane row, so lane rows carry it and bespoke probes do not. On
+        # 2026-08-24 sparse_cliff was re-run specifically to unblock figure f3,
+        # whose ONLY blocker was "sparse_cliff rows carry engine_commit"; the
+        # run finished rc=0 and all 1,000 rows came back with engine_commit
+        # None, because the stamping was added to the probe while the VALUE was
+        # never passed into its container. Reading it here fixes every bespoke
+        # driver at once instead of one at a time.
+        #
+        # PAGE-SPEC rule 3 is one engine commit per table, so a row that cannot
+        # say which commit it came from cannot be published under it, whatever
+        # else it measured correctly.
+        "engine_commit": os.environ.get("ARCADEDB_ENGINE_COMMIT", "").strip() or None,
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
     }
     try:
