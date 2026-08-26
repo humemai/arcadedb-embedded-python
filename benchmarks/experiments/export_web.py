@@ -115,21 +115,32 @@ def _engine_identity(raw: str | None, commit: str | None) -> str | None:
     """How an ArcadeDB cell says which engine produced it.
 
     DECISIONS #49 (2026-08-21): the page identifies ArcadeDB by upstream COMMIT
-    SHA, not by a release number, because our build line prints `26.9.1.dev0`
-    for every commit we build, so two wheels a hundred commits apart carry the
-    same version string. That decision was recorded and then never reached this
-    file: `arcadedb_version` was the literal "26.8.1" and every entry came out
-    with engine_commit=None, so the page has been identifying the engine the one
-    way #49 says cannot do the job.
+    SHA, not by a release number, because our build line prints the same version
+    for every commit we build. That decision was recorded and then never reached
+    this file: `arcadedb_version` was the literal "26.8.1" and every entry came
+    out with engine_commit=None, so the page spent five days identifying the
+    engine the one way #49 says cannot do the job.
 
     Both, per the user 2026-08-26, and in this order for a reason. The commit is
-    the identifier; the version is context that tells a reader which release line
-    to expect it in. The version printed is whatever the artifact actually
-    reported, NEVER rounded: "26.9.1.dev0" is honest and "26.9.1" is not, because
-    the latter names a release that may not carry this commit at all.
+    the identifier; the version is context saying which release line to expect it
+    in.
+
+    THE DEV SUFFIX IS NORMALISED, and that is the user's correction on the same
+    day: the `0` in `26.9.1.dev0` is a literal chosen when the wheel is built,
+    not a build counter, so printing it implies a sequence that does not exist
+    and invites a reader to think dev0 and dev1 are different engines. They are
+    not distinguishable that way at all, which is the entire reason the commit is
+    the identifier. `26.9.1.dev0` renders `26.9.1-dev`.
+
+    Normalisation happens at RENDER time only. Callers compare raw version
+    strings before getting here, so two genuinely different version strings are
+    still caught as a disagreement rather than collapsed into one label.
     """
     ver = (raw or "").strip() or None
     sha = (commit or "").strip() or None
+    if ver:
+        # 26.9.1.dev0 / 26.8.1.dev25 / 26.9.1-SNAPSHOT -> 26.9.1-dev
+        ver = re.sub(r"[.\-]?(dev\d*|SNAPSHOT)$", "-dev", ver, flags=re.I)
     if ver and sha:
         return f"arcadedb {ver} \u00b7 {sha}"
     return f"arcadedb {ver}" if ver else (f"arcadedb {sha}" if sha else None)
