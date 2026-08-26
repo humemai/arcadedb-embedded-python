@@ -213,7 +213,20 @@ class ArcadeNativeTS(ArcadeTS):
         ArcadeDB and in the direction that flatters us.
         """
         import time
-        time.sleep(float(os.environ.get("TS_SETTLE_S", "5")))
+        # DEFAULT 0, and the name is one the runner delivers.
+        #
+        # This defaulted to 5 and read TS_SETTLE_S, which is on no passthrough
+        # list, so it could be neither turned off nor turned on from a campaign:
+        # every published row gave THIS arm five seconds of extra sealing that
+        # questdb, duckdb and the document arm never got, while the page asserted
+        # in prose that no engine settled. An asymmetry that only one engine
+        # receives, and that the caller cannot control, is the same defect this
+        # class's own docstring says it exists not to re-create.
+        _s = float(os.environ.get("BENCH_TS_SETTLE_S")
+                   or os.environ.get("TS_SETTLE_S", "0"))
+        self._settled_s = _s
+        if _s > 0:
+            time.sleep(_s)
 
 
 class DuckTS:
@@ -417,8 +430,14 @@ def main():
     # finished absorbing 2.6M rows. Setting this lets that be tested rather
     # than argued, and the value lands in the artifact so a settled row can
     # never be mistaken for an unsettled one.
-    settle = float(os.environ.get("TSBS_SETTLE_S", "0"))
-    out["settle_s"] = settle
+    settle = float(os.environ.get("BENCH_TS_SETTLE_S")
+                   or os.environ.get("TSBS_SETTLE_S", "0"))
+    # THE UNION, so a per-adapter settle cannot hide from the export guard, which
+    # reads this field and would otherwise print "no engine settled" over a row
+    # whose adapter slept privately.
+    out["settle_s"] = max(settle, float(getattr(b, "_settled_s", 0.0) or 0.0))
+    out["settle_s_lane"] = settle
+    out["settle_s_adapter"] = round(float(getattr(b, "_settled_s", 0.0) or 0.0), 3)
     if settle > 0:
         time.sleep(settle)
 
@@ -431,6 +450,23 @@ def main():
             times.append((time.perf_counter() - t) * 1000)
         out[f"{qn}_ms"] = round(statistics.median(times), 2)
         out[f"{qn}_rows"] = len(ref) if ref is not None else 0
+
+    # ASSERT THE SHAPES, do not merely record them. The lane already knew the
+    # right answers -- 60 minute buckets over an hour, 12 two-hour buckets over a
+    # day -- and wrote whatever it got beside a latency that is only meaningful
+    # if the query matched. The comment at :179 documents exactly this failure
+    # happening once already: a query that returns ZERO ROWS against a TIMESERIES
+    # type is very fast, and a zero-row q_range is the cheapest possible way to
+    # win a benchmark. QuestDB is the standing risk because ILP over TCP is
+    # fire-and-forget, so an under-ingest is silent on the write side too.
+    _expect = {"q_range": 60, "q_global": 12, "q_last": 1}
+    _wrong = {qn: out[f"{qn}_rows"] for qn, want in _expect.items()
+              if out.get(f"{qn}_rows") != want}
+    if _wrong:
+        raise SystemExit(
+            f"{args.backend}: query shapes did not match the corpus: got {_wrong}, "
+            f"expected {_expect}. A latency for a query that returned the wrong "
+            f"number of rows is not a measurement of that query.")
     # Ask each backend for ITS OWN version, before closing it. run_conditions
     # stamps engine_version from the arcadedb-embedded wheel, which is the
     # right answer for the ArcadeDB row and the wrong one for duckdb and

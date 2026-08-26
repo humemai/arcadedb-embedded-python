@@ -70,18 +70,27 @@ def main():
     print(f"BUILD-DONE {build_s}s", flush=True)
 
     out_reps = []
+    WARM = 20
+    timed_n = len(test) - WARM
     for rep in range(1, PASSES + 1):
-        for q in test[:20]:          # untimed warmup, exactly l3d_dense's 20
+        # HELD OUT, not the head of the timed set. This warmed on test[:20] and
+        # then timed range(len(test)), so the first 20 queries of every pass -
+        # including pass 0, the one published as COLD - had already been asked
+        # and answered. A cold pass must answer only questions the engine has
+        # never seen. sparse_multipass_driver.py already draws from a held-out
+        # slice; this is the same fix.
+        for q in test[timed_n:]:     # untimed warmup, held out of the timed set
             b.search(q, K)
         lats, recalls = [], []
-        for qi in range(len(test)):
+        for qi in range(timed_n):
             t1 = time.perf_counter()
             ids = b.search(test[qi], K)
             lats.append((time.perf_counter() - t1) * 1e3)
             recalls.append(len(set(ids[:K]) & set(gt[qi].tolist())) / K)
         lats.sort()
         rec = {"rep": rep, "backend": BACKEND, "scale": SCALE,
-               "build_s": build_s, "n_queries": len(test),
+               "build_s": build_s, "n_queries": timed_n,
+               "warmup_held_out": WARM,
                # Read, not asserted. The dev20 drivers wrote "INT8"/"fp32" as
                # string literals regardless of what BENCH_DENSE_QUANT actually
                # said, which is the same self-assertion that let one of them

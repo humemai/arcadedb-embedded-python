@@ -831,11 +831,19 @@ def main():
     out["build_s"] = round(build, 2)
     out["build_docs_per_s"] = round(len(train) / build, 1)
 
-    for q in test[:20]:  # warmup, untimed
+    WARM = 20
+    timed_n = len(test) - WARM
+    # HELD OUT, not the head of the timed set. This warmed on test[:20] and
+    # then timed range(len(test)), so the first 20 queries of every pass -
+    # including pass 0, the one published as COLD - had already been asked
+    # and answered. A cold pass must answer only questions the engine has
+    # never seen. sparse_multipass_driver.py already draws from a held-out
+    # slice; this is the same fix.
+    for q in test[timed_n:]:  # warmup, untimed, held out of the timed set
         b.search(q, K)
     lats, recalls = [], []
     t0 = time.perf_counter()
-    for qi in range(len(test)):
+    for qi in range(timed_n):
         t1 = time.perf_counter()
         ids = b.search(test[qi], K)
         lats.append((time.perf_counter() - t1) * 1e3)
@@ -843,7 +851,9 @@ def main():
     span = time.perf_counter() - t0
     p = pct(lats)
     out.update({f"query_{k}_ms": round(v, 3) for k, v in p.items()})
-    out["qps"] = round(len(test) / span, 1)
+    out["qps"] = round(timed_n / span, 1)
+    out["n_queries_timed"] = timed_n
+    out["warmup_held_out"] = WARM
     out["recall_at_10"] = round(statistics.mean(recalls), 4)
 
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
