@@ -507,8 +507,20 @@ def check_close_cost(rows):
         r["_session_ms"] = (r["clean_close_ms"]
                             + (r.get("clean_open_ms") or 0.0))
     if not lc:
-        print("\n== F11 close cost ==\n  NOT CHECKED: no lifecycle rows")
-        return 0
+        # NOT a pass. This gate returned 0 for weeks while PAPER_SCALES was
+        # silently deleting every lifecycle row upstream of it, so the one check
+        # that would have caught the deletion reported success because of it.
+        # A gate whose only failure mode is "I saw nothing" has to treat seeing
+        # nothing as the failure.
+        any_lifecycle = any(r.get("lane") == "lifecycle" for r in rows)
+        print("\n== F11 session cost ==\n  NO LIFECYCLE ROWS REACHED THIS GATE.")
+        if any_lifecycle:
+            print("  Rows exist but none carry clean_close_ms; the lane wrote them "
+                  "without the column this gate reads.")
+        else:
+            print("  Check PAPER_SCALES in make_paper_tables.py: a lane absent from "
+                  "it is deleted by load_canonical before any gate runs.")
+        return 1
     print("\n== F11 session cost (open+close): O(written), not O(stored), under 100 ms ==")
     bad = 0
     # AGGREGATE BY MEDIAN, per (situation, scale). The first version of this
@@ -587,6 +599,7 @@ LANE_SCRIPT = {
     "l3d": {"l3d_dense.py"},
     "l4": {"l4_tsbs.py"},
     "e2": {"e2_hybrid.py"},
+    "lifecycle": {"l5_lifecycle.py"},
     "e4_decomp": {"deployment_decomp_probe.py"},
 }
 

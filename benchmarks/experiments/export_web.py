@@ -345,6 +345,15 @@ SCALE_LABELS = {
     ("l1", "medium"): "20M rows",
     ("l1tpc", "tpch1"): "SF1",
     ("e2", "e2"): "50k products",
+    # TSBS publishes its corpus as a point count, which is what the ingest
+    # column is per second of.
+    ("l4", "ts100"): "2.59M points",
+    # The lifecycle tiers are row counts of the structure under test, so the
+    # label is the count rather than a tier name a reader cannot size.
+    ("lifecycle", "lc10k"): "10k",
+    ("lifecycle", "lc100k"): "100k",
+    ("lifecycle", "lc1m"): "1M",
+    ("lifecycle", "lc10m"): "10M",
 }
 
 

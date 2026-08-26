@@ -259,14 +259,30 @@ def _await_gav(db, timeout_s=900):
         time.sleep(0.05)
 
 
+# (language, query). The LANGUAGE is part of the fixture, not a detail:
+#
+#   graph_gav MUST be cypher. The Graph Analytical View is consumed only by the
+#   openCypher executor (GAVExpandAll, GAVFusedChainOperator, MatchRelationshipStep);
+#   SQL SELECT's only GAV reference is FetchFromSchemaGraphAnalyticalViewsStep,
+#   which reads the schema catalogue rather than the view. The read here was SQL,
+#   so every graph_gav session had the accelerator present and never consulted it,
+#   and since #6633 made the CSR lazy-on-first-use a session that never uses the
+#   view never loads it. That is what made graph_gav look flat at 10M, and it is
+#   why "a GAV under the identical trigger" was not an identical trigger at all:
+#   the vector arm hits its index and this one did not.
+#
+#   sparse MUST be a vector search. `SELECT count(*) FROM S LIMIT 10` plans to
+#   CountFromTypeStep, which calls database.countType() and never touches the
+#   index, so the sparse read measured a row count.
 READS = {
-    "doc":       "SELECT count(*) FROM D",
-    "doc_idx10": "SELECT FROM D WHERE p0 = 5 LIMIT 10",
-    "graph":     "SELECT count(*) FROM (SELECT expand(out('E')) FROM P LIMIT 100)",
-    "graph_gav": "SELECT count(*) FROM (SELECT expand(out('E').out('E')) FROM P LIMIT 100)",
+    "doc":       ("sql", "SELECT count(*) FROM D"),
+    "doc_idx10": ("sql", "SELECT FROM D WHERE p0 = 5 LIMIT 10"),
+    "graph":     ("sql", "SELECT count(*) FROM (SELECT expand(out('E')) FROM P LIMIT 100)"),
+    "graph_gav": ("cypher", "MATCH (a:P)-[:E]->()-[:E]->(c:P) RETURN count(c) AS n"),
     "vector":    None,     # filled in at runtime, needs a probe vector
-    "sparse":    "SELECT count(*) FROM S LIMIT 10",
-    "ts":        "SELECT count(*) FROM T",
+    "sparse":    ("sql", "SELECT FROM (SELECT expand(sparseVectorNeighbors("
+                         "'S[tokens,weights]', [1, 8, 15, 22], [0.5, 0.5, 0.5, 0.5], 10)))"),
+    "ts":        ("sql", "SELECT count(*) FROM T"),
 }
 
 
@@ -280,7 +296,8 @@ def _read(db, situation):
         return
     q = READS.get(situation)
     if q:
-        list(db.query("sql", q))
+        lang, text = q
+        list(db.query(lang, text))
 
 
 _WRITE_SEQ = [0]
@@ -318,10 +335,24 @@ def _write_own(db, situation):
         db.command("sql", f"INSERT INTO V SET id = {i}, emb = [{v}]")
     elif situation in ("graph", "graph_gav"):
         db.command("sql", f"INSERT INTO P SET id = {i}")
-    elif situation in ("doc", "doc_idx10"):
-        db.command("sql", f"INSERT INTO D SET p0 = {i}")
+    elif situation == "doc":
+        db.command("sql", f"INSERT INTO D SET id = {i}")
+    elif situation == "doc_idx10":
+        # ALL TEN, because all ten are indexed. Setting p0 alone touched one of
+        # the ten NOTUNIQUE indexes and the column was read as "what a write to a
+        # ten-index type costs".
+        cols = ", ".join(f"p{k} = {i + k}" for k in range(10))
+        db.command("sql", f"INSERT INTO D SET {cols}")
     elif situation == "sparse":
-        db.command("sql", f"INSERT INTO S SET id = {i}")
+        # tokens AND weights, because LSMSparseVectorIndex.put() returns early
+        # when either is absent (engine LSMSparseVectorIndex.java:183-186), so an
+        # id-only insert was DISCARDED by the index. write_own for sparse was
+        # therefore byte-identical to the constant write it exists not to be, and
+        # the lane's positive claim - that the sparse index is not affected - was
+        # resting on a write the index threw away.
+        toks = ", ".join(str(1 + 7 * k) for k in range(16))
+        wts = ", ".join("0.25" for _ in range(16))
+        db.command("sql", f"INSERT INTO S SET tokens = [{toks}], weights = [{wts}]")
     elif situation == "ts":
         db.command("sql", f"INSERT INTO T SET ts = {1_800_000_000_000 + i}, sensor = 's0', value = 1.0")
     else:
@@ -466,7 +497,15 @@ def main():
         import_ms, jvm_start_ms, first_open_ms, cold_proc_ms = (
             float(x) for x in _boot.stdout.strip().split()[-4:])
     else:
-        import_ms = jvm_start_ms = first_open_ms = cold_proc_ms = -1.0
+        # NOT -1.0. A sentinel that is a float goes into a median, a mean and a
+        # ratio without anything objecting, and cold_start_penalty_ms clamped it
+        # to 0.0 with max(), so a failed boot published four impossible columns
+        # and a penalty of zero while the cell exited 0. None is what a missing
+        # measurement is, and it makes every downstream consumer say so.
+        sys.stderr.write(
+            "cold-start subprocess failed (rc=%s); cold columns will be null\n%s\n"
+            % (_boot.returncode, (_boot.stderr or "")[-2000:]))
+        import_ms = jvm_start_ms = first_open_ms = cold_proc_ms = None
 
     out = bench_common.run_conditions(
         lane="lifecycle", backend=args.backend, workload=args.workload,
@@ -483,10 +522,16 @@ def main():
     # The cold start decomposed, because "JVM boot" was being used for three different things.
     # Measured on this machine: a bare JVM is ~115 ms, so jvm_start_ms above that is JPype's overhead,
     # and first_open_ms is ArcadeDB's own initialisation with the JVM already up.
-    out["import_ms"] = round(import_ms, 3)               # interpreter + module import
-    out["jvm_start_ms"] = round(jvm_start_ms, 3)         # start_jvm() alone, no database
-    out["first_open_ms"] = round(first_open_ms, 3)       # first open, JVM already up
-    out["cold_process_ms"] = round(cold_proc_ms, 3)      # what a CLI actually waits for
+    _r3 = lambda x: None if x is None else round(x, 3)
+    out["import_ms"] = _r3(import_ms)                    # interpreter + module import
+    out["jvm_start_ms"] = _r3(jvm_start_ms)              # start_jvm() alone, no database
+    out["first_open_ms"] = _r3(first_open_ms)            # first open, JVM already up
+    out["cold_process_ms"] = _r3(cold_proc_ms)           # what a CLI actually waits for
+    # WHICH CACHE STATE THESE FOUR DESCRIBE. cold_open_ms above is measured after
+    # a verified page-cache eviction; this subprocess is not evicted, so its
+    # "cold" means a fresh PROCESS against a warm page cache. Two different
+    # meanings of cold in one row, stated rather than left to the column name.
+    out["cold_process_cache_state"] = "warm-page-cache"
 
     # MODES, not a literal tuple. This loop ignored BENCH_LC_MODES until 2026-08-25,
     # which cost a 10M vector cell 10.6 h per rep instead of the ~53 min the filter
@@ -508,7 +553,7 @@ def main():
     # first-class column so no table can quote an open() without it.
     # Kept for continuity with earlier runs, but it is a COLD START penalty, not JVM boot: it is the
     # whole cold process minus a warm session. jvm_start_ms above is the JVM boot proper.
-    out["cold_start_penalty_ms"] = round(
+    out["cold_start_penalty_ms"] = None if out["cold_process_ms"] is None else round(
         max(0.0, out["cold_process_ms"] - (out["clean_open_ms"] + out["clean_close_ms"])), 3)
 
     # A stale reopen: the PREVIOUS session committed, so any persisted derived

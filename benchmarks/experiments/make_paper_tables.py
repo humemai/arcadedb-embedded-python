@@ -99,9 +99,25 @@ OUT = os.path.join(_PAPER_DIR, "tables")
 # see the rep filter in load_canonical for the 34 rows that made this explicit.
 MAX_REP = 5
 
+# A LANE MISSING FROM THIS MAP IS SILENTLY DELETED, not flagged. load_canonical
+# drops any row whose (lane, scale) is not listed, via PAPER_SCALES.get(lane, []),
+# so an unlisted lane resolves to the empty list and every one of its rows goes.
+#
+# That is not hypothetical. `lifecycle` and `l4` were registered in runner.LANES,
+# run to completion, and stamped correctly, and every row was discarded here
+# before any table, figure or gate saw it: 117 lifecycle rows worth ~18 h of
+# bench time and 20 l4 rows. The F11 close-cost gate then reported
+# "NOT CHECKED: no lifecycle rows" and returned 0, i.e. PASS, because the rows it
+# was written to check had already been filtered out upstream of it.
+#
+# Adding a lane here is therefore step 1 of 3. Step 2 is export_web.SCALE_LABELS,
+# which SystemExits on a missing tier by design. Step 3 is fairness_check
+# .LANE_SCRIPT, so F6b can tell a lane script from a bespoke driver.
 PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
                 "l3s": ["tiny", "small", "medium"], "l3d": ["small", "deep10m"],
-                "e2": ["e2"]}
+                "e2": ["e2"],
+                "l4": ["ts100"],
+                "lifecycle": ["lc10k", "lc100k", "lc1m", "lc10m"]}
 
 NAMES = {
     "arcadedb_embedded": "ArcadeDB (emb)", "arcadedb_server": "ArcadeDB (srv)",
