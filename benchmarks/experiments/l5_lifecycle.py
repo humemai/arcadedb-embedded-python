@@ -280,8 +280,13 @@ READS = {
     "graph":     ("sql", "SELECT count(*) FROM (SELECT expand(out('E')) FROM P LIMIT 100)"),
     "graph_gav": ("cypher", "MATCH (a:P)-[:E]->()-[:E]->(c:P) RETURN count(c) AS n"),
     "vector":    None,     # filled in at runtime, needs a probe vector
-    "sparse":    ("sql", "SELECT FROM (SELECT expand(sparseVectorNeighbors("
-                         "'S[tokens,weights]', [1, 8, 15, 22], [0.5, 0.5, 0.5, 0.5], 10)))"),
+    # The function is `vector.sparseNeighbors`, backticked because of the dot,
+    # and it is what l3_sparse.py:190 calls. A first draft guessed
+    # "sparseVectorNeighbors" and every sparse cell died on "Unknown function
+    # name" -- which is exactly what the smoke run at the smallest tier is for.
+    "sparse":    ("sql", "SELECT expand(`vector.sparseNeighbors`("
+                         "'S[tokens,weights]', [1, 8, 15, 22], "
+                         "[0.5, 0.5, 0.5, 0.5], 10))"),
     "ts":        ("sql", "SELECT count(*) FROM T"),
 }
 
