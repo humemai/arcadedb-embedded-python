@@ -350,6 +350,13 @@ class ArcadeEmbedded(Base):
 
 class ArcadeServer(Base):
     """ArcadeDB over HTTP (client-server), same index/params as embedded."""
+    # fp32, DECLARED, because this arm has no qline path: it cannot pass the
+    # METADATA quantization key that ArcadeEmbedded uses. Before this the row
+    # was labelled from BENCH_DENSE_QUANT, so a campaign exporting INT8 -- the
+    # only way to drive the fp32/int8 axis from outside -- wrote server rows
+    # stamped INT8 for an unquantized index, and the l3d table printed them as
+    # the quantized arm.
+    quantization = "fp32"
     name = "arcadedb_dense_server"
 
     def connect(self):
@@ -420,6 +427,14 @@ class ArcadeServer(Base):
 
 
 class Chroma(Base):
+    # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
+    # quantized says so on the class, so the row never has to consult an
+    # environment variable that a different arm may have set for a different
+    # reason. Before this, qdrant_dense_int8, milvus_dense_int8 and lancedb_dense
+    # all recorded quantization="fp32", which made every int8 comparator row
+    # indistinguishable from its fp32 sibling on the one field that names the
+    # ablation.
+    quantization = "fp32"
     name = "chroma_dense"
     # chromadb 1.5.9 exposes no close/shutdown on PersistentClient (checked
     # dir(chromadb.Client)); it flushes per write. Nothing to ask for.
@@ -445,6 +460,14 @@ class Chroma(Base):
 
 
 class LanceDB(Base):
+    # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
+    # quantized says so on the class, so the row never has to consult an
+    # environment variable that a different arm may have set for a different
+    # reason. Before this, qdrant_dense_int8, milvus_dense_int8 and lancedb_dense
+    # all recorded quantization="fp32", which made every int8 comparator row
+    # indistinguishable from its fp32 sibling on the one field that names the
+    # ablation.
+    quantization = "fp32"
     name = "lancedb_dense"
     # lancedb 0.37.1 exposes no close on the connection (checked dir); its
     # tables are files written on commit.
@@ -484,6 +507,14 @@ class LanceDB(Base):
 
 
 class SqliteVec(Base):
+    # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
+    # quantized says so on the class, so the row never has to consult an
+    # environment variable that a different arm may have set for a different
+    # reason. Before this, qdrant_dense_int8, milvus_dense_int8 and lancedb_dense
+    # all recorded quantization="fp32", which made every int8 comparator row
+    # indistinguishable from its fp32 sibling on the one field that names the
+    # ablation.
+    quantization = "fp32"
     name = "sqlite_vec_dense"
 
     def close(self):
@@ -516,6 +547,14 @@ class SqliteVec(Base):
 
 
 class DuckVSS(Base):
+    # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
+    # quantized says so on the class, so the row never has to consult an
+    # environment variable that a different arm may have set for a different
+    # reason. Before this, qdrant_dense_int8, milvus_dense_int8 and lancedb_dense
+    # all recorded quantization="fp32", which made every int8 comparator row
+    # indistinguishable from its fp32 sibling on the one field that names the
+    # ablation.
+    quantization = "fp32"
     name = "duckdb_vss_dense"
 
     def close(self):
@@ -555,6 +594,14 @@ class DuckVSS(Base):
 
 
 class Qdrant(Base):
+    # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
+    # quantized says so on the class, so the row never has to consult an
+    # environment variable that a different arm may have set for a different
+    # reason. Before this, qdrant_dense_int8, milvus_dense_int8 and lancedb_dense
+    # all recorded quantization="fp32", which made every int8 comparator row
+    # indistinguishable from its fp32 sibling on the one field that names the
+    # ablation.
+    quantization = "fp32"
     name = "qdrant_dense"
 
     def connect(self):
@@ -605,6 +652,14 @@ class Qdrant(Base):
 
 
 class Milvus(Base):
+    # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
+    # quantized says so on the class, so the row never has to consult an
+    # environment variable that a different arm may have set for a different
+    # reason. Before this, qdrant_dense_int8, milvus_dense_int8 and lancedb_dense
+    # all recorded quantization="fp32", which made every int8 comparator row
+    # indistinguishable from its fp32 sibling on the one field that names the
+    # ablation.
+    quantization = "fp32"
     name = "milvus_dense"
 
     def connect(self):
@@ -712,6 +767,14 @@ class QdrantInt8(Qdrant):
     misconfiguration reported as their result -- the exact failure this lane's
     matched-operating-point rule exists to prevent.
     """
+    # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
+    # quantized says so on the class, so the row never has to consult an
+    # environment variable that a different arm may have set for a different
+    # reason. Before this, qdrant_dense_int8, milvus_dense_int8 and lancedb_dense
+    # all recorded quantization="fp32", which made every int8 comparator row
+    # indistinguishable from its fp32 sibling on the one field that names the
+    # ablation.
+    quantization = "INT8"
     name = "qdrant_dense_int8"
 
     def search(self, qvec, k):
@@ -742,6 +805,14 @@ class QdrantInt8(Qdrant):
 
 class MilvusInt8(Milvus):
     """Milvus HNSW_SQ at SQ8, its int8 scalar-quantized HNSW variant."""
+    # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
+    # quantized says so on the class, so the row never has to consult an
+    # environment variable that a different arm may have set for a different
+    # reason. Before this, qdrant_dense_int8, milvus_dense_int8 and lancedb_dense
+    # all recorded quantization="fp32", which made every int8 comparator row
+    # indistinguishable from its fp32 sibling on the one field that names the
+    # ablation.
+    quantization = "INT8"
     name = "milvus_dense_int8"
 
     def build(self, vecs):
@@ -817,8 +888,24 @@ def main():
     # quantizes knows it; reading an env var here samples whatever happens to be
     # set at this instant, which for an arm that sets it later is the wrong
     # answer and a silent one.
-    out["quantization"] = canonical_quant_label(
-        getattr(b, "quantization", None) or os.environ.get("BENCH_DENSE_QUANT", ""))
+    # NO ENV FALLBACK. Every arm declares what it actually built; an arm that does
+    # not is a bug, not an invitation to guess from whatever happens to be set at
+    # this instant. The old fallback is how three comparator arms came to record
+    # fp32 while building int8, and how the server arm wore a label for a knob it
+    # ignores.
+    _declared = getattr(b, "quantization", None)
+    if not _declared:
+        raise SystemExit(
+            f"{args.backend}: the arm declares no `quantization`. Add it to the class. "
+            f"Reading BENCH_DENSE_QUANT here would label the row from a knob this arm "
+            f"may not honour, which is exactly how the int8 comparator rows came to say fp32.")
+    _asked = os.environ.get("BENCH_DENSE_QUANT", "").strip()
+    if _asked and canonical_quant_label(_asked) != canonical_quant_label(_declared):
+        raise SystemExit(
+            f"{args.backend}: BENCH_DENSE_QUANT={_asked!r} but this arm builds "
+            f"{_declared!r} and cannot honour the request. Refusing rather than "
+            f"labelling the row from a knob that changed nothing.")
+    out["quantization"] = canonical_quant_label(_declared)
     t0 = time.perf_counter()
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)

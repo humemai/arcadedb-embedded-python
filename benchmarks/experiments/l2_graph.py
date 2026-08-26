@@ -543,8 +543,17 @@ def main():
                 t = time.perf_counter()
                 ad.run_cypher(text)
                 lat.append((time.perf_counter() - t) * 1000)
+            # p50 FIRST, because the page prints these as times and asserts
+            # elsewhere that pycost is its only non-p50 ms column. Three of these
+            # were means, where one GC pause inside five iterations moves the
+            # published number and a median would not have noticed.
+            lat_sorted = sorted(lat)
+            out[f"{qname}_p50_ms"] = round(statistics.median(lat_sorted), 2)
+            out[f"{qname}_p95_ms"] = round(
+                lat_sorted[max(0, int(0.95 * (len(lat_sorted) - 1)))], 2)
             out[f"{qname}_mean_ms"] = round(statistics.mean(lat), 2)
             out[f"{qname}_min_ms"] = round(min(lat), 2)
+            out[f"{qname}_iters"] = len(lat)
             out[f"{qname}_rows"] = rows0
         # STAMP THE ARM. BENCH_GAV=0 changes what was measured and, until this
         # line, changed nothing that was recorded: an ablation run wrote the
