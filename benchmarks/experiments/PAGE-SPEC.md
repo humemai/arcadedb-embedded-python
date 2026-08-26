@@ -11,7 +11,7 @@ those two would refuse.
 
 ---
 
-## 0. The four rules every published cell obeys
+## 0. The rules every published cell obeys
 
 1. **Serial, full cpuset.** Every published latency, throughput, percentile and
    memory cell runs one at a time on mini's `cpuset 0-11` (the 12 P-core THREADS
@@ -73,6 +73,31 @@ those two would refuse.
    So the rule is: a knob must be DELIVERED to the cell, HONOURED by the lane,
    and RESOLVE to something that exists inside the container. Checking only the
    first has now failed twice.
+7. **A probe must measure the thing its column is named after, and a bespoke
+   stage must not hardcode a condition the lane derives.** Two failures on
+   2026-08-26, both of which produced plausible numbers and exit 0.
+
+   *The probe measured something else.* `graph_gav`'s read was issued in SQL,
+   and a Graph Analytical View is consumed only by the openCypher executor, so
+   every graph_gav session had the accelerator present and never consulted it.
+   Same fixture, same data: 1.6 ms in SQL, 234 ms in cypher. `sparse`'s read was
+   `SELECT count(*)`, which plans to CountFromTypeStep and never touches the
+   index, and its write set neither tokens nor weights, so the index discarded
+   it and write_own was byte-identical to the control write it exists not to be.
+   `doc_idx10` wrote one of its ten indexed properties. The check is cheap and
+   mechanical: a read that costs about as much as an empty query did not reach
+   the structure, and a write whose index-entry count does not move did not
+   land. Assert both in the lane rather than trusting the query text.
+
+   *The bespoke stage hardcoded a condition.* The #5467 profiling stage set
+   `ARCADEDB_HEAP=16g` by hand while the lane derives heap from the tier (4g at
+   tiny, 8g at small). Both ran on the same host under the same cpuset, so the
+   two profiles were comparable to each other, but a cross-date comparison
+   against a profile taken at 8g was not, and it was posted upstream before the
+   difference was noticed. A stage that sets by hand any condition the lane
+   computes has to say so on the row, and any comparison spanning stages has to
+   check the conditions match rather than assume the host is enough.
+
 6. **The config PROFILE is recorded on every row.** ArcadeDB ships profiles that
    rewrite defaults wholesale: one sets `VECTOR_INDEX_GRAPH_BUILD_CACHE_SIZE=-1`
    with both cache heap percentages at 50, another pins both caches to a flat
@@ -244,6 +269,11 @@ at 10M ([#6722](https://github.com/ArcadeData/arcadedb/issues/6722)) and
 2,465,487 ms to close after one insert
 ([#6067](https://github.com/ArcadeData/arcadedb/issues/6067)). A GAV under the
 identical trigger is 21.6 ms.
+**RETRACTED 2026-08-26: not an identical trigger.** The graph_gav read was
+issued in SQL, which cannot reach a Graph Analytical View at all, so that arm
+never consulted the accelerator while the vector arm hit its index. Same
+fixture at lc10k: 1.6 ms in SQL, 234 ms in cypher. The vector figures are
+unaffected; the GAV comparison is withdrawn pending qAH.
 **SUPERSEDED THE SAME DAY.** #6067's close-time deferral reached main at 09:58
 UTC on 08-25 via [#6724](https://github.com/ArcadeData/arcadedb/pull/6724), so
 the 41-minute figure describes an engine that stopped shipping that morning. At
@@ -394,8 +424,10 @@ caveat to write around):
   n=5: the first query after an invalidating commit is **3.0 ms** (range
   2.7-308.7) against 5,613 ms unfixed, and the view reports `status=BUILDING` in
   all five, so the rebuild genuinely went to the background. The 10M sweep
-  confirms it holds at scale: a GAV's write-own close is **21.6 ms** at 10M
-  vertices, flat against 9.5 ms at 10k.
+  ~~confirms it holds at scale: a GAV's write-own close is 21.6 ms at 10M
+  vertices, flat against 9.5 ms at 10k.~~ **WITHDRAWN 2026-08-26**: that flatness
+  is an artefact of a read that could not reach the view (SQL, not cypher), so it
+  is not evidence about the view at all.
 - **NEW 2026-08-25, and it is the OPEN half of the vector cost.**
   [#6722](https://github.com/ArcadeData/arcadedb/issues/6722) (ours). Every
   database open parses every page of every `LSM_VECTOR` index and rebuilds the
