@@ -78,6 +78,63 @@ def _short_version(raw: str | None) -> str | None:
     return m.group(0) if m else None
 
 
+def _arcadedb_identity(rows) -> str | None:
+    """The engine identity for the payload header, derived from the rows.
+
+    A STABLE release tag identifies an engine on its own: 26.8.1 names exactly
+    one build. A DEV version does not, because our build line prints
+    26.9.1.dev0 for every commit we build, and that asymmetry is the whole
+    basis of #42 (paper, releases) against #49 (page, commits). So a release
+    needs no commit, and a dev version without one is not an identity at all.
+
+    None when the rows disagree, rather than a guess: one string over two
+    engines is precisely the claim #49 forbids. arcadedb_commits beside this
+    lists what is actually in the payload, and each table carries its own pin
+    under PAGE-SPEC rule 3.
+    """
+    vers = {str(r.get("engine_version")).strip() for r in rows
+            if str(r.get("backend", "")).startswith("arcadedb") and r.get("engine_version")}
+    shas = {str(r.get("engine_commit")).strip() for r in rows
+            if str(r.get("backend", "")).startswith("arcadedb") and r.get("engine_commit")}
+    if len(vers) != 1:
+        return None
+    ver = next(iter(vers))
+    if len(shas) == 1:
+        return _engine_identity(ver, next(iter(shas)))
+    if not shas and not _IS_PRERELEASE(ver):
+        return _engine_identity(ver, None)   # a release names itself
+    return None
+
+
+def _IS_PRERELEASE(ver: str) -> bool:
+    v = (ver or "").lower()
+    return "dev" in v or "snapshot" in v or "-rc" in v
+
+
+def _engine_identity(raw: str | None, commit: str | None) -> str | None:
+    """How an ArcadeDB cell says which engine produced it.
+
+    DECISIONS #49 (2026-08-21): the page identifies ArcadeDB by upstream COMMIT
+    SHA, not by a release number, because our build line prints `26.9.1.dev0`
+    for every commit we build, so two wheels a hundred commits apart carry the
+    same version string. That decision was recorded and then never reached this
+    file: `arcadedb_version` was the literal "26.8.1" and every entry came out
+    with engine_commit=None, so the page has been identifying the engine the one
+    way #49 says cannot do the job.
+
+    Both, per the user 2026-08-26, and in this order for a reason. The commit is
+    the identifier; the version is context that tells a reader which release line
+    to expect it in. The version printed is whatever the artifact actually
+    reported, NEVER rounded: "26.9.1.dev0" is honest and "26.9.1" is not, because
+    the latter names a release that may not carry this commit at all.
+    """
+    ver = (raw or "").strip() or None
+    sha = (commit or "").strip() or None
+    if ver and sha:
+        return f"arcadedb {ver} \u00b7 {sha}"
+    return f"arcadedb {ver}" if ver else (f"arcadedb {sha}" if sha else None)
+
+
 def _engine_version(label: str, raw: str | None,
                     image: str | None = None) -> str | None:
     """"<engine> <version>", from a row label and whatever the adapter stamped.
@@ -1362,7 +1419,12 @@ def main() -> int:
     payload = {
         "source": "benchmarks/experiments/results/runs_paper.csv",
         "generator": "benchmarks/experiments/export_web.py",
-        "arcadedb_version": "26.8.1",
+        # Read from the rows, not asserted here. The literal "26.8.1" survived a
+        # re-pin and two campaigns because nothing recomputed it (DECISIONS #49).
+        "arcadedb_version": _arcadedb_identity(rows),
+        "arcadedb_commits": sorted({
+            c for c in (r.get("engine_commit") for r in rows
+                        if str(r.get("backend", "")).startswith("arcadedb")) if c}),
         "conditions": GLOBAL_CONDITIONS,
         "provenance_note": (
             "Host identity is recorded on the sparse and dense lanes only; the "

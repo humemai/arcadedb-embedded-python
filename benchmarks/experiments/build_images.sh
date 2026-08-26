@@ -66,7 +66,14 @@ case "$_pin" in
       echo "debugging-only hatch any more, which is what this message used to say." >&2
       exit 1
     fi
-    echo "WARNING: building a PRE-RELEASE image ($_pin); these rows cannot be published" >&2 ;;
+    # NOT "cannot be published", which is what this line used to say and which
+    # flatly contradicted the paragraph above it. DECISIONS #49: the page pins
+    # by commit, so a pre-release IS publishable there once the rows stamp
+    # engine_commit. The stale wording cost real time on 2026-08-26, when it was
+    # read as a blocker on putting a completed, commit-pinned table on the page.
+    echo "NOTE: PRE-RELEASE image ($_pin). Publishable on the COMMIT-PINNED page" >&2
+    echo "      (DECISIONS #49) once every row stamps engine_commit; NOT publishable" >&2
+    echo "      in the paper, which pins to stable releases (DECISIONS #42)." >&2 ;;
 esac
 echo "arcadedb pin: $_pin"
 
