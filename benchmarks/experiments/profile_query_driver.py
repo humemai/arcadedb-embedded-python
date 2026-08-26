@@ -21,8 +21,17 @@ def main():
         import bigann_sparse as src
         from l3_sparse import BACKENDS
         b = BACKENDS["arcadedb_sparse_embedded"]()
-        n = src.SCALE_DOCS["small"]
-        queries = src.gen_queries(src.SCALE_QUERIES["small"])
+        # The tier is a knob because the whole point of issue #5467 is a per-query
+        # cost that a small corpus cannot amortise, and it is invisible at 1M by
+        # construction: the scope asked for "a profile at that tier (the existing
+        # profile is 1M, where these constants are invisible)" and every profile
+        # posted to that thread so far has been the 1M one.
+        scale = os.environ.get("PROFILE_SCALE", "small")
+        if scale not in src.SCALE_DOCS:
+            raise SystemExit(f"PROFILE_SCALE={scale!r}; known: {sorted(src.SCALE_DOCS)}")
+        n = src.SCALE_DOCS[scale]
+        queries = src.gen_queries(src.SCALE_QUERIES[scale])
+        print(f"PROFILE_SCALE={scale} n_docs={n:,} queries={len(queries):,}", flush=True)
         b.connect()
         b.build(n)
         if hasattr(b, "post_build"):
