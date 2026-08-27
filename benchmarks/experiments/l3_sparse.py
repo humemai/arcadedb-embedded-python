@@ -520,14 +520,23 @@ def main():
     # gate that exists to catch exactly that passes. The generator is wrapped so
     # the row records what was actually ingested, and a shortfall is a refusal
     # rather than a smaller number nobody reads.
+    # `global` FIRST. Defining `def gen_docs` below makes the name local to this
+    # entire function, so without this the `_raw = gen_docs` line reads an
+    # unassigned local and raises UnboundLocalError -- which compile() cannot
+    # catch, being a runtime error, and which failed every l3s cell. The adapters
+    # resolve this name from module globals at call time, so rebinding the global
+    # is also what makes the count reach them.
+    global gen_docs
     n_docs = SCALE_DOCS[args.scale]
     _ingested = {"n": 0}
     _gen_docs_raw = gen_docs
 
-    def gen_docs(n, *a, **kw):          # noqa: F811 - deliberate shadow, counted
+    def _counted_gen_docs(n, *a, **kw):
         for item in _gen_docs_raw(n, *a, **kw):
             _ingested["n"] += 1
             yield item
+
+    gen_docs = _counted_gen_docs
 
     queries = gen_queries(SCALE_QUERIES[args.scale])
     _query_gen_s = time.perf_counter() - _p0
