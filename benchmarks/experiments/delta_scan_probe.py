@@ -97,8 +97,24 @@ def main():
         time.sleep(0.1)
 
     probes = [vec() for _ in range(QUERIES)]
+    warm = [vec() for _ in range(50)]
+
+    def warmup():
+        """Held out of the timed set, and run before EVERY pass.
+
+        The delta=0 pass is the baseline every other step is divided by, and the
+        first version measured it against a freshly built index with nothing
+        warmed: it came out at 1.094 ms against 0.426 ms for delta=100, i.e. the
+        baseline was dearer than a step with a hundred extra vectors in it, which
+        makes every ratio below it meaningless. Warming before each pass costs a
+        second and removes the one confound this probe cannot afford, since the
+        whole output is a ratio against step zero.
+        """
+        for w in warm:
+            list(db.query("sql", f"SELECT FROM (SELECT expand(vectorNeighbors('V[emb]', {w}, 10)))"))
 
     def timed_pass():
+        warmup()
         lat = []
         for p in probes:
             t = time.perf_counter()
