@@ -293,12 +293,18 @@ grep -q "Using provided JAR directory\|pre-staged" "$DEST/wheel.log" \
   || die "build.sh did not take the local jars (see $DEST/wheel.log). It printed: $(grep -m1 'JARs from' "$DEST/wheel.log")"
 
 say "verifying"
-"$0" --verify "$SHA"
+# Pass the COMMIT THAT WAS ASKED FOR, not the stamp. --verify resolves both
+# halves itself: the image tag from this argument, the expected jar stamp via
+# stamp_sha_for. Passing $SHA made it resolve the tag back to the ancestor and
+# look for an image the build had not tagged, which is how a merge pin died at
+# its own verification step with the artifacts sitting correct on disk.
+"$0" --verify "$SHA_TREE"
 
 cat > "$DEST/manifest.json" <<JSON
 {
-  "engine_commit": "$SHA",
+  "engine_commit": "$SHA_TREE",
   "engine_commit_short": "$SHORT",
+  "engine_jar_stamp": "$SHA",
   "server_image": "$IMG",
   "jar_count": $(ls "$LIB"/*.jar | wc -l),
   "assembly": "$CTX"
