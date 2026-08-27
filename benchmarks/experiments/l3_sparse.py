@@ -45,6 +45,21 @@ def recall_at_k(result_ids, gt_row):
 
 
 class Base:
+    # VERSION IS A MEASUREMENT INPUT, not a label.
+    #
+    # Qdrant already read its server version (see #156 below); Milvus did not,
+    # so its rows reached the page as engine_version="milvus" -- the backend NAME
+    # where a version belongs. Elastic, duckdb and questdb publish blank or a
+    # bare name elsewhere for the same reason. We hold ArcadeDB to naming its
+    # build; a table comparing us against Milvus "milvus" is no more defensible.
+    #
+    # This default catches the next adapter that forgets, which is the actual
+    # failure: the gap was never a decision, it was an omission nothing flagged.
+    #
+    # "unset" rather than "?" so the difference between "nobody asked" and "the
+    # engine was asked and would not say" survives into the artifact.
+    version = "unset"
+
     def close(self):
         """Release the engine handle. Overridden where there is one to release.
 
@@ -388,6 +403,13 @@ class Milvus(Base):
         from pymilvus import DataType, MilvusClient
         host = os.environ["BENCH_SERVER_HOST"]
         self.cl = MilvusClient(uri=f"http://{host}:19530")
+        try:
+            import pymilvus
+            self.version = ("milvus:"
+                            + str(self.cl.get_server_version())
+                            + "/pymilvus:" + pymilvus.__version__)
+        except Exception as e:                     # noqa: BLE001
+            self.version = f"milvus:unknown ({e.__class__.__name__})"
         # THE SERVER'S version, not the string "milvus" (#156).
         try:
             self.version = "milvus:" + str(self.cl.get_server_version())

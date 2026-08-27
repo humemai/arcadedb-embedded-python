@@ -227,6 +227,11 @@ def load_dataset(scale):
 
 
 class Base:
+    # Same default as l3_sparse.Base. Every adapter in this lane already sets a
+    # version, which is why the dense table's identities are clean; this exists
+    # so the next one added cannot publish without one by simply forgetting.
+    version = "unset"
+
     name = "?"
     version = "?"
 
