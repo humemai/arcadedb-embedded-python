@@ -78,6 +78,27 @@ def _short_version(raw: str | None) -> str | None:
     return m.group(0) if m else None
 
 
+# AN ENGINE IDENTITY THAT IDENTIFIES NOTHING.
+#
+# 35 of 266 published ArcadeDB rows carried one of these in engine_version:
+# "server:latest" (a floating tag -- whatever the registry served that day),
+# "arcadedb-embedded" and "server" (backend names that leaked into the version
+# field), and "unknown (PackageNotFoundError)". A number published under any of
+# them cannot be attributed to a build, re-derived, or defended if challenged.
+#
+# They are not "a bit stale". Stale is knowable and comparable -- 26.8.1 is a
+# real build we can diff against the pin. These identify nothing at all, which
+# is strictly worse, and they must not render.
+_UNUSABLE_VERSION = re.compile(
+    r"^\s*(|none|null|unknown.*|arcadedb-embedded|arcadedb|server|server:latest|latest)\s*$",
+    re.I)
+
+
+def _engine_is_identifiable(raw) -> bool:
+    """False when engine_version names no build that could ever be resolved."""
+    return not _UNUSABLE_VERSION.match(str(raw or ""))
+
+
 def _arcadedb_identity(rows) -> str | None:
     """The engine identity for the payload header, derived from the rows.
 
@@ -1357,6 +1378,25 @@ def main() -> int:
         return 2
 
     rows = list(csv.DictReader(FROZEN.open()))
+
+    # WITHHELD: ArcadeDB rows whose engine_version identifies no build.
+    #
+    # Not rendered, and said out loud rather than dropped quietly. A number we
+    # cannot attribute to a build cannot be re-derived or defended, and the page
+    # is the artifact people cite. Comparator rows are untouched: this is a
+    # claim about OUR engine's provenance, not theirs.
+    _unusable = [r for r in rows
+                 if str(r.get("backend", "")).startswith("arcadedb")
+                 and not _engine_is_identifiable(r.get("engine_version"))]
+    if _unusable:
+        import collections as _c
+        _by = _c.Counter((r.get("lane"), str(r.get("engine_version") or "(blank)")[:40])
+                         for r in _unusable)
+        print(f"  WITHHELD {len(_unusable)} ArcadeDB rows: engine_version identifies no build")
+        for (lane, ev), n in sorted(_by.items()):
+            print(f"    {lane:<10}{ev:<42}n={n}")
+        print("    -> re-run these lanes at the pin; they are the cheap ones")
+        rows = [r for r in rows if r not in _unusable]
     names = _image_version_names()
 
     # The tabular lanes run OLTP and OLAP as separate workloads over ONE corpus
@@ -1596,6 +1636,22 @@ def main() -> int:
         # Read from the rows, not asserted here. The literal "26.8.1" survived a
         # re-pin and two campaigns because nothing recomputed it (DECISIONS #49).
         "arcadedb_version": _arcadedb_identity(rows),
+        # EVERY ENGINE IN THE PAYLOAD, not just the ones that recorded a commit.
+        #
+        # This listed engine_commit only, and rows predating the stamp carry
+        # none -- so a page whose tables were mostly 26.8.1 published
+        # arcadedb_commits: ["d7940d79e"] and read as though the whole thing
+        # were pinned to it. The stale rows were invisible precisely BECAUSE
+        # they were stale. Absence of provenance rendered as uniform provenance,
+        # which is the worst direction for that error to run.
+        #
+        # arcadedb_version beside this is already None whenever the versions
+        # disagree, so the mix was detectable and this field contradicted it.
+        # Now they agree: a mixed payload lists every engine it actually holds.
+        "arcadedb_engines": sorted({
+            _engine_identity(r.get("engine_version"), r.get("engine_commit"))
+            or str(r.get("engine_version") or "").strip() or "(no engine recorded)"
+            for r in rows if str(r.get("backend", "")).startswith("arcadedb")}),
         "arcadedb_commits": sorted({
             c for c in (r.get("engine_commit") for r in rows
                         if str(r.get("backend", "")).startswith("arcadedb")) if c}),
