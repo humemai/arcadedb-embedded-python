@@ -102,8 +102,14 @@ verify_sha() {  # <label> <40-char sha found> <expected>
 # ---------------------------------------------------------------- verify only
 if [ "${1:-}" = "--verify" ]; then
   SHA_SHORT="${2:?usage: --verify <sha>}"
+  # TWO DIFFERENT SHAS, same split as the build path above: the image is TAGGED
+  # by the commit that was requested, and the jars inside it CARRY the last
+  # non-merge ancestor, because that is what buildnumber-maven-plugin writes.
+  # Looking the image up by the stamp would miss it for any merge pin, which is
+  # the naming the build now uses. Identical for a non-merge pin.
   SHA=$(stamp_sha_for "$SHA_SHORT")
-  IMG="arcadedb-local:${SHA:0:9}"
+  SHA_TREE=$(git -C "$REPO" rev-parse --verify "${SHA_SHORT}^{commit}" 2>/dev/null || echo "$SHA")
+  IMG="arcadedb-local:${SHA_TREE:0:9}"
   say "verifying pair at $SHA"
   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
