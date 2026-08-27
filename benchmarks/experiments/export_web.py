@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import re
 import statistics
 import sys
@@ -92,6 +93,23 @@ def _short_version(raw: str | None) -> str | None:
 _UNUSABLE_VERSION = re.compile(
     r"^\s*(|none|null|unknown.*|arcadedb-embedded|arcadedb|server|server:latest|latest)\s*$",
     re.I)
+
+
+def _pinned_dir(name):
+    """results/<name>_<pin> when the campaign has re-run it, else results/<name>.
+
+    Same rule the dense table uses: a pinned re-run supersedes the pre-pin
+    overlay, and when there is no re-run the overlay stands unchanged rather
+    than the table vanishing. BENCH_ENGINE_COMMIT names the pin; without it
+    nothing is preferred, so a local export cannot silently pick up a directory
+    the campaign has not finished writing.
+    """
+    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+    if pin:
+        cand = HERE / "results" / f"{name}_{pin}"
+        if cand.is_dir():
+            return cand
+    return HERE / "results" / name
 
 
 def _comparator_versions(rows):
@@ -738,7 +756,14 @@ GLOBAL_CONDITIONS = [
 ]
 
 
-E4_DIR = HERE / "results" / "e4decomp_2681"
+# _pinned_dir cannot be used here: it is defined below and this is module scope.
+# Resolved the same way, and for the same reason -- e4decomp_2681 is a 2026-08-07
+# artifact on 26.8.1, so a pinned re-run must be able to supersede it without an
+# edit here. The "_2681" name is kept as the fallback because that is what exists.
+E4_DIR = (HERE / "results" / f"e4decomp_{os.environ.get('BENCH_ENGINE_COMMIT', '').strip()}"
+          if (HERE / "results" / f"e4decomp_{os.environ.get('BENCH_ENGINE_COMMIT', '').strip()}").is_dir()
+             and os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+          else HERE / "results" / "e4decomp_2681")
 
 # Named so the page can say what each step is rather than showing three opaque
 # arm names. embedded -> inproc_http isolates the wire format with the process
@@ -965,7 +990,7 @@ def _sparse_multipass_table():
     The dense table CAN carry both columns because both of its passes come out
     of the same overlay. This one cannot, so it says so instead.
     """
-    root = HERE / "results" / "sparse_mp"
+    root = _pinned_dir("sparse_mp")
     if not root.is_dir():
         return None
     entries = []
