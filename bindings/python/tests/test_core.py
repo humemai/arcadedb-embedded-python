@@ -1135,7 +1135,7 @@ def test_to_columns_survives_json_metacharacters_in_aliases(temp_db_path):
         cols = db.query(
             "sql",
             # nosec B608 - the interpolated values ARE the test: `weird` and `semi`
-            # are deliberately hostile column ALIASES (a quote, a backslash, a
+            # are deliberately hostile column ALIASES (a double quote and a
             # semicolon) chosen to prove #6758's escaping fix. They are literals
             # defined three lines up, not input, and there is no parameter form for
             # an alias. Our bandit gate scans tests at low/low where upstream's does

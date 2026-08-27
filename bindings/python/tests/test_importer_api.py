@@ -162,10 +162,16 @@ def test_import_documents_on_row_error(
         db.command("sql", "CREATE INDEX ON Product (sku) UNIQUE")
 
         kwargs = {} if mode is None else {"on_row_error": mode}
-        try:
+        if mode == "skip":
+            # Must NOT raise: rolling back the bad row's own transaction is what
+            # lets the surrounding good rows survive.
             db.import_documents(csv_path, document_type="Product", **kwargs)
-        except arcadedb.ArcadeDBError:
-            assert mode != "skip", "skip mode should not fail the job on a bad row"
+        else:
+            # Must raise. A try/except here passed when abort returned normally
+            # with a partial result, so a regression that silently stopped
+            # aborting would not have failed this test.
+            with pytest.raises(arcadedb.ArcadeDBError):
+                db.import_documents(csv_path, document_type="Product", **kwargs)
 
         rows = sorted(
             str(r.get("sku"))

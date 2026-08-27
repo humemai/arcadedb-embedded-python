@@ -108,6 +108,14 @@ def _build_import_settings(
     # value that is not "skip" silently means "abort". A typo would therefore
     # turn a requested skip-and-continue import back into abort-on-first-bad-row
     # with no error anywhere, which is the failure mode this rejects up front.
+    # isinstance BEFORE .lower(): on_row_error=1 otherwise raises AttributeError
+    # from inside the validation, while the public API documents ValueError for
+    # anything unsupported. A caller catching ValueError would miss it.
+    if on_row_error is not None and not isinstance(on_row_error, str):
+        raise ValueError(
+            f"Invalid on_row_error mode: {on_row_error!r}. "
+            f"Expected one of {sorted(_VALID_ON_ROW_ERROR)}"
+        )
     if on_row_error is not None and on_row_error.lower() not in _VALID_ON_ROW_ERROR:
         raise ValueError(
             f"Invalid on_row_error mode: {on_row_error!r}. "
