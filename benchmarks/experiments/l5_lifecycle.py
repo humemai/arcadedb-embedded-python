@@ -316,14 +316,52 @@ def _read(db, situation):
         # sufficient for "the view served it": SQL cannot reach a Graph
         # Analytical View at all, so a zero here proves the defect is back,
         # while a non-zero does not by itself prove the view was consulted.
-        # A real usage assertion needs the engine's own view counter and is
-        # not wired yet; the row says which of the two this is.
+        # _gav_probe_plan() below is what actually settles it.
         if situation == "graph_gav":
             _gav_cypher_reads[0] += 1
+            if _gav_plan[0] is None:
+                _gav_plan[0] = _gav_probe_plan(db, text)
 
 
 _WRITE_SEQ = [0]
 _gav_cypher_reads = [0]
+_gav_plan = [None]
+
+# THE VIEW ANNOUNCES ITSELF IN THE PLAN.
+#
+# The engine exposes no per-query "the view served this" counter -- GraphAnalyticalView
+# has getNodeCount/getEdgeCount/getBuildTimestamp and nothing that increments on use --
+# so there is no counter to read and the flag sat hardcoded False.
+#
+# But the view has DEDICATED OPERATORS, and they print their own names into the
+# execution plan along with the provider that backs them:
+#
+#     GAVExpandAll.java:265        return "GAVExpandAll";
+#     GAVExpandAll.java:283        sb.append(" [provider=").append(provider.getName());
+#     GAVFusedChainOperator:566    return "GAVFusedChain";
+#
+# A plan naming one of these could not have been produced by a traversal that
+# walked the buckets, so EXPLAIN is a sufficient observable. This is a stronger
+# claim than the cypher-reads counter: that one only says SQL was not used.
+_GAV_OPERATORS = ("GAVExpandAll", "GAVExpandInto", "GAVFusedChain", "CSRCount")
+
+
+def _gav_probe_plan(db, text):
+    """EXPLAIN the graph_gav read once and return which GAV operator served it.
+
+    Returns the matched operator name, or "" when the plan is readable and names
+    none of them (the view exists but the planner did not use it -- a real and
+    reportable outcome, not an error), or None when the plan could not be read at
+    all, which must NOT be reported as a negative result.
+    """
+    try:
+        plan = "\n".join(str(r) for r in db.query("cypher", "EXPLAIN " + text))
+    except Exception:
+        return None
+    for op in _GAV_OPERATORS:
+        if op in plan:
+            return op
+    return ""
 
 
 def _write(db, situation):
@@ -607,10 +645,17 @@ def main():
     out["close_over_budget"] = out["clean_close_ms"] > 100.0
     if args.workload == "graph_gav":
         out["gav_cypher_reads_issued"] = _gav_cypher_reads[0]
-        # FALSE until the engine's own view counter is read here. Stamped so a
-        # downstream table cannot present this row as "the view under load"
-        # without the row itself saying that was never verified.
-        out["gav_view_usage_verified"] = False
+        # NOW WIRED, via the plan rather than a counter (see _gav_probe_plan).
+        # Three distinguishable outcomes, because collapsing them would put the
+        # engine's failure and our own in the same bucket:
+        #   True  - a GAV operator served the read, named in gav_view_operator
+        #   False - the plan was read and named no GAV operator: the view did not
+        #           serve it, which is a finding about the engine
+        #   None  - EXPLAIN itself failed: we learned nothing, and the row must
+        #           not be read as either of the above
+        out["gav_view_operator"] = _gav_plan[0]
+        out["gav_view_usage_verified"] = (
+            None if _gav_plan[0] is None else bool(_gav_plan[0]))
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(out, open(args.out, "w"), indent=1)
