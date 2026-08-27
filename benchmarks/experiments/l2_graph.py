@@ -475,7 +475,12 @@ def main():
     # Wrap AFTER the rebind above, so both the synthetic and the LDBC streams are
     # counted. Adapters resolve these names from module globals at call time, so
     # rebinding here is what makes the count reach them.
-    global gen_persons, gen_edges
+    # NO `global` here: Python's global is a compile-time declaration for the whole
+    # function, so the one in the ldbc branch above already covers these defs.
+    # Repeating it after the branch assigns them is "name assigned to before global
+    # declaration", a SyntaxError that ast.parse does NOT catch (it is raised by
+    # the symbol-table pass, which only compile() runs) and that therefore reached
+    # the bench host and failed every l2 cell.
     _persons_src, _edges_src = gen_persons, gen_edges
 
     def gen_persons(n, *a, **kw):        # noqa: F811 - deliberate shadow, counted
