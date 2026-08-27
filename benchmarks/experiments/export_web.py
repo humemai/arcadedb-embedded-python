@@ -964,6 +964,100 @@ def _sparse_multipass_table():
     }
 
 
+# ---------------------------------------------------------------- lifecycle
+# PAGE-SPEC section 2: "cold-start decomposition (4 columns), then per scenario:
+# open ms, action ms, close ms, session ms". The SESSION is what the page quotes,
+# because open and close alone hide a rebuild triggered BETWEEN them: an earlier
+# version of this lane reported ~5 ms open and ~300 ms close for a session that
+# actually cost 4.3 s.
+LIFECYCLE_SCENARIOS = [
+    ("clean", "reopen, touch nothing, close"),
+    ("read", "reopen, one query, close"),
+    ("write", "reopen, commit one row into a scratch type, close"),
+    ("write_own", "reopen, commit into the structure's OWN data, close"),
+    ("write_own_read", "write then read in one session"),
+]
+
+# Situations whose probe is not yet trustworthy. graph_gav's read reaches the
+# view now (it is issued in cypher; SQL cannot reach a Graph Analytical View at
+# all) but the same edit changed its SCOPE from 100 seeds to an unbounded
+# whole-graph 2-hop, so its numbers describe the query written rather than the
+# view. Withheld rather than published with a caveat nobody reads.
+LIFECYCLE_WITHHELD = {"graph_gav": "probe scope under revision; see PAGE-SPEC 4c"}
+
+
+def _lifecycle_table():
+    rows = [r for r in load_canonical() if r.get("lane") == "lifecycle"]
+    if not rows:
+        return None
+
+    by = {}
+    for r in rows:
+        by.setdefault((r.get("workload"), r.get("scale")), []).append(r)
+
+    entries = []
+    for (situation, scale), rs in sorted(by.items()):
+        if situation in LIFECYCLE_WITHHELD:
+            continue
+        entry = {
+            "backend": situation,
+            "is_arcadedb": True,
+            "scale": scale,
+            "scale_label": scale_label("lifecycle", scale),
+            "workload": "session",
+            "n_docs": str(rs[0].get("n_rows") or ""),
+            "deployment": "embedded",
+            "image": rs[0].get("image"),
+            "version_name": _engine_identity(rs[0].get("engine_version"),
+                                             rs[0].get("engine_commit")),
+            "host": rs[0].get("host"),
+            "metrics": {},
+        }
+        # The four cold-start columns, which the page must print beside any
+        # session number: a 5 ms open inside a process that took half a second to
+        # reach its first database call is not a 5 ms cost to anyone launching a
+        # CLI.
+        for field, label in (("jvm_start_ms", "JVM start ms"),
+                             ("first_open_ms", "first open ms"),
+                             ("cold_process_ms", "cold process ms")):
+            got = _agg(rs, field)
+            if got is not None:
+                entry["metrics"][label] = got
+        for key, _desc in LIFECYCLE_SCENARIOS:
+            got = _agg(rs, f"{key}_session_ms")
+            if got is not None:
+                entry["metrics"][f"{key} session ms"] = got
+        if entry["metrics"]:
+            entries.append(entry)
+
+    if not entries:
+        return None
+    return {
+        "id": "lifecycle",
+        "title": "Session cost, open to close",
+        "dataset": "synthetic, one structure per row",
+        "conditions": [
+            "The SESSION is open + action + close. Reporting open and close alone "
+            "hides work triggered between them.",
+            "Cold start is measured in a fresh subprocess and reported beside every "
+            "session number, because a millisecond open inside a process that takes "
+            "half a second to reach its first database call is not a millisecond to "
+            "whoever launched it.",
+            "A clean close should be O(what was written), not O(what is stored): "
+            "write nothing and closing should cost the same at 10k rows and 10M.",
+        ] + [f"`{k}` is withheld: {v}" for k, v in sorted(LIFECYCLE_WITHHELD.items())],
+        "columns": ["JVM start ms", "first open ms", "cold process ms"]
+                   + [f"{k} session ms" for k, _ in LIFECYCLE_SCENARIOS],
+        "withheld_scales": [],
+        "withheld_reason": None,
+        "entries": entries,
+        "source_paths": ["benchmarks/experiments/results/runs_paper.csv"],
+        "source_urls": ["https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"],
+        "source_path": "benchmarks/experiments/results/runs_paper.csv",
+        "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv",
+    }
+
+
 def _l4_table():
     grouped = _l4_rows()
     if not grouped:
@@ -1430,8 +1524,8 @@ def main() -> int:
     # The function stays because the SciPy paper still publishes these rows and
     # a future page may want them WITH the matrix. Restoring them means adding
     # the matrix too, and re-adding their cells to page_check.MAPPING.
-    for extra in (_sparse_multipass_table(), _l4_table(), _e4_table(),
-                  _python_cost_table()):
+    for extra in (_sparse_multipass_table(), _l4_table(), _lifecycle_table(),
+                  _e4_table(), _python_cost_table()):
         if extra and extra["entries"]:
             tables.append(extra)
 
