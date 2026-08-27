@@ -155,11 +155,28 @@ SHA_IN="${1:?usage: build_engine_pair.sh <commit-ish>}"
 git -C "$REPO" rev-parse --verify "$SHA_IN" >/dev/null 2>&1 || die "unknown commit $SHA_IN"
 SHA=$(stamp_sha_for "$SHA_IN")
 [ -n "$SHA" ] || die "no non-merge commit reachable from $SHA_IN"
-SHORT="${SHA:0:9}"
+
+# THE TREE TO BUILD IS NOT THE SHA THE JARS WILL CARRY, and conflating them
+# builds the wrong code. $SHA above answers "what will the plugin stamp"; it is
+# the last non-merge ANCESTOR, whose tree is not the merge's tree whenever the
+# merge actually combined anything. Checking $SHA out therefore silently builds
+# the merged-in branch tip instead of the merge result.
+#
+# Caught building 1b04483bf (the #6743 merge, what upstream shipped): it resolved
+# to 78e63b047 (the PR tip) whose tree differs across ALL FIVE files of the
+# sparse query hot path -- the exact code the build existed to re-measure. That
+# would have reproduced the provenance error the re-measure was correcting.
+#
+# So: build the tree that was ASKED FOR, and keep $SHA only as the expected
+# stamp. For a non-merge argument the two are identical and nothing changes,
+# which is every campaign build to date.
+SHA_TREE=$(git -C "$REPO" rev-parse --verify "${SHA_IN}^{commit}")
+SHORT="${SHA_TREE:0:9}"
 IMG="arcadedb-local:$SHORT"
 DEST="${BUILD_DEST:-$HOME/engine-builds/$SHORT}"
 
-say "commit  $SHA"
+say "commit  $SHA_TREE"
+[ "$SHA_TREE" = "$SHA" ] || say "stamp   $SHA (merge: jars carry the last non-merge ancestor)"
 say "image   $IMG"
 say "workdir $DEST"
 
@@ -186,9 +203,13 @@ if [ ! -d "$WT/.git" ]; then
   # destroys the only provenance field we have). --local hardlinks the object
   # store, so this costs almost nothing.
   git clone --local --no-checkout "$REPO" "$WT" >/dev/null 2>&1
-  git -C "$WT" checkout --detach "$SHA" >/dev/null 2>&1
+  git -C "$WT" checkout --detach "$SHA_TREE" >/dev/null 2>&1
 fi
-[ "$(git -C "$WT" rev-parse HEAD)" = "$SHA" ] || die "clone is not at $SHA"
+[ "$(git -C "$WT" rev-parse HEAD)" = "$SHA_TREE" ] || die "clone is not at $SHA_TREE"
+# The tree, not just the commit id: this is the assertion that would have caught
+# the merge-resolution bug above, since the wrong commit had the wrong tree.
+[ "$(git -C "$WT" rev-parse HEAD^{tree})" = "$(git -C "$REPO" rev-parse "${SHA_IN}^{tree}")" ] \
+  || die "clone tree does not match $SHA_IN"
 [ -z "$(git -C "$WT" status --porcelain)" ] || die "clone is dirty; a build from a dirty tree cannot be identified by its commit"
 
 # Skip maven when the assembly already carries this exact commit. The check is
