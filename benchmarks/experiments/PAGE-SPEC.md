@@ -546,6 +546,42 @@ The 5.9x is a within-session property that each open re-pays.
 
 ---
 
+## 4c. Lane readiness, 2026-08-27
+
+What a reader of this file most needs is which lanes can be published now. An
+adversarial audit on 08-26 confirmed 23 defects, 14 blocking publication; 18 are
+fixed. This is the residue.
+
+| lane | rows at pin `d7940d79e` | status |
+|---|---|---|
+| `l1` | 50 | READY |
+| `l1tpc` | 50 | READY |
+| `e2` | yes | READY |
+| `l4` | 20, re-run 08-27 | READY for ingest and the aggregates. `q_last` needed a second fix: our native arm asked a WINDOWED question in the column three unbounded arms share. Fixed, needs one more 11-minute re-run |
+| `lifecycle` | 104 | READY except `graph_gav` |
+| `l3s` | 35 | measurements sound; `n_docs` still comes from a module constant so rule 4's corpus fingerprint checks a constant |
+| `l2` | none | never run at this pin |
+| `l3d` | none | never run at paper tier |
+
+**Two of the defects flattered us**, which is why they were worth finding: the l4
+native arm slept 5 s that no other arm got, and its `q_last` was windowed where
+the others were unbounded. Both were invisible in the row because the field name
+did not say what had been done.
+
+**`graph_gav` is not ready and the reason is ours.** The audit found the read was
+issued in SQL, which cannot reach a Graph Analytical View at all. Fixing that
+made it reach the view (1.6 ms -> 234 ms at lc10k, which is the proof), but the
+same edit changed the SCOPE: the old read was 100 seeds, the replacement is an
+unbounded whole-graph 2-hop, so 16,087 ms at 1M measures the query written, not
+the view. Rule 7 half-applied. It needs a bounded seed set AND a per-cycle
+assertion that the view was used.
+
+**Still blocking the page, all ours:** `export_web.py` has no lifecycle table, so
+104 clean rows have nowhere to render; `n_docs`; `graph_gav`; then `l2` and the
+dense campaign.
+
+---
+
 ## 5. Blocked cells — what may not be published today
 
 | what | why | clears when |
