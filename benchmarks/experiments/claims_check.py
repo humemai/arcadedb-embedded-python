@@ -310,6 +310,28 @@ def gav_ablation(field):
     return st.median([r[field] for r in rows]) if rows else None
 
 
+def gav_speedup(rows, field):
+    """How much the view is worth on one query: ablated / with-view.
+
+    The page prints neither absolute. It prints the RATIO ("worth 6.5x on top
+    degree"), and a ratio pinned only by its numerator is not pinned.
+
+    The with-view side goes through median_of/_sel, the SAME helper every other
+    with-view claim uses, rather than a filter of its own. My first version
+    selected `gav is True` and got NODATA on all 25 rows: nothing stamps True.
+    The ablation records `gav=False` and the default arm records nothing, so
+    with-view is expressed by ABSENCE, which _sel already knows and a fresh
+    filter does not. Writing a second way to select the same arm is exactly what
+    this file's docstring warns against.
+    """
+    off = gav_ablation(field)
+    on = median_of(rows, field, lane="l2", scale="sf10", workload="olap",
+                   backend="arcadedb_graph_embedded")
+    if off is None or on in (None, 0):
+        return None
+    return off / on
+
+
 def ingest_ab(arm):
     """Median rows/s of one arm of the 500k-row bulk-vs-per-row A/B.
 
@@ -1142,6 +1164,26 @@ CLAIMS = [
     ("l3d.arcadedb.cold", 8.87, 0.02,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_COLD),
      "dense fp32 p50 cold (first pass after build)"),
+    # THE PAGE'S TWO RECALL FIGURES, pinned against CANONICAL ROWS rather than
+    # the paper's generated t5_dense_ts.tex. The page renders from
+    # web_benchmarks.json, which comes from runs_paper.csv, so pinning it to the
+    # paper's tables would check the page against a file it does not read -- and
+    # BENCH_PAPER_DIR is deliberately absent from this repo, so those claims are
+    # NODATA here anyway.
+    #
+    # arcadedb at deep10m has NO canonical rows yet: the dense campaign running
+    # on mini is what produces them. Until it lands this claim is NODATA, which
+    # is the correct reading of "the page states a number our data cannot yet
+    # produce" -- it came from the paper's tables, and the campaign will replace
+    # it. Do not delete the claim to make the check green.
+    ("l3d.page.recall.arcadedb_deep10m", 0.951, 0.002,
+     lambda r: median_of(r, "recall_at_10", lane="l3d", scale="deep10m",
+                         backend="arcadedb_dense_embedded"),
+     "the page's \"ArcadeDB returns 95.1%\" at 10M"),
+    ("l3d.page.recall.chroma_deep10m", 0.9337, 0.002,
+     lambda r: median_of(r, "recall_at_10", lane="l3d", scale="deep10m",
+                         backend="chroma_dense"),
+     "the page's \"Chroma returns 93.4% of the true neighbours\""),
     ("l3d.arcadedb.recall", 0.951, 0.001,
      lambda r: cell("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", D_RECALL),
      "dense fp32 recall@10"),
@@ -1406,6 +1448,19 @@ CLAIMS = [
     ("l2.gav_ablated.topdeg", 368, 1,
      lambda r: gav_ablation("top_degree_mean_ms"),
      "top-degree WITHOUT the analytical view; the 6.5x arm"),
+    # THE RATIOS THE PROJECT PAGE PRINTS. Named l2.page.* rather than page.*
+    # because --lane filters on the id PREFIX: a page claim about l2 data that
+    # does not start with the lane silently never runs under --lane l2, which is
+    # how the campaign checks each lane as it lands. The absolutes above were pinned and
+    # the ratios derived from them were not, so the page could publish "6.5x"
+    # against data that had moved and nothing would disagree. Found by
+    # page_prose_check.py, which walks the page's prose and asks this list.
+    ("l2.page.gav.speedup.topdeg", 6.5, 0.15,
+     lambda r: gav_speedup(r, "top_degree_mean_ms"),
+     "the page's \"worth 6.5x on top degree\""),
+    ("l2.page.gav.speedup.samecity", 2.4, 0.15,
+     lambda r: gav_speedup(r, "same_city_edges_mean_ms"),
+     "the page's \"about 2.4x on the other two\"; same-city arm"),
     ("l1.ingest.perrow_500k", 67147, 1,
      lambda r: ingest_ab("serial_sql"),
      "per-row SQL at the matched 500k scale; reproduced the pre-release 67.3k"),
