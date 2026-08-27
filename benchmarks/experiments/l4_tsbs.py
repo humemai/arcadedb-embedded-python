@@ -184,6 +184,28 @@ class ArcadeNativeTS(ArcadeTS):
     # Timestamps are stored in MILLISECONDS by the TS engine, so the epoch-second bounds
     # the document arm uses have to be scaled; that alone is enough to select no rows.
     def q_last(self):
+        """Unbounded, the same question the other three arms are asked.
+
+        This used to carry `AND ts BETWEEN a AND b`, a 40-day window, while
+        ArcadeTS, DuckTS and QuestTS all ask an unbounded "newest reading for
+        this host". export_web prints whichever it finds under one column name,
+        so a windowed number for our arm sat beside three unbounded ones and the
+        column was not a comparison. A window is a legitimate thing to measure
+        and a legitimate thing for a TIMESERIES type to be good at; it is not
+        the same measurement, so it gets its own field rather than the shared
+        column.
+        """
+        return self.db.query("sql",
+            f"SELECT ts, uu FROM Point WHERE host = '{HOST}' "
+            f"ORDER BY ts DESC LIMIT 1").to_list()
+
+    def q_last_windowed(self):
+        """The bounded form, reported separately as q_last_windowed_ms.
+
+        Kept because it is the shape a TIMESERIES type is designed for and the
+        difference between the two is worth publishing; it just cannot wear the
+        unbounded column's name.
+        """
         a = T0 * 1000
         return self.db.query("sql",
             f"SELECT ts, uu FROM Point WHERE host = '{HOST}' "
@@ -459,6 +481,19 @@ def main():
     # type is very fast, and a zero-row q_range is the cheapest possible way to
     # win a benchmark. QuestDB is the standing risk because ILP over TCP is
     # fire-and-forget, so an under-ingest is silent on the write side too.
+    # The windowed last-point, for whichever arms implement it, under its OWN
+    # name so it can never be printed as the unbounded one.
+    if hasattr(b, "q_last_windowed"):
+        _t = []
+        _ref = None
+        for _ in range(QITER):
+            _s = time.perf_counter()
+            _ref = b.q_last_windowed()
+            _t.append((time.perf_counter() - _s) * 1000)
+        out["q_last_windowed_ms"] = round(statistics.median(_t), 2)
+        out["q_last_windowed_rows"] = len(_ref) if _ref is not None else 0
+        out["last_window_s"] = 86400 * 40
+
     _expect = {"q_range": 60, "q_global": 12, "q_last": 1}
     _wrong = {qn: out[f"{qn}_rows"] for qn, want in _expect.items()
               if out.get(f"{qn}_rows") != want}
