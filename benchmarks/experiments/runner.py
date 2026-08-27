@@ -311,6 +311,18 @@ SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0")) or
 # The build-cache bound the dense lane applies, read here too so the SERVER arm gets the same policy
 # as the embedded one (see the server_env comment below). Default matches l3d_dense.py's own default.
 DENSE_BUILD_CACHE = os.environ.get("BENCH_DENSE_BUILD_CACHE", "100000").strip()
+# The PERCENT knob, which reached the embedded arm only. l3d_dense.py:307 reads it
+# and puts it in the index METADATA; nothing put it on the server's JVM, so a
+# sweep of graphBuildCacheMaxHeapPercent moved one topology and not the other and
+# any embedded-vs-server delta was the knob failing rather than a finding. That
+# sweep is worth 4.7x at deep10m (10,786 s at 10% against 2,274 s at 25%), so a
+# silent one-sided application is not a small error.
+#
+# Empty by default so the server keeps the engine's own default when the campaign
+# does not ask, rather than this file inventing one.
+DENSE_BUILD_CACHE_PCT = os.environ.get("BENCH_DENSE_BUILD_CACHE_PCT", "").strip()
+_PCT_OPT = (" -Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent=" + DENSE_BUILD_CACHE_PCT
+            if DENSE_BUILD_CACHE_PCT else "")
 
 # WHERE THE LIFECYCLE LANE PUTS ITS DATABASE, and why it is a host path.
 #
@@ -357,7 +369,7 @@ BACKENDS = {
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
-                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE],
+                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE + _PCT_OPT],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
@@ -465,7 +477,7 @@ BACKENDS = {
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
-                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE],
+                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE + _PCT_OPT],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
@@ -573,7 +585,7 @@ BACKENDS = {
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
-                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE],
+                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE + _PCT_OPT],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
@@ -642,7 +654,7 @@ BACKENDS = {
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
-                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE],
+                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE + _PCT_OPT],
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },

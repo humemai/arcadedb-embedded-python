@@ -125,6 +125,19 @@ def main():
             out.append(r)
             print("ARM " + json.dumps(r), flush=True)
 
+    # WRITE THE ARTIFACT FIRST. Every arm has already run by this point: the
+    # summary below is formatting, and a KeyError in a format string used to
+    # destroy a completed set of runs (default 9 arms of full TSBS ingest,
+    # 2.59M points each) because json.dump came after it. Formatting must never
+    # be able to lose measurement.
+    outp_early = os.environ.get("PROBE_OUT", "")
+    if outp_early:
+        os.makedirs(os.path.dirname(outp_early) or ".", exist_ok=True)
+        with open(outp_early, "w") as f:
+            for r in out:
+                f.write(json.dumps(r) + "\n")
+        print(f"wrote {len(out)} rows -> {outp_early}", flush=True)
+
     print()
     base = None
     for _, _, label in arms:
@@ -134,8 +147,8 @@ def main():
         if base is None:
             base = m
         print(f"  {label:<10} {s['n_tags']:>2} tags {s['n_fields']:>2} fields  "
-              f"stride {s['predicted_stride_bytes']:>5} B  "
-              f"{s['predicted_rows_per_64k_page']:>4} rows/page  "
+              f"stride {s.get('predicted_stride_bytes', s.get('predicted_stride_bytes_inline_v0', '?')):>5} B  "
+              f"{s.get('predicted_rows_per_64k_page', '?'):>4} rows/page  "
               f"{m:>10,.0f} pts/s  {m/base:.2f}x")
 
     outp = os.environ.get("PROBE_OUT", "")

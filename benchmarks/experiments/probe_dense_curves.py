@@ -46,9 +46,28 @@ def run(mc, out_path):
     build_s = round(time.time() - t0, 1)
     print(f"mc={mc} built in {build_s}s", flush=True)
 
+    # WARM BEFORE EVERY ef, held out of the timed set.
+    #
+    # The sweep had no warmup at all, so the ef=50 point (always first) absorbed
+    # the entire cold-index cost and every later point ran warm: at deep10m the
+    # same engine reads 8.9-10.0 ms on its first pass and 0.9-1.2 ms afterwards,
+    # which inverts or flattens the low end of the very curve this probe draws.
+    # Warming at each ef rather than once keeps the points comparable to each
+    # other, since a new ef changes how much of the graph is touched.
+    _warm = test[-20:] if len(test) > 40 else test[:1]
+
+    def _warmup(ef_value):
+        for wq in _warm:
+            db.query("sql",
+                     "SELECT vid FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?)))",
+                     "Article[embedding]",
+                     arcadedb.to_java_float_array(wq), base.K, ef_value).to_list()
+
+    timed = range(len(test) - 20) if len(test) > 40 else range(len(test))
     for ef in (50, 100, 200, 400, 800):
+        _warmup(ef)
         lat, hits = [], 0
-        for qi in range(len(test)):
+        for qi in timed:
             q = arcadedb.to_java_float_array(test[qi])
             t = time.time()
             rows = db.query(
@@ -59,7 +78,12 @@ def run(mc, out_path):
             lat.append((time.time() - t) * 1000)
             got = [int(r["vid"]) for r in rows]
             hits += len(set(got) & set(gt[qi].tolist()))
-        rec = hits / (len(test) * base.K)
+        # DENOMINATOR MUST MATCH WHAT WAS TIMED. The warmup slice is held out of
+        # `timed`, so dividing by len(test) would under-report recall by exactly
+        # the held-out fraction and the error would look like a real recall loss
+        # at every ef.
+        n_timed = len(timed)
+        rec = hits / (n_timed * base.K)
         lat.sort()
         row = {"maxConnections": mc, "efSearch": ef, "build_s": build_s,
                "recall_at_10": round(rec, 4),
