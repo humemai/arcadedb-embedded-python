@@ -3268,7 +3268,7 @@
       "title": "Time series",
       "dataset": "TSBS cpu-only, 2,592,000 points",
       "conditions": [
-        "No engine takes a settle step, and that was measured rather than assumed: sealing the write buffer makes the aggregation faster and the last-point query slower, since the unsealed tail a scan walks is where the newest point lives. Settling only ours would have been a one-sided advantage.",
+        "No engine takes a settle step, and that was measured rather than assumed: sealing the write buffer makes the aggregation faster and the last-point query slower, since the unsealed tail a scan walks is where the newest point lives. Settling only ours would have been a one-sided advantage. (Rows disagree on this; treat with care.)",
         "One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark. A matched one-tag/ten-tag run prices the schema at 2.0x on ingest and 2.6x faster on last-point.",
         "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound: telling the engine to look only at the past hour made it slower, 0.860 ms against 0.720, because evaluating the time filter costs more than the scan it saves."
       ],
@@ -3288,25 +3288,25 @@
           "n_docs": "2592000",
           "deployment": "embedded",
           "image": null,
-          "version_name": "arcadedb 26.8.1",
-          "host": "container:817eae0b8686 (host unknown)",
+          "version_name": "arcadedb 26.9.1",
+          "host": "container:fb9f26f0e4b3 (host unknown)",
           "metrics": {
             "ingest pts/s": {
-              "median": 1861235.6,
-              "min": 1835332.7,
-              "max": 1914436.0,
+              "median": 1836697.7,
+              "min": 1600205.6,
+              "max": 1895093.3,
               "n": 5
             },
             "newest reading ms": {
-              "median": 0.72,
-              "min": 0.69,
-              "max": 0.84,
+              "median": 0.85,
+              "min": 0.83,
+              "max": 0.9,
               "n": 5
             },
             "12h aggregate ms": {
-              "median": 24.98,
-              "min": 23.29,
-              "max": 30.27,
+              "median": 27.01,
+              "min": 22.15,
+              "max": 28.94,
               "n": 5
             }
           }
@@ -3319,25 +3319,25 @@
           "n_docs": "2592000",
           "deployment": "embedded",
           "image": null,
-          "version_name": "arcadedb 26.8.1",
-          "host": "mini",
+          "version_name": "arcadedb 26.9.1",
+          "host": "container:9323dbe31628 (host unknown)",
           "metrics": {
             "ingest pts/s": {
-              "median": 40070.5,
-              "min": 38059.8,
-              "max": 40739.6,
+              "median": 40312.9,
+              "min": 39037.1,
+              "max": 41552.9,
               "n": 5
             },
             "newest reading ms": {
-              "median": 0.43,
-              "min": 0.42,
-              "max": 0.51,
+              "median": 0.7,
+              "min": 0.68,
+              "max": 0.73,
               "n": 5
             },
             "12h aggregate ms": {
-              "median": 1695.6,
-              "min": 1655.72,
-              "max": 1737.68,
+              "median": 1521.46,
+              "min": 1499.72,
+              "max": 1569.98,
               "n": 5
             }
           }
@@ -3351,24 +3351,24 @@
           "deployment": "server",
           "image": null,
           "version_name": "questdb 9.1.1",
-          "host": "mini",
+          "host": "container:103b05ef7081 (host unknown)",
           "metrics": {
             "ingest pts/s": {
-              "median": 432375.0,
-              "min": 430479.6,
-              "max": 434725.8,
+              "median": 1305766.2,
+              "min": 1280014.0,
+              "max": 1325196.6,
               "n": 5
             },
             "newest reading ms": {
-              "median": 0.8,
-              "min": 0.75,
-              "max": 0.88,
+              "median": 0.9,
+              "min": 0.7,
+              "max": 0.97,
               "n": 5
             },
             "12h aggregate ms": {
-              "median": 2.03,
-              "min": 1.93,
-              "max": 2.31,
+              "median": 2.1,
+              "min": 1.99,
+              "max": 2.26,
               "n": 5
             }
           }
@@ -3382,24 +3382,24 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "duckdb 1.5.5",
-          "host": "mini",
+          "host": "container:6713d45bb4c0 (host unknown)",
           "metrics": {
             "ingest pts/s": {
-              "median": 1862391.8,
-              "min": 1773698.0,
-              "max": 1886906.9,
+              "median": 1889697.3,
+              "min": 1761412.2,
+              "max": 1894802.9,
               "n": 5
             },
             "newest reading ms": {
-              "median": 1.5,
-              "min": 1.38,
-              "max": 1.83,
+              "median": 1.52,
+              "min": 1.47,
+              "max": 2.23,
               "n": 5
             },
             "12h aggregate ms": {
-              "median": 4.44,
-              "min": 4.37,
-              "max": 4.68,
+              "median": 4.59,
+              "min": 4.25,
+              "max": 4.61,
               "n": 5
             }
           }

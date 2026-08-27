@@ -837,6 +837,41 @@ L4_METRICS = [
 ]
 
 
+# backend -> the label this table has always used. Canonical rows name backends
+# the way runner.BACKENDS does; the legacy files named them by hand.
+L4_CANON_LABELS = {
+    "arcadedb_ts_native": "arcadedb (native TIMESERIES)",
+    "arcadedb_ts_doc":    "arcadedb (document path)",
+    "questdb":            "questdb",
+    "duckdb":             "duckdb",
+}
+
+
+def _l4_canonical(all_rows):
+    """Frozen l4 rows, grouped by display label, or None when the lane is absent.
+
+    PREFERRED OVER THE LEGACY FILES, and the reason is a published number that
+    was wrong. _l4_rows() read results/l4_tsbs.jsonl (every ts_utc 2026-08-08,
+    engine 26.8.1, engine_commit null) plus the ts_2681 native probe (2026-08-06).
+    Against those, published QuestDB ingest is 432,375 pts/s where the pinned
+    lane measures 1,305,766 -- so the page read as a 4.3x ArcadeDB ingest lead
+    where the corrected rows give 1.41x. The lane also promoted ArcadeNativeTS
+    into itself (l4_tsbs.py:113-132), so the bespoke probe is no longer the only
+    source of the native arm and need not be read at all.
+
+    Returns None rather than an empty dict when there are no l4 rows, so the
+    caller falls back instead of rendering an empty table.
+    """
+    grouped = defaultdict(list)
+    for r in all_rows:
+        if r.get("lane") != "l4":
+            continue
+        label = L4_CANON_LABELS.get(r.get("backend"))
+        if label:
+            grouped[label].append(r)
+    return grouped or None
+
+
 def _l4_rows():
     """Both ArcadeDB arms plus the comparators, from the two files that hold them.
 
@@ -1066,8 +1101,9 @@ def _lifecycle_table(all_rows):
     }
 
 
-def _l4_table():
-    grouped = _l4_rows()
+def _l4_table(all_rows):
+    # Canonical first; the 2026-08 files are the fallback, not the source.
+    grouped = _l4_canonical(all_rows) or _l4_rows()
     if not grouped:
         return None
 
@@ -1465,10 +1501,26 @@ def main() -> int:
             # tier, different runs. That is the exact defect this whole pass
             # started from, reproduced one function later.
             #
-            # The overlay wins because it is the matched set: one driver, one
-            # protocol, every engine, and it is what T5 and f4 read.
-            entries = [e for e in entries if e["scale"] != "deep10m"]
-            entries.extend(_dense_10m_entries())
+            # ALL-OR-NOTHING, and the canonical set wins once it is complete.
+            #
+            # The overlay was the matched set while the campaign had no ArcadeDB
+            # at this tier: one driver, one protocol, every engine. But it is an
+            # August artifact (dense_mp5_2681: engine 26.8.1, image None), so
+            # while it wins, the pinned campaign cannot change the dense table at
+            # all -- the longest job on the machine, 2-3 days of deep10m cells,
+            # rendering not one number. That was invisible because the
+            # replacement is unconditional.
+            #
+            # So: if the canonical rows carry ArcadeDB at deep10m, they ARE the
+            # matched set and the overlay is dropped entirely. Otherwise the
+            # overlay stands, unchanged. Never both -- mixing them is two engine
+            # lines in one table (F5) on top of the double-measurement this
+            # REPLACE was written to prevent (Qdrant at 1.295 and again at 1.342).
+            _canon_10m = [e for e in entries if e["scale"] == "deep10m"]
+            _canon_has_arcade = any(e.get("is_arcadedb") for e in _canon_10m)
+            if not _canon_has_arcade:
+                entries = [e for e in entries if e["scale"] != "deep10m"]
+                entries.extend(_dense_10m_entries())
         if entries:
             # A scale where the comparators have rows and ArcadeDB does not
             # reads as "ArcadeDB could not do this tier", which is a claim the
@@ -1532,7 +1584,7 @@ def main() -> int:
     # The function stays because the SciPy paper still publishes these rows and
     # a future page may want them WITH the matrix. Restoring them means adding
     # the matrix too, and re-adding their cells to page_check.MAPPING.
-    for extra in (_sparse_multipass_table(), _l4_table(), _lifecycle_table(rows),
+    for extra in (_sparse_multipass_table(), _l4_table(rows), _lifecycle_table(rows),
                   _e4_table(), _python_cost_table()):
         if extra and extra["entries"]:
             tables.append(extra)
