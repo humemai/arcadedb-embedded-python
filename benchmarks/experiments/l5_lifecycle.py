@@ -278,7 +278,16 @@ READS = {
     "doc":       ("sql", "SELECT count(*) FROM D"),
     "doc_idx10": ("sql", "SELECT FROM D WHERE p0 = 5 LIMIT 10"),
     "graph":     ("sql", "SELECT count(*) FROM (SELECT expand(out('E')) FROM P LIMIT 100)"),
-    "graph_gav": ("cypher", "MATCH (a:P)-[:E]->()-[:E]->(c:P) RETURN count(c) AS n"),
+    # BOUNDED to the same 100 seeds the SQL form used, and the same shape the
+    # `graph` row asks. The first cypher version was an unbounded whole-graph
+    # 2-hop: it did reach the view (1.6 ms in SQL against 234 ms in cypher at
+    # lc10k is the proof) but it changed the SCOPE at the same time, so 16,087 ms
+    # at 1M measured the query written rather than the view, and was comparable
+    # to neither the `graph` row nor the numbers it replaced. Fixing the language
+    # and the scope in one edit is rule 7 half-applied.
+    "graph_gav": ("cypher",
+                  "MATCH (a:P)-[:E]->()-[:E]->(c:P) WHERE a.id < 100 "
+                  "RETURN count(c) AS n"),
     "vector":    None,     # filled in at runtime, needs a probe vector
     # The function is `vector.sparseNeighbors`, backticked because of the dot,
     # and it is what l3_sparse.py:190 calls. A first draft guessed
@@ -303,9 +312,18 @@ def _read(db, situation):
     if q:
         lang, text = q
         list(db.query(lang, text))
+        # Counts reads ISSUED THROUGH CYPHER, which is necessary but not
+        # sufficient for "the view served it": SQL cannot reach a Graph
+        # Analytical View at all, so a zero here proves the defect is back,
+        # while a non-zero does not by itself prove the view was consulted.
+        # A real usage assertion needs the engine's own view counter and is
+        # not wired yet; the row says which of the two this is.
+        if situation == "graph_gav":
+            _gav_cypher_reads[0] += 1
 
 
 _WRITE_SEQ = [0]
+_gav_cypher_reads = [0]
 
 
 def _write(db, situation):
@@ -587,6 +605,12 @@ def main():
         out["drop_is_single_cycle"] = True
 
     out["close_over_budget"] = out["clean_close_ms"] > 100.0
+    if args.workload == "graph_gav":
+        out["gav_cypher_reads_issued"] = _gav_cypher_reads[0]
+        # FALSE until the engine's own view counter is read here. Stamped so a
+        # downstream table cannot present this row as "the view under load"
+        # without the row itself saying that was never verified.
+        out["gav_view_usage_verified"] = False
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(out, open(args.out, "w"), indent=1)
