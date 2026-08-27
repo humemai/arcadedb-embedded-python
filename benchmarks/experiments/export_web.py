@@ -986,8 +986,16 @@ LIFECYCLE_SCENARIOS = [
 LIFECYCLE_WITHHELD = {"graph_gav": "probe scope under revision; see PAGE-SPEC 4c"}
 
 
-def _lifecycle_table():
-    rows = [r for r in load_canonical() if r.get("lane") == "lifecycle"]
+def _lifecycle_table(all_rows):
+    """Built from the FROZEN CSV, like every other table in this file.
+
+    The first version called load_canonical(), which is make_paper_tables' name
+    and does not exist here: this module reads results/runs_paper.csv, which that
+    script generates. It compiled, and the check I ran monkey-patched
+    load_canonical INTO the module, so the test supplied the very name that was
+    missing and proved nothing.
+    """
+    rows = [r for r in all_rows if r.get("lane") == "lifecycle"]
     if not rows:
         return None
 
@@ -1524,7 +1532,7 @@ def main() -> int:
     # The function stays because the SciPy paper still publishes these rows and
     # a future page may want them WITH the matrix. Restoring them means adding
     # the matrix too, and re-adding their cells to page_check.MAPPING.
-    for extra in (_sparse_multipass_table(), _l4_table(), _lifecycle_table(),
+    for extra in (_sparse_multipass_table(), _l4_table(), _lifecycle_table(rows),
                   _e4_table(), _python_cost_table()):
         if extra and extra["entries"]:
             tables.append(extra)
