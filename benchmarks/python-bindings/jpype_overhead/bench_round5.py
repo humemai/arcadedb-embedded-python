@@ -5,9 +5,11 @@ Same RESULT protocol as bench_python.py.
 Usage: uv run python bench_round5.py <phase> <dbDir>
 """
 
+import json
 import statistics
 import sys
 import time
+from pathlib import Path
 
 import arcadedb_embedded as arcadedb
 
@@ -224,7 +226,21 @@ def bench_importexport(db_dir):
         )
 
 
+def _emit_provenance(tag=""):
+    """See bench_python._emit_provenance: mini_results.csv names no engine and
+    no date, and five pinned claims plus six published page entries rest on it.
+    Both producers of that file have to stamp, or the gap simply moves."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "experiments"))
+        import bench_common
+        cond = bench_common.run_conditions(probe="jpype_overhead_round5", phase=tag)
+    except Exception as exc:                       # noqa: BLE001
+        cond = {"provenance_error": f"{type(exc).__name__}: {exc}"}
+    print("PROVENANCE," + json.dumps(cond, sort_keys=True), flush=True)
+
+
 if __name__ == "__main__":
+    _emit_provenance(" ".join(sys.argv[1:2]))
     phase, db_dir = sys.argv[1], sys.argv[2]
     {
         "bench-update": bench_update,

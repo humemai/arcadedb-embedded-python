@@ -491,8 +491,36 @@ def bench_async(db_dir: str):
         )
 
 
+def _emit_provenance(phase):
+    """One PROVENANCE line per phase, so the CSV can say what produced it.
+
+    results/mini_results.csv has 126 measurement rows and NOT ONE field naming
+    an engine or a date -- the row protocol above carries a host tag and a run
+    tag and nothing else. Six entries of the project page's "What Python costs"
+    table, two page_check pins and three claims_check pins (1.28, 1.63, 13.81)
+    all rest on it, and the only provenance that exists anywhere is a sentence
+    in REPORT.md naming a 26.8.1-SNAPSHOT laptop session, which is neither the
+    paper's pin nor the mini re-measure that actually produced the file.
+
+    Printed rather than written to a path because this script's whole output
+    contract is stdout lines the collector tees into the CSV; a sidecar would
+    be one more thing that can go missing, which is how the tentag probe lost
+    its source log.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "experiments"))
+        import bench_common
+        cond = bench_common.run_conditions(probe="jpype_overhead", phase=phase)
+    except Exception as exc:                       # noqa: BLE001
+        # A failure to READ the conditions must be visible, not silent: an
+        # unstamped row is exactly what this exists to prevent.
+        cond = {"provenance_error": f"{type(exc).__name__}: {exc}"}
+    print("PROVENANCE," + json.dumps(cond, sort_keys=True), flush=True)
+
+
 if __name__ == "__main__":
     phase, data_dir, db_dir = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
+    _emit_provenance(phase)
     {
         "vector-bench": lambda: bench_vector(data_dir, db_dir),
         "bench-query": lambda: bench_query(db_dir),

@@ -21,6 +21,20 @@ import os
 import statistics
 import time
 
+# STAMP WHAT PRODUCED THE ROW, in the row.
+#
+# This probe replaced the one that wrote results/tentag/tentag_ab.json, whose
+# only provenance is an English sentence ("run 2026-07-30 22:08-22:24 UTC") and
+# whose source log is gone. Two numbers from that file -- l4.tentag.ingest_cost
+# and l4.tentag.lastpoint_gain -- publish in BOTH papers and on the project
+# page, and the engine behind them is now unrecoverable: the campaign has no
+# rows dated 2026-07-30 to reconstruct it from.
+#
+# The successor was about to reproduce that exactly: it imported none of the
+# harness and emitted no ts_utc and no engine_version. An artifact that cannot
+# say what produced it cannot be defended, however good the measurement was.
+import bench_common
+
 LP = os.environ.get("TSBS_LP", "/data/tsbs/cpu_influx.lp")
 LIMIT = int(os.environ.get("TSBS_LIMIT", "0"))
 CHUNK = 50_000
@@ -122,6 +136,7 @@ def main():
             r = run_arm(rows, n_tags, n_fields, f"{label}_r{rep}")
             r["rep"] = rep
             r["label"] = label
+            r.update(bench_common.run_conditions(probe="ts_stride_probe"))
             out.append(r)
             print("ARM " + json.dumps(r), flush=True)
 
