@@ -772,6 +772,41 @@ def _require_engine_commit(tier, backends):
         "Export the pin the pair was built and VERIFIED at:\n"
         "    ./build_engine_pair.sh --verify <sha> && export ARCADEDB_ENGINE_COMMIT=<sha>\n"
         "Or pass --tier sweep if these rows are not for the page.")
+# THE SWAP IS OPT-IN; THE CHECK THAT IT HAPPENED MUST NOT BE.
+#
+# Without ARCADEDB_SERVER_IMAGE this block is a silent no-op and every served
+# ArcadeDB arm runs the STOCK arcadedata/arcadedb release baked into BACKENDS,
+# while its rows still carry whatever ARCADEDB_ENGINE_COMMIT claims. On
+# 2026-08-27 that produced 21 of 21 server rows across l1, l1tpc and l3d stamped
+# engine_commit=d7940d79e with engine_version reporting build 727aa4568 -- the
+# 26.8.1 release. Three separate wrong conclusions were drawn from those rows
+# before anyone read the two fields side by side.
+#
+# provenance_check.check_engine_commit_matches_build() catches this exactly, and
+# caught all 21 in under a second when finally pointed at the file. But it runs
+# at FREEZE, over the frozen CSV, which is days after the machine time is spent.
+# The evidence existed for the whole campaign and nothing read it in time.
+#
+# So the same question is asked here, before cell 1, where it is still free:
+# if a local pin is claimed, a served ArcadeDB arm may not be left on a stock
+# upstream image.
+def _require_local_server_image():
+    if not _LOCAL_ENGINE_COMMIT or _LOCAL_SERVER_IMAGE:
+        return
+    stock = sorted(n for n, c in BACKENDS.items()
+                   if "arcadedb" in n
+                   and str(c.get("server_image") or "").startswith("arcadedata/arcadedb"))
+    if not stock:
+        return
+    raise SystemExit(
+        "REFUSING: ARCADEDB_ENGINE_COMMIT=" + _LOCAL_ENGINE_COMMIT + " claims a local\n"
+        "engine, but these served arms would run the STOCK upstream image:\n"
+        + "".join(f"  {n}: {BACKENDS[n]['server_image']}\n" for n in stock) +
+        "Every row they write would name an engine they did not run.\n"
+        "Export ARCADEDB_SERVER_IMAGE (build_engine_pair.sh prints the tag) with\n"
+        "ARCADEDB_WHEEL, or drop --tier paper if these rows are not for the page.")
+
+
 if _LOCAL_SERVER_IMAGE:
     _swapped = 0
     for _name, _cfg in BACKENDS.items():
@@ -1820,6 +1855,7 @@ def main():
         jobs = [j for j in jobs if j["backend"] in keep]
     # After filtering, so the check sees the backends that will actually run.
     _require_engine_commit(args.tier, {j["backend"] for j in jobs})
+    _require_local_server_image()
     only = {int(x) for x in args.only_reps.split(",") if x.strip()}
     cells = [(j, r) for j in jobs for r in range(1, args.reps + 1)
              if not only or r in only]
