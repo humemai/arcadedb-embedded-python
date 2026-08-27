@@ -41,7 +41,11 @@ step() { # step <name> <cmd...>
     fi
     # -o extraction (not ^-anchored): the engine logger omits trailing newlines,
     # so protocol lines can start mid-line
-    grep -ohE '(RESULT|PARITY|INFO|MICRO),[^\r\n]*' "$RESULTS/$name.log" >> "$RESULTS/all_results.csv" || true
+    # PROVENANCE is collected with the rest. The phases now print a line naming
+    # the engine, the commit and the timestamp they ran under, and a collector
+    # that filtered it out would leave the CSV exactly as unprovenanced as the
+    # one this change exists to replace.
+    grep -ohE '(RESULT|PARITY|INFO|MICRO|PROVENANCE),[^\r\n]*' "$RESULTS/$name.log" >> "$RESULTS/all_results.csv" || true
 }
 
 jrun() { # jrun <phase> <dataDir> <dbDir>
