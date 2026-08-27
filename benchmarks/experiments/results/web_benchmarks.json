@@ -2,6 +2,64 @@
   "source": "benchmarks/experiments/results/runs_paper.csv",
   "generator": "benchmarks/experiments/export_web.py",
   "arcadedb_version": null,
+  "comparator_versions": {
+    "chroma_dense": [
+      "1.5.9"
+    ],
+    "composed_qdrant_neo4j": [
+      "qdrant-local+neo4j"
+    ],
+    "duckdb": [
+      "(no version recorded)",
+      "1.5.5"
+    ],
+    "duckdb_vss_dense": [
+      "1.5.4"
+    ],
+    "elasticsearch_sparse": [
+      "9.4.1"
+    ],
+    "ladybug_graph": [
+      "ladybug:0.18.1"
+    ],
+    "lancedb_dense": [
+      "0.34.0"
+    ],
+    "milvus_dense": [
+      "3.0.0"
+    ],
+    "milvus_sparse": [
+      "milvus"
+    ],
+    "neo4j_graph": [
+      "neo4j-driver:6.2.0"
+    ],
+    "postgres": [
+      "17.10 (Debian 17.10-1.pgdg13+1)",
+      "postgres"
+    ],
+    "qdrant_dense": [
+      "1.18.0",
+      "?"
+    ],
+    "qdrant_sparse": [
+      "qdrant"
+    ],
+    "questdb": [
+      "(no version recorded)"
+    ],
+    "sqlite_vec_dense": [
+      "0.1.9"
+    ],
+    "surrealdb_e2": [
+      "surrealdb-py"
+    ]
+  },
+  "comparator_version_split": [
+    "duckdb",
+    "postgres",
+    "qdrant_dense"
+  ],
   "arcadedb_engines": [
     "arcadedb 26.8.1",
     "arcadedb 26.9.1-dev \u00b7 d7940d79e",

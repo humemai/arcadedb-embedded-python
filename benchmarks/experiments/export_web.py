@@ -94,6 +94,18 @@ _UNUSABLE_VERSION = re.compile(
     re.I)
 
 
+def _comparator_versions(rows):
+    """backend -> the set of versions it was published under (non-ArcadeDB)."""
+    out = {}
+    for r in rows:
+        b = str(r.get("backend") or "")
+        if not b or b.startswith("arcadedb"):
+            continue
+        v = str(r.get("engine_version") or r.get("version_name") or "").strip()
+        out.setdefault(b, set()).add(v or "(no version recorded)")
+    return out
+
+
 def _engine_is_identifiable(raw) -> bool:
     """False when engine_version names no build that could ever be resolved."""
     return not _UNUSABLE_VERSION.match(str(raw or ""))
@@ -1648,6 +1660,25 @@ def main() -> int:
         # arcadedb_version beside this is already None whenever the versions
         # disagree, so the mix was detectable and this field contradicted it.
         # Now they agree: a mixed payload lists every engine it actually holds.
+        # EVERY COMPARATOR VERSION, and a flag when one backend shows two.
+        #
+        # The harness pins moved ahead of the frozen results -- ladybug 0.19.1
+        # against a published 0.18.1, lancedb 0.37.1 against 0.34.0, qdrant
+        # 1.19.0 against 1.18.0, pymilvus 3.0.1 against 3.0.0 -- so every lane
+        # the campaign re-runs picks up a NEWER comparator than the lanes it does
+        # not. Nothing checked that: fairness_check has no version assertion at
+        # all, and the identifiability gate deliberately exempted comparators as
+        # "a claim about OUR engine's provenance, not theirs". That exemption was
+        # wrong. A table comparing us against Qdrant version "?" is no more
+        # defensible than one comparing us against an engine we cannot name.
+        #
+        # Disclosed rather than withheld: dropping comparator rows would gut the
+        # tables and read as though those engines could not run the workload,
+        # which is the claim the tier guard exists to prevent us making.
+        "comparator_versions": {
+            b: sorted(v) for b, v in sorted(_comparator_versions(rows).items())},
+        "comparator_version_split": sorted(
+            b for b, v in _comparator_versions(rows).items() if len(v) > 1),
         "arcadedb_engines": sorted({
             _engine_identity(r.get("engine_version"), r.get("engine_commit"))
             or str(r.get("engine_version") or "").strip() or "(no engine recorded)"
