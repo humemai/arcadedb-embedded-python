@@ -26,13 +26,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.WeekFields;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.logging.Level;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Manages backup retention with support for both simple max-files and tiered retention policies.
@@ -47,10 +45,6 @@ import java.util.regex.Pattern;
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
 public class BackupRetentionManager {
-  private static final Pattern           BACKUP_FILENAME_PATTERN =
-      Pattern.compile(".*-backup-(\\d{8})-(\\d{6})\\.zip$");
-  private static final DateTimeFormatter TIMESTAMP_PARSER        =
-      DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
   private static final FilenameFilter    BACKUP_FILE_FILTER      =
       (dir, name) -> name.endsWith(".zip") && name.contains("-backup-");
 
@@ -59,7 +53,8 @@ public class BackupRetentionManager {
 
   public BackupRetentionManager(final String backupDirectory) {
     this.backupDirectory = backupDirectory;
-    this.databaseConfigs = new HashMap<>();
+    // Mutated from the server thread (schedule/cancel) and read from the backup threads (applyRetention).
+    this.databaseConfigs = new ConcurrentHashMap<>();
   }
 
   /**
@@ -67,6 +62,22 @@ public class BackupRetentionManager {
    */
   public void registerDatabase(final String databaseName, final DatabaseBackupConfig config) {
     databaseConfigs.put(databaseName, config);
+  }
+
+  /**
+   * Forgets the retention configuration of a database that no longer exists on this server, so the map does not grow
+   * with names that will never be backed up again (issue #6752). The archives already on disk are left untouched:
+   * a backup taken before the drop is exactly what an operator restores from.
+   */
+  public void unregisterDatabase(final String databaseName) {
+    databaseConfigs.remove(databaseName);
+  }
+
+  /**
+   * Returns the names of the databases whose retention configuration is currently registered.
+   */
+  public Set<String> getRegisteredDatabases() {
+    return Set.copyOf(databaseConfigs.keySet());
   }
 
   /**
@@ -181,18 +192,14 @@ public class BackupRetentionManager {
    * Parses the timestamp from a backup filename.
    */
   private LocalDateTime parseBackupTimestamp(final String filename) {
-    final Matcher matcher = BACKUP_FILENAME_PATTERN.matcher(filename);
-    if (!matcher.matches())
-      return null;
-
-    try {
-      final String timestampStr = matcher.group(1) + "-" + matcher.group(2);
-      return LocalDateTime.parse(timestampStr, TIMESTAMP_PARSER);
-    } catch (final Exception e) {
+    // The convention lives on BackupCoordinator, which is also what writes these names: a parser that drifted from
+    // the writer would drop every archive it could not read out of the retention set, which is to say never rotate
+    // them out again (issue #6753).
+    final LocalDateTime timestamp = BackupCoordinator.parseArchiveTimestamp(filename);
+    if (timestamp == null)
       LogManager.instance().log(this, Level.WARNING,
           "Could not parse timestamp from backup filename: %s", filename);
-      return null;
-    }
+    return timestamp;
   }
 
   /**

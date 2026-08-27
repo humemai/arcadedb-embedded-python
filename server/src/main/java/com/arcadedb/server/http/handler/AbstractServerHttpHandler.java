@@ -664,10 +664,35 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
     // auto-commit wrapper as well since #6201, which is where the engine raises most of them.
     final NeedRetryException retryable = firstOf(e, cause, NeedRetryException.class);
     if (retryable != null) {
-      LogManager.instance()
-              .log(this, Level.FINE, "Error on command execution (%s): %s", getClass().getSimpleName(),
-                      retryable.getMessage());
-      sendErrorResponse(exchange, 503, "Cannot execute command", retryable, null);
+      sendRetryableResponse(exchange, retryable);
+      return;
+    }
+
+    // 503: an HA snapshot-reinstall resync (issue #5977 pattern) closed and reinstalled the database out from
+    // under a handle a request had already resolved (or resolved while one was in flight). The condition is
+    // transient by construction - a handle resolved a moment later sees the reinstalled database - so it must be
+    // reported the same retryable way a Raft conflict already is, instead of the opaque 500 it fell through to
+    // before, which RemoteHttpComponent's NeedRetryException-driven auto-retry never saw (issue #6770).
+    //
+    // Scope: this maps EVERY DatabaseIsClosedException to 503, not only the resync race above. A concurrent
+    // DROP/CLOSE DATABASE admin action throws the same exception type on a still in-flight request, and that
+    // close is permanent rather than transient - a retry costs one wasted round trip before falling through to
+    // the arm below (issue #6778, #6770 follow-up). Scoping THIS 503 itself to the resync case needs a
+    // resync-vs-permanent-close signal that does not exist yet, so that half of #6778 is not attempted here.
+    final DatabaseIsClosedException databaseClosed = firstOf(e, cause, DatabaseIsClosedException.class);
+    if (databaseClosed != null) {
+      sendRetryableResponse(exchange, databaseClosed);
+      return;
+    }
+
+    // 404: the wasted retry the comment above describes re-resolves the database with allowLoad=false
+    // (DatabaseAbstractHandler.execute), which raises this narrower type - not the generic
+    // DatabaseOperationException - once the registry entry is gone. Answered as an accurate "not there"
+    // instead of falling through to the generic 500 below (issue #6778).
+    final DatabaseNotAvailableException notAvailable = firstOf(e, cause, DatabaseNotAvailableException.class);
+    if (notAvailable != null) {
+      logUserError(notAvailable);
+      sendErrorResponse(exchange, 404, "Database not found", notAvailable, null);
       return;
     }
 
@@ -816,6 +841,18 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
     if (type.isInstance(cause))
       return type.cast(cause);
     return null;
+  }
+
+  /**
+   * Sends a 503 for a failure the caller can retry as-is - a Raft conflict or a resync race, both transient by
+   * construction. Shared by the {@link NeedRetryException} and {@link DatabaseIsClosedException} arms of
+   * {@link #sendMappedErrorResponse}.
+   */
+  private void sendRetryableResponse(final HttpServerExchange exchange, final Throwable retryable) {
+    LogManager.instance()
+            .log(this, Level.FINE, "Error on command execution (%s): %s", getClass().getSimpleName(),
+                    retryable.getMessage());
+    sendErrorResponse(exchange, 503, "Cannot execute command", retryable, null);
   }
 
   /**

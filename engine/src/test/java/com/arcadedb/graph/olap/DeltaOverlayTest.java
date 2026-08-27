@@ -57,20 +57,22 @@ class DeltaOverlayTest {
   void duplicateEdgeDeletionAcrossMergesDecrementsOnce() {
     final NodeIdMapping mapping = baseMappingWith(2);
     final DeltaOverlay empty = new DeltaOverlay(mapping.size());
+    final RID edgeRid = rid(10);
 
     final TxDelta firstDelete = new TxDelta();
-    firstDelete.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    firstDelete.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
     final DeltaOverlay afterFirst = empty.merge(firstDelete, mapping);
     assertThat(afterFirst.getDeltaEdgeCount()).isEqualTo(-1);
 
-    // Replay the exact same deletion in a subsequent transaction delta.
+    // Replay the exact same deletion (same edge identity) in a subsequent transaction delta.
     final TxDelta secondDelete = new TxDelta();
-    secondDelete.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    secondDelete.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
     final DeltaOverlay afterSecond = afterFirst.merge(secondDelete, mapping);
 
     // Before the fix this drifted to -2.
     assertThat(afterSecond.getDeltaEdgeCount()).isEqualTo(-1);
     assertThat(afterSecond.isEdgeDeleted(EDGE_TYPE, 0, 1)).isTrue();
+    assertThat(afterSecond.countDeletedEdges(EDGE_TYPE, 0, 1)).isEqualTo(1);
   }
 
   /**
@@ -80,13 +82,15 @@ class DeltaOverlayTest {
   void duplicateEdgeDeletionWithinSingleDeltaDecrementsOnce() {
     final NodeIdMapping mapping = baseMappingWith(2);
     final DeltaOverlay empty = new DeltaOverlay(mapping.size());
+    final RID edgeRid = rid(10);
 
     final TxDelta delta = new TxDelta();
-    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
-    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
+    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
 
     final DeltaOverlay merged = empty.merge(delta, mapping);
     assertThat(merged.getDeltaEdgeCount()).isEqualTo(-1);
+    assertThat(merged.countDeletedEdges(EDGE_TYPE, 0, 1)).isEqualTo(1);
   }
 
   /**
@@ -99,11 +103,39 @@ class DeltaOverlayTest {
     final DeltaOverlay empty = new DeltaOverlay(mapping.size());
 
     final TxDelta delta = new TxDelta();
-    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
-    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(2)));
+    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
+    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(2), rid(11)));
 
     final DeltaOverlay merged = empty.merge(delta, mapping);
     assertThat(merged.getDeltaEdgeCount()).isEqualTo(-2);
+  }
+
+  /**
+   * Issue #6769: two DISTINCT parallel edges between the SAME pair, each deleted, must each be
+   * counted - the pair alone cannot distinguish "one of two parallel edges deleted" from "the
+   * same edge reported twice". A boolean per-pair flag (the pre-fix representation) collapses
+   * both to the same answer, which then made {@code GraphAnalyticalView#copyBaseExcludingDeleted}
+   * exclude every parallel edge between the pair instead of just the ones actually deleted.
+   */
+  @Test
+  void distinctParallelEdgesBetweenSamePairAreCountedSeparately() {
+    final NodeIdMapping mapping = baseMappingWith(2);
+    final DeltaOverlay empty = new DeltaOverlay(mapping.size());
+
+    final TxDelta delta = new TxDelta();
+    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
+    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(11)));
+
+    final DeltaOverlay merged = empty.merge(delta, mapping);
+    assertThat(merged.getDeltaEdgeCount()).isEqualTo(-2);
+    assertThat(merged.countDeletedEdges(EDGE_TYPE, 0, 1)).isEqualTo(2);
+
+    // Replaying just one of the two deletions must not inflate the count further.
+    final TxDelta replayOne = new TxDelta();
+    replayOne.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
+    final DeltaOverlay afterReplay = merged.merge(replayOne, mapping);
+    assertThat(afterReplay.getDeltaEdgeCount()).isEqualTo(-2);
+    assertThat(afterReplay.countDeletedEdges(EDGE_TYPE, 0, 1)).isEqualTo(2);
   }
 
   /**
@@ -113,22 +145,151 @@ class DeltaOverlayTest {
   void addThenDeleteNetsToZero() {
     final NodeIdMapping mapping = baseMappingWith(2);
     final DeltaOverlay empty = new DeltaOverlay(mapping.size());
+    final RID edgeRid = rid(10);
 
     final TxDelta addDelta = new TxDelta();
-    addDelta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    addDelta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
     final DeltaOverlay afterAdd = empty.merge(addDelta, mapping);
     assertThat(afterAdd.getDeltaEdgeCount()).isEqualTo(1);
 
     final TxDelta delDelta = new TxDelta();
-    delDelta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    delDelta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
     final DeltaOverlay afterDelete = afterAdd.merge(delDelta, mapping);
     assertThat(afterDelete.getDeltaEdgeCount()).isEqualTo(0);
 
     // Replaying the deletion must not push it negative.
     final TxDelta replay = new TxDelta();
-    replay.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    replay.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
     final DeltaOverlay afterReplay = afterDelete.merge(replay, mapping);
     assertThat(afterReplay.getDeltaEdgeCount()).isEqualTo(0);
+  }
+
+  /**
+   * Issue #6775: an edge created and deleted inside ONE transaction must be withdrawn from the added-edge
+   * index, not masked with a pair-keyed deletion. Both facts reach {@code merge()} in the same
+   * {@link TxDelta} (adds are processed first), and the pair alone cannot say which of the pair's edges
+   * the deletion belongs to - recording one would spend an exclusion budget against the base CSR's run for
+   * the pair, masking an edge nobody deleted, while leaving the phantom add on record as a live neighbour.
+   */
+  @Test
+  void edgeAddedAndDeletedWithinOneDeltaIsWithdrawnRatherThanMasked() {
+    final NodeIdMapping mapping = baseMappingWith(2);
+    final DeltaOverlay empty = new DeltaOverlay(mapping.size());
+    final RID edgeRid = rid(10);
+
+    final TxDelta delta = new TxDelta();
+    delta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
+    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
+
+    final DeltaOverlay merged = empty.merge(delta, mapping);
+
+    assertThat(merged.getAddedOutNeighbors(0, EDGE_TYPE)).isEmpty();
+    assertThat(merged.getAddedInNeighbors(1, EDGE_TYPE)).isEmpty();
+    // No budget on record: there is no base edge for it to be spent against.
+    assertThat(merged.countDeletedEdges(EDGE_TYPE, 0, 1)).isZero();
+    assertThat(merged.countDeletedOutEdges(0, EDGE_TYPE)).isZero();
+    assertThat(merged.countDeletedInEdges(1, EDGE_TYPE)).isZero();
+    assertThat(merged.getDeltaEdgeCount()).isZero();
+    assertThat(merged.hasChanges()).isFalse();
+  }
+
+  /**
+   * Issue #6775, the across-transactions shape: the add lands in one overlay window and the deletion in a
+   * later one, before any compaction. The withdrawal must reach back into the added index the earlier
+   * merge built.
+   */
+  @Test
+  void edgeAddedAndDeletedAcrossDeltasIsWithdrawnRatherThanMasked() {
+    final NodeIdMapping mapping = baseMappingWith(2);
+    final RID edgeRid = rid(10);
+
+    final TxDelta addDelta = new TxDelta();
+    addDelta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
+    final DeltaOverlay afterAdd = new DeltaOverlay(mapping.size()).merge(addDelta, mapping);
+    assertThat(afterAdd.getAddedOutNeighbors(0, EDGE_TYPE)).containsExactly(1);
+
+    final TxDelta delDelta = new TxDelta();
+    delDelta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
+    final DeltaOverlay afterDelete = afterAdd.merge(delDelta, mapping);
+
+    assertThat(afterDelete.getAddedOutNeighbors(0, EDGE_TYPE)).isEmpty();
+    assertThat(afterDelete.getAddedInNeighbors(1, EDGE_TYPE)).isEmpty();
+    assertThat(afterDelete.countDeletedEdges(EDGE_TYPE, 0, 1)).isZero();
+    assertThat(afterDelete.getDeltaEdgeCount()).isZero();
+
+    // The earlier overlay is immutable and must not have been reached into.
+    assertThat(afterAdd.getAddedOutNeighbors(0, EDGE_TYPE)).containsExactly(1);
+  }
+
+  /**
+   * Issue #6775 meets #6769: deleting ONE of two parallel edges the overlay itself added must withdraw
+   * exactly that edge and leave its sibling live, rather than withdrawing both or masking the pair.
+   */
+  @Test
+  void deletingOneOfTwoParallelAddedEdgesWithdrawsOnlyThatOne() {
+    final NodeIdMapping mapping = baseMappingWith(2);
+
+    final TxDelta addDelta = new TxDelta();
+    addDelta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
+    addDelta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(11)));
+    final DeltaOverlay afterAdd = new DeltaOverlay(mapping.size()).merge(addDelta, mapping);
+    assertThat(afterAdd.getAddedOutNeighbors(0, EDGE_TYPE)).containsExactly(1, 1);
+    assertThat(afterAdd.getDeltaEdgeCount()).isEqualTo(2);
+
+    final TxDelta delDelta = new TxDelta();
+    delDelta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
+    final DeltaOverlay afterDelete = afterAdd.merge(delDelta, mapping);
+
+    assertThat(afterDelete.getAddedOutNeighbors(0, EDGE_TYPE)).containsExactly(1);
+    assertThat(afterDelete.getAddedInNeighbors(1, EDGE_TYPE)).containsExactly(0);
+    assertThat(afterDelete.countDeletedEdges(EDGE_TYPE, 0, 1)).isZero();
+    assertThat(afterDelete.getDeltaEdgeCount()).isEqualTo(1);
+  }
+
+  /**
+   * The other half of the #6775 rule: a deletion of an edge the overlay never added is a BASE edge, and it
+   * must still leave the per-pair budget {@code GraphAnalyticalView#copyBaseExcludingDeleted} spends
+   * against the base CSR run. Withdrawing adds must not have made every deletion vanish.
+   */
+  @Test
+  void deletionOfAnEdgeTheOverlayNeverAddedStillRecordsTheBaseBudget() {
+    final NodeIdMapping mapping = baseMappingWith(2);
+
+    // One edge the overlay added, and one it did not (it lives in the base CSR).
+    final TxDelta addDelta = new TxDelta();
+    addDelta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(11)));
+    final DeltaOverlay afterAdd = new DeltaOverlay(mapping.size()).merge(addDelta, mapping);
+
+    final TxDelta delDelta = new TxDelta();
+    delDelta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
+    final DeltaOverlay afterDelete = afterAdd.merge(delDelta, mapping);
+
+    assertThat(afterDelete.countDeletedEdges(EDGE_TYPE, 0, 1)).isEqualTo(1);
+    assertThat(afterDelete.countDeletedOutEdges(0, EDGE_TYPE)).isEqualTo(1);
+    // ...and the unrelated added edge is untouched
+    assertThat(afterDelete.getAddedOutNeighbors(0, EDGE_TYPE)).containsExactly(1);
+    assertThat(afterDelete.getDeltaEdgeCount()).isZero();
+  }
+
+  /**
+   * Keying the added edges by identity also absorbs a replayed add of an edge the overlay already holds,
+   * which the previous append-only list turned into a second, phantom, occurrence of one edge.
+   */
+  @Test
+  void replayedAddOfTheSameEdgeIsAbsorbed() {
+    final NodeIdMapping mapping = baseMappingWith(2);
+    final RID edgeRid = rid(10);
+
+    final TxDelta addDelta = new TxDelta();
+    addDelta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
+    final DeltaOverlay afterAdd = new DeltaOverlay(mapping.size()).merge(addDelta, mapping);
+
+    final TxDelta replay = new TxDelta();
+    replay.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), edgeRid));
+    final DeltaOverlay afterReplay = afterAdd.merge(replay, mapping);
+
+    assertThat(afterReplay.getAddedOutNeighbors(0, EDGE_TYPE)).containsExactly(1);
+    assertThat(afterReplay.getDeltaEdgeCount()).isEqualTo(1);
   }
 
   /**

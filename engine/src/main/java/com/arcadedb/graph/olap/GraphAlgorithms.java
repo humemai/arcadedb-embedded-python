@@ -23,11 +23,13 @@ import com.arcadedb.graph.Vertex;
 import com.arcadedb.graph.Vertex.DIRECTION;
 
 import com.arcadedb.query.QueryEngineManager;
+import com.arcadedb.utility.DedicatedThreadPool;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.Arrays;
 import java.util.PriorityQueue;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -72,11 +74,13 @@ public final class GraphAlgorithms {
   /** Upper bound on a single checkpointed batch's size, so abort latency stays bounded as the range grows past
    *  it instead of scaling with the range - see {@link #CHECKPOINT_BATCHES}. */
   private static final int MAX_CHECKPOINT_BATCH_SIZE = CHECKPOINT_BATCHES * PARALLEL_THRESHOLD;
-  /** Bitmask for how often {@link #lccBuildAndIntersect}'s sequential prep passes check in between nodes -
-   *  {@code (u & MASK) == MASK} is true every 1024th node, not every {@code MASK}th one. Matches the 1024-node
-   *  stride {@code WorkGuard.checkPeriodically} and {@code GraphData.adjacency} both use elsewhere in the
-   *  codebase. */
-  private static final int LCC_PREP_CHECKPOINT_MASK = 1023;
+  /** Bitmask for how often a sequential pass with no other natural checkpoint of its own - {@link #pageRank}'s
+   *  dangling-sum loop and {@link #lccBuildAndIntersect}'s sequential prep/materialization passes - checks in
+   *  between elements: {@code (i & MASK) == MASK} is true every 1024th element, not every {@code MASK}th one.
+   *  Matches the 1024-node stride {@code WorkGuard.checkPeriodically} and {@code GraphData.adjacency} both use
+   *  elsewhere in the codebase. Shared across every such loop in this class rather than given a narrower,
+   *  per-caller name, so the checkpoint cadence has exactly one source of truth to tune. */
+  private static final int PERIODIC_CHECKPOINT_MASK = 1023;
   /** Entry-count threshold at which {@link #lccBuildAndIntersect}'s per-node prep passes checkpoint mid-row,
    *  inside a single node's own edge walk rather than only between nodes - otherwise one supernode row is an
    *  unabortable unit regardless of its own size, the same class of gap issue #6715 names for
@@ -134,31 +138,76 @@ public final class GraphAlgorithms {
    * a {@link CommandExecutionException} is thrown, with the interrupt flag preserved for the caller.
    * Public because the parallel Cypher operators (GAV fused chain, partitioned triangle count) reuse
    * it for the same guarantee.
+   * <p>
+   * #6568: it also RECLAIMS - a chunk still queued on the query pool is run on this thread rather than waited for,
+   * which is what makes the wait deadlock-free instead of relying on every caller running a chunk itself. See the
+   * {@link #awaitFutures(Future[], int, DedicatedThreadPool)} overload for why the caller-runs policy is not that
+   * guarantee.
    */
   public static void awaitFutures(final Future<?>[] futures, final int count) {
+    awaitFutures(futures, count, QueryEngineManager.getInstance());
+  }
+
+  /**
+   * {@link #awaitFutures(Future[], int)} for a fan-out submitted to a pool other than the query-parallelism one.
+   * <p>
+   * <b>#6568: the wait RECLAIMS before it parks.</b> Every future still sitting in {@code pool}'s queue is taken
+   * back out and run on this thread rather than waited for. That is what makes the fan-out deadlock-free rather
+   * than merely usually-fine: a caller that parks on a queued task while every worker is itself parked on a queued
+   * task can never be woken by anything, and the bounded queue's caller-runs policy does not save it - the policy
+   * only fires when the queue is FULL, and a queue with free slots quietly accepts the task and parks the
+   * submitter. Reclaiming means the waiter always has work it can make progress on, so by induction on nesting
+   * depth the whole fan-out completes. See {@link DedicatedThreadPool#runQueuedTaskOnCaller(Runnable)}.
+   * <p>
+   * A reclaimed task runs to completion inside {@code run()} and records its outcome in its own future, so the
+   * {@code get()} below still surfaces its exception exactly as if a worker had run it.
+   *
+   * @param pool the pool the futures were submitted to, or null to skip reclaiming (a foreign future is simply
+   *             never found in the queue, so passing the wrong pool costs a queue scan and nothing else)
+   */
+  public static void awaitFutures(final Future<?>[] futures, final int count, final DedicatedThreadPool pool) {
     Throwable firstError = null;
     for (int i = 0; i < count; i++) {
+      // The interrupt is checked BEFORE the reclaim below, not left to get() alone. A reclaimed chunk runs inline,
+      // and FutureTask.run() does not consult the interrupt flag, so an already-interrupted waiter would run the
+      // chunk to completion, find its get() returning normally (the future IS done), and go on to run every
+      // remaining chunk the same way - returning normally, with the flag still set, from a wait that was supposed
+      // to abort. That is #4951's guarantee (a killed or timed-out query must never merge partial results and call
+      // them complete) undone by the reclaim, so the check is part of the fix rather than a tidy-up.
+      if (Thread.currentThread().isInterrupted())
+        throw abort(futures, count, i, firstError, "interrupted");
+
       if (futures[i] == null)
         // Defensive: a caller that partially populated the array must not NPE the whole await.
         continue;
       try {
+        // Deadlock avoidance, not an optimisation: see the #6568 note above. Reclaim only the chunk about to be
+        // waited on, PER INDEX, rather than sweeping the whole batch out of the queue up front - see
+        // reclaimQueuedChunk for why the greedier version is worse.
+        reclaimQueuedChunk(futures[i], pool);
         futures[i].get();
       } catch (final ExecutionException e) {
         if (firstError == null)
           firstError = e.getCause();
       } catch (final InterruptedException e) {
-        for (int j = i; j < count; j++)
-          if (futures[j] != null)
-            futures[j].cancel(true);
         Thread.currentThread().interrupt();
-        final CommandExecutionException interrupted = new CommandExecutionException(
-            "Parallel graph computation interrupted, partial results discarded");
-        if (firstError != null)
-          // A chunk had already failed before the interrupt: keep its cause for diagnostics.
-          interrupted.addSuppressed(firstError);
-        throw interrupted;
+        throw abort(futures, count, i, firstError, "interrupted");
+      } catch (final CancellationException e) {
+        // A chunk whose future was cancelled rather than run, which on this path means the pool was SHUT DOWN
+        // (#4961: a caller-runs rejection and, since #6568, a reclaim both cancel instead of running there, so
+        // that nobody is left waiting for a task no worker will ever take). Server shutdown with a query still
+        // in flight is exactly when it fires. Handled like the interrupt: without this the CancellationException
+        // - a RuntimeException neither clause below caught - unwound this frame while the remaining chunks kept
+        // running and writing into the caller's per-chunk arrays behind its back, which is the leak #4951 closed
+        // for the interrupt and left open here.
+        throw abort(futures, count, i, firstError, "cancelled, the executor was shut down");
       }
     }
+    // An interrupt that landed while the LAST chunk was being reclaimed has no further get() to surface it: the
+    // loop condition ends first. Without this the wait would return normally from work that was already abandoned.
+    if (Thread.currentThread().isInterrupted())
+      throw abort(futures, count, count, firstError, "interrupted");
+
     if (firstError != null) {
       if (firstError instanceof RuntimeException re)
         throw re;
@@ -166,6 +215,59 @@ public final class GraphAlgorithms {
         throw er;
       throw new RuntimeException(firstError);
     }
+  }
+
+  /**
+   * Cancels every chunk this wait has not yet collected and builds the exception that replaces the partial result.
+   * <p>
+   * The guarantee every caller needs (#4951): a fan-out that ends early must not leave background chunks running,
+   * because they keep writing into the per-chunk arrays the caller is about to abandon, and it must never let a
+   * truncated result be read as a complete one.
+   *
+   * @param from       the index the wait stopped at; everything from here on is still outstanding
+   * @param firstError a chunk failure seen before the abort, kept as a suppressed cause rather than lost
+   * @param why        what ended the wait, for the message
+   */
+  private static CommandExecutionException abort(final Future<?>[] futures, final int count, final int from,
+      final Throwable firstError, final String why) {
+    for (int j = from; j < count; j++)
+      if (futures[j] != null)
+        futures[j].cancel(true);
+
+    final CommandExecutionException aborted = new CommandExecutionException(
+        "Parallel graph computation " + why + ", partial results discarded");
+    if (firstError != null)
+      aborted.addSuppressed(firstError);
+    return aborted;
+  }
+
+  /**
+   * Runs ONE chunk on the waiting thread if the pool has accepted it but not started it. Called per index from the
+   * wait above, immediately before that index is blocked on.
+   * <p>
+   * <b>Why per index and not a sweep of the whole batch up front.</b> The greedier version looks strictly better -
+   * the caller is about to block anyway, so why leave siblings queued - and it is not: the pool's threads are
+   * created lazily, so a fan-out that submits every chunk and awaits at once (both {@code GAVFusedChainOperator}
+   * paths do) would find its own chunks still queued and run them ITSELF, serialising a fan-out that was about to
+   * become parallel a microsecond later. Per index cannot do that for more than one chunk: reaching index i means
+   * every earlier chunk has finished, by which time the workers have long since drained the queue.
+   * <p>
+   * It costs nothing in liveness, which is the only thing that has to be guaranteed. If {@code futures[i]} is
+   * running rather than queued, some worker is making progress on it, and that worker reclaims its own nested work
+   * when it waits - which is exactly what the induction in the javadoc above rests on. The waiter can be idle
+   * while a sibling sits queued; it can never be deadlocked.
+   * <p>
+   * Costs nothing when there is nothing to reclaim either: an already-resolved future is skipped, and an empty
+   * queue is one {@code AtomicInteger} read inside {@code runQueuedTaskOnCaller}.
+   * <p>
+   * The {@code instanceof Runnable} gate is what {@code submit()} guarantees - {@code AbstractExecutorService}
+   * queues the very {@code RunnableFuture} it returns. A caller that hands in a future it wrapped (a derived
+   * {@code CompletableFuture}, say) silently loses reclaiming and gets the old parking behaviour back, which is
+   * why the fan-outs pass the array {@code submit()} gave them and nothing else.
+   */
+  private static void reclaimQueuedChunk(final Future<?> future, final DedicatedThreadPool pool) {
+    if (pool != null && !future.isDone() && future instanceof Runnable queued)
+      pool.runQueuedTaskOnCaller(queued);
   }
 
   /**
@@ -339,8 +441,11 @@ public final class GraphAlgorithms {
 
       // Handle dangling nodes: distribute their rank evenly
       double danglingSum = 0.0;
-      for (int i = 0; i < danglingNodes.length; i++)
+      for (int i = 0; i < danglingNodes.length; i++) {
+        if ((i & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
+          checkpoint.check();
         danglingSum += currentRank[danglingNodes[i]];
+      }
       if (danglingSum > 0.0) {
         final double danglingContrib = damping * danglingSum / n;
         parallelForRangeCheckpointed(n, checkpoint, (s, e) -> {
@@ -1398,7 +1503,7 @@ public final class GraphAlgorithms {
       if (csr == null)
         continue;
       for (int u = 0; u < n; u++) {
-        if ((u & LCC_PREP_CHECKPOINT_MASK) == LCC_PREP_CHECKPOINT_MASK)
+        if ((u & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
           checkpoint.check();
         degree[u] += csr.outDegree(u) + csr.inDegree(u);
       }
@@ -1406,14 +1511,20 @@ public final class GraphAlgorithms {
 
     // Build offsets from degrees
     final int[] offsets = new int[n + 1];
-    for (int i = 0; i < n; i++)
+    for (int i = 0; i < n; i++) {
+      if ((i & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
+        checkpoint.check();
       offsets[i + 1] = offsets[i] + degree[i];
+    }
 
     final int totalEdges = offsets[n];
     final int[] neighbors = new int[totalEdges];
     final int[] pos = new int[n];
-    for (int i = 0; i < n; i++)
+    for (int i = 0; i < n; i++) {
+      if ((i & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
+        checkpoint.check();
       pos[i] = offsets[i];
+    }
 
     if (singleType) {
       // Single edge type: merge forward + backward (both already sorted) -> O(d) per node
@@ -1423,7 +1534,7 @@ public final class GraphAlgorithms {
       final int[] bwdOffsets = csr.getBackwardOffsets();
       final int[] bwdNeighbors = csr.getBackwardNeighbors();
       for (int u = 0; u < n; u++) {
-        if ((u & LCC_PREP_CHECKPOINT_MASK) == LCC_PREP_CHECKPOINT_MASK)
+        if ((u & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
           checkpoint.check();
         int ia = fwdOffsets[u], aEnd = fwdOffsets[u + 1];
         int ib = bwdOffsets[u], bEnd = bwdOffsets[u + 1];
@@ -1453,7 +1564,7 @@ public final class GraphAlgorithms {
         final int[] fwdOffsets = csr.getForwardOffsets();
         final int[] fwdNeighbors = csr.getForwardNeighbors();
         for (int u = 0; u < n; u++) {
-          if ((u & LCC_PREP_CHECKPOINT_MASK) == LCC_PREP_CHECKPOINT_MASK)
+          if ((u & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
             checkpoint.check();
           for (int j = fwdOffsets[u]; j < fwdOffsets[u + 1]; j++) {
             if (((j - fwdOffsets[u]) & (LCC_ROW_CHECKPOINT_ENTRIES - 1)) == 0)
@@ -1464,7 +1575,7 @@ public final class GraphAlgorithms {
         final int[] bwdOffsets = csr.getBackwardOffsets();
         final int[] bwdNeighbors = csr.getBackwardNeighbors();
         for (int u = 0; u < n; u++) {
-          if ((u & LCC_PREP_CHECKPOINT_MASK) == LCC_PREP_CHECKPOINT_MASK)
+          if ((u & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
             checkpoint.check();
           for (int j = bwdOffsets[u]; j < bwdOffsets[u + 1]; j++) {
             if (((j - bwdOffsets[u]) & (LCC_ROW_CHECKPOINT_ENTRIES - 1)) == 0)
@@ -1489,7 +1600,7 @@ public final class GraphAlgorithms {
     // checkpointed the same periodic way as the prep passes above.
     int write = 0;
     for (int u = 0; u < n; u++) {
-      if ((u & LCC_PREP_CHECKPOINT_MASK) == LCC_PREP_CHECKPOINT_MASK)
+      if ((u & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
         checkpoint.check();
       final int readStart = offsets[u];
       final int readEnd = offsets[u + 1];
@@ -1551,6 +1662,8 @@ public final class GraphAlgorithms {
     // With forward counting, each triangle is found once and credited to all 3 nodes
     final double[] lcc = new double[n];
     for (int u = 0; u < n; u++) {
+      if ((u & PERIODIC_CHECKPOINT_MASK) == PERIODIC_CHECKPOINT_MASK)
+        checkpoint.check();
       final long deg = offsets[u + 1] - offsets[u];
       if (deg >= 2)
         lcc[u] = (2.0 * triangles.get(u)) / (double) (deg * (deg - 1));

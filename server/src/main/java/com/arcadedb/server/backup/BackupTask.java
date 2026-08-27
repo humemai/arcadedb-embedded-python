@@ -19,6 +19,7 @@
 package com.arcadedb.server.backup;
 
 import com.arcadedb.database.Database;
+import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.event.ServerEventLog;
@@ -31,9 +32,7 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
 import java.util.logging.Level;
 
 /**
@@ -42,8 +41,6 @@ import java.util.logging.Level;
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
 public class BackupTask implements Runnable {
-  private static final DateTimeFormatter BACKUP_TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
-
   // Cached reflection objects for better performance
   private static volatile Class<?>                     backupClass;
   private static volatile Constructor<?>               backupConstructor;
@@ -74,6 +71,22 @@ public class BackupTask implements Runnable {
 
   @Override
   public void run() {
+    // A schedule can outlive its database: it is dropped, or the operator explicitly closes it. Resolving the
+    // database below with load-on-demand would then either reopen a database somebody deliberately closed, or throw
+    // on every single tick after a drop. The plugin cancels the schedule on the unregister callback; this check is
+    // the belt-and-braces half, and also covers the window while an HA snapshot install has the database
+    // unregistered (issue #6752).
+    //
+    // It keys off the registry, not off the database being open, so a database closed WITHOUT going through
+    // removeDatabase() still looks present here: no unregister callback fired, the schedule is still installed, and
+    // every tick reaches performBackup() and skips there instead. That costs a wakeup and a FINE line per tick and
+    // nothing else - it still cannot reopen the database - and removeDatabase() is the path every caller uses.
+    if (!server.existsDatabase(databaseName)) {
+      LogManager.instance().log(this, Level.FINE,
+          "Skipping backup for database '%s' - not available on this server", databaseName);
+      return;
+    }
+
     // Check if backup should run on this server
     if (!shouldRunOnThisServer()) {
       LogManager.instance().log(this, Level.FINE,
@@ -90,11 +103,31 @@ public class BackupTask implements Runnable {
       return;
     }
 
+    // One backup of a database at a time, whichever entry point asked for it: a periodic tick, an immediate trigger
+    // and the HTTP "trigger backup" command are three independent submissions, and two of them running together read
+    // and compress the same database twice for one usable archive - and, when they resolve to the same archive name,
+    // write into the same file (issue #6753). A refused tick costs nothing: the schedule covers this database again
+    // on the next one.
+    final BackupCoordinator coordinator = server.getBackupCoordinator();
+    if (!coordinator.begin(databaseName)) {
+      LogManager.instance().log(this, Level.WARNING,
+          "Skipping backup for database '%s' - a backup of it is already in progress", databaseName);
+      return;
+    }
+
     // Perform the backup
     try {
       LogManager.instance().log(this, Level.INFO, "Starting scheduled backup for database '%s'...", databaseName);
 
       final String backupFile = performBackup();
+      if (backupFile == null) {
+        // Closed or dropped between the check above and the lookup: the check and the lookup cannot be made atomic,
+        // and cancel(false) cannot stop a task that has already started, so losing this race is expected. Report it
+        // as the skip it is instead of as a backup failure with a CRITICAL server event (issue #6752).
+        LogManager.instance().log(this, Level.FINE,
+            "Skipping backup for database '%s' - it went away while the backup was starting", databaseName);
+        return;
+      }
 
       LogManager.instance().log(this, Level.INFO, "Scheduled backup completed for database '%s': %s", databaseName,
           backupFile);
@@ -111,6 +144,8 @@ public class BackupTask implements Runnable {
 
       server.getEventLog().reportEvent(ServerEventLog.EVENT_TYPE.CRITICAL, "Auto-Backup", databaseName,
           "Scheduled backup failed: " + e.getMessage());
+    } finally {
+      coordinator.end(databaseName);
     }
   }
 
@@ -172,11 +207,18 @@ public class BackupTask implements Runnable {
    * threads - uncommitted changes are simply not included.
    */
   private String performBackup() throws Exception {
-    final Database database = server.getDatabase(databaseName);
+    final Database database;
+    try {
+      // allowLoad=false: a scheduled backup must never be the thing that (re)opens a database (issue #6752).
+      database = server.getDatabase(databaseName, false, false);
+    } catch (final DatabaseOperationException e) {
+      // Removed between run()'s availability check and here. Reported by the caller as a skip.
+      return null;
+    }
 
-    // Generate backup filename
-    final String timestamp = LocalDateTime.now().format(BACKUP_TIMESTAMP_FORMAT);
-    final String backupFileName = databaseName + "-backup-" + timestamp + ".zip";
+    // Generate backup filename. The convention lives on the coordinator so that this task, the HTTP "trigger backup"
+    // command and the default name a CLI or SQL backup gets all agree - and all carry milliseconds (issue #6753).
+    final String backupFileName = server.getBackupCoordinator().newArchiveName(databaseName);
 
     // Prepare backup directory for this database - use Files.createDirectories to avoid TOCTOU
     final Path dbBackupPath = Paths.get(backupDirectory, databaseName);

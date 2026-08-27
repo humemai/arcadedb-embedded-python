@@ -67,6 +67,26 @@ class DeltaOverlayCompactionDedupTest {
     return Map.of(EDGE_TYPE, csr);
   }
 
+  /**
+   * Builds a base CSR over {@code nodeCount} nodes containing {@code count} parallel forward edges
+   * {@code src -> tgt}.
+   */
+  private Map<String, CSRAdjacencyIndex> csrWithParallelEdges(final int nodeCount, final int src, final int tgt,
+      final int count) {
+    final int[] fwdOffsets = new int[nodeCount + 1];
+    final int[] bwdOffsets = new int[nodeCount + 1];
+    for (int i = 0; i <= nodeCount; i++) {
+      fwdOffsets[i] = i > src ? count : 0;
+      bwdOffsets[i] = i > tgt ? count : 0;
+    }
+    final int[] fwdNeighbors = new int[count];
+    final int[] bwdNeighbors = new int[count];
+    java.util.Arrays.fill(fwdNeighbors, tgt);
+    java.util.Arrays.fill(bwdNeighbors, src);
+    final CSRAdjacencyIndex csr = new CSRAdjacencyIndex(fwdOffsets, fwdNeighbors, bwdOffsets, bwdNeighbors, nodeCount, count);
+    return Map.of(EDGE_TYPE, csr);
+  }
+
   private Map<String, CSRAdjacencyIndex> emptyCsr(final int nodeCount) {
     final CSRAdjacencyIndex csr = new CSRAdjacencyIndex(new int[nodeCount + 1], new int[0], new int[nodeCount + 1], new int[0],
         nodeCount, 0);
@@ -83,7 +103,7 @@ class DeltaOverlayCompactionDedupTest {
     final DeltaOverlay empty = new DeltaOverlay(mapping.size());
 
     final TxDelta replay = new TxDelta();
-    replay.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    replay.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
 
     // Without CSR awareness (legacy path) the edge would be appended to the overlay → duplicate.
     final DeltaOverlay legacy = empty.merge(replay, mapping);
@@ -107,7 +127,7 @@ class DeltaOverlayCompactionDedupTest {
     final DeltaOverlay empty = new DeltaOverlay(mapping.size());
 
     final TxDelta delta = new TxDelta();
-    delta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    delta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
 
     final DeltaOverlay merged = empty.merge(delta, mapping, emptyCsr(2));
     assertThat(merged.getAddedOutNeighbors(0, EDGE_TYPE)).containsExactly(1);
@@ -125,12 +145,12 @@ class DeltaOverlayCompactionDedupTest {
     final DeltaOverlay empty = new DeltaOverlay(mapping.size());
 
     final TxDelta del = new TxDelta();
-    del.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    del.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
     final DeltaOverlay afterDelete = empty.merge(del, mapping, csr);
     assertThat(afterDelete.isEdgeDeleted(EDGE_TYPE, 0, 1)).isTrue();
 
     final TxDelta readd = new TxDelta();
-    readd.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    readd.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
     final DeltaOverlay afterReadd = afterDelete.merge(readd, mapping, csr);
 
     // The explicit add is kept so the base deletion is offset → edge present once on read.
@@ -138,8 +158,13 @@ class DeltaOverlayCompactionDedupTest {
   }
 
   /**
-   * Delete then re-add of the same edge within a single buffered delta must keep the add for the same
-   * reason: the deletion would otherwise erase the base edge.
+   * Delete of an edge then add of a replacement edge on the same pair, within a single buffered delta:
+   * the add must be kept for the same reason, the deletion would otherwise erase the base edge.
+   * <p>
+   * The two edges carry DIFFERENT identities, because that is the only shape the engine can produce - a
+   * record cannot be re-created under the RID of one deleted in the same transaction. Same-RID in both
+   * lists means something else entirely, and means it unambiguously: an edge created and deleted inside
+   * one transaction, which {@code merge()} cancels rather than masks (issue #6775).
    */
   @Test
   void deleteThenReAddWithinSingleDeltaReinstatesEdge() {
@@ -147,11 +172,87 @@ class DeltaOverlayCompactionDedupTest {
     final DeltaOverlay empty = new DeltaOverlay(mapping.size());
 
     final TxDelta delta = new TxDelta();
-    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
-    delta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1)));
+    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
+    delta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(11)));
 
     final DeltaOverlay merged = empty.merge(delta, mapping, csrWithEdge(2, 0, 1));
     assertThat(merged.getAddedOutNeighbors(0, EDGE_TYPE)).containsExactly(1);
     assertThat(merged.isEdgeDeleted(EDGE_TYPE, 0, 1)).isTrue();
+  }
+
+  /**
+   * Issue #6769 review follow-up: delete-then-re-add-within-one-buffered-delta (the scenario above)
+   * combined with a pair that has SEVERAL parallel edges in the freshly built base CSR. The masking
+   * ("this pair was deleted, so the re-add is not a duplicate, reinstate it") must not be confused
+   * with the exact-count deletion tracking #6769 added ("only ONE of the parallel edges was actually
+   * deleted") - reinstating the add must not make the pair look like all of them were deleted, and
+   * the deletion count must stay exact rather than collapsing to a presence flag again.
+   */
+  @Test
+  void deleteThenReAddOneOfSeveralParallelEdgesDuringCompactionReplayStaysExact() {
+    final NodeIdMapping mapping = baseMappingWith(2);
+    final Map<String, CSRAdjacencyIndex> csr = csrWithParallelEdges(2, 0, 1, 3);
+    final DeltaOverlay empty = new DeltaOverlay(mapping.size());
+
+    final TxDelta delta = new TxDelta();
+    delta.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(10)));
+    delta.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), rid(11)));
+
+    final DeltaOverlay merged = empty.merge(delta, mapping, csr);
+
+    // The re-add is reinstated (masked by this same delta's own deletion of the pair) ...
+    assertThat(merged.getAddedOutNeighbors(0, EDGE_TYPE)).containsExactly(1);
+    // ... but exactly ONE deletion is on record for the pair, not three - the masking check only
+    // needed to know "was this pair touched at all", it must not inflate the exact count #6769 added.
+    assertThat(merged.isEdgeDeleted(EDGE_TYPE, 0, 1)).isTrue();
+    assertThat(merged.countDeletedEdges(EDGE_TYPE, 0, 1)).isEqualTo(1);
+    assertThat(merged.getDeltaEdgeCount()).isZero();
+  }
+
+  /**
+   * Issue #6777: RIDs are not permanently unique identities - {@code LocalBucket} reuses a slot freed by
+   * a delete for a later insert ("hole reuse", #5279). Reproduces the exact buffered-delta sequence a
+   * compaction replay can produce, in commit order:
+   * <ol>
+   *   <li>E1 (pair 0-&gt;1) is deleted, RID {@code r}. {@code r} is recorded in the identity-dedup Set.</li>
+   *   <li>E2 (pair 0-&gt;2), a genuinely different edge, is created reusing the now-freed RID {@code r}.
+   *       The freshly built base CSR already contains E2's pair (the read-committed scan crossed its
+   *       bucket after E2 committed), so per #4588 the add is skipped rather than tracked by identity -
+   *       E2's RID never enters {@code addedEdgesPerType}.</li>
+   *   <li>E2 is deleted, same RID {@code r}. Since {@code r} is not in {@code addedEdgesPerType} (step 2
+   *       skipped it), the withdraw-the-add branch (#6775) does not apply, and the deletion falls through
+   *       to the identity-dedup Set - which already holds {@code r} from E1's unrelated deletion in step 1.
+   *       Before the fix, {@code Set.add()} returns false and E2's deletion is silently dropped.</li>
+   * </ol>
+   */
+  @Test
+  void deletionOfDifferentEdgeReusingAReplayedRidIsNotDropped() {
+    final NodeIdMapping mapping = baseMappingWith(3);
+    // The fresh base CSR reflects E2's pair (0->2) as already live, but NOT E1's pair (0->1) - E1 was
+    // already gone by the time the compaction scan ran.
+    final Map<String, CSRAdjacencyIndex> csr = csrWithEdge(3, 0, 2);
+    final RID reusedRid = rid(10);
+
+    final TxDelta deleteE1 = new TxDelta();
+    deleteE1.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(1), reusedRid));
+    final DeltaOverlay afterE1Delete = new DeltaOverlay(mapping.size()).merge(deleteE1, mapping, csr);
+    assertThat(afterE1Delete.countDeletedEdges(EDGE_TYPE, 0, 1)).isEqualTo(1);
+
+    final TxDelta addE2 = new TxDelta();
+    addE2.addedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(2), reusedRid));
+    final DeltaOverlay afterE2Add = afterE1Delete.merge(addE2, mapping, csr);
+    // Skipped: already represented by the fresh base CSR, so not tracked by identity.
+    assertThat(afterE2Add.getAddedOutNeighbors(0, EDGE_TYPE)).isEmpty();
+
+    final TxDelta deleteE2 = new TxDelta();
+    deleteE2.deletedEdges.add(new TxDelta.EdgeDelta(EDGE_TYPE, rid(0), rid(2), reusedRid));
+    final DeltaOverlay afterE2Delete = afterE2Add.merge(deleteE2, mapping, csr);
+
+    // E2's own deletion must be recorded, not absorbed by E1's unrelated deletion under the same reused RID.
+    assertThat(afterE2Delete.isEdgeDeleted(EDGE_TYPE, 0, 2)).isTrue();
+    assertThat(afterE2Delete.countDeletedEdges(EDGE_TYPE, 0, 2)).isEqualTo(1);
+    // E1's own exclusion budget must be untouched.
+    assertThat(afterE2Delete.countDeletedEdges(EDGE_TYPE, 0, 1)).isEqualTo(1);
+    assertThat(afterE2Delete.getDeltaEdgeCount()).isEqualTo(-2);
   }
 }
