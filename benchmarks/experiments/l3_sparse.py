@@ -513,7 +513,22 @@ def main():
     # measurement on the machine was unaccounted for. Not knowing where it
     # goes is also why the campaign could not be honestly costed or shortened.
     _p0 = time.perf_counter()
+    # COUNTED, not asserted. n_docs was SCALE_DOCS[scale], a module constant, so
+    # PAGE-SPEC rule 4's corpus fingerprint was fingerprinting a constant: point a
+    # lane at base_small.csr where base_1M.csr was meant and the row still claims
+    # the full corpus, build_docs_per_s is inflated by the same factor, and the
+    # gate that exists to catch exactly that passes. The generator is wrapped so
+    # the row records what was actually ingested, and a shortfall is a refusal
+    # rather than a smaller number nobody reads.
     n_docs = SCALE_DOCS[args.scale]
+    _ingested = {"n": 0}
+    _gen_docs_raw = gen_docs
+
+    def gen_docs(n, *a, **kw):          # noqa: F811 - deliberate shadow, counted
+        for item in _gen_docs_raw(n, *a, **kw):
+            _ingested["n"] += 1
+            yield item
+
     queries = gen_queries(SCALE_QUERIES[args.scale])
     _query_gen_s = time.perf_counter() - _p0
 
@@ -620,6 +635,27 @@ def main():
         out.update(cond)
     except Exception as e:  # never lose a completed run over provenance
         out["conditions_error"] = f"{e.__class__.__name__}: {e}"
+
+    # Recorded at the END, when the generator has actually run. A shortfall is a
+
+    # refusal: a row claiming the full corpus while a fraction was ingested is
+
+    # what rule 4's fingerprint cannot catch on its own, and every per-second
+
+    # figure in the row is inflated by the same factor.
+
+    out["n_docs_ingested"] = _ingested["n"]
+
+    if _ingested["n"] and _ingested["n"] < n_docs:
+
+        raise SystemExit(
+
+            f"ingested {_ingested['n']:,} docs against a declared {n_docs:,} for "
+
+            f"scale {args.scale}: the corpus is short, so build_docs_per_s is "
+
+            f"inflated by {n_docs/_ingested['n']:.2f}x.")
+
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(out, open(args.out, "w"), indent=1)

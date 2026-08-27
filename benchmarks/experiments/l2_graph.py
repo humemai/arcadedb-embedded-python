@@ -448,7 +448,16 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    # COUNTED, not asserted. n_persons was SCALE_PERSONS[scale], a module constant, so
+    # PAGE-SPEC rule 4's corpus fingerprint was fingerprinting a constant: point a
+    # lane at an LDBC extract with a partial person_0_0.csv was meant and the row still claims
+    # the full corpus, build rate is inflated by the same factor, and the
+    # gate that exists to catch exactly that passes. The generator is wrapped so
+    # the row records what was actually ingested, and a shortfall is a refusal
+    # rather than a smaller number nobody reads.
     n_persons = SCALE_PERSONS[args.scale]
+    _ingested = {"persons": 0, "edges": 0}
+
     n_q = SCALE_OLTP_QUERIES[args.scale]
     out = {"n_persons": n_persons, "graph_source": _GRAPH_SOURCE}
 
@@ -462,6 +471,22 @@ def main():
         pick_query_ids = lambda _n, k: _ldbc.pick_query_ids(args.scale, k)
         # LDBC person ids are sparse longs; harness-invented ids must not collide
         write_id_base = _ldbc.write_id_base(args.scale)
+
+    # Wrap AFTER the rebind above, so both the synthetic and the LDBC streams are
+    # counted. Adapters resolve these names from module globals at call time, so
+    # rebinding here is what makes the count reach them.
+    global gen_persons, gen_edges
+    _persons_src, _edges_src = gen_persons, gen_edges
+
+    def gen_persons(n, *a, **kw):        # noqa: F811 - deliberate shadow, counted
+        for item in _persons_src(n, *a, **kw):
+            _ingested["persons"] += 1
+            yield item
+
+    def gen_edges(n, *a, **kw):          # noqa: F811 - deliberate shadow, counted
+        for item in _edges_src(n, *a, **kw):
+            _ingested["edges"] += 1
+            yield item
         out["graph_source"] = f"ldbc-{args.scale}"
 
     ad = ADAPTERS[args.backend]()
@@ -590,6 +615,17 @@ def main():
     _t = time.perf_counter()
     ad.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
+    # Recorded at the END, when the generators have actually run. A shortfall is a
+    # refusal: a row claiming the full corpus while a fraction was ingested is
+    # exactly what rule 4's fingerprint cannot catch on its own.
+    out["n_persons_ingested"] = _ingested["persons"]
+    out["n_edges_ingested"] = _ingested["edges"]
+    if _ingested["persons"] and _ingested["persons"] < n_persons:
+        raise SystemExit(
+            f"ingested {_ingested['persons']:,} persons against a declared "
+            f"{n_persons:,} for scale {args.scale}: the corpus is short, so every "
+            f"per-second figure in this row is inflated by {n_persons/_ingested['persons']:.2f}x.")
+
     with open(args.out, "w") as f:
         json.dump(out, f)
     print(json.dumps(out))
