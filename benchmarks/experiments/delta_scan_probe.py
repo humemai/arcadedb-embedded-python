@@ -80,9 +80,19 @@ def main():
     db.command("sql", f'CREATE INDEX ON V (emb) LSM_VECTOR METADATA '
                       f'{{ "dimensions": {DIM}, "similarity": "COSINE" }}')
 
-    idx = db.schema.get_index_by_name("V[emb]")
+    # schema.get_index_by_name returns the raw Java TypeIndex, not the Python
+    # VectorIndex wrapper, so it exposes getStats() and not get_stats(). The
+    # per-bucket LSMVectorIndex underneath it is what carries the counters.
+    # Verified against the wheel before this ran; the first version guessed
+    # get_stats() and died after building the whole 200k corpus.
+    _ti = db.schema.get_index_by_name("V[emb]")
+    _lsm = _ti.getIndexesOnBuckets()[0]
+
+    def stats():
+        st = _lsm.getStats()
+        return {str(k): int(st.get(k)) for k in st.keySet()}
     for _ in range(1200):
-        if idx.get_stats().get("graphNodeCount", 0) >= BASE:
+        if stats().get("graphNodeCount", 0) >= BASE:
             break
         time.sleep(0.1)
 
@@ -110,7 +120,7 @@ def main():
                     db.command("sql", f"INSERT INTO V SET id = {BASE + added}, emb = {vec()}")
                 db.commit()
             lat = timed_pass()
-            s = idx.get_stats()
+            s = stats()
             rec = dict(stamp)
             rec.update({
                 "delta_target": target,
