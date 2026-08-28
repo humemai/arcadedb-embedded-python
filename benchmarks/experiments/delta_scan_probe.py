@@ -180,24 +180,62 @@ def main():
                 "graph_nodes": s.get("graphNodeCount"),
                 "graph_state": s.get("graphState"),
                 "mutations_since_rebuild": s.get("mutationsSinceRebuild"),
+                # #6858's DECISION, recorded rather than inferred. Upstream
+                # added these four precisely so the trigger can be observed from
+                # outside, and the first bounded run could not say why no
+                # rebuild fired because it captured none of them. A verification
+                # that cannot explain a negative result is not a verification.
+                #
+                # The trigger needs the buffer to exceed the graph walk's own
+                # work AND the accumulated scans to have already cost what the
+                # rebuild will, so deltaScanWorkSinceRebuild against
+                # deltaScanWorkTarget is the whole answer.
+                "graph_walk_visited_avg": s.get("graphWalkVisitedAvg"),
+                "delta_scan_budget": s.get("deltaScanBudget"),
+                "delta_scan_work_since_rebuild": s.get("deltaScanWorkSinceRebuild"),
+                "delta_scan_work_target": s.get("deltaScanWorkTarget"),
+                "persisted_graph_nodes": s.get("persistedGraphNodeCount"),
                 "p50_ms": round(st.median(lat), 3),
                 "p95_ms": round(lat[int(0.95 * (len(lat) - 1))], 3),
                 "n_queries": len(lat),
             })
-            if rec["graph_nodes"] != BASE:
-                raise SystemExit(
-                    f"graph moved to {rec['graph_nodes']} from {BASE} at delta={target}: a rebuild "
-                    f"fired and drained the buffer, so the settings did not reach the engine. "
-                    f"(In PROBE_MODE=bounded a rebuild is the expected outcome, not a fault.) "
-                    f"Every step from here measures a different graph.")
-            if rec["delta_count"] is not None and rec["delta_count"] < target * 0.9:
-                raise SystemExit(
-                    f"delta buffer holds {rec['delta_count']} against a target of {target}: "
-                    f"something drained it, so the scan cost below is not the cost of {target} entries.")
+            # THE SAME TWO FACTS MEAN OPPOSITE THINGS IN THE TWO MODES.
+            #
+            # sweep:   a moving graph or a drained buffer means the disabling
+            #          settings did not reach the engine, so every step from
+            #          here prices a different graph. Refuse.
+            # bounded: a moving graph or a drained buffer IS the result. The
+            #          query-side trigger fired and bounded the scan, which is
+            #          the whole thing being verified. Record it and continue.
+            #
+            # Guarding on the fact rather than the mode would have made bounded
+            # mode refuse on success, which is the failure this comment exists
+            # to stop the next reader from reintroducing.
+            drained = (rec["delta_count"] is not None
+                       and rec["delta_count"] < target * 0.9)
+            moved = rec["graph_nodes"] != BASE
+            rec["rebuild_fired"] = bool(moved or drained)
+            if MODE == "sweep":
+                if moved:
+                    raise SystemExit(
+                        f"graph moved to {rec['graph_nodes']} from {BASE} at delta={target}: a "
+                        f"rebuild fired and drained the buffer, so the settings did not reach the "
+                        f"engine. Every step from here measures a different graph.")
+                if drained:
+                    raise SystemExit(
+                        f"delta buffer holds {rec['delta_count']} against a target of {target}: "
+                        f"something drained it, so the scan cost below is not the cost of "
+                        f"{target} entries.")
+            elif rec["rebuild_fired"]:
+                print(f"BOUNDED delta={target}: trigger fired "
+                      f"(buffer {rec['delta_count']} of {target}, graph {rec['graph_nodes']})",
+                      flush=True)
             f.write(json.dumps(rec) + "\n"); f.flush()
+            _w, _t = rec["delta_scan_work_since_rebuild"], rec["delta_scan_work_target"]
+            _prog = f" scanwork={_w}/{_t}" if _t else ""
             print(f"RESULT delta={target:>6} buffered={rec['delta_count']} "
                   f"graph={rec['graph_nodes']} p50={rec['p50_ms']:.3f} ms "
-                  f"p95={rec['p95_ms']:.3f} ms", flush=True)
+                  f"p95={rec['p95_ms']:.3f} ms{_prog}", flush=True)
     db.close()
 
 

@@ -300,6 +300,35 @@ READS = {
 }
 
 
+# Last cycle's counters, so the row can carry them without threading a return
+# value through cycle()/measure()/measure_stale(), which three callers unpack
+# positionally.
+_LAST_VECTOR_STATS = {}
+
+
+def _vector_stats(db):
+    """The LSM_VECTOR counters, or a recorded reason. {} when there is no index.
+
+    THE LIFECYCLE LANE TIMES THE #6857 PATH DIRECTLY. Its write-then-idle shape
+    is exactly the scenario where the inactivity timer used to read a large-but-
+    unloaded graph as a small one and rebuild every vector for a single insert.
+    On the previous pin those rebuilds are IN these close timings; on b7c6c800d
+    they should not be.
+
+    Without the counters the row shows only that a number moved, and the two
+    candidate explanations -- the engine got faster, or the engine stopped doing
+    work it never needed to do -- are the difference between a benchmark result
+    and a bug fix. graphRebuildCount and the new persistedGraphNodeCount
+    separate them.
+    """
+    try:
+        ti = db.schema.get_index_by_name("V[emb]")
+        st = ti.getIndexesOnBuckets()[0].getStats()
+        return {str(k): int(st.get(k)) for k in st.keySet()}
+    except Exception as e:                         # noqa: BLE001
+        return {"vector_stats_error": f"{type(e).__name__}: {e}"}
+
+
 def _read(db, situation):
     if situation == "empty":
         return
@@ -457,6 +486,13 @@ def cycle(situation, mode, cold=False):
     elif mode == "drop":
         _drop(db, situation)
     t2 = time.perf_counter()
+    # BEFORE close, because close is what the timer's rebuild used to land in
+    # and a closed handle answers nothing. Vector workload only: the other
+    # situations have no LSM_VECTOR index and would record an error dict that
+    # means nothing. Kept out of the timed window (t2 is already taken).
+    if situation == "vector":
+        _LAST_VECTOR_STATS.clear()
+        _LAST_VECTOR_STATS.update(_vector_stats(db))
     db.close()
     t3 = time.perf_counter()
     return (t1 - t0) * 1000, (t3 - t2) * 1000, (t2 - t1) * 1000
@@ -656,6 +692,13 @@ def main():
         out["gav_view_operator"] = _gav_plan[0]
         out["gav_view_usage_verified"] = (
             None if _gav_plan[0] is None else bool(_gav_plan[0]))
+
+    # WHAT THE ENGINE DID, beside what the clock saw. #6857 removed the
+    # inactivity-timer rebuilds that used to land inside these close timings, so
+    # graphRebuildCount is what separates "the engine got faster" from "the
+    # engine stopped doing work it never needed to do".
+    if args.workload == "vector" and _LAST_VECTOR_STATS:
+        out["vector_index_stats"] = dict(_LAST_VECTOR_STATS)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     json.dump(out, open(args.out, "w"), indent=1)

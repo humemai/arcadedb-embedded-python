@@ -244,6 +244,24 @@ class Base:
     def post_build(self):
         pass
 
+    def engine_stats(self):
+        """Engine-side counters for this run, or {} for engines that have none.
+
+        WHY THIS EXISTS NOW. The pin moved to b7c6c800d, which carries #6858:
+        a query-side delta-scan trigger that is ON BY DEFAULT and deliberately
+        does MORE background rebuild work than the engine used to. If dense
+        timings move against the previous pin, the row has to be able to say
+        whether that trigger fired -- otherwise the campaign records a number
+        and loses the reason, which is the failure this whole harness keeps
+        relearning. Upstream added graphWalkVisitedAvg, deltaScanBudget,
+        deltaScanWorkSinceRebuild and deltaScanWorkTarget precisely so the
+        decision is observable instead of inferred.
+
+        Pass-through, never a fixed key list: the engine grows counters between
+        releases and a whitelist here would silently drop the next one.
+        """
+        return {}
+
     def search(self, qvec, k):
         raise NotImplementedError
 
@@ -339,6 +357,25 @@ class ArcadeEmbedded(Base):
                    METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
                    "maxConnections": {M}, "beamWidth": {EF_CONSTRUCTION}, {qline}
                    "storeVectorsInGraph": false, "addHierarchy": true }}''')
+
+    def engine_stats(self):
+        """The engine's own counters for this run.
+
+        schema.get_index_by_name returns the raw Java TypeIndex, not the Python
+        wrapper, so this is getStats() and not get_stats(), and the per-bucket
+        LSMVectorIndex underneath is what carries the counters. Same access path
+        delta_scan_probe.py uses, which was verified against the wheel after a
+        first version guessed get_stats() and died having built 200k vectors.
+        """
+        try:
+            ti = self.db.schema.get_index_by_name("Article[embedding]")
+            st = ti.getIndexesOnBuckets()[0].getStats()
+            return {str(k): int(st.get(k)) for k in st.keySet()}
+        except Exception as e:                     # noqa: BLE001
+            # Recorded, not swallowed: a missing stat block must read as a
+            # reason, not as an empty dict indistinguishable from a comparator
+            # that legitimately has no counters.
+            return {"engine_stats_error": f"{type(e).__name__}: {e}"}
 
     def search(self, qvec, k):
         rows = self.db.query(
@@ -922,6 +959,10 @@ def main():
     build = time.perf_counter() - t0
     out["build_s"] = round(build, 2)
     out["build_docs_per_s"] = round(len(train) / build, 1)
+    # Captured AFTER the build and again after the timed passes below, because
+    # #6858's trigger fires from the QUERY path: a build-time snapshot alone
+    # cannot show a rebuild that the searches provoked.
+    out["engine_stats_after_build"] = b.engine_stats()
 
     WARM = 20
     timed_n = len(test) - WARM
@@ -947,6 +988,10 @@ def main():
     out["n_queries_timed"] = timed_n
     out["warmup_held_out"] = WARM
     out["recall_at_10"] = round(statistics.mean(recalls), 4)
+    # The second snapshot: #6858's trigger is evaluated when queries run, so a
+    # rebuild it provoked exists only in the AFTER-SEARCH counters. Comparing
+    # the two is what tells a reader whether the timings above include one.
+    out["engine_stats_after_search"] = b.engine_stats()
 
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
