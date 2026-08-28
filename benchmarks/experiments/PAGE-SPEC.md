@@ -552,7 +552,17 @@ What a reader of this file most needs is which lanes can be published now. An
 adversarial audit on 08-26 confirmed 23 defects, 14 blocking publication; 18 are
 fixed. This is the residue.
 
-| lane | rows at pin `d7940d79e` | status |
+> **SUPERSEDED 2026-08-28: the pin moved to `b7c6c800d`.** The table below
+> describes rows measured at `d7940d79e`, which are now quarantined as
+> `results/SUPERSEDED_prepin_d7940d79e.jsonl` and reach no table. That pin
+> predated `1b04483bf`, the #6743 sparse fix, so its sparse numbers understate
+> ArcadeDB by roughly 4x (1M p50 ~37 ms against 11.26 ms re-measured); it also
+> predated 20 `graph/olap` commits including four GAV **correctness** fixes
+> (#6769 masks all parallel edges when one is deleted), #6857 and #6858. The
+> campaign is re-running every lane at the new pin. Kept as written because it
+> records what the audit found, not what is currently published.
+
+| lane | rows at pin `d7940d79e` (SUPERSEDED) | status |
 |---|---|---|
 | `l1` | 50 | READY |
 | `l1tpc` | 50 | READY |
