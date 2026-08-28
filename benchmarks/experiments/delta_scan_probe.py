@@ -36,6 +36,24 @@ OUT = os.environ.get("PROBE_OUT", "results/probe/delta_scan.jsonl")
 DB = os.environ.get("PROBE_DB", "/lcdb/deltaprobe")
 
 
+# TWO MODES, because the probe now has two jobs.
+#
+#   PROBE_MODE=sweep   (default) price the RAW linear scan by disabling every
+#                      rebuild trigger including #6858's, so the buffer grows to
+#                      each step and the number stays comparable to the one filed
+#                      on #6797.
+#   PROBE_MODE=bounded leave #6858 at its DEFAULT and show the buffer does NOT
+#                      grow: the query-side trigger fires and drains it. This is
+#                      the mode that verifies the fix rather than the defect.
+#
+# Kept in one file because the two must share the corpus, the query set and the
+# timing harness; measuring the fix with a different rig than the defect is how
+# a comparison stops meaning anything.
+MODE = os.environ.get("PROBE_MODE", "sweep").strip().lower()
+if MODE not in ("sweep", "bounded"):
+    raise SystemExit(f"PROBE_MODE must be sweep or bounded, got {MODE!r}")
+
+
 def main():
     import arcadedb_embedded as arcadedb
     from arcadedb_embedded import DatabaseFactory  # noqa: F401
@@ -55,11 +73,29 @@ def main():
         "arcadedb.vectorIndex.rebuildGraphRatio": "0",
         "arcadedb.vectorIndex.mutationsBeforeRebuild": str(10 ** 9),
         "arcadedb.vectorIndex.inactivityRebuildTimeoutMs": str(10 ** 9),
+        # THE NEW QUERY-SIDE TRIGGER, added by #6858 (the fix for the finding
+        # this probe produced). It is ON BY DEFAULT and fires from the query
+        # path, which is exactly the path this probe times -- so without
+        # disabling it the buffer drains mid-sweep, graphNodeCount moves off the
+        # base, and the probe's own guard refuses the run.
+        #
+        # Disabling it is what keeps the ORIGINAL measurement reproducible: this
+        # sweep exists to price the raw linear scan, and it can only do that
+        # while nothing bounds the buffer. maxDeltaScanRatio=0 is upstream's own
+        # documented way back to the pre-fix behaviour, so the number stays
+        # comparable to the one filed on #6797.
+        # sweep only. In bounded mode this key is dropped below so the engine
+        # keeps its shipped default, which is the thing under test.
+        "arcadedb.vectorIndex.maxDeltaScanRatio": "0",
     }
     # -D on the JVM, which is how every other knob in this harness reaches the
     # engine. An env-var convention was a guess and a silently ignored setting
     # here would let a rebuild fire mid-sweep and empty the buffer under the
     # measurement, which is precisely the confound this probe exists to avoid.
+    if MODE == "bounded":
+        # The whole point of this mode is the SHIPPED default, so the key that
+        # would suppress it is removed rather than set to something else.
+        settings.pop("arcadedb.vectorIndex.maxDeltaScanRatio", None)
     extra = " ".join(f"-D{k}={v}" for k, v in settings.items())
     # ARCADEDB_JVM_ARGS is the name jvm.py:445 actually reads. ARCADEDB_JVM_EXTRA,
     # which this first used, is read by nothing: the settings would have been
@@ -152,6 +188,7 @@ def main():
                 raise SystemExit(
                     f"graph moved to {rec['graph_nodes']} from {BASE} at delta={target}: a rebuild "
                     f"fired and drained the buffer, so the settings did not reach the engine. "
+                    f"(In PROBE_MODE=bounded a rebuild is the expected outcome, not a fault.) "
                     f"Every step from here measures a different graph.")
             if rec["delta_count"] is not None and rec["delta_count"] < target * 0.9:
                 raise SystemExit(
