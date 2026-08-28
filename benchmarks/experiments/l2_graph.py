@@ -625,11 +625,27 @@ def main():
     # exactly what rule 4's fingerprint cannot catch on its own.
     out["n_persons_ingested"] = _ingested["persons"]
     out["n_edges_ingested"] = _ingested["edges"]
-    if _ingested["persons"] and _ingested["persons"] < n_persons:
+    # COMPARE AGAINST THE CORPUS ON DISK, not a published constant.
+    #
+    # This compared ingest against SCALE_PERSONS, which ldbc_snb documents as the
+    # count of the OFFICIAL dataset. Our generated sf1 holds 9,892 against the
+    # official 10,995, so the guard refused every l2 cell of qBI on a run whose
+    # ingest was complete. That is the same "fingerprinting a constant" defect
+    # the guard was written to catch, committed by the guard itself.
+    #
+    # The real failure mode is a TRUNCATED LOAD: fewer rows ingested than the
+    # file offers. Only the file can say what it offers.
+    _expected = None
+    if _GRAPH_SOURCE == "ldbc":
+        _expected = _ldbc.persons_in_corpus(args.scale)
+    if _expected is None:
+        _expected = n_persons                      # synthetic: the generator IS the corpus
+    out["n_persons_in_corpus"] = _expected
+    if _ingested["persons"] and _ingested["persons"] < _expected:
         raise SystemExit(
-            f"ingested {_ingested['persons']:,} persons against a declared "
-            f"{n_persons:,} for scale {args.scale}: the corpus is short, so every "
-            f"per-second figure in this row is inflated by {n_persons/_ingested['persons']:.2f}x.")
+            f"ingested {_ingested['persons']:,} persons against {_expected:,} in the "
+            f"corpus for scale {args.scale}: the load is short, so every per-second "
+            f"figure in this row is inflated by {_expected/_ingested['persons']:.2f}x.")
 
     with open(args.out, "w") as f:
         json.dump(out, f)

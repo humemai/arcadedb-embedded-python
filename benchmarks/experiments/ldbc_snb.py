@@ -29,9 +29,40 @@ from graph_common import (OLAP_ITERATIONS, OLAP_QUERIES, OLTP_READS,
 
 _REF_YEAR = 2026  # age reference; fixed so re-runs are identical
 
-# person counts of the official datasets (for progress/expected counts;
-# the streams read whatever the files actually contain)
+# Person counts of the OFFICIAL datasets. Kept for the scale names and as a
+# progress hint; the streams read whatever the files actually contain.
+#
+# NOT A CORPUS FINGERPRINT. Our generated sf1 holds 9,892 persons against the
+# official 10,995, so a shortfall guard comparing ingest against THIS refuses a
+# perfectly good run -- which it did, failing every l2 cell of qBI. Use
+# persons_in_corpus() for anything that must describe the corpus on disk.
 SCALE_PERSONS = {"sf1": 10_995, "sf10": 72_949}
+
+_CORPUS_PERSONS = {}
+
+
+def persons_in_corpus(scale):
+    """How many persons the corpus ON DISK actually holds, counted once.
+
+    The shortfall guard exists to catch a truncated LOAD -- ingesting fewer rows
+    than the file offers. Comparing against a published constant instead makes
+    it fire on a corpus that is merely a different generation, which is the
+    "fingerprinting a constant" failure the guard was written to fix, one level
+    up. Counted from the same file gen_persons() streams.
+
+    Returns None when the file cannot be read, so the caller can skip the check
+    rather than refuse on a count it does not have.
+    """
+    if scale in _CORPUS_PERSONS:
+        return _CORPUS_PERSONS[scale]
+    try:
+        path = _root(scale) / "person_0_0.csv"
+        with open(path, "rb") as fh:
+            n = max(0, sum(1 for _ in fh) - 1)     # minus the header
+        _CORPUS_PERSONS[scale] = n or None
+    except Exception:                              # noqa: BLE001
+        _CORPUS_PERSONS[scale] = None
+    return _CORPUS_PERSONS[scale]
 SCALE_OLTP_QUERIES = {"sf1": 500, "sf10": 200}
 OLAP_ITERATIONS = OLAP_ITERATIONS  # re-export unchanged
 
