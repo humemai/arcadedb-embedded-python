@@ -18,7 +18,6 @@ arcadedb_embedded/
 ├── __init__.py          # Package exports and version
 ├── _logging.py          # Internal logging helpers
 ├── async_executor.py    # Async command/query + record wrapper
-├── citation.py          # Citation DOI helpers
 ├── core.py              # Database, DatabaseFactory, convenience helpers
 ├── exceptions.py        # ArcadeDBError (unified exceptions)
 ├── exporter.py          # Export (JSONL/GraphML/GraphSON + CSV helper)
@@ -38,16 +37,12 @@ arcadedb_embedded/
 
 **`__init__.py`**
 
-- Central export surface (Database, AsyncExecutor, GraphBatch, Schema, Exporter, VectorIndex, converters, citation/import helpers)
+- Central export surface (Database, AsyncExecutor, GraphBatch, Schema, Exporter, VectorIndex, converters, import helpers)
 - Version metadata
 
 **`_logging.py`**
 
 - Internal logger access and swallowed-exception helpers for cleanup/finalizer paths
-
-**`citation.py`**
-
-- `cite()`: resolves version-specific DOI URLs for released Python package versions
 
 **`jvm.py`**
 

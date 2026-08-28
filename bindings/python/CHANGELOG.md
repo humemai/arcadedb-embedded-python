@@ -9,6 +9,18 @@ Java behaviour reaches Python users through `pip install` without passing
 through anything they would think to read. Breaking changes are listed first
 for each version.
 
+## Unreleased
+
+### Breaking
+
+- **Removed `arcadedb_embedded.cite()` and the `citation` module.** The helper
+  resolved a release's Zenodo DOI by calling the Zenodo API at runtime, which
+  put a network round trip and a third-party dependency inside a library whose
+  purpose is in-process, offline database access, and it raised
+  `ArcadeDBError` on any network that blocks zenodo.org. Cite the project with
+  the metadata in `CITATION.cff` instead: GitHub renders it as "Cite this
+  repository", and Zenodo reads it when archiving each release.
+
 ## 26.8.1
 
 First stable release on the 26.8.1 line, synced to upstream's release commit

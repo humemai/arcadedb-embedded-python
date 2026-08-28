@@ -188,7 +188,6 @@ nav:
   - Transactions: api/transactions.md
   - Vector: api/vector.md
   - Importer: api/importer.md
-  - Citation: api/citation.md
   - Async Executor: api/async_executor.md
   - Schema: api/schema.md
   - Server: api/server.md
