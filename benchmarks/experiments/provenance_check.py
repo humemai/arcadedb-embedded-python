@@ -691,6 +691,24 @@ def check_schema_homogeneity(rows):
     return bad
 
 
+def _stamp_for(commit):
+    """The sha buildnumber-maven-plugin writes for a commit-ish.
+
+    Identical to build_engine_pair.sh's stamp_sha_for(): the last NON-MERGE
+    commit reachable from it. Falls back to the input when git cannot answer,
+    so an unresolvable sha compares as itself rather than silently passing.
+    """
+    try:
+        import subprocess
+        out = subprocess.run(["git", "log", "-1", "--no-merges", "--format=%H", commit],
+                             capture_output=True, text=True, timeout=10,
+                             cwd=os.path.dirname(os.path.abspath(__file__)))
+        got = out.stdout.strip().lower()
+        return got or commit
+    except Exception:                              # noqa: BLE001
+        return commit
+
+
 def check_engine_commit_matches_build(rows):
     """Does the commit we STAMPED match the commit the engine REPORTS?
 
@@ -728,8 +746,19 @@ def check_engine_commit_matches_build(rows):
             continue
         checked += 1
         reported = m.group(1).lower()
-        n = min(len(stamped), len(reported), 40)
-        if stamped[:n] != reported[:n]:
+        # A MERGE PIN STAMPS ITS ANCESTOR, and comparing the two raw strings
+        # calls that a mislabel. buildnumber-maven-plugin runs
+        # `git log -1 --no-merges`, so a campaign pinned to a merge commit
+        # legitimately writes engine_commit=<merge> beside a jar reporting
+        # <last non-merge ancestor>. b7c6c800d stamps 4c1411025, and 20 correct
+        # rows were reported as mismatches before this resolved it.
+        #
+        # Resolved through git rather than by loosening the comparison: the
+        # check exists because a 24-commit mislabel shipped, and "these two
+        # differ but it is probably fine" is how that returns.
+        stamped_stamp = _stamp_for(stamped)
+        n = min(len(stamped_stamp), len(reported), 40)
+        if stamped_stamp[:n] != reported[:n]:
             print(f"  BAD: {r.get('lane')}/{r.get('scale')}/{r.get('backend')} "
                   f"rep {r.get('rep')} stamped {stamped[:9]} but the engine "
                   f"reports {reported[:9]}")
