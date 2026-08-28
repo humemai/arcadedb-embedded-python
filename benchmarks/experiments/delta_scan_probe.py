@@ -93,9 +93,21 @@ def main():
     # here would let a rebuild fire mid-sweep and empty the buffer under the
     # measurement, which is precisely the confound this probe exists to avoid.
     if MODE == "bounded":
-        # The whole point of this mode is the SHIPPED default, so the key that
-        # would suppress it is removed rather than set to something else.
-        settings.pop("arcadedb.vectorIndex.maxDeltaScanRatio", None)
+        # EVERY disabling setting goes, not just maxDeltaScanRatio.
+        #
+        # The first version dropped only that key and left the others, and the
+        # run looked like the fix did nothing: no rebuild at any step. The
+        # decision stats said why. deltaScanBudget read 1,000,000,000 -- the
+        # probe's OWN mutationsBeforeRebuild=10**9, which the new trigger's
+        # buffer condition is derived from. The buffer never approached a
+        # billion, so condition one could never fire, while the scan-cost
+        # condition was already satisfied (22,775,000 against a target of
+        # 20,000,000 at the last step).
+        #
+        # In other words the test disabled the thing it was testing, and the
+        # only reason that is known rather than guessed is that the probe now
+        # records the decision. Bounded mode runs the engine AS SHIPPED.
+        settings.clear()
     extra = " ".join(f"-D{k}={v}" for k, v in settings.items())
     # ARCADEDB_JVM_ARGS is the name jvm.py:445 actually reads. ARCADEDB_JVM_EXTRA,
     # which this first used, is read by nothing: the settings would have been
