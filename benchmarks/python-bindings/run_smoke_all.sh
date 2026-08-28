@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 # backend : pip packages : smoke script
 BACKENDS=(
-  "arcadedb:arcadedb-embedded==26.7.2.dev0 numpy:smoke_arcadedb.py"
+  "arcadedb:arcadedb-embedded==26.8.1 numpy:smoke_arcadedb.py"
   "sqlite::smoke_sqlite.py"
   "duckdb:duckdb:smoke_duckdb.py"
   "ladybug:ladybug==0.18.1:smoke_ladybug.py"

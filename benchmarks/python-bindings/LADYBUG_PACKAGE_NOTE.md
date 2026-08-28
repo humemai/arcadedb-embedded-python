@@ -1,4 +1,4 @@
-# LadybugDB package + versions (updated 2026-07-11)
+# LadybugDB package + versions (updated 2026-08-28)
 
 The experiments use the OFFICIAL LadybugDB package **`ladybug`** (0.18.1, from
 LadybugDB/ladybug-python). Earlier they pinned `real_ladybug` (0.15.3), which is
@@ -6,11 +6,8 @@ published from a different repo (lbugdb/lbug) and is frozen; we switched after
 LadybugDB shipped 0.18.1.
 
 Versions pinned (all on PyPI):
-- ArcadeDB: `arcadedb-embedded==26.7.2` (release). This also corrects an earlier
-  paper misstatement: the 2026-07-05 run actually used `26.8.1.dev0` (upstream's
-  pom said 26.8.1-SNAPSHOT at build time; that line was later renamed and
-  released as 26.7.2), while the paper stated 26.7.2. Re-measured on the real
-  26.7.2 release so the text is now true.
+- ArcadeDB: `arcadedb-embedded==26.8.1` (release; every paper row was re-measured on
+  the PyPI 26.8.1 wheel on 2026-08-04, image sha256:d0dbe7c653c1).
 - LadybugDB: `ladybug==0.18.1`.
 - DuckDB 1.5.4, SQLite 3.46.1, Chroma 1.5.9 (unchanged).
 

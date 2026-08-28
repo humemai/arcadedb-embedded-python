@@ -17,17 +17,12 @@ import bench_common as bc
 
 
 def _arcadedb_version():
-    """Version from the installed distribution metadata, not the module attr.
+    """Version from the installed distribution metadata.
 
-    `arcadedb_embedded.__version__` was baked at build time and did not track
-    the wheel: a 26.8.1.dev20 wheel reported "26.8.1.dev0". Fixed upstream in
-    9f2f542c84 (shipped in 26.8.1.dev21), but every run in this paper used an
-    earlier wheel, so results/runs.csv records lib_version 26.8.1.dev0 for
-    ArcadeDB rows that actually ran dev2, dev3 and dev20. The authoritative
-    versions are the pins in build_images.sh, which is what the paper states.
-
-    importlib.metadata reads the installed distribution, so it is right on
-    every wheel including the old ones.
+    importlib.metadata reads the installed distribution, so it reports the
+    wheel that is actually installed. Every ArcadeDB row behind the paper
+    (results/runs_paper.csv) ran the released 26.8.1 PyPI wheel, image
+    sha256:d0dbe7c653c1, and records lib_version 26.8.1.
     """
     try:
         from importlib.metadata import version as _v
