@@ -687,7 +687,6 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "arcadedb-embedded"
 # Placeholder: the build overwrites this from the parent pom.xml
-# (scripts/extract_version.py), so a wheel is versioned 26.8.1.devN.
 version = "0.0.0"
 requires-python = ">=3.10"
 dependencies = ["jpype1>=1.5.0"]

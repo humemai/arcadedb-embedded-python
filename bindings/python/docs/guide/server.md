@@ -204,8 +204,7 @@ inferred from the jars being present.
 
 ### Two things to know before exposing these
 
-**`redis_port` is accepted and ignored.** Measured on 26.8.1.dev24 and still
-true on 26.8.1: with a distinct port passed to each plugin, Postgres and Bolt
+**`redis_port` is accepted and ignored.** Measured on 26.8.1: with a distinct port passed to each plugin, Postgres and Bolt
 bind what they were given and the Redis listener binds the hardcoded 6379
 anyway. Plan for 6379 or do not enable Redis.
 

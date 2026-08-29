@@ -16,10 +16,10 @@ It covers:
 - deriving alert-style views from SQL aggregates
 - reading back the latest sample per sensor
 
-!!! note "TAG storage changed in 26.8.1.dev23"
+!!! note "TAG storage changed in 26.8.1"
 
     A mutable TimeSeries row is fixed-stride, so a `STRING` TAG used to reserve
-    258 bytes inline whatever the value was. Since 26.8.1.dev23 a TAG holds a
+    258 bytes inline whatever the value was. Since 26.8.1 a TAG holds a
     4-byte dictionary id instead
     ([#5574](https://github.com/ArcadeData/arcadedb/pull/5574)), which for a
     ten-tag schema takes the row stride from 2,612 B to 72 B.
