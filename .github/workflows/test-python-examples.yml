@@ -284,19 +284,57 @@ jobs:
           # Determine which examples are selected
           examples=$(ls $EXAMPLES 2>/dev/null || true)
 
+          # EXIT 75 MEANS "THE DATASET HOST IS DOWN", NOT "THE BINDINGS BROKE".
+          #
+          # On 2026-08-29 the TLS certificate for files.grouplens.org expired and
+          # every job here went red on BOTH this fork and upstream's main -- 11
+          # and 12 jobs, every OS, Python 3.10 through 3.14 -- at this step,
+          # before a single example ran. Re-running does not help: a re-run
+          # happens now, and the certificate is still expired.
+          #
+          # The cost is not the lost coverage, it is that upstream's main showed
+          # a failing run titled with a Python bindings PR. A third party letting
+          # a certificate lapse must not be indistinguishable from a regression
+          # we introduced.
+          #
+          # So: skip the examples that need the dataset, keep running the rest,
+          # and say plainly why. Any other non-zero exit is still a hard failure.
+          SKIPPED_DATASETS=""
+          fetch() {  # fetch <label> <download_data.py args...>
+            local label="$1"; shift
+            # rc MUST be captured in the else branch. After `if cmd; then ...; fi`
+            # with no else, the IF STATEMENT returns 0, so a `$?` read after `fi`
+            # is the if's status and not the command's -- which silently turned
+            # every failure into "exited 0" and would have made this skip
+            # everything, including real ones.
+            local rc=0
+            if python3 download_data.py "$@"; then
+              return 0
+            else
+              rc=$?
+            fi
+            if [ "$rc" -eq 75 ]; then
+              echo "::warning title=Dataset unavailable::$label host unreachable; skipping examples that need it"
+              SKIPPED_DATASETS="$SKIPPED_DATASETS $label"
+              return 0
+            fi
+            echo "::error title=Dataset download failed::$label exited $rc"
+            return "$rc"
+          }
+
           if echo "$examples" | grep -qE '(^|[[:space:]])(04_csv_import_documents|05_csv_import_graph|06_vector_search_recommendations)\.py([[:space:]]|$)'; then
             echo "📥 Downloading MovieLens Small dataset..."
-            python3 download_data.py movielens-small
+            fetch movielens-small movielens-small
           fi
 
           if echo "$examples" | grep -qE '(^|[[:space:]])(07_stackoverflow_tables_oltp|08_stackoverflow_tables_olap|09_stackoverflow_graph_oltp|10_stackoverflow_graph_olap|13_stackoverflow_hybrid_queries)\.py([[:space:]]|$)'; then
             echo "📥 Downloading Stack Overflow Tiny dataset (no vectors)..."
-            python3 download_data.py stackoverflow-tiny --no-vectors
+            fetch stackoverflow-tiny-novec stackoverflow-tiny --no-vectors
           fi
 
           if echo "$examples" | grep -qE '(^|[[:space:]])(11_vector_index_build|12_vector_search)\.py([[:space:]]|$)'; then
             echo "📥 Downloading Stack Overflow Tiny dataset (with vectors)..."
-            python3 download_data.py stackoverflow-tiny
+            fetch stackoverflow-tiny stackoverflow-tiny
           fi
 
       - name: Install timeout command (macOS only)
