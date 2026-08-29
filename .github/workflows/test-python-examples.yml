@@ -39,6 +39,20 @@ on:
         required: false
         default: "0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py"
 
+# SUPERSEDE, do not race.
+#
+# A force-push to a PR branch left the OLD run going alongside the new one: on
+# #6889 both 118b347ce and 75293c7a2 ran at once, and the stale one reported a
+# failure that the newer commit had already fixed. Anyone reading the PR sees a
+# red check against work that is done.
+#
+# cancel-in-progress is scoped to pull_request ONLY. On a push to a long-lived
+# branch a superseded run is often the one you still want -- it is the record
+# for that commit -- so those are left to finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   EXAMPLES: ${{ inputs.examples || '0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py' }}
 
