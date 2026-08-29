@@ -16,7 +16,7 @@ On `main` (or a `release/X.Y.Z` branch if you want main to keep moving):
 
 - [ ] Version is already set in `pom.xml` (e.g., `X.Y.Z-SNAPSHOT`)
 - [ ] Run full test suite
-- [ ] Update `CHANGELOG.md` or prepare release notes
+- [ ] Prepare release notes for the GitHub release
 - [ ] Update documentation if needed
 - [ ] Commit all changes
 
@@ -70,7 +70,6 @@ git push origin main
 - Update project README if needed
 - Notify users/community
 - Update any integration guides
-- Optionally add release to CHANGELOG.md
 
 ## Python Versioning Strategy
 

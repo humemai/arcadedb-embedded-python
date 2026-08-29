@@ -238,5 +238,3 @@ nav:
   - Release Workflow: development/release.md
   - Troubleshooting: development/troubleshooting.md
 - Java API Coverage: java-api-coverage.md
-
-- Changelog: changelog.md

@@ -72,8 +72,8 @@ INCLUDE_PATHS=(
     ".github/workflows/test-python-examples.yml"
 )
 
-# NOT shipped, and each for a reason: CHANGELOG.md and the AUDIT/REFACTOR plans
-# are fork release history and internal notes; benchmarks/, dist/, exports/,
+# NOT shipped, and each for a reason: the AUDIT/REFACTOR plans are internal
+# notes; benchmarks/, dist/, exports/,
 # local-jars/, log/, site/, my_test_databases/ are artifacts; docs/ and
 # mkdocs.yml are the fork's documentation site. Audited 2026-08-04: upstream
 # holds nothing under bindings/python that we withhold.
