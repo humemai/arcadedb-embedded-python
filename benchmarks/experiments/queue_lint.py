@@ -45,6 +45,36 @@ CONTAINER_PATHS = ("/data/", "/lcdb", "/pout", "/work/")
 # Commands that run INSIDE a cell, where container paths are correct.
 CELL_RUNNERS = ("runner.py",)
 
+# A host-side probe gets NOTHING: no bind mounts, no venv, no cpuset, no heap.
+# runner.py gives each cell 0-11 and a tier-appropriate -Xmx; a probe launched
+# straight from a queue script is compared against those numbers while running
+# on all 20 cores with the JVM default heap. It has cost us three times: the e4
+# decomposition (0-19, quarantined), qBN's 10M delta scan (no -Xmx, killed at
+# rc=139 on OutOfMemoryError after an hour), and the jpype suite (0-19, and a
+# July-stale class file so the Java arm never ran at all).
+PROBE_INVOCATION = re.compile(
+    r"""(?:\bpython3\b|/bin/python)["']?\s+-u\s+([a-z_0-9]+\.py)"""
+    r"""|(?:^|\s|/|\./)(run_bench\.sh)""")
+# Targets that establish their own envelope. Kept explicit rather than inferred:
+# the linter cannot read the callee, so each entry is a claim someone checked.
+PINS_INTERNALLY = {
+    "run_bench.sh": "BENCH_CPUSET defaults to 0-11 inside run_bench.sh",
+}
+SETS_HEAP_INTERNALLY = {
+    "run_bench.sh": "JFLAGS carries -Xmx4g",
+}
+PIN_TOKENS = ("taskset -c", "BENCH_CPUSET", "cpuset-cpus")
+
+# `VAR=x taskset -c 0-11 cmd` is right; `taskset -c 0-11 VAR=x cmd` is not.
+# Once taskset is the command the rest are its ARGUMENTS, so the shell never
+# treats VAR=x as an assignment and taskset tries to exec a file by that name:
+#   taskset: failed to execute PROBE_DB=/var/tmp/deltaprobe_1000000
+# All four qBN arms died rc=127 in one second on 2026-08-29 this way.
+TASKSET_THEN_ENV = re.compile(r"taskset\s+-c\s+\S+\s+(?:\\\s*)?([A-Za-z_][A-Za-z0-9_]*)=")
+HEAP_TOKENS = ("-Xmx", "ARCADEDB_JVM_ARGS", "JAVA_OPTS", "PROBE_HEAP",
+               "ARCADEDB_HEAP",   # ts_stride_probe
+               "HEAP=")           # deployment_decomp_probe
+
 
 def read_scripts(paths, host=None):
     out = {}
@@ -100,6 +130,25 @@ def check_paths_and_python(name, body):
             m = re.search(r"(?<!/)\bpython3\b\s+-u\s+([a-z_]+\.py)", line)
             if m and m.group(1) not in CELL_RUNNERS:
                 problems.append((i, f"bare python3 runs {m.group(1)} on the host; use $VENV/bin/python"))
+
+            # the envelope: a probe measured on a different machine shape than
+            # the campaign is not comparable to it, however cleanly it exits
+            te = TASKSET_THEN_ENV.search(line)
+            if te:
+                problems.append(
+                    (i, f"taskset is followed by {te.group(1)}=...; the shell "
+                        f"passes it to taskset as a filename (rc=127). Put "
+                        f"every VAR=value BEFORE taskset."))
+
+            pm = PROBE_INVOCATION.search(line)
+            target = pm and (pm.group(1) or pm.group(2))
+            if target and target not in CELL_RUNNERS and "lint: unpinned" not in line:
+                if not any(t in line for t in PIN_TOKENS) and target not in PINS_INTERNALLY:
+                    problems.append(
+                        (i, f"host-side {target} carries no cpuset; runner.py cells get 0-11"))
+                if not any(t in line for t in HEAP_TOKENS) and target not in SETS_HEAP_INTERNALLY:
+                    problems.append(
+                        (i, f"host-side {target} sets no heap; the JVM default is a quarter of RAM"))
     return problems
 
 
@@ -115,9 +164,24 @@ def check_cycles(scripts):
             waits.update(q for q in m.group(1).split() if q.startswith("qB"))
         waits.discard(stage)
         edges[stage] = waits
+
+    # A wrapper that ends in `exec /bin/bash /home/tk/qXX.sh` IS qXX once it
+    # starts: it holds the machine on qXX's behalf and other scripts wait on
+    # the qXX name, not the wrapper's. Without this, qBNRUN -> qBH plus
+    # qBH -> qBN reads as two unrelated edges when it is one deadlock.
+    alias = {}
+    for name, body in scripts.items():
+        m = re.search(r"exec\s+/bin/bash\s+/home/tk/(qB[A-Z]*)\.sh", body)
+        if m and m.group(1) != name[:-3]:
+            alias[name[:-3]] = m.group(1)
+    for wrapper, target in alias.items():
+        edges.setdefault(target, set())
+        edges[target] |= edges.get(wrapper, set())
+
     cycles = []
     for a, waits in edges.items():
         for b in waits:
+            b = alias.get(b, b)
             if b in edges and a in edges[b]:
                 pair = tuple(sorted((a, b)))
                 if pair not in cycles:
