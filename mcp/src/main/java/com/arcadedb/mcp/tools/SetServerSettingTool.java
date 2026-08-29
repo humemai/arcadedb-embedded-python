@@ -60,19 +60,35 @@ public class SetServerSettingTool {
     // reached this server-administration operation (GHSA-pff6-hp53-pj54).
     MCPToolUtils.checkServerAdmin(user, "set_server_setting");
 
-    final String key = args.getString("key", "");
-    final String value = args.getString("value", "");
-
-    if (key.isEmpty())
-      throw new IllegalArgumentException("Setting key is required");
+    // Both members are declared required, so both have to be re-checked here: the declared schema is advisory, and
+    // reading 'value' with an empty-string default turned a call that omitted it into a success that stored "" -
+    // for a numeric key, a NumberFormatException deferred to whichever component read the setting next (#6837).
+    final String key = MCPToolUtils.requireString(args, "key");
+    final String value = args.getString("value", null);
+    if (value == null)
+      throw new IllegalArgumentException("'value' is required");
 
     // Validate the key exists
     final GlobalConfiguration cfg = GlobalConfiguration.findByKey(key);
     if (cfg == null)
       throw new IllegalArgumentException("Unknown server setting: " + key);
 
+    // "" is a legitimate value for a String setting - it is how a caller clears one - and is a valid value for no
+    // other type, so it is rejected exactly where it would otherwise be stored unparseable.
+    if (value.isEmpty() && cfg.getType() != String.class)
+      throw new IllegalArgumentException(
+          "'value' must not be empty for setting '" + key + "' of type " + cfg.getType().getSimpleName());
+
+    // A non-empty value still has to BE the setting's type (#6875). ContextConfiguration.setValue is a plain map
+    // put, so before this coercion "arcadedb.asyncWorkerThreads"="abc" was answered with isError:false and the
+    // NumberFormatException surfaced later, inside whichever component read the setting next. Coercing here also
+    // means the map holds a typed value, which both GlobalConfiguration's and ContextConfiguration's accessors
+    // return without re-parsing. GlobalConfiguration.coerce is the same parse the global setter uses, so this tool
+    // and its HTTP twin refuse exactly what setValue refuses.
+    final Object coerced = cfg.coerce(value);
+
     final Object oldValue = server.getConfiguration().getValue(cfg);
-    server.getConfiguration().setValue(key, value);
+    server.getConfiguration().setValue(cfg.getKey(), coerced);
 
     final JSONObject result = new JSONObject();
     result.put("key", key);
@@ -82,7 +98,11 @@ public class SetServerSettingTool {
     // so an unset secret cannot be distinguished from a set one either.
     result.put("previousValue",
         cfg.isHidden() ? "*****" : oldValue != null ? oldValue.toString() : JSONObject.NULL);
-    result.put("newValue", value);
+    // the value as STORED, which for a typed setting is the coerced form rather than the text the caller sent -
+    // masked for a secret on the same terms as previousValue above, so that a response the caller may log, cache
+    // or hand on does not carry a credential this server otherwise refuses to hand back
+    result.put("newValue",
+        cfg.isHidden() ? "*****" : coerced != null ? coerced.toString() : JSONObject.NULL);
     result.put("message", "Setting '" + key + "' updated successfully.");
     return result;
   }

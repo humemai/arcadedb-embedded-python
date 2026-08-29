@@ -163,6 +163,19 @@ public class Select {
     return this;
   }
 
+  /**
+   * Bounds how long one execution of this select may take. The budget covers the whole answer - index lookup
+   * included - and is enforced by every plan shape, the vector k-NN search of {@link #nearestTo} among them.
+   *
+   * @param exceptionOnTimeout {@code true} to raise a {@link com.arcadedb.exception.TimeoutException} when the budget
+   *                           runs out, {@code false} to stop and hand back whatever was <b>already produced</b>: the
+   *                           records a {@link SelectIterator} had yielded, the tally {@link #count()} had reached.
+   *                           #6873: on the {@code nearestTo()} path "already produced" means the results already
+   *                           assembled, so an expiry before assembly starts answers with an <b>empty</b> list rather
+   *                           than a truncated one - the neighbours the index searches found are RIDs and distances,
+   *                           and turning any of them into a result would mean loading a record past a deadline that
+   *                           has already gone.
+   */
   public Select timeout(final long timeoutValue, final TimeUnit timeoutUnit, final boolean exceptionOnTimeout) {
     checkNotCompiled();
     this.timeoutInMs = timeoutUnit.toMillis(timeoutValue);
@@ -192,12 +205,12 @@ public class Select {
       fromType(json.getString("fromType"));
       if (json.has("polymorphic"))
         polymorphic(json.getBoolean("polymorphic"));
-    } else if (json.has("fromBuckets")) {
-      final JSONArray buckets = json.getJSONArray("fromBuckets");
-      fromBuckets(
-          buckets.toList().stream().map(b -> database.getSchema().getBucketByName(b.toString())).collect(Collectors.toList())
-              .toArray(new String[buckets.length()]));
-    }
+    } else if (json.has("fromBuckets"))
+      // #6817: fromBuckets(String...) RESOLVES THE NAMES ITSELF, SO MAPPING THEM TO Bucket OBJECTS FIRST WAS BOTH
+      // POINTLESS AND FATAL: List<Bucket>.toArray(new String[size]) COMPILES - <T> T[] toArray(T[])'S TYPE VARIABLE
+      // IS INDEPENDENT OF THE ELEMENT TYPE - AND THEN TAKES ArrayList'S System.arraycopy BRANCH, WHICH RAISES
+      // ArrayStoreException FOR EVERY NON-EMPTY BUCKET LIST. PASS THE NAMES STRAIGHT THROUGH INSTEAD
+      fromBuckets(json.getJSONArray("fromBuckets").toList().stream().map(Object::toString).toArray(String[]::new));
 
     if (json.has("where")) {
       where();
@@ -209,10 +222,34 @@ public class Select {
     if (json.has("skip"))
       skip(json.getInt("skip"));
 
+    // #6817: THE STATE BELOW IS WRITTEN BY SelectCompiled.json() BUT USED TO BE DROPPED HERE, SO json() AND
+    // json(JSONObject) WERE NOT INVERSE - A ROUND-TRIPPED SELECT RAN WITH NO DEADLINE AND NO ORDER BY
+    if (json.has("orderBy")) {
+      final JSONArray parsedOrderBy = json.getJSONArray("orderBy");
+      for (int i = 0; i < parsedOrderBy.length(); i++) {
+        final JSONObject entry = parsedOrderBy.getJSONObject(i);
+        orderBy(entry.getString("property"), entry.getBoolean("ascending", true));
+      }
+    }
+    if (json.has("timeoutInMs"))
+      timeout(json.getLong("timeoutInMs"), TimeUnit.MILLISECONDS, json.getBoolean("exceptionOnTimeout", false));
+    if (json.getBoolean("parallel", false))
+      // NOT VIA SelectCompiled.parallel(): THAT IS ONLY REACHABLE AFTER compile(), AND THIS SELECT IS STILL BEING BUILT
+      parallel = true;
+
     return this;
   }
 
   private void parseJsonCondition(final JSONArray condition) {
+    // #6817: A SELECT WITH A SINGLE WHERE LEAF SERIALIZES AS A ONE-ELEMENT ARRAY - compile() WRAPS THE LEAF IN A
+    // SYNTHETIC `run` ROOT WHOSE OPERATOR SelectTreeNode.toJSON() DELIBERATELY OMITS AND WHOSE RIGHT SIDE IS null.
+    // REJECTING THAT SHAPE MADE THE COMMONEST SELECT OF ALL IMPOSSIBLE TO READ BACK, SO UNWRAP IT INSTEAD: compile()
+    // RE-ADDS THE SAME `run` ROOT ON THE WAY OUT, WHICH IS WHAT MAKES THE TWO json METHODS INVERSE FOR THIS SHAPE
+    if (condition.length() == 1 && condition.get(0) instanceof JSONArray nested) {
+      parseJsonCondition(nested);
+      return;
+    }
+
     if (condition.length() != 3)
       throw new IllegalArgumentException("Invalid condition " + condition);
 
