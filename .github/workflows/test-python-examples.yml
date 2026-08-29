@@ -337,6 +337,18 @@ jobs:
             fetch stackoverflow-tiny stackoverflow-tiny
           fi
 
+          # HAND THE SKIP LIST TO THE NEXT STEP.
+          #
+          # Each step is its own shell, so SKIPPED_DATASETS dies here. Without
+          # this the download skips politely and the example loop then runs
+          # 04_csv_import_documents.py --dataset movielens-small against data
+          # that was never fetched -- the job still fails, just later and with a
+          # worse error. Caught in review on #6889.
+          echo "SKIPPED_DATASETS=$(echo $SKIPPED_DATASETS | xargs)" >> "$GITHUB_ENV"
+          if [ -n "$(echo $SKIPPED_DATASETS | xargs)" ]; then
+            echo "::notice title=Datasets unavailable::skipping examples that need:$SKIPPED_DATASETS"
+          fi
+
       - name: Install timeout command (macOS only)
         if: matrix.platform == 'darwin/amd64' || matrix.platform == 'darwin/arm64'
         shell: bash
@@ -385,9 +397,32 @@ jobs:
             TIMEOUT_CMD="timeout"
           fi
 
+          # WHICH EXAMPLES NEED WHICH DATASET. Same grouping the download step
+          # uses to decide what to fetch, kept in the same file so the two
+          # cannot drift into disagreeing about what a dataset is for.
+          needs_dataset() {  # <example.py> -> prints the label, or nothing
+            case "$1" in
+              04_csv_import_documents.py|05_csv_import_graph.py|06_vector_search_recommendations.py)
+                echo "movielens-small" ;;
+              07_stackoverflow_tables_oltp.py|08_stackoverflow_tables_olap.py|09_stackoverflow_graph_oltp.py|10_stackoverflow_graph_olap.py|13_stackoverflow_hybrid_queries.py)
+                echo "stackoverflow-tiny-novec" ;;
+              11_vector_index_build.py|12_vector_search.py)
+                echo "stackoverflow-tiny" ;;
+            esac
+          }
+
           # Run each example
           for example in $examples; do
             total=$((total + 1))
+
+            # Skip, do not fail, when the dataset host was unreachable. Counted
+            # as skipped and named, so a reader can tell "not run" from "passed".
+            need=$(needs_dataset "$(basename "$example")")
+            if [ -n "$need" ] && echo " ${SKIPPED_DATASETS:-} " | grep -q " $need "; then
+              echo "SKIP $example - dataset '$need' unavailable (third-party host)"
+              skipped=$((skipped + 1))
+              continue
+            fi
 
             # Set example-specific parameters and timeout
             case "$example" in
