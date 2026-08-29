@@ -30,6 +30,48 @@ JFLAGS=(
     -Xmx4g
 )
 
+# The campaign pins every cell to 0-11; a host-side suite gets the whole machine
+# unless it asks. An unpinned run is not comparable to the numbers it is meant
+# to be compared against -- the same defect that made the e4 host-side run
+# unusable. Override with BENCH_CPUSET= (empty) to deliberately run unpinned.
+BENCH_CPUSET="${BENCH_CPUSET-0-11}"
+if [ -n "$BENCH_CPUSET" ]; then
+    PIN=(taskset -c "$BENCH_CPUSET")
+else
+    PIN=()
+fi
+
+FAILED_STEPS=""
+
+# OverheadBench.class is gitignored, so a fresh checkout has the source and no
+# class: every j-* arm died on ClassNotFoundException while run_bench.sh still
+# exited 0, and the CSV kept only the p-* half of a Java-vs-Python comparison.
+# The bundled JRE is runtime-only and neither bench host carries a JDK, so
+# compile in the same Corretto the JRE is (docker image, no host install).
+JAVAC_IMAGE="${JAVAC_IMAGE:-maven:3.9-amazoncorretto-25}"
+compile_java() {
+    if command -v javac >/dev/null 2>&1; then
+        echo "=== compiling OverheadBench.java with host javac"
+        javac -cp "$JARS" -d "$BENCH_DIR" "$BENCH_DIR/OverheadBench.java" || return 1
+    elif command -v docker >/dev/null 2>&1; then
+        echo "=== compiling OverheadBench.java in $JAVAC_IMAGE"
+        # HOME=/tmp: the maven image tries to seed /root/.m2 and prints a
+        # "Wrong volume permissions?" warning under -u; javac never needs it.
+        docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$BENCH_DIR:/bench" -v "$SITE/jars:/jars:ro" -w /bench \
+            "$JAVAC_IMAGE" javac -cp '/jars/*' -d /bench OverheadBench.java || return 1
+    else
+        echo "no javac and no docker: cannot build the Java arm" >&2
+        return 1
+    fi
+    [ -f "$BENCH_DIR/OverheadBench.class" ]
+}
+if ! compile_java; then
+    echo "ABORT: OverheadBench did not compile; the Java half of the suite" >&2
+    echo "       cannot run and a Python-only CSV proves nothing." >&2
+    exit 1
+fi
+
 step() { # step <name> <cmd...>
     local name="$1"
     shift
@@ -38,6 +80,7 @@ step() { # step <name> <cmd...>
         echo "OK  $name" >> "$RESULTS/run.log"
     else
         echo "FAIL $name (exit $?)" | tee -a "$RESULTS/run.log"
+        FAILED_STEPS="$FAILED_STEPS $name"
     fi
     # -o extraction (not ^-anchored): the engine logger omits trailing newlines,
     # so protocol lines can start mid-line
@@ -45,15 +88,22 @@ step() { # step <name> <cmd...>
     # the engine, the commit and the timestamp they ran under, and a collector
     # that filtered it out would leave the CSV exactly as unprovenanced as the
     # one this change exists to replace.
-    grep -ohE '(RESULT|PARITY|INFO|MICRO|PROVENANCE),[^\r\n]*' "$RESULTS/$name.log" >> "$RESULTS/all_results.csv" || true
+    # NOT [^\r\n]* -- in a POSIX bracket expression \r and \n are the literal
+    # characters backslash, r and n, so that class means "not backslash, r or n"
+    # and every line was truncated at its first r/n. It silently reduced
+    # PROVENANCE,{"cpuset": "0-19", "engine"...  to  PROVENANCE,{"cpuset": "0-19", "e
+    # for the whole of 2026-08. grep is already line-oriented, so .* is the
+    # correct "rest of line"; tr strips the CR the engine logger can leave.
+    grep -ohE '(RESULT|PARITY|INFO|MICRO|PROVENANCE),.*' "$RESULTS/$name.log" \
+        | tr -d '\r' >> "$RESULTS/all_results.csv" || true
 }
 
 jrun() { # jrun <phase> <dataDir> <dbDir>
-    "$JAVA" "${JFLAGS[@]}" -cp "$JARS:$BENCH_DIR" OverheadBench "$@"
+    "${PIN[@]}" "$JAVA" "${JFLAGS[@]}" -cp "$JARS:$BENCH_DIR" OverheadBench "$@"
 }
 
 prun() { # prun <phase> <dataDir> <dbDir>
-    (cd "$REPO_ROOT" && uv run python "$BENCH_DIR/bench_python.py" "$@")
+    (cd "$REPO_ROOT" && "${PIN[@]}" uv run python "$BENCH_DIR/bench_python.py" "$@")
 }
 
 : > "$RESULTS/all_results.csv"
@@ -104,3 +154,11 @@ if [ "${SKIP_500K:-0}" != "1" ]; then
 fi
 
 echo "=== [$(date +%H:%M:%S)] ALL DONE" | tee -a "$RESULTS/run.log"
+
+# "Steps that fail are skipped past so an overnight run always completes" is a
+# good property; reporting rc=0 for a run in which every Java arm died is not.
+# The queue gates on this line.
+if [ -n "$FAILED_STEPS" ]; then
+    echo "FAILED STEPS:$FAILED_STEPS" | tee -a "$RESULTS/run.log"
+    exit 1
+fi
