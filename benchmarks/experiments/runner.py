@@ -387,7 +387,14 @@ BACKENDS = {
                        # upstream #6513 made it budget off AVAILABLE heap and the server arm's deep10m build
                        # went 3,256 s -> 16,981 s (5.2x) against an unchanged embedded arm. The engine change
                        # is real; it landed on a configuration we never meant to run.
-                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
+                       # -XX:+UseCompactObjectHeaders, because jvm.py:513 adds it to
+                       # EVERY embedded JVM unconditionally. On the stock image the
+                       # served arm could not have it at all -- JDK 21 answers
+                       # "Unrecognized VM option" -- so the deployment axis compared a
+                       # heap layout as well as a transport. It is settable now only
+                       # because the served arm moved to Corretto 25 with the same jars.
+                       "-e", "JAVA_OPTS=-XX:+UseCompactObjectHeaders "
+                             "-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
                              "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE + _PCT_OPT],
@@ -497,7 +504,14 @@ BACKENDS = {
                        # upstream #6513 made it budget off AVAILABLE heap and the server arm's deep10m build
                        # went 3,256 s -> 16,981 s (5.2x) against an unchanged embedded arm. The engine change
                        # is real; it landed on a configuration we never meant to run.
-                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
+                       # -XX:+UseCompactObjectHeaders, because jvm.py:513 adds it to
+                       # EVERY embedded JVM unconditionally. On the stock image the
+                       # served arm could not have it at all -- JDK 21 answers
+                       # "Unrecognized VM option" -- so the deployment axis compared a
+                       # heap layout as well as a transport. It is settable now only
+                       # because the served arm moved to Corretto 25 with the same jars.
+                       "-e", "JAVA_OPTS=-XX:+UseCompactObjectHeaders "
+                             "-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
                              "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE + _PCT_OPT],
@@ -617,7 +631,14 @@ BACKENDS = {
                        # upstream #6513 made it budget off AVAILABLE heap and the server arm's deep10m build
                        # went 3,256 s -> 16,981 s (5.2x) against an unchanged embedded arm. The engine change
                        # is real; it landed on a configuration we never meant to run.
-                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
+                       # -XX:+UseCompactObjectHeaders, because jvm.py:513 adds it to
+                       # EVERY embedded JVM unconditionally. On the stock image the
+                       # served arm could not have it at all -- JDK 21 answers
+                       # "Unrecognized VM option" -- so the deployment axis compared a
+                       # heap layout as well as a transport. It is settable now only
+                       # because the served arm moved to Corretto 25 with the same jars.
+                       "-e", "JAVA_OPTS=-XX:+UseCompactObjectHeaders "
+                             "-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
                              "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE + _PCT_OPT],
@@ -688,7 +709,14 @@ BACKENDS = {
                        # upstream #6513 made it budget off AVAILABLE heap and the server arm's deep10m build
                        # went 3,256 s -> 16,981 s (5.2x) against an unchanged embedded arm. The engine change
                        # is real; it landed on a configuration we never meant to run.
-                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
+                       # -XX:+UseCompactObjectHeaders, because jvm.py:513 adds it to
+                       # EVERY embedded JVM unconditionally. On the stock image the
+                       # served arm could not have it at all -- JDK 21 answers
+                       # "Unrecognized VM option" -- so the deployment axis compared a
+                       # heap layout as well as a transport. It is settable now only
+                       # because the served arm moved to Corretto 25 with the same jars.
+                       "-e", "JAVA_OPTS=-XX:+UseCompactObjectHeaders "
+                             "-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
                              "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE + _PCT_OPT],
@@ -706,7 +734,14 @@ BACKENDS = {
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
         # see the ARCADEDB_OPTS_GC note above
         "-e", "ARCADEDB_OPTS_GC=",
-                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
+                       # -XX:+UseCompactObjectHeaders, because jvm.py:513 adds it to
+                       # EVERY embedded JVM unconditionally. On the stock image the
+                       # served arm could not have it at all -- JDK 21 answers
+                       # "Unrecognized VM option" -- so the deployment axis compared a
+                       # heap layout as well as a transport. It is settable now only
+                       # because the served arm moved to Corretto 25 with the same jars.
+                       "-e", "JAVA_OPTS=-XX:+UseCompactObjectHeaders "
+                             "-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
                              "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE + _PCT_OPT],
