@@ -387,6 +387,18 @@ DENSE_PRECISION = {
     "duckdb_vss_dense": "fp32",
     "sqlite_vec_dense": "fp32",
     "lancedb_dense": "int8",
+    # The int8 comparator arms. They are written in l3d_dense.py, registered in
+    # runner.py, and running in the current campaign, but they had no entry
+    # here -- and a dense backend without one makes this script raise
+    # SystemExit. So the first campaign to finish them would have failed the
+    # export rather than published them. Verified against the DDL each arm
+    # issues, per DECISIONS #53, not against its name:
+    #   qdrant_dense_int8             ScalarQuantization(type=INT8, quantile .99)
+    #   milvus_dense_int8             HNSW_SQ / SQ8
+    #   arcadedb_dense_embedded_int8  LSM_VECTOR METADATA quantization INT8
+    "qdrant_dense_int8": "int8",
+    "milvus_dense_int8": "int8",
+    "arcadedb_dense_embedded_int8": "int8",
 }
 
 
@@ -583,7 +595,14 @@ def _dense_10m_entries():
         out.append({
             "backend": label,
             "is_arcadedb": ours,
-            "precision": "int8" if arm == "int8" else "fp32",
+            # NOT `arm == "int8"`. arm is a FILENAME token, and only ArcadeDB's
+            # quantized arm is called "int8"; LanceDB's is "lancedb", so the
+            # published deep10m row carried precision="fp32" beneath the label
+            # "LanceDB (int8)" -- confirmed in web_benchmarks.json. DENSE_PRECISION
+            # is the audited answer, and the arm token only has to disambiguate
+            # ArcadeDB's two arms, which share one backend name.
+            "precision": ("int8" if arm == "int8"
+                          else DENSE_PRECISION.get(backend_key, "fp32")),
             "scale": "deep10m",
             "scale_label": scale_label("l3d", "deep10m"),
             "workload": "search",
