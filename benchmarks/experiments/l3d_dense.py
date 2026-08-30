@@ -1021,7 +1021,26 @@ class MilvusInt8(Milvus):
 
 BACKENDS = {b.name: b for b in
             (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus,
-             ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8)}
+             ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8,
+             ArcadeServerInt8, SqliteVecInt8)}
+
+# EVERY adapter that names itself must be registered here. This tuple is
+# explicit, and --backend takes `choices=list(BACKENDS)`, so a class that exists,
+# declares a name, and is wired into runner.py is STILL rejected by argparse if
+# someone forgets this line. That is not hypothetical: arcadedb_dense_server_int8
+# and sqlite_vec_dense_int8 were added, declared, given DENSE_PRECISION entries
+# and registered in runner.py on 2026-08-30, and every one of their cells died in
+# six seconds on `argparse: invalid choice` because only this tuple was missed.
+# runner.py has its OWN BACKENDS dict for topology and images; the two are
+# unrelated registries that share a name, which is what made the gap easy to miss.
+_unregistered = sorted(
+    c.name for c in Base.__subclasses__() + [s for b in Base.__subclasses__()
+                                             for s in b.__subclasses__()]
+    if getattr(c, "name", None) and c.name not in BACKENDS)
+if _unregistered:
+    raise SystemExit(
+        "l3d_dense.py: adapter(s) define a name but are absent from BACKENDS, so "
+        "--backend would reject them: " + ", ".join(_unregistered))
 
 
 def pct(vals):
