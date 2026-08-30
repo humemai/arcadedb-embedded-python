@@ -567,7 +567,15 @@ class LanceDB(Base):
     # all recorded quantization="fp32", which made every int8 comparator row
     # indistinguishable from its fp32 sibling on the one field that names the
     # ablation.
-    quantization = "fp32"
+    # INT8, because that is what build() issues: IVF_HNSW_SQ is scalar
+    # quantization and it is LanceDB's only HNSW offering. The comment above
+    # names three arms that recorded fp32 while building quantized indexes;
+    # qdrant_dense_int8 and milvus_dense_int8 were corrected and THIS ONE, the
+    # third, kept declaring fp32 until 2026-08-30. export_web never published
+    # the wrong value -- it reads precision from DENSE_PRECISION, hand-built
+    # from the adapters, precisely because this field could not be trusted --
+    # so the page label was right while the row was wrong. Now they agree.
+    quantization = "INT8"
     name = "lancedb_dense"
     # lancedb 0.37.1 exposes no close on the connection (checked dir); its
     # tables are files written on commit.
@@ -1014,7 +1022,14 @@ def main():
             f"Reading BENCH_DENSE_QUANT here would label the row from a knob this arm "
             f"may not honour, which is exactly how the int8 comparator rows came to say fp32.")
     _asked = os.environ.get("BENCH_DENSE_QUANT", "").strip()
-    if _asked and canonical_quant_label(_asked) != canonical_quant_label(_declared):
+    # ONLY ArcadeDB arms read BENCH_DENSE_QUANT. A comparator declares what its
+    # own DDL builds and cannot honour the knob at all, so refusing it on a
+    # mismatch would kill every comparator the moment a campaign asked ArcadeDB
+    # for int8 -- and would have fired the instant lancedb_dense started
+    # declaring INT8 truthfully.
+    if ("arcadedb" in args.backend
+            and _asked
+            and canonical_quant_label(_asked) != canonical_quant_label(_declared)):
         raise SystemExit(
             f"{args.backend}: BENCH_DENSE_QUANT={_asked!r} but this arm builds "
             f"{_declared!r} and cannot honour the request. Refusing rather than "
