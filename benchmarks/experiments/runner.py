@@ -861,7 +861,10 @@ def _require_engine_commit(tier, backends):
         "Every row would be written with engine_commit=None, which PAGE-SPEC "
         "rule 3 forbids publishing, and the run would still exit 0.\n"
         "Export the pin the pair was built and VERIFIED at:\n"
-        "    ./build_engine_pair.sh --verify <sha> && export ARCADEDB_ENGINE_COMMIT=<sha>\n"
+        "    ~/verify_pair_c25.sh <sha> && export ARCADEDB_ENGINE_COMMIT=<sha>\n"
+        "    (build_engine_pair.sh verifies a locally COMPILED pair; the pair is now\n"
+        "     assembled from upstream's published jars, and verify_pair_c25.sh also\n"
+        "     checks the JVM major matches on both arms, which it never did.)\n"
         "Or pass --tier sweep if these rows are not for the page.")
 # THE SWAP IS OPT-IN; THE CHECK THAT IT HAPPENED MUST NOT BE.
 #
@@ -894,7 +897,7 @@ def _require_local_server_image():
         "engine, but these served arms would run the STOCK upstream image:\n"
         + "".join(f"  {n}: {BACKENDS[n]['server_image']}\n" for n in stock) +
         "Every row they write would name an engine they did not run.\n"
-        "Export ARCADEDB_SERVER_IMAGE (build_engine_pair.sh prints the tag) with\n"
+        "Export ARCADEDB_SERVER_IMAGE (build_matched_pair.sh prints the tag) with\n"
         "ARCADEDB_WHEEL, or drop --tier paper if these rows are not for the page.")
 
 

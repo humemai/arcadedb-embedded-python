@@ -1,5 +1,22 @@
 # What is in `results/`, and who reads it
 
+> **WHICH HOST.** This describes `results/` **on the bench host (mini)**, where
+> the campaigns actually write. A developer checkout does NOT have the same
+> tree: most of `results/` is gitignored (`runs.jsonl` at `.gitignore:578`,
+> engine logs at `:390`), so overlays, manifests and quarantine files exist on
+> mini as UNTRACKED paths and simply are not here. Counts below are mini's.
+>
+> Two consequences, both of which have bitten:
+>
+> 1. A path listed here may be absent from your checkout. That is expected, not
+>    a missing file. Check on mini before concluding anything is lost.
+> 2. **Committing a path that exists untracked on mini makes mini's `git pull`
+>    fail**, and every queue script opens with `git pull --ff-only`, so it
+>    aborts the waiting stage. This is not the tracked-modification case in
+>    [[dirty-tree-on-mini-is-an-outage]]; it is the untracked-collision case,
+>    and it takes the chain down the same way. Before committing anything under
+>    `results/`, check the incoming paths against mini's untracked files.
+
 Written 2026-08-30 because `provenance_check.py` listed **20 result directories
 as "dead overlay, or an unaudited input"** and eleven of them turned out to be
 live inputs to the published page. A warning that fires on live data teaches
@@ -78,3 +95,34 @@ Add it to `FEEDS`/`FEEDS_FILES` in `provenance_check.py` **or** to this file's
 "no reader" list. The audit exists to catch an unaudited input to a published
 cell; every entry it prints that is actually fine makes the next real one
 easier to miss.
+
+## The 8d6af9475 re-pin (2026-08-30)
+
+The engine moved from `b7c6c800d` to upstream's published snapshot
+`8d6af9475`, and the served arm moved from Temurin 21 / musl / ZGC to
+Corretto 25 / glibc / G1 with compact object headers. See DECISIONS #54.
+
+| path | what |
+|---|---|
+| `runs_page_8d6af9475.jsonl` | the new campaign. Started by carrying 220 clean COMPARATOR rows forward from `runs_page_b7c6c800d.jsonl`; each carries `carried_forward_from` and `carried_forward_reason`. 197 ArcadeDB rows were NOT carried. |
+| `runs_lifecycle_8d6af9475.jsonl` | lifecycle on the matched pair (qCC). Carries the #6798 counters owed upstream. |
+| `results_jdk21_control.jsonl` | **a control, not a published lane.** One served deep10m rep on upstream's stock image (Temurin 21 / musl), identical jars and flags. Exists only to price the JVM major before deciding whether to report it upstream. Never merge into `runs.jsonl`. |
+| `runs_page_b7c6c800d.jsonl` | previous campaign. Its comparator rows live on in the new file; its ArcadeDB rows are superseded. |
+
+**Every ArcadeDB row measured before 2026-08-30 is superseded**, embedded as
+well as served: the jars moved 84 commits. Counted, not estimated: 60 of the
+481 frozen rows in `runs_paper.csv` are ArcadeDB SERVER rows, over l1/medium,
+l1tpc/tpch1, l2/sf1, l2/sf10, l3d/small, l3s/tiny, l3s/small, l3s/medium.
+
+`runs_paper.csv` is regenerated from `runs.jsonl` by the freeze step, and the
+canonical store keys on (lane, scale, n_docs, workload, backend, gav, rep) with
+the latest `ts_utc` winning -- so the re-measured rows supersede the old ones on
+merge. **Do not hand-edit the frozen CSV**; re-freeze after the campaign.
+
+### Queue scripts
+
+`queue-archive-20260830/` on the bench host holds the 15 retired `qB*` scripts.
+They pin `b7c6c800d` and verify the pair with `build_engine_pair.sh`, which
+checks a locally COMPILED pair -- the wrong claim for a pair assembled from
+upstream's published jars. Live scripts are `qCA` -> `qCB` -> `qCC` -> `qCD`,
+each gated on `verify_pair_c25.sh`.
