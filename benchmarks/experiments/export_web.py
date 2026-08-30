@@ -95,7 +95,7 @@ _UNUSABLE_VERSION = re.compile(
     re.I)
 
 
-def _pinned_dir(name):
+def _pinned_dir(name, expected=None):
     """results/<name>_<pin> when the campaign has re-run it, else results/<name>.
 
     Same rule the dense table uses: a pinned re-run supersedes the pre-pin
@@ -108,6 +108,24 @@ def _pinned_dir(name):
     if pin:
         cand = HERE / "results" / f"{name}_{pin}"
         if cand.is_dir():
+            # ALL OR NOTHING. A pinned re-run that has only started supersedes a
+            # COMPLETE overlay file by file, and every caller skips what is
+            # missing, so a partial directory does not shrink the table visibly
+            # -- it publishes the subset that happens to exist. On 2026-08-30
+            # results/sparse_mp_b7c6c800d held 1 of the 12 files that
+            # results/sparse_mp holds, and that one file is an ArcadeDB arm, so
+            # a pinned export would have published a 6-engine multipass
+            # comparison as a single ArcadeDB row while still calling it the
+            # comparison. Same defect the deep10m overlay was fixed for.
+            if expected:
+                missing = [f for f in expected if not (cand / f).is_file()]
+                if missing:
+                    print(f"  NOTE: {cand.name} has {len(missing)} of "
+                          f"{len(expected)} files missing; using the complete "
+                          f"overlay results/{name} instead. Missing: "
+                          f"{', '.join(missing[:4])}"
+                          f"{' ...' if len(missing) > 4 else ''}")
+                    return HERE / "results" / name
             return cand
     return HERE / "results" / name
 
@@ -990,7 +1008,9 @@ def _sparse_multipass_table():
     The dense table CAN carry both columns because both of its passes come out
     of the same overlay. This one cannot, so it says so instead.
     """
-    root = _pinned_dir("sparse_mp")
+    root = _pinned_dir("sparse_mp", expected=[
+        f"sp_{arm}_{tier}.json"
+        for tier in ("medium", "small") for arm, _b, _l in SPARSE_MP_ARMS])
     if not root.is_dir():
         return None
     entries = []
