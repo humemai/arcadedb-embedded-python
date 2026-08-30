@@ -858,13 +858,21 @@ def main():
         present = {os.path.basename(p.rstrip("/"))
                    for p in glob.glob(os.path.join(RESULTS, "*"))
                    if os.path.isdir(p)}
-        skip = {"archive", "manifests", "logs"}
-        unmapped = sorted(present - mapped - skip)
+        # raw/ is an INPUT to this very script, and archive-<date>/ is where
+        # superseded material is parked on purpose; listing either as "dead
+        # overlay, or an unaudited input" trains people to skip the warning.
+        # On 2026-08-30 this printed 20 directories, of which 11 were live
+        # inputs to published tables. Everything it still prints should be
+        # decided and recorded in RESULTS-MAP.md.
+        skip = {"archive", "manifests", "logs", "raw"}
+        unmapped = sorted(d for d in present - mapped - skip
+                          if not d.startswith("archive-"))
         if unmapped:
             print("=== result dirs not mapped to any table ===")
             for u in unmapped:
                 print(f"  {u}")
-            print("  (dead overlay, or an unaudited input: decide which)")
+            print("  (dead overlay, or an unaudited input: decide which,")
+            print("   and record the decision in RESULTS-MAP.md)")
             print()
 
         # The same question for top-level result FILES. Without this, the only
