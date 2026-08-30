@@ -450,13 +450,21 @@ class ArcadeEmbedded(Base):
 
 class ArcadeServer(Base):
     """ArcadeDB over HTTP (client-server), same index/params as embedded."""
-    # fp32, DECLARED, because this arm has no qline path: it cannot pass the
-    # METADATA quantization key that ArcadeEmbedded uses. Before this the row
-    # was labelled from BENCH_DENSE_QUANT, so a campaign exporting INT8 -- the
-    # only way to drive the fp32/int8 axis from outside -- wrote server rows
-    # stamped INT8 for an unquantized index, and the l3d table printed them as
-    # the quantized arm.
+    # fp32 BY CONFIGURATION, not by inability. The note here used to say this
+    # arm "has no qline path: it cannot pass the METADATA quantization key that
+    # ArcadeEmbedded uses". That was wrong: build() already POSTs a METADATA
+    # block over /command/bench and simply omitted the key. The sparse lane had
+    # been running its server arm as int8 the whole time. Corrected 2026-08-30
+    # with ArcadeServerInt8 below; DECISIONS #53 calls this "the first arm this
+    # decision owes", because it is one of ours and can only make our own
+    # numbers look worse or unchanged.
+    #
+    # The label is still DECLARED rather than read from BENCH_DENSE_QUANT: that
+    # knob reaches the embedded adapter's process, not the server container, so
+    # a campaign exporting INT8 used to stamp server rows INT8 over an
+    # unquantized index and the l3d table printed them as the quantized arm.
     quantization = "fp32"
+    _quant_ddl = ""
     name = "arcadedb_dense_server"
 
     def connect(self):
@@ -503,6 +511,7 @@ class ArcadeServer(Base):
         self._cmd("sql", f'''CREATE INDEX ON Article (embedding) LSM_VECTOR
                   METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
                   "maxConnections": {M}, "beamWidth": {EF_CONSTRUCTION},
+                  {self._quant_ddl}
                   "storeVectorsInGraph": false, "addHierarchy": true }}''',
                   # A CLIENT TIMEOUT IS NOT A MEASUREMENT. At deep10m under the
                   # bounded 100k cache this fired at 6h with the server still
@@ -650,6 +659,58 @@ class SqliteVec(Base):
     def search(self, qvec, k):
         rows = self.cx.execute(
             "SELECT rowid FROM v WHERE embedding MATCH ? AND k = ? "
+            "ORDER BY distance", (qvec.tobytes(), k)).fetchall()
+        return [int(r[0]) for r in rows]
+
+
+
+class SqliteVecInt8(SqliteVec):
+    """sqlite-vec with its own shipped int8 column type and quantizer.
+
+    The fp32-only exemption used to read "sqlite-vec is an exact scan by
+    construction, and inventing a quantized configuration an engine does not
+    ship would be a worse comparison than omitting it". The first clause is
+    true and the second does not follow: vec0 ships `int8` as a first-class
+    column type and ships vec_quantize_int8() to fill it, so nothing is being
+    invented here. The scan stays exact; only the stored precision changes,
+    which is exactly the axis this arm exists to price.
+
+    'unit' is the engine's own domain name for [-1, 1], and load_dataset()
+    normalises every row to unit length so L2 ranking equals cosine ranking.
+    So this arm uses the single setting sqlite-vec ships, and chooses nothing --
+    strictly less configuration than QdrantInt8, where we picked quantile 0.99
+    ourselves. No `bit` arm: 0.1.9 ships binary without rescoring.
+    """
+    name = "sqlite_vec_dense_int8"
+    quantization = "INT8"
+    _db_path = "/tmp/l3d_sqlitevec_int8.db"
+
+    def connect(self):
+        import sqlite3
+        import sqlite_vec
+        self.version = lib_version(sqlite_vec, "sqlite-vec")
+        self.cx = sqlite3.connect(self._db_path)
+        self.cx.enable_load_extension(True)
+        sqlite_vec.load(self.cx)
+        self.cx.enable_load_extension(False)
+
+    def build(self, vecs):
+        self.cx.execute(
+            f"CREATE VIRTUAL TABLE v USING vec0(embedding int8[{DIM}])")
+        for i in range(0, len(vecs), BATCH):
+            chunk = vecs[i:i + BATCH]
+            self.cx.executemany(
+                "INSERT INTO v (rowid, embedding) "
+                "VALUES (?, vec_quantize_int8(?, 'unit'))",
+                [(i + j, chunk[j].tobytes()) for j in range(len(chunk))])
+            self.cx.commit()
+
+    def search(self, qvec, k):
+        # The query is quantized the same way the corpus was; comparing a float
+        # probe against int8 storage would measure a type error, not a design.
+        rows = self.cx.execute(
+            "SELECT rowid FROM v WHERE embedding MATCH "
+            "vec_quantize_int8(?, 'unit') AND k = ? "
             "ORDER BY distance", (qvec.tobytes(), k)).fetchall()
         return [int(r[0]) for r in rows]
 
@@ -826,6 +887,25 @@ class Milvus(Base):
 # sqlite-vec is an exact scan by construction, and inventing a quantized
 # configuration an engine does not ship would be a worse comparison than
 # omitting it.
+
+
+class ArcadeServerInt8(ArcadeServer):
+    """ArcadeDB over HTTP with LSM_VECTOR INT8, the server twin of the embedded arm.
+
+    The arm DECISIONS #53 owed us. The dense table published ArcadeDB at two
+    precisions and every comparator at one, and the one ArcadeDB deployment that
+    was single-precision was single-precision because a comment claimed the
+    server could not pass the METADATA quantization key. It always could: the
+    key travels in the same POSTed DDL as dimensions and similarity, which is
+    why the sparse lane's server arm has been int8 all along.
+
+    Declared, not read from BENCH_DENSE_QUANT: that variable is set in the
+    driver's process and the index is created inside the server container, so
+    the knob cannot reach the thing it would be labelling.
+    """
+    name = "arcadedb_dense_server_int8"
+    quantization = "INT8"
+    _quant_ddl = '"quantization": "INT8",'
 
 
 class ArcadeEmbeddedInt8(ArcadeEmbedded):

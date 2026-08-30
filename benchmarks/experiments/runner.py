@@ -667,6 +667,22 @@ BACKENDS = {
         "server_port": 2480,
         "ready_regex": r"HTTP Server started",
     },
+    # The int8 arm of arcadedb_dense_server. Identical image, env, port and
+    # readiness probe: only the index precision differs, and it differs in the
+    # POSTed METADATA rather than here. Cloned rather than referenced so a
+    # future image bump cannot move one arm of an ablation without the other.
+    "arcadedb_dense_server_int8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel
+        "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+                       "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
+                             "-Darcadedb.server.defaultDatabases=bench[root] "
+                             "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
+                             "-Darcadedb.vectorIndex.graphBuildCacheSize=" + DENSE_BUILD_CACHE + _PCT_OPT],
+        "server_port": 2480,
+        "ready_regex": r"HTTP Server started",
+    },
     # PRECISION ARMS. Same topology and image as their fp32 siblings, because
     # the only variable is the index precision; anything else would make the
     # pair two configurations rather than an ablation.
@@ -675,6 +691,7 @@ BACKENDS = {
     "chroma_dense": {"topology": "embedded", "image": "dbbench:dense"},
     "lancedb_dense": {"topology": "embedded", "image": "dbbench:dense"},
     "sqlite_vec_dense": {"topology": "embedded", "image": "dbbench:dense"},
+    "sqlite_vec_dense_int8": {"topology": "embedded", "image": "dbbench:dense"},
     "duckdb_vss_dense": {"topology": "embedded", "image": "dbbench:dense"},
     "qdrant_dense": {
         "topology": "client_server",
@@ -899,7 +916,11 @@ LANES = {
              # Chroma, DuckDB-VSS and sqlite-vec have none; LanceDB is int8
              # already (IVF_HNSW_SQ is its only HNSW offering).
              "arcadedb_dense_embedded_int8", "qdrant_dense_int8",
-             "milvus_dense_int8"],
+             "milvus_dense_int8",
+             # added 2026-08-30 under DECISIONS #53: every engine at every
+             # precision it ships. The server arm is ours and was the one the
+             # decision owed first.
+             "arcadedb_dense_server_int8", "sqlite_vec_dense_int8"],
             ["search"]),
     # L4 TIME SERIES. Promoted from two ad-hoc scripts (l4_tsbs.py invoked by
     # hand, plus l4_native_probe.py, a bespoke probe that produced the published

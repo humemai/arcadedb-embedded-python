@@ -399,6 +399,11 @@ DENSE_PRECISION = {
     "qdrant_dense_int8": "int8",
     "milvus_dense_int8": "int8",
     "arcadedb_dense_embedded_int8": "int8",
+    # DECISIONS #53 arms, added 2026-08-30. Checked against the DDL each issues:
+    #   arcadedb_dense_server_int8  METADATA "quantization": "INT8" in the POSTed DDL
+    #   sqlite_vec_dense_int8       vec0(embedding int8[DIM]) + vec_quantize_int8(v,'unit')
+    "arcadedb_dense_server_int8": "int8",
+    "sqlite_vec_dense_int8": "int8",
 }
 
 
