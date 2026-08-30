@@ -310,7 +310,16 @@ SERVER_MEM_FRACTION = float(os.environ.get("BENCH_SERVER_MEM_FRACTION", "0")) or
 # client_server: the server image + readiness probe + env.
 # The build-cache bound the dense lane applies, read here too so the SERVER arm gets the same policy
 # as the embedded one (see the server_env comment below). Default matches l3d_dense.py's own default.
-DENSE_BUILD_CACHE = os.environ.get("BENCH_DENSE_BUILD_CACHE", "100000").strip()
+# 0 = the engine's own default: auto-size the build cache to 25% of AVAILABLE
+# heap. This defaulted to 100000 until 2026-08-30 -- a fairness bound, since
+# auto-sizing lets ArcadeDB cache 5.36 GiB of corpus at deep10m that no
+# comparator caches during a build. That reasoning is reversed here on the
+# grounds that 100000 is not a default in ANY engine profile (checked at the
+# pin: PROFILE defaults to "default", whose branch sets nothing, so the declared
+# graphBuildCacheSize=0 / graphBuildCacheMaxHeapPercent=25 stand; -1/50 belong to
+# "high-performance"). Publishing a configuration nobody ships is a worse
+# distortion than publishing one engine using the envelope every arm is given.
+DENSE_BUILD_CACHE = os.environ.get("BENCH_DENSE_BUILD_CACHE", "0").strip()
 # The PERCENT knob, which reached the embedded arm only. l3d_dense.py:307 reads it
 # and puts it in the index METADATA; nothing put it on the server's JVM, so a
 # sweep of graphBuildCacheMaxHeapPercent moved one topology and not the other and

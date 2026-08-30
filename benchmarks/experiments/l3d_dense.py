@@ -327,7 +327,13 @@ class ArcadeEmbedded(Base):
         #
         # BENCH_DENSE_BUILD_CACHE=0 restores the auto-sizing for the ablation
         # arm, so the cost of the default is measurable rather than asserted.
-        cache = os.environ.get("BENCH_DENSE_BUILD_CACHE", "100000").strip()
+        # DEFAULT REVERSED 2026-08-30, from 100000 to 0 (the engine's auto).
+        # The fairness argument above is real but it bought a configuration no
+        # user runs: 100000 is not the default in any profile at this pin, only
+        # the pre-#3144 value. Every arm gets the same cap, and an engine that
+        # spends its share on a build cache is making an engineering choice the
+        # comparison should show rather than suppress.
+        cache = os.environ.get("BENCH_DENSE_BUILD_CACHE", "0").strip()
         extra = (f"{extra} -Darcadedb.vectorIndex.graphBuildCacheSize={cache}").strip()
         self.build_cache_size = int(cache)
         # THE OTHER HALF OF THE AUTO POLICY. graphBuildCacheSize=0 caches the
@@ -345,6 +351,16 @@ class ArcadeEmbedded(Base):
         # comment below), so the 5.36 GiB cache and the redundant build were
         # never separated. Re-run this ablation on a release carrying #6490
         # before quoting a cost for the default.
+        #
+        # THAT BLOCKER IS GONE (2026-08-30). #6490 (8e89f2b9b) is an ancestor of
+        # BOTH pins the page has used -- 472e5bddf and b7c6c800d -- so the
+        # redundant build was already absent from every measurement taken since.
+        # Nothing stands between us and an honest AUTO number now; the ablation
+        # is simply owed. It matters more than it did, because the bound this
+        # default applies costs the SERVER arm at least 8x at deep10m (>28,800 s
+        # against 3,372-3,750 s measured under AUTO) while costing the embedded
+        # arm nothing, and 533 engine commits also separate the two pins, so
+        # neither the cache nor the pin can currently be blamed for that.
         pct = os.environ.get("BENCH_DENSE_BUILD_CACHE_PCT", "").strip()
         if pct:
             extra = f"{extra} -Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent={pct}"
