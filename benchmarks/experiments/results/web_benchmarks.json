@@ -1588,7 +1588,7 @@
         {
           "backend": "LanceDB (int8)",
           "is_arcadedb": false,
-          "precision": "fp32",
+          "precision": "int8",
           "scale": "deep10m",
           "scale_label": "9.99M",
           "workload": "search",
