@@ -79,7 +79,7 @@ HEAP_TOKENS = ("-Xmx", "ARCADEDB_JVM_ARGS", "JAVA_OPTS", "PROBE_HEAP",
 def read_scripts(paths, host=None):
     out = {}
     if host:
-        listing = subprocess.run(["ssh", host, "ls /home/tk/qB*.sh"],
+        listing = subprocess.run(["ssh", host, "ls /home/tk/q[A-Z]*.sh"],
                                  capture_output=True, text=True, timeout=60)
         for p in listing.stdout.split():
             body = subprocess.run(["ssh", host, f"cat {p}"],
@@ -158,10 +158,10 @@ def check_cycles(scripts):
     for name, body in scripts.items():
         stage = name[:-3]
         waits = set()
-        for m in re.finditer(r"pgrep\s+-x\s+-f\s+[\"']/bin/bash /home/tk/(qB[A-Z]*)\.sh[\"']", body):
+        for m in re.finditer(r"pgrep\s+-x\s+-f\s+[\"']/bin/bash /home/tk/(q[A-Z]+)\.sh[\"']", body):
             waits.add(m.group(1))
         for m in re.finditer(r"(?m)^\s*for q in ([^\n;]*?);\s*do", body):
-            waits.update(q for q in m.group(1).split() if q.startswith("qB"))
+            waits.update(q for q in m.group(1).split() if q.startswith("q") and q[1:2].isupper())
         waits.discard(stage)
         edges[stage] = waits
 
@@ -171,7 +171,7 @@ def check_cycles(scripts):
     # qBH -> qBN reads as two unrelated edges when it is one deadlock.
     alias = {}
     for name, body in scripts.items():
-        m = re.search(r"exec\s+/bin/bash\s+/home/tk/(qB[A-Z]*)\.sh", body)
+        m = re.search(r"exec\s+/bin/bash\s+/home/tk/(q[A-Z]+)\.sh", body)
         if m and m.group(1) != name[:-3]:
             alias[name[:-3]] = m.group(1)
     for wrapper, target in alias.items():
