@@ -1689,6 +1689,27 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         # cannot see. The settle loop runs on this side only, since this is
         # where compaction and writeback are still in flight.
         if server_cid:
+            # KEEP THE SERVER'S LOG. It was never captured, so when a served
+            # cell behaved anomalously the evidence died with the container.
+            # That cost us the explanation for a real one: deep10m
+            # arcadedb_dense_server rep1 built at 2,977 docs/s and rep5 at 868,
+            # on identical config, identical recall and identical bytes
+            # written, with rep5 burning 4.3x the CPU (104,684 s against
+            # 24,132 s). The engine's own "Graph build building: n/total
+            # (vector accesses=...)" lines carry the cache-miss proxy that
+            # would have settled it, and they were thrown away.
+            #
+            # Tail-bounded: these logs run to tens of MB on a 10M build, and a
+            # cell that fails fast should not write a 50 MB artifact either.
+            try:
+                _log = sh(["docker", "logs", "--tail", "4000", server_cid])
+                if _log.strip():
+                    _lp = os.path.join(RAW, f"{run_id}.serverlog")
+                    with open(_lp, "w") as _fh:
+                        _fh.write(_log)
+                    row["server_log"] = os.path.basename(_lp)
+            except Exception as _e:                       # noqa: BLE001
+                row["server_log_error"] = f"{type(_e).__name__}: {_e}"
             d = container_disk(server_cid)
             row["server_disk_mb"] = d["disk_mb"]
             row["server_disk_rw_mb"] = d["disk_rw_mb"]
