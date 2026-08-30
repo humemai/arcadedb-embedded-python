@@ -283,6 +283,24 @@ class Base:
 class ArcadeEmbedded(Base):
     name = "arcadedb_dense_embedded"
 
+    @property
+    def quantization(self):
+        """What this arm actually built, not a constant.
+
+        The stamping guard requires every arm to declare its quantization, and
+        this one had no declaration at all: `arcadedb_dense_embedded` raised
+        SystemExit in 2.9s on every rep of the deep10m campaign and produced no
+        rows. A static "fp32" would be the wrong repair -- build() passes
+        METADATA quantization straight from BENCH_DENSE_QUANT, so this arm does
+        honour the knob, and a constant would refuse a legitimate int8 request
+        (or, worse, mislabel it). Deriving it through the same helper build()
+        uses keeps the label and the DDL from drifting apart.
+
+        ArcadeEmbeddedInt8 shadows this with a plain class attribute, which
+        wins over an inherited property, so that arm is unaffected.
+        """
+        return canonical_quant_label(os.environ.get("BENCH_DENSE_QUANT", ""))
+
     def connect(self):
         import arcadedb_embedded as arcadedb
         self._a = arcadedb
