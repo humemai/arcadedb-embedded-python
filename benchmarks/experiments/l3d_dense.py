@@ -167,6 +167,32 @@ def degree_stamp(backend):
     return None, "exact_scan_no_ann"
 
 
+# ArcadePageVectorValues.DEFAULT_CACHE_SIZE at the pin. An inline-quantized
+# index (INT8/BINARY) that is left on the default gets exactly this, because a
+# miss reads from an index page rather than a record; only a NON-quantized index
+# auto-sizes against the heap. So 100000 is int8's default, not a bound on it.
+ENGINE_DEFAULT_CACHE_SIZE = 100_000
+
+
+def configured_build_cache():
+    """The value we hand the engine: 0 (its auto) unless the campaign overrides."""
+    return int(os.environ.get("BENCH_DENSE_BUILD_CACHE", "0").strip() or 0)
+
+
+def effective_build_cache(configured, quant):
+    """What the engine will actually use, mirroring computeGraphBuildCacheCapacity.
+
+    Recorded because the configured value alone does not say what happened: 0
+    means 100000 for an int8 index and "as much of the corpus as 25% of the
+    available heap holds" for an fp32 one, and those are wildly different runs.
+    """
+    if configured > 0:
+        return configured, "explicit bound from BENCH_DENSE_BUILD_CACHE"
+    if canonical_quant_label(quant) != "fp32":
+        return ENGINE_DEFAULT_CACHE_SIZE, "engine default for an inline-quantized index"
+    return 0, "engine auto: whole corpus when it fits graphBuildCacheMaxHeapPercent (default 25) of AVAILABLE heap"
+
+
 def canonical_quant_label(raw):
     """The one name for this arm in results, whatever the input spelled."""
     return resolve_quant(raw) or "fp32"
@@ -335,7 +361,6 @@ class ArcadeEmbedded(Base):
         # comparison should show rather than suppress.
         cache = os.environ.get("BENCH_DENSE_BUILD_CACHE", "0").strip()
         extra = (f"{extra} -Darcadedb.vectorIndex.graphBuildCacheSize={cache}").strip()
-        self.build_cache_size = int(cache)
         # THE OTHER HALF OF THE AUTO POLICY. graphBuildCacheSize=0 caches the
         # whole corpus WHEN IT FITS this percentage of heap, so the percentage
         # is what decides whether auto-sizing degrades to eviction or takes
@@ -364,7 +389,6 @@ class ArcadeEmbedded(Base):
         pct = os.environ.get("BENCH_DENSE_BUILD_CACHE_PCT", "").strip()
         if pct:
             extra = f"{extra} -Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent={pct}"
-            self.build_cache_pct = int(pct)
         self.db = arcadedb.create_database(
             "/tmp/l3d_arcade",
             jvm_kwargs={"heap_size": heap,
@@ -951,6 +975,20 @@ def main():
     # normalising costs nothing and old artifacts stay readable.
     # THE OVERRIDE, ON THE ROW. A disclosed fairness override that only lives in
     # a comment is not disclosed to anyone reading the artifact.
+    # THE CACHE POLICY, RECORDED. It never was: build_cache_size was assigned in
+    # connect(), and connect() runs AFTER this block, so getattr found nothing
+    # and every row carried graph_build_cache_size=None. That is how two
+    # campaigns were compared for weeks without noticing they ran different
+    # cache policies, and why an 8x server delta could not be attributed.
+    if "arcadedb" in args.backend:
+        _cfg = configured_build_cache()
+        _eff, _why = effective_build_cache(_cfg, out.get("quantization", "fp32"))
+        out["graph_build_cache_configured"] = _cfg
+        out["graph_build_cache_effective"] = _eff
+        out["graph_build_cache_policy"] = _why
+        _pct = os.environ.get("BENCH_DENSE_BUILD_CACHE_PCT", "").strip()
+        out["graph_build_cache_pct"] = int(_pct) if _pct else 25
+
     _bc = getattr(b, "build_cache_size", None)
     _bp = getattr(b, "build_cache_pct", None)
     if _bp is not None:
