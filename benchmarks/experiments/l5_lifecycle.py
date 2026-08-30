@@ -491,8 +491,23 @@ def cycle(situation, mode, cold=False):
     # situations have no LSM_VECTOR index and would record an error dict that
     # means nothing. Kept out of the timed window (t2 is already taken).
     if situation == "vector":
-        _LAST_VECTOR_STATS.clear()
-        _LAST_VECTOR_STATS.update(_vector_stats(db))
+        # DO NOT let a later cycle overwrite a good reading. _drop() runs
+        # `DROP INDEX V[emb]`, so on the drop cycle get_index_by_name returns
+        # None and _vector_stats records
+        #   AttributeError: 'NoneType' object has no attribute 'getIndexesOnBuckets'
+        # Because this dict was cleared and rewritten every cycle, the drop
+        # cycle's error is what every row ended up carrying: 15 of 15 vector
+        # rows on b7c6c800d, which is the whole reason the #6798 counters could
+        # not be reported. Keep the first real reading and remember its mode;
+        # an error is only recorded if no cycle ever produced counters.
+        _st = _vector_stats(db)
+        _real = _st and "vector_stats_error" not in _st
+        if _real or not _LAST_VECTOR_STATS or "vector_stats_error" in _LAST_VECTOR_STATS:
+            if _real or not _LAST_VECTOR_STATS:
+                _LAST_VECTOR_STATS.clear()
+                _LAST_VECTOR_STATS.update(_st)
+                if _real:
+                    _LAST_VECTOR_STATS["vector_stats_mode"] = mode
     db.close()
     t3 = time.perf_counter()
     return (t1 - t0) * 1000, (t3 - t2) * 1000, (t2 - t1) * 1000
