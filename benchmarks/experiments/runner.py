@@ -1689,6 +1689,42 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         # cannot see. The settle loop runs on this side only, since this is
         # where compaction and writeback are still in flight.
         if server_cid:
+            # WHAT JVM THE SERVER ACTUALLY RAN. No row has ever recorded it,
+            # so "was that cell on JDK 21 or 25?" was unanswerable from the
+            # data -- which mattered the moment the served arm went bimodal
+            # (deep10m rep1 3,355 s, rep5 11,505 s, same image name) and the
+            # JVM was a live hypothesis we could neither confirm nor kill.
+            # Read from the running container, not restated from the image we
+            # asked for: a value we assert cannot catch the case where
+            # something else was launched, which is the failure behind
+            # "server:latest" and the dev22-stamped dev20 run.
+            try:
+                _jv = sh(["docker", "exec", server_cid, "java", "-version"])
+                _first = (_jv or "").strip().splitlines()
+                if _first:
+                    row["server_jvm"] = _first[0].strip()[:120]
+            except Exception as _e:                       # noqa: BLE001
+                row["server_jvm"] = f"unread: {type(_e).__name__}"
+
+            # AND WHAT BUILD CACHE THE ENGINE CHOSE. graphBuildCacheSize=0 is
+            # the engine default and budgets off AVAILABLE heap since #6513, so
+            # the capacity actually chosen can differ between reps of one arm.
+            # graph_build_cache_effective above records what we ASKED for; this
+            # records what the engine decided, which is the only number that
+            # can explain a bimodal build.
+            try:
+                _lg = sh(["docker", "logs", server_cid])
+                _m = re.search(r"cache enabled: size=(\d+)", _lg or "")
+                if _m:
+                    row["graph_build_cache_chosen"] = int(_m.group(1))
+                _p = re.findall(r"vector accesses=(\d+)\)", _lg or "")
+                _b = re.findall(r"Graph build building: (\d+)/", _lg or "")
+                if _p and _b and int(_b[-1]) > int(_b[0]):
+                    row["graph_build_access_ratio"] = round(
+                        (int(_p[-1]) - int(_p[0])) / (int(_b[-1]) - int(_b[0])), 3)
+            except Exception:                             # noqa: BLE001
+                pass
+
             # KEEP THE SERVER'S LOG. It was never captured, so when a served
             # cell behaved anomalously the evidence died with the container.
             # That cost us the explanation for a real one: deep10m
