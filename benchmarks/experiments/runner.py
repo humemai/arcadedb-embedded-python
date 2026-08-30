@@ -361,11 +361,23 @@ BACKENDS = {
         "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
-        # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
-        # also drops the image's ZGC default: both deployments run the same
-        # default GC (G1) so the embedded-vs-server axis isolates transport,
-        # not GC choice.
+        # starved the server vs embedded's per-scale heap.
+        #
+        # ARCADEDB_OPTS_GC IS A SEPARATE VARIABLE AND MUST BE CLEARED EXPLICITLY.
+        # This comment used to claim that setting JAVA_OPTS "also drops the
+        # image's ZGC default: both deployments run the same default GC (G1)".
+        # It does not. `docker inspect` shows ARCADEDB_OPTS_GC=-XX:+UseZGC
+        # -XX:+ZGenerational as its own env entry, and overriding
+        # ARCADEDB_OPTS_MEMORY and JAVA_OPTS leaves it untouched: the server JVM
+        # observed mid-run on 2026-08-30 was still on ZGC. The deployment axis,
+        # which exists to isolate TRANSPORT, was also switching collector.
+        #
+        # STILL NOT FULLY MATCHED, and it cannot be from this file: the server
+        # image ships JDK 21.0.11 and the embedded wheel bundles Corretto 25.0.4.
+        # That is a disclosure, not something to paper over here.
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+        # see the ARCADEDB_OPTS_GC note above
+        "-e", "ARCADEDB_OPTS_GC=",
                        # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
                        # -Darcadedb.vectorIndex.graphBuildCacheSize to the embedded JVM and this did not, so
                        # the two ArcadeDB deployments ran DIFFERENT cache policies: embedded bounded at
@@ -474,6 +486,8 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+        # see the ARCADEDB_OPTS_GC note above
+        "-e", "ARCADEDB_OPTS_GC=",
                        # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
                        # -Darcadedb.vectorIndex.graphBuildCacheSize to the embedded JVM and this did not, so
                        # the two ArcadeDB deployments ran DIFFERENT cache policies: embedded bounded at
@@ -577,11 +591,23 @@ BACKENDS = {
         "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
         # Heap parity with the embedded deployment (protocol: same JVM-heap
         # policy per scale tier) — the image's own default is -Xmx2G, which
-        # starved the server vs embedded's per-scale heap. Setting JAVA_OPTS
-        # also drops the image's ZGC default: both deployments run the same
-        # default GC (G1) so the embedded-vs-server axis isolates transport,
-        # not GC choice.
+        # starved the server vs embedded's per-scale heap.
+        #
+        # ARCADEDB_OPTS_GC IS A SEPARATE VARIABLE AND MUST BE CLEARED EXPLICITLY.
+        # This comment used to claim that setting JAVA_OPTS "also drops the
+        # image's ZGC default: both deployments run the same default GC (G1)".
+        # It does not. `docker inspect` shows ARCADEDB_OPTS_GC=-XX:+UseZGC
+        # -XX:+ZGenerational as its own env entry, and overriding
+        # ARCADEDB_OPTS_MEMORY and JAVA_OPTS leaves it untouched: the server JVM
+        # observed mid-run on 2026-08-30 was still on ZGC. The deployment axis,
+        # which exists to isolate TRANSPORT, was also switching collector.
+        #
+        # STILL NOT FULLY MATCHED, and it cannot be from this file: the server
+        # image ships JDK 21.0.11 and the embedded wheel bundles Corretto 25.0.4.
+        # That is a disclosure, not something to paper over here.
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+        # see the ARCADEDB_OPTS_GC note above
+        "-e", "ARCADEDB_OPTS_GC=",
                        # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
                        # -Darcadedb.vectorIndex.graphBuildCacheSize to the embedded JVM and this did not, so
                        # the two ArcadeDB deployments ran DIFFERENT cache policies: embedded bounded at
@@ -651,6 +677,8 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel (F5: one engine line per table)
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+        # see the ARCADEDB_OPTS_GC note above
+        "-e", "ARCADEDB_OPTS_GC=",
                        # SAME BUILD-CACHE POLICY AS THE EMBEDDED ARM. l3d_dense.py passes
                        # -Darcadedb.vectorIndex.graphBuildCacheSize to the embedded JVM and this did not, so
                        # the two ArcadeDB deployments ran DIFFERENT cache policies: embedded bounded at
@@ -676,6 +704,8 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",  # RELEASED 26.8.1, matches the 26.8.1 wheel
         "server_env": ["-e", "ARCADEDB_OPTS_MEMORY=-Xms{heap} -Xmx{heap}",
+        # see the ARCADEDB_OPTS_GC note above
+        "-e", "ARCADEDB_OPTS_GC=",
                        "-e", "JAVA_OPTS=-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
