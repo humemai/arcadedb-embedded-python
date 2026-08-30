@@ -1753,6 +1753,12 @@ def main():
     ap.add_argument("--only-reps", default="",
                     help="comma-separated rep numbers to run (e.g. '5' or '2,4'); "
                          "empty = all 1..reps")
+    ap.add_argument("--skip-done-since", default="",
+                    help="ISO8601 UTC; skip (backend, rep) cells this results-file "
+                         "already records CLEAN at or after that instant. For "
+                         "resuming a long stage after an interruption without "
+                         "re-running finished cells. Errored and timed-out cells "
+                         "are NOT skipped -- they are exactly what a resume retries.")
     ap.add_argument("--tier", default="paper", choices=["paper", "sweep"])
     ap.add_argument("--workers", type=int, default=0,
                     help="parallel workers on disjoint cpuset shards "
@@ -1860,6 +1866,38 @@ def main():
     cells = [(j, r) for j in jobs for r in range(1, args.reps + 1)
              if not only or r in only]
     random.Random(args.seed).shuffle(cells)  # shuffled order even in serial tier
+
+    # RESUME. There was none: a stage killed at cell 20 of 55 re-ran all 55, so
+    # the only way to drop one bad arm from a long run was to pay for every good
+    # cell again. Skipping happens AFTER the shuffle, so the cells that remain
+    # keep the order this campaign already drew rather than being re-shuffled
+    # into a different experiment.
+    #
+    # Only CLEAN rows count. A timeout or a traceback is precisely what a resume
+    # is for, and treating those as done would make a stage converge on its own
+    # failures.
+    if args.skip_done_since:
+        _since = args.skip_done_since.strip().replace("Z", "+00:00")
+        _done = set()
+        _rf = os.path.join(RESULTS, args.results_file)
+        if os.path.exists(_rf):
+            for _line in open(_rf):
+                if not _line.strip():
+                    continue
+                try:
+                    _r = json.loads(_line)
+                except Exception:
+                    continue
+                if _r.get("error") or _r.get("scale") != args.scale:
+                    continue
+                if str(_r.get("ts_utc", "")) >= _since:
+                    _done.add((_r.get("backend"), _r.get("rep")))
+        _before = len(cells)
+        cells = [(j, r) for (j, r) in cells if (j["backend"], r) not in _done]
+        print(f"resume: {_before - len(cells)} of {_before} cells already clean "
+              f"since {args.skip_done_since}; {len(cells)} to run")
+        for _b, _r in sorted(_done, key=lambda x: (str(x[0]), x[1] or 0)):
+            print(f"    skip {_b} rep{_r}")
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     manifest = {"ts": ts, "tier": args.tier, "scale": args.scale, "cpuset": CPUSET,
