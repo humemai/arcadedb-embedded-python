@@ -863,6 +863,38 @@ class Milvus(Base):
         self.cl.flush("articles")
         self.cl.load_collection("articles")
 
+    def engine_stats(self):
+        """Report whether the HNSW index actually EXISTS, without changing timing.
+
+        NOTHING verified this. Milvus builds indexes on sealed segments in the
+        background, and a collection can serve queries by brute force while its
+        index is still building -- which produces exactly the row we have at
+        deep10m: recall 0.993, HIGHER than Qdrant's 0.976-0.981 on nominally the
+        same parameters, with a query p50 of 18.3 ms, 14x SLOWER than Qdrant's
+        1.27 ms. High recall with slow queries is the brute-force signature.
+
+        If that is what happened, the 167 s / 59,668 docs/s build is not a build
+        time at all, and the comparison that says Milvus builds 13-64x faster
+        than ArcadeDB is measuring different things on the two sides.
+
+        This only OBSERVES: it runs after the timed window and records what it
+        finds. Deciding whether to WAIT for the index is a separate change, and
+        it would move a published number, so it does not belong in the same step
+        as finding out.
+        """
+        out = {}
+        try:
+            desc = self.cl.describe_index("articles", "vec")
+            for k in ("index_type", "state", "indexed_rows", "total_rows",
+                      "pending_index_rows", "metric_type"):
+                if isinstance(desc, dict) and k in desc:
+                    out[f"milvus_{k}"] = desc[k]
+            if not out and desc is not None:
+                out["milvus_describe_index"] = str(desc)[:300]
+        except Exception as e:                            # noqa: BLE001
+            out["milvus_index_state_error"] = f"{type(e).__name__}: {e}"
+        return out
+
     def search(self, qvec, k):
         res = self.cl.search("articles", data=[qvec.tolist()], limit=k,
                              search_params={"params": {"ef": EF_SEARCH}})

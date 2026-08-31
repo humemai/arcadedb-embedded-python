@@ -1753,6 +1753,29 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row["server_disk_settled"] = d["disk_settled"]
             if d["disk_note"]:
                 row["server_disk_note"] = d["disk_note"]
+        # THE EMBEDDED ENGINE LOGS HERE. For a served cell the client is just the
+        # driver, but for an EMBEDDED cell the client container IS the engine, so
+        # its log carries the one line that says what the auto-sizer decided:
+        #     Building graph with N vectors ... (cache enabled: size=M)
+        # Without it the embedded arms can never report graph_build_cache_chosen,
+        # and they are the CONTROL for the served fp32 spread: the driver holds
+        # the corpus in numpy outside the JVM, so their available heap should be
+        # nearly free and their chosen cache near the full corpus. If it is not,
+        # the mechanism is wrong.
+        try:
+            if cli_cid:
+                _cl = sh(["docker", "logs", "--tail", "4000", cli_cid])
+                _m = re.search(r"cache enabled: size=(\d+)", _cl or "")
+                if _m:
+                    row["graph_build_cache_chosen"] = int(_m.group(1))
+                if _cl.strip():
+                    _cp = os.path.join(RAW, f"{run_id}.clientlog")
+                    with open(_cp, "w") as _fh:
+                        _fh.write(_cl)
+                    row["client_log"] = os.path.basename(_cp)
+        except Exception:                                  # noqa: BLE001
+            pass
+
         # No client measurement here: it is taken above, just before
         # docker_rm, because this block runs after the container is gone.
         _d = [row.get(k) for k in ("server_disk_mb", "client_disk_mb")
