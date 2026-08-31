@@ -393,7 +393,9 @@ BACKENDS = {
                        # "Unrecognized VM option" -- so the deployment axis compared a
                        # heap layout as well as a transport. It is settable now only
                        # because the served arm moved to Corretto 25 with the same jars.
-                       "-e", "JAVA_OPTS=-XX:+UseCompactObjectHeaders "
+                       "-e", "JAVA_OPTS=" + ("" if os.environ.get(
+                           "BENCH_ARCADEDB_NO_COMPACT_HEADERS") else
+                           "-XX:+UseCompactObjectHeaders ") +
                              "-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
@@ -510,7 +512,9 @@ BACKENDS = {
                        # "Unrecognized VM option" -- so the deployment axis compared a
                        # heap layout as well as a transport. It is settable now only
                        # because the served arm moved to Corretto 25 with the same jars.
-                       "-e", "JAVA_OPTS=-XX:+UseCompactObjectHeaders "
+                       "-e", "JAVA_OPTS=" + ("" if os.environ.get(
+                           "BENCH_ARCADEDB_NO_COMPACT_HEADERS") else
+                           "-XX:+UseCompactObjectHeaders ") +
                              "-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
@@ -637,7 +641,9 @@ BACKENDS = {
                        # "Unrecognized VM option" -- so the deployment axis compared a
                        # heap layout as well as a transport. It is settable now only
                        # because the served arm moved to Corretto 25 with the same jars.
-                       "-e", "JAVA_OPTS=-XX:+UseCompactObjectHeaders "
+                       "-e", "JAVA_OPTS=" + ("" if os.environ.get(
+                           "BENCH_ARCADEDB_NO_COMPACT_HEADERS") else
+                           "-XX:+UseCompactObjectHeaders ") +
                              "-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
@@ -715,7 +721,9 @@ BACKENDS = {
                        # "Unrecognized VM option" -- so the deployment axis compared a
                        # heap layout as well as a transport. It is settable now only
                        # because the served arm moved to Corretto 25 with the same jars.
-                       "-e", "JAVA_OPTS=-XX:+UseCompactObjectHeaders "
+                       "-e", "JAVA_OPTS=" + ("" if os.environ.get(
+                           "BENCH_ARCADEDB_NO_COMPACT_HEADERS") else
+                           "-XX:+UseCompactObjectHeaders ") +
                              "-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
@@ -740,7 +748,9 @@ BACKENDS = {
                        # "Unrecognized VM option" -- so the deployment axis compared a
                        # heap layout as well as a transport. It is settable now only
                        # because the served arm moved to Corretto 25 with the same jars.
-                       "-e", "JAVA_OPTS=-XX:+UseCompactObjectHeaders "
+                       "-e", "JAVA_OPTS=" + ("" if os.environ.get(
+                           "BENCH_ARCADEDB_NO_COMPACT_HEADERS") else
+                           "-XX:+UseCompactObjectHeaders ") +
                              "-Darcadedb.server.rootPassword=dbbenchpass "
                              "-Darcadedb.server.defaultDatabases=bench[root] "
                              "-Darcadedb.queryMaxHeapElementsAllowedPerOp=5000000 "
