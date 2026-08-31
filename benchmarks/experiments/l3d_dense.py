@@ -859,8 +859,50 @@ class Milvus(Base):
                 {"id": i + j, "vec": vecs[i + j].tolist()}
                 for j in range(min(BATCH, len(vecs) - i))])
 
-    def post_build(self):  # settle: flush + load (Milvus's own recommended path)
+    def post_build(self):
+        """Wait for the HNSW index to EXIST before stopping the clock.
+
+        flush() + load_collection() was not a settle. `load_collection` returns
+        once the collection is loadable, which is true while its real index is
+        still building: probed, it returned LoadState.Loaded with
+            {"state": "InProgress", "indexed_rows": 0,
+             "total_rows": 1000000, "pending_index_rows": 1000000}
+        and Milvus then answers queries from a TEMPORARY index. The pinned
+        image's own milvus.yaml says so:
+            interimIndex.enableIndex: true   # "a temporary index for growing
+                segments and sealed segments not yet indexed"
+            denseVectorIndexType: IVF_FLAT_CC, nlist 128, nprobe 16
+        which is why the deep10m row read recall 0.993 -- HIGHER than Qdrant's
+        0.978 on the same degree -- at a p50 14x SLOWER. Higher recall AND
+        slower is not HNSW; it is a coarse interim index.
+
+        The published rates make it unarguable. A graph build is superlinear,
+        so its rate must FALL as the corpus grows. Ours did the opposite:
+            milvus_sparse  tiny/small/medium   9,083 / 9,787 / 8,819 docs/s
+            milvus_dense   small / deep10m    56,813 / 70,881 docs/s
+        Flat across an 88x corpus, and RISING on the dense arm. That is ingest.
+
+        STATE ALONE IS NOT ENOUGH. The probe caught
+            {"state": "Finished", "indexed_rows": 1000000,
+             "total_rows": 1000000, "pending_index_rows": 855349}
+        held for seconds. All three conjuncts below are load-bearing.
+
+        This MOVES A PUBLISHED NUMBER by roughly 4-5x, so every Milvus cell at
+        every scale has to be re-run and the change disclosed. It is not a patch
+        to apply quietly to existing rows.
+        """
         self.cl.flush("articles")
+        deadline = time.time() + 7200
+        d = None
+        while time.time() < deadline:
+            d = self.cl.describe_index("articles", "vec")
+            if (d.get("state") == "Finished"
+                    and int(d.get("pending_index_rows", 0)) == 0
+                    and int(d.get("indexed_rows", -1)) == int(d.get("total_rows", -2))):
+                break
+            time.sleep(1.0)
+        else:
+            raise RuntimeError(f"milvus index did not finish within 7200s: {d}")
         self.cl.load_collection("articles")
 
     def engine_stats(self):

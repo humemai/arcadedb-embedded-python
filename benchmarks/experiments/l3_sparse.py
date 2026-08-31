@@ -436,7 +436,35 @@ class Milvus(Base):
             self.cl.insert(self.COLL, batch)
 
     def post_build(self):
+        """Wait for the real index, not merely for the collection to load.
+
+        Same defect as the dense lane: `load_collection` returns while the index
+        is still building, and the pinned image serves the gap from a temporary
+        index (`interimIndex.enableIndex: true` in its own milvus.yaml). The
+        published sparse rates give it away -- a graph/inverted build is
+        superlinear, so its rate must FALL with corpus size, and ours was flat
+        across an 88x range:
+            tiny 100k    9,083 docs/s
+            small 1M     9,787 docs/s
+            medium 8.8M  8,819 docs/s
+        That is ingest, not a build. state == "Finished" alone is insufficient;
+        the probe caught Finished with pending_index_rows = 855,349.
+
+        This MOVES PUBLISHED NUMBERS: all 15 sparse Milvus rows re-run and the
+        change is disclosed.
+        """
         self.cl.flush(self.COLL)
+        deadline = time.time() + 7200
+        d = None
+        while time.time() < deadline:
+            d = self.cl.describe_index(self.COLL, "emb")
+            if (d.get("state") == "Finished"
+                    and int(d.get("pending_index_rows", 0)) == 0
+                    and int(d.get("indexed_rows", -1)) == int(d.get("total_rows", -2))):
+                break
+            time.sleep(1.0)
+        else:
+            raise RuntimeError(f"milvus sparse index did not finish within 7200s: {d}")
         self.cl.load_collection(self.COLL)
 
     def search(self, idx, vals, k):
