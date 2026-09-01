@@ -27,6 +27,31 @@ people to ignore the warning, so the classification lives here.
 (`QUARANTINE_`, `REFUSED_`, `SUPERSEDED_`, `NONCOMPARABLE_`) are evidence of a
 decision and are never tidied away.
 
+## STOP: `runs.jsonl` is NOT a superset of the campaign files
+
+Checked 2026-09-01: `runs.jsonl` holds **2,679 rows, every one with
+`engine_commit = None`**, and its newest row is dated **2026-08-18**. It
+predates the entire commit-pinning era.
+
+**So every `runs_*_<pin>.jsonl` is the ONLY copy of its data.**
+`merge_campaign.py` has not been run for b7c6c800d or 8d6af9475. Archiving a
+campaign file would delete the campaign.
+
+This is a trap, because those files report "no reader" when you grep the
+publishing scripts -- not because they are dead, but because **the merge step
+that would make them read has not happened yet**. The same reasoning nearly
+deleted `l4_tsbs.jsonl`, which turned out to be `FEEDS_FILES["T5"]`.
+
+**Order of operations, and it is not optional:**
+
+1. `merge_campaign.py` -- campaign files -> `runs.jsonl`
+2. freeze -> `runs_paper.csv`
+3. `export_web.py` -> `web_benchmarks.json`
+4. ONLY THEN archive the campaign files, and only after confirming their rows
+   are in `runs.jsonl` by `engine_commit`
+
+Until step 1 runs, treat every `runs_*.jsonl` as irreplaceable.
+
 ## Canonical data
 
 | path | what | read by |
