@@ -1,0 +1,19 @@
+{
+  "ts": "20260825T173056Z",
+  "tier": "sweep",
+  "scale": "lc10k",
+  "cpuset": "0-11",
+  "workers": 2,
+  "shards": [
+    "0-5",
+    "6-11"
+  ],
+  "reps": 1,
+  "seed": 42,
+  "mem": "8g",
+  "heap": "4g",
+  "server_mem_fraction": null,
+  "images": {
+    "dbbench:arcadedb": ""
+  }
+}

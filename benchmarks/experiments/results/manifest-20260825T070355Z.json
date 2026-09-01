@@ -1,0 +1,18 @@
+{
+  "ts": "20260825T070355Z",
+  "tier": "paper",
+  "scale": "ts100",
+  "cpuset": "0-11",
+  "workers": 1,
+  "shards": [
+    "0-11"
+  ],
+  "reps": 1,
+  "seed": 42,
+  "mem": "16g",
+  "heap": "8g",
+  "server_mem_fraction": null,
+  "images": {
+    "dbbench:duckdb": ""
+  }
+}
