@@ -1061,6 +1061,25 @@ def sh(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw).stdout.strip()
 
 
+def docker_logs(cid, tail=4000):
+    """Container logs with BOTH streams merged.
+
+    `sh()` returns stdout only, and that silently defeated every log capture in
+    this file. ArcadeDB logs through java.util.logging, whose ConsoleHandler
+    writes to System.err; only the startup banner reaches stdout. So the
+    serverlog captured for a 376-minute deep10m build was 1,125 bytes of ASCII
+    art, and `graph_build_cache_chosen` -- the field the whole build-cache
+    investigation rests on -- was never populated in a single row, for either
+    deployment. Both captures looked correct and both threw the evidence away.
+
+    wait_ready() had it right from the start (logs.stdout + logs.stderr). The
+    teardown captures, added later, did not, and nothing compared them.
+    """
+    r = subprocess.run(["docker", "logs", "--tail", str(tail), cid],
+                       capture_output=True, text=True)
+    return ((r.stdout or "") + (r.stderr or "")).strip()
+
+
 def cgroup_dir(cid):
     p = f"/sys/fs/cgroup/system.slice/docker-{cid}.scope"
     if os.path.isdir(p):
@@ -1723,7 +1742,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # records what the engine decided, which is the only number that
             # can explain a bimodal build.
             try:
-                _lg = sh(["docker", "logs", server_cid])
+                # docker_logs, not sh: JUL logs to stderr, so this read
+                # returned "" on every served cell ever run and the two
+                # fields below were silently never set. tail="all"
+                # because the access ratio differences the FIRST sample
+                # against the last.
+                _lg = docker_logs(server_cid, tail="all")
                 _m = re.search(r"cache enabled: size=(\d+)", _lg or "")
                 if _m:
                     row["graph_build_cache_chosen"] = int(_m.group(1))
@@ -1748,7 +1772,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # Tail-bounded: these logs run to tens of MB on a 10M build, and a
             # cell that fails fast should not write a 50 MB artifact either.
             try:
-                _log = sh(["docker", "logs", "--tail", "4000", server_cid])
+                _log = docker_logs(server_cid)
                 if _log.strip():
                     _lp = os.path.join(RAW, f"{run_id}.serverlog")
                     with open(_lp, "w") as _fh:
@@ -1774,7 +1798,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         # the mechanism is wrong.
         try:
             if cli_cid:
-                _cl = sh(["docker", "logs", "--tail", "4000", cli_cid])
+                _cl = docker_logs(cli_cid)
                 _m = re.search(r"cache enabled: size=(\d+)", _cl or "")
                 if _m:
                     row["graph_build_cache_chosen"] = int(_m.group(1))
