@@ -1798,10 +1798,17 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         # the mechanism is wrong.
         try:
             if cli_cid:
-                _cl = docker_logs(cli_cid)
-                _m = re.search(r"cache enabled: size=(\d+)", _cl or "")
+                # tail="all" for the parse: the "cache enabled" line is
+                # printed once at build START, and a 10M build emits far more
+                # than 4,000 progress lines after it. With the default tail the
+                # embedded rows came back chosen=None even after the stderr
+                # fix (deep10m embedded rep4, 2026-09-02). The file written
+                # below stays tail-bounded.
+                _full = docker_logs(cli_cid, tail="all")
+                _m = re.search(r"cache enabled: size=(\d+)", _full or "")
                 if _m:
                     row["graph_build_cache_chosen"] = int(_m.group(1))
+                _cl = "\n".join(_full.splitlines()[-4000:])
                 if _cl.strip():
                     _cp = os.path.join(RAW, f"{run_id}.clientlog")
                     with open(_cp, "w") as _fh:
