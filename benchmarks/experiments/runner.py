@@ -1450,9 +1450,22 @@ MP_LABELS = {
 }
 
 
-def _driver_out(job, rep, container=False):
+# The sparse multipass overlay names its files sp_<arm>_<tier>.json, one per
+# arm and tier (one build, six passes), read by export_web's l3smp table
+# through _pinned_dir("sparse_mp", ...). Same driver contract, different
+# filename and labels.
+MP_LABELS.update({
+    "arcadedb_sparse_embedded": "arc_int8", "arcadedb_sparse_embedded_fp32": "arc_fp32",
+    "arcadedb_sparse_server": "arc_srv", "qdrant_sparse": "qdrant",
+    "milvus_sparse": "milvus", "elasticsearch_sparse": "elastic",
+})
+
+
+def _driver_out(job, rep, container=False, scale=None):
     label = MP_LABELS.get(job["backend"], job["backend"])
-    rel = os.path.join(job["driver_out_dir"], f"mp_{label}_b{rep}.json")
+    fmt = os.environ.get("BENCH_DRIVER_OUT_FMT", "mp_{label}_b{rep}.json")
+    name = fmt.format(label=label, rep=rep, scale=scale or job.get("_scale", ""))
+    rel = os.path.join(job["driver_out_dir"], name)
     return f"/work/results/{rel}" if container else os.path.join(RESULTS, rel)
 
 
@@ -1465,6 +1478,7 @@ def _client_tail(job, be, scale, run_id):
 
 
 def run_cell(job, rep, scale, cpuset, tier, net_name):
+    job["_scale"] = scale
     """Run one cell (backend x workload x scale, one repeat). Returns row dict."""
     be = BACKENDS[job["backend"]]
     # scale in run_id: out-file names must never collide across campaigns
