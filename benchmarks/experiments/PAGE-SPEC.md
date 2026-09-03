@@ -188,7 +188,7 @@ tracked artifact, and its conditions.
 | `l3s` | Sparse vector search | ArcadeDB emb int8 / emb fp32 / srv int8, Elasticsearch, Milvus, Qdrant | p50, **p95**, **p99**, recall@10, build s, peak mem |
 | `l3smp` | Sparse: what a second pass buys | same six | cold p50, warm p50, gain, **recall@10** |
 | `l3s_nocompact` | **NEW** — what the settle step buys | ArcadeDB emb int8 with/without COMPACT | p50 at 100k / 1M / 8.84M, ratio |
-| `l3d` | Dense vector search | ArcadeDB emb fp32 / srv fp32 / emb int8, Chroma, DuckDB-VSS, LanceDB, Milvus, Qdrant, sqlite-vec | cold p50, **cold p95/p99**, warm p50, recall@10, build s |
+| `l3d` | Dense vector search | ArcadeDB emb fp32 / srv fp32 / emb int8 / srv int8, Chroma, DuckDB-VSS, LanceDB, Milvus (fp32, int8), Qdrant (fp32, int8), sqlite-vec (fp32, int8) | cold p50, **cold p95/p99**, warm p50, recall@10, build s |
 | `l3d_params` | **NEW** — matched operating points | every dense arm | ef_construction, ef_search, degree_param, degree_family, quantization, index kind |
 
 Scales: `l3s` 100k / 1M / 8.84M; `l3d` 1M / 9.99M.
@@ -196,6 +196,37 @@ Scales: `l3s` 100k / 1M / 8.84M; `l3d` 1M / 9.99M.
 `l3d_params` exists to make the maxConnections-32-vs-M-16 argument checkable
 rather than assertable, and to disclose that sqlite-vec is `exact_scan_no_ann` —
 brute force, not an ANN index.
+
+#### Dense build cache: what the four ArcadeDB arms run, and why served fp32 is slow (2026-09-03)
+
+Every published `l3d` ArcadeDB row runs the engine default, `graphBuildCacheSize=0`,
+which sizes the HNSW build cache as 25% of *available* heap at build start
+(`graphBuildCacheMaxHeapPercent=25`, since #6513). The cache ablation at
+`8d6af9475` (`results/ablation_cache_8d6af9475.jsonl`, 21 cells, deep10m, heap
+24g both sides) shows that one default lands the two deployments in different
+places:
+
+| arm | cache the default chose | build (min) | at whole corpus (9,990,000) |
+|---|---|---|---|
+| embedded fp32 | whole corpus (driver holds vectors in numpy; JVM near empty at sizing) | 38-42 | 38-42 |
+| served fp32 | **3,674,697** (ingest put ~17 GB on-heap first) | 190-198 | 55-56 |
+| embedded int8 | 100,000 (`DEFAULT_CACHE_SIZE`; the percent knob is unread for inline quantization) | 59-63 | not measured (3.67M: 53) |
+| served int8 | 100,000 | 78-80 | not measured (3.67M: 69-70) |
+
+At a matched capacity the served and embedded arms are within 6-10% of each
+other at every point measured, so the served/embedded build gap on the page is
+the cache sizer, not the transport. Figure:
+`.notes/papers/icde-2027/figs/deep10m_build_vs_cache.png`. Full analysis in
+`.notes/papers/icde-2027/FINDINGS-20260830.md` sections 2, 6 and 7.
+
+**How the page handles it.** The `l3d` table publishes the default-policy rows
+as they are, since that is what a user gets, and the caption must say that the
+served fp32 build is on the wrong side of the cache knee at the engine default
+and that the same jars embedded are not. The ablation is not a page table; it is
+the evidence for the upstream report. Recommendation to record for operators:
+set `graphBuildCacheSize` to the corpus size when `N * (4*dims + 64)` bytes
+fits in about half the free heap; otherwise `graphBuildCacheMaxHeapPercent=75`.
+For int8 only `graphBuildCacheSize` moves anything.
 
 ### Graph
 
@@ -573,6 +604,15 @@ fixed. This is the residue.
 | `l2` | none | never run at this pin |
 | `l3d` | none | never run at paper tier |
 
+> **2026-09-03, pin `8d6af9475`:** every lane above is READY at n=5 per cell
+> (97 cells, 505 clean rows across `runs_page`, `runs_l4`, `runs_lifecycle`):
+> `l1`, `l1tpc`, `l2` sf1/sf10, `l3s` tiny/small/medium, `l3d` deep10m at paper
+> tier with all four ArcadeDB arms and nine comparators, `l4`, `lifecycle`
+> lc10k/lc100k/lc1m all seven workloads, `e2`. `l3d` small is re-running (qCH)
+> after 20 cells failed on a wrong `BENCH_DENSE_DATA`. Comparator rows carry
+> `engine_commit=b7c6c800d` by design (carried forward; they do not run
+> ArcadeDB), except Milvus, re-measured after the build-time fix.
+
 **Two of the defects flattered us**, which is why they were worth finding: the l4
 native arm slept 5 s that no other arm got, and its `q_last` was windowed where
 the others were unbounded. Both were invisible in the row because the field name
@@ -597,7 +637,7 @@ dense campaign.
 | what | why | clears when |
 |---|---|---|
 | ~~`l3s` medium, Milvus + Qdrant~~ | ~~pools two corpora~~ | **CLEARED 2026-08-21**: `PAPER_CORPUS` in `load_canonical` admits only the corpus each tier publishes, fingerprinted on `(n_docs, dims)`. Rows still need re-publishing |
-| `l3d` deep10m, all comparators | `tier=sweep`, envelope 28g/16g against ArcadeDB's 36g/24g, `version_name: null` | re-run at paper tier, matched envelope, pinned versions |
+| ~~`l3d` deep10m, all comparators~~ | ~~`tier=sweep`, envelope 28g/16g, `version_name: null`~~ | **CLEARED 2026-09-03**: 5 clean paper-tier rows per comparator at the matched 36g/24g envelope in `runs_page_8d6af9475.jsonl` (Milvus re-measured after `df807f112`, the rest carried forward from `b7c6c800d`) |
 | `f6_memory_ceiling` | draws no ArcadeDB bar | ArcadeDB deep10m memory rows exist |
 | `l4` ratios | QuestDB's WAL-apply poll was inside its timed ingest. **Code fixed 2026-08-22** (`QuestTS.settle()` runs outside the timer); the published rows still carry the old timing | **Lane ran clean 2026-08-25, 20 rows 0 errors, all four arms — and every row carries `engine_commit=None`, so none may be published.** Re-run at the new pin in qAA |
 | `l4` ArcadeDB native TIMESERIES row | comes from `l4_native_probe.py`, a BESPOKE PROBE, not the lane script, and runs two opt-in fast paths (`TS_PRIMITIVE=1`, `TS_NUMPY=1`) that no comparator gets. FAIRNESS F6b is precisely "bespoke drivers investigate, lane scripts publish". The 1.86M pts/s headline is a probe number sitting in a table of lane numbers | the native arm is promoted into `l4_tsbs.py` as a fourth backend and re-run, or the row is withdrawn |
