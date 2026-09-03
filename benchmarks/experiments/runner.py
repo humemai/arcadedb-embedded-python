@@ -948,6 +948,15 @@ LANE_CORPUS = {
     "l4":    (_unset("BENCH_TSBS_LP", "TSBS_LP"), "tsbs/cpu_influx.lp"),
     "l1tpc": (_unset("BENCH_TPC_DATA"), "tpch"),
     "l3d":   (_unset("BENCH_DENSE_DATA"), "dense"),
+    # BENCH_SPARSE_DATA alone is NOT the paper corpus. l3_sparse.py selects the
+    # real Big-ANN SPLADE corpus only on BENCH_SPARSE_SOURCE=bigann; the data
+    # path by itself leaves it on the synthetic 10M/30,000-dim generator. qCD
+    # (2026-08-30) set the path and not the source, this guard passed, and all
+    # 45 sparse ArcadeDB cells at 8d6af9475 ran the wrong corpus, exactly the
+    # "94 rows" omission the comment further down already records from the
+    # campaign before. The freeze dropped them on the corpus fingerprint, so
+    # nothing was published, but 9 hours of the machine were. Paper tier now
+    # refuses below unless the source is set.
     "l3s":   (lambda: os.environ.get("BENCH_SPARSE_SOURCE") != "bigann"
               and not os.environ.get("BENCH_SPARSE_DATA"), "sparse"),
     "l2":    (lambda: os.environ.get("BENCH_GRAPH_SOURCE") == "ldbc"
@@ -2085,6 +2094,11 @@ def main():
         jobs = [j for j in jobs if j["backend"] in keep]
     # After filtering, so the check sees the backends that will actually run.
     _require_engine_commit(args.tier, {j["backend"] for j in jobs})
+    if args.tier == "paper" and "l3s" in args.lanes.split(",") \
+            and os.environ.get("BENCH_SPARSE_SOURCE") != "bigann":
+        raise SystemExit("REFUSING: l3s at paper tier needs BENCH_SPARSE_SOURCE=bigann "
+                         "(the paper corpus, 8,841,823 x 30,109). BENCH_SPARSE_DATA "
+                         "alone selects nothing; see LANE_CORPUS.")
     _require_local_server_image()
     only = {int(x) for x in args.only_reps.split(",") if x.strip()}
     cells = [(j, r) for j in jobs for r in range(1, args.reps + 1)

@@ -582,6 +582,15 @@ def f8_deployment(rows):
         """
         out = set()
         for r in rs:
+            # ONE PIN, TWO VERSION STRINGS. At 8d6af9475 the embedded wheel
+            # stamps "26.9.1.dev0" and the server jar "26.9.1-SNAPSHOT", and
+            # the string compare below refused f8 across a pair that IS the
+            # same engine. engine_commit is the identity (PAGE-SPEC section 1);
+            # the version string is only the fallback for rows that predate it.
+            rc = str(r.get("engine_commit") or "").strip().lower()
+            if rc and rc != "none":
+                out.add(rc[:9])
+                continue
             v = str(r.get("engine_version") or r.get("wheel_version") or "?")
             v = v.split("(")[0].replace("server:", "").strip()
             if not re.search(r"\d+\.\d+\.\d+", v):
