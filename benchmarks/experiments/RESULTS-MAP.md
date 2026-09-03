@@ -74,7 +74,7 @@ These are NOT dead. They feed published cells and are the reason the
 | dir | feeds | pin era |
 |---|---|---|
 | `sparse_mp/` | `l3smp` multipass table (`export_web`) | 2026-08 overlay |
-| `sparse_mp_<pin>/` | same table when COMPLETE; see the all-or-nothing rule below | current pin, **partial** |
+| `sparse_mp_<pin>/` | same table when COMPLETE; see the all-or-nothing rule below. `sparse_mp_b7c6c800d` (1 of 12 files) was removed 2026-09-04; `sparse_mp_8d6af9475` is written by qCL via `runner.py --driver sparse_multipass_driver.py` | current pin, qCL |
 | `e4decomp/`, `e4decomp_2681/` | `e4` deployment table (`export_web`) | 2026-08 overlay |
 | `e4_decomp/` | `claims_check` only | 2026-08 |
 | `dense_mp_2681/` | `make_paper_tables`, `make_paper_figures` | 2026-08 |
