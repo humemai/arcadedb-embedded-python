@@ -228,6 +228,17 @@ set `graphBuildCacheSize` to the corpus size when `N * (4*dims + 64)` bytes
 fits in about half the free heap; otherwise `graphBuildCacheMaxHeapPercent=75`.
 For int8 only `graphBuildCacheSize` moves anything.
 
+**The multipass table (2026-09-04, DECISIONS #56).** T5's dense block and the
+page's 10M dense table are re-measured at this pin by qCJ with the fp32 build
+cache **pinned to the corpus** (`graphBuildCacheSize=9,990,000` on
+`arcadedb_dense_embedded` and `arcadedb_dense_server`) and the INT8 arms at the
+**engine default** (100,000). User decision, on time. The caption of that table
+and the page's condition line must say: "ArcadeDB fp32 build cache pinned to
+the corpus size (9,990,000); INT8 at the engine default; comparators have no
+equivalent setting; see #7146 for the default's cost." The single-pass `l3d`
+rows elsewhere on the page stay at the default and are not to be mixed with
+these in one table.
+
 ### Graph
 
 | id | title | rows | columns |
