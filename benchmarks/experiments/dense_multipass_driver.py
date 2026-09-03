@@ -100,8 +100,13 @@ def main():
                # the lane builds cannot disagree. It reported "fp32" for the
                # unset case while l3d_dense reported "none", and that split is
                # what made BENCH_DENSE_QUANT=fp32 look like a legal input.
-               "quantization": canonical_quant_label(
-                   os.environ.get("BENCH_DENSE_QUANT")),
+               # From the ADAPTER, not the environment: the int8 arms declare
+               # `quantization = "INT8"` on the class and set BENCH_DENSE_QUANT
+               # only inside build(), so reading the env here stamped every
+               # int8 multipass file as fp32 (the same defect l3d_dense.py
+               # documents at its own stamping site).
+               "quantization": (_q if isinstance((_q := getattr(b, "quantization", None)), str) and _q
+                                else canonical_quant_label(os.environ.get("BENCH_DENSE_QUANT"))),
                "heap_asked": os.environ.get("ARCADEDB_HEAP"),
                # THE DEGREE, in this backend's own unit. Its absence is why F7
                # could not verify the published DEEP-10M cells and fell back to

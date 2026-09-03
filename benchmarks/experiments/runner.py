@@ -1428,6 +1428,42 @@ def observe_server(cid):
     return out
 
 
+# --driver: run a different script inside the SAME cell envelope.
+#
+# The dense multipass protocol (one build, five timed passes; T5's cold/warm
+# split) was measured once, by hand-rolled docker runs, at engine 26.8.1, and
+# never re-run because nothing could launch it with the campaign's envelope:
+# the wheel-built image, the matched server image and its JVM flags, the
+# cpuset, the memory split, the manifests, the teardown captures. Copying that
+# into a shell script is how one flag goes missing (F6 was exactly that). So
+# the runner grows a switch instead: the client command becomes
+# `python -u <driver>` and the driver writes results/<out-dir>/mp_<label>_b<rep>.json,
+# the file layout export_web and make_paper_tables already read.
+MP_LABELS = {
+    "arcadedb_dense_embedded": "fp32", "arcadedb_dense_embedded_int8": "int8",
+    "arcadedb_dense_server": "arcsrv", "arcadedb_dense_server_int8": "arcsrv_int8",
+    "milvus_dense": "milvus", "milvus_dense_int8": "milvus_int8",
+    "qdrant_dense": "qdrant", "qdrant_dense_int8": "qdrant_int8",
+    "chroma_dense": "chroma", "duckdb_vss_dense": "duckvss",
+    "lancedb_dense": "lancedb",
+    "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
+}
+
+
+def _driver_out(job, rep, container=False):
+    label = MP_LABELS.get(job["backend"], job["backend"])
+    rel = os.path.join(job["driver_out_dir"], f"mp_{label}_b{rep}.json")
+    return f"/work/results/{rel}" if container else os.path.join(RESULTS, rel)
+
+
+def _client_tail(job, be, scale, run_id):
+    if job.get("driver"):
+        return [be["image"], "python", "-u", job["driver"]]
+    return [be["image"], "python", job["script"],
+            "--backend", job["backend"], "--workload", job["workload"],
+            "--scale", scale, "--out", f"/work/results/raw/{run_id}.json"]
+
+
 def run_cell(job, rep, scale, cpuset, tier, net_name):
     """Run one cell (backend x workload x scale, one repeat). Returns row dict."""
     be = BACKENDS[job["backend"]]
@@ -1602,6 +1638,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         # image while the paper claims served comparators are pinned by digest.
         # run_conditions() in bench_common.py reads these two.
         bench_env += ["-e", f"BENCH_IMAGE={be['image']}"]
+        if job.get("driver"):
+            bench_env += ["-e", f"BENCH_MP_BACKEND={job['backend']}",
+                          "-e", f"BENCH_MP_SCALE={scale}",
+                          "-e", f"PROBE_OUT={_driver_out(job, rep, container=True)}"]
         if be.get("server_image"):
             bench_env += ["-e", f"BENCH_SERVER_IMAGE={be['server_image']}"]
 
@@ -1624,9 +1664,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                # so a cold open can be produced by evicting it. See LC_HOST_DIR.
                + (["-v", f"{LC_HOST_DIR}:/lcdb"]
                   if job["lane"] == "lifecycle" else [])
-               + [be["image"], "python", job["script"],
-                  "--backend", job["backend"], "--workload", job["workload"],
-                  "--scale", scale, "--out", f"/work/results/raw/{run_id}.json"])
+               + _client_tail(job, be, scale, run_id))
         cli_cid = sh(cmd)
         if len(cli_cid) < 12:
             row["error"] = "client_failed_to_start"
@@ -1694,9 +1732,27 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row["error"] = detail
 
         out_path = os.path.join(RAW, f"{run_id}.json")
+        if job.get("driver"):
+            # The driver's artifact IS the result; the row records that it
+            # exists and how many passes it holds. Tables read the file.
+            _dp = _driver_out(job, rep)
+            if rc == 0 and os.path.exists(_dp):
+                try:
+                    _passes = json.load(open(_dp))
+                    row["driver_out"] = os.path.relpath(_dp, RESULTS)
+                    row["driver_passes"] = len(_passes) if isinstance(_passes, list) else None
+                    if isinstance(_passes, list) and _passes:
+                        for _k in ("build_s", "recall_at_10", "quantization"):
+                            if _k in _passes[0]:
+                                row[_k] = _passes[0][_k]
+                except Exception as _e:                   # noqa: BLE001
+                    row["error"] = f"driver_out_unreadable: {type(_e).__name__}"
+            elif rc == 0:
+                row["error"] = "driver_no_output"
+            out_path = None
         # merge bench output ONLY on clean exit: a stale or partial out file
         # must never masquerade as results for a failed/killed cell
-        if rc == 0 and os.path.exists(out_path):
+        if out_path and rc == 0 and os.path.exists(out_path):
             # A None FROM THE DRIVER NEVER ERASES A VALUE THE RUNNER SET.
             #
             # The driver's row is merged over the runner's, and bench_common
@@ -2009,6 +2065,11 @@ def main():
                          "tier's own. Use --results-file to keep them out of "
                          "runs.jsonl.")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--driver", default="",
+                    help="run this script inside the cell instead of the lane's "
+                         "(e.g. dense_multipass_driver.py); needs --driver-out-dir")
+    ap.add_argument("--driver-out-dir", default="",
+                    help="results/ subdirectory the driver writes mp_<label>_b<rep>.json into")
     ap.add_argument("--results-file", default="runs.jsonl",
                     help="where rows are appended, relative to results/. Use a "
                          "scratch file for smoke runs: the canonical rule takes "
@@ -2093,6 +2154,15 @@ def main():
         keep = set(args.backends.split(","))
         jobs = [j for j in jobs if j["backend"] in keep]
     # After filtering, so the check sees the backends that will actually run.
+    if bool(args.driver) != bool(args.driver_out_dir):
+        sys.exit("--driver and --driver-out-dir go together")
+    if args.driver:
+        if not os.path.exists(os.path.join(HERE, args.driver)):
+            sys.exit(f"--driver {args.driver} does not exist in {HERE}")
+        os.makedirs(os.path.join(RESULTS, args.driver_out_dir), exist_ok=True)
+        for j in jobs:
+            j["driver"] = args.driver
+            j["driver_out_dir"] = args.driver_out_dir
     _require_engine_commit(args.tier, {j["backend"] for j in jobs})
     if args.tier == "paper" and "l3s" in args.lanes.split(",") \
             and os.environ.get("BENCH_SPARSE_SOURCE") != "bigann":
