@@ -1804,7 +1804,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 # embedded rows came back chosen=None even after the stderr
                 # fix (deep10m embedded rep4, 2026-09-02). The file written
                 # below stays tail-bounded.
-                _full = docker_logs(cli_cid, tail="all")
+                # NOT docker_logs(cli_cid): the client container was removed
+                # at docker_rm() above, so that call returned "No such
+                # container" and every embedded row stayed chosen=None
+                # (deep10m embedded int8 r1/r2, 2026-09-03, 111-byte
+                # clientlogs). `logs` was read in full BEFORE removal.
+                _full = (logs.stdout or "") + (logs.stderr or "")
                 _m = re.search(r"cache enabled: size=(\d+)", _full or "")
                 if _m:
                     row["graph_build_cache_chosen"] = int(_m.group(1))
