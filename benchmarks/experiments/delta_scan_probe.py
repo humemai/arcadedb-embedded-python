@@ -226,7 +226,14 @@ def main():
             drained = (rec["delta_count"] is not None
                        and rec["delta_count"] < target * 0.9)
             moved = rec["graph_nodes"] != BASE
-            rec["rebuild_fired"] = bool(moved or drained)
+            # STARTED, not finished. `moved or drained` only sees a rebuild that
+            # completed inside the step; at 1M the async rebuild ran through
+            # the last two steps and was cancelled at close, at 10M it fired
+            # and was deferred for heap four times, and both rows said False
+            # while the engine log said otherwise (BUGS F7, 2026-09-04).
+            rec["async_rebuild_in_progress"] = s.get("asyncRebuildInProgress")
+            rec["rebuild_fired"] = bool(moved or drained
+                                        or (rec["async_rebuild_in_progress"] or 0) > 0)
             if MODE == "sweep":
                 if moved:
                     raise SystemExit(
