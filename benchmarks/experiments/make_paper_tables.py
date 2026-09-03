@@ -637,6 +637,32 @@ def sparse_table(rows):
     write("t4_sparse.tex", "\n".join(lines) + "\n")
 
 
+MP_ARMS = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus", "milvus_int8",
+           "qdrant", "qdrant_int8", "chroma", "duckvss", "lancedb",
+           "sqlitevec", "sqlitevec_int8")
+MP_BUILDS = 5
+
+
+def dense_mp_dir():
+    """results/dense_mp5_<pin> when qCJ has written EVERY arm's five builds,
+    else results/dense_mp5_2681. One resolver for the table, the figures, the
+    exporter and the checks, so they cannot disagree about which directory
+    "the dense overlay" is. All-or-nothing for the same reason export_web's
+    _pinned_dir is: a half-written pinned directory must not supersede a
+    complete overlay file by file."""
+    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+    if pin:
+        cand = os.path.join(RESULTS, f"dense_mp5_{pin}")
+        if os.path.isdir(cand):
+            missing = [f"mp_{a}_b{b}.json" for a in MP_ARMS for b in range(1, MP_BUILDS + 1)
+                       if not os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
+            if not missing:
+                return cand
+            sys.stderr.write(f"dense_mp5_{pin}: {len(missing)} of {len(MP_ARMS) * MP_BUILDS} "
+                             f"files missing (e.g. {missing[0]}); using dense_mp5_2681\n")
+    return os.path.join(RESULTS, "dense_mp5_2681")
+
+
 def _dense_multipass():
     """T5's dense block, read from the one-build/five-pass artifacts.
 
@@ -667,8 +693,7 @@ def _dense_multipass():
     # could not decide whether an 85% cold-latency move between two engine
     # builds was a regression or noise. It is now five, one per build.
     stats = {}
-    for fp in sorted(glob.glob(os.path.join(RESULTS, "dense_mp5_2681",
-                                            "mp_*_b*.json"))):
+    for fp in sorted(glob.glob(os.path.join(dense_mp_dir(), "mp_*_b*.json"))):
         try:
             passes = json.load(open(fp))
         except Exception:

@@ -134,8 +134,10 @@ FEEDS = {
     # fed the superseded dev-era dense rows and are deliberately NOT listed,
     # so the unmapped-input check reports them as the dead overlays they are.
     # batch1 was read by the time-series half and never mapped: a blind spot.
-    "T5": ["dense_mp5_2681", "ts_2681"],
+    "T5": [None, "ts_2681"],   # None -> make_paper_tables.dense_mp_dir() at import
 }
+import make_paper_tables as _MPT
+FEEDS["T5"][0] = os.path.basename(_MPT.dense_mp_dir())
 
 # Top-level result FILES that feed published tables, as opposed to the overlay
 # DIRECTORIES above. This map exists because the audit had a blind spot exactly

@@ -163,3 +163,16 @@ verbatim copies of finished files that a filed report links to, under a path
 that exists nowhere on mini: `ablation_cache_8d6af9475.jsonl` (the cache
 default issue) and `delta_scan_8d6af9475/` (the #6797 follow-up). Copy, never
 move; `results/` stays the working store.
+
+## `dense_mp5_<pin>/`: the multipass overlay, pin-aware (2026-09-04)
+
+`make_paper_tables.dense_mp_dir()` is the ONE resolver: it returns
+`results/dense_mp5_<BENCH_ENGINE_COMMIT>` only when every one of the 13 arms
+(`fp32 int8 arcsrv arcsrv_int8 milvus milvus_int8 qdrant qdrant_int8 chroma
+duckvss lancedb sqlitevec sqlitevec_int8`) has all five `mp_<arm>_b<n>.json`
+files, else `results/dense_mp5_2681`. T5, f4/f8's dense bars, the page's 10M
+dense table, F4 in `fairness_check` and `provenance_check`'s FEEDS all call it,
+so they cannot disagree. qCJ writes the pinned directory through
+`runner.py --driver dense_multipass_driver.py --driver-out-dir dense_mp5_8d6af9475`;
+its per-cell rows go to `mp_rows_8d6af9475.jsonl` (never merged; the files are
+the result). Cache policy for that directory: DECISIONS #56.

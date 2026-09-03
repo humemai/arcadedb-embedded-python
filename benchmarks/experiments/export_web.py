@@ -502,7 +502,7 @@ SOURCES = {
     # Two tiers, two artifacts: small comes from the campaign's frozen rows,
     # DEEP-10M from the matched multipass overlay. Both are published.
     "l3d": ["benchmarks/experiments/results/runs_paper.csv",
-            "benchmarks/experiments/results/dense_mp5_2681"],
+            "benchmarks/experiments/results/dense_mp5_<pin or 2681>"],   # resolved in _dense_10m_entries
     "l2": "benchmarks/experiments/results/runs_paper.csv",
     "l1": "benchmarks/experiments/results/runs_paper.csv",
     "l1tpc": "benchmarks/experiments/results/runs_paper.csv",
@@ -532,6 +532,7 @@ DENSE_10M_ARMS = [
     ("int8", "arcadedb_dense_embedded", "ArcadeDB (embedded, int8)", True),
     # the server overlay stamps quantization='fp32'
     ("arcsrv", "arcadedb_dense_server", "ArcadeDB (server, fp32)", True),
+    ("arcsrv_int8", "arcadedb_dense_server_int8", "ArcadeDB (server, int8)", True),
     ("qdrant", "qdrant_dense", "Qdrant (fp32)", False),
     ("chroma", "chroma_dense", "Chroma (fp32)", False),
     ("duckvss", "duckdb_vss_dense", "DuckDB VSS (fp32)", False),
@@ -539,6 +540,9 @@ DENSE_10M_ARMS = [
     # ArcadeDB's two arms were, which made quantization read as our quirk.
     ("lancedb", "lancedb_dense", "LanceDB (int8)", False),
     ("milvus", "milvus_dense", "Milvus (fp32)", False),
+    ("milvus_int8", "milvus_dense_int8", "Milvus (int8)", False),
+    ("qdrant_int8", "qdrant_dense_int8", "Qdrant (int8)", False),
+    ("sqlitevec_int8", "sqlite_vec_dense_int8", "sqlite-vec (int8)", False),
     ("sqlitevec", "sqlite_vec_dense", "sqlite-vec (fp32)", False),
 ]
 
@@ -564,7 +568,8 @@ def _dense_10m_entries():
     Cold is pass 0, warm pools passes 1-4 over all five builds. Reported
     together because separating them is the point: only ArcadeDB moves.
     """
-    root = HERE / "results" / "dense_mp5_2681"
+    import make_paper_tables as _MPT
+    root = Path(_MPT.dense_mp_dir())
     if not root.is_dir():
         return []
     out = []

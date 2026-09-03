@@ -291,7 +291,7 @@ def _dense_overlay_recall(arm="fp32"):
     """
     import make_paper_tables as _T
 
-    root = os.path.join(_T.RESULTS, "dense_mp5_2681")
+    root = _T.dense_mp_dir()
     vals = []
     for h in sorted(_glob_json(root, f"mp_{arm}_b*.json")):
         with open(h, encoding="utf-8") as fh:
@@ -347,7 +347,7 @@ def _dense_overlay_p50(srv=False, arm="fp32", warm=True):
     # build-then-five-passes protocol for exactly this reason, so a comparator
     # read from anywhere else is a different experiment wearing the same axis.
     name = f"mp_{'arcsrv' if srv else arm}_b*.json"
-    hits = sorted(_glob.glob(os.path.join(_T.RESULTS, "dense_mp5_2681", name)))
+    hits = sorted(_glob.glob(os.path.join(_T.dense_mp_dir(), name)))
     if not hits:
         return None
     vals = []

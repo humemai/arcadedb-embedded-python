@@ -74,8 +74,8 @@ def _dense_rows():
     # old directory held a single build per arm and needed a "_build" filter to
     # skip the two ad-hoc reproducibility extras; here every file is a first
     # class build and nothing is skipped.
-    for fp in sorted(glob.glob(os.path.join(RESULTS, "dense_mp5_2681",
-                                            "mp_*_b*.json"))):
+    import make_paper_tables as _T
+    for fp in sorted(glob.glob(os.path.join(_T.dense_mp_dir(), "mp_*_b*.json"))):
         try:
             d = json.load(open(fp))
         except Exception:
