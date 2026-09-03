@@ -612,6 +612,16 @@ fixed. This is the residue.
 > after 20 cells failed on a wrong `BENCH_DENSE_DATA`. Comparator rows carry
 > `engine_commit=b7c6c800d` by design (carried forward; they do not run
 > ArcadeDB), except Milvus, re-measured after the build-time fix.
+>
+> **CORRECTION 2026-09-04:** `l3s` at this pin is NOT ready. All 45 ArcadeDB
+> sparse cells ran the synthetic 10M/30,000 corpus (BUGS F6); the freeze
+> dropped them and T4 stays at 26.8.1 until qCI (paper corpus, ~9 h) lands.
+> `l3d` small re-ran clean (qCH, 20 rows). `l3d` deep10m ArcadeDB rows are at
+> the pin in `runs_paper.csv`, but T5 and the page's 10M dense table read the
+> `dense_mp5_2681` multipass overlay, which nothing re-ran; f8 refuses to draw
+> across the two pins. Open decision: re-run the dense multipass at the pin
+> (ArcadeDB arms ~31 h at today's served-fp32 default, plus Milvus) or drop the
+> warm column and read T5 from the campaign rows.
 
 **Two of the defects flattered us**, which is why they were worth finding: the l4
 native arm slept 5 s that no other arm got, and its `q_last` was windowed where

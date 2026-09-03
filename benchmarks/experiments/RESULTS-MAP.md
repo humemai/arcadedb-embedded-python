@@ -131,6 +131,7 @@ Corretto 25 / glibc / G1 with compact object headers. See DECISIONS #54.
 |---|---|
 | `runs_page_8d6af9475.jsonl` | the new campaign. Started by carrying 220 clean COMPARATOR rows forward from `runs_page_b7c6c800d.jsonl`; each carries `carried_forward_from` and `carried_forward_reason`. 197 ArcadeDB rows were NOT carried. |
 | `runs_lifecycle_8d6af9475.jsonl` | lifecycle on the matched pair (qCC). Carries the #6798 counters owed upstream. |
+| `delta_scan_8d6af9475/` | the #6797 probe at 1M and 10M, sweep and bounded (qCF, 2026-09-03). Evidence for the upstream follow-up; FINDINGS section 9. `rebuild_fired` is wrong in it (BUGS F7), the engine log in STATUS.txt is the record. |
 | `ablation_cache_8d6af9475.jsonl` | the deep10m build-cache ablation (qCG, 21 cells, 2026-09-01..03): fp32 and int8, served and embedded, at pinned 100,000 / 3,674,697 and heap-percent 50 / 75. Read by nothing on the page; it is the evidence for the upstream cache-default report and for the PAGE-SPEC dense build-cache note. `graph_build_cache_chosen` is populated from block 2 on (the capture was broken before, BUGS F1/F3/F4). Never merge into `runs.jsonl`. |
 | `results_jdk21_control.jsonl` | **a control, not a published lane.** One served deep10m rep on upstream's stock image (Temurin 21 / musl), identical jars and flags. Exists only to price the JVM major before deciding whether to report it upstream. Never merge into `runs.jsonl`. |
 | `runs_page_b7c6c800d.jsonl` | previous campaign. Its comparator rows live on in the new file; its ArcadeDB rows are superseded. |
@@ -152,3 +153,13 @@ They pin `b7c6c800d` and verify the pair with `build_engine_pair.sh`, which
 checks a locally COMPILED pair -- the wrong claim for a pair assembled from
 upstream's published jars. Live scripts are `qCA` -> `qCB` -> `qCC` -> `qCD`,
 each gated on `verify_pair_c25.sh`.
+
+## `evidence/`: tracked copies of what an upstream report cites
+
+`results/` is untracked by design (a checkout must never revert a live
+campaign file, and a tracked path that exists untracked on mini aborts its
+next `git pull`). But an upstream issue needs a stable URL. `evidence/` holds
+verbatim copies of finished files that a filed report links to, under a path
+that exists nowhere on mini: `ablation_cache_8d6af9475.jsonl` (the cache
+default issue) and `delta_scan_8d6af9475/` (the #6797 follow-up). Copy, never
+move; `results/` stays the working store.
