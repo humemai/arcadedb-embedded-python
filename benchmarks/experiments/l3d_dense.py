@@ -892,6 +892,38 @@ class Milvus(Base):
         to apply quietly to existing rows.
         """
         self.cl.flush("articles")
+        # COMPACT, THEN WAIT FOR THE INDEX. Not the other way round, and not
+        # index-only. At deep10m every row reported state=Finished with all
+        # 9,990,000 rows indexed, and the rows still split into two modes:
+        # build 470-570 s / p50 3.7 ms / recall 0.994, or build ~900 s /
+        # p50 1.6 ms / recall 0.986, three-and-two on both arms (BUGS F8).
+        # Measured on a laptop, 200k: compaction completes in seconds and then
+        # describe_index reads state=Finished with pending_index_rows=200000,
+        # i.e. "Finished" is a stale flag and the merged segment is served by
+        # the interim index until it is re-indexed. So a run where Milvus's
+        # background compaction fired AFTER our index wait passed spent its
+        # queries on the interim index (higher recall, 2.3x slower) and the
+        # row said nothing. Forcing compaction here, then re-waiting the
+        # index, gives every run the same segment layout: the steady state an
+        # operator reaches once Milvus's own compaction has run. Loop until a
+        # compaction stops shrinking the segment set, since one call may not
+        # merge everything at 10M.
+        self._compactions = 0
+        prev = None
+        for _ in range(6):
+            n = len(self.cl.list_persistent_segments("articles"))
+            if prev is not None and n >= prev:
+                break
+            prev = n
+            job = self.cl.compact("articles")
+            t0 = time.time()
+            while time.time() - t0 < 7200:
+                if "Completed" in str(self.cl.get_compaction_state(job)):
+                    break
+                time.sleep(1.0)
+            else:
+                raise RuntimeError(f"milvus compaction {job} did not complete within 7200s")
+            self._compactions += 1
         deadline = time.time() + 7200
         d = None
         while time.time() < deadline:
@@ -931,6 +963,13 @@ class Milvus(Base):
                       "pending_index_rows", "metric_type"):
                 if isinstance(desc, dict) and k in desc:
                     out[f"milvus_{k}"] = desc[k]
+            # The segment layout is the discriminator F8 lacked.
+            try:
+                out["milvus_persistent_segments"] = len(self.cl.list_persistent_segments("articles"))
+                out["milvus_loaded_segments"] = len(self.cl.list_loaded_segments("articles"))
+                out["milvus_compactions_forced"] = getattr(self, "_compactions", None)
+            except Exception as e:                          # noqa: BLE001
+                out["milvus_segments_error"] = f"{type(e).__name__}: {e}"[:120]
             if not out and desc is not None:
                 out["milvus_describe_index"] = str(desc)[:300]
         except Exception as e:                            # noqa: BLE001
