@@ -255,6 +255,30 @@ def main():
             print(f"RESULT delta={target:>6} buffered={rec['delta_count']} "
                   f"graph={rec['graph_nodes']} p50={rec['p50_ms']:.3f} ms "
                   f"p95={rec['p95_ms']:.3f} ms{_prog}", flush=True)
+    # PROBE_WAIT_REBUILD=1 (bounded mode): after the last step, wait for the
+    # admitted async rebuild to finish and take one more timed pass, so the
+    # record shows the bound LANDING (buffer drained, p50 back near baseline)
+    # rather than only the trigger firing. #7184 verification, 2026-09-07.
+    if MODE == "bounded" and os.environ.get("PROBE_WAIT_REBUILD") == "1":
+        t0 = time.time()
+        while time.time() - t0 < 7200:
+            st = stats()
+            if not st.get("asyncRebuildInProgress"):
+                break
+            time.sleep(5)
+        st = stats()
+        warmup()
+        lat = timed_pass()
+        rec = {"delta_target": "after_rebuild", "delta_count": st.get("deltaVectorsCount"),
+               "graph_nodes": st.get("graphNodeCount"), "graph_state": st.get("graphState"),
+               "async_rebuild_in_progress": st.get("asyncRebuildInProgress"),
+               "rebuilds_deferred_for_memory": st.get("rebuildsDeferredForMemory"),
+               "waited_s": round(time.time() - t0, 1),
+               "p50_ms": round(st.median(lat), 3), "n_queries": len(lat)}
+        with open(OUT, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+        print(f"AFTER-REBUILD waited={rec['waited_s']}s buffered={rec['delta_count']} graph={rec['graph_nodes']} p50={rec['p50_ms']} ms", flush=True)
+
     db.close()
 
 
