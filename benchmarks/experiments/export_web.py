@@ -1657,11 +1657,21 @@ def main() -> int:
             # overlay stands, unchanged. Never both -- mixing them is two engine
             # lines in one table (F5) on top of the double-measurement this
             # REPLACE was written to prevent (Qdrant at 1.295 and again at 1.342).
-            _canon_10m = [e for e in entries if e["scale"] == "deep10m"]
-            _canon_has_arcade = any(e.get("is_arcadedb") for e in _canon_10m)
-            if not _canon_has_arcade:
+            #
+            # 2026-09-07, REVERSED for the tier: the overlay wins whenever it
+            # exists. The 8d6af9475 campaign put single-pass 10M rows in the
+            # CSV with ArcadeDB in them, the rule above then dropped the
+            # overlay, and the page showed one timed pass per build (cold
+            # 8.434) while T5 showed the multipass rows (8.87): page_check
+            # DIFFERed on every 10M cell. PAGE-SPEC: the page's 10M dense table
+            # is T5's protocol, cold and warm from the multipass files. The
+            # single-pass rows stay in the CSV for l3d_params and the ablation;
+            # they are never this table. "Never both" still holds: it is all
+            # overlay or, with no overlay on disk, all CSV.
+            _mp = _dense_10m_entries()
+            if _mp:
                 entries = [e for e in entries if e["scale"] != "deep10m"]
-                entries.extend(_dense_10m_entries())
+                entries.extend(_mp)
         if entries:
             # A scale where the comparators have rows and ArcadeDB does not
             # reads as "ArcadeDB could not do this tier", which is a claim the
