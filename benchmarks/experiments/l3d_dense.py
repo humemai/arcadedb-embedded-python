@@ -908,13 +908,29 @@ class Milvus(Base):
         # operator reaches once Milvus's own compaction has run. Loop until a
         # compaction stops shrinking the segment set, since one call may not
         # merge everything at 10M.
+        # ORDER MATTERS: milvus.yaml ships indexBasedCompaction=true, so a
+        # compaction plan only takes segments that are ALREADY indexed. The
+        # first version of this settle compacted right after flush, before the
+        # index existed, and "Completed" merged nothing: qCM's rows stayed 3/2
+        # bimodal (26-28 segments against 6-8). So: index first, then compact
+        # until the segment set stops moving, re-waiting the index after each
+        # pass because a merged segment is unindexed until it is not, then load.
+        def _wait_index(what):
+            deadline = time.time() + 7200
+            d = None
+            while time.time() < deadline:
+                d = self.cl.describe_index("articles", "vec")
+                if (d.get("state") == "Finished"
+                        and int(d.get("pending_index_rows", 0)) == 0
+                        and int(d.get("indexed_rows", -1)) == int(d.get("total_rows", -2))):
+                    return
+                time.sleep(1.0)
+            raise RuntimeError(f"milvus index did not finish within 7200s ({what}): {d}")
+
+        _wait_index("after flush")
         self._compactions = 0
-        prev = None
-        for _ in range(6):
-            n = len(self.cl.list_persistent_segments("articles"))
-            if prev is not None and n >= prev:
-                break
-            prev = n
+        self._segments_trace = [len(self.cl.list_persistent_segments("articles"))]
+        for _ in range(8):
             job = self.cl.compact("articles")
             t0 = time.time()
             while time.time() - t0 < 7200:
@@ -924,17 +940,11 @@ class Milvus(Base):
             else:
                 raise RuntimeError(f"milvus compaction {job} did not complete within 7200s")
             self._compactions += 1
-        deadline = time.time() + 7200
-        d = None
-        while time.time() < deadline:
-            d = self.cl.describe_index("articles", "vec")
-            if (d.get("state") == "Finished"
-                    and int(d.get("pending_index_rows", 0)) == 0
-                    and int(d.get("indexed_rows", -1)) == int(d.get("total_rows", -2))):
+            _wait_index(f"after compaction {self._compactions}")
+            n = len(self.cl.list_persistent_segments("articles"))
+            self._segments_trace.append(n)
+            if n >= self._segments_trace[-2]:
                 break
-            time.sleep(1.0)
-        else:
-            raise RuntimeError(f"milvus index did not finish within 7200s: {d}")
         self.cl.load_collection("articles")
 
     def engine_stats(self):
@@ -968,6 +978,7 @@ class Milvus(Base):
                 out["milvus_persistent_segments"] = len(self.cl.list_persistent_segments("articles"))
                 out["milvus_loaded_segments"] = len(self.cl.list_loaded_segments("articles"))
                 out["milvus_compactions_forced"] = getattr(self, "_compactions", None)
+                out["milvus_segments_trace"] = getattr(self, "_segments_trace", None)
             except Exception as e:                          # noqa: BLE001
                 out["milvus_segments_error"] = f"{type(e).__name__}: {e}"[:120]
             if not out and desc is not None:
