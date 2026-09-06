@@ -95,6 +95,14 @@ _UNUSABLE_VERSION = re.compile(
     re.I)
 
 
+def _dense_overlay_is_pinned():
+    """True when the 10M dense rows come from the pinned multipass re-run
+    (DECISIONS #56 applies to exactly that directory), so the disclosure
+    appears with the rows it describes and not before."""
+    import make_paper_tables as _MPT
+    return not str(_MPT.dense_mp_dir()).endswith("dense_mp5_2681")
+
+
 def _pinned_dir(name, expected=None):
     """results/<name>_<pin> when the campaign has re-run it, else results/<name>.
 
@@ -681,6 +689,8 @@ LANES = {
         "conditions": [
             "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
             "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
+            *([("ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.")]
+              if _dense_overlay_is_pinned() else []),
         ],
     },
     "l2": {

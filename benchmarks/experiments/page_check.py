@@ -204,6 +204,19 @@ def _check_dense_10m(payload):
                 print(f"  DIFFER {label:28s} {name}: page={got:.6g} "
                       f"paper={want:.6g}")
                 bad += 1
+    # DECISIONS #56: when the 10M rows come from the pinned multipass re-run,
+    # the table must say the fp32 build cache was pinned to the corpus. A
+    # disclosure that can silently drop off the page is not a disclosure.
+    import export_web as _EW
+    if _EW._dense_overlay_is_pinned():
+        conds = " ".join(next((t.get("conditions", []) for t in payload.get("tables", [])
+                               if t["id"] == "l3d"), []))
+        if "graphBuildCacheSize pinned to the corpus size" in conds:
+            checked += 1
+            print("  #56 disclosure present on the dense table")
+        else:
+            print("  MISSING the #56 build-cache disclosure on the dense table while the pinned overlay is in use")
+            bad += 1
     print(f"  {checked} DEEP-10M cells match the paper's table")
     return checked, bad
 

@@ -74,6 +74,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--site", default=str(DEFAULT_SITE),
                     help=f"humem.ai checkout (default {DEFAULT_SITE})")
+    ap.add_argument("--page-only", action="store_true",
+                    help="skip claims_check (paper prose vs data). DECISIONS #58: the page "
+                         "does not wait for the paper; every page gate still runs")
     ap.add_argument("--no-build", action="store_true",
                     help="skip the Next.js build; the build is what catches a "
                          "page referencing an asset this script did not write")
@@ -105,7 +108,10 @@ def main() -> int:
     exported = HERE / "results" / "web_benchmarks.json"
 
     step(3, "Gates: nothing is published until all four agree")
-    for gate in GATES:
+    gates = [g for g in GATES if not (args.page_only and g == "claims_check")]
+    if args.page_only:
+        print("  --page-only: claims_check (paper prose) skipped, DECISIONS #58")
+    for gate in gates:
         proc = subprocess.run(py + [str(HERE / f"{gate}.py")],
                               cwd=HERE.parents[1], capture_output=True,
                               text=True)

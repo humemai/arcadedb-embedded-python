@@ -546,7 +546,46 @@ def graph_table(rows):
 # would keep the failure mode alive, since the next missing directory would
 # re-arm it. _sparse_2681_rows below refuses instead of falling back.
 
+def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
+    """T4's ArcadeDB rows from the PINNED campaign, when it is complete.
+
+    The paper corpus rows (8,841,823 x 30,109; load_canonical's PAPER_CORPUS
+    already drops everything else) at BENCH_ENGINE_COMMIT, all three tiers at
+    five reps and one engine_version, else None. Same all-or-nothing rule as
+    dense_mp_dir(): a partial re-run must not supersede a complete overlay
+    tier by tier. Until qCI (2026-09-06) every sparse row at a pin had been on
+    the synthetic corpus (BUGS F6), which is why T4 still read sparse_2681.
+    """
+    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip().lower()
+    if not pin:
+        return None
+    out = {}
+    for r in load_canonical():
+        if r.get("lane") != "l3s" or r.get("backend") != arm or r.get("error"):
+            continue
+        if str(r.get("engine_commit") or "").lower()[:9] != pin[:9]:
+            continue
+        out.setdefault(r["scale"], []).append(r)
+    tiers = ("tiny", "small", "medium")
+    if any(len(out.get(t, [])) < 5 for t in tiers):
+        missing = [t for t in tiers if len(out.get(t, [])) < 5]
+        sys.stderr.write(f"pinned sparse rows incomplete at {missing}; T4 uses sparse_2681\n")
+        return None
+    versions = {str(r.get("engine_version")) for t in tiers for r in out[t]}
+    if len(versions) != 1:
+        sys.stderr.write(f"pinned sparse rows span {sorted(versions)}; T4 uses sparse_2681\n")
+        return None
+    return out
+
+
 def _sparse_2681_rows(arm="arcadedb_sparse_embedded"):
+    pinned = _pinned_sparse_rows(arm)
+    if pinned is not None:
+        return pinned
+    return _sparse_2681_rows_overlay(arm)
+
+
+def _sparse_2681_rows_overlay(arm="arcadedb_sparse_embedded"):
     """T4's ArcadeDB rows, from ONE released engine.
 
     Replaces a six-deep cascade of dev overlays (verify5411=dev0, sparse_full=

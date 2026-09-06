@@ -119,7 +119,7 @@ FEEDS = {
     # Kept in step with what make_paper_tables ACTUALLY opens, which is the
     # only definition of "feeds a table" that cannot drift. dev22_sparse was
     # listed here but is no longer read by anything.
-    "T4": ["sparse_2681"],
+    "T4": ["sparse_2681"],   # replaced below when the pinned sparse rows are complete
     # srv109 is the post-#109 server dense re-measure and now feeds T5's
     # server row; verify5413 stays listed because it remains the fallback in
     # make_paper_tables and its landmark warning is the record of WHY it was
@@ -138,6 +138,8 @@ FEEDS = {
 }
 import make_paper_tables as _MPT
 FEEDS["T5"][0] = os.path.basename(_MPT.dense_mp_dir())
+if _MPT._pinned_sparse_rows() is not None:
+    FEEDS["T4"] = ["runs.jsonl"]
 
 # Top-level result FILES that feed published tables, as opposed to the overlay
 # DIRECTORIES above. This map exists because the audit had a blind spot exactly
