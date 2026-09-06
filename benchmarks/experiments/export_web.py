@@ -1204,6 +1204,7 @@ def _lifecycle_table(all_rows):
             "session number, because a millisecond open inside a process that takes "
             "half a second to reach its first database call is not a millisecond to "
             "whoever launched it.",
+            "Known at this engine build: a vector database's no-op session close grows with the index (6 ms at 10k, 96 ms at 1M), because the first search after a write started a full asynchronous graph rebuild and close waited on it. Reported as ArcadeDB issue #7183 and fixed upstream in #7191 for 26.10.1; the rows here are as measured on 8d6af9475.",
             "A clean close should be O(what was written), not O(what is stored): "
             "write nothing and closing should cost the same at 10k rows and 10M.",
         ] + [f"`{k}` is withheld: {v}" for k, v in sorted(LIFECYCLE_WITHHELD.items())],

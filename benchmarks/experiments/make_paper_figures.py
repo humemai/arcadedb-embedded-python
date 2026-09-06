@@ -556,6 +556,18 @@ def _sparse_overlay_p50(tier):
     return st.median(v) if v else None
 
 
+def _sparse_rows_identity():
+    import make_paper_tables as _T
+    out = set()
+    for r in _T._sparse_2681_rows().get("small") or []:
+        rc = str(r.get("engine_commit") or "").strip().lower()
+        if rc and rc != "none":
+            out.add(rc[:9])
+        else:
+            out.add(str(r.get("engine_version") or "?").split("(")[0].strip())
+    return out
+
+
 def f8_deployment(rows):
     """Server/embedded ratio per metric: the transport fee, same engine."""
     def _sel(lane, scale, wl, be):
@@ -668,7 +680,10 @@ def f8_deployment(rows):
                         line_of("l1", "medium", "oltp", "arcadedb_server")),
         "Graph\n1-hop p50": (line_of("l2", "sf10", "oltp", "arcadedb_graph_embedded"),
                              line_of("l2", "sf10", "oltp", "arcadedb_graph_server")),
-        "Sparse\np50": ({"26.8.1"},
+        # The embedded half comes from whatever _sparse_2681_rows() resolved
+        # (the pinned l3s rows when complete, else the 26.8.1 overlay), so its
+        # identity is read off those rows, not asserted.
+        "Sparse\np50": (_sparse_rows_identity(),
                         line_of("l3s", "small", "search", "arcadedb_sparse_server")),
         "TPC-H Q1": (line_of("l1tpc", "tpch1", "olap", "arcadedb_embedded"),
                      line_of("l1tpc", "tpch1", "olap", "arcadedb_server")),

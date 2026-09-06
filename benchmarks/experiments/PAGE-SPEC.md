@@ -624,7 +624,7 @@ fixed. This is the residue.
 > `engine_commit=b7c6c800d` by design (carried forward; they do not run
 > ArcadeDB), except Milvus, re-measured after the build-time fix.
 >
-> **CORRECTION 2026-09-04:** `l3s` at this pin is NOT ready. All 45 ArcadeDB
+> **2026-09-07:** `l3s` is READY at the pin (qCI, paper corpus, 45 rows; T4 reads them). Milvus dense rows are being re-measured (qCO, sealed segments). **Earlier correction 2026-09-04:** `l3s` at this pin was NOT ready. All 45 ArcadeDB
 > sparse cells ran the synthetic 10M/30,000 corpus (BUGS F6); the freeze
 > dropped them and T4 stays at 26.8.1 until qCI (paper corpus, ~9 h) lands.
 > `l3d` small re-ran clean (qCH, 20 rows). `l3d` deep10m ArcadeDB rows are at

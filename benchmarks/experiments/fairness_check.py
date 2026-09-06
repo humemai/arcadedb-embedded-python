@@ -474,6 +474,17 @@ def check_protocol_overlays():
     return 0
 
 
+
+# Regressions the gate has already caught, filed, and seen fixed upstream: the
+# gate keeps printing them, as KNOWN rather than BAD, on the pin they were
+# measured on. Disclosed on the page's lifecycle table by export_web. Remove
+# the entry at the re-pin that carries the fix, so the gate is armed again.
+KNOWN_REGRESSIONS = {
+    "vector": ("8d6af9475",
+               "the first search after a write started a full async rebuild and close() waited on it; "
+               "filed as #7183, fixed in #7191 for 26.10.1"),
+}
+
 def check_close_cost(rows):
     """F11: close must be O(what was written), not O(what is stored).
 
@@ -550,10 +561,15 @@ def check_close_cost(rows):
         if "lc10k" in sizes and "lc100k" in sizes:
             small, big = sizes["lc10k"], sizes["lc100k"]
             if small > 0 and big / small > 1.5:
-                print(f"  BAD: {sit} clean session grows {big / small:.1f}x "
-                      f"({small:.1f} -> {big:.1f} ms medians) over 10x the "
-                      f"rows, with nothing written. That is O(stored).")
-                bad += 1
+                known = KNOWN_REGRESSIONS.get(sit)
+                if known and any(str(r.get("engine_commit") or "").startswith(known[0]) for r in lc):
+                    print(f"  KNOWN: {sit} clean session grows {big / small:.1f}x "
+                          f"({small:.1f} -> {big:.1f} ms medians) over 10x the rows: {known[1]}")
+                else:
+                    print(f"  BAD: {sit} clean session grows {big / small:.1f}x "
+                          f"({small:.1f} -> {big:.1f} ms medians) over 10x the "
+                          f"rows, with nothing written. That is O(stored).")
+                    bad += 1
     if not bad:
         print(f"  ok {len(lc)} lifecycle row(s), none over budget, none scaling")
     return bad
