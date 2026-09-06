@@ -795,7 +795,14 @@ BACKENDS = {
                        "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
                        "-e", "ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml",
                        "-e", "COMMON_STORAGETYPE=local"],
-        "server_volumes": ["-v", f"{HERE}/docker-conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml"],
+        "server_volumes": ["-v", f"{HERE}/docker-conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml",
+                           # BUGS F8: the image seals growing segments at 12% of 1024 MB,
+                           # so a 10M ingest lands as 26-28 ~150 MB segments that Milvus's
+                           # own compaction merges to 6-8 at an unpredictable moment, and a
+                           # manual compact() after the fact merges nothing. Sealing at 50%
+                           # produces that end layout directly. One line changed from the
+                           # image default; disclosed in PROTOCOL section 7.
+                           "-v", f"{HERE}/docker-conf/milvus-dense.yaml:/milvus/configs/milvus.yaml"],
         "server_cmd": ["milvus", "run", "standalone"],
         "server_port": 19530,
         "ready_regex": r"Proxy successfully started|successfully started",
@@ -813,7 +820,14 @@ BACKENDS = {
                        "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
                        "-e", "ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml",
                        "-e", "COMMON_STORAGETYPE=local"],
-        "server_volumes": ["-v", f"{HERE}/docker-conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml"],
+        "server_volumes": ["-v", f"{HERE}/docker-conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml",
+                           # BUGS F8: the image seals growing segments at 12% of 1024 MB,
+                           # so a 10M ingest lands as 26-28 ~150 MB segments that Milvus's
+                           # own compaction merges to 6-8 at an unpredictable moment, and a
+                           # manual compact() after the fact merges nothing. Sealing at 50%
+                           # produces that end layout directly. One line changed from the
+                           # image default; disclosed in PROTOCOL section 7.
+                           "-v", f"{HERE}/docker-conf/milvus-dense.yaml:/milvus/configs/milvus.yaml"],
         "server_cmd": ["milvus", "run", "standalone"],
         "server_port": 19530,
         "ready_regex": r"Proxy successfully started|successfully started",
