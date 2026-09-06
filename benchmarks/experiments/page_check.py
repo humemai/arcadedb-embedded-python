@@ -406,6 +406,12 @@ def _check_page_atomicity(page_path):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", default=str(DEFAULT_JSON))
+    ap.add_argument("--page-only", action="store_true",
+                    help="DECISIONS #58: the first section compares page cells to the "
+                         "paper's hand-typed PROSE constants (claims_check.CLAIMS). With the "
+                         "paper stale and awaiting its rewrite that comparison is printed but "
+                         "does not fail the gate. The table-vs-table, page-prose and artifact "
+                         "sections are unchanged.")
     args = ap.parse_args()
 
     path = Path(args.json)
@@ -445,7 +451,10 @@ def main() -> int:
         if not ok:
             bad += 1
 
-    print(f"\n{checked} page cells checked against the paper, {bad} disagree")
+    print(f"\n{checked} page cells checked against the paper's prose constants, {bad} disagree")
+    if args.page_only and bad:
+        print(f"  --page-only: those {bad} are the paper's stale prose, advisory (DECISIONS #58)")
+        bad = 0
 
     print("\nDEEP-10M tier, page table vs the paper's table")
     d_checked, d_bad = _check_dense_10m(payload)
