@@ -36,6 +36,8 @@ import com.arcadedb.schema.LocalTimeSeriesType;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.ServerDatabase;
+import com.arcadedb.server.security.ReplicatedUsersPersistenceException;
+import com.arcadedb.server.security.SecurityUserFileRepository;
 import com.arcadedb.utility.FileUtils;
 import org.apache.ratis.proto.RaftProtos;
 import org.apache.ratis.proto.RaftProtos.LogEntryProto;
@@ -68,6 +70,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -903,7 +906,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
         switch (decoded.type()) {
         case TX_ENTRY -> applyTxEntry(decoded, index, originatedLocally);
         case SCHEMA_ENTRY -> applySchemaEntry(decoded, index, originatedLocally);
-        case INSTALL_DATABASE_ENTRY -> applyInstallDatabaseEntry(decoded);
+        case INSTALL_DATABASE_ENTRY -> applyInstallDatabaseEntry(decoded, index);
         case DROP_DATABASE_ENTRY -> applyDropDatabaseEntry(decoded);
         case SECURITY_USERS_ENTRY -> applySecurityUsersEntry(decoded);
         case BOOTSTRAP_FINGERPRINT_ENTRY -> applyBootstrapFingerprintEntry(decoded, index, originatedLocally);
@@ -956,6 +959,29 @@ public class ArcadeStateMachine extends BaseStateMachine {
       return CompletableFuture.failedFuture(e);
     } catch (final IllegalArgumentException e) {
       LogManager.instance().log(this, Level.WARNING, "Invalid raft log entry at index %d: %s", index, e.getMessage());
+      return CompletableFuture.failedFuture(e);
+    } catch (final RaftLogEntryDecodeException e) {
+      // A committed entry of a KNOWN type that this version cannot read: truncated, corrupt, or written in a
+      // shape it does not understand. "Halt the node" and "skip the entry" are not the only two options
+      // (issue #7138): when the envelope named a database, the failure is isolable exactly like an apply error
+      // on that database, so quarantine it and let the leader resend it as a snapshot. The node stays up for
+      // its other databases, and the entry is never silently skipped. Without a database name there is nothing
+      // to quarantine, and handleUnexpectedApplyError escalates to the node-wide halt as before.
+      final String decodeDatabase = e.getDatabaseName();
+      LogManager.instance().log(this, Level.SEVERE,
+          "Cannot decode the committed Raft log entry at index %d (type=%s, database=%s). This is either a corrupt "
+              + "entry or one written by a newer node in a shape this version cannot read: %s",
+          e, index, e.getType(), decodeDatabase == null || decodeDatabase.isEmpty() ? "<none>" : decodeDatabase,
+          e.getMessage());
+      try {
+        handleUnexpectedApplyError(index, decodeDatabase, e);
+      } catch (final ReplicationException quarantined) {
+        return CompletableFuture.failedFuture(quarantined);
+      } catch (final RuntimeException fatal) {
+        triggerCriticalHalt();
+        return CompletableFuture.failedFuture(fatal);
+      }
+      // handleUnexpectedApplyError always throws; unreachable, but the compiler needs a value.
       return CompletableFuture.failedFuture(e);
     } catch (final Throwable e) {
       // Unexpected errors (NPE, ClassCastException, OOM, etc.) indicate a bug that could cause
@@ -1141,6 +1167,16 @@ public class ArcadeStateMachine extends BaseStateMachine {
       throw new ReplicationException(
           "Apply error on database '" + databaseName + "' at index " + index + "; per-database snapshot resync in progress", t);
     }
+
+    // Node-scoped entry (no single target database): there is no per-database state to quarantine and no
+    // targeted resync that would repair it, so an unexpected error here still escalates to the node-wide halt
+    // (issue #4798's reasoning: never silently skip a committed mutation). An apply that is provably fail-safe
+    // classifies its OWN failure as recoverable before it reaches here - see applySecurityUsersEntry (issue
+    // #7137) - so the entries that arrive at this line are the ones for which a halt is the honest answer.
+    // Say which class of entry it was: without it, the SEVERE at the fatal branch names only an index.
+    LogManager.instance().log(this, Level.SEVERE,
+        "Unexpected error applying a node-scoped Raft entry at index %d (the entry targets no single database, so "
+            + "there is nothing to quarantine); escalating to the node-wide halt: %s", index, t.getMessage());
     throw t;
   }
 
@@ -2561,11 +2597,35 @@ public class ArcadeStateMachine extends BaseStateMachine {
     return list != null && !list.isEmpty();
   }
 
-  private void applyInstallDatabaseEntry(final RaftLogEntryCodec.DecodedEntry decoded) {
+  // @VisibleForTesting
+  void applyInstallDatabaseEntry(final RaftLogEntryCodec.DecodedEntry decoded, final long entryIndex) {
     final String databaseName = decoded.databaseName();
     final boolean forceSnapshot = decoded.forceSnapshot();
 
     if (forceSnapshot) {
+      // Replay guard (issue #7143). Ratis re-feeds every entry between the last snapshot marker and
+      // shutdown, and unlike the normal-create branch below the force branch has no existence check to
+      // stop it - existence is precisely what it ignores. So without this a restart re-downloaded and
+      // re-installed the whole database on every replay: correct in outcome, but a node restarting
+      // repeatedly re-pulls a multi-GB database on each attempt, lengthening every start and competing
+      // for the bandwidth the cluster needs to recover. The in-place Ratis restart (restartRatisIfNeeded,
+      // one per health-monitor tick) can repeat that without the process ever exiting.
+      //
+      // The same per-database evidence applyBootstrapFingerprintEntry uses: a persisted applied index at
+      // or beyond this entry proves a previous session ran this install to completion and that Raft has
+      // since replicated this database forward from there. It is deliberately PER-DATABASE - one state
+      // machine multiplexes every database, so a co-located database that advanced the global index must
+      // not suppress this one's reinstall (issue #4824) - and a legacy plain-number applied-index file
+      // yields -1, which re-installs exactly as before.
+      final long persistedApplied = readPersistedAppliedIndex(databaseName);
+      if (persistedApplied >= entryIndex) {
+        LogManager.instance().log(this, Level.INFO,
+            "Database '%s' already reinstalled by this entry in a previous session (persistedAppliedIndex=%d >= "
+                + "entryIndex=%d); skipping the snapshot re-download",
+            databaseName, persistedApplied, entryIndex);
+        return;
+      }
+
       // Restore flow: replace files from the leader's snapshot even if the DB exists.
       // The leader's own files are already authoritative, so the leader skips the reinstall;
       // replicas close their local copy and pull the fresh snapshot from the leader.
@@ -3251,13 +3311,57 @@ public class ArcadeStateMachine extends BaseStateMachine {
       previous.close();
   }
 
+  /**
+   * Applies a replicated user list.
+   * <p>
+   * A local PERSISTENCE failure here - {@code ServerSecurity.applyReplicatedUsers} cannot write
+   * {@code server-users.jsonl} because the config volume is full, read-only or NFS-hiccuping - is deliberately
+   * NOT a node-halt condition (issue #7137). Every other failure of that method still is; see the note at the
+   * catch below. It reaches {@code handleUnexpectedApplyError} with the empty
+   * database name the codec gives this entry, which skips the per-database quarantine of #4797 and lands in
+   * the node-wide {@code catch (Throwable)} halt; and because the halt leaves the applied index untouched on
+   * purpose, the next start replays the same entry and halts again. With an environmental cause that is an
+   * indefinite crash loop of the whole node - every co-located database - triggered by nothing worse than a
+   * password change on the leader.
+   * <p>
+   * Failing the entry is enough because nothing here can diverge the databases this node replicates: the
+   * failure is confined to one file of server-local configuration. It is also not a security hole, because
+   * {@code applyReplicatedUsers} publishes the new list in memory BEFORE reporting the write failure, so a
+   * revoked account or a changed password takes effect on this node immediately - only the durability of that
+   * change is outstanding, and the entry replays on the next start. What is lost is confidence that the file
+   * survives a restart, which is an operational problem, and the SEVERE below is what says so.
+   * <p>
+   * The classification lives here, at the apply site, rather than in the generic handler: whether a failure
+   * can diverge replicated state is a property of the apply, not of the entry's database scoping, so a future
+   * node-scoped entry that CAN diverge still reaches the halt it needs.
+   */
   private void applySecurityUsersEntry(final RaftLogEntryCodec.DecodedEntry decoded) {
     final String payload = decoded.usersJson();
     if (payload == null) {
       LogManager.instance().log(this, Level.WARNING, "SECURITY_USERS_ENTRY has null payload, skipping");
       return;
     }
-    server.getSecurity().applyReplicatedUsers(payload);
+    try {
+      server.getSecurity().applyReplicatedUsers(payload);
+    } catch (final ReplicatedUsersPersistenceException e) {
+      LogManager.instance().log(this, Level.SEVERE,
+          "Could not fully apply a replicated user list on this node: %s. The node keeps running and, when the "
+              + "list reached memory, is already enforcing it - but it is not durable: a restart before this is "
+              + "fixed reads the previous '%s'. The usual cause is a local write failure: check that the "
+              + "configuration directory holding that file is writable and has free space",
+          e, e.getMessage(), SecurityUserFileRepository.FILE_NAME);
+      // The message has to match what actually happened, because it is the half most likely to travel - into
+      // another node's log, an HA status payload, an incident writeup - without the SEVERE above beside it.
+      // "Stays up with its previous users" was true before the ordering fix and is now the opposite of the
+      // guarantee this fix exists to provide (issue #7137).
+      throw new ReplicationException(
+          "Failed to persist the replicated user list locally; the node is already enforcing the new list in "
+              + "memory, only its durability to disk failed", e);
+    }
+    // Note what is NOT caught: a payload this node cannot parse, or a user entry it cannot construct, throws
+    // from applyReplicatedUsers BEFORE any mutation. That is not "the disk is full", it is "this node cannot
+    // read a committed entry its peers applied", and it still reaches the node-wide halt - the case #4798
+    // argues must never be skipped quietly. Catching RuntimeException here would have downgraded it silently.
     HALog.log(this, HALog.DETAILED, "Applied SECURITY_USERS_ENTRY (%d bytes)", payload.length());
   }
 
@@ -4125,8 +4229,74 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * and must not advertise itself as ready.
    */
   public boolean isResyncInProgress() {
-    return isSnapshotDownloadPending() || !divergedDatabases.isEmpty() || staleSnapshotAppliedFloor.get() >= 0
-        || !staleDatabaseAppliedFloors.isEmpty();
+    return getLocalResyncState().inProgress();
+  }
+
+  /**
+   * Immutable report of everything {@link #isResyncInProgress()} is made of, so the cluster status document can
+   * publish the local node's own health instead of only the cluster's (issue #7136).
+   * <p>
+   * The invariant this type exists to make checkable: <b>anything that makes readiness return 503 appears in
+   * {@code GET /api/v1/cluster}</b>. {@link #isResyncInProgress()} - the readiness gate - is {@link #inProgress()}
+   * on this very record, so a new resync condition cannot be added to one without appearing in the other. Before
+   * it, a follower that had quarantined a database on a WAL version gap answered that endpoint with
+   * {@code raftState: "RUNNING"} and {@code alerts: []} while Kubernetes was pulling it out of the Service.
+   *
+   * @param snapshotDownloadQueued     a snapshot download is flagged but has not started
+   * @param snapshotDownloadInProgress a snapshot download is running
+   * @param divergedDatabases          databases quarantined on a WAL version gap and awaiting a resync
+   *                                   (issues #4740, #4797), sorted
+   * @param snapshotAppliedFloor       the node-wide stale-snapshot read floor, or {@code -1} when there is none
+   *                                   (issue #6111)
+   * @param databaseAppliedFloors      per-database read floors left by a snapshot install that could not bring
+   *                                   them up to date, keyed by database name (issue #6760)
+   */
+  public record LocalResyncState(boolean snapshotDownloadQueued, boolean snapshotDownloadInProgress,
+                                 List<String> divergedDatabases, long snapshotAppliedFloor,
+                                 Map<String, Long> databaseAppliedFloors) {
+
+    public LocalResyncState {
+      divergedDatabases = List.copyOf(divergedDatabases);
+      databaseAppliedFloors = Map.copyOf(databaseAppliedFloors);
+    }
+
+    /**
+     * Whether this node may hold divergent data pending a resync, and therefore must not advertise itself as
+     * ready. The sole definition of that predicate: {@link ArcadeStateMachine#isResyncInProgress()} delegates
+     * here rather than re-deriving it.
+     */
+    public boolean inProgress() {
+      return snapshotDownloadQueued || snapshotDownloadInProgress || !divergedDatabases.isEmpty()
+          || snapshotAppliedFloor >= 0 || !databaseAppliedFloors.isEmpty();
+    }
+  }
+
+  /**
+   * Snapshots the four components of {@link #isResyncInProgress()} for the cluster status document and the
+   * readiness gate (issue #7136). Copies rather than views: a poll rendering the document must not see the set
+   * change under it, and the caller must not be able to reach into the state machine's own collections.
+   * <p>
+   * Called only from the readiness probe, the health tick and the status endpoint, never from an apply path. A
+   * healthy node - the overwhelming majority of those calls - allocates only the record itself; a node that is
+   * actually resyncing pays for a sorted copy and the record's own defensive copy of it, which is a fair price
+   * on a path that runs a handful of times a second at most.
+   */
+  public LocalResyncState getLocalResyncState() {
+    // A healthy node - the overwhelming majority of calls, since the readiness probe polls this - copies
+    // nothing: both immutable empties are shared constants and the record's own copyOf calls return them
+    // unchanged. Only a node that actually has something in flight pays for the copies.
+    final List<String> diverged;
+    if (divergedDatabases.isEmpty())
+      diverged = List.of();
+    else {
+      diverged = new ArrayList<>(divergedDatabases);
+      // Sorted so a status poll payload is stable between ticks on an unchanged node.
+      Collections.sort(diverged);
+    }
+    final Map<String, Long> floors = staleDatabaseAppliedFloors.isEmpty()
+        ? Map.of() : new HashMap<>(staleDatabaseAppliedFloors);
+    return new LocalResyncState(needsSnapshotDownload.get(), snapshotDownloadInProgress.get(), diverged,
+        staleSnapshotAppliedFloor.get(), floors);
   }
 
   /**

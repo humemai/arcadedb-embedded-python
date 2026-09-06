@@ -436,7 +436,11 @@ public class TransactionContext implements Transaction {
             try {
               database.getSchema().getDictionary().reload();
             } catch (final IOException e) {
-              throw new SchemaException("Error on reloading schema dictionary");
+              // Chain the cause: the reason the dictionary could not be re-read is the only thing that tells a
+              // truncated file apart from a permission problem or a closed channel (issue #7141).
+              throw new SchemaException(
+                  "Error on reloading the schema dictionary of database '" + database.getName() + "' while rolling back: "
+                      + e.getMessage(), e);
             }
             break;
           }
@@ -552,8 +556,32 @@ public class TransactionContext implements Transaction {
           + "its read and its update. Please retry the operation");
   }
 
-  public void addUpdatedRecord(final Record record) throws IOException {
+  /**
+   * Queues a record for the deferred write performed by {@link #commit1stPhase()}.
+   * <p>
+   * A dropped write (see {@code false} below) leaves two traces, both deliberate. {@code onBeforeUpdate} has already
+   * fired by the time {@code LocalDatabase.updateRecord} reaches here, so a listener sees a "before" with no matching
+   * "after" - the write genuinely did not happen, and the caller is told so by the return value rather than by an
+   * exception. And the record keeps its dirty flag, because only the commit clears it, over {@code
+   * modifiedRecordsCache}, which the delete already emptied of this RID. Neither matters for a record that no longer
+   * exists, and clearing the flag would claim a write that was never persisted.
+   *
+   * @return {@code false} when this same transaction has already deleted the record, so nothing was queued and the
+   * caller must skip the rest of the update (index maintenance, after-update events) too; {@code true} otherwise.
+   */
+  public boolean addUpdatedRecord(final Record record) throws IOException {
     final RID rid = record.getIdentity();
+
+    // #7149: the delete wins. A record this transaction already deleted cannot exist at commit, so a write to it
+    // can never be observed - exactly as the symmetric order already behaves, where removeRecordFromCache() drops
+    // an update queued BEFORE the delete. Queueing it instead makes commit1stPhase find the record missing and
+    // raise a ConcurrentModificationException blaming a concurrent transaction that never existed. That lie is
+    // expensive as well as wrong: it is a NeedRetryException, so the caller re-runs the whole command
+    // 'arcadedb.txRetries' times against a state that can never change, and a Bolt client is finally told
+    // Neo.TransientError.Transaction.DeadlockDetected for a single-client statement. The commit-time arm stays for
+    // what it was written for (#4959): a delete by a genuinely CONCURRENT transaction, which no local state shows.
+    if (deletedRecordsInTx.contains(rid))
+      return false;
 
     if (updatedRecords == null)
       updatedRecords = new HashMap<>();
@@ -583,6 +611,7 @@ public class TransactionContext implements Transaction {
     }
     updateRecordInCache(record);
     removeImmutableRecordsOfSamePage(record.getIdentity());
+    return true;
   }
 
   /**
@@ -2209,7 +2238,11 @@ public class TransactionContext implements Transaction {
     )
       throw new TransactionException("Explicit lock must be acquired before any modification");
 
-    explicitLockedFiles = lockFilesInOrder(filesToLock);
+    // EXPLICIT_LOCK_TIMEOUT, not COMMIT_LOCK_TIMEOUT: an explicit `LOCK` is taken up front, before any work, and an
+    // application that asks for one is telling the engine how long it is prepared to wait for a busy resource. The
+    // setting existed and documented exactly that, but nothing read it and every explicit lock silently used the
+    // commit-time budget instead (issue #7121).
+    explicitLockedFiles = lockFilesInOrder(filesToLock, GlobalConfiguration.EXPLICIT_LOCK_TIMEOUT);
   }
 
   /**
@@ -2242,7 +2275,16 @@ public class TransactionContext implements Transaction {
   }
 
   private List<Integer> lockFilesInOrder(final IntHashSet files) {
-    final long timeout = database.getConfiguration().getValueAsLong(GlobalConfiguration.COMMIT_LOCK_TIMEOUT);
+    return lockFilesInOrder(files, GlobalConfiguration.COMMIT_LOCK_TIMEOUT);
+  }
+
+  /**
+   * @param timeoutSetting which budget bounds the wait: {@link GlobalConfiguration#COMMIT_LOCK_TIMEOUT} for the
+   *                       implicit locking commit does on the caller's behalf,
+   *                       {@link GlobalConfiguration#EXPLICIT_LOCK_TIMEOUT} for a lock the application asked for.
+   */
+  private List<Integer> lockFilesInOrder(final IntHashSet files, final GlobalConfiguration timeoutSetting) {
+    final long timeout = database.getConfiguration().getValueAsLong(timeoutSetting);
     final LocalSchema schema = database.getSchema().getEmbedded();
 
     // Work on a private copy so the caller's set is never mutated by the migration re-resolution below

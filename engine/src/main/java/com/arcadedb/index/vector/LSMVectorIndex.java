@@ -1868,7 +1868,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
           final RandomAccessVectorValues vectors = ArcadePageVectorValues.forGraphBuild(getDatabase(),
               metadata.dimensions, vectorProp,
               snapshotOf(vectorIndex(), ordinalToVectorId), ordinalToVectorId, this,
-              computeGraphBuildCacheCapacity(ordinalToVectorId.length, false));
+              computeGraphBuildCacheCapacity(ordinalToVectorId.length));
           buildAndPersistPQ(vectors);
         } catch (final Exception e) {
           LogManager.instance().log(this, Level.WARNING,
@@ -1973,7 +1973,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final RandomAccessVectorValues vectors = ArcadePageVectorValues.forGraphBuild(getDatabase(),
           metadata.dimensions, vectorProp,
           snapshotOf(vectorIndex(), gapOrdinalToVectorId), gapOrdinalToVectorId, this,
-          computeGraphBuildCacheCapacity(gapOrdinalToVectorId.length, false));
+          computeGraphBuildCacheCapacity(gapOrdinalToVectorId.length));
 
       // Collected into a local list first, exactly the way buildGraphFromScratchExclusively collects its own
       // unreachable-node re-queue before its publish step: appended into the shared deltaVectors only once this
@@ -2581,22 +2581,32 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final VectorLocationIndex vectorLocationSnapshot = new VectorLocationIndex(Math.max(16, expectedSize));
 
       // Issue #3144: for inline-quantized indexes (INT8/BINARY) the graph builder reads vectors
-      // straight from index pages on any thread (getImmutablePage needs no DatabaseContext), so we
-      // only warm the bounded build cache instead of holding a full second on-heap copy of the whole
-      // vector set. Document-based indexes (NONE/PRODUCT) still need a full preload because JVector's
-      // worker threads cannot lookupByRID without a transaction context bound to the thread.
+      // straight from index pages on any thread (getImmutablePage needs no DatabaseContext). Document-based
+      // indexes (NONE/PRODUCT) still need a full preload because JVector's worker threads cannot lookupByRID
+      // without a transaction context bound to the thread. Both kinds of index now share the same heap-percent
+      // cache budget (issue #7146); this flag only changes how a miss is resolved, not how large the cache is.
       final boolean inlineQuantization = metadata.quantizationType == VectorQuantizationType.INT8
           || metadata.quantizationType == VectorQuantizationType.BINARY;
-      // ORDERING: this now budgets off AVAILABLE heap (issue #6503), so it must stay AFTER the
-      // releaseResidentGraphFirst block at the top of this method. On the close path that block has already
-      // dropped the old graph, the search cache and the pooled searchers, so this sizes against a heap that no
-      // longer counts them. Move this call above that block - or that block below this call - and the close-path
-      // rebuild would shrink its own build cache to make room for memory it is in the act of freeing, which is
-      // the slow-build failure mode this change exists to avoid rather than cause.
-      final int graphBuildCacheSize = computeGraphBuildCacheCapacity(expectedSize, inlineQuantization);
+      // ORDERING: the budget is a share of the heap ceiling, then capped at currently AVAILABLE heap
+      // (issues #6503 / #7146), so this must stay AFTER the releaseResidentGraphFirst block at the top of this
+      // method. On the close path that block has already dropped the old graph, the search cache and the pooled
+      // searchers, so the available-heap cap no longer counts them. Move this call above that block - or that
+      // block below this call - and the close-path rebuild would shrink its own build cache to make room for
+      // memory it is in the act of freeing.
+      final int graphBuildCacheSize = computeGraphBuildCacheCapacity(expectedSize);
       // Never preload more than the cache can hold: the surplus used to be read, boxed and then dropped.
       final int preloadBudget = Math.min(expectedSize, graphBuildCacheSize);
-      final Map<Integer, VectorFloat<?>> preloadedVectors = new HashMap<>(preloadBudget * 4 / 3 + 1);
+      // Warm the build cache in place rather than through an intermediate map. The validation loop below reads
+      // every vector anyway; collecting them into a HashMap first and copying that into the cache afterwards held
+      // both at once at the peak of the build, for a boxed key, a map node and a table slot per vector that
+      // VectorHeapBudget.bytesPerCachedVector() does not account for. Sizing the cache from the heap ceiling
+      // (issue #7146) makes that intermediate copy scale with the corpus, so it is the wrong moment to be paying
+      // ~50 extra bytes a vector immediately before the graph itself is allocated.
+      // Same fallback forGraphBuild() applied when it allocated the cache itself, so a non-positive capacity still
+      // yields the flat default rather than a one-slot cache.
+      final VectorCache buildCache = new VectorCache(
+          graphBuildCacheSize <= 0 ? ArcadePageVectorValues.DEFAULT_CACHE_SIZE : graphBuildCacheSize);
+      int preloadedVectorCount = 0;
       final List<Integer> validVectorIds = new ArrayList<>(expectedSize);
       int skippedDeletedDocs = 0;
 
@@ -2651,8 +2661,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
                   validVectorIds.add(vectorId);
                   // Only warm the cache up to the budget; the rest are re-read from index pages
                   // lazily during the build (issue #3144).
-                  if (preloadedVectors.size() < preloadBudget)
-                    preloadedVectors.put(vectorId, vts.createFloatVector(vector));
+                  if (preloadedVectorCount < preloadBudget) {
+                    buildCache.put(vectorId, vts.createFloatVector(vector));
+                    preloadedVectorCount++;
+                  }
                   validationSuccesses++;
                 } else {
                   validationAllZeros++;
@@ -2683,8 +2695,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
               if (fromDelta.length() == metadata.dimensions && !VectorUtils.isZeroVector(fromDelta)) {
                 vectorLocationSnapshot.addOrUpdate(vectorId, locationIsCompacted, locationOffset, vectorRid, false);
                 validVectorIds.add(vectorId);
-                if (preloadedVectors.size() < preloadBudget)
-                  preloadedVectors.put(vectorId, fromDelta);
+                if (preloadedVectorCount < preloadBudget) {
+                  buildCache.put(vectorId, fromDelta);
+                  preloadedVectorCount++;
+                }
               }
             } else {
               // Without quantization: validate by reading from document.
@@ -2700,8 +2714,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
                   if (vector.length == metadata.dimensions && !VectorUtils.isZeroVector(vector)) {
                     vectorLocationSnapshot.addOrUpdate(vectorId, locationIsCompacted, locationOffset, vectorRid, false);
                     validVectorIds.add(vectorId);
-                    if (preloadedVectors.size() < preloadBudget)
-                      preloadedVectors.put(vectorId, vts.createFloatVector(vector));
+                    if (preloadedVectorCount < preloadBudget) {
+                      buildCache.put(vectorId, vts.createFloatVector(vector));
+                      preloadedVectorCount++;
+                    }
                   }
                 }
 
@@ -2760,23 +2776,19 @@ public class LSMVectorIndex implements Index, IndexInternal {
         return;
       }
 
-      LogManager.instance().log(this, Level.INFO, "Building graph with %d vectors using property '%s' (cache enabled: size=%d)",
-          filteredVectorIds.length, vectorProp, graphBuildCacheSize);
+      LogManager.instance().log(this, Level.INFO,
+          "Building graph with %d vectors using property '%s' (cache enabled: size=%d of %d)",
+          filteredVectorIds.length, vectorProp, graphBuildCacheSize, filteredVectorIds.length);
 
-      // Create lazy-loading vector values that reads vectors from documents or index pages (if quantized)
+      // Create lazy-loading vector values that reads vectors from documents or index pages (if quantized), over
+      // the cache the validation phase above already warmed in place. That is what lets JVector's parallel
+      // ForkJoinPool threads resolve a vector without a DatabaseContext of their own for lookupByRID.
       final ArcadePageVectorValues pageVectors = ArcadePageVectorValues.forGraphBuild(database, metadata.dimensions,
           vectorProp,
           vectorLocationSnapshot,  // Use immutable snapshot
           finalActiveVectorIds, this,  // Pass LSM index reference for quantization support
-          graphBuildCacheSize  // Pass configurable cache size
+          buildCache  // already holds the preloadBudget vectors read during validation
       );
-
-      // Pre-populate cache with vectors validated during the validation phase above.
-      // This ensures JVector's parallel ForkJoinPool threads can access vectors
-      // from cache without needing a DatabaseContext for lookupByRID.
-      for (final Map.Entry<Integer, VectorFloat<?>> entry : preloadedVectors.entrySet())
-        pageVectors.putInCache(entry.getKey(), entry.getValue());
-      preloadedVectors.clear(); // Free memory
 
       vectors = pageVectors;
 
@@ -3988,10 +4000,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
       return true; // nothing built yet: this is a first build in all but name, and must not be declined
 
     final long nodes = Math.max(resident.getIdUpperBound(), vectorIndex().getActiveCount());
-    final boolean inlineQuantization = metadata.quantizationType == VectorQuantizationType.INT8
-        || metadata.quantizationType == VectorQuantizationType.BINARY;
-    final long buildCacheCapacity = computeGraphBuildCacheCapacity((int) Math.min(nodes, Integer.MAX_VALUE / 2),
-        inlineQuantization);
+    final long buildCacheCapacity = computeGraphBuildCacheCapacity((int) Math.min(nodes, Integer.MAX_VALUE / 2));
 
     final long estimate = VectorHeapBudget.estimateRebuildHeapBytes(nodes, metadata.dimensions, buildCacheCapacity,
         true);
@@ -5272,14 +5281,18 @@ public class LSMVectorIndex implements Index, IndexInternal {
   }
 
   /**
-   * Search for k nearest neighbors to the given vector and return results with similarity scores.
+   * Search for k nearest neighbors to the given vector and return results with their distances.
    * This method is similar to HnswVectorIndex.findNeighborsFromVector and avoids the need to
    * recalculate distances after the search.
    *
    * @param queryVector The query vector to search for
    * @param k           The number of neighbors to return
    *
-   * @return List of pairs containing RID and similarity score
+   * @return List of pairs containing the RID and its <b>distance</b> from the query vector - not a similarity:
+   *         smaller is closer, the list is already sorted ascending, and the nearest neighbour is first. The
+   *         value is what {@code scoreToDistance()} makes of the engine's similarity score, so it can be
+   *         negative (DOT_PRODUCT) or {@code Float.MAX_VALUE} (a EUCLIDEAN score at or below zero), and
+   *         sorting it descending returns the furthest neighbours first (issue #7140).
    */
   public List<Pair<RID, Float>> findNeighborsFromVector(final float[] queryVector, final int k) {
     return findNeighborsFromVector(queryVector, k, -1, null);
@@ -5298,7 +5311,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * @param k           The number of neighbors to return
    * @param allowedRIDs Optional set of RIDs to restrict search to (null means no filtering)
    *
-   * @return List of pairs containing RID and similarity score
+   * @return List of pairs containing the RID and its <b>distance</b> from the query vector - not a similarity:
+   *         smaller is closer, the list is already sorted ascending, and the nearest neighbour is first. The
+   *         value is what {@code scoreToDistance()} makes of the engine's similarity score, so it can be
+   *         negative (DOT_PRODUCT) or {@code Float.MAX_VALUE} (a EUCLIDEAN score at or below zero), and
+   *         sorting it descending returns the furthest neighbours first (issue #7140).
    */
   public List<Pair<RID, Float>> findNeighborsFromVector(final float[] queryVector, final int k,
       final Set<RID> allowedRIDs) {
@@ -5313,7 +5330,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * @param efSearch    Search beam width (-1 uses index default). Higher values improve recall at cost of latency.
    * @param allowedRIDs Optional set of RIDs to restrict search to (null means no filtering)
    *
-   * @return List of pairs containing RID and similarity score
+   * @return List of pairs containing the RID and its <b>distance</b> from the query vector - not a similarity:
+   *         smaller is closer, the list is already sorted ascending, and the nearest neighbour is first. The
+   *         value is what {@code scoreToDistance()} makes of the engine's similarity score, so it can be
+   *         negative (DOT_PRODUCT) or {@code Float.MAX_VALUE} (a EUCLIDEAN score at or below zero), and
+   *         sorting it descending returns the furthest neighbours first (issue #7140).
    */
   public List<Pair<RID, Float>> findNeighborsFromVector(final float[] queryVector, int k, final int efSearch,
       final Set<RID> allowedRIDs) {
@@ -6201,7 +6222,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * @param queryVector The query vector to search for
    * @param k           The number of neighbors to return
    *
-   * @return List of pairs containing RID and approximate similarity score
+   * @return List of pairs containing the RID and its approximate <b>distance</b> from the query vector - not a similarity:
+   *         smaller is closer, the list is already sorted ascending, and the nearest neighbour is first. The
+   *         value is what {@code scoreToDistance()} makes of the engine's similarity score, so it can be
+   *         negative (DOT_PRODUCT) or {@code Float.MAX_VALUE} (a EUCLIDEAN score at or below zero), and
+   *         sorting it descending returns the furthest neighbours first (issue #7140).
    */
   public List<Pair<RID, Float>> findNeighborsFromVectorApproximate(final float[] queryVector, final int k) {
     return findNeighborsFromVectorApproximate(queryVector, k, null);
@@ -6219,7 +6244,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * @param k           The number of neighbors to return
    * @param allowedRIDs Optional set of RIDs to restrict search to (null means no filtering)
    *
-   * @return List of pairs containing RID and approximate similarity score
+   * @return List of pairs containing the RID and its approximate <b>distance</b> from the query vector - not a similarity:
+   *         smaller is closer, the list is already sorted ascending, and the nearest neighbour is first. The
+   *         value is what {@code scoreToDistance()} makes of the engine's similarity score, so it can be
+   *         negative (DOT_PRODUCT) or {@code Float.MAX_VALUE} (a EUCLIDEAN score at or below zero), and
+   *         sorting it descending returns the furthest neighbours first (issue #7140).
    */
   public List<Pair<RID, Float>> findNeighborsFromVectorApproximate(final float[] queryVector, int k,
       final Set<RID> allowedRIDs) {
@@ -6234,9 +6263,14 @@ public class LSMVectorIndex implements Index, IndexInternal {
       return findNeighborsFromVector(queryVector, k, allowedRIDs);
     }
 
-    // Track search metrics
+    // Track search metrics. Both halves are recorded together in the finally below rather than the count here and
+    // the latency there, because one exit from this method must record NEITHER: when the guard further down refuses
+    // the graph/PQ pair, this call hands the whole search to findNeighborsFromVector, which counts and times itself.
+    // Counting here as well would charge one caller-facing search twice - and worse, the two latencies do not even
+    // measure the same thing, since this method's clock spans the exact search it delegates to on top of its own
+    // guard overhead, so the summed latency would grow faster than the operation count it is divided by.
     final long startTime = System.nanoTime(); // Use nanos for microsecond precision
-    metrics.incrementSearchOperations();
+    boolean handedOffToExactSearch = false;
 
     try {
       if (queryVector == null)
@@ -6288,99 +6322,134 @@ public class LSMVectorIndex implements Index, IndexInternal {
           return Collections.emptyList();
         }
 
-        // Convert query vector to VectorFloat
-        final VectorFloat<?> queryVectorFloat = vts.createFloatVector(queryVector);
+        // Pin BOTH halves of the pair the beam walks, and refuse the pair if they disagree. graphIndex is
+        // published under the write lock this read lock excludes, so it cannot move underneath us - but pqVectors
+        // is republished LATER and outside that lock (see buildAndPersistPQ), so a rebuild that has already
+        // installed its new, larger graph but not yet its new codes leaves the two sized differently. Walking that
+        // graph through those codes asks PQVectors for an ordinal it was never sized for, and JVector throws
+        // IndexOutOfBoundsException from inside GraphSearcher.initializeInternal - before any Bits filter can
+        // exclude the entry point, so a filter cannot close this. The ordinal map is checked too because the
+        // pre-filter branch scores ordinals from it rather than from the beam.
+        //
+        // getIdUpperBound(), not size(): the question here is the ordinal SPACE the beam can hand back, and JVector
+        // defines that as "highest node id seen + 1" while size() is merely how many nodes are in it. The two are
+        // equal for every graph this index publishes today, because a deletion rebuilds the graph rather than
+        // punching a hole in its id space (loadPersistedGraphOrDecidePrefix refuses a persisted graph outright once
+        // getDeletedCount() is non-zero, issue #3135) - but a graph that ever did carry a hole would pass a
+        // size() check and still walk an ordinal past the codes' end, which is the exception this whole guard
+        // exists to prevent. The rest of the file already asks the question this way: findUnreachableOrdinals sizes
+        // its BFS arrays off getIdUpperBound(), and getStats reports it as graphNodeCount.
+        //
+        // Any state where this fires is a state the PQ path cannot serve at all, so nothing that works today is
+        // being turned off: in the steady state the codes cover exactly the graph they were built from. The exact
+        // path needs no codes, so it answers correctly throughout the window, and the fast path resumes by itself
+        // on the next query once the codes are republished. Falling back has to happen after this lock is
+        // released - findNeighborsFromVector can take the WRITE lock to rebuild, and this thread holds the read
+        // lock, which ReentrantReadWriteLock cannot upgrade.
+        //
+        // pinnedOrdinalMap is also the ONE snapshot the filter and the result loop below both resolve through, the
+        // way the exact path takes one: reading the volatile field at each use instead would let a rebuild land
+        // between two of them and pair an ordinal's RID with a vector from a different mapping (issue #4581). The
+        // guard has to check that same array for the same reason - checking one snapshot and walking another says
+        // nothing.
+        final PQVectors           pinnedPq         = pqVectors;
+        final ImmutableGraphIndex pinnedGraph      = graphIndex;
+        final int[]               pinnedOrdinalMap = this.ordinalToVectorId;
+        if (pinnedPq != null && pinnedGraph.getIdUpperBound() <= pinnedPq.count()
+            && pinnedOrdinalMap.length <= pinnedPq.count()) {
+          // Convert query vector to VectorFloat
+          final VectorFloat<?> queryVectorFloat = vts.createFloatVector(queryVector);
 
-        // Build the memory-resident PQ score function (uses SIMD/Panama if available)
-        // This is the key to zero-disk-I/O: we use PQ scores for BOTH navigation AND final scoring
-        final ScoreFunction.ApproximateScoreFunction scoreFunction =
-            pqVectors.precomputedScoreFunctionFor(queryVectorFloat, metadata.similarityFunction);
+          // Build the memory-resident PQ score function (uses SIMD/Panama if available)
+          // This is the key to zero-disk-I/O: we use PQ scores for BOTH navigation AND final scoring
+          final ScoreFunction.ApproximateScoreFunction scoreFunction =
+              pinnedPq.precomputedScoreFunctionFor(queryVectorFloat, metadata.similarityFunction);
 
-        // Create a ReRanker that does NOT pull from disk - just returns PQ similarity
-        // This is the critical optimization: we bypass RandomAccessVectorValues entirely
-        final ScoreFunction.ExactScoreFunction approxReranker = ordinal -> scoreFunction.similarityTo(ordinal);
+          // Create a ReRanker that does NOT pull from disk - just returns PQ similarity
+          // This is the critical optimization: we bypass RandomAccessVectorValues entirely
+          final ScoreFunction.ExactScoreFunction approxReranker = ordinal -> scoreFunction.similarityTo(ordinal);
 
-        // Wrap in a DefaultSearchScoreProvider (concrete implementation)
-        final DefaultSearchScoreProvider ssp = new DefaultSearchScoreProvider(scoreFunction, approxReranker);
+          // Wrap in a DefaultSearchScoreProvider (concrete implementation)
+          final DefaultSearchScoreProvider ssp = new DefaultSearchScoreProvider(scoreFunction, approxReranker);
 
-        // Snapshot the volatile ordinal map once, the way the exact path does: the filter and the result loop below
-        // must resolve an ordinal through the same array, or a concurrent rebuild between the two reads would pair
-        // an ordinal's RID with a vector from a different mapping (issue #4581).
-        final int[] ordinalMap = this.ordinalToVectorId;
+          // Issue #6514 pre-filter plan: the PQ-scored counterpart of the issue #6502 plan in findNeighborsFromVector -
+          // see preFilterApproximate's javadoc for why it cannot simply call bruteForceScan. Gated by its own
+          // selectivity threshold, not VECTOR_INDEX_PREFILTER_MAX_SELECTIVITY: Issue6514ApproximatePrefilterBenchmark
+          // measured this path's crossover at roughly 6-7% selectivity, well below the exact path's 20% default -
+          // see VECTOR_INDEX_PREFILTER_APPROXIMATE_MAX_SELECTIVITY's javadoc for why the two cannot share one knob.
+          if (allowedRIDs != null && !allowedRIDs.isEmpty() && allowListQualifiesForPreFilter(allowedRIDs, pinnedOrdinalMap,
+              GlobalConfiguration.VECTOR_INDEX_PREFILTER_APPROXIMATE_MAX_SELECTIVITY)) {
+            metrics.incrementPreFilterSearches();
+            final List<Pair<RID, Float>> results = new ArrayList<>(k);
+            // PQ-scaled, not exact (issue #6559 item 2): preFilterApproximate scores its ordinals from the PQ codes,
+            // so delta rows merged here are ranked against - and returned alongside - approximate scores.
+            mergeWithDeltaScanApproximate(queryVectorFloat, k, allowedRIDs, results);
+            preFilterApproximate(scoreFunction, k, allowedRIDs, results, pinnedOrdinalMap);
+            return results;
+          }
 
-        // Issue #6514 pre-filter plan: the PQ-scored counterpart of the issue #6502 plan in findNeighborsFromVector -
-        // see preFilterApproximate's javadoc for why it cannot simply call bruteForceScan. Gated by its own
-        // selectivity threshold, not VECTOR_INDEX_PREFILTER_MAX_SELECTIVITY: Issue6514ApproximatePrefilterBenchmark
-        // measured this path's crossover at roughly 6-7% selectivity, well below the exact path's 20% default -
-        // see VECTOR_INDEX_PREFILTER_APPROXIMATE_MAX_SELECTIVITY's javadoc for why the two cannot share one knob.
-        if (allowedRIDs != null && !allowedRIDs.isEmpty() && allowListQualifiesForPreFilter(allowedRIDs, ordinalMap,
-            GlobalConfiguration.VECTOR_INDEX_PREFILTER_APPROXIMATE_MAX_SELECTIVITY)) {
-          metrics.incrementPreFilterSearches();
+          // Live-only (plus the optional RID allow-list): PQ scores a tombstone as happily as a live vector, so
+          // without this the beam fills with nodes the post-filter below then drops (issue #5558).
+          final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, pinnedOrdinalMap, vectorIndex());
+
+          // Execute search using the PQ-based score provider
+          // The graph structure is typically small enough to stay in OS page cache
+          // Note: JVector 4.0's search method uses (scoreProvider, topK, Bits) signature
+          final SearchResult searchResult;
+          final GraphSearcherPool pool = getSearcherPool();
+          final long poolEpoch = searcherPoolEpoch();
+          // Pin the graph reference: a concurrent rebuild may swap the volatile field, and borrow/release must
+          // agree on which graph the searcher belongs to.
+          final ImmutableGraphIndex pooledGraph = pinnedGraph;
+          final GraphSearcher searcher = pool.borrow(pooledGraph, poolEpoch);
+          try {
+            searchResult = searcher.search(ssp, k, bitsFilter);
+          } finally {
+            pool.release(searcher, pooledGraph, poolEpoch);
+          }
+
+          recordGraphWalkCost(searchResult.getVisitedCount());
+
+          // Extract RIDs and scores from search results
           final List<Pair<RID, Float>> results = new ArrayList<>(k);
-          // PQ-scaled, not exact (issue #6559 item 2): preFilterApproximate scores its ordinals from the PQ codes,
-          // so delta rows merged here are ranked against - and returned alongside - approximate scores.
+          int skippedOutOfBounds = 0;
+          int skippedDeletedOrNull = 0;
+          for (final SearchResult.NodeScore nodeScore : searchResult.getNodes()) {
+            final int ordinal = nodeScore.node;
+            if (ordinal >= 0 && ordinal < pinnedOrdinalMap.length) {
+              final int vectorId = pinnedOrdinalMap[ordinal];
+              final RID rid = vectorIndex().getRid(vectorId);
+              if (rid != null) {
+                final float distance = scoreToDistance(metadata.similarityFunction, nodeScore.score);
+                results.add(new Pair<>(bindRid(rid), distance));
+              } else {
+                skippedDeletedOrNull++;
+              }
+            } else {
+              skippedOutOfBounds++;
+            }
+          }
+
+          // Merge with delta vectors inserted since last graph rebuild, scored on the same PQ scale as the graph rows
+          // above rather than exactly (issue #6559 item 2) - see mergeWithDeltaScanApproximate for why ranking the two
+          // against each other on different scales let quantization error, not the data, decide which row won.
           mergeWithDeltaScanApproximate(queryVectorFloat, k, allowedRIDs, results);
-          preFilterApproximate(scoreFunction, k, allowedRIDs, results, ordinalMap);
+
+          // Log performance metrics. FINE, not INFO (issue #6559 item 3): this path's entire reason to exist is
+          // microsecond latency, so an unconditional per-query INFO line - on the query rate this path is built for -
+          // costs more to format and write than the search itself reports, and floods the log. Every comparable
+          // per-query summary on the neighbouring search paths is already FINE.
+          final long elapsedNanos = System.nanoTime() - startTime;
+          LogManager.instance().log(this, Level.FINE,
+              "Zero-disk-I/O PQ search returned %d results in %.2f µs (skipped: %d out of bounds, %d deleted/null)",
+              results.size(), elapsedNanos / 1000.0, skippedOutOfBounds, skippedDeletedOrNull);
+
           return results;
         }
 
-        // Live-only (plus the optional RID allow-list): PQ scores a tombstone as happily as a live vector, so
-        // without this the beam fills with nodes the post-filter below then drops (issue #5558).
-        final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, ordinalMap, vectorIndex());
-
-        // Execute search using the PQ-based score provider
-        // The graph structure is typically small enough to stay in OS page cache
-        // Note: JVector 4.0's search method uses (scoreProvider, topK, Bits) signature
-        final SearchResult searchResult;
-        final GraphSearcherPool pool = getSearcherPool();
-        final long poolEpoch = searcherPoolEpoch();
-        // Pin the graph reference: a concurrent rebuild may swap the volatile field, and borrow/release must
-        // agree on which graph the searcher belongs to.
-        final ImmutableGraphIndex pooledGraph = graphIndex;
-        final GraphSearcher searcher = pool.borrow(pooledGraph, poolEpoch);
-        try {
-          searchResult = searcher.search(ssp, k, bitsFilter);
-        } finally {
-          pool.release(searcher, pooledGraph, poolEpoch);
-        }
-
-        recordGraphWalkCost(searchResult.getVisitedCount());
-
-        // Extract RIDs and scores from search results
-        final List<Pair<RID, Float>> results = new ArrayList<>(k);
-        int skippedOutOfBounds = 0;
-        int skippedDeletedOrNull = 0;
-        for (final SearchResult.NodeScore nodeScore : searchResult.getNodes()) {
-          final int ordinal = nodeScore.node;
-          if (ordinal >= 0 && ordinal < ordinalMap.length) {
-            final int vectorId = ordinalMap[ordinal];
-            final RID rid = vectorIndex().getRid(vectorId);
-            if (rid != null) {
-              final float distance = scoreToDistance(metadata.similarityFunction, nodeScore.score);
-              results.add(new Pair<>(bindRid(rid), distance));
-            } else {
-              skippedDeletedOrNull++;
-            }
-          } else {
-            skippedOutOfBounds++;
-          }
-        }
-
-        // Merge with delta vectors inserted since last graph rebuild, scored on the same PQ scale as the graph rows
-        // above rather than exactly (issue #6559 item 2) - see mergeWithDeltaScanApproximate for why ranking the two
-        // against each other on different scales let quantization error, not the data, decide which row won.
-        mergeWithDeltaScanApproximate(queryVectorFloat, k, allowedRIDs, results);
-
-        // Log performance metrics. FINE, not INFO (issue #6559 item 3): this path's entire reason to exist is
-        // microsecond latency, so an unconditional per-query INFO line - on the query rate this path is built for -
-        // costs more to format and write than the search itself reports, and floods the log. Every comparable
-        // per-query summary on the neighbouring search paths is already FINE.
-        final long elapsedNanos = System.nanoTime() - startTime;
-        LogManager.instance().log(this, Level.FINE,
-            "Zero-disk-I/O PQ search returned %d results in %.2f µs (skipped: %d out of bounds, %d deleted/null)",
-            results.size(), elapsedNanos / 1000.0, skippedOutOfBounds, skippedDeletedOrNull);
-
-        return results;
+        // The guard refused the graph/PQ pair. Nothing was searched, so this attempt is not an operation of its
+        // own: the exact search below is the search, and it keeps its own books.
+        handedOffToExactSearch = true;
 
       } catch (final Exception e) {
         LogManager.instance().log(this, Level.SEVERE, "Error performing PQ approximate search", e);
@@ -6388,10 +6457,17 @@ public class LSMVectorIndex implements Index, IndexInternal {
       } finally {
         lock.readLock().unlock();
       }
+
+      // Reached only when the guard above refused the graph/PQ pair - every other path returns from inside the
+      // block. Outside the read lock on purpose: this can rebuild, which takes the write lock.
+      return findNeighborsFromVector(queryVector, k, allowedRIDs);
     } finally {
-      // Track search latency (convert nanos to ms for consistency)
-      final long elapsedMs = (System.nanoTime() - startTime) / 1_000_000;
-      metrics.addSearchLatency(elapsedMs);
+      if (!handedOffToExactSearch) {
+        // Track search latency (convert nanos to ms for consistency)
+        final long elapsedMs = (System.nanoTime() - startTime) / 1_000_000;
+        metrics.incrementSearchOperations();
+        metrics.addSearchLatency(elapsedMs);
+      }
     }
   }
 
@@ -8383,39 +8459,38 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * Computes how many vectors the graph-build cache should hold.
    * <p>
    * An explicit {@code arcadedb.vectorIndex.graphBuildCacheSize} (or the per-index metadata) wins. Otherwise the
-   * capacity depends on what a cache miss costs during the build:
-   * <ul>
-   *   <li>inline-quantized indexes (INT8/BINARY) read a miss straight from an index page on any thread, so a
-   *       small bound is enough and the heap is better spent elsewhere;</li>
-   *   <li>document-based indexes (NONE/PRODUCT) pay a record lookup plus a full property deserialization on
-   *       every miss, so the whole corpus is cached when the heap allows it. This is what the validation phase
-   *       materializes anyway: bounding the cache below it (issue #3144) threw the vectors away right after
-   *       reading them and made a from-scratch fp32 build re-read almost every vector, hundreds of times each.</li>
-   * </ul>
-   * The budget is a share of the heap actually AVAILABLE, not of the whole heap (issue #6503): a rebuild keeps the
-   * old graph and its search cache resident for its whole duration, and sizing off the ceiling made the cache ask
-   * for the same amount whether that headroom existed or not - which is also why raising {@code -Xmx} did not help,
-   * since it grew the cache proportionally. See {@link VectorHeapBudget} for how availability is measured.
+   * cache holds the whole corpus when it fits {@code arcadedb.vectorIndex.graphBuildCacheMaxHeapPercent}, for both
+   * document-backed indexes (NONE/PRODUCT) and inline-quantized indexes (INT8/BINARY). Document-backed misses still
+   * cost a record lookup plus a full property deserialization, which is why a bound below the corpus (issue #3144)
+   * made a from-scratch fp32 build re-read almost every vector, hundreds of times each; INT8/BINARY misses are
+   * cheaper (an index page) but the percent knob used to skip them entirely (issue #7146).
+   * <p>
+   * The budget is a share of the heap ceiling, then capped at 90% of the heap currently AVAILABLE: taking the
+   * percent of leftover heap made a served ingest of the same corpus choose a third of the cache an embedded
+   * build would get (issue #7146), while sizing off the ceiling with no available-heap cap made an online rebuild
+   * holding the old graph ask for the same amount whether that headroom existed or not (issue #6503). See
+   * {@link VectorHeapBudget#buildCacheBudgetBytes(int)}.
    *
-   * @param expectedSize        number of vectors the build will walk
-   * @param inlineQuantization  whether vectors are readable from index pages without a record lookup
+   * @param expectedSize number of vectors the build will walk
    *
    * @return the number of vectors to hold, always positive
    */
-  int computeGraphBuildCacheCapacity(final int expectedSize, final boolean inlineQuantization) {
+  int computeGraphBuildCacheCapacity(final int expectedSize) {
     final int configured = getGraphBuildCacheSize();
     if (configured > 0)
       return configured;
 
-    if (inlineQuantization)
-      return ArcadePageVectorValues.DEFAULT_CACHE_SIZE;
+    // There used to be an `if (inlineQuantization) return DEFAULT_CACHE_SIZE;` here (issue #3144), and with it a
+    // boolean parameter every caller had to compute. The percent knob must apply to INT8/BINARY as well
+    // (issue #7146), so the parameter went with the branch: how a miss is resolved is a property of the reader,
+    // not of the capacity, and keeping an argument the method ignores only invites a caller to believe otherwise.
 
     final int heapPercent = mutable.getDatabase().getConfiguration()
         .getValueAsInteger(GlobalConfiguration.VECTOR_INDEX_GRAPH_BUILD_CACHE_MAX_HEAP_PERCENT);
     if (heapPercent <= 0)
       return ArcadePageVectorValues.DEFAULT_CACHE_SIZE;
 
-    final long heapBudget = VectorHeapBudget.budgetBytes(heapPercent);
+    final long heapBudget = VectorHeapBudget.buildCacheBudgetBytes(heapPercent);
     final long affordable = Math.max(ArcadePageVectorValues.DEFAULT_CACHE_SIZE,
         heapBudget / VectorHeapBudget.bytesPerCachedVector(metadata.dimensions));
     final long wanted = Math.max(1, expectedSize);

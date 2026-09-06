@@ -712,9 +712,11 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
 
     try {
       channelRecoveryExecutor.execute(() -> {
-        // Leadership may have moved while this task sat in the queue; a transfer from a non-leader is
-        // rejected by Ratis and would only log noise. Re-check before choosing a target so the choice is
-        // made against the configuration this node is actually leading.
+        // Leadership may have moved while this task sat in the queue. Re-check before choosing a target so the
+        // choice is made against the configuration this node is actually leading - and note that this re-check
+        // is load-bearing rather than cosmetic: Ratis does NOT reject a transfer submitted through a
+        // non-leader's client, it routes it to the current leader, so a stale task would force an election on a
+        // node that never asked for one (issue #7134).
         if (shutdownRequested || !isLeader())
           return;
 
@@ -1825,6 +1827,16 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     return raftGroup.getPeers().size();
   }
 
+  /**
+   * The peers {@code arcadedb.ha.serverList} declared, as read once at startup - NOT the live Raft
+   * configuration (see {@link #configuredPeers()} for that). One of the few legitimate direct readers of the
+   * static group: {@link RaftClusterStatusExporter} reconciles the two lists itself to decide which declared
+   * peers are still pending a join (issue #7136).
+   */
+  Collection<RaftPeer> getDeclaredPeers() {
+    return raftGroup.getPeers();
+  }
+
   public String getLeaderName() {
     final RaftPeerId leaderId = getLeaderId();
     if (leaderId == null)
@@ -2514,17 +2526,43 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   public Collection<RaftPeer> getLivePeers() {
+    final Collection<RaftPeer> live = getCommittedPeersOrNull();
+    return live != null ? live : raftGroup.getPeers();
+  }
+
+  /**
+   * The peers of the live Raft configuration, or {@code null} when it cannot be read - before the Raft server
+   * starts, or while an in-place restart re-initializes the division (issue #5271).
+   * <p>
+   * {@link #getLivePeers()} substitutes the declared list in that case, which is the right answer for a caller
+   * that just needs a peer list. It is the wrong answer for a caller that must not mistake the declared list for
+   * a committed membership: {@link RaftClusterStatusExporter} records which peers have ever been committed, and
+   * folding the declared list into that record would permanently silence the convergence note (issue #7136).
+   * Such a caller reads this and treats {@code null} as "no information this tick".
+   */
+  Collection<RaftPeer> getCommittedPeersOrNull() {
     if (raftServer != null) {
       try {
         final var division = raftServer.getDivision(raftGroup.getGroupId());
         final var conf = division.getRaftConf();
         if (conf != null)
           return conf.getCurrentPeers();
-      } catch (final IOException e) {
-        LogManager.instance().log(this, Level.FINE, "Cannot read live peers from Raft server, using static list", e);
+      } catch (final Exception e) {
+        // Catch Exception, not IOException: Ratis throws IllegalStateException ("stateMachineUpdater is
+        // uninitialized") for the whole window in which an in-place restart re-initializes the division
+        // (issue #5271), which is precisely the window this fallback exists for. Narrowing it to IOException
+        // made every membership reader behind configuredPeers() - /api/v1/cluster, getReplicaAddresses(), the
+        // Bolt/gRPC routing table - propagate instead of degrading, and aborted the health-monitor tick that
+        // drives the restart (issue #7135). Membership reads must degrade, never propagate.
+        // WARNING, matching the sibling guards (isLeader, getLeaderId) rather than the FINE this used to log:
+        // now that the catch is wide enough to swallow a genuine bug and not only the documented Ratis
+        // IllegalStateException, a silent fallback to "no membership" is how such a bug would hide.
+        LogManager.instance().log(this, Level.WARNING,
+            "Cannot read the live Raft configuration this tick; returning no membership, and it is the caller's "
+                + "choice whether to substitute the declared server list", e);
       }
     }
-    return raftGroup.getPeers();
+    return null;
   }
 
   /**
@@ -2560,8 +2598,14 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       final boolean resyncInProgress = sm != null && sm.isResyncInProgress();
       return isReadyForTrafficState(leaderPresent, localInConfig, info.isLeader(), commitIndex, appliedIndex,
           maxLagEntries, resyncInProgress, info.isLeaderReady());
-    } catch (final IOException e) {
-      LogManager.instance().log(this, Level.FINE, "Cannot read Raft state for readiness probe", e);
+    } catch (final Exception e) {
+      // Catch Exception, not IOException: getLastAppliedIndex() above is documented to throw Ratis'
+      // IllegalStateException while an in-place restart re-initializes the division (issue #5271), so the
+      // narrow catch let /api/v1/ready answer HTTP 500 instead of NOT_READY (issue #7135). This method's
+      // contract is to fail closed on unreadable state, and that is the answer for every read failure.
+      // WARNING for the same reason as getCommittedPeersOrNull above: the broad catch must not let a real bug
+      // hide behind a probe that merely answers NOT_READY.
+      LogManager.instance().log(this, Level.WARNING, "Cannot read Raft state for readiness probe", e);
       return false;
     }
   }
@@ -2703,13 +2747,35 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     clusterManager.transferLeadership(targetPeerId, timeoutMs);
   }
 
+  /**
+   * Steps this leader down by transferring leadership to the best eligible peer.
+   * <p>
+   * Refuses when this node is not the leader (issue #7134). A follower has nothing to step down FROM, but the
+   * transfer it would issue does not fail locally: Ratis routes it to the real leader, which then holds an
+   * election nobody asked for. That is reachable from an ordinary {@code POST /api/v1/cluster/stepdown} sent
+   * through a Kubernetes Service, so the guard sits here - in the method every caller goes through - rather
+   * than only in the handler.
+   *
+   * @throws NotTheLeaderRefusalException when this node is not the leader, whether that is already true on
+   *                                       entry or becomes true while the candidates are being tried
+   */
   public void stepDown() {
+    if (!isLeader())
+      throw new NotTheLeaderRefusalException("Refusing to step down", getLeaderId());
+
     final List<RaftPeer> candidates = selectStepDownTargets(getLivePeers(), localPeerId, clusterMonitor);
 
     for (final RaftPeer peer : candidates) {
       try {
         transferLeadership(peer.getId().toString(), 10_000);
         return;
+      } catch (final NotTheLeaderRefusalException notLeader) {
+        // Leadership moved between the guard above and this attempt. Every remaining candidate refuses
+        // identically, so walking the list logs the same thing N times and then falls through to "no other peer
+        // available for leadership transfer" - and stepDown() would RETURN NORMALLY, which the HTTP handler
+        // reports as 200 for a step-down that never happened. Propagate instead: the caller is told, with the
+        // new leader's name, that there was nothing here to step down from (issue #7134).
+        throw notLeader;
       } catch (final Exception e) {
         LogManager.instance().log(this, Level.SEVERE,
             "Failed to step down (transfer to %s): %s", peer.getId(), e.getMessage());
@@ -3444,7 +3510,14 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       // Membership kept changing under us across every attempt: report the peers we currently know,
       // without indices, rather than risk attributing a match/next index to the wrong peer.
       return degradedFollowerStates(leaderFollowerInfos(info));
-    } catch (final IOException e) {
+    } catch (final Exception e) {
+      // Exception, not IOException, for the same reason as getCommittedPeersOrNull() and isReadyForTraffic():
+      // this reads division.getInfo() through the identical path, so it meets the identical Ratis
+      // IllegalStateException while an in-place restart re-initializes the division (issue #5271). It feeds
+      // getReplicationStats(), getFollowerSamples() and the cluster-status and health endpoints, so propagating
+      // here would 500 them in exactly the window the #7135 hardening exists for. No followers is the right
+      // degraded answer.
+      LogManager.instance().log(this, Level.FINE, "Cannot read follower states this tick", e);
       return List.of();
     }
   }
@@ -3816,7 +3889,16 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     final long refreshMs = configuration.getValueAsLong(GlobalConfiguration.HA_GRPC_ALLOWLIST_REFRESH_MS);
     final long startupGraceMs = configuration.getValueAsLong(GlobalConfiguration.HA_PEER_ALLOWLIST_STARTUP_GRACE_MS);
     final long stickyTtlMs = configuration.getValueAsLong(GlobalConfiguration.HA_PEER_ALLOWLIST_STICKY_TTL_MS);
-    final List<String> peerHosts = PeerAddressAllowlistFilter.extractPeerHosts(serverList);
+    // The same Kubernetes DNS suffix parsePeerList applies to the peer addresses (issue #7132). Without it the
+    // allowlist tried to resolve the bare pod names written in the server list ("arcadedb-0"), which only
+    // happen to resolve when the pod's DNS search list covers them - i.e. when the namespace and the headless
+    // service share a name. Everywhere else no configured host resolved, the quorum latch never tripped, and
+    // the filter fell open for the whole grace window and then rejected every peer.
+    final String k8sDnsSuffix = configuration.getValueAsBoolean(GlobalConfiguration.HA_K8S)
+        ? configuration.getValueAsString(GlobalConfiguration.HA_K8S_DNS_SUFFIX)
+        : "";
+    final List<String> peerHosts = PeerAddressAllowlistFilter.extractPeerHosts(serverList).stream()
+        .map(h -> RaftPeerAddressResolver.applyDnsSuffix(h, k8sDnsSuffix)).toList();
     if (peerHosts.isEmpty()) {
       LogManager.instance().log(this, Level.WARNING,
           "arcadedb.ha.peerAllowlist.enabled=true but arcadedb.ha.serverList is empty; allowlist not installed");
@@ -3824,13 +3906,43 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     }
     final PeerAddressAllowlistFilter filter = new PeerAddressAllowlistFilter(peerHosts, refreshMs, startupGraceMs,
         stickyTtlMs);
+
+    // Kubernetes scale-up (issue #7132 x #4836). The joiner synthesizes itself into the group and dials the
+    // existing pods, but its host is in nobody's server list, and by then every existing pod has latched
+    // everQuorumResolved - so the join was rejected on the RECEIVING side and the new pod stayed NOT_READY
+    // forever. The headless service domain is the StatefulSet's own membership record: it resolves to the A
+    // records of every pod backing it, at any replica count and without an ordinal to guess, and it covers a
+    // pod that is not Ready yet because the service that publishes it sets publishNotReadyAddresses (which
+    // the shipped manifest documents as required, since a pod is Ready only once it has joined).
+    final String serviceDomain = headlessServiceDomain(k8sDnsSuffix);
+    if (serviceDomain != null)
+      filter.learnPeerHosts(List.of(serviceDomain));
+
     this.allowlistFilter = filter;
     GrpcConfigKeys.Server.setServicesCustomizer(parameters, new RaftGrpcServicesCustomizer(filter));
+  }
+
+  /**
+   * The headless-service FQDN behind {@code arcadedb.ha.k8sSuffix}, i.e. the suffix without its leading dot,
+   * or {@code null} when not running under Kubernetes or when no suffix is configured. Package-private for
+   * testing.
+   */
+  static String headlessServiceDomain(final String k8sDnsSuffix) {
+    if (k8sDnsSuffix == null || k8sDnsSuffix.isBlank())
+      return null;
+    final String trimmed = k8sDnsSuffix.trim();
+    final String domain = trimmed.startsWith(".") ? trimmed.substring(1) : trimmed;
+    return domain.isBlank() ? null : domain;
   }
 
   /** Package-private test hook: the transport configuration the Raft client builders read. */
   Parameters raftParametersForTest() {
     return raftParameters;
+  }
+
+  /** Package-private test hook: the inbound Raft gRPC peer allowlist, or null when disabled. */
+  PeerAddressAllowlistFilter allowlistFilterForTest() {
+    return allowlistFilter;
   }
 
   /**
@@ -3843,8 +3955,37 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   @Override
   public void refreshPeerAllowlist() {
     final PeerAddressAllowlistFilter filter = allowlistFilter;
-    if (filter != null)
-      filter.proactiveRefresh();
+    if (filter == null)
+      return;
+
+    // Reconcile the allowlist with cluster MEMBERSHIP, not with the boot-time configuration (issue #7132).
+    // getLivePeers() reads the committed Raft configuration - the same authority the cluster status endpoint
+    // uses - so a peer added at runtime (addPeer, the Kubernetes auto-join) is admitted from here on instead
+    // of being rejected forever by every node that had already latched everQuorumResolved. A tick that finds
+    // nothing new is a set comparison and does not touch DNS.
+    final List<String> memberHosts = new ArrayList<>();
+    for (final RaftPeer peer : getLivePeers()) {
+      final String host = allowlistHostOf(peer.getAddress());
+      if (host != null)
+        memberHosts.add(host);
+    }
+    filter.learnPeerHosts(memberHosts);
+
+    filter.proactiveRefresh();
+  }
+
+  /**
+   * The host of a Raft peer address in the form the allowlist resolver wants: no port, and no brackets around
+   * an IPv6 literal ({@link InetAddress#getAllByName} rejects those). Returns {@code null} when the address
+   * carries no usable host. Package-private for testing.
+   */
+  static String allowlistHostOf(final String raftAddress) {
+    final String host = extractHost(raftAddress);
+    if (host == null || host.isBlank())
+      return null;
+    if (host.startsWith("[") && host.endsWith("]"))
+      return host.length() > 2 ? host.substring(1, host.length() - 1) : null;
+    return host;
   }
 
   private static void deleteRecursive(final File file) {
