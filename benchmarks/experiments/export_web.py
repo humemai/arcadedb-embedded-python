@@ -590,7 +590,10 @@ def _dense_10m_entries():
             passes = json.loads(h.read_text(encoding="utf-8"))
             if not passes:
                 continue
-            ver.add(passes[0].get("engine_version"))
+            _ev = passes[0].get("engine_version")
+            if str(_ev or "").startswith("unknown") and str(passes[0].get("lib_version") or "").startswith("server:"):
+                _ev = passes[0]["lib_version"]      # the served arm's engine, learned on connect()
+            ver.add(_ev)
             build.append({"build_s": passes[0].get("build_s")})
             cold.append({"p50": passes[0].get("p50")})
             for p in passes[1:]:

@@ -126,6 +126,11 @@ def main():
                "p99": round(lats[int(0.99 * len(lats))], 3),
                "recall_at_10": round(statistics.mean(recalls), 4)}
         rec.update(run_conditions(lane="l3d_mp"))
+        # AFTER run_conditions, which stamps engine_version from the package
+        # in this container: for the served ArcadeDB arm that reads "unknown",
+        # while the adapter learned the real server build on connect().
+        if "arcadedb" in BACKEND and getattr(b, "version", None):
+            rec["engine_version"] = b.version
         out_reps.append(rec)
         print("RESULT " + json.dumps(rec), flush=True)
 

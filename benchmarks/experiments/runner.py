@@ -1612,7 +1612,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         #
         # "0" is a non-empty string and therefore truthy below, so the value
         # that turns the view OFF does survive the `if`.
-        for _k in ("BENCH_SPARSE_SOURCE", "BENCH_SPARSE_DATA",
+        for _k in ("ARCADEDB_ENGINE_COMMIT",   # so an in-container record names the pin too
+                   "BENCH_SPARSE_SOURCE", "BENCH_SPARSE_DATA",
                    "BENCH_GRAPH_SOURCE", "BENCH_GRAPH_DATA",
                    "BENCH_DENSE_DATA", "BENCH_DENSE_M",
                    # the HNSW build-cache bound; unset means the lane's

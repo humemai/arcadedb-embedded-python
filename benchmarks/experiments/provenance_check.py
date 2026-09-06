@@ -616,6 +616,14 @@ def _versions_in(subdir):
                 if isinstance(r, dict)]
         n += 1
         found = False
+        # The multipass driver stamped the served ArcadeDB arm's engine only in
+        # lib_version ("server:26.9.1-SNAPSHOT (build <sha>...)") while
+        # engine_version read "unknown" from the client container's package.
+        # Read the real one. Fixed at the driver for future files.
+        for r in recs:
+            lv = str(r.get("lib_version") or "")
+            if str(r.get("engine_version") or "").startswith("unknown") and lv.startswith("server:"):
+                r["engine_version"] = lv
         for r in recs:
             for k in VERSION_KEYS:
                 v = r.get(k)
@@ -820,7 +828,9 @@ def main():
             vs = ", ".join(sorted(vals)) if vals else "NONE"
             kn = ",".join(keys) or "-"
             print(f"  {sub:<20} n={n:<3} key={kn:<15} {vs[:60]}")
-            table_versions.update(vals)
+            # Comparator files legitimately carry no ArcadeDB version ("unknown
+            # (PackageNotFoundError)"): they are not an engine line of this table.
+            table_versions.update(v for v in vals if not str(v).startswith("unknown"))
 
             if missing:
                 print(f"    BAD: {missing}/{n} files carry no version under "
