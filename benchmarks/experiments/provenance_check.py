@@ -697,10 +697,15 @@ def check_schema_homogeneity(rows):
         # Union minus intersection = fields not every row of this cell family
         # carries. Per BACKEND, since different engines legitimately report
         # different metrics (recall exists only where there is ground truth).
+        # ... and per ABLATION MARKER: the l2 OLAP family holds the Graph
+        # Analytical View arm and its view-off ablation (gav) side by side, and
+        # they legitimately measure different fields (the view-off rows have no
+        # view timings). The docstring says an ablation carries its own marker;
+        # this is where the marker is honoured.
         per_be = collections.defaultdict(list)
         for r in rs:
-            per_be[r.get("backend")].append(r)
-        for be, brs in sorted(per_be.items(), key=lambda kv: str(kv[0])):
+            per_be[(r.get("backend"), r.get("gav"))].append(r)
+        for (be, _gav), brs in sorted(per_be.items(), key=lambda kv: str(kv[0])):
             if len(brs) < 2:
                 continue
             sets = [measured(r) for r in brs]
