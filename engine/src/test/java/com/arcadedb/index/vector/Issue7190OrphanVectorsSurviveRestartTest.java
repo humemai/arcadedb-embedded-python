@@ -145,6 +145,16 @@ class Issue7190OrphanVectorsSurviveRestartTest {
           assertThat(index.getStats().get("totalVectors"))
               .as("the index still reports every vector after reopen")
               .isEqualTo((long) COUNT);
+          // #7191 persists the delta-served set per graph generation and reports it as
+          // unreachableGraphNodes, readable on a fresh open before any search. It must
+          // agree with what the build said, which is the direct form of the check the
+          // log capture above approximates.
+          final Object unreachable = index.getStats().get("unreachableGraphNodes");
+          System.out.println("ORPHANS unreachableGraphNodes after reopen=" + unreachable);
+          if (unreachable != null)
+            assertThat(((Number) unreachable).longValue())
+                .as("unreachableGraphNodes after reopen equals the vectors the build reported unreachable")
+                .isEqualTo(reportedOrphans);
           // The defect. The build reported `reportedOrphans` unreachable vectors and served them from the delta
           // scan; that set did not survive the restart, so exactly those vectors no longer find themselves, while
           // the stats above say nothing is missing. k results still come back, so a caller cannot tell.
