@@ -331,8 +331,22 @@ def _check_page_atomicity(page_path):
     for backend in ("arcadedb_e2", "surrealdb_e2", "composed_qdrant_neo4j"):
         n_trials = n_torn = 0
         seen = False
+        # NEWEST ROW PER CANONICAL KEY, the same rule every table applies.
+        # runs.jsonl is append-only and a campaign file can be merged more than
+        # once (2026-09-06: three merges of one file tripled these counts to 600).
+        _newest = {}
         with open(HERE / "results" / "runs.jsonl") as fh:
             for line in fh:
+                try:
+                    _r = _json.loads(line)
+                except Exception:
+                    continue
+                _k = (_r.get("lane"), _r.get("scale"), _r.get("n_docs"), _r.get("workload"),
+                      _r.get("backend"), _r.get("gav"), _r.get("rep"))
+                if _k not in _newest or str(_r.get("ts_utc", "")) > str(_newest[_k].get("ts_utc", "")):
+                    _newest[_k] = _r
+        if True:
+            for line in (_json.dumps(_r) for _r in _newest.values()):
                 if not line.strip():
                     continue
                 try:
