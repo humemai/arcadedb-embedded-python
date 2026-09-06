@@ -661,7 +661,12 @@ def check_schema_homogeneity(rows):
     IGNORE_PREFIX = ("server_", "client_", "ts_", "run_", "image", "engine_",
                      "producer", "host", "cpuset", "mem_", "heap", "gav",
                      "backend", "lane", "scale", "workload", "rep", "tier",
-                     "topology", "rc", "error", "oom", "disk_note")
+                     "topology", "rc", "error", "oom", "disk_note",
+                     # DIAGNOSTICS, not measurements: what the engine chose or
+                     # logged, captured only once the capture worked (BUGS F1-F4,
+                     # 2026-09-02/03). A family split on these is a split in
+                     # instrumentation history, not in what was measured.
+                     "graph_build_cache", "graph_build_access", "driver_")
     def measured(r):
         return {k for k, v in r.items()
                 if isinstance(v, (int, float))
@@ -671,8 +676,18 @@ def check_schema_homogeneity(rows):
     # compared against an olap row (olap_*_ms) from the same backend, and the
     # check fires on every cell family in the corpus. They measure different
     # things by design; only rows of the same workload are comparable.
-    by = collections.defaultdict(list)
+    # ONLY THE ROWS THAT ARE PUBLISHED. runs.jsonl is append-only, so a family
+    # holds every superseded rep beside the current one; the docstring already
+    # says the finding is scoped to CURRENT rows, and this is where that scope
+    # is applied: newest ts_utc per canonical key, the same rule the tables use.
+    _newest = {}
     for r in rows:
+        _k = (r.get("lane"), r.get("scale"), r.get("n_docs"), r.get("workload"),
+              r.get("backend"), r.get("gav"), r.get("rep"))
+        if _k not in _newest or str(r.get("ts_utc", "")) > str(_newest[_k].get("ts_utc", "")):
+            _newest[_k] = r
+    by = collections.defaultdict(list)
+    for r in _newest.values():
         by[(r.get("lane"), r.get("scale"), r.get("workload"))].append(r)
 
     bad = 0
