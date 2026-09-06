@@ -198,8 +198,8 @@ public class TransactionContext implements Transaction {
   private       List<Integer>                        explicitLockedFiles   = null;
   private       long                                 txId                  = -1;
   private       STATUS                               status                = STATUS.INACTIVE;
-  // Whether the 1st phase in progress ends by replaying the queued index operations (leader only). See
-  // isIndexChangesReplayed().
+  // Whether the 1st phase in progress ends by replaying the queued index operations - always true for an
+  // originating commit. See isIndexChangesReplayed().
   private       boolean                              indexChangesReplayed  = true;
   // KEEPS TRACK OF MODIFIED RECORD IN TX. AT 1ST PHASE COMMIT TIME THE RECORD ARE SERIALIZED AND INDEXES UPDATED. THIS DEFERRING IMPROVES SPEED ESPECIALLY
   // WITH GRAPHS WHERE EDGES ARE CREATED AND CHUNKS ARE UPDATED MULTIPLE TIMES IN THE SAME TX
@@ -519,6 +519,39 @@ public class TransactionContext implements Transaction {
       throw new TransactionException("Transaction not begun");
   }
 
+  /**
+   * Refuses, with the retryable conflict the caller already knows how to handle, an update computed from a record
+   * image that is no longer the committed one (#6950).
+   * <p>
+   * A record's page is put under the commit-time MVCC check when the record is TAKEN for update - not when its
+   * content was read. Under the default READ_COMMITTED isolation a read caches no page in the transaction (see
+   * {@link #getPage(PageId, int)}), so a commit landing between the read and the pin hands the pin the NEWER
+   * version: the version check then has nothing left to refuse, and the read-modify-write is applied on top of a
+   * value it never saw. That is a SILENTLY lost update - no exception for either writer, so no retry loop can help -
+   * and it is what handed two writers the same range in the counter-document (hi-lo / sequence emulation) pattern.
+   * Comparing the image the update is diffed against with the slot the pin just loaded is what tells a stale
+   * read-modify-write from a good one, at RECORD granularity, so a concurrent write to another slot of the same page
+   * stays the false conflict it is.
+   * <p>
+   * Only for a {@link MutableDocument}: its buffer is the pre-update image by construction - properties are overlaid
+   * on a map and the buffer is left alone, which is exactly what {@code LocalDatabase.getOriginalDocument} relies on
+   * to diff the indexes. An edge segment, by contrast, is mutated IN PLACE before it is handed to
+   * {@code updateRecord}, so its buffer is the image being WRITTEN rather than the one that was read: comparing it
+   * would refuse every edge append. Concurrency on those chunks is owned by the commutative edge-append merge.
+   *
+   * @param recordPage the page just pinned for {@code rid}, or {@code null} when the RID could not name one.
+   */
+  public static void checkRecordIsStillTheOneRead(final LocalBucket bucket, final RID rid, final BasePage recordPage,
+      final Record record) {
+    if (recordPage == null || !(record instanceof MutableDocument))
+      return;
+
+    final Binary readImage = ((RecordInternal) record).getBuffer();
+    if (readImage != null && bucket.hasRecordChangedSinceRead(rid, recordPage, readImage))
+      throw new ConcurrentModificationException("Record " + rid + " was modified by a concurrent transaction between "
+          + "its read and its update. Please retry the operation");
+  }
+
   public void addUpdatedRecord(final Record record) throws IOException {
     final RID rid = record.getIdentity();
 
@@ -527,6 +560,14 @@ public class TransactionContext implements Transaction {
     if (updatedRecords.put(record.getIdentity(), record) == null) {
       final LocalBucket bucket = (LocalBucket) database.getSchema().getBucketById(rid.getBucketId());
       final MutablePage recordPage = bucket.fetchPageInTransaction(rid);
+      try {
+        checkRecordIsStillTheOneRead(bucket, rid, recordPage, record);
+      } catch (final ConcurrentModificationException e) {
+        // The transaction is doomed either way, but a caller that swallows the conflict and commits anyway must not
+        // find this record still queued for a write it never got to make.
+        updatedRecords.remove(rid);
+        throw e;
+      }
       // #6129, #6141: same moment, and the same reason, as the page pinned right above - it is the view of the record
       // this update is based on. The pin covers the record's own slot and nothing else, so a record that keeps content
       // on another page (the chunk chain of a multi-page record past its head, the content record behind a placeholder
@@ -1629,6 +1670,10 @@ public class TransactionContext implements Transaction {
 
   /**
    * Locks the files in order, then checks all the pre-conditions.
+   *
+   * @param isLeader whether this node is the current Raft leader - no longer consulted for index replay (#6964,
+   *                 always replayed below), still consulted further down to gate the edge-append/slot-merge
+   *                 conflict-rebase, which stays leader-only.
    */
   public TransactionPhase1 commit1stPhase(final boolean isLeader) {
     if (status == STATUS.INACTIVE)
@@ -1642,9 +1687,15 @@ public class TransactionContext implements Transaction {
     // Without this, concurrent updateRecordNoLock calls could both load the same page
     // at the same version, bypassing MVCC version checks.
     status = STATUS.COMMIT_1ST_PHASE;
-    // Only the leader replays the queued index operations below: on a replica the index pages arrive with the
-    // leader's changes. An index that skips work during this phase because "the replay will do it" must know.
-    this.indexChangesReplayed = isLeader;
+    // The queued index operations are always replayed below, regardless of isLeader: this method runs only for a
+    // transaction ORIGINATING its own commit - on the leader directly, or on a replica shipping its own WAL bytes
+    // through Raft (#5503) - never for a node passively applying someone else's already-decided changes (that goes
+    // through TransactionManager.applyChangesInternal, which never touches TransactionContext/indexChanges at all).
+    // A replica-originated commit that skipped this replay (#6964) would ship WAL bytes with no index pages in
+    // them, so the index entry would be missing everywhere, forever - not just on the replica. isLeader still
+    // gates conflict-rebase below: replaying an index queue is a pure local recomputation, but rebasing a page
+    // against a newer local version is unsafe once the result has to survive an extra hop through Raft ordering.
+    this.indexChangesReplayed = true;
 
     try {
       // #4937: explicit-lock mode captured before checkExplicitLocks nulls explicitLockedFiles, so the
@@ -1696,20 +1747,18 @@ public class TransactionContext implements Transaction {
         updatedRecordsIndexSnapshot = null;
       }
 
-      if (!isLeader || !hasChanges()) {
-        if (!hasChanges()) {
-          if (lockedFiles != null) {
-            database.getTransactionManager().unlockFilesInOrder(lockedFiles, getRequester());
-            lockedFiles = null;
-          }
-          status = STATUS.INACTIVE;
-          return null;
+      if (!hasChanges()) {
+        if (lockedFiles != null) {
+          database.getTransactionManager().unlockFilesInOrder(lockedFiles, getRequester());
+          lockedFiles = null;
         }
+        status = STATUS.INACTIVE;
+        return null;
       }
 
-      if (isLeader)
-        // COMMIT INDEX CHANGES (IN CASE OF REPLICA THIS IS DEMANDED TO THE LEADER EXECUTION)
-        indexChanges.commit();
+      // COMMIT INDEX CHANGES: always, on whichever node originates this commit (#6964) - see the note on
+      // indexChangesReplayed above.
+      indexChanges.commit();
 
       // #4937: the steps above (updateRecordNoLock, indexChanges.commit) can add pages of files that were
       // NOT in the lock set computed at lock time - EXTERNAL-property buckets, indexes created inside this
@@ -2133,12 +2182,14 @@ public class TransactionContext implements Transaction {
   }
 
   /**
-   * Whether the index operations queued on this transaction are replayed at the end of the 1st commit phase. True on
-   * a leader (and on any non-replicated database); false on a replica, where the index pages come from the leader's
-   * changes and {@link TransactionIndexContext#commit()} is never invoked. An index consulted during
-   * {@link STATUS#COMMIT_1ST_PHASE} - the phase that re-runs {@code DocumentIndexer.updateDocument} while
-   * serializing the records updated in this transaction - uses this to tell whether it can leave the work to the
-   * replay instead of applying it a second time (issue #5516).
+   * Whether the index operations queued on this transaction are replayed at the end of the 1st commit phase. Always
+   * true: {@link TransactionContext#commit1stPhase} runs only for a transaction originating its own commit - the
+   * leader's, or a replica's own (#5503) - and every such commit replays the queue (#6964). A node passively
+   * applying someone else's already-decided changes never reaches this class at all (see
+   * {@code TransactionManager#applyChangesInternal}). An index consulted during {@link STATUS#COMMIT_1ST_PHASE} -
+   * the phase that re-runs {@code DocumentIndexer.updateDocument} while serializing the records updated in this
+   * transaction - uses this to tell whether it can leave the work to the replay instead of applying it a second
+   * time (issue #5516).
    */
   public boolean isIndexChangesReplayed() {
     return indexChangesReplayed;

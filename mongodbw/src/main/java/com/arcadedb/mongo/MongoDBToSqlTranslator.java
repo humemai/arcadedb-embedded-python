@@ -54,8 +54,7 @@ public class MongoDBToSqlTranslator {
           throw new IllegalArgumentException("Invalid operator " + key);
       } else {
         buffer.append(quoteFieldPath(entry.getKey()));
-        buffer.append(" = ");
-        buildValue(buffer, params, value);
+        buildEquality(buffer, params, true, value);
       }
     }
   }
@@ -131,11 +130,9 @@ public class MongoDBToSqlTranslator {
       } else
         throw new IllegalArgumentException("Operator $nin was expecting a collection");
     } else if ("$eq".equals(key)) {
-      sql.append(" = ");
-      buildValue(sql, params, value);
+      buildEquality(sql, params, true, value);
     } else if ("$ne".equals(key)) {
-      sql.append(" <> ");
-      buildValue(sql, params, value);
+      buildEquality(sql, params, false, value);
     } else if ("$lt".equals(key)) {
       sql.append(" < ");
       buildValue(sql, params, value);
@@ -216,6 +213,27 @@ public class MongoDBToSqlTranslator {
   }
 
   /**
+   * Emits an (in)equality comparison, special-casing a {@code null} operand as {@code IS [NOT] NULL} rather than a
+   * bound {@code = null} / {@code <> null} parameter. SQL equality against a bound {@code null} never matches a
+   * stored {@code null} (or absent) property, whereas MongoDB's {@code {field: null}} does - it matches a missing
+   * field as well as a stored {@code null} - so binding it as an ordinary parameter would silently match nothing.
+   * <p>
+   * {@code {field: {$ne: null}}} is not the exact negation of that: per MongoDB's own semantics it matches only a
+   * field that exists and is not null, excluding a missing field too (rather than including it, the way negating
+   * {@code {field: null}} might suggest). {@code IS NOT NULL} matches that: ArcadeDB also evaluates a missing
+   * property as {@code null}, so it is excluded here exactly as MongoDB excludes it.
+   */
+  protected static void buildEquality(final StringBuilder buffer, final Map<String, Object> params, final boolean positive,
+      final Object value) {
+    if (value == null)
+      buffer.append(positive ? " IS NULL" : " IS NOT NULL");
+    else {
+      buffer.append(positive ? " = " : " <> ");
+      buildValue(buffer, params, value);
+    }
+  }
+
+  /**
    * Binds a value taken off the wire as a named parameter and appends only its placeholder. Nothing the client sent reaches the
    * statement text, so a value can no longer close a quoted literal and append clauses of its own - the injection is
    * unreachable by construction instead of by remembering to escape at each call site. Binding also preserves the value's Java
@@ -289,9 +307,38 @@ public class MongoDBToSqlTranslator {
     for (final Map.Entry<String, Object> entry : map.entrySet()) {
       final String p = entry.getKey();
       final Object value = entry.getValue();
-      result.put(p, "_id".equals(p) ? getObjectId((String) value) : toBsonValue(value));
+      result.put(p, "_id".equals(p) ? convertIdToMongoDB(value) : toBsonValue(value));
     }
     return result;
+  }
+
+  /**
+   * MongoDB allows any BSON scalar as {@code _id}, not just an ObjectId. Only a value that actually looks like a
+   * 24-char hex ObjectId string is decoded as one; anything else (an integer, an odd-length or non-hex string, ...)
+   * is passed through unchanged instead of corrupting or throwing.
+   * <p>
+   * Known limitation (#6955): a client-supplied {@code String _id} that happens to be exactly 24 hex characters is,
+   * once stored, indistinguishable from a real {@code ObjectId}'s hex encoding - both are the same bare hex string
+   * on disk. A plain {@code insertOne} followed by {@code find} therefore round-trips such a {@code String _id} back
+   * as an {@code ObjectId}. Unlike the upsert path (see {@code executeUpsert}'s {@code idIsObjectId} tracking), there
+   * is no in-memory flag to bridge insert and a later, possibly separate, {@code find} call - fixing this for real
+   * would mean persisting the original BSON type alongside {@code _id} (a marker byte/prefix, a side property, or a
+   * schema-level type tag), a storage-format decision affecting every document with a hex-looking String {@code _id}
+   * rather than a narrow code fix. Left as a documented limitation rather than guessed at unilaterally.
+   */
+  private static Object convertIdToMongoDB(final Object value) {
+    if (value instanceof String s && isObjectIdHex(s))
+      return getObjectId(s);
+    return toBsonValue(value);
+  }
+
+  static boolean isObjectIdHex(final String s) {
+    if (s.length() != 24)
+      return false;
+    for (int i = 0; i < s.length(); i++)
+      if (Character.digit(s.charAt(i), 16) < 0)
+        return false;
+    return true;
   }
 
   /**
@@ -324,6 +371,9 @@ public class MongoDBToSqlTranslator {
   }
 
   protected static ObjectId getObjectId(final String s) {
+    if (!isObjectIdHex(s))
+      throw new IllegalArgumentException("'" + s + "' is not a 24-char hex ObjectId");
+
     final byte[] buffer = new byte[s.length() / 2];
     for (int i = 0; i < s.length(); i += 2) {
       buffer[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4) + Character.digit(s.charAt(i + 1), 16));

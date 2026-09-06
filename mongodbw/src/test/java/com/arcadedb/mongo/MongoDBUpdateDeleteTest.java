@@ -29,6 +29,7 @@ import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
 import org.bson.Document;
+import org.bson.types.ObjectId;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -156,5 +157,281 @@ public class MongoDBUpdateDeleteTest extends BaseGraphServerTest {
     final Document inserted = collection.find(eq("test", "missing")).first();
     assertThat(inserted).isNotNull();
     assertThat(inserted.get("counter")).isEqualTo(999);
+  }
+
+  /**
+   * Regression test for issue #6941: {@code executeUpsert} seeded the new record's {@code _id} from the filter
+   * but then unconditionally overwrote it with a freshly generated one, so repeating an upsert filtered on
+   * {@code _id} (the idiomatic "upsert by primary key" pattern) never matched its own previous insert and kept
+   * creating duplicates instead of updating in place.
+   */
+  @Test
+  void upsertFilteredOnIdIsIdempotent() {
+    final ObjectId id = new ObjectId();
+
+    final UpdateResult first = collection.updateOne(eq("_id", id), new Document("$set", new Document("v", 1)),
+        new UpdateOptions().upsert(true));
+    assertThat(first.getUpsertedId()).isNotNull();
+    assertThat(first.getUpsertedId().asObjectId().getValue()).isEqualTo(id);
+
+    final UpdateResult second = collection.updateOne(eq("_id", id), new Document("$set", new Document("v", 2)),
+        new UpdateOptions().upsert(true));
+    assertThat(second.getUpsertedId()).isNull();
+    assertThat(second.getModifiedCount()).isEqualTo(1);
+
+    final Document found = collection.find(eq("_id", id)).first();
+    assertThat(found).isNotNull();
+    assertThat(found.get("v")).isEqualTo(2);
+  }
+
+  /**
+   * Follow-up to #6941 flagged by review: a client-supplied {@code String _id} that happens to be exactly 24 hex
+   * characters is indistinguishable, once stored, from a real ObjectId's hex encoding. {@code executeUpsert} used
+   * to promote every such stored hex string back to an ObjectId in the response regardless of what the client
+   * actually sent, silently changing the wire type of an id the client chose as a plain string.
+   */
+  @Test
+  void upsertFilteredOnHexLookingStringIdReportsItAsAStringNotAnObjectId() {
+    final String hexLookingId = "abcdef0123456789abcdef01";
+
+    final UpdateResult result = collection.updateOne(eq("_id", hexLookingId), new Document("$set", new Document("v", 1)),
+        new UpdateOptions().upsert(true));
+
+    assertThat(result.getUpsertedId()).isNotNull();
+    assertThat(result.getUpsertedId().isString()).isTrue();
+    assertThat(result.getUpsertedId().asString().getValue()).isEqualTo(hexLookingId);
+  }
+
+  /**
+   * Follow-up to #6941 flagged by review: an explicit {@code _id: null} filter is a legal, if unusual, BSON _id.
+   * {@code executeUpsert} must tell that apart from a genuinely absent {@code _id} and preserve it, rather than
+   * discarding it for a freshly generated one the way the original #6941 bug discarded a seeded ObjectId.
+   * <p>
+   * The upsert is now repeated with the same {@code eq("_id", null)} filter to confirm it is idempotent: before
+   * #6952 was fixed, matching a stored {@code null} by equality compiled to {@code "_id" = :p0} with {@code p0}
+   * bound to {@code null}, which never matches a stored null the way SQL's {@code IS NULL} does, so this second
+   * call would have inserted a duplicate instead of updating in place.
+   */
+  @Test
+  void upsertFilteredOnNullIdPreservesTheNullId() {
+    final UpdateResult first = collection.updateOne(eq("_id", null), new Document("$set", new Document("v", 1)),
+        new UpdateOptions().upsert(true));
+
+    assertThat(first.getUpsertedId()).isNotNull();
+    assertThat(first.getUpsertedId().isNull()).isTrue();
+
+    final Document inserted = collection.find(eq("v", 1)).first();
+    assertThat(inserted).isNotNull();
+    // containsKey, not just get() == null: a Map.get returns null for a missing key too, so this confirms the
+    // wire response actually carries an "_id" field rather than having dropped it.
+    assertThat(inserted.containsKey("_id")).isTrue();
+    assertThat(inserted.get("_id")).isNull();
+
+    final UpdateResult second = collection.updateOne(eq("_id", null), new Document("$set", new Document("v", 2)),
+        new UpdateOptions().upsert(true));
+    assertThat(second.getUpsertedId()).isNull();
+    assertThat(second.getModifiedCount()).isEqualTo(1);
+    assertThat(collection.countDocuments(eq("_id", null))).isEqualTo(1);
+    assertThat(collection.find(eq("_id", null)).first().get("v")).isEqualTo(2);
+  }
+
+  /**
+   * Regression test for issue #6952: a filter on a null-valued field must match a document that actually stores
+   * that field as {@code null}, the same way MongoDB's null-equality does. Before the fix, {@code {field: null}}
+   * compiled to {@code "field" = :param} with {@code param} bound to {@code null}, which never matches.
+   * <p>
+   * A dedicated collection is used because MongoDB's null-equality also matches a document where the field is
+   * simply absent, which is exactly the semantics being fixed here - the shared {@code collection} already holds
+   * ten unrelated documents with no {@code tag} field at all, and those would match too.
+   */
+  @Test
+  void findByNullValuedFieldMatchesTheStoredNull() {
+    client.getDatabase(getDatabaseName()).createCollection("nullFilterDoc");
+    final MongoCollection<Document> nullDocs = client.getDatabase(getDatabaseName()).getCollection("nullFilterDoc");
+    nullDocs.insertOne(new Document("test", "null-field").append("tag", null));
+
+    final Document found = nullDocs.find(eq("tag", null)).first();
+
+    assertThat(found).isNotNull();
+    assertThat(found.getString("test")).isEqualTo("null-field");
+  }
+
+  /**
+   * Follow-up to #6952, flagged by review: MongoDB's {@code {field: null}} matches both a stored {@code null} and a
+   * document where the field is simply absent - {@code findByNullValuedFieldMatchesTheStoredNull} only pins the
+   * first half of that claim (routing around the second half by using a dedicated collection). This closes the loop
+   * by asserting the second half directly: a document that never set {@code tag} at all is still matched.
+   */
+  @Test
+  void findByNullValuedFieldAlsoMatchesADocumentWhereTheFieldIsAbsent() {
+    client.getDatabase(getDatabaseName()).createCollection("nullFilterAbsent");
+    final MongoCollection<Document> nullDocs = client.getDatabase(getDatabaseName()).getCollection("nullFilterAbsent");
+    nullDocs.insertOne(new Document("test", "absent-field"));
+
+    final Document found = nullDocs.find(eq("tag", null)).first();
+
+    assertThat(found).isNotNull();
+    assertThat(found.getString("test")).isEqualTo("absent-field");
+  }
+
+  /**
+   * Follow-up to #6952: {@code $ne} shares the same root cause as plain equality and {@code $eq}, so a filter of
+   * {@code {field: {$ne: null}}} must exclude a document whose field is stored as {@code null}.
+   * <p>
+   * Unlike plain {@code {field: null}} equality, {@code {field: {$ne: null}}} is not its exact negation: per
+   * MongoDB's own documentation it matches only a field that exists and is not null, excluding a document where the
+   * field is missing too (rather than including it). A document with no {@code tag} field at all is included here
+   * to pin that half of the contract as well.
+   */
+  @Test
+  void neNullExcludesTheStoredNullAndAnAbsentFieldButMatchesEverythingElse() {
+    collection.insertOne(new Document("test", "null-field").append("tag", null));
+    collection.insertOne(new Document("test", "absent-field"));
+    collection.insertOne(new Document("test", "set-field").append("tag", "x"));
+
+    final Document nePredicate = new Document("tag", new Document("$ne", null));
+
+    // countDocuments, not just .first(): pins exclusivity rather than relying on result ordering - if the
+    // translation regressed to also match the null/absent documents, .first() could still return "set-field" and
+    // hide the regression.
+    assertThat(collection.countDocuments(nePredicate)).isEqualTo(1);
+    final Document found = collection.find(nePredicate).first();
+    assertThat(found).isNotNull();
+    assertThat(found.getString("test")).isEqualTo("set-field");
+  }
+
+  /**
+   * Regression test for issue #6952: {@code deleteMany} on a null-valued filter must remove the document whose
+   * field is actually stored as {@code null}, not silently delete nothing.
+   * <p>
+   * A dedicated collection is used for the same reason as {@link #findByNullValuedFieldMatchesTheStoredNull}: the
+   * null filter also matches a document where the field is absent, so the shared {@code collection}'s ten unrelated
+   * documents (no {@code tag} field) would be swept up by {@code deleteMany} too. This is exercised directly by
+   * inserting an absent-field document alongside the explicit-null one and asserting {@code deleteMany} removes
+   * both, closing the same missing-field half of the contract for the delete path.
+   */
+  @Test
+  void deleteManyByNullValuedFieldRemovesBothTheStoredNullAndAnAbsentField() {
+    client.getDatabase(getDatabaseName()).createCollection("nullFilterDelete");
+    final MongoCollection<Document> nullDocs = client.getDatabase(getDatabaseName()).getCollection("nullFilterDelete");
+    nullDocs.insertOne(new Document("test", "null-field").append("tag", null));
+    nullDocs.insertOne(new Document("test", "absent-field"));
+
+    final DeleteResult result = nullDocs.deleteMany(new Document("tag", null));
+
+    assertThat(result.getDeletedCount()).isEqualTo(2);
+    assertThat(nullDocs.find(eq("test", "null-field")).first()).isNull();
+    assertThat(nullDocs.find(eq("test", "absent-field")).first()).isNull();
+  }
+
+  /**
+   * Regression test for issue #6953: {@code executeUpsert}'s replacement branch (a full {@code replaceOne} upsert)
+   * used to copy the update document's values verbatim, so a client-supplied {@code _id} that is an actual
+   * {@code ObjectId} was stored as that raw driver object rather than the hex-string convention every other
+   * {@code _id} write path in this class follows. That would make the stored {@code _id} fail to match a later
+   * {@code eq("_id", ...)} filter, which binds the ObjectId as its hex string.
+   */
+  @Test
+  void replaceOneUpsertNormalizesAReplacementObjectIdIdToItsHexString() {
+    final ObjectId id = new ObjectId();
+
+    final UpdateResult result = collection.replaceOne(eq("test", "no-such-value"),
+        new Document("_id", id).append("replaced", true), new UpdateOptions().upsert(true));
+
+    assertThat(result.getUpsertedId()).isNotNull();
+    assertThat(result.getUpsertedId().isObjectId()).isTrue();
+    assertThat(result.getUpsertedId().asObjectId().getValue()).isEqualTo(id);
+
+    final Document found = collection.find(eq("_id", id)).first();
+    assertThat(found).isNotNull();
+    assertThat(found.get("replaced")).isEqualTo(true);
+  }
+
+  /**
+   * Regression test for issue #6953: the same gap as above, reached through the {@code $set} branch of an upsert
+   * (rather than a full replacement) - {@code applyOperatorsToDocument} stored a {@code $set}-supplied {@code _id}
+   * verbatim too.
+   */
+  @Test
+  void setUpsertNormalizesAnObjectIdIdToItsHexString() {
+    final ObjectId id = new ObjectId();
+
+    final UpdateResult result = collection.updateOne(eq("test", "no-such-value-2"),
+        new Document("$set", new Document("_id", id).append("v", 42)), new UpdateOptions().upsert(true));
+
+    assertThat(result.getUpsertedId()).isNotNull();
+    assertThat(result.getUpsertedId().isObjectId()).isTrue();
+    assertThat(result.getUpsertedId().asObjectId().getValue()).isEqualTo(id);
+
+    final Document found = collection.find(eq("_id", id)).first();
+    assertThat(found).isNotNull();
+    assertThat(found.get("v")).isEqualTo(42);
+  }
+
+  /**
+   * Follow-up to #6953, flagged by review: the replacement branch's fix normalizes every field's value the same way
+   * the pre-existing filter-seeding loop already does, not just {@code _id} - ArcadeDB has no native ObjectId type,
+   * so an ObjectId-valued non-{@code _id} field would otherwise be stored as the raw driver object too, and later
+   * fail to match a filter on that field the same way an un-normalized {@code _id} did.
+   */
+  @Test
+  void replaceOneUpsertNormalizesANonIdObjectIdFieldToo() {
+    final ObjectId ref = new ObjectId();
+
+    final UpdateResult result = collection.replaceOne(eq("test", "no-such-value-3"),
+        new Document("ref", ref).append("replaced", true), new UpdateOptions().upsert(true));
+
+    assertThat(result.getUpsertedId()).isNotNull();
+
+    final Document found = collection.find(eq("ref", ref)).first();
+    assertThat(found).isNotNull();
+    assertThat(found.get("replaced")).isEqualTo(true);
+    // Asserts on the stored value directly, not just that the filter round-trip happens to work: "ref" is not
+    // "_id", so it is never promoted back to an ObjectId on read (only "_id" gets that treatment in
+    // convertMapToMongoDB) - it must come back as the plain hex string it was normalized to on write.
+    assertThat(found.get("ref")).isEqualTo(ref.toHexString());
+  }
+
+  /**
+   * Follow-up to #6953, flagged by review: {@code idIsObjectId} must reflect whichever site last set {@code _id},
+   * not just OR together every site that ever saw an ObjectId - otherwise a filter seeding an ObjectId {@code _id}
+   * followed by a {@code $set} that overwrites it with a plain string would still report the response {@code _id}
+   * as an ObjectId, even though the client's own {@code $set} explicitly chose a {@code String}.
+   */
+  @Test
+  void setUpsertOverridingAFilterSeededObjectIdWithAPlainStringReportsTheStringNotTheObjectId() {
+    final ObjectId filterId = new ObjectId();
+
+    final UpdateResult result = collection.updateOne(eq("_id", filterId),
+        new Document("$set", new Document("_id", "plain-string-id").append("v", 1)), new UpdateOptions().upsert(true));
+
+    assertThat(result.getUpsertedId()).isNotNull();
+    assertThat(result.getUpsertedId().isString()).isTrue();
+    assertThat(result.getUpsertedId().asString().getValue()).isEqualTo("plain-string-id");
+
+    final Document found = collection.find(eq("_id", "plain-string-id")).first();
+    assertThat(found).isNotNull();
+    assertThat(found.get("v")).isEqualTo(1);
+  }
+
+  /**
+   * Follow-up to #6953, flagged by review: the same last-write-wins tracking above is exercised through the
+   * replacement branch, not just {@code $set} - a {@code replaceOne} upsert whose filter seeds an ObjectId
+   * {@code _id} but whose replacement document supplies a plain string must report the string back too.
+   */
+  @Test
+  void replaceOneUpsertOverridingAFilterSeededObjectIdWithAPlainStringReportsTheStringNotTheObjectId() {
+    final ObjectId filterId = new ObjectId();
+
+    final UpdateResult result = collection.replaceOne(eq("_id", filterId),
+        new Document("_id", "plain-string-id-2").append("replaced", true), new UpdateOptions().upsert(true));
+
+    assertThat(result.getUpsertedId()).isNotNull();
+    assertThat(result.getUpsertedId().isString()).isTrue();
+    assertThat(result.getUpsertedId().asString().getValue()).isEqualTo("plain-string-id-2");
+
+    final Document found = collection.find(eq("_id", "plain-string-id-2")).first();
+    assertThat(found).isNotNull();
+    assertThat(found.get("replaced")).isEqualTo(true);
   }
 }

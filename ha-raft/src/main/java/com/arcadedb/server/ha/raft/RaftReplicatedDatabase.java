@@ -75,6 +75,7 @@ import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.index.IndexCursor;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.network.binary.ReplicatedEntryTooLargeException;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.query.QueryEngine;
 import com.arcadedb.query.opencypher.optimizer.statistics.GraphStatisticsCache;
@@ -104,6 +105,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -123,6 +125,7 @@ import java.util.function.IntPredicate;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
+import java.util.zip.CRC32;
 
 /**
  * A {@link DatabaseInternal} wrapper that intercepts commit() to submit WAL changes through Raft consensus.
@@ -186,6 +189,14 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   private final        AtomicLong                                        schemaInstalmentsShipped = new AtomicLong();
   private final        AtomicLong                                        schemaInstalmentTotalMs  = new AtomicLong();
   private final        AtomicLong                                        schemaInstalmentMaxMs    = new AtomicLong();
+
+  /**
+   * Sealed-store slices this database has shipped since it opened (issue #4416). Zero on every node whose sealed
+   * stores fit one Raft entry, which is what makes it worth reading: a non-zero value says compaction is now
+   * shipping a store that would previously have been refused, and how much Raft traffic that costs per cycle.
+   */
+  private final        AtomicLong                                        sealedChunksShipped      = new AtomicLong();
+  private final        AtomicLong                                        sealedChunksMaxSequence  = new AtomicLong();
 
   /**
    * Memoized unreferenced-file count behind the (file modification count, schema version) gate (issue #6168).
@@ -533,6 +544,14 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   // @VisibleForTesting
   void replicateAndCommitLocally(final ReplicationPayload payload, final boolean leader,
       final ArcadeStateMachine stateMachine, final long phase2Ticket) {
+    // The correlation key between this thread and the Raft apply thread, read once (8 bytes off the
+    // front of the payload) so the abandoned mark and the cleanup below name the same slot (#6848).
+    // Only the leader origin-skips its own entries, so only the leader has a slot to name: a replica
+    // pays neither the peek nor a map entry, and its abandoned mark would have been inert anyway
+    // (applyTxEntry sees originatedLocally=false there and applies without ever consulting the map).
+    final long walTxId = leader ? localWalTxId(payload) : UNKNOWN_WAL_TX_ID;
+    boolean markedAbandoned = false;
+
     // --- REPLICATION (no lock held): send WAL to Raft and wait for quorum ---
     long committedLogIndex = -1;
     try {
@@ -557,8 +576,22 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       // The ticket travels with the mark (#5410): this branch keeps holding it so a crash before the
       // entry applies still replays it, and whoever finally applies the entry releases it from the
       // mark - without that correlation the checkpoint stayed pinned until the node restarted.
-      markTransactionAbandonedForLocalApply(payload, phase2Ticket);
-      rollback();
+      markedAbandoned = markTransactionAbandonedForLocalApply(payload, walTxId, phase2Ticket);
+      if (markedAbandoned) {
+        rollback();
+      } else {
+        // The apply thread reached this entry before the mark existed and origin-skipped it, so the
+        // entry is committed and no one else will ever write its pages here. Recover exactly as the
+        // MAJORITY-committed branch above does - that is the same situation, learned a different way
+        // (issue #6848). Rolling back instead would leave this leader permanently one write behind
+        // its followers, which is the divergence #4790 exists to prevent.
+        LogManager.instance().log(this, Level.WARNING,
+            "Replication of tx %d on database '%s' timed out after the entry had already been applied and "
+                + "origin-skipped by the state machine; applying it locally to prevent leader divergence (#6848)",
+            walTxId, getName());
+        if (applyLocallyAfterMajorityCommit(payload))
+          releasePhase2Ticket(stateMachine, phase2Ticket);
+      }
       throw e;
     } catch (final ArcadeDBException e) {
       // Replication failed outright: the entry never reached the log, so there is nothing this node
@@ -570,6 +603,13 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       releasePhase2Ticket(stateMachine, phase2Ticket);
       rollback();
       throw new TransactionException("Error on commit distributed transaction (replication)", e);
+    } finally {
+      // Every exit except "abandoned" has settled who writes the pages, so the origin-skip slot the
+      // apply thread may have left behind has done its job and must not linger. The abandoned mark
+      // lives in the same map and MUST survive: it is what the eventual apply consumes. Only the
+      // leader origin-skips, so only the leader (the one holding a state machine here) has a slot.
+      if (!markedAbandoned && walTxId != UNKNOWN_WAL_TX_ID && stateMachine != null)
+        stateMachine.forgetLocalOriginatedEntry(getName(), walTxId);
     }
 
     // Test-only fault injection: simulate leader crash between replication and phase-2
@@ -735,18 +775,55 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
    * {@code phase2Ticket} rides along so the eventual apply can release it (issue #5410). When the
    * txId cannot be extracted the ticket stays held, which is the safe direction: an entry we cannot
    * correlate is one we cannot prove was applied.
+   *
+   * @return {@code true} when the mark now stands, so the state machine's apply of this entry is what
+   * will write its pages; {@code false} when the apply thread had already origin-skipped the entry
+   * before the mark could be published, which makes the CALLER responsible for applying it locally
+   * (issue #6848). An unreadable txId reports {@code true}: it keeps the conservative pre-#6848
+   * behaviour rather than applying an entry we cannot prove committed.
    */
-  private void markTransactionAbandonedForLocalApply(final ReplicationPayload payload, final long phase2Ticket) {
+  private boolean markTransactionAbandonedForLocalApply(final ReplicationPayload payload, final long walTxId,
+      final long phase2Ticket) {
     final ArcadeStateMachine stateMachine = stateMachineOrNull();
-    if (stateMachine == null)
-      return;
+    if (stateMachine == null || walTxId == UNKNOWN_WAL_TX_ID)
+      // Nothing to correlate against (no state machine wired yet, or an unreadable payload - already
+      // logged where it was read): keep the conservative behaviour of holding the ticket and rolling
+      // back, exactly as before the #6848 handshake existed.
+      return true;
+    return stateMachine.markLocalTransactionAbandoned(getName(), walTxId, phase2Ticket);
+  }
+
+  /**
+   * Sentinel for "this payload's WAL transaction id could not be read", which makes the whole #6848
+   * handshake inapplicable: an entry we cannot correlate is one we cannot prove was applied, so the
+   * caller keeps the conservative pre-#6848 behaviour (mark nothing, hold the ticket, roll back).
+   * <p>
+   * It shares a value with {@link ArcadeStateMachine#NO_ABANDONED_MARK} and means something entirely
+   * unrelated - that one is a phase-2 ticket sentinel, this one a transaction id. The two are never
+   * compared, assigned to each other, or passed through the same variable; the shared value is a
+   * coincidence of both wanting the one number their domain cannot produce, not a shared protocol.
+   * <p>
+   * {@code Long.MIN_VALUE} is that number here because a replicated WAL transaction id is either the
+   * per-database counter ({@code TransactionManager.getNextTransactionId()}, an {@code AtomicLong}
+   * starting at zero) or the literal {@code -1} that flags a compaction/sealed-store entry for
+   * {@code forceApply} - the only negative value any writer puts in that header. Nothing negates the
+   * counter, so a real id can never collide with this sentinel and be mistaken for an unreadable
+   * payload.
+   */
+  private static final long UNKNOWN_WAL_TX_ID = Long.MIN_VALUE;
+
+  /**
+   * Reads the WAL transaction id of a captured payload - the correlation key shared with the Raft
+   * apply thread. Best-effort: a payload we cannot parse yields {@link #UNKNOWN_WAL_TX_ID} rather
+   * than masking the replication failure that is already on its way to the caller.
+   */
+  private long localWalTxId(final ReplicationPayload payload) {
     try {
-      final long walTxId = ArcadeStateMachine.deserializeWalTransaction(payload.walData()).txId;
-      stateMachine.markLocalTransactionAbandoned(getName(), walTxId, phase2Ticket);
+      return ArcadeStateMachine.peekWalTransactionId(payload.walData());
     } catch (final Exception e) {
       LogManager.instance().log(this, Level.WARNING,
-          "Could not mark transaction for local apply after indeterminate replication (db=%s): %s",
-          getName(), e.getMessage());
+          "Could not read the WAL transaction id of a replicated entry (db=%s): %s", getName(), e.getMessage());
+      return UNKNOWN_WAL_TX_ID;
     }
   }
 
@@ -1107,8 +1184,8 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   }
 
   @Override
-  public void deleteRecordNoLock(final Record record) {
-    proxied.deleteRecordNoLock(record);
+  public boolean deleteRecordNoLock(final Record record) {
+    return proxied.deleteRecordNoLock(record);
   }
 
   @Override
@@ -2090,6 +2167,297 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
         toRetire.put(shipped.getKey(), shipped.getValue());
   }
 
+  /** Sealed-store slices this database has shipped since it opened - see {@link #sealedChunksShipped}. */
+  public long getSealedStoreChunksShipped() {
+    return sealedChunksShipped.get();
+  }
+
+  /**
+   * The most slices any ONE sealed store has been cut into since this database opened (issue #4416).
+   * <p>
+   * The cumulative {@link #getSealedStoreChunksShipped()} cannot answer the question an operator actually has,
+   * which is whether a SINGLE store is producing a burst: a thousand slices reads the same there whether it was
+   * one pathological store or a thousand healthy one-slice ones. This is the burst gauge. Anything at or above
+   * {@link GlobalConfiguration#MAX_REPLICATED_SEALED_CHUNKS} means the WARNING in {@link #planSealedSlices} fired
+   * and the leader is holding a FileManager recording session open across that many sequential quorum round
+   * trips, which shows up as leader commit latency (see that constant's javadoc for exactly what it blocks).
+   */
+  public long getSealedStoreMaxSliceSequence() {
+    return sealedChunksMaxSequence.get();
+  }
+
+  /**
+   * How ONE sealed store will be shipped: metadata only, no bytes (issues #4416, #6933).
+   * <p>
+   * The slices are described here and CUT ON DEMAND by {@link #slice}, because materializing them all up front
+   * doubled leader heap for the whole shipping loop - the source image stays strongly reachable throughout, so a
+   * 600MB sealed store cost 1.2GB, and #6917 raised the per-shard ceiling from one 32MB entry to the
+   * {@code Integer.MAX_VALUE} clamp in {@link GlobalConfiguration#maxReplicatedSealedStoreSize}. Cutting one
+   * slice at a time bounds the extra copy by one slice.
+   * <p>
+   * A plan has a BODY of up to {@code count - 1} slices of {@code bodySliceSize} bytes and a final slice of
+   * {@code tailSize} bytes. The two sizes differ because they are spent in different places: every body slice
+   * gets a delivery-only entry to itself, so it may use the whole per-entry budget, while every store's final
+   * slice has to share ONE publishing entry with every other store of the same maintenance session (#6933).
+   *
+   * @param count         how many slices carry the store; {@code 0} when it ships whole as a
+   *                      {@link RaftLogEntryCodec.TsSealedBlob}
+   * @param bodySliceSize how many bytes each slice but the last carries
+   * @param tailSize      how many bytes the final - publishing - slice carries
+   * @param fileCrc       CRC32 of the whole image, carried on every slice so the follower validates what it
+   *                      reassembled against the leader's own copy
+   * @param fileLength    the whole image's length
+   */
+  // @VisibleForTesting
+  record SealedSlicePlan(int count, int bodySliceSize, int tailSize, long fileCrc, int fileLength) {
+
+    /** Whether the store needs slicing at all, or ships whole exactly as it did before #4416. */
+    boolean sliced() {
+      return count > 0;
+    }
+
+    /**
+     * Cuts slice {@code index} out of {@code blob}. The returned chunk is the ONLY copy this plan makes, and it
+     * is the caller's to drop as soon as it has been shipped.
+     */
+    RaftLogEntryCodec.TsSealedChunk slice(final RaftLogEntryCodec.TsSealedBlob blob, final int index) {
+      final boolean last = index == count - 1;
+      final int bodyLength = fileLength - tailSize;
+      final int from = last ? bodyLength : (int) Math.min(bodyLength, (long) index * bodySliceSize);
+      final int to = last ? fileLength : (int) Math.min(bodyLength, (long) from + bodySliceSize);
+      return new RaftLogEntryCodec.TsSealedChunk(blob.typeName(), blob.shardIndex(), blob.fileName(), fileLength,
+          fileCrc, from, Arrays.copyOfRange(blob.bytes(), from, to), last);
+    }
+  }
+
+  /** The plan of a store that ships whole. */
+  private static final SealedSlicePlan NOT_SLICED = new SealedSlicePlan(0, 0, 0, 0L, 0);
+
+  /**
+   * What the codec writes for one sealed slice besides its payload, MEASURED rather than guessed (issue #6933):
+   * the type and file names are variable-length, and a long type name lengthens the derived
+   * {@code .ts.sealed} name with it, so a flat constant is a bound that a sufficiently verbose schema walks past.
+   * <p>
+   * Encoding a whole empty entry rather than the slice section alone overstates it by the entry header, which is
+   * the safe direction: {@link GlobalConfiguration#REPLICATED_SEALED_CHUNK_FRAMING_BYTES} already reserves for
+   * ONE slice, so this is only charged for the stores BEYOND the first.
+   */
+  private static int sealedSliceFraming(final RaftLogEntryCodec.TsSealedBlob blob) {
+    final RaftLogEntryCodec.TsSealedChunk empty = new RaftLogEntryCodec.TsSealedChunk(blob.typeName(),
+        blob.shardIndex(), blob.fileName(), 0L, 0L, 0L, EMPTY_SLICE_PAYLOAD, true);
+    return RaftLogEntryCodec.encodeSchemaEntry("", "", Collections.emptyMap(), Collections.emptyMap(),
+        Collections.emptyList(), Collections.emptyList(), Collections.emptyList(), false, List.of(empty)).size();
+  }
+
+  private static final byte[] EMPTY_SLICE_PAYLOAD = new byte[0];
+
+  /**
+   * What the publishing entry spends on everything that is NOT sealed payload, measured by encoding it (issue
+   * #6933). Both file maps are measured even though {@code splitSchemaEntry} may move {@code filesToAdd} to the
+   * FIRST chunk of a split: overstating the header can only make the sealed payload smaller, understating it puts
+   * the entry over the cap.
+   */
+  private static int publishingHeaderSize(final String databaseName, final String schemaJson,
+      final Map<Integer, String> filesToAdd, final Map<Integer, String> filesToRemove) {
+    return RaftLogEntryCodec.encodeSchemaEntry(databaseName, schemaJson, filesToAdd, filesToRemove,
+        Collections.emptyList(), Collections.emptyList(), Collections.emptyList()).size();
+  }
+
+  /**
+   * How many raw sealed bytes the PUBLISHING entry may carry in total (issue #6933) - all the whole blobs plus
+   * every sliced store's final slice.
+   * <p>
+   * Two different bounds meet here and both have to hold. {@code sealedEntryBudget} is the POLICY one,
+   * {@code arcadedb.ha.tsMaxSealedInlineSize} less its framing and compression reserve, and it says nothing about
+   * a schema JSON riding beside the payload because a delivery-only entry carries none. The transport one does:
+   * the publishing entry also carries the schema JSON and the file maps, and it is the WHOLE entry that must stay
+   * under the cap. Subtracting the header from the policy budget instead would be wrong in the direction that
+   * matters - with a deliberately small inline cap the header is larger than the whole budget, and a shard that
+   * used to seal would stop sealing.
+   *
+   * @param sealedEntryBudget    {@link GlobalConfiguration#replicatedSealedChunkBudget}; {@code <= 0} means
+   *                             slicing is off entirely
+   * @param entryCap             the transport's maximum replicated entry size
+   * @param publishingHeaderSize what {@link #publishingHeaderSize} measured for this session
+   */
+  // @VisibleForTesting
+  static long publishingSealedCapacity(final long sealedEntryBudget, final long entryCap,
+      final int publishingHeaderSize) {
+    if (sealedEntryBudget <= 0)
+      return 0;
+    final long transportRoom = entryCap - publishingHeaderSize
+        - GlobalConfiguration.REPLICATED_SEALED_CHUNK_FRAMING_BYTES - entryCap / 128;
+    return Math.min(sealedEntryBudget, transportRoom);
+  }
+
+  /**
+   * Plans how EVERY sealed store of one compaction/maintenance session is shipped (issue #6933), before a single
+   * entry is committed.
+   * <p>
+   * WHY THIS IS A SESSION-WIDE DECISION AND NOT A PER-STORE ONE. {@code TimeSeriesEngine.runSealedMaintenanceReplicated}
+   * runs retention and downsampling for every shard of a type inside ONE
+   * {@link #runWithCompactionReplication(Callable)} session, so {@code recordedSealed} routinely holds several
+   * stores. Everything that PUBLISHES rides one entry: the whole blobs, and the final slice of every sliced
+   * store. Sizing each store's final slice against the whole per-entry budget - which is what #6917 did - asks
+   * that one entry to carry N budgets, and {@code RaftTransactionBroker.splitSchemaEntry} cannot split it,
+   * because what blows the cap is the header rather than the WAL: it computes {@code walBudget <= 0} and throws.
+   * By then {@code replicateSealedChunk} has already committed every earlier slice of every store to the Raft
+   * log, leaving the followers staging sealed stores they will never install while the leader has swapped its own
+   * and cleared its mutable buckets.
+   * <p>
+   * So the publishing entry's sealed capacity is divided evenly among the stores: a store no larger than its
+   * share ships whole, a larger one is sliced with a final slice capped at that share. The body slices keep the
+   * full per-entry budget, because each of them travels alone. The resulting publishing payload is at most
+   * {@code stores x share}, which is the capacity itself - it fits by construction, at any shard count.
+   *
+   * WHY THE CAPACITY IS DIVIDED EVENLY AND NOT BY SIZE. A size-weighted allocation would fit a session that an
+   * even one refuses - one tiny store beside one huge one, on a cap tight enough that the huge one's even share is
+   * smaller than the tiny store already is. Even division is chosen anyway because the property that matters here
+   * is the one a reader can check in a line: no store contributes more than its share, so the total cannot exceed
+   * the capacity, at any shard count and in any order. A weighted split has to be re-derived every time the
+   * publishing entry's contents change, and it buys headroom only in a regime an operator reaches by lowering
+   * {@code arcadedb.ha.tsMaxSealedInlineSize} far below the cap - which the refusal message tells them to undo.
+   *
+   * @param sealedEntryBudget  raw sealed bytes one DELIVERY-ONLY entry may carry, from
+   *                           {@link GlobalConfiguration#replicatedSealedChunkBudget}; {@code <= 0} means a cap
+   *                           too small to slice at all, where every store keeps shipping whole exactly as it did
+   *                           before #4416 and {@code TimeSeriesShard}'s own guard is what bounds it
+   * @param publishingCapacity raw sealed bytes the PUBLISHING entry may carry in total, from
+   *                           {@link #publishingSealedCapacity}
+   *
+   * @throws ReplicatedEntryTooLargeException when the publishing entry cannot carry even one slice per store.
+   *                                          Thrown HERE, where nothing has been shipped yet, rather than from
+   *                                          the splitter after the delivery-only slices are already committed.
+   */
+  // @VisibleForTesting
+  static List<SealedSlicePlan> planSealedShipping(final List<RaftLogEntryCodec.TsSealedBlob> blobs,
+      final long sealedEntryBudget, final long publishingCapacity, final String databaseName) {
+    final List<SealedSlicePlan> plans = new ArrayList<>(blobs.size());
+    if (blobs.isEmpty())
+      return plans;
+
+    if (sealedEntryBudget <= 0) {
+      // A cap too small to hold even one slice's framing. Slicing is impossible, so this is the pre-#4416 world:
+      // ship whole and let TimeSeriesShard's guard keep the stores under one entry.
+      for (int i = 0; i < blobs.size(); i++)
+        plans.add(NOT_SLICED);
+      return plans;
+    }
+
+    // Every store beyond the first pays for its own slice framing outright; the FIRST one pays only for whatever
+    // it costs ABOVE the flat reserve already held back inside publishingSealedCapacity. Charging it in full would
+    // reserve twice for the same slice and shrink the tail of every single-shard cluster for nothing, and not
+    // charging it at all would leave the flat reserve as the last unmeasured assumption here - a type name of a
+    // few thousand characters really does outgrow it, and nothing caps type-name length.
+    long extraFraming = Math.max(0L,
+        sealedSliceFraming(blobs.getFirst()) - GlobalConfiguration.REPLICATED_SEALED_CHUNK_FRAMING_BYTES);
+    for (int i = 1; i < blobs.size(); i++)
+      extraFraming += sealedSliceFraming(blobs.get(i));
+
+    final long share = (publishingCapacity - extraFraming) / blobs.size();
+    if (share <= 0)
+      throw new ReplicatedEntryTooLargeException(String.format(
+          """
+          Schema change for database '%s' publishes %d TimeSeries sealed store(s) but only %d bytes of one Raft \
+          entry are left for them once the schema JSON and the file maps are on it, %d each after their framing. \
+          Raise arcadedb.ha.appendBufferSize - and with it arcadedb.ha.writeBufferSize, which must stay >= \
+          appendBufferSize + 8 bytes.""",
+          databaseName, blobs.size(), Math.max(0L, publishingCapacity), Math.max(0L, share)));
+
+    for (final RaftLogEntryCodec.TsSealedBlob blob : blobs)
+      plans.add(planSealedSlices(blob, sealedEntryBudget, share, databaseName));
+    return plans;
+  }
+
+  /**
+   * Plans the slices of ONE sealed-store image (issue #4416), or returns a plan that is not
+   * {@link SealedSlicePlan#sliced()} when it fits its share of the publishing entry and must ship inline as a
+   * {@link RaftLogEntryCodec.TsSealedBlob} exactly as before.
+   * <p>
+   * Static and side-effect-free so the arithmetic that a follower's reassembly depends on - contiguous offsets, a
+   * whole-file CRC every slice agrees on, exactly one slice flagged {@code last} - can be pinned without a cluster.
+   * <p>
+   * Slices are cut against the budgets rather than against the entry cap directly: the codec compresses each one,
+   * so a slice that fits uncompressed always fits encoded, and the framing the budget already subtracts covers
+   * the rest. A store needing more than {@code MAX_REPLICATED_SEALED_CHUNKS} slices is still shipped - refusing
+   * here would leave the follower holding a stale sealed file the leader has already replaced, which is
+   * divergence - but it is reported, because the shard guard in {@code TimeSeriesShard.compactInternal} is
+   * supposed to have kept it from ever getting this far and the maintenance path (retention, downsampling) has no
+   * such guard.
+   * <p>
+   * When the tail fits without shrinking anything the slicing is UNIFORM - the shape #4416 shipped. That is not
+   * quite "every single-shard cluster keeps its old byte layout": a lone store owns the whole publishing capacity,
+   * but the capacity itself is now the entry cap less the measured schema JSON and file maps, so a store whose
+   * uniform tail was within a schema JSON of the budget gets one more, smaller, final slice than it used to. That
+   * IS the thin-margin half of #6933, not a side effect of it.
+   *
+   * @param bodyBudget how many raw bytes of sealed content one delivery-only entry may carry; {@code <= 0}
+   *                   disables slicing
+   * @param tailBudget how many of those this store may spend on the shared publishing entry; {@code <= 0}
+   *                   disables slicing
+   */
+  // @VisibleForTesting
+  static SealedSlicePlan planSealedSlices(final RaftLogEntryCodec.TsSealedBlob blob, final long bodyBudget,
+      final long tailBudget, final String databaseName) {
+    final byte[] bytes = blob.bytes() != null ? blob.bytes() : new byte[0];
+    if (bodyBudget <= 0 || tailBudget <= 0 || bytes.length <= tailBudget)
+      return NOT_SLICED;
+
+    final CRC32 crc = new CRC32();
+    crc.update(bytes);
+
+    final int length = bytes.length;
+    final int bodySliceSize = (int) Math.min(bodyBudget, Integer.MAX_VALUE);
+
+    // The uniform shape first, because it is the one #4416 pinned and the one a single-shard type always gets.
+    final int uniformCount = (int) (((long) length + bodySliceSize - 1) / bodySliceSize);
+    final long uniformTail = length - (long) (uniformCount - 1) * bodySliceSize;
+
+    final int count;
+    final int tailSize;
+    if (uniformTail <= tailBudget) {
+      count = uniformCount;
+      tailSize = (int) uniformTail;
+    } else {
+      // The tail would not fit this store's share of the publishing entry: cap it, and let the body absorb the
+      // difference. The body is at least one byte long here, because length > tailBudget >= tailSize.
+      tailSize = (int) Math.min(tailBudget, Integer.MAX_VALUE);
+      count = (int) (((long) length - tailSize + bodySliceSize - 1) / bodySliceSize) + 1;
+    }
+
+    if (count > GlobalConfiguration.MAX_REPLICATED_SEALED_CHUNKS)
+      LogManager.instance().log(RaftReplicatedDatabase.class, Level.WARNING,
+          """
+          Sealed TimeSeries store '%s' of database '%s' is %d bytes and needs %d replicated entries of %d bytes, \
+          above the %d one compaction is expected to produce. Shipping it anyway - withholding it would leave the \
+          other nodes on a sealed store this one has already replaced - but raise arcadedb.ha.appendBufferSize, or \
+          shorten the retention on this type, before the burst starts costing write latency.""",
+          null, blob.fileName(), databaseName, length, count, bodySliceSize,
+          GlobalConfiguration.MAX_REPLICATED_SEALED_CHUNKS);
+
+    return new SealedSlicePlan(count, bodySliceSize, tailSize, crc.getValue(), length);
+  }
+
+  /**
+   * The eager form of {@link #planSealedSlices}, for the single-store case where the whole entry budget is this
+   * store's to spend. Kept because the #4416 tests pin the arithmetic through it; the shipping path uses the plan
+   * directly so it never holds more than one slice at a time.
+   *
+   * @param budget how many raw bytes of sealed content one entry may carry; {@code <= 0} disables slicing
+   */
+  // @VisibleForTesting
+  static List<RaftLogEntryCodec.TsSealedChunk> sliceSealedBlob(final RaftLogEntryCodec.TsSealedBlob blob,
+      final long budget, final String databaseName) {
+    final SealedSlicePlan plan = planSealedSlices(blob, budget, budget, databaseName);
+    if (!plan.sliced())
+      return Collections.emptyList();
+
+    final List<RaftLogEntryCodec.TsSealedChunk> slices = new ArrayList<>(plan.count());
+    for (int i = 0; i < plan.count(); i++)
+      slices.add(plan.slice(blob, i));
+    return slices;
+  }
+
   /** Schema-WAL instalments this database has shipped since it opened - see {@link #schemaInstalmentsShipped}. */
   public long getSchemaWalInstalmentsShipped() {
     return schemaInstalmentsShipped.get();
@@ -2203,17 +2571,74 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       for (final Map.Entry<Integer, Integer> grown : pagesGrownDuringSession(pageCountsBefore, addFiles).entrySet())
         appendFilePagesAsWal(grown.getKey(), walChunkBudget, walEntries, bucketDeltas, grown.getValue());
 
-      final List<RaftLogEntryCodec.TsSealedBlob> sealedBlobs = new ArrayList<>(compactionSealedBuffer.get());
+      final List<RaftLogEntryCodec.TsSealedBlob> recordedSealed = new ArrayList<>(compactionSealedBuffer.get());
+      // Released here rather than only in the finally (#6933): the shipping loop below drops each sliced store's
+      // image as it goes, and a second list still holding it would make that release do nothing. Nothing can add
+      // to the buffer any more - the compaction callback has returned.
+      compactionSealedBuffer.get().clear();
 
-      if (addFiles.isEmpty() && removeFiles.isEmpty() && walEntries.isEmpty() && sealedBlobs.isEmpty())
+      if (addFiles.isEmpty() && removeFiles.isEmpty() && walEntries.isEmpty() && recordedSealed.isEmpty())
         return result;
 
+      // #4416: a sealed store bigger than one Raft entry is shipped as an ordered sequence of slices instead of
+      // being refused. Everything but the final slice of each store goes out HERE, ahead of the publishing entry,
+      // as a delivery-only entry the follower merely stages; the final slice is handed to replicateSchema below
+      // so the install lands in the same entry as the mutable-bucket clear WAL.
+      //
+      // WHAT A FAILURE PART-WAY THROUGH THIS LOOP LEAVES, since the loop makes several quorum round trips where
+      // the whole-file path made one, and nothing here retries or rolls back. The compaction has already run
+      // LOCALLY - the sealed file is swapped and the mutable-bucket clear is committed on this node, because
+      // commit() inside the session buffers the WAL for shipping AFTER applying it here - so a throw leaves this
+      // node sealed and the others still holding those samples in their (fully replicated) mutable bucket. Every
+      // node still answers the same sample count; what diverges is where the samples live, and the page versions
+      // this node advanced past theirs. The recovery is the one that already existed for a failed whole-file
+      // compaction, not a new one: the next entry touching those pages hits a version gap on the followers and
+      // escalates to a snapshot resync, and a follower's part-written staging file is truncated by the first
+      // slice of the next sequence. Deliberately not retried here - a retry would re-ship a sealed image the next
+      // compaction is about to rewrite anyway.
+      // #6933: the whole session is planned BEFORE anything ships, because the publishing entry has to carry the
+      // final slice of EVERY sliced store plus every whole blob, and a plan that cannot fit has to be refused
+      // here rather than by the splitter after the delivery-only slices are already in the Raft log. The schema
+      // JSON is serialized early for the same reason - its encoded size is part of what the sealed payload has
+      // to leave room for.
       final String serializedSchema = proxied.getSchema().getEmbedded().toJSON().toString();
-      broker.replicateSchema(getName(), serializedSchema, addFiles, removeFiles, walEntries, bucketDeltas, sealedBlobs);
+      final long sealedChunkBudget = GlobalConfiguration.replicatedSealedChunkBudget(proxied.getConfiguration());
+      final List<SealedSlicePlan> sealedPlans = planSealedShipping(recordedSealed, sealedChunkBudget,
+          publishingSealedCapacity(sealedChunkBudget, broker.maxEntrySize(),
+              publishingHeaderSize(getName(), serializedSchema, addFiles, removeFiles)), getName());
+
+      final List<RaftLogEntryCodec.TsSealedBlob> sealedBlobs = new ArrayList<>(recordedSealed.size());
+      final List<RaftLogEntryCodec.TsSealedChunk> finalSealedChunks = new ArrayList<>();
+      int sealedSlicesShipped = 0;
+      for (int store = 0; store < recordedSealed.size(); store++) {
+        final RaftLogEntryCodec.TsSealedBlob blob = recordedSealed.get(store);
+        final SealedSlicePlan plan = sealedPlans.get(store);
+        if (!plan.sliced()) {
+          sealedBlobs.add(blob);
+          continue;
+        }
+        // One slice materialized at a time (#6933): the source image is already one whole-file array on this
+        // thread, and cutting the sequence up front made it two.
+        for (int i = 0; i < plan.count() - 1; i++)
+          broker.replicateSealedChunk(getName(), plan.slice(blob, i));
+        finalSealedChunks.add(plan.slice(blob, plan.count() - 1));
+        sealedSlicesShipped += plan.count();
+        // Nothing needs this store's image any more - only its final slice publishes - so let an N-shard session
+        // stop holding N whole-file arrays at once.
+        recordedSealed.set(store, null);
+        // Per-STORE, not per-session: the burst that costs latency is one store's sequence of round trips, and
+        // summing across stores would hide a single pathological shard behind a busy-but-healthy cycle.
+        sealedChunksMaxSequence.accumulateAndGet(plan.count(), Math::max);
+      }
+      sealedChunksShipped.addAndGet(sealedSlicesShipped);
+
+      broker.replicateSchema(getName(), serializedSchema, addFiles, removeFiles, walEntries, bucketDeltas,
+          sealedBlobs, finalSealedChunks);
 
       HALog.log(this, HALog.DETAILED,
-          "Compaction for database '%s' replicated via Raft: addFiles=%d, removeFiles=%d, walEntries=%d, sealedBlobs=%d",
-          getName(), addFiles.size(), removeFiles.size(), walEntries.size(), sealedBlobs.size());
+          "Compaction for database '%s' replicated via Raft: addFiles=%d, removeFiles=%d, walEntries=%d, "
+              + "sealedBlobs=%d, sealedSlices=%d",
+          getName(), addFiles.size(), removeFiles.size(), walEntries.size(), sealedBlobs.size(), sealedSlicesShipped);
 
       if (HALog.isEnabled(HALog.DETAILED))
         logSchemaPayloadDiagnostics("compaction", serializedSchema, addFiles, removeFiles);

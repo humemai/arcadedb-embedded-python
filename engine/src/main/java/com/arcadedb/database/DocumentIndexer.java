@@ -38,7 +38,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
-import java.util.function.Function;
 
 public class DocumentIndexer {
   private final LocalDatabase database;
@@ -332,7 +331,7 @@ public class DocumentIndexer {
       final Document modifiedRecord, final String[] propertyNames, final KeyExpansion[] expansions) {
     final Object[] oldKey = buildFullTextByItemKey(originalRecord, propertyNames, expansions);
     final Object[] newKey = buildFullTextByItemKey(modifiedRecord, propertyNames, expansions);
-    if (Arrays.equals(oldKey, newKey))
+    if (sameKeyTuple(oldKey, newKey))
       return false;
     if (!isAllEmpty(oldKey))
       index.remove(oldKey, rid);
@@ -482,7 +481,43 @@ public class DocumentIndexer {
       final Document modifiedRecord, final String[] propertyNames, final KeyExpansion[] expansions) {
     final List<Object[]> oldTuples = buildMultiListItemTuples(originalRecord, propertyNames, expansions);
     final List<Object[]> newTuples = buildMultiListItemTuples(modifiedRecord, propertyNames, expansions);
+    return applyTupleDelta(index, rid, oldTuples, newTuples);
+  }
 
+  /**
+   * Updates an index with a single collection modifier ({@code BY ITEM}, {@code BY KEY} or {@code BY VALUE}) by diffing the
+   * complete key tuples the write path would produce for the original and the modified record. Diffing whole tuples rather than
+   * the collection's element membership is what keeps the non-expanded sibling properties of the same composite key honest: a
+   * change to a scalar sibling alone changes every tuple, so every stale entry is removed and re-added under the new key
+   * (issue #6934). The tuples are produced by the same builders used at insert time, so update and insert cannot disagree on
+   * the key shape.
+   *
+   * @return {@code true} if at least one index entry was removed or added.
+   */
+  private boolean updateExpandedKeysInIndex(final Index index, final RID rid, final Document originalRecord,
+      final Document modifiedRecord, final String[] propertyNames, final int expansionIndex, final KeyExpansion expansion) {
+    final List<Object[]> oldTuples = collectExpandedKeys(originalRecord, propertyNames, expansionIndex, expansion);
+    final List<Object[]> newTuples = collectExpandedKeys(modifiedRecord, propertyNames, expansionIndex, expansion);
+    return applyTupleDelta(index, rid, oldTuples, newTuples);
+  }
+
+  private List<Object[]> collectExpandedKeys(final Document record, final String[] propertyNames, final int expansionIndex,
+      final KeyExpansion expansion) {
+    final List<Object[]> tuples = new ArrayList<>();
+    if (expansion == KeyExpansion.LIST_ITEM)
+      forEachListItemKey(record, propertyNames, expansionIndex, tuples::add);
+    else
+      forEachMapEntryKey(record, propertyNames, expansionIndex, expansion, tuples::add);
+    return tuples;
+  }
+
+  /**
+   * Removes the tuples no longer produced by the record and adds the ones that are new, leaving unchanged tuples untouched.
+   *
+   * @return {@code true} if at least one index entry was removed or added.
+   */
+  private static boolean applyTupleDelta(final Index index, final RID rid, final List<Object[]> oldTuples,
+      final List<Object[]> newTuples) {
     boolean changed = false;
     for (final Object[] oldTuple : oldTuples) {
       if (!containsTuple(newTuples, oldTuple)) {
@@ -501,9 +536,35 @@ public class DocumentIndexer {
 
   private static boolean containsTuple(final List<Object[]> tuples, final Object[] tuple) {
     for (final Object[] t : tuples)
-      if (Arrays.equals(t, tuple))
+      if (sameKeyTuple(t, tuple))
         return true;
     return false;
+  }
+
+  /**
+   * The one equality every "did this key change?" decision in this class goes through: two tuples are the same key when
+   * every element is {@link #sameKeyValue(Object, Object) the same key value}. Kept as the single policy so a new update
+   * path cannot pick a third notion of equality (issue #7109).
+   */
+  private static boolean sameKeyTuple(final Object[] a, final Object[] b) {
+    if (a.length != b.length)
+      return false;
+    for (int i = 0; i < a.length; i++)
+      if (!sameKeyValue(a[i], b[i]))
+        return false;
+    return true;
+  }
+
+  /**
+   * Content-aware equality for a single key value: array-typed keys (the {@code float[]} of a vector index, a
+   * {@code BINARY} property) do not override {@code Object.equals()}, so two independently deserialized-but-identical
+   * arrays would compare unequal and trigger a spurious remove()+put() on every record update (issues #5318 and #7109).
+   * {@link Objects#deepEquals} uses {@code Object.equals()} for scalar keys, the element-wise {@code Arrays.equals()}
+   * overload of the matching primitive array type ({@code float[]}, {@code byte[]}, ...) for primitive arrays, and
+   * {@code Arrays.deepEquals()} for {@code Object[]}.
+   */
+  private static boolean sameKeyValue(final Object a, final Object b) {
+    return Objects.deepEquals(a, b);
   }
 
   /**
@@ -611,11 +672,7 @@ public class DocumentIndexer {
           oldKeyValues[i] = getPropertyValue(originalRecord, propertyNamesArray[i]);
           newKeyValues[i] = getPropertyValue(modifiedRecord, propertyNamesArray[i]);
 
-          // Use content-aware comparison: array-typed keys (e.g. the float[] of a vector index) do not override
-          // Object.equals(), so two independently deserialized-but-identical arrays would compare unequal and
-          // trigger a spurious remove()+put() on every record update (issue #5318). Objects.deepEquals falls back
-          // to Object.equals() for scalar keys and to element-wise Arrays.equals() for array keys.
-          if (!keyValuesAreModified && !Objects.deepEquals(newKeyValues[i], oldKeyValues[i]))
+          if (!keyValuesAreModified && !sameKeyValue(newKeyValues[i], oldKeyValues[i]))
             keyValuesAreModified = true;
         }
 
@@ -636,12 +693,10 @@ public class DocumentIndexer {
         index.remove(oldKeyValues, rid);
         index.put(newKeyValues, new RID[] { rid });
         anyIndexModified = true;
-      } else if (expansion == KeyExpansion.LIST_ITEM) {
-        // List update logic - compute delta
-        anyIndexModified |= updateListItemsInIndex(index, rid, originalRecord, modifiedRecord, propertyNamesArray, expansionIndex);
       } else {
-        // Map update logic - compute delta on keys or values
-        anyIndexModified |= updateMapEntriesInIndex(index, rid, originalRecord, modifiedRecord, propertyNamesArray,
+        // Single BY ITEM / BY KEY / BY VALUE modifier: diff the complete key tuples, so a change to a scalar sibling of the
+        // collection property is reflected too (issue #6934)
+        anyIndexModified |= updateExpandedKeysInIndex(index, rid, originalRecord, modifiedRecord, propertyNamesArray,
             expansionIndex, expansion);
       }
     }
@@ -675,161 +730,6 @@ public class DocumentIndexer {
       }
     }
     return new DetachedDocument(modifiedRecord, values);
-  }
-
-  /** @return {@code true} if at least one index entry was removed or added. */
-  private boolean updateMapEntriesInIndex(final Index index, final RID rid, final Document originalRecord,
-      final Document modifiedRecord, final String[] propertyNames, final int mapPropertyIndex, final KeyExpansion expansion) {
-    final Collection<Object> oldElements = mapElements(originalRecord, propertyNames[mapPropertyIndex], expansion);
-    final Collection<Object> newElements = mapElements(modifiedRecord, propertyNames[mapPropertyIndex], expansion);
-
-    boolean changed = false;
-
-    // Remove entries for elements no longer present
-    for (final Object oldElement : oldElements) {
-      if (!newElements.contains(oldElement)) {
-        final Object[] keyValues = new Object[propertyNames.length];
-        for (int i = 0; i < keyValues.length; ++i)
-          keyValues[i] = i == mapPropertyIndex ? oldElement : getPropertyValue(originalRecord, propertyNames[i]);
-        index.remove(keyValues, rid);
-        changed = true;
-      }
-    }
-
-    // Add entries for new elements
-    for (final Object newElement : newElements) {
-      if (!oldElements.contains(newElement)) {
-        final Object[] keyValues = new Object[propertyNames.length];
-        for (int i = 0; i < keyValues.length; ++i)
-          keyValues[i] = i == mapPropertyIndex ? newElement : getPropertyValue(modifiedRecord, propertyNames[i]);
-        index.put(keyValues, new RID[] { rid });
-        changed = true;
-      }
-    }
-
-    return changed;
-  }
-
-  /** @return {@code true} if at least one index entry was removed or added. */
-  private boolean updateListItemsInIndex(final Index index, final RID rid,
-      final Document originalRecord, final Document modifiedRecord,
-      final String[] propertyNames, final int listPropertyIndex) {
-    boolean changed = false;
-    final String propertyName = propertyNames[listPropertyIndex];
-    final String[] pathParts = propertyName.split("\\.");
-    final String listPropertyName = pathParts[0];
-
-    // Get the list values from both records
-    final Object oldListValue = originalRecord.get(listPropertyName);
-    final Object newListValue = modifiedRecord.get(listPropertyName);
-
-    final List<?> oldList = oldListValue instanceof List<?> list ? list : List.of();
-    final List<?> newList = newListValue instanceof List<?> list ? list : List.of();
-
-    // For nested paths, we need to compare the extracted values, not the objects themselves
-    final boolean isNested = pathParts.length > 1;
-
-    if (isNested) {
-      // Build a helper to extract nested values
-      Function<Object, Object> extractValue = item -> {
-        Object value = item;
-        for (int j = 1; j < pathParts.length; j++) {
-          if (value == null)
-            break;
-          if (value instanceof Document doc) {
-            value = doc.get(pathParts[j]);
-          } else if (value instanceof Map<?, ?> map) {
-            value = map.get(pathParts[j]);
-          } else {
-            value = null;
-            break;
-          }
-        }
-        return value;
-      };
-
-      // Collect old and new values
-      final List<Object> oldValues = new ArrayList<>();
-      for (Object item : oldList) {
-        final Object val = extractValue.apply(item);
-        if (val != null)
-          oldValues.add(val);
-      }
-
-      final List<Object> newValues = new ArrayList<>();
-      for (Object item : newList) {
-        final Object val = extractValue.apply(item);
-        if (val != null)
-          newValues.add(val);
-      }
-
-      // Remove entries for values that are no longer in the list
-      for (final Object oldValue : oldValues) {
-        if (!newValues.contains(oldValue)) {
-          final Object[] keyValues = new Object[propertyNames.length];
-          for (int i = 0; i < keyValues.length; ++i) {
-            if (i == listPropertyIndex) {
-              keyValues[i] = oldValue;
-            } else {
-              keyValues[i] = getPropertyValue(originalRecord, propertyNames[i]);
-            }
-          }
-          index.remove(keyValues, rid);
-          changed = true;
-        }
-      }
-
-      // Add entries for new values
-      for (final Object newValue : newValues) {
-        if (!oldValues.contains(newValue)) {
-          final Object[] keyValues = new Object[propertyNames.length];
-          for (int i = 0; i < keyValues.length; ++i) {
-            if (i == listPropertyIndex) {
-              keyValues[i] = newValue;
-            } else {
-              keyValues[i] = getPropertyValue(modifiedRecord, propertyNames[i]);
-            }
-          }
-          index.put(keyValues, new RID[] { rid });
-          changed = true;
-        }
-      }
-    } else {
-      // Simple list items - use direct comparison
-      // Remove entries for items that are no longer in the list
-      for (final Object oldItem : oldList) {
-        if (!newList.contains(oldItem)) {
-          final Object[] keyValues = new Object[propertyNames.length];
-          for (int i = 0; i < keyValues.length; ++i) {
-            if (i == listPropertyIndex) {
-              keyValues[i] = oldItem;
-            } else {
-              keyValues[i] = getPropertyValue(originalRecord, propertyNames[i]);
-            }
-          }
-          index.remove(keyValues, rid);
-          changed = true;
-        }
-      }
-
-      // Add entries for new items
-      for (final Object newItem : newList) {
-        if (!oldList.contains(newItem)) {
-          final Object[] keyValues = new Object[propertyNames.length];
-          for (int i = 0; i < keyValues.length; ++i) {
-            if (i == listPropertyIndex) {
-              keyValues[i] = newItem;
-            } else {
-              keyValues[i] = getPropertyValue(modifiedRecord, propertyNames[i]);
-            }
-          }
-          index.put(keyValues, new RID[] { rid });
-          changed = true;
-        }
-      }
-    }
-
-    return changed;
   }
 
   public void deleteDocument(final Document record) {

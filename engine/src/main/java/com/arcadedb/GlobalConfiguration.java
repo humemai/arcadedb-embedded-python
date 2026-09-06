@@ -710,6 +710,18 @@ public enum GlobalConfiguration {
       Higher values improve performance but consume more memory. Default: 20000. Recommended range: 10000-100000. Set to 0 to disable batching.""",
       Integer.class, 20_000),
 
+  OPENCYPHER_FOREACH_EAGER_READ("arcadedb.opencypher.foreachEagerRead", SCOPE.DATABASE,
+      """
+      Make FOREACH eager when a later clause in the same query reads the graph (MATCH, MERGE, CALL, a CALL {} subquery, \
+      or a later FOREACH whose own body contains a MERGE). Eager means the FOREACH body runs for every input row before \
+      the first row reaches that reader, so every row sees the same, complete post-FOREACH graph instead of whichever \
+      writes happened to land inside the pull batch it was produced in. The cost is that the FOREACH input rows are held \
+      in memory until the last write is applied. Set to false to restore the streaming, batch-at-a-time behaviour for a \
+      bulk query whose input does not fit in memory, at the price of the following read observing a partially applied \
+      FOREACH. Read when the execution plan is built, so a change takes effect for statements planned afterwards \
+      (see arcadedb.opencypher.planCache).""",
+      Boolean.class, true),
+
   OPENCYPHER_LOAD_CSV_ALLOW_FILE_URLS("arcadedb.opencypher.loadCsv.allowFileUrls", SCOPE.DATABASE,
       """
       Allow LOAD CSV to access local files via file:/// URLs and bare file paths. \
@@ -1315,11 +1327,15 @@ public enum GlobalConfiguration {
   SERVER_SHUTDOWN_TIMEOUT("arcadedb.server.shutdownTimeout", SCOPE.SERVER,
       """
       Milliseconds the JVM shutdown hook waits for the server lifecycle lock before giving up and letting \
-      the JVM exit WITHOUT a graceful stop. It only matters when another thread is inside start()/stop() \
-      when the shutdown signal arrives: normally the hook takes the lock immediately and this value is \
-      never reached. Giving up leaves databases as a kill would - the next open replays the WAL - which is \
-      the lesser evil, because a hook that waits forever can make the process unkillable (issue #5418). \
-      Raise it if a legitimate shutdown of very large databases needs longer than the default.""",
+      the JVM exit WITHOUT a graceful stop. It only matters when another thread holds the lifecycle lock \
+      when the shutdown signal arrives - a stop() in progress, a start() that has already opened its \
+      databases (they open long before the HTTP service, the plugins and HA come up), or the tail of \
+      start() after the status has already turned ONLINE: normally the hook takes the lock immediately \
+      and this value is never reached, and while the server is still STARTING with no database open yet \
+      the hook uses a fixed 2000ms bound instead, which this setting does not govern. Giving up leaves \
+      databases as a kill would - the next open replays the WAL - which is the lesser evil, because a hook \
+      that waits forever can make the process unkillable (issue #5418). Raise it if a legitimate shutdown \
+      of very large databases needs longer than the default.""",
       Long.class, 60_000L),
 
   // Metrics
@@ -1941,11 +1957,15 @@ public enum GlobalConfiguration {
 
   HA_TS_MAX_SEALED_INLINE_SIZE("arcadedb.ha.tsMaxSealedInlineSize", SCOPE.SERVER,
       """
-      Maximum size in bytes of a TimeSeries sealed-store file that may be shipped inline inside a single \
-      Raft SCHEMA_ENTRY during compaction. When the projected sealed-store size would exceed this cap, the \
-      leader skips compacting that shard (data stays in the fully replicated mutable bucket) instead of \
-      producing an entry too large for the Raft transport. Always clamped down to the real per-entry ceiling, \
-      min(arcadedb.ha.grpcMessageSizeMax, arcadedb.ha.appendBufferSize), so a value above that has no effect.""",
+      Maximum size in bytes of TimeSeries sealed-store content a SINGLE Raft entry may carry during \
+      compaction. A sealed store up to this size ships inline in one SCHEMA_ENTRY; a larger one is sliced \
+      and shipped as an ordered sequence of entries of at most this size each, which the follower stages on \
+      disk and installs atomically with the mutable-bucket clear when the last slice lands (issue #4416). \
+      Always clamped down to the real per-entry ceiling, min(arcadedb.ha.grpcMessageSizeMax, \
+      arcadedb.ha.appendBufferSize), so a value above that has no effect. It therefore no longer bounds the \
+      sealed store itself: what does is this value times MAX_REPLICATED_SEALED_CHUNKS - see \
+      GlobalConfiguration.maxReplicatedSealedStoreSize - and a shard whose projected sealed store exceeds \
+      THAT is still skipped, leaving its samples in the fully replicated mutable bucket.""",
       Long.class, 48 * 1024 * 1024L),
 
   HA_SNAPSHOT_WATCHDOG_TIMEOUT("arcadedb.ha.snapshotWatchdogTimeout", SCOPE.SERVER,
@@ -2074,6 +2094,56 @@ public enum GlobalConfiguration {
       stickiness (drop a host from the allowlist as soon as it stops resolving).""",
       Long.class, 300_000L),
 
+  HA_TLS_ENABLED("arcadedb.ha.tls.enabled", SCOPE.SERVER,
+      """
+      Negotiate TLS on the Raft gRPC transport, which carries AppendEntries, RequestVote and the Ratis \
+      admin/client calls between the nodes of a cluster. When true, arcadedb.ha.tls.certChainFile, \
+      arcadedb.ha.tls.privateKeyFile and arcadedb.ha.tls.trustCertCollectionFile must all name a readable PEM \
+      file or the node refuses to start. Default is false so a development or test cluster still starts with \
+      no configuration at all; the peer-address allowlist (arcadedb.ha.peerAllowlist.enabled) is IP-based and \
+      is defeated by a spoofed source address or a compromised peer, so it is a best-effort default rather \
+      than a substitute for TLS on an untrusted network. TLS on the gRPC port does not replace the \
+      X-ArcadeDB-Cluster-Token check on the HTTP side channels (snapshot download, database verify).""",
+      Boolean.class, false),
+
+  HA_TLS_CERT_CHAIN_FILE("arcadedb.ha.tls.certChainFile", SCOPE.SERVER,
+      """
+      PEM file holding this node's Raft gRPC certificate followed by any intermediate CA certificates. The \
+      certificate must carry a subject alternative name matching the address the other nodes use to dial this \
+      node in arcadedb.ha.serverList (on Kubernetes, the pod's stable headless-service DNS name). Every node \
+      both accepts and initiates Raft connections, so with arcadedb.ha.tls.mutualAuth=true this one \
+      certificate is presented as the TLS server certificate AND as the client certificate: it needs BOTH the \
+      serverAuth and clientAuth extended key usages. A CA that issues single-purpose certificates will \
+      otherwise produce a handshake failure that the startup file checks cannot catch, because the file is \
+      perfectly readable and merely the wrong kind of certificate. Required when arcadedb.ha.tls.enabled is \
+      true.""",
+      String.class, ""),
+
+  HA_TLS_PRIVATE_KEY_FILE("arcadedb.ha.tls.privateKeyFile", SCOPE.SERVER,
+      """
+      PEM file holding the PKCS#8 private key that matches arcadedb.ha.tls.certChainFile. Required when \
+      arcadedb.ha.tls.enabled is true.""",
+      String.class, ""),
+
+  HA_TLS_TRUST_CERT_COLLECTION_FILE("arcadedb.ha.tls.trustCertCollectionFile", SCOPE.SERVER,
+      """
+      PEM file holding the cluster CA certificate(s) that sign every node certificate. A peer presenting a \
+      certificate this collection does not chain to is rejected during the TLS handshake, before any Raft \
+      message is read. Required when arcadedb.ha.tls.enabled is true.""",
+      String.class, ""),
+
+  HA_TLS_MUTUAL_AUTH("arcadedb.ha.tls.mutualAuth", SCOPE.SERVER,
+      """
+      Require the dialling peer to present a client certificate signed by the CA collection in \
+      arcadedb.ha.tls.trustCertCollectionFile, binding peer identity to the certificate rather than to a \
+      source IP address. Set to false for server-only TLS, \
+      which encrypts the traffic but leaves the Raft port open to any client that trusts the cluster CA - the \
+      back door this setting exists to close. Turning it off does NOT make \
+      arcadedb.ha.tls.trustCertCollectionFile optional: the dialling node still needs the cluster CA to \
+      validate the certificate presented by the node it dials. Only meaningful when arcadedb.ha.tls.enabled \
+      is true.""",
+      Boolean.class, true),
+
   // POSTGRES
   POSTGRES_PORT("arcadedb.postgres.port", SCOPE.SERVER,
       "TCP/IP port number used for incoming connections for Postgres plugin. Default is 5432", Integer.class, 5432),
@@ -2093,14 +2163,15 @@ public enum GlobalConfiguration {
       "Maximum size in bytes accepted for a single bind-message parameter value on the Postgres wire protocol. Values declaring a larger size are rejected before allocation. Default is 16MB",
       Integer.class, 16 * 1024 * 1024),
 
-  POSTGRES_SIMPLE_QUERY_MAX_ROWS("arcadedb.postgres.simpleQueryMaxRows", SCOPE.SERVER, """
-      Maximum number of rows a simple-query protocol ('Q' message) SELECT is allowed to buffer server-side before \
-      the first row is sent. Unlike the extended query protocol, the simple-query protocol has no client-driven \
-      cursor/max-rows mechanism and always expects the complete result set in one response, so the server has to \
-      hold it in memory to determine the row description (column set and types) before streaming it. A SELECT whose \
-      result exceeds this limit is refused with an error instead of risking an OutOfMemoryError; the client should \
-      use the extended query protocol with a bounded portal fetch size for very large result sets. Default is \
-      1000000""", Integer.class, 1_000_000),
+  POSTGRES_QUERY_MAX_ROWS("arcadedb.postgres.queryMaxRows", SCOPE.SERVER, """
+      Maximum number of rows the result of one statement is allowed to occupy server-side before the first row is \
+      sent to a Postgres wire protocol client, on the simple-query ('Q') and the extended-query (Parse/Bind/\
+      Describe/Execute) protocol alike. Postgres fixes the column set in the RowDescription that precedes every \
+      DataRow, and a schemaless document can carry a property no earlier row had, so the server has to see the \
+      whole result before it can announce it: on the extended protocol the portal's row limit bounds what each \
+      Execute sends, not what the server holds. A statement whose result exceeds this limit is refused with an \
+      error instead of risking an OutOfMemoryError; narrow it with a WHERE or LIMIT clause or raise the limit. \
+      0 means unlimited. Default is 1000000""", Integer.class, 1_000_000),
 
   // BOLT (Neo4j)
   BOLT_PORT("arcadedb.bolt.port", SCOPE.SERVER,
@@ -2426,6 +2497,92 @@ public enum GlobalConfiguration {
     final long grpcMessageSizeMax = configuration.getValueAsLong(HA_GRPC_MESSAGE_SIZE_MAX);
     final long appendBufferSize = FileUtils.getSizeAsNumber(configuration.getValueAsString(HA_APPEND_BUFFER_SIZE));
     return Math.min(grpcMessageSizeMax, appendBufferSize);
+  }
+
+  /**
+   * Bytes reserved, per replicated sealed-store slice, for everything that is not the slice payload: the entry
+   * header, the type and file names, the offsets, the two CRCs and the compression framing. Deliberately generous -
+   * it is subtracted from a multi-megabyte budget, so over-reserving costs a fraction of one slice, while
+   * under-reserving produces an entry above the Raft ceiling, which makes the leader step down (issue #4743).
+   */
+  public static final int REPLICATED_SEALED_CHUNK_FRAMING_BYTES = 4 * 1024;
+
+  /**
+   * How many entries one sealed store may be sliced into. It bounds the burst a single compaction can put through
+   * the Raft pipeline: every slice is its own quorum round trip, taken sequentially.
+   * <p>
+   * WHAT THAT BURST ACTUALLY BLOCKS, because it is not the database write lock and an earlier revision of this
+   * javadoc said it was. The slicing loop in {@code RaftReplicatedDatabase.runWithCompactionReplication} runs
+   * AFTER the compaction callback has returned, so neither {@code TimeSeriesShard.compactionLock} nor the
+   * per-shard lock {@code TimeSeriesEngine.runSealedMaintenanceReplicated} takes is still held - both are
+   * released inside the callback. What stays open for the whole burst is the FileManager RECORDING SESSION, and
+   * its cost falls on other commits on the LEADER: each one calls {@code waitForActiveRecordingSession()} before
+   * dispatching its TX_ENTRY (issue #4083 ordering), which polls until the session ends and then gives up after
+   * {@link #HA_QUORUM_TIMEOUT}. So a long burst degrades leader commit latency up to that timeout and then lets
+   * commits through on the racy path - it does not stall them for the burst's full duration, and it does not
+   * touch reads or follower traffic at all.
+   * <p>
+   * At the stock settings this bound is slack, not binding: the per-entry ceiling is
+   * min({@link #HA_TS_MAX_SEALED_INLINE_SIZE}, min({@link #HA_GRPC_MESSAGE_SIZE_MAX},
+   * {@link #HA_APPEND_BUFFER_SIZE})) = 32MB, so ~68 slices already reach the ~2GB ceiling and nothing can ask for
+   * 512. Reaching this constant at all takes a deliberately lowered append buffer. The ~2GB ceiling itself comes
+   * from the {@link Integer#MAX_VALUE} clamp in {@link #maxReplicatedSealedStoreSize} - where
+   * {@code TimeSeriesSealedStore.readWholeSealedFile} stops, since the leader materializes the file as one array -
+   * NOT from this constant times the cap, which at the stock 32MB would be ~16GB.
+   */
+  public static final int MAX_REPLICATED_SEALED_CHUNKS = 512;
+
+  /**
+   * How many bytes of sealed-store payload one replicated entry may carry (issue #4416): the configured
+   * {@link #HA_TS_MAX_SEALED_INLINE_SIZE}, clamped down to the real per-entry ceiling and less the framing.
+   * <p>
+   * Zero when the configured cap is so small that the framing alone does not fit - a slice cannot be built at
+   * all then, which is why {@link #maxReplicatedSealedStoreSize} falls back to the per-entry cap in that case and
+   * the shard keeps being skipped exactly as it was before slicing existed.
+   */
+  public static long replicatedSealedChunkBudget(final ContextConfiguration configuration) {
+    final long perEntry = maxReplicatedSealedEntrySize(configuration);
+    // The 1/128 is what the FRAMING constant cannot cover: a slice is LZ4-compressed for the wire, and sealed
+    // blocks are ALREADY compressed by their own columnar codecs, so the "compressed" slice can come out LARGER
+    // than the raw one - by up to n/255 + 16 bytes in the worst case. A fixed reserve is the wrong shape for that,
+    // because the overflow grows with the slice while the reserve does not: at a 4MB entry cap the expansion alone
+    // is ~16KB, four times the framing. Reserving a proportion keeps the encoded slice under the cap at every cap.
+    return Math.max(0L, perEntry - REPLICATED_SEALED_CHUNK_FRAMING_BYTES - perEntry / 128);
+  }
+
+  /**
+   * The most sealed-store content one replicated entry may carry: the configured cap, never above what the
+   * transport accepts.
+   */
+  public static long maxReplicatedSealedEntrySize(final ContextConfiguration configuration) {
+    return Math.min(configuration.getValueAsLong(HA_TS_MAX_SEALED_INLINE_SIZE),
+        maxReplicatedRaftEntrySize(configuration));
+  }
+
+  /**
+   * The largest TimeSeries sealed store a replicated shard may hold (issue #4416): what fits one entry, or - when
+   * the cap leaves room for a slice - {@link #MAX_REPLICATED_SEALED_CHUNKS} slices of
+   * {@link #replicatedSealedChunkBudget}. A shard whose projected sealed store exceeds this is not compacted, so
+   * its samples stay in the fully replicated mutable bucket: correct, but uncompressed and unbounded, which is the
+   * state issue #4416 exists to push further away rather than to remove outright.
+   * <p>
+   * The {@code max} is what keeps a deliberately tiny cap behaving as it always did: a store that FITS one entry
+   * ships in one entry whether or not anything could be sliced.
+   * <p>
+   * Clamped to {@link Integer#MAX_VALUE} because the leader reads the whole sealed file into one byte array before
+   * slicing it. Removing that clamp means streaming the file instead, which is a separate change.
+   */
+  public static long maxReplicatedSealedStoreSize(final ContextConfiguration configuration) {
+    final long perEntry = maxReplicatedSealedEntrySize(configuration);
+    // Saturating rather than wrapping. It cannot currently change an answer - a budget large enough to overflow
+    // this product needs a per-entry cap of ~18 petabytes, and THAT alone is already far above the
+    // Integer.MAX_VALUE clamp below, which is what the max() then returns either way - but a ceiling that is
+    // correct only because two unrelated bounds happen to cover for each other is one edit away from not being.
+    final long budget = replicatedSealedChunkBudget(configuration);
+    final long sliced = budget >= Long.MAX_VALUE / MAX_REPLICATED_SEALED_CHUNKS
+        ? Long.MAX_VALUE
+        : budget * MAX_REPLICATED_SEALED_CHUNKS;
+    return Math.min(Integer.MAX_VALUE, Math.max(perEntry, sliced));
   }
 
   /**

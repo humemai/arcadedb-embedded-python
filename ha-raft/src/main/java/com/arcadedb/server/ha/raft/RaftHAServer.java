@@ -31,6 +31,7 @@ import org.apache.ratis.client.RaftClientConfigKeys;
 import org.apache.ratis.conf.Parameters;
 import org.apache.ratis.conf.RaftProperties;
 import org.apache.ratis.grpc.GrpcConfigKeys;
+import org.apache.ratis.grpc.GrpcTlsConfig;
 import org.apache.ratis.metrics.MetricRegistries;
 import org.apache.ratis.metrics.MetricRegistryInfo;
 import org.apache.ratis.metrics.RatisMetricRegistry;
@@ -110,10 +111,20 @@ import java.util.logging.Logger;
  * {@link #shutdownRequested} volatile flag prevents recovery during shutdown.
  * <p>
  * <b>Security note (K8s mode):</b> When {@code HA_K8S} is enabled and gRPC is bound
- * to {@code 0.0.0.0}, any pod in the Kubernetes cluster can connect to the Raft port
- * and inject Raft log entries. Authentication for inter-node traffic relies on
- * Kubernetes NetworkPolicy. Operators should restrict access to the Raft port via
- * NetworkPolicy rules in production.
+ * to {@code 0.0.0.0}, any host that can reach the Raft port can connect to it and inject Raft log
+ * entries. Three mitigations, in decreasing order of strength:
+ * <ul>
+ *   <li>{@code arcadedb.ha.tls.*} (issue #3890) - mutual TLS, the only one that binds peer identity to a
+ *       certificate rather than to a spoofable source address, and the only one that also encrypts the
+ *       traffic. Off by default; this is the supported way to secure the Raft port in production.</li>
+ *   <li>{@code arcadedb.ha.peerAllowlist.enabled} - rejects inbound connections whose address does not
+ *       resolve to a host in {@code HA_SERVER_LIST}. On by default, but IP-based: defeated by spoofing on a
+ *       flat L2 network or by a compromised peer. A best-effort default, not a substitute for mTLS.</li>
+ *   <li>A Kubernetes NetworkPolicy restricting the port to the StatefulSet pods - network-level isolation,
+ *       and worth having alongside either of the above.</li>
+ * </ul>
+ * None of these replaces the {@code X-ArcadeDB-Cluster-Token} check on the HTTP side channels (snapshot
+ * download, database verify), which is a separate control on a separate port.
  */
 public class RaftHAServer implements HealthMonitor.HealthTarget {
 
@@ -128,6 +139,8 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   // Generous: the request is served on the state-machine updater thread, which may be busy applying a
   // backlog, and a timeout here only skips one compaction tick.
   private static final long SNAPSHOT_REQUEST_TIMEOUT_MS = 30_000L;
+  /** Budget of the log purge that precedes a database snapshot install (issue #7037): "not now" beats waiting. */
+  private static final long PRE_INSTALL_SNAPSHOT_REQUEST_TIMEOUT_MS = 5_000L;
 
   private final    ArcadeDBServer          arcadeServer;
   private final    ContextConfiguration    configuration;
@@ -182,7 +195,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   // still copies it to a local before use so a concurrent reassignment cannot null it mid-method.
   private volatile RaftServer                raftServer;
   private          RaftClient                raftClient;
-  private          RaftProperties            raftProperties;
+  private volatile RaftProperties            raftProperties;
   private volatile RaftTransactionBroker     transactionBroker;
   private          RaftClusterStatusExporter statusExporter;
   private          ScheduledExecutorService  lagMonitorExecutor;
@@ -213,6 +226,16 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   // Inbound Raft gRPC peer allowlist, recreated on each Ratis (re)start. Periodically refreshed by the
   // health monitor tick so a returned peer's new pod IP is admitted proactively (issue #4696).
   private volatile PeerAddressAllowlistFilter allowlistFilter;
+  // Ratis transport parameters (gRPC TLS conf and the inbound-allowlist services customizer) built by
+  // buildParameters() on each Ratis (re)start. Kept so refreshRaftClient() can rebuild the leader's
+  // self-client with the SAME transport configuration: a client built with an empty Parameters would
+  // dial the Raft port in plaintext and fail every handshake once TLS is on (issue #3890).
+  // Published by buildParameters() only on its LAST line, once the TLS configuration and the inbound-peer
+  // allowlist customizer are both installed. Two things depend on that: a ConfigurationException from a bad
+  // cert/key/trust path leaves the previous, working value in place rather than a TLS-less one, and a
+  // concurrent reader (refreshRaftClient() from a leader-change callback) never sees a half-built transport
+  // configuration.
+  private volatile Parameters                 raftParameters        = new Parameters();
   private final    Object                    leaderChangeNotifier  = new Object();
   private final    Object                    applyNotifier         = new Object();
   // Upper bound on a single applyNotifier.wait(...) call before the loop re-checks the apply-index
@@ -953,7 +976,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
 
     this.raftProperties = properties;
 
-    raftClient = buildRaftClient(raftGroup, properties);
+    raftClient = buildRaftClient(raftGroup, properties, parameters);
 
     LogManager.instance()
         .log(this, Level.INFO, "Raft cluster joined: %d nodes %s", peerDisplayNames.size(), peerDisplayNames.values());
@@ -984,7 +1007,8 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     // as soon as a leader is visible - at that point this node is either a functioning member or a
     // cold-start election completed - or on shutdown.
     if (configuration.getValueAsBoolean(GlobalConfiguration.HA_K8S)) {
-      final KubernetesAutoJoin autoJoin = new KubernetesAutoJoin(arcadeServer, raftGroup, localPeerId, raftProperties);
+      final KubernetesAutoJoin autoJoin = new KubernetesAutoJoin(arcadeServer, raftGroup, localPeerId, raftProperties,
+          parameters);
       final Thread joinThread = new Thread(
           () -> autoJoin.tryAutoJoinWithRetry(() -> !shutdownRequested && getLeaderId() == null),
           "arcadedb-k8s-auto-join");
@@ -1299,6 +1323,81 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     restartRatis(false);
   }
 
+  @Override
+  public String getRaftLogFailure() {
+    final ArcadeStateMachine sm = stateMachine;
+    if (sm == null)
+      return null;
+    final ArcadeStateMachine.RaftLogFailure failure = sm.getRaftLogFailure();
+    return failure != null ? failure.describe() : null;
+  }
+
+  /**
+   * {@inheritDoc}
+   * <p>
+   * "Enough" is two log segments ({@code arcadedb.ha.logSegmentSize}): Ratis rolls the open segment and
+   * preallocates the next on recovery, so with less than that the restarted writer fails at the first append.
+   */
+  @Override
+  public boolean isRaftStorageWritable() {
+    final File volume = raftStorageVolume();
+    if (volume == null)
+      return true; // volume unknown: never guess "full" from it, let the restart budget bound the attempts
+    final RaftProperties properties = raftProperties;
+    final long segmentSize = properties != null ? RaftServerConfigKeys.Log.segmentSizeMax(properties).getSize()
+        : RaftServerConfigKeys.Log.SEGMENT_SIZE_MAX_DEFAULT.getSize();
+    return volume.getUsableSpace() >= 2L * segmentSize;
+  }
+
+  /**
+   * Whether free space on the Raft storage volume is below {@code arcadedb.ha.raftStorageMinFreeSpacePerc}. The
+   * same arithmetic as the compaction scheduler's disk-pressure probe; {@code false} when the check is disabled
+   * (0) or the volume cannot be sized, so pressure is never guessed.
+   */
+  boolean isRaftStorageUnderPressure() {
+    final int minFreeSpacePerc = configuration.getValueAsInteger(GlobalConfiguration.HA_RAFT_STORAGE_MIN_FREE_SPACE_PERC);
+    if (minFreeSpacePerc <= 0)
+      return false;
+    final File volume = raftStorageVolume();
+    if (volume == null)
+      return false;
+    final long total = volume.getTotalSpace();
+    final long usable = volume.getUsableSpace();
+    return total > 0 && usable >= 0 && (double) usable / (double) total * 100.0 < minFreeSpacePerc;
+  }
+
+  /**
+   * Forces a local Raft snapshot with the smallest creation gap Ratis accepts, so every log segment below the
+   * applied index becomes purgeable before a database snapshot is written onto the same volume (issue #7037).
+   * Best-effort: a refused or timed-out request only means the segments stay until the next periodic tick.
+   * <p>
+   * Only when the Raft storage volume is actually under pressure (below {@code arcadedb.ha.raftStorageMinFreeSpacePerc},
+   * the same threshold the periodic compaction escalates on): an ordinary resync on a volume with room must not pay a
+   * round trip to the {@code StateMachineUpdater} for a purge that has nothing to reclaim.
+   * <p>
+   * A snapshot request is fulfilled by the {@code StateMachineUpdater} thread, and only while the state machine is
+   * {@code RUNNING}, so it is skipped when it could not be served promptly: on the apply thread itself (a request
+   * issued from an entry apply would wait on itself), while the state machine is paused or reloading (a
+   * leader-driven install, which purges the log by itself once it lands), and it carries a short budget rather than
+   * the scheduler's 30s one, because the install it precedes must not queue behind a long entry apply.
+   */
+  void compactRaftLogBeforeSnapshotInstall(final String databaseName) {
+    if (!isRaftStorageUnderPressure())
+      return;
+    final ArcadeStateMachine sm = stateMachine;
+    if (sm == null || sm.isApplyThread() || sm.getLifeCycleState() != LifeCycle.State.RUNNING) {
+      LogManager.instance().log(this, Level.FINE,
+          "Skipping the Raft log purge before installing '%s': the state machine cannot serve a snapshot request now",
+          databaseName);
+      return;
+    }
+    final long index = takeLocalSnapshot(RaftLogCompactionScheduler.DISK_PRESSURE_CREATION_GAP,
+        PRE_INSTALL_SNAPSHOT_REQUEST_TIMEOUT_MS);
+    if (index >= 0)
+      HALog.log(this, HALog.BASIC, "Raft log purged up to index %d before installing the snapshot of '%s'", index,
+          databaseName);
+  }
+
   /**
    * Builds a fully wired {@link ArcadeStateMachine}. Both collaborators must be set: {@code setServer}
    * gives it the {@link ArcadeDBServer} and {@code setRaftHAServer} the owning {@code RaftHAServer}.
@@ -1395,17 +1494,19 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
         } else
           startupOption = RaftStorage.StartupOption.RECOVER;
 
+        final Parameters recoveryParameters = buildParameters(configuration);
+
         this.raftServer = RaftServer.newBuilder()
             .setServerId(localPeerId)
             .setGroup(raftGroup)
             .setStateMachine(stateMachine)
             .setProperties(properties)
-            .setParameters(buildParameters(configuration))
+            .setParameters(recoveryParameters)
             .setOption(startupOption)
             .build();
         this.raftServer.start();
         this.raftProperties = properties;
-        this.raftClient = buildRaftClient(raftGroup, properties);
+        this.raftClient = buildRaftClient(raftGroup, properties, recoveryParameters);
 
         final int batchSize = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_BATCH_SIZE);
         final int queueSize = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_QUEUE_SIZE);
@@ -1638,7 +1739,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     // no broker is available to concurrent callers (the field is volatile).
     final RaftClient oldClient = raftClient;
 
-    raftClient = buildRaftClient(raftGroup, raftProperties, knownLeaderId);
+    raftClient = buildRaftClient(raftGroup, raftProperties, raftParameters, knownLeaderId);
 
     if (transactionBroker != null) {
       final int batchSize = configuration.getValueAsInteger(GlobalConfiguration.HA_GROUP_COMMIT_BATCH_SIZE);
@@ -1732,6 +1833,17 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     return display != null ? display : leaderId.toString();
   }
 
+  /**
+   * The peers every "who are the members" consumer reports: the declared server list reconciled against the live
+   * Raft configuration (issue #7040). A peer the configuration dropped is not a replica - the leader does not
+   * replicate to it and a client must not be routed to it - and a peer added at runtime is one even though the
+   * server list does not declare it. {@link #getStats()}, {@link #getReplicaAddresses()} and
+   * {@link #routingTableFor} all read this, so the three views cannot disagree about membership.
+   */
+  private List<RaftPeer> configuredPeers() {
+    return ClusterMembership.of(raftGroup.getPeers(), getLivePeers()).configuredPeers();
+  }
+
   public Map<String, Object> getStats() {
     final Map<String, Object> stats = new HashMap<>();
     stats.put("localPeerId", localPeerId.toString());
@@ -1749,7 +1861,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     final RaftPeerId statsLeaderId = getLeaderId();
     final RaftPeerId statsExcludeId = statsLeaderId != null ? statsLeaderId : localPeerId;
     final List<Map<String, String>> replicas = new ArrayList<>();
-    for (final RaftPeer peer : raftGroup.getPeers()) {
+    for (final RaftPeer peer : configuredPeers()) {
       if (!peer.getId().equals(statsExcludeId)) {
         final Map<String, String> replicaInfo = new HashMap<>();
         replicaInfo.put("id", peer.getId().toString());
@@ -1768,7 +1880,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     final RaftPeerId leaderId = getLeaderId();
     final RaftPeerId excludeId = leaderId != null ? leaderId : localPeerId;
     final StringBuilder sb = new StringBuilder();
-    for (final RaftPeer peer : raftGroup.getPeers()) {
+    for (final RaftPeer peer : configuredPeers()) {
       if (!peer.getId().equals(excludeId)) {
         final String httpAddr = resolveHttpAddress(peer);
         if (httpAddr != null) {
@@ -1786,9 +1898,10 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    * from one {@link #getLeaderId()} read, so a concurrent leader change cannot make the writer and reader sets
    * mutually inconsistent. Returns {@code null} when no leader is known, the leader has no resolvable
    * address for that protocol, or that address cannot be told apart from a follower's (see
-   * {@link #selectUnambiguousRouting}). Readers reflect the configured cluster membership, matching
-   * {@link #getReplicaAddresses()}; peers whose address cannot be resolved, or resolved to an address another
-   * peer claims too, are skipped.
+   * {@link #selectUnambiguousRouting}). Readers reflect the live cluster membership ({@link #configuredPeers()}),
+   * matching {@link #getReplicaAddresses()}: a peer the configuration dropped is never handed to a client as a
+   * read target (issue #7040). Peers whose address cannot be resolved, or resolved to an address another peer
+   * claims too, are skipped.
    * <p>
    * The ambiguity filter is deliberately confined to the client-routing view and is <b>not</b> applied to the
    * HTTP addresses behind {@link #getReplicaAddresses()} or {@code getStats()}: those feed cluster reporting
@@ -1818,15 +1931,16 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     if (writer == null)
       return null;
 
-    final Collection<RaftPeer> peers = raftGroup.getPeers();
+    final Collection<RaftPeer> peers = configuredPeers();
 
     // Index 0 is always the writer, so one pair of arrays carries the whole view and the ambiguity check can
     // see the leader and the followers at once. A peer that resolves to nothing is skipped, exactly as before.
     //
-    // The +1 is not slack: raftGroup is final and holds the peers HA_SERVER_LIST was parsed into, while the
-    // leader comes from live Ratis state, so a leader that joined at runtime (addPeer, the Kubernetes
-    // auto-join) is not in getPeers() and the writer occupies a slot beyond it. Sizing to peers.size() would
-    // put an ArrayIndexOutOfBoundsException on the Bolt ROUTE path in exactly that window.
+    // The +1 is not slack: the leader comes from live Ratis state read separately from the membership above,
+    // and getLivePeers() falls back to the declared list when the division cannot be read, so a leader that
+    // joined at runtime (addPeer, the Kubernetes auto-join) can be absent from `peers` and the writer occupies
+    // a slot beyond it. Sizing to peers.size() would put an ArrayIndexOutOfBoundsException on the Bolt ROUTE
+    // path in exactly that window.
     final String[] addresses = new String[peers.size() + 1];
     final boolean[] fromConfig = new boolean[addresses.length];
     // Carried alongside so the warning can name the peers that collided rather than only say that some did
@@ -2557,24 +2671,28 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    * This uses a bounded retry so a single call returns within a reasonable time, allowing
    * our own retry loop in setConfigurationWithRetry to control the overall timeout.
    */
-  private static RaftClient buildRaftClient(final RaftGroup group, final RaftProperties properties) {
-    return buildRaftClient(group, properties, null);
+  private static RaftClient buildRaftClient(final RaftGroup group, final RaftProperties properties,
+      final Parameters parameters) {
+    return buildRaftClient(group, properties, parameters, null);
   }
 
   /**
-   * Like {@link #buildRaftClient(RaftGroup, RaftProperties)}, but seeds the new client with a
+   * Like {@link #buildRaftClient(RaftGroup, RaftProperties, Parameters)}, but seeds the new client with a
    * known leader peer ID so the first write request routes directly to the leader without a
    * probe round-trip.
+   *
+   * @param parameters the same transport {@link Parameters} the local Ratis server was built with, so the
+   *                   self-client speaks TLS whenever the transport does (issue #3890).
    */
   private static RaftClient buildRaftClient(final RaftGroup group, final RaftProperties properties,
-      final RaftPeerId knownLeaderId) {
+      final Parameters parameters, final RaftPeerId knownLeaderId) {
     // Set the client-side RPC timeout to match the quorum timeout so a slow leader response
     // does not trigger a premature TimeoutIOException before the commit completes.
     RaftClientConfigKeys.Rpc.setRequestTimeout(properties, TimeDuration.valueOf(10, TimeUnit.SECONDS));
     final RaftClient.Builder builder = RaftClient.newBuilder()
         .setRaftGroup(group)
         .setProperties(properties)
-        .setParameters(new Parameters())
+        .setParameters(parameters != null ? parameters : new Parameters())
         .setRetryPolicy(RetryPolicies.retryUpToMaximumCountWithFixedSleep(60, TimeDuration.valueOf(1, TimeUnit.SECONDS)));
     if (knownLeaderId != null)
       builder.setLeaderId(knownLeaderId);
@@ -3072,9 +3190,9 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     final List<HAReplicationStatsProvider.FollowerSample> samples = new ArrayList<>(followers.size());
     for (final Map<String, Object> follower : followers) {
       final String peerId = (String) follower.get("peerId");
-      final long matchIndex = follower.get("matchIndex") instanceof Number n ? n.longValue() : -1;
-      final long nextIndex = follower.get("nextIndex") instanceof Number n ? n.longValue() : -1;
-      final long lastContactMs = follower.get("lastRpcElapsedMs") instanceof Number n ? n.longValue() : -1;
+      final long matchIndex = followerStateIndex(follower, "matchIndex");
+      final long nextIndex = followerStateIndex(follower, "nextIndex");
+      final long lastContactMs = followerStateIndex(follower, "lastRpcElapsedMs");
       final long lag = commitIndex >= 0 && matchIndex >= 0 ? Math.max(0L, commitIndex - matchIndex) : -1;
       final String status = clusterMonitor != null ? clusterMonitor.getReplicaStatus(peerId).name() : "UNKNOWN";
       final long laggingForMs = clusterMonitor != null ? clusterMonitor.getReplicaLaggingForMs(peerId) : 0;
@@ -3082,6 +3200,27 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
           peerId, matchIndex, nextIndex, lag, lastContactMs, status, laggingForMs));
     }
     return samples;
+  }
+
+  /**
+   * Reads one index of a {@link #getFollowerStates()} entry, or {@code -1} when the entry does not carry it.
+   * <p>
+   * The match/next index keys are deliberately absent from the degraded entries
+   * {@link #degradedFollowerStates} builds when membership churned faster than a consistent snapshot could
+   * be taken (issue #4842). Every consumer must therefore read them through this method rather than with a
+   * raw {@code (Long)} cast: the cast unboxes the missing value into a {@code NullPointerException}, and
+   * because the consumers run inside catch-alls the failure did not crash anything - it silently dropped
+   * the whole cluster-configuration table and aborted the lag-monitor tick, precisely while membership was
+   * changing (issue #7041). Callers that need to tell "unknown" from Ratis's own {@code -1} never-appended
+   * sentinel check {@link #hasFollowerStateIndex} first.
+   */
+  static long followerStateIndex(final Map<String, Object> state, final String key) {
+    return state.get(key) instanceof Number n ? n.longValue() : -1L;
+  }
+
+  /** Whether a {@link #getFollowerStates()} entry carries {@code key} at all (see {@link #followerStateIndex}). */
+  static boolean hasFollowerStateIndex(final Map<String, Object> state, final String key) {
+    return state.get(key) instanceof Number;
   }
 
   /**
@@ -3537,26 +3676,27 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       return dir != null ? dir.getAbsolutePath() : "<unknown>";
     }
 
-    /**
-     * The Raft storage directory, or its nearest existing ancestor. {@code File.getUsableSpace()}
-     * returns 0 for a path that does not exist, which would otherwise read as "disk full" during the
-     * window between server start and Ratis creating the directory.
-     * <p>
-     * The configured directory itself is resolved once and cached: {@code resolveRaftStorageDir} is
-     * config-derived and constant for the server's lifetime, and re-running its {@code exists()} probes
-     * on every tick is pointless I/O. The ancestor walk stays per-call because its result legitimately
-     * changes once Ratis creates the directory.
-     */
-    private File raftStorageVolume() {
-      File dir = cachedRaftStorageDir;
-      if (dir == null) {
-        dir = getRaftStorageDir();
-        cachedRaftStorageDir = dir;
-      }
-      while (dir != null && !dir.exists())
-        dir = dir.getParentFile();
-      return dir;
+  }
+
+  /**
+   * The Raft storage directory, or its nearest existing ancestor. {@code File.getUsableSpace()}
+   * returns 0 for a path that does not exist, which would otherwise read as "disk full" during the
+   * window between server start and Ratis creating the directory.
+   * <p>
+   * The configured directory itself is resolved once and cached: {@code resolveRaftStorageDir} is
+   * config-derived and constant for the server's lifetime, and re-running its {@code exists()} probes
+   * on every tick is pointless I/O. The ancestor walk stays per-call because its result legitimately
+   * changes once Ratis creates the directory. Shared by the compaction scheduler's disk-pressure probe and
+   * the log-writer recovery's free-space gate (issue #7037), so the two cannot disagree on the volume; the walk
+   * itself is {@link SnapshotInstaller#nearestExistingAncestor}, the same one the snapshot space check uses.
+   */
+  private File raftStorageVolume() {
+    File dir = cachedRaftStorageDir;
+    if (dir == null) {
+      dir = getRaftStorageDir();
+      cachedRaftStorageDir = dir;
     }
+    return SnapshotInstaller.nearestExistingAncestor(dir);
   }
 
   /**
@@ -3579,6 +3719,15 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    * @return the resulting snapshot index, or -1 when no snapshot was taken
    */
   long takeLocalSnapshot(final long creationGap) {
+    return takeLocalSnapshot(creationGap, SNAPSHOT_REQUEST_TIMEOUT_MS);
+  }
+
+  /**
+   * {@link #takeLocalSnapshot(long)} with an explicit request timeout. Ratis fulfils the request on its
+   * {@code StateMachineUpdater} thread the next time that thread is free, so a caller that cannot afford to wait
+   * behind a long entry apply passes a short budget and treats the timeout as "not now".
+   */
+  long takeLocalSnapshot(final long creationGap, final long timeoutMs) {
     final RaftServer server = raftServer;
     if (server == null || shutdownRequested)
       return -1L;
@@ -3588,7 +3737,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     try {
       final RaftClientReply reply = server.snapshotManagement(
           SnapshotManagementRequest.newCreate(snapshotClientId, localPeerId, raftGroup.getGroupId(),
-              snapshotCallId.incrementAndGet(), SNAPSHOT_REQUEST_TIMEOUT_MS, creationGap));
+              snapshotCallId.incrementAndGet(), timeoutMs, creationGap));
       if (reply == null || !reply.isSuccess()) {
         LogManager.instance().log(this, Level.FINE, "Local Raft snapshot request was not successful: %s", reply);
         return -1L;
@@ -3637,11 +3786,31 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    * The customizer adds a {@link PeerAddressAllowlistFilter} that rejects inbound Raft gRPC
    * connections from IPs not listed in {@code arcadedb.ha.serverList}.
    */
-  private Parameters buildParameters(final ContextConfiguration configuration) {
+  // Package-private rather than private so Issue3890RaftParametersPublicationTest can pin when
+  // raftParameters becomes visible - the property this method exists to get right.
+  Parameters buildParameters(final ContextConfiguration configuration) {
     this.allowlistFilter = null;
     final Parameters parameters = new Parameters();
+
+    // mTLS first: it is the cryptographic peer identity the allowlist below cannot provide. Throws a
+    // ConfigurationException at startup when enabled with an unusable cert/key/trust path (issue #3890),
+    // which is one of the two reasons raftParameters is published only on the way out of this method.
+    final GrpcTlsConfig tlsConfig = RaftPropertiesBuilder.applyTls(configuration, parameters);
+    if (tlsConfig != null)
+      LogManager.instance().log(this, Level.INFO,
+          "Raft gRPC transport secured with TLS (mutual authentication: %s)", tlsConfig.getMtlsEnabled());
+
+    installPeerAllowlist(configuration, parameters);
+
+    // Last line on every path: see the field's comment. Nothing above may publish a partially-configured
+    // Parameters, and nothing below may add to it.
+    this.raftParameters = parameters;
+    return parameters;
+  }
+
+  private void installPeerAllowlist(final ContextConfiguration configuration, final Parameters parameters) {
     if (!configuration.getValueAsBoolean(GlobalConfiguration.HA_PEER_ALLOWLIST_ENABLED))
-      return parameters;
+      return;
 
     final String serverList = configuration.getValueAsString(GlobalConfiguration.HA_SERVER_LIST);
     final long refreshMs = configuration.getValueAsLong(GlobalConfiguration.HA_GRPC_ALLOWLIST_REFRESH_MS);
@@ -3651,13 +3820,17 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     if (peerHosts.isEmpty()) {
       LogManager.instance().log(this, Level.WARNING,
           "arcadedb.ha.peerAllowlist.enabled=true but arcadedb.ha.serverList is empty; allowlist not installed");
-      return parameters;
+      return;
     }
     final PeerAddressAllowlistFilter filter = new PeerAddressAllowlistFilter(peerHosts, refreshMs, startupGraceMs,
         stickyTtlMs);
     this.allowlistFilter = filter;
     GrpcConfigKeys.Server.setServicesCustomizer(parameters, new RaftGrpcServicesCustomizer(filter));
-    return parameters;
+  }
+
+  /** Package-private test hook: the transport configuration the Raft client builders read. */
+  Parameters raftParametersForTest() {
+    return raftParameters;
   }
 
   /**

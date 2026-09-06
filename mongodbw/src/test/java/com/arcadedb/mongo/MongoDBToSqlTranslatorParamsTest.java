@@ -112,8 +112,14 @@ class MongoDBToSqlTranslatorParamsTest {
     assertThat(sql.toString()).doesNotContain("E10");
   }
 
+  /**
+   * Regression test for issue #6952: an equality comparison against a bound {@code null} parameter does not match a
+   * stored {@code null} (or absent) property the way SQL's {@code IS NULL} does, so a Mongo filter of the shape
+   * {@code {field: null}} - legal, since MongoDB's null-equality also matches a missing field - used to compile to
+   * {@code `missing` = :p0} with {@code p0} bound to {@code null} and match nothing.
+   */
   @Test
-  void aNullValueIsBoundRatherThanSpelled() {
+  void aNullValueEmitsIsNullInsteadOfBoundEquality() {
     final StringBuilder sql = new StringBuilder();
     final Map<String, Object> params = new HashMap<>();
 
@@ -121,9 +127,39 @@ class MongoDBToSqlTranslatorParamsTest {
     query.put("missing", null);
     MongoDBToSqlTranslator.buildExpression(sql, params, query);
 
-    assertThat(sql.toString()).isEqualTo("`missing` = :p0");
-    assertThat(params).containsKey("p0");
-    assertThat(params.get("p0")).isNull();
+    assertThat(sql.toString()).isEqualTo("`missing` IS NULL");
+    assertThat(params).isEmpty();
+  }
+
+  /**
+   * Follow-up to #6952: {@code $eq} shares the same {@code buildValue} call as the plain-equality shape above, so it
+   * carries the identical gap for {@code {field: {$eq: null}}}.
+   */
+  @Test
+  void eqNullEmitsIsNull() {
+    final StringBuilder sql = new StringBuilder();
+    final Map<String, Object> params = new HashMap<>();
+
+    MongoDBToSqlTranslator.buildExpression(sql, params, new Document("missing", new Document("$eq", null)));
+
+    assertThat(sql.toString()).isEqualTo("(`missing` IS NULL)");
+    assertThat(params).isEmpty();
+  }
+
+  /**
+   * Follow-up to #6952: {@code $ne} is the negated counterpart of {@code $eq} and shares the same root cause - a
+   * bound {@code null} parameter compiled with {@code <>} never matches a stored {@code null}/missing property
+   * either, so {@code {field: {$ne: null}}} must emit {@code IS NOT NULL} instead.
+   */
+  @Test
+  void neNullEmitsIsNotNull() {
+    final StringBuilder sql = new StringBuilder();
+    final Map<String, Object> params = new HashMap<>();
+
+    MongoDBToSqlTranslator.buildExpression(sql, params, new Document("missing", new Document("$ne", null)));
+
+    assertThat(sql.toString()).isEqualTo("(`missing` IS NOT NULL)");
+    assertThat(params).isEmpty();
   }
 
   @Test
@@ -375,5 +411,19 @@ class MongoDBToSqlTranslatorParamsTest {
 
     assertThatThrownBy(() -> MongoDBToSqlTranslator.buildExpression(sql, params, new Document("field", new Document("$not", new Document()))))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  /**
+   * Regression test for issue #6939: {@code getObjectId} used to index straight past the end of an odd-length
+   * input (or, for an even-length non-hex string, silently fabricate a wrong id) instead of rejecting it. Its
+   * only caller already filters with {@code isObjectIdHex} first, so this guard is unreachable in practice today,
+   * but it is exercised directly here since the method is {@code protected} and its contract should hold on its
+   * own regardless of how careful the current caller happens to be.
+   */
+  @Test
+  void getObjectIdRejectsMalformedInputInsteadOfIndexingPastTheEndOrFabricatingAnId() {
+    assertThatThrownBy(() -> MongoDBToSqlTranslator.getObjectId("abc")).isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> MongoDBToSqlTranslator.getObjectId("g".repeat(24))).isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> MongoDBToSqlTranslator.getObjectId("short")).isInstanceOf(IllegalArgumentException.class);
   }
 }

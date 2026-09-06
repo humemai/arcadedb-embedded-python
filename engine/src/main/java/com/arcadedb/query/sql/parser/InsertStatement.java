@@ -45,6 +45,7 @@ public class InsertStatement extends Statement {
   public boolean         selectInParentheses = false;
   public boolean         selectWithFrom      = false;
   public boolean         unsafe              = false;
+  public boolean         onDuplicateKeySkip  = false;
 
   public InsertStatement() {
   }
@@ -65,6 +66,8 @@ public class InsertStatement extends Statement {
       builder.append(" ");
       insertBody.toString(params, builder);
     }
+    if (onDuplicateKeySkip)
+      builder.append(" ON DUPLICATE KEY SKIP");
     if (returnStatement != null) {
       builder.append(" RETURN ");
       returnStatement.toString(params, builder);
@@ -105,6 +108,7 @@ public class InsertStatement extends Statement {
     result.selectInParentheses = selectInParentheses;
     result.selectWithFrom = selectWithFrom;
     result.unsafe = unsafe;
+    result.onDuplicateKeySkip = onDuplicateKeySkip;
     return result;
   }
 
@@ -116,9 +120,16 @@ public class InsertStatement extends Statement {
 
     context.setDatabase(db);
     context.setInputParameters(args);
-    final InsertExecutionPlan executionPlan = createExecutionPlan(context);
-    executionPlan.executeInternal();
-    return new LocalResultSet(executionPlan);
+    final boolean implicitTransaction = beginImplicitTransaction(db);
+    boolean success = false;
+    try {
+      final InsertExecutionPlan executionPlan = createExecutionPlan(context);
+      executionPlan.executeInternal();
+      success = true;
+      return new LocalResultSet(executionPlan);
+    } finally {
+      endImplicitTransaction(db, implicitTransaction, success);
+    }
   }
 
   @Override
@@ -129,9 +140,16 @@ public class InsertStatement extends Statement {
 
     context.setDatabase(db);
     context.setInputParameters(params);
-    final InsertExecutionPlan executionPlan = createExecutionPlan(context);
-    executionPlan.executeInternal();
-    return new LocalResultSet(executionPlan);
+    final boolean implicitTransaction = beginImplicitTransaction(db);
+    boolean success = false;
+    try {
+      final InsertExecutionPlan executionPlan = createExecutionPlan(context);
+      executionPlan.executeInternal();
+      success = true;
+      return new LocalResultSet(executionPlan);
+    } finally {
+      endImplicitTransaction(db, implicitTransaction, success);
+    }
   }
 
   public InsertExecutionPlan createExecutionPlan(final CommandContext context) {
@@ -153,6 +171,8 @@ public class InsertStatement extends Statement {
     if (selectWithFrom != that.selectWithFrom)
       return false;
     if (unsafe != that.unsafe)
+      return false;
+    if (onDuplicateKeySkip != that.onDuplicateKeySkip)
       return false;
     if (!Objects.equals(targetType, that.targetType))
       return false;
@@ -178,6 +198,7 @@ public class InsertStatement extends Statement {
     result = 31 * result + (selectInParentheses ? 1 : 0);
     result = 31 * result + (selectWithFrom ? 1 : 0);
     result = 31 * result + (unsafe ? 1 : 0);
+    result = 31 * result + (onDuplicateKeySkip ? 1 : 0);
     return result;
   }
 
@@ -215,6 +236,10 @@ public class InsertStatement extends Statement {
 
   public boolean isUnsafe() {
     return unsafe;
+  }
+
+  public boolean isOnDuplicateKeySkip() {
+    return onDuplicateKeySkip;
   }
 
   @Override

@@ -71,33 +71,33 @@ public final class PartitionedTriangleOp implements CountOp {
 
   @Override
   public long execute(final GraphTraversalProvider provider, final Database db, final WorkGuard guard) {
-    final int nodeCount = provider.getNodeCount();
-    final int[] personPartition = buildPartitionMapping(provider, nodeCount, guard);
+    final int nodeIdUpperBound = provider.getNodeIdUpperBound();
+    final int[] personPartition = buildPartitionMapping(provider, nodeIdUpperBound, guard);
 
     final NeighborView knowsView = provider.getNeighborView(Vertex.DIRECTION.BOTH, triangleEdgeType);
     if (knowsView == null)
-      return countTrianglesPerNode(provider, personPartition, nodeCount, guard);
+      return countTrianglesPerNode(provider, personPartition, nodeIdUpperBound, guard);
 
     final int[] nbrs = knowsView.neighbors();
 
     final int threadCount = Math.max(1, Runtime.getRuntime().availableProcessors());
     final long[] partialCounts = new long[threadCount];
 
-    if (nodeCount < 1000) {
-      partialCounts[0] = countRange(knowsView, nbrs, personPartition, 0, nodeCount, guard);
+    if (nodeIdUpperBound < 1000) {
+      partialCounts[0] = countRange(provider, knowsView, nbrs, personPartition, 0, nodeIdUpperBound, guard);
     } else {
       final ExecutorService executor = QueryEngineManager.getInstance().getExecutorService();
       final Future<?>[] futures = new Future<?>[threadCount - 1];
-      final int chunkSize = (nodeCount + threadCount - 1) / threadCount;
+      final int chunkSize = (nodeIdUpperBound + threadCount - 1) / threadCount;
       int launched = 0;
       for (int t = 1; t < threadCount; t++) {
         final int start = t * chunkSize;
-        final int end = Math.min(start + chunkSize, nodeCount);
-        if (start >= nodeCount)
+        final int end = Math.min(start + chunkSize, nodeIdUpperBound);
+        if (start >= nodeIdUpperBound)
           break;
         final int threadIdx = t;
         futures[launched++] = executor.submit(() ->
-            partialCounts[threadIdx] = countRange(knowsView, nbrs, personPartition, start, end, guard));
+            partialCounts[threadIdx] = countRange(provider, knowsView, nbrs, personPartition, start, end, guard));
       }
       // #4952: the calling thread runs chunk 0 itself (same discipline as GraphAlgorithms.parallelForRange)
       // instead of submitting ALL chunks and blocking. Submitting everything meant that, when this operator
@@ -111,7 +111,8 @@ public final class PartitionedTriangleOp implements CountOp {
       // into partialCounts (and holding pool threads) behind the caller's back.
       boolean chunk0Completed = false;
       try {
-        partialCounts[0] = countRange(knowsView, nbrs, personPartition, 0, Math.min(chunkSize, nodeCount), guard);
+        partialCounts[0] = countRange(provider, knowsView, nbrs, personPartition, 0,
+            Math.min(chunkSize, nodeIdUpperBound), guard);
         chunk0Completed = true;
       } finally {
         // #4951: awaitFutures throws on interrupt (cancelling the outstanding chunks) instead of returning,
@@ -134,13 +135,15 @@ public final class PartitionedTriangleOp implements CountOp {
     return total;
   }
 
-  private static long countRange(final NeighborView knowsView, final int[] nbrs,
+  private static long countRange(final GraphTraversalProvider provider, final NeighborView knowsView, final int[] nbrs,
       final int[] personPartition, final int start, final int end, final WorkGuard guard) {
     long count = 0;
     for (int u = start; u < end; u++) {
       // Triangle counting is superlinear in the degree, so the per-anchor check is what bounds the whole
       // range: one high-degree anchor already costs O(d^2) intersections (issue #6266).
       guard.check();
+      if (!provider.isNodeLive(u))
+        continue;
       final int country = personPartition[u];
       if (country < 0)
         continue;
@@ -174,25 +177,58 @@ public final class PartitionedTriangleOp implements CountOp {
     return count;
   }
 
-  private int[] buildPartitionMapping(final GraphTraversalProvider provider, final int nodeCount,
+  private int[] buildPartitionMapping(final GraphTraversalProvider provider, final int nodeIdUpperBound,
       final WorkGuard guard) {
-    final int[] partition = new int[nodeCount];
+    final int[] partition = new int[nodeIdUpperBound];
     Arrays.fill(partition, -1);
 
     final int chainLength = partitionEdgeTypes.length;
     final NeighborView[] views = new NeighborView[chainLength];
-    for (int h = 0; h < chainLength; h++)
+    boolean allViewsAvailable = true;
+    for (int h = 0; h < chainLength; h++) {
       views[h] = provider.getNeighborView(partitionDirections[h], partitionEdgeTypes[h]);
+      if (views[h] == null)
+        allViewsAvailable = false;
+    }
 
-    for (final NeighborView v : views)
-      if (v == null)
-        return partition;
+    // #6943: a NeighborView is unavailable while a delta overlay is active (GraphAnalyticalView.getNeighborView
+    // returns null unconditionally in that state) - the normal condition of a view between commits, not an
+    // exotic one. Falling straight through to an all-(-1) mapping made every consumer read "no vertex is in any
+    // partition" instead of "the fast path is unavailable", so the whole query silently answered 0.
+    //
+    // Rather than bailing out of the CSR path entirely (the OLTP fallback below still exercises it), walk the
+    // chain with the per-node accessor: it is specified to work regardless of overlay state (see
+    // GraphTraversalProvider#getNeighborIds javadoc) and is the same fallback #countTrianglesPerNode already
+    // relies on when the triangle-edge view itself is missing. This keeps the mapping on the CSR node-id path -
+    // no RID/Vertex materialization - even when the fast array-offset scan below cannot be used.
+    if (!allViewsAvailable) {
+      for (int p = 0; p < nodeIdUpperBound; p++) {
+        guard.checkPeriodically(p);
+        if (!provider.isNodeLive(p))
+          continue;
+        int current = p;
+        boolean valid = true;
+        for (int h = 0; h < chainLength; h++) {
+          final int[] hNbrs = provider.getNeighborIds(current, partitionDirections[h], partitionEdgeTypes[h]);
+          if (hNbrs.length == 0) {
+            valid = false;
+            break;
+          }
+          current = hNbrs[0];
+        }
+        if (valid)
+          partition[p] = current;
+      }
+      return partition;
+    }
 
     final NeighborView firstView = views[0];
     final int[] firstNbrs = firstView.neighbors();
 
-    for (int p = 0; p < nodeCount; p++) {
+    for (int p = 0; p < nodeIdUpperBound; p++) {
       guard.checkPeriodically(p);
+      if (!provider.isNodeLive(p))
+        continue;
       final int fStart = firstView.offset(p);
       final int fEnd = firstView.offsetEnd(p);
       if (fStart == fEnd)
@@ -216,10 +252,12 @@ public final class PartitionedTriangleOp implements CountOp {
   }
 
   private long countTrianglesPerNode(final GraphTraversalProvider provider,
-      final int[] personPartition, final int nodeCount, final WorkGuard guard) {
+      final int[] personPartition, final int nodeIdUpperBound, final WorkGuard guard) {
     long total = 0;
-    for (int u = 0; u < nodeCount; u++) {
+    for (int u = 0; u < nodeIdUpperBound; u++) {
       guard.check();
+      if (!provider.isNodeLive(u))
+        continue;
       final int country = personPartition[u];
       if (country < 0)
         continue;

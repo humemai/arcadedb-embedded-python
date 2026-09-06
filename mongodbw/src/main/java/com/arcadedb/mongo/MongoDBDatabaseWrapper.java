@@ -469,8 +469,6 @@ public class MongoDBDatabaseWrapper implements MongoDatabase {
           collection.insertDocuments(documents);
           n = documents.size();
 
-          assert n == documents.size();
-
           final Document result = new Document("n", n);
           this.putLastResult(channel, result);
         }
@@ -478,8 +476,6 @@ public class MongoDBDatabaseWrapper implements MongoDatabase {
         this.putLastError(channel, var7);
         throw var7;
       }
-
-      ++n;
     } catch (final MongoServerError e) {
       final Document error = new Document();
       error.put("index", n);
@@ -578,7 +574,7 @@ public class MongoDBDatabaseWrapper implements MongoDatabase {
           nModified += updated;
 
           if (updated == 0 && upsert) {
-            final ObjectId id = executeUpsert(collectionName, q, u);
+            final Object id = executeUpsert(collectionName, q, u);
             final Document upDoc = new Document("index", index);
             upDoc.put("_id", id);
             upserted.add(upDoc);
@@ -615,8 +611,13 @@ public class MongoDBDatabaseWrapper implements MongoDatabase {
     return executeCount(sql.toString(), params);
   }
 
-  private ObjectId executeUpsert(final String collectionName, final Document q, final Document u) {
+  private Object executeUpsert(final String collectionName, final Document q, final Document u) {
     final MutableDocument record = database.newDocument(database.getSchema().getOrCreateDocumentType(collectionName).getName());
+
+    // Tracks the _id's own BSON type as seeded, independently of the hex string it ends up stored as: a client
+    // that filtered on an ObjectId gets an ObjectId back, but a client that filtered on a plain 24-hex-char String
+    // (indistinguishable from an ObjectId's hex once stored) must get that String type back, not a promoted one.
+    boolean idIsObjectId = false;
 
     // Seed the new document with the filter's top-level equalities, mirroring MongoDB upsert.
     if (q != null)
@@ -626,33 +627,78 @@ public class MongoDBDatabaseWrapper implements MongoDatabase {
           continue;
         final Object value = entry.getValue();
         if (value instanceof Document opDoc) {
-          if (opDoc.containsKey("$eq"))
-            record.set(field, opDoc.get("$eq"));
-        } else
-          record.set(field, value);
+          if (opDoc.containsKey("$eq")) {
+            final Object eqValue = opDoc.get("$eq");
+            if ("_id".equals(field) && eqValue instanceof ObjectId)
+              idIsObjectId = true;
+            record.set(field, normalizeIdValue(eqValue));
+          }
+        } else {
+          if ("_id".equals(field) && value instanceof ObjectId)
+            idIsObjectId = true;
+          record.set(field, normalizeIdValue(value));
+        }
       }
 
     if (isReplacement(u)) {
-      for (final Map.Entry<String, Object> entry : u.entrySet())
-        record.set(entry.getKey(), entry.getValue());
+      for (final Map.Entry<String, Object> entry : u.entrySet()) {
+        final Object value = entry.getValue();
+        // Last write wins, matching record.set() itself: a replacement re-specifying "_id" overrides whatever type
+        // the filter seeded, rather than only ever promoting it to true and leaking a stale ObjectId flag if the
+        // replacement's own _id is some other type.
+        if ("_id".equals(entry.getKey()))
+          idIsObjectId = value instanceof ObjectId;
+        record.set(entry.getKey(), normalizeIdValue(value));
+      }
     } else {
-      applyOperatorsToDocument(record, u);
+      final Boolean setIdIsObjectId = applyOperatorsToDocument(record, u);
+      if (setIdIsObjectId != null)
+        idIsObjectId = setIdIsObjectId;
     }
 
-    final ObjectId id = new ObjectId();
-    record.set("_id", id.getHexData());
+    // has(), not get() == null: an explicit "_id": null in the filter/update is a legal (if unusual) BSON _id and
+    // must be preserved, whereas a genuinely absent _id needs one generated.
+    if (!record.has("_id")) {
+      record.set("_id", new ObjectId().getHexData());
+      idIsObjectId = true;
+    }
+
     record.save();
-    return id;
+
+    final Object id = record.get("_id");
+    return idIsObjectId && id instanceof String hex ? new ObjectId(hex) : id;
   }
 
-  private void applyOperatorsToDocument(final MutableDocument record, final Document u) {
+  /**
+   * The filter seeding loop copies values verbatim; an {@code ObjectId}-typed filter value (e.g. {@code eq("_id", objectId)})
+   * must be normalized to its hex string, matching how {@code insertDocuments} and {@code buildValue} store an ObjectId.
+   */
+  private static Object normalizeIdValue(final Object value) {
+    return value instanceof ObjectId oid ? oid.getHexData() : value;
+  }
+
+  /**
+   * Applies the update operators to the record being upserted, returning whether an ObjectId-typed {@code _id} was
+   * seeded through {@code $set} - mirroring the same tracking the filter-seeding loop and the replacement branch in
+   * {@link #executeUpsert} already do, so the response reports {@code _id} back as an ObjectId regardless of which
+   * branch supplied it. {@code null} means {@code $set} never touched {@code _id} at all, so the caller should keep
+   * whatever the filter-seeding loop already determined instead of overriding it - unlike a plain {@code boolean}
+   * OR, this lets a non-{@code ObjectId} {@code $set}-supplied {@code _id} correctly override (rather than leak
+   * through) a {@code true} the filter already seeded.
+   */
+  private Boolean applyOperatorsToDocument(final MutableDocument record, final Document u) {
+    Boolean idIsObjectId = null;
     for (final Map.Entry<String, Object> entry : u.entrySet()) {
       final String op = entry.getKey();
       final Document operand = (Document) entry.getValue();
       switch (op) {
       case "$set" -> {
-        for (final Map.Entry<String, Object> f : operand.entrySet())
-          record.set(f.getKey(), f.getValue());
+        for (final Map.Entry<String, Object> f : operand.entrySet()) {
+          final Object value = f.getValue();
+          if ("_id".equals(f.getKey()))
+            idIsObjectId = value instanceof ObjectId;
+          record.set(f.getKey(), normalizeIdValue(value));
+        }
       }
       case "$unset" -> {
         for (final String f : operand.keySet())
@@ -668,6 +714,7 @@ public class MongoDBDatabaseWrapper implements MongoDatabase {
       default -> throw new UnsupportedOperationException("Unsupported update operator '" + op + "'");
       }
     }
+    return idIsObjectId;
   }
 
   /**
