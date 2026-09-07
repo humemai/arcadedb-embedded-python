@@ -96,8 +96,13 @@ def temp_db():
     yield db
 
     # Cleanup
+    # Database has is_open(), not is_closed(): the old call raised
+    # AttributeError, the bare except swallowed it, and the directory was
+    # removed under a still-open database, which the engine then failed to
+    # flush at JVM shutdown ("Failed to allocate sparse segment component ...
+    # No such file or directory", 2026-09-07). No fixture test ever closed.
     try:
-        if not db.is_closed():
+        if db.is_open():
             db.close()
     except Exception:
         pass  # nosec B110

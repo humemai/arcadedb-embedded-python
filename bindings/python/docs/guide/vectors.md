@@ -102,6 +102,29 @@ Suggested presets from tests/examples (k=10):
 - Normal (default/adaptive): `max_connections=32`, `beam_width=100`, `ef_search=None`.
 - Max: `max_connections=32`, `beam_width=200`, `ef_search=200`.
 
+### The search beam in SQL
+
+`vectorNeighbors(index, vector, k)` takes an optional fourth argument, the search
+beam (`efSearch`): how many candidates the graph walk keeps before returning
+`k`. Higher finds more of the true neighbours and costs time; the engine's
+default is adaptive. Pass it explicitly when you compare recall across
+settings or engines, so the number you quote is the number that ran:
+
+```sql
+SELECT expand(vectorNeighbors('Doc[embedding]', :q, 10, 100))
+```
+
+### Build-time cache for large graphs
+
+Building the graph for millions of vectors is dominated by reading the vectors
+back; the engine keeps a cache of them while it builds, sized from the heap it
+sees (`arcadedb.vectorIndex.graphBuildCacheSize`, an absolute count, or the
+percent form). On a build at 10M vectors the difference between the default
+and a cache the size of the corpus was 7,000 s against 2,300 s on the same
+machine, so at that scale set it deliberately and give the JVM the heap to hold
+it. See the [Memory & Heap](#memory--heap-requirements-1024-dim-vectors)
+section for the heap side.
+
 ## Memory & Heap Requirements (1024-dim vectors)
 
 Vector index build is the most memory-hungry step. For 1024-dimensional vectors:
@@ -347,6 +370,39 @@ with arcadedb.create_database("./sparse_demo") as db:
     arcadedb.to_java_float_array([1.0]),
     ).to_list()
 ```
+
+### Weight precision: INT8 by default, FP32 on request
+
+The sparse index stores posting weights quantized to 8 bits by default, which
+is what a search engine does and costs a small amount of recall. To keep exact
+32-bit weights, say so in the index metadata:
+
+```sql
+CREATE INDEX ON SparseDoc (tokens, weights) LSM_SPARSE_VECTOR
+METADATA {"dimensions": 30000, "weightQuantization": "FP32"}
+```
+
+Both forms answer `vector.sparseNeighbors` the same way; the difference is on
+disk (about 20% larger at FP32 for a SPLADE-style corpus) and in recall@10
+(a few tenths of a point). Measure on your own data before choosing; the
+default is the right one for most retrieval workloads.
+
+### The settle step: compact before you time queries
+
+An LSM sparse index answers from every segment it has written until those
+segments are merged, and a freshly loaded index has many. Queries get faster
+once it is compacted, so compact after bulk loads and before benchmarks, the
+way you would force-merge a search engine:
+
+```sql
+COMPACT INDEX `SparseDoc[tokens,weights]`
+```
+
+The statement is synchronous and works embedded and over the server's HTTP
+API alike. In-process there is also the Java handle,
+`db.get_java_database().getSchema().getIndexByName(...).compact()`, which is
+what the SQL form calls. At one million documents the compaction took about
+two seconds and moved query p50 from 9.5 ms to 7.0 ms.
 
 ## Grouped Search
 

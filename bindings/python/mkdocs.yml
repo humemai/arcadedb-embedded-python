@@ -166,6 +166,7 @@ nav:
   - 22 - numpy Bulk I/O Workflow: examples/22_numpy_bulk_io.md
   - 23 - Server Mode And HTTP Access: examples/23_server_mode_http_access.md
   - 24 - Transactions, Database Commands And Time-Series Writes Over HTTP: examples/24_server_http_transactions_timeseries.md
+  - 25 - Sparse Vectors, Weight Precision And Compaction: examples/25_sparse_quantization_and_compact.md
   - Data Import Patterns: examples/import.md
   - Vector Search Patterns: examples/vectors.md
 - User Guide:
