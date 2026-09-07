@@ -749,3 +749,21 @@ And a closing list of what the page does NOT measure: concurrency and load;
 replication beyond the failover trial; durability at non-default settings;
 updates and deletes against a live vector index; dense dimensionality above 128;
 anything across a real network; k other than 10.
+
+---
+
+## Addendum 2026-09-07: what the page shows after the 8d6af9475 re-pin and the user's audit
+
+Amends §2 (tables), §4a (disk) and the arm lists above. DECISIONS #58, #60, #61 in the private notes carry the reasoning; this is the spec-level record.
+
+**Tables now on the page (13):** `l3s`, `l3smp`, `l3d`, `l2`, `l2olap`, `l1`, `l1olap` (NEW: the five analytical queries, one column each), `l1tpc`, `l4`, `e2`, `e2atom` (NEW: trials, crashes raised, torn results), `lifecycle`, `e4`, `pycost`. `l3d_params` waits on a renderer for text cells; `l3s_nocompact`, `l4_tentag`, `pyingest`, `pysweep`, `ops_build/recovery/failover/start` are still unbuilt.
+
+**Columns added from fields the rows already carried:** `p95`/`p99` (l3s), `cold p99` (l3d), `point p99` and `2-hop p99` (l2), `view build s` (l2olap, absent on rows without the view), `update p50` and `ingest rows/s` (l1), `CPU s` (e2), `peak memory GiB` on the multipass-fed tables (from the campaign cell of the same arm; the served arm's multipass file sees only the client container), and **`disk GiB` on every table that has it**.
+
+**`ops_disk` is realised as a column, not a table.** `disk_data_mb` = the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is a post-run reading, not the build-point reading §4a asks for, and every table that prints it says so in its conditions. Blank where the engine's containers were not sampled (Milvus's sparse stack) or the row predates the wiring (dense comparators at 1M). §4a's stricter protocol stays the October target.
+
+**Arms: both deployments wherever the engine has a served form.** Added: `arcadedb_sparse_server_fp32` (l3s, l3smp), the server arm without the view (l2olap, SF1 and SF10; l2olap now shows both scales), `arcadedb_e2_server` (e2, e2atom; one HTTP session transaction), `arcadedb_ts_doc_server` and `arcadedb_ts_native_server` (l4; the native arm writes InfluxDB line protocol to `/api/v1/ts/{db}/write` and declares `ts_path=native_timeseries_http_line_protocol`), and `arcadedb_server` on `lifecycle` (rows labelled `<situation> (server)`: `open database` / action / `close database` over HTTP; JVM-start, first-open and cold-process columns are null, a server is already a process; tiers lc10k/lc100k/lc1m). E4 runs as a runner lane (`e4_decomp.py`) at the pin instead of the August hand launch. Quantization: fp32 and int8 only; fp16 is not run.
+
+**Every typed number in `arcadedb.ts` is pinned** by `page_check.PROSE`, including page-only tables through `lambda P:` references over the exported JSON; a reworded sentence fails ABSENT. `page_check` also fails if any table loses its ArcadeDB row against the live page.
+
+**Identity:** every ArcadeDB row is named from its own engine string and commit (`arcadedb 26.9.1-dev · 8d6af9475`), never from an image tag. The page header lists the identities actually present.
