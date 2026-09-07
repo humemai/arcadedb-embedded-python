@@ -2519,31 +2519,31 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "arcadedb 26.8.1",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
             "average friend age ms": {
-              "median": 1213.34,
-              "min": 1180.9,
-              "max": 1215.21,
+              "median": 1186.12,
+              "min": 1090.3,
+              "max": 1213.46,
               "n": 5
             },
             "friends in same city ms": {
-              "median": 1196.1,
-              "min": 1172.35,
-              "max": 1212.76,
+              "median": 1169.19,
+              "min": 1089.78,
+              "max": 1190.53,
               "n": 5
             },
             "most friends ms": {
-              "median": 367.98,
-              "min": 363.99,
-              "max": 385.86,
+              "median": 372.56,
+              "min": 354.06,
+              "max": 379.5,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 8.1179,
-              "min": 8.0653,
-              "max": 8.1515,
+              "median": 8.0609,
+              "min": 8.055,
+              "max": 8.1414,
               "n": 5
             }
           }
@@ -5538,9 +5538,8 @@
       "title": "What Python costs",
       "dataset": "Same engine, same query, called from Java and from Python",
       "conditions": [
-        "This table's artifact carries no engine identity (it predates the provenance stamp); the re-measure at the engine commit the rest of the page reports is queued and this line goes away with it.",
-        "The engine itself runs at the same speed either way. What Python is charged for is moving results across the boundary, which is why the vector search costs 1.28x and the scan 1.63x rather than anything scaling with the work the engine did.",
-        "The path you choose inside Python matters far more than the language boundary does. Asking for row objects is 13.8x slower than asking for columns over the same query, so the practical advice is to use the columnar or batched call for anything large."
+        "The engine itself runs at the same speed either way. What Python is charged for is moving results across the boundary, which is why the vector search costs 1.17x and the scan 1.74x rather than anything scaling with the work the engine did.",
+        "The path you choose inside Python matters far more than the language boundary does. Asking for row objects is 14.9x slower than asking for columns over the same query, so the practical advice is to use the columnar or batched call for anything large."
       ],
       "columns": [
         "time ms",
@@ -5557,13 +5556,13 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
-          "host": null,
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 2.61,
-              "min": 2.61,
-              "max": 2.61,
+              "median": 1.658,
+              "min": 1.658,
+              "max": 1.658,
               "n": 1
             },
             "vs Java": {
@@ -5582,19 +5581,19 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
-          "host": null,
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 3.329,
-              "min": 3.329,
-              "max": 3.329,
+              "median": 1.946,
+              "min": 1.946,
+              "max": 1.946,
               "n": 1
             },
             "vs Java": {
-              "median": 1.28,
-              "min": 1.28,
-              "max": 1.28,
+              "median": 1.17,
+              "min": 1.17,
+              "max": 1.17,
               "n": 1
             }
           }
@@ -5607,13 +5606,13 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
-          "host": null,
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 159.86,
-              "min": 159.86,
-              "max": 159.86,
+              "median": 147.859,
+              "min": 147.859,
+              "max": 147.859,
               "n": 1
             },
             "vs Java": {
@@ -5632,19 +5631,19 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
-          "host": null,
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 260.704,
-              "min": 260.704,
-              "max": 260.704,
+              "median": 257.98,
+              "min": 257.98,
+              "max": 257.98,
               "n": 1
             },
             "vs Java": {
-              "median": 1.63,
-              "min": 1.63,
-              "max": 1.63,
+              "median": 1.74,
+              "min": 1.74,
+              "max": 1.74,
               "n": 1
             }
           }
@@ -5657,19 +5656,19 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
-          "host": null,
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 401.425,
-              "min": 401.425,
-              "max": 401.425,
+              "median": 386.767,
+              "min": 386.767,
+              "max": 386.767,
               "n": 1
             },
             "vs Java": {
-              "median": 2.51,
-              "min": 2.51,
-              "max": 2.51,
+              "median": 2.62,
+              "min": 2.62,
+              "max": 2.62,
               "n": 1
             }
           }
@@ -5682,19 +5681,19 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
-          "host": null,
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 3600.535,
-              "min": 3600.535,
-              "max": 3600.535,
+              "median": 3853.804,
+              "min": 3853.804,
+              "max": 3853.804,
               "n": 1
             },
             "vs Java": {
-              "median": 22.52,
-              "min": 22.52,
-              "max": 22.52,
+              "median": 26.06,
+              "min": 26.06,
+              "max": 26.06,
               "n": 1
             }
           }
