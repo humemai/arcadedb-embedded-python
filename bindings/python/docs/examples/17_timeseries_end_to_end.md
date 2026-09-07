@@ -60,6 +60,16 @@ python3 17_timeseries_end_to_end.py --hours 12 --interval-minutes 5
 - The generated data models smart-building telemetry with tags for region, building,
   zone, and sensor id plus fields for temperature, humidity, power, CO2, and occupancy.
 
+## Server mode: the same type over HTTP
+
+The last step starts the bundled server (`create_server()`), creates the same
+`SensorReading` TIMESERIES type there, and writes every generated sample through
+`POST /api/v1/ts/{db}/write` in InfluxDB line protocol, one sample per line,
+timestamps in milliseconds (`?precision=ms`), then reads the count and the latest
+sample per sensor back with SQL over HTTP. That is the path a client without the
+wheel gets; in-process, `db.async_executor().append_samples(...)` skips the parse
+and the socket. Example 24 covers transactions and database commands over HTTP.
+
 ## Why SQL-First?
 
 The bindings already expose a stable generic interface through `db.command()` and

@@ -28,6 +28,7 @@ import argparse
 import math
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -437,8 +438,94 @@ def main() -> int:
 
         print_rows("Latest sample per sensor:", latest_per_sensor(db))
 
+    server_mode_demo(samples, db_dir)
     print("Example complete. Database files were kept for inspection.")
     return 0
+
+
+def server_mode_demo(samples: list[tuple], db_dir: str) -> None:
+    """The same TIMESERIES type fed over HTTP, from the bundled server.
+
+    In server mode a client without the wheel writes samples through
+    ``POST /api/v1/ts/{db}/write`` in InfluxDB line protocol and reads them back
+    with the same SQL. Standard-library HTTP only; see example 24 for
+    transactions and database commands over HTTP.
+    """
+    import base64
+    import json
+    import socket
+    import urllib.request
+
+    root = os.path.join(db_dir, "timeseries_demo_server")
+    if os.path.exists(root):
+        shutil.rmtree(root)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = int(sock.getsockname()[1])
+    password = "password123"  # nosec B105 - example-only local server
+    server = arcadedb.create_server(
+        root_path=root,
+        root_password=password,
+        config={"host": "127.0.0.1", "http_port": port, "mode": "development"},
+    )
+    server.start()
+    time.sleep(1)
+    base = f"http://127.0.0.1:{server.get_http_port()}"
+    auth = "Basic " + base64.b64encode(f"root:{password}".encode()).decode()
+
+    def call(path: str, body=None, raw: bytes | None = None):
+        data = raw if raw is not None else json.dumps(body).encode()
+        req = urllib.request.Request(base + path, data=data, method="POST")
+        req.add_header("Authorization", auth)
+        req.add_header(
+            "Content-Type", "text/plain" if raw is not None else "application/json"
+        )
+        with urllib.request.urlopen(
+            req, timeout=60
+        ) as resp:  # nosec B310 - local URL built above
+            text = resp.read().decode()
+            return json.loads(text) if text else {}
+
+    try:
+        server.create_database("timeseries_http")
+        call(
+            "/api/v1/command/timeseries_http",
+            {
+                "language": "sql",
+                "command": "CREATE TIMESERIES TYPE SensorReading TIMESTAMP ts "
+                "TAGS (sensor_id STRING, region STRING, building STRING, zone STRING) "
+                "FIELDS (temperature DOUBLE, humidity DOUBLE, power_kw DOUBLE, "
+                "co2_ppm DOUBLE, occupancy LONG)",
+            },
+        )
+        lines = "\n".join(
+            f"SensorReading,sensor_id={sid},region={reg},building={bld},zone={zone} "
+            f"temperature={temp},humidity={hum},power_kw={kw},co2_ppm={co2},occupancy={occ}i {ts}"
+            for ts, sid, reg, bld, zone, temp, hum, kw, co2, occ in samples
+        )
+        started = time.perf_counter()
+        call("/api/v1/ts/timeseries_http/write?precision=ms", raw=lines.encode())
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        count = call(
+            "/api/v1/query/timeseries_http",
+            {"language": "sql", "command": "SELECT count(*) AS n FROM SensorReading"},
+        )["result"][0]["n"]
+        latest = call(
+            "/api/v1/query/timeseries_http",
+            {
+                "language": "sql",
+                "command": "SELECT sensor_id, max(ts) AS ts FROM SensorReading "
+                "GROUP BY sensor_id ORDER BY sensor_id",
+            },
+        )["result"]
+        print()
+        print("Server mode, the same type over HTTP:")
+        print(
+            f"  wrote {len(samples)} samples in line protocol in {elapsed_ms:.1f} ms, stored {count}"
+        )
+        print(f"  latest sample per sensor over HTTP: {len(latest)} sensors")
+    finally:
+        server.stop()
 
 
 if __name__ == "__main__":
