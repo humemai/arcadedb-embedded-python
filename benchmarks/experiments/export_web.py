@@ -236,8 +236,14 @@ def _row_engine_string(r) -> str | None:
     ev = str(r.get("engine_version") or "")
     if ev and not ev.startswith("unknown"):
         return ev
-    lv = str(r.get("lib_version") or "")
-    return lv if lv and lv.lower() != "none" else None
+    # The served banner lands in backend_version on the L4 lane (its
+    # engine_version comes from the wheel import, absent in the client image)
+    # and in lib_version on the dense driver.
+    for k in ("backend_version", "lib_version"):
+        v = str(r.get(k) or "")
+        if v and v.lower() != "none" and not v.startswith("unknown"):
+            return v
+    return None
 
 
 def _campaign_engine_string(backend) -> str | None:
@@ -1733,7 +1739,7 @@ def main() -> int:
     # claim about OUR engine's provenance, not theirs.
     _unusable = [r for r in rows
                  if str(r.get("backend", "")).startswith("arcadedb")
-                 and not _engine_is_identifiable(r.get("engine_version"))]
+                 and not _engine_is_identifiable(_row_engine_string(r))]
     if _unusable:
         import collections as _c
         _by = _c.Counter((r.get("lane"), str(r.get("engine_version") or "(blank)")[:40])
@@ -2036,8 +2042,8 @@ def main() -> int:
         "comparator_version_split": sorted(
             b for b, v in _comparator_versions(rows).items() if len(v) > 1),
         "arcadedb_engines": sorted({
-            _engine_identity(r.get("engine_version"), r.get("engine_commit"))
-            or str(r.get("engine_version") or "").strip() or "(no engine recorded)"
+            _engine_identity(_row_engine_string(r), r.get("engine_commit"))
+            or str(_row_engine_string(r) or "").strip() or "(no engine recorded)"
             for r in rows if str(r.get("backend", "")).startswith("arcadedb")}),
         "arcadedb_commits": sorted({
             c for c in (r.get("engine_commit") for r in rows

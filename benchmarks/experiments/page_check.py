@@ -166,6 +166,8 @@ PROSE = [
      lambda P: P.max("l3smp", "small", "gain")),
     ("l3smp.max_gain.medium", r"and (\d+(?:\.\d+)?)x at 8\.84 million",
      lambda P: P.max("l3smp", "medium", "gain")),
+    ("l3smp.max_gain.medium.pct", r"no engine gains more than (\d+)%",
+     lambda P: round((P.max("l3smp", "medium", "gain") - 1) * 100)),
     ("e2atom.trials", r"interrupted mid-way, (\d+) trials per run",
      lambda P: P("e2atom", "ArcadeDB (one transaction)", "e2", "trials")),
     ("e2atom.composed.torn", r"left torn in (\d+) of 40 trials",
