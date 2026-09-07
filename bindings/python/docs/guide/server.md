@@ -278,6 +278,80 @@ requests.post(
 )
 ```
 
+## Transactions, Database Commands and Time-Series Writes over HTTP
+
+Three server features the bindings do not wrap, because they are the server's
+HTTP API rather than the embedded API. They matter as soon as a second process
+talks to the server you started with `create_server()`.
+
+### One transaction across several requests
+
+`POST /api/v1/begin/{db}` opens a server-side transaction and returns its id in
+the `arcadedb-session-id` response header. Send that header on every command
+that belongs to the transaction, then `POST /api/v1/commit/{db}` or
+`POST /api/v1/rollback/{db}` with the same header. Without the header each
+command is its own transaction.
+
+```python
+import requests
+from requests.auth import HTTPBasicAuth
+
+base_url = f"http://localhost:{server.get_http_port()}"
+s = requests.Session()
+s.auth = HTTPBasicAuth("root", "password123")
+
+r = s.post(f"{base_url}/api/v1/begin/mydb")
+sid = r.headers["arcadedb-session-id"]
+headers = {"arcadedb-session-id": sid}
+s.post(f"{base_url}/api/v1/command/mydb", headers=headers,
+       json={"language": "sql", "command": "INSERT INTO Person SET name = 'a'"})
+s.post(f"{base_url}/api/v1/command/mydb", headers=headers,
+       json={"language": "sql", "command": "INSERT INTO Person SET name = 'b'"})
+s.post(f"{base_url}/api/v1/commit/mydb", headers=headers)   # or /rollback/mydb
+```
+
+A session that is never committed is discarded when it times out, so a client
+that dies mid-operation leaves nothing half-written.
+
+### Database commands
+
+`POST /api/v1/server` takes server-level commands as JSON: `create database`,
+`drop database`, `open database` and `close database`. Closing a database
+releases its files and page cache on the server; opening it again reads them
+back, which is the served equivalent of closing and reopening an embedded
+database.
+
+```python
+s.post(f"{base_url}/api/v1/server", json={"command": "create database mydb"})
+s.post(f"{base_url}/api/v1/server", json={"command": "close database mydb"})
+s.post(f"{base_url}/api/v1/server", json={"command": "open database mydb"})
+```
+
+### Time-series writes with line protocol
+
+A `TIMESERIES` type accepts writes through `POST /api/v1/ts/{db}/write`, one
+InfluxDB line-protocol sample per line, with `?precision=ns|us|ms|s` naming the
+timestamp unit. The measurement name is the type name; tags and fields map to
+the type's declared tags and fields.
+
+```python
+s.post(f"{base_url}/api/v1/command/mydb", json={
+    "language": "sql",
+    "command": "CREATE TIMESERIES TYPE Reading TIMESTAMP ts "
+               "TAGS (sensor STRING) FIELDS (value DOUBLE)"})
+body = "\n".join(f"Reading,sensor=s1 value={v} {1700000000 + i}"
+                 for i, v in enumerate([1.0, 2.0, 3.0]))
+s.post(f"{base_url}/api/v1/ts/mydb/write?precision=s",
+       data=body.encode(), headers={"Content-Type": "text/plain"})
+rows = s.post(f"{base_url}/api/v1/query/mydb", json={
+    "language": "sql", "command": "SELECT count(*) AS n FROM Reading"}).json()["result"]
+```
+
+In-process, the same type is fed with `db.async_executor().append_samples(...)`
+(see [Time Series End to End](../../examples/17_timeseries_end_to_end.md)), which
+skips the parse and the socket; the HTTP path is what any client without the
+wheel gets.
+
 ## Multi-Process Access
 
 ArcadeDB's embedded mode uses file-based locking, which prevents multiple processes from accessing the same database simultaneously. **Server mode solves this problem** by providing a central HTTP endpoint that multiple processes (or applications) can connect to.
