@@ -2198,6 +2198,18 @@ def main():
         raise SystemExit("REFUSING: l3s at paper tier needs BENCH_SPARSE_SOURCE=bigann "
                          "(the paper corpus, 8,841,823 x 30,109). BENCH_SPARSE_DATA "
                          "alone selects nothing; see LANE_CORPUS.")
+    # Same trap, graph lane (2026-09-07, qCS): without BENCH_GRAPH_SOURCE=ldbc
+    # l2_graph.py keeps the synthetic generator, whose scales are micro..large,
+    # and every sf1/sf10 cell dies in 0.8 s on argparse. Ten error rows in the
+    # campaign file for nothing. The campaign scripts exported it; the re-run did
+    # not; nothing refused.
+    if args.tier == "paper" and "l2" in args.lanes.split(",") \
+            and args.scale.startswith("sf") \
+            and os.environ.get("BENCH_GRAPH_SOURCE") != "ldbc":
+        raise SystemExit("REFUSING: l2 at paper tier on an SF scale needs "
+                         "BENCH_GRAPH_SOURCE=ldbc (the LDBC-SNB projection under "
+                         "BENCH_GRAPH_DATA, default /data/ldbc); the synthetic "
+                         "generator does not know sf1/sf10.")
     _require_local_server_image()
     only = {int(x) for x in args.only_reps.split(",") if x.strip()}
     cells = [(j, r) for j in jobs for r in range(1, args.reps + 1)
