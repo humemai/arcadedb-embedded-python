@@ -1408,10 +1408,17 @@ def _overhead_medians():
         for row in csv.reader(fh):
             if len(row) < 8:
                 continue
+            # Parse BEFORE touching the defaultdict: a PROVENANCE line split by
+            # the csv reader reaches here with len >= 8, and `out[k].append(
+            # float(...))` created key k and then raised, leaving an empty list
+            # that statistics.median refused (2026-09-07, first pinned file).
             try:
-                out[(row[3], row[4])].append(float(row[6]))
+                val = float(row[6])
             except ValueError:
                 continue
+            if row[2] != "RESULT":
+                continue
+            out[(row[3], row[4])].append(val)
     return {k: statistics.median(v) for k, v in out.items()}
 
 
