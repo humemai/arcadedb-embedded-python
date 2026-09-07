@@ -340,6 +340,7 @@ DISPLAY_NAMES = {
     # sitting between "embedded, int8" and "embedded, fp32"
     # with no precision of its own reads as a third, unstated option.
     "arcadedb_sparse_server": "ArcadeDB (server, int8)",
+    "arcadedb_sparse_server_fp32": "ArcadeDB (server, fp32)",
     "arcadedb_sparse_embedded_fp32": "ArcadeDB (embedded, fp32)",
     "arcadedb_sparse_embedded_nocompact": "ArcadeDB (embedded, no settle step)",
     "arcadedb_e2": "ArcadeDB (one transaction)",
@@ -439,6 +440,7 @@ SPARSE_PRECISION = {
     "arcadedb_sparse_embedded": "int8",
     "arcadedb_sparse_embedded_fp32": "fp32",
     "arcadedb_sparse_server": "int8",
+    "arcadedb_sparse_server_fp32": "fp32",
     "qdrant_sparse": "fp32",
     "milvus_sparse": "fp32",
     "elasticsearch_sparse": "~9-bit",
@@ -654,12 +656,13 @@ def _dense_10m_entries():
             ver.add(_ev)
             build.append({"build_s": passes[0].get("build_s")})
             peak.append({"peak_anon_mib_sum": passes[0].get("peak_anon_mib_sum")})
-            cold.append({"p50": passes[0].get("p50")})
+            cold.append({"p50": passes[0].get("p50"), "p99": passes[0].get("p99")})
             for p in passes[1:]:
                 warm.append({"p50": p.get("p50")})
                 recall.append({"r": p.get("recall_at_10")})
         metrics = {}
         for label_, rows_, field in (("cold p50 ms", cold, "p50"),
+                                     ("cold p99 ms", cold, "p99"),
                                      ("warm p50 ms", warm, "p50"),
                                      ("recall@10", recall, "r"),
                                      ("build s", build, "build_s")):
@@ -716,7 +719,8 @@ def _dense_10m_entries():
 # page both talk in GiB, and a column headed "GiB" printing 8256 would be a
 # defect the reader has to catch. Divide here, once, rather than in each table
 # spec where the next lane to add memory would forget it.
-_UNIT_DIVISOR = {"peak_anon_mib_sum": 1024.0, "end_anon_mib_sum": 1024.0, "disk_data_mb": 1024.0}
+_UNIT_DIVISOR = {"peak_anon_mib_sum": 1024.0, "end_anon_mib_sum": 1024.0, "disk_data_mb": 1024.0,
+                 "cpu_usec_sum": 1e6}
 DISK_NOTE = ("Disk is what the workload left on disk, in GiB: the engine's writable layer "
              "plus its volumes after the cell, minus the same engine's empty footprint. It is "
              "read after the queries, so it includes anything querying wrote; a server "
@@ -754,6 +758,10 @@ def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
 def _agg(rows, field):
     """Median across repetitions, with the spread, matching the paper."""
     vals = [v for v in (_num(r.get(field)) for r in rows) if v is not None]
+    if field == "gav_build_s":
+        # A row without the view records 0.0 for the view it did not build;
+        # that is an absent cell, not a zero-second build.
+        vals = [v for v in vals if v > 0]
     if not vals:
         return None
     div = _UNIT_DIVISOR.get(field)
@@ -771,7 +779,8 @@ LANES = {
     "l3s": {
         "title": "Sparse vector search",
         "dataset": "Big-ANN'23 Sparse (real SPLADE over MS MARCO)",
-        "metrics": [("query_p50_ms", "p50 ms"), ("recall_at_10", "recall@10"),
+        "metrics": [("query_p50_ms", "p50 ms"), ("query_p95_ms", "p95 ms"), ("query_p99_ms", "p99 ms"),
+                    ("recall_at_10", "recall@10"),
                     ("build_s", "build s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
@@ -792,7 +801,7 @@ LANES = {
         # each of its five, so overlay pass 0 IS the campaign protocol. The
         # small tier has no second pass, so it shows a dash there rather than a
         # number borrowed from a different measurement.
-        "metrics": [("query_p50_ms", "cold p50 ms"),
+        "metrics": [("query_p50_ms", "cold p50 ms"), ("query_p99_ms", "cold p99 ms"),
                     ("recall_at_10", "recall@10"),
                     ("build_s", "build s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
@@ -814,8 +823,10 @@ LANES = {
         # LadybugDB runs the same SF10 workload in a twenty-second of the
         # memory. A page that omits the resource axis reads as if latency
         # were the only axis anyone deploys on.
-        "metrics": [("point_p50_ms", "point p50 ms"), ("hop1_p50_ms", "1-hop p50 ms"),
-                    ("hop2_p50_ms", "2-hop p50 ms"), ("write_p50_ms", "write p50 ms"),
+        "metrics": [("point_p50_ms", "point p50 ms"), ("point_p99_ms", "point p99 ms"),
+                    ("hop1_p50_ms", "1-hop p50 ms"),
+                    ("hop2_p50_ms", "2-hop p50 ms"), ("hop2_p99_ms", "2-hop p99 ms"),
+                    ("write_p50_ms", "write p50 ms"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         # OLTP only. The OLAP rows live in the l2olap table below, which is
@@ -846,7 +857,8 @@ LANES = {
     # a row no other table has: the same engine with its Graph Analytical View
     # turned off. The paper reports all six numbers.
     #
-    # SF10 only, and that is a real limit rather than a presentation choice.
+    # SF1 and SF10 since 2026-09-07 (qCS measured the view-off arm at SF1;
+    # until then it existed at SF10 only). Kept for the record:
     # The ablation was run at SF10, so SF1 has no view-off arm, and a table
     # with an ablation row that is dashed at one scale invites the reader to
     # read the dash as a failure.
@@ -854,26 +866,53 @@ LANES = {
         "title": "Graph analytics, with and without the Graph Analytical View",
         "dataset": "LDBC-SNB, SF10",
         "lane_source": "l2",
-        "only_scales": {"sf10"},
+        "only_scales": {"sf1", "sf10"},
         "only_workload": "olap",
         "metrics": [("friend_age_by_city_mean_ms", "average friend age ms"),
                     ("same_city_edges_mean_ms", "friends in same city ms"),
                     ("top_degree_mean_ms", "most friends ms"),
+                    ("gav_build_s", "view build s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         "conditions": [
             "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
             "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
-            "The ArcadeDB (embedded) row without the view at SF10 was measured at ArcadeDB 26.8.1 on 2026-08-10 and is the one row in this table not yet re-run at the engine commit the page reports; the re-run is queued and this sentence goes away with it.",
             "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
             "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
+        ],
+    },
+    "l1olap": {
+        "title": "Tabular OLAP, query by query",
+        "dataset": "Synthetic orders workload, the five analytical queries behind the OLAP total",
+        "lane_source": "l1",
+        "only_workload": "olap",
+        "metrics": [("olap_agg_by_region_ms", "aggregate by region ms"),
+                    ("olap_top_customers_ms", "top customers ms"),
+                    ("olap_filtered_avg_ms", "filtered average ms"),
+                    ("olap_status_histogram_ms", "status histogram ms"),
+                    ("olap_range_agg_ms", "range aggregate ms")],
+        "conditions": [
+            "The same five queries whose sum is the OLAP total in the table above, one column each, so a reader can see which shapes an engine is slow on rather than one number.",
+        ],
+    },
+    "e2atom": {
+        "title": "Cross-model transaction: what survives a crash",
+        "dataset": "The same vector-graph-document operation, killed mid-way, then inspected",
+        "lane_source": "e2",
+        "only_workload": "atomicity",
+        "metrics": [("trials", "trials"), ("crash_raised_count", "crashes raised"),
+                    ("torn_count", "torn results")],
+        "conditions": [
+            "A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these.",
         ],
     },
     "l1": {
         "title": "Tabular OLTP and OLAP",
         "dataset": "Synthetic orders workload",
         "metrics": [("read_p50_ms", "read p50 ms"), ("insert_p50_ms", "insert p50 ms"),
-                    ("oltp_ops_per_s", "OLTP ops/s"), ("olap_total_ms", "OLAP total ms"),
+                    ("update_p50_ms", "update p50 ms"),
+                    ("oltp_ops_per_s", "OLTP ops/s"), ("ingest_rows_per_s", "ingest rows/s"),
+                    ("olap_total_ms", "OLAP total ms"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         # The memory column is the one cell on this page a reader can most
@@ -901,6 +940,7 @@ LANES = {
         "title": "Cross-model transaction",
         "dataset": "Vector hit to graph traversal to document update, in one transaction",
         "metrics": [("hybrid_p50_ms", "p50 ms"), ("hybrid_p99_ms", "p99 ms"),
+                    ("cpu_usec_sum", "CPU s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         # HYBRID ONLY. The atomicity workload has no latency to print, so
@@ -1146,6 +1186,11 @@ def _l4_rows():
 
 
 # (overlay filename arm, runner backend key, display label)
+# Optional arms: shown when their files exist, never required for the pinned
+# directory to count as complete (the fp32 served arm was added 2026-09-07).
+SPARSE_MP_OPTIONAL_ARMS = [
+    ("arc_srv_fp32", "arcadedb_sparse_server_fp32", "ArcadeDB (server, fp32)"),
+]
 SPARSE_MP_ARMS = [
     ("arc_int8", "arcadedb_sparse_embedded", "ArcadeDB (embedded, int8)"),
     ("arc_fp32", "arcadedb_sparse_embedded_fp32", "ArcadeDB (embedded, fp32)"),
@@ -1176,7 +1221,7 @@ def _sparse_multipass_table():
         return None
     entries = []
     for tier in ("medium", "small"):
-        for arm, backend, label in SPARSE_MP_ARMS:
+        for arm, backend, label in SPARSE_MP_ARMS + SPARSE_MP_OPTIONAL_ARMS:
             fp = root / f"sp_{arm}_{tier}.json"
             if not fp.is_file():
                 continue

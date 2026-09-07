@@ -131,6 +131,7 @@ NAMES = {
     "arcadedb_sparse_embedded_fp32": "ArcadeDB (emb, fp32)",
     "arcadedb_sparse_embedded_nocompact": "ArcadeDB (emb, no settle)",
     "arcadedb_sparse_server": "ArcadeDB (srv)",
+    "arcadedb_sparse_server_fp32": "ArcadeDB (srv, fp32)",
     "qdrant_sparse": "Qdrant", "milvus_sparse": "Milvus",
     "elasticsearch_sparse": "Elasticsearch",
     "arcadedb_dense_embedded": "ArcadeDB (emb)",

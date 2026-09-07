@@ -275,7 +275,7 @@ class ArcadeServer(ArcadeEmbedded):
                     "CREATE PROPERTY Doc.tokens ARRAY_OF_INTEGERS",
                     "CREATE PROPERTY Doc.weights ARRAY_OF_FLOATS",
                     'CREATE INDEX ON Doc (tokens, weights) LSM_SPARSE_VECTOR '
-                    'METADATA {"dimensions": %d}' % DIMENSIONS]:
+                    'METADATA ' + self._index_metadata()]:
             self._cmd("sql", ddl)
         self.idx_name = "Doc[tokens,weights]"
 
@@ -544,8 +544,17 @@ class Elastic(Base):
         return ids
 
 
+class ArcadeServerFP32(ArcadeServer):
+    """The fp32 ablation on the served deployment (2026-09-07). The server DDL
+    now takes the same METADATA the embedded adapter builds, so quant applies
+    to both deployments; with quant None the JSON is {"dimensions": N}, byte
+    for byte what the server arm always sent."""
+    name = "arcadedb_sparse_server_fp32"
+    quant = "FP32"
+
+
 BACKENDS = {c.name: c for c in
-            [ArcadeEmbedded, ArcadeEmbeddedFP32, ArcadeEmbeddedNoCompact,
+            [ArcadeEmbedded, ArcadeEmbeddedFP32, ArcadeEmbeddedNoCompact, ArcadeServerFP32,
              ArcadeServer, Qdrant, Milvus, Elastic]}
 
 

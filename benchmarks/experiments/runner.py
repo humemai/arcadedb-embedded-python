@@ -833,6 +833,10 @@ BACKENDS = {
         "ready_regex": r"Proxy successfully started|successfully started",
     },
 }
+# The fp32 ablation on the served deployment shares the served arm's
+# topology, images, heap and GC settings to the byte; only the adapter's DDL
+# differs (l3_sparse.ArcadeServerFP32, 2026-09-07).
+BACKENDS["arcadedb_sparse_server_fp32"] = dict(BACKENDS["arcadedb_sparse_server"])
 
 # ---------------------------------------------------------------- local engine
 # FAST-ITERATION MODE. The project page is no longer pinned to a PyPI release: the
@@ -1007,6 +1011,7 @@ LANES = {
     "l3s": ("l3_sparse.py",
             ["arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32",
              "arcadedb_sparse_embedded_nocompact", "arcadedb_sparse_server",
+             "arcadedb_sparse_server_fp32",
              "qdrant_sparse", "milvus_sparse", "elasticsearch_sparse"],
             ["search"]),
     "l3d": ("l3d_dense.py",
@@ -1470,7 +1475,8 @@ MP_LABELS = {
 # filename and labels.
 MP_LABELS.update({
     "arcadedb_sparse_embedded": "arc_int8", "arcadedb_sparse_embedded_fp32": "arc_fp32",
-    "arcadedb_sparse_server": "arc_srv", "qdrant_sparse": "qdrant",
+    "arcadedb_sparse_server": "arc_srv",
+    "arcadedb_sparse_server_fp32": "arc_srv_fp32", "qdrant_sparse": "qdrant",
     "milvus_sparse": "milvus", "elasticsearch_sparse": "elastic",
 })
 
