@@ -114,16 +114,21 @@ settings or engines, so the number you quote is the number that ran:
 SELECT expand(vectorNeighbors('Doc[embedding]', :q, 10, 100))
 ```
 
-### Build-time cache for large graphs
+### Build-time cache: use the default
 
 Building the graph for millions of vectors is dominated by reading the vectors
-back; the engine keeps a cache of them while it builds, sized from the heap it
-sees (`arcadedb.vectorIndex.graphBuildCacheSize`, an absolute count, or the
-percent form). On a build at 10M vectors the difference between the default
-and a cache the size of the corpus was 7,000 s against 2,300 s on the same
-machine, so at that scale set it deliberately and give the JVM the heap to hold
-it. See the [Memory & Heap](#memory--heap-requirements-1024-dim-vectors)
-section for the heap side.
+back, so the engine caches them while it builds. The default sizing is
+automatic and is the right setting: it reads the heap the engine actually has
+free and caches the whole corpus when it fits, inside a share of the heap
+(`arcadedb.vectorIndex.graphBuildCacheMaxHeapPercent`, 25%). Give the JVM the
+heap and leave `graphBuildCacheSize` alone; set an absolute count only to bound
+a build on a deliberately small heap. Engines before 26.10 sized it from a
+post-GC heap figure that included the page cache and could pick a fraction of
+the corpus on a large heap (a 10M build took 7,000 s that way against 2,300 s
+with the corpus cached); upstream fixed the sizing, so nothing in the bindings'
+tests or examples sets it. See the
+[Memory & Heap](#memory--heap-requirements-1024-dim-vectors) section for the
+heap side.
 
 ## Memory & Heap Requirements (1024-dim vectors)
 

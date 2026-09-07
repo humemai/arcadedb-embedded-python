@@ -863,6 +863,13 @@ before the first database is opened):
 | `arcadedb.vectorIndex.searchCacheSize` | `0` (automatic) | Vectors kept warm across queries. `-1` disables it. |
 | `arcadedb.vectorIndex.searchCacheMaxHeapPercent` | `25` | Share of the heap the automatic search-cache sizing may use. |
 
+Leave both at their defaults. Automatic build-cache sizing reads the heap the
+engine actually has free and caches the whole corpus when it fits, which is
+what a build wants; engines before 26.10 read a post-GC figure that included
+the evictable page cache and could settle on a fraction of a large corpus on
+a large heap (upstream #7146, fixed in #7147). Set an absolute size only to
+bound a build on a deliberately small heap.
+
 The search cache is per index and stays warm between queries, so the first
 queries after a fresh build pay a cold-start cost while it fills; check
 `vectorCacheHits` against `vectorCacheMisses` to see when it has settled.

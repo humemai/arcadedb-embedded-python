@@ -132,7 +132,7 @@ JVM arguments use two flag types:
     - `-XX:MaxDirectMemorySize=<size>`: Limit off-heap buffers
 
 - **`-D` flags**: System properties for ArcadeDB configuration
-    - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: JVector build cache limit
+    - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: build-cache override (default automatic; leave unset)
     - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: Mutations threshold before rebuilding JVector
 
 **Automatically injected flags** (always set, override only if needed):

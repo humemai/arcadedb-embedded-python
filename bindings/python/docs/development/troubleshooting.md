@@ -178,7 +178,7 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g")
 | `-Xmx<size>` | Maximum heap memory | `-Xmx8g` (8 gigabytes) |
 | `-Xms<size>` | Initial heap size (recommended: same as `-Xmx`) | `-Xms8g` |
 | `-XX:MaxDirectMemorySize=<size>` | Limit off-heap direct buffers | `-XX:MaxDirectMemorySize=8g` |
-| `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>` | Max vectors cached during HNSW build (default: 10000) | `-Darcadedb.vectorIndex.graphBuildCacheSize=3000` |
+| `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>` | Override for the vectors cached during the graph build (default `0`, automatic; leave it) | `-Darcadedb.vectorIndex.graphBuildCacheSize=3000` |
 | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>` | Mutations before graph rebuild (default: 100) | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=200` |
 
 **Vector Index Memory Tuning:**
@@ -193,7 +193,6 @@ start_jvm(
     heap_size="8g",
     jvm_args=(
         "-Xms8g -XX:MaxDirectMemorySize=8g "
-        "-Darcadedb.vectorIndex.graphBuildCacheSize=3000 "
         "-Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
     ),
 )
@@ -207,11 +206,14 @@ start_jvm(
   from `countEntries()`. The engine now rejects both the JVM property and the
   per-index metadata key. Size the heap for the live vector set instead.
 
-- `graphBuildCacheSize`: Number of vectors during HNSW build
-    - Memory ≈ cacheSize × (dimensions × 4 + 64) bytes
-    - For 768-dim: 10000 entries ≈ 30 MB
-    - Lower values reduce build-time memory spikes
-    - Recommended: 3000-5000 for high-dimensional vectors
+- `graphBuildCacheSize`: vectors held in RAM while the graph is built. **Leave
+    it at the default.** The default (`0`) is automatic: the engine sizes the
+    cache from the heap it actually has free and takes the whole corpus when it
+    fits, so a build never re-reads vectors from disk unnecessarily. Set an
+    absolute count only when you deliberately run a small heap and want the
+    build bounded; memory ≈ cacheSize × (dimensions × 4 + 64) bytes. (Engines
+    before 26.10 read a post-GC heap figure that included the page cache and
+    could pick a fraction of the corpus on a large heap; that is fixed upstream.)
 
 **Memory Planning:**
 
@@ -245,7 +247,6 @@ start_jvm(
     heap_size="16g",
     jvm_args=(
         "-Xms16g -XX:MaxDirectMemorySize=16g "
-        "-Darcadedb.vectorIndex.graphBuildCacheSize=5000 "
         "-Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
     ),
 )
@@ -255,7 +256,6 @@ start_jvm(
     heap_size="8g",
     jvm_args=(
         "-Xms8g -XX:MaxDirectMemorySize=8g "
-        "-Darcadedb.vectorIndex.graphBuildCacheSize=2000 "
         "-Darcadedb.vectorIndex.mutationsBeforeRebuild=150"
     ),
 )
@@ -286,15 +286,17 @@ start_jvm(
     start_jvm(heap_size="8g", jvm_args="-Xms8g")
     ```
 
-2. **Bound Vector Caches** (for vector workloads):
+2. **Lower the caches' heap share** (for vector workloads). The build and
+   search caches size themselves automatically inside a share of the heap
+   (25% each by default); lower the share rather than pinning a count:
     ```python
     from arcadedb_embedded.jvm import start_jvm
-
     start_jvm(
         heap_size="8g",
         jvm_args=(
             "-Xms8g "
-                "-Darcadedb.vectorIndex.graphBuildCacheSize=3000"
+            "-Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent=10 "
+            "-Darcadedb.vectorIndex.searchCacheMaxHeapPercent=10"
         ),
     )
     ```
