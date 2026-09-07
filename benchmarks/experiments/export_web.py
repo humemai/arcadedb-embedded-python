@@ -1121,6 +1121,7 @@ L4_CANON_LABELS = {
     "arcadedb_ts_native": "arcadedb (native TIMESERIES)",
     "arcadedb_ts_doc":    "arcadedb (document path)",
     "arcadedb_ts_doc_server": "arcadedb (server, document path)",
+    "arcadedb_ts_native_server": "arcadedb (server, native TIMESERIES)",
     "questdb":            "questdb",
     "duckdb":             "duckdb",
 }
@@ -1327,20 +1328,21 @@ def _lifecycle_table(all_rows):
 
     by = {}
     for r in rows:
-        by.setdefault((r.get("workload"), r.get("scale")), []).append(r)
+        _srv = str(r.get("backend", "")).endswith("_server")   # served twin, 2026-09-07
+        by.setdefault((r.get("workload"), r.get("scale"), _srv), []).append(r)
 
     entries = []
-    for (situation, scale), rs in sorted(by.items()):
+    for (situation, scale, _srv), rs in sorted(by.items()):
         if situation in LIFECYCLE_WITHHELD:
             continue
         entry = {
-            "backend": situation,
+            "backend": f"{situation} (server)" if _srv else situation,
             "is_arcadedb": True,
             "scale": scale,
             "scale_label": scale_label("lifecycle", scale),
             "workload": "session",
             "n_docs": str(rs[0].get("n_rows") or ""),
-            "deployment": "embedded",
+            "deployment": "server" if _srv else "embedded",
             "image": rs[0].get("image"),
             "version_name": _engine_identity(rs[0].get("engine_version"),
                                              rs[0].get("engine_commit")),
@@ -1406,6 +1408,7 @@ def _l4_table(all_rows):
     # 9009, SQL over pg-wire, see l4_tsbs.py); the other two run in-process.
     L4_DEPLOYMENT = {"arcadedb (native TIMESERIES)": "embedded",
                      "arcadedb (server, document path)": "server",
+                     "arcadedb (server, native TIMESERIES)": "server",
                      "arcadedb (document path)": "embedded",
                      "questdb": "server", "duckdb": "embedded"}
     entries = []

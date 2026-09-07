@@ -566,6 +566,12 @@ def main():
     ap.add_argument("--scale", default="lc10k", choices=list(SCALE_ROWS))
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+    if args.backend.endswith("_server"):
+        # The served twin (2026-09-07): same situations, same generators, the
+        # server's open/close database commands over HTTP. No filesystem
+        # assertion: the database lives in the server container.
+        import l5_lifecycle_server
+        return l5_lifecycle_server.main(args)
 
     fs = _assert_fs()
     n = SCALE_ROWS[args.scale]

@@ -310,6 +310,77 @@ class ArcadeNativeTS(ArcadeTS):
             time.sleep(_s)
 
 
+class ArcadeNativeTSServer(ArcadeNativeTS):
+    """The native TIMESERIES type on the SERVER (2026-09-07). Ingest goes through
+    the server's own time-series endpoint, POST /api/v1/ts/{db}/write with
+    InfluxDB line protocol, in chunks; the three queries are the same SQL the
+    embedded native arm asks, over HTTP. No wheel fast path is involved, so
+    `declared` says so: this is what a client without the wheel gets from the
+    engine's own idiom."""
+    name = "arcadedb_ts_native_server"
+    CHUNK = int(os.environ.get("TS_CHUNK", "100000"))
+
+    def connect(self):
+        import requests
+        self.rq = requests.Session()
+        self.rq.auth = ("root", "dbbenchpass")
+        host = os.environ["BENCH_SERVER_HOST"]
+        port = os.environ.get("BENCH_SERVER_PORT", "2480")
+        self.base = f"http://{host}:{port}/api/v1"
+        try:
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            self._ver = "server:" + (info.json().get("version") or "?")
+        except Exception:  # noqa: BLE001
+            self._ver = "server:unknown"
+
+    def version(self):
+        return self._ver
+
+    def declared(self):
+        return {"ts_primitive": False, "ts_numpy": False, "ts_chunk": self.CHUNK,
+                "ts_shards": self.SHARDS, "ts_path": "native_timeseries_http_line_protocol"}
+
+    def _post(self, kind, command, language="sql", timeout=600):
+        r = self.rq.post(f"{self.base}/{kind}/bench",
+                         json={"language": language, "command": command}, timeout=timeout)
+        r.raise_for_status()
+        return r.json().get("result", [])
+
+    def ingest(self, pts):
+        self._post("command", "CREATE TIMESERIES TYPE Point TIMESTAMP ts "
+                              "TAGS (host STRING) FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) "
+                              f"SHARDS {self.SHARDS}")
+        url = f"{self.base}/ts/bench/write?precision=s"
+        for lo in range(0, len(pts), self.CHUNK):
+            body = "\n".join(f"Point,host={h} uu={uu},us={us},ui={ui} {ts}"
+                             for h, ts, uu, us, ui in pts[lo:lo + self.CHUNK])
+            r = self.rq.post(url, data=body.encode(), headers={"Content-Type": "text/plain"}, timeout=900)
+            r.raise_for_status()
+
+    def q_last(self):
+        return self._post("query", f"SELECT ts, uu FROM Point WHERE host = '{HOST}' ORDER BY ts DESC LIMIT 1")
+
+    def q_last_windowed(self):
+        return self._post("query", f"SELECT ts, uu FROM Point WHERE host = '{HOST}' "
+                                   f"AND ts BETWEEN {(T0 - 86400 * 40) * 1000} AND {(T0 + 86400 * 40) * 1000} "
+                                   "ORDER BY ts DESC LIMIT 1")
+
+    def q_range(self):
+        return self._post("query", f"SELECT ts.timeBucket('1m', ts) AS m, max(uu) AS v FROM Point "
+                                   f"WHERE host = '{HOST}' AND ts >= {T0 * 1000} AND ts < {(T0 + 3600) * 1000} "
+                                   "GROUP BY m ORDER BY m")
+
+    def q_global(self):
+        return self._post("query", f"SELECT ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point "
+                                   f"WHERE ts >= {T0 * 1000} AND ts < {(T0 + 43200) * 1000} GROUP BY h ORDER BY h")
+
+    def settle(self):
+        self._settled_s = 0.0
+
+    def close(self):
+        self.rq.close()
+
+
 class DuckTS:
     name = "duckdb"
 
@@ -455,7 +526,7 @@ class QuestTS:
 # adding a served arm cannot forget to update the role test.
 _CLIENT_SERVER = {"questdb"}
 
-BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, DuckTS, QuestTS)}
+BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, QuestTS)}
 
 
 def main():

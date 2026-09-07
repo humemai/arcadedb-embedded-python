@@ -1018,7 +1018,7 @@ LANES = {
     # compares ArcadeDB against ITSELF across what a database contains, so a
     # comparator column would be meaningless.
     "lifecycle": ("l5_lifecycle.py",
-                  ["arcadedb_embedded"],
+                  ["arcadedb_embedded", "arcadedb_server"],
                   ["empty", "doc", "doc_idx10", "graph", "graph_gav",
                    "vector", "sparse", "ts"]),
     "l3s": ("l3_sparse.py",
@@ -1067,7 +1067,7 @@ LANES = {
            # arms run: the document path is what ordinary SQL gives you, the
            # native path is the engine asked in its own idiom, and the page
            # prints both rather than choosing the flattering one.
-           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "questdb", "duckdb"],
+           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb"],
            ["ingest"]),
 }
 
