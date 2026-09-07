@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the paper's data figures from results/runs.csv (matplotlib).
+"""Generate data figures from results/runs_paper.csv (matplotlib).
 
 Outputs PNG (~200 dpi, <1 MB) to figures/:
   fig_throughput.png  OLTP ops/s by backend (tabular + graph), at the largest tier present
@@ -9,7 +9,7 @@ Outputs PNG (~200 dpi, <1 MB) to figures/:
   fig_scaling.png     key metrics vs dataset tier (if >=2 tiers present)
 
 Run:  uv run --with matplotlib --with pandas python make_figures.py
-Final figures come from the mini run's runs.csv; this also drafts from partial data.
+Reads the frozen selection by default; set RUNS=results/runs.csv to draft from a fresh campaign.
 """
 import os
 import pandas as pd
@@ -18,7 +18,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CSV = os.path.join(HERE, "results", "runs.csv")
+# Same source as make_tables.py: the frozen selection, overridable with RUNS=.
+CSV = os.environ.get("RUNS", os.path.join(HERE, "results", "runs_paper.csv"))
 OUT = os.path.join(HERE, "figures")
 os.makedirs(OUT, exist_ok=True)
 TIER_ORDER = ["tiny", "small", "medium"]
@@ -111,7 +112,7 @@ def main():
         a2.set_title("Peak memory scaling"); a2.set_ylabel("MiB"); a2.legend(fontsize=8)
         save(fig, "fig_scaling.png")
     else:
-        print("scaling figure skipped (need >=2 tiers; rerun on mini results)")
+        print("scaling figure skipped (need >=2 tiers; rerun on the official results)")
 
 
 if __name__ == "__main__":

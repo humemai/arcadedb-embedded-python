@@ -12,7 +12,7 @@ Lanes:
 
 Outputs: results/runs.csv, results/mem/<run>.csv, results/manifest.json, results/ENV.md.
 Validate on laptop:  python run.py --datasets tiny --reps 2
-Official (mini):     python run.py --datasets tiny,small,medium --reps 5
+Official run:        python run.py --datasets tiny,small,medium --reps 5
 """
 import argparse
 import csv
@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.abspath(os.environ.get("BENCH_DATA", os.path.join(
-    HERE, "..", "..", "..", "bindings", "python", "examples", "data")))
+    HERE, "..", "..", "bindings", "python", "examples", "data")))
 # Ablation arms (BENCH_GAV=0, BENCH_ARCADE_WAL_FLUSH=2) must NOT land in the
 # same runs.jsonl as the default-configuration campaign. Curation keeps the
 # newest row per (lane, backend, dataset, workload, rep), so an ablation run
