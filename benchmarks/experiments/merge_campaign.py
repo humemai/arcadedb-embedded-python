@@ -171,6 +171,20 @@ def main():
     existing = load(CANON)
     if not incoming:
         sys.exit("nothing to merge: incoming file is empty")
+    # SKIP ROWS THE STORE ALREADY HOLDS. The bench host's campaign file is
+    # append-only and gets pulled more than once while a campaign runs, and
+    # every earlier merge appended the WHOLE file again: on 2026-09-06 one
+    # campaign file went in three times and every E2 row existed thrice
+    # (BUGS-20260830 F12). Idempotent on the canonical key was never enough;
+    # it has to be idempotent on the row. A row is "already here" when a
+    # stored row has the same canonical key and the same ts_utc.
+    _have = {(key(r), str(r.get("ts_utc"))) for r in existing}
+    _n = len(incoming)
+    incoming = [r for r in incoming if (key(r), str(r.get("ts_utc"))) not in _have]
+    print(f"already present : {_n - len(incoming)} of {_n} incoming rows, skipped")
+    if not incoming:
+        print("nothing new to merge.")
+        return
 
     before = canonicalise(existing)
     after = canonicalise(existing + incoming)

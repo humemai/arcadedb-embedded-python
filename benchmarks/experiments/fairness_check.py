@@ -88,12 +88,51 @@ def _dense_rows():
         r["scale"] = "deep10m"
         # Served arms record the client container's cap; the split is the
         # lane's, not the row's, so name it here rather than guess later.
-        if r.get("backend") in ("arcadedb_dense_server", "qdrant_dense",
-                                "milvus_dense"):
-            r.setdefault("role", "client")
-            r.setdefault("mem_split", "0.75")
+        # THE ENVELOPE COMES FROM THE CAMPAIGN ROW, not from the file. The
+        # multipass driver runs inside the client container and writes what it
+        # can see: mem_cap=8g, role=client, nothing about the server side. The
+        # runner stamps server_mem_cap / server_heap / mem_split / client_mem_cap
+        # on the campaign row of the same cell AFTER the cell, from its own
+        # docker knowledge, and the driver ran inside that same envelope
+        # (runner --driver). Until 2026-09-07 this patched three fp32 backends BY
+        # NAME with mem_split=0.75, so the served fp32 arm reduced to 32g, the
+        # served int8 arms to 8g, and F3 failed the tier on the pinned overlay
+        # (BUGS-20260830 F13). Now: any file whose backend has a campaign row
+        # with server_mem_cap at this scale inherits that row's server-side
+        # fields; embedded arms have none and keep their own mem_cap.
+        _srv = _served_envelopes()
+        if "server_mem_cap" not in r and r.get("backend") in _srv:
+            for _k, _v in _srv[r["backend"]].items():
+                r.setdefault(_k, _v)
         out.append(r)
     return out
+
+
+def _served_envelopes():
+    """backend -> the server-side envelope fields of its newest l3d deep10m
+    campaign row, for every backend whose row carries server_mem_cap."""
+    if getattr(_served_envelopes, "_cache", None) is not None:
+        return _served_envelopes._cache
+    newest = {}
+    try:
+        with open(os.path.join(HERE, "results", "runs.jsonl")) as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if r.get("lane") != "l3d" or r.get("scale") != "deep10m" or r.get("error"):
+                    continue
+                if not r.get("server_mem_cap"):
+                    continue
+                be = r.get("backend")
+                if be not in newest or str(r.get("ts_utc")) > str(newest[be].get("ts_utc")):
+                    newest[be] = r
+    except FileNotFoundError:
+        pass
+    keys = ("server_mem_cap", "server_heap", "mem_split", "client_mem_cap", "server_mem_cap_g", "role")
+    _served_envelopes._cache = {be: {kk: r[kk] for kk in keys if r.get(kk) is not None} for be, r in newest.items()}
+    return _served_envelopes._cache
 
 
 def check_cpuset(rows):
@@ -374,7 +413,7 @@ def check_degree(rows):
         d = _base_degree(r)
         if d is not None:
             g[r["scale"]].setdefault(r["backend"], set()).add(d)
-        elif r.get("backend") == "sqlite_vec_dense":
+        elif str(r.get("backend", "")).startswith("sqlite_vec_dense"):  # fp32 and int8: both exact scans
             # An exact scan has no graph, so it has no degree to match. That is
             # a property of the engine, like a Rust engine having no JVM heap,
             # not a recording gap. It is the recall=1.0 baseline precisely
