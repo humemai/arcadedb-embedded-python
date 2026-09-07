@@ -157,7 +157,7 @@ PROSE = [
      lambda P: P("pycost", "Python, to_columns", "100k-row scan", "vs Java")),
     ("pycost.rows_vs_columns", r"row objects is (\d+(?:\.\d+)?)x slower",
      lambda P: P("pycost", "Python, to_list", "100k-row scan", "time ms") / P("pycost", "Python, to_columns", "100k-row scan", "time ms")),
-    ("l2olap.view.top_degree", r"The view is worth (\d+(?:\.\d+)?)x on top degree",
+    ("l2olap.view.top_degree", r"[Tt]he view is worth (\d+(?:\.\d+)?)x on top degree",
      lambda P: P("l2olap", "ArcadeDB (embedded)", "sf10", "most friends ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "most friends ms")),
     ("l2olap.view.other_two", r"about (\d+(?:\.\d+)?)x on the other two",
      lambda P: (P("l2olap", "ArcadeDB (embedded)", "sf10", "average friend age ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "average friend age ms")
@@ -166,6 +166,12 @@ PROSE = [
      lambda P: P.max("l3smp", "small", "gain")),
     ("l3smp.max_gain.medium", r"and (\d+(?:\.\d+)?)x at 8\.84 million",
      lambda P: P.max("l3smp", "medium", "gain")),
+    ("e2atom.trials", r"interrupted mid-way, (\d+) trials per run",
+     lambda P: P("e2atom", "ArcadeDB (one transaction)", "e2", "trials")),
+    ("e2atom.composed.torn", r"left torn in (\d+) of 40 trials",
+     lambda P: P("e2atom", "Qdrant + Neo4j (no shared transaction)", "e2", "torn results")),
+    ("e2atom.arcadedb.torn", r"ArcadeDB and SurrealDB in (\d+) of 40",
+     lambda P: max(P("e2atom", "ArcadeDB (one transaction)", "e2", "torn results"), P("e2atom", "SurrealDB", "e2", "torn results"))),
     ("dense.second_pass", r"ArcadeDB alone gains about (\d+(?:\.\d+)?)x on a second pass",
      lambda P: P("l3d", "ArcadeDB (embedded, fp32)", "deep10m", "cold p50 ms") / P("l3d", "ArcadeDB (embedded, fp32)", "deep10m", "warm p50 ms")),
 ]
