@@ -104,8 +104,13 @@ def temp_db():
     try:
         if db.is_open():
             db.close()
-    except Exception:
-        pass  # nosec B110
+    except Exception as exc:  # noqa: BLE001
+        # Never silent: a swallowed teardown is how the is_closed() bug hid for
+        # ten months. Warn so it shows in the summary, but do not fail the test
+        # that just passed for a close-time problem it did not cause.
+        import warnings
+
+        warnings.warn(f"temp_db teardown: close failed: {exc!r}", stacklevel=1)
 
     # Force garbage collection to release file handles (Windows fix)
     import gc
