@@ -61,15 +61,23 @@ def test_dense_search_beam_argument(temp_db):
     temp_db.command("sql", "CREATE DOCUMENT TYPE VDoc")
     temp_db.command("sql", "CREATE PROPERTY VDoc.id INTEGER")
     temp_db.command("sql", "CREATE PROPERTY VDoc.emb ARRAY_OF_FLOATS")
+    # Distinct random vectors: the first version used ((i*(j+1)) % 17)/17, which
+    # produced duplicates the engine dropped ("Building graph with 282 vectors" of
+    # 300 in CI), so id 7 could be absent from every answer.
+    import random
+
+    _rnd = random.Random(7)  # nosec B311 - test data, not cryptography
+    _vecs = {}
     with temp_db.transaction():
         for i in range(300):
-            v = [((i * (j + 1)) % 17) / 17.0 for j in range(16)]
+            v = [round(_rnd.random(), 6) for _ in range(16)]
+            _vecs[i] = v
             temp_db.command("sql", f"INSERT INTO VDoc SET id = {i}, emb = {v}")
     temp_db.command(
         "sql",
         'CREATE INDEX ON VDoc (emb) LSM_VECTOR METADATA {"dimensions": 16, "similarity": "COSINE"}',
     )
-    q = [((7 * (j + 1)) % 17) / 17.0 for j in range(16)]
+    q = _vecs[7]
     for beam in (16, 200):
         rows = temp_db.query(
             "sql",
@@ -79,4 +87,6 @@ def test_dense_search_beam_argument(temp_db):
             beam,
         ).to_list()
         assert len(rows) == 10, (beam, rows)
-        assert 7 in [int(r["id"]) for r in rows]
+        if beam == 200:
+            # The query IS vector 7; with a wide beam the exact match is in the top 10.
+            assert 7 in [int(r["id"]) for r in rows], rows

@@ -30,7 +30,9 @@ def http_server(tmp_path):
             if s.get(f"{base}/api/v1/server", timeout=5).status_code == 200:
                 break
         except Exception:  # noqa: BLE001
-            pass
+            # Readiness poll: the server is not listening yet; keep waiting.
+            time.sleep(0.5)
+            continue
         time.sleep(0.5)
     server.create_database("httpx")
     try:
@@ -39,8 +41,10 @@ def http_server(tmp_path):
         s.close()
         try:
             server.stop()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+
+            warnings.warn(f"server fixture: stop failed: {exc!r}", stacklevel=1)
 
 
 def _cmd(s, base, db, sql, headers=None, kind="command"):

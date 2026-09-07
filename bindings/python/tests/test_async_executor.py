@@ -107,6 +107,7 @@ def test_async_executor_pending_and_processing_flags(temp_db):
         except Exception:  # noqa: BLE001
             # A poll inside a 1 s loop: a throw here means the executor has not
             # started yet, and the wait_completion() below is the real check.
+            time.sleep(0.01)
             continue
 
         time.sleep(0.01)
