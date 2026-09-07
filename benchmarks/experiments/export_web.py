@@ -1419,6 +1419,7 @@ def _overhead_medians():
             if row[2] != "RESULT":
                 continue
             out[(row[3], row[4])].append(val)
+    _overhead_medians.counts = {k: len(v) for k, v in out.items()}
     return {k: statistics.median(v) for k, v in out.items()}
 
 
@@ -1448,9 +1449,14 @@ def _python_cost_table():
 
     rows_out = []
 
-    def add(label, workload, value_us, baseline_us, note):
+    _counts = getattr(_overhead_medians, "counts", {})
+
+    def add(label, workload, value_us, baseline_us, note, arm=None):
         if value_us is None or baseline_us is None:
             return
+        # n is the number of runs behind the median (5 at the pin, 3-5 in the
+        # 2026-08-10 file); it was the literal 1 until 2026-09-07.
+        _n = _counts.get((workload_key(workload), arm), 1) if arm else 1
         rows_out.append({
             "backend": label,
             "is_arcadedb": True,
@@ -1463,20 +1469,22 @@ def _python_cost_table():
             "host": _prov.get("host") if _prov else None,
             "metrics": {
                 "time ms": {"median": round(value_us / 1000, 3), "min": round(value_us / 1000, 3),
-                            "max": round(value_us / 1000, 3), "n": 1},
+                            "max": round(value_us / 1000, 3), "n": _n},
                 "vs Java": {"median": round(value_us / baseline_us, 2),
                             "min": round(value_us / baseline_us, 2),
-                            "max": round(value_us / baseline_us, 2), "n": 1},
+                            "max": round(value_us / baseline_us, 2), "n": _n},
             },
         })
 
+    def workload_key(w):
+        return "vector" if w == "vector search" else "query"
     jv, jq = us("vector", "J-direct"), us("query", "J-allcols-100000")
-    add("Java, in process", "vector search", jv, jv, "baseline")
-    add("Python", "vector search", us("vector", "P-raw-call"), jv, "same call")
-    add("Java, in process", "100k-row scan", jq, jq, "baseline")
-    add("Python, to_columns", "100k-row scan", us("query", "P-columns-100000"), jq, "columnar")
-    add("Python, to_json_list", "100k-row scan", us("query", "P-jsonbatch-100000"), jq, "batched JSON")
-    add("Python, to_list", "100k-row scan", us("query", "P-tolist-100000"), jq, "row objects")
+    add("Java, in process", "vector search", jv, jv, "baseline", "J-direct")
+    add("Python", "vector search", us("vector", "P-raw-call"), jv, "same call", "P-raw-call")
+    add("Java, in process", "100k-row scan", jq, jq, "baseline", "J-allcols-100000")
+    add("Python, to_columns", "100k-row scan", us("query", "P-columns-100000"), jq, "columnar", "P-columns-100000")
+    add("Python, to_json_list", "100k-row scan", us("query", "P-jsonbatch-100000"), jq, "batched JSON", "P-jsonbatch-100000")
+    add("Python, to_list", "100k-row scan", us("query", "P-tolist-100000"), jq, "row objects", "P-tolist-100000")
 
     if not rows_out:
         return None
