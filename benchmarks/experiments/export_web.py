@@ -216,6 +216,13 @@ def _engine_identity(raw: str | None, commit: str | None) -> str | None:
     ver = (raw or "").strip() or None
     sha = (commit or "").strip() or None
     if ver:
+        # "server:26.9.1-SNAPSHOT (build <sha>/<ts>/main)" is the served arm's
+        # own banner; the version is the middle, the build sha stands in for a
+        # missing commit. Without this the header listed the banner verbatim
+        # as a third engine beside the two it already named.
+        _m = re.search(r"\(build ([0-9a-f]{9})", ver)
+        sha = sha or (_m.group(1) if _m else None)
+        ver = re.sub(r"^server:", "", ver).split(" (build")[0].strip()
         # 26.9.1.dev0 / 26.8.1.dev25 / 26.9.1-SNAPSHOT -> 26.9.1-dev
         ver = re.sub(r"[.\-]?(dev\d*|SNAPSHOT)$", "-dev", ver, flags=re.I)
     if ver and sha:
@@ -223,8 +230,46 @@ def _engine_identity(raw: str | None, commit: str | None) -> str | None:
     return f"arcadedb {ver}" if ver else (f"arcadedb {sha}" if sha else None)
 
 
+def _row_engine_string(r) -> str | None:
+    """engine_version unless it is the driver's "unknown (...)" placeholder, in
+    which case lib_version (the served arm's banner, learned on connect())."""
+    ev = str(r.get("engine_version") or "")
+    if ev and not ev.startswith("unknown"):
+        return ev
+    lv = str(r.get("lib_version") or "")
+    return lv if lv and lv.lower() != "none" else None
+
+
+def _campaign_engine_string(backend) -> str | None:
+    """The newest campaign row's engine string for a backend, for overlay files
+    that stamped neither engine_version nor lib_version (the served sparse
+    multipass files). The overlay ran inside the same campaign envelope."""
+    best = None
+    try:
+        with open(HERE / "results" / "runs.jsonl") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if r.get("backend") != backend or r.get("error"):
+                    continue
+                if _row_engine_string(r) and (best is None or str(r.get("ts_utc")) > str(best.get("ts_utc"))):
+                    best = r
+    except FileNotFoundError:
+        return None
+    return _row_engine_string(best) if best else None
+
+
+def _overlay_commit() -> str | None:
+    """The commit an overlay row belongs to: the files carry engine_commit=None
+    (the driver never stamped it) but the directory is named by the pin, so a
+    pinned overlay's rows are that commit's rows by construction."""
+    return os.environ.get("BENCH_ENGINE_COMMIT", "").strip() or None if _dense_overlay_is_pinned() else None
+
+
 def _engine_version(label: str, raw: str | None,
-                    image: str | None = None) -> str | None:
+                    image: str | None = None, commit: str | None = None) -> str | None:
     """"<engine> <version>", from a row label and whatever the adapter stamped.
 
     The engine name comes from the IMAGE when there is one. A row label names
@@ -233,6 +278,19 @@ def _engine_version(label: str, raw: str | None,
     pinned image is Neo4j's, so taking the name from the label produced
     "qdrant + neo4j 5-community" for a version only one of them has.
     """
+    # OUR ENGINE IS NAMED FROM ITS OWN ROW, never from the image tag. The
+    # served rows carry engine_version "server:26.9.1-SNAPSHOT (build <sha>)"
+    # and engine_commit; the image in runner.py is the DEFAULT the campaign
+    # overrides with ARCADEDB_SERVER_IMAGE, and its tag said 26.8.1 while the
+    # container was built from 8d6af9475. 2026-09-07: every served ArcadeDB
+    # entry on the page read "arcadedb 26.8.1" beside embedded rows at
+    # "arcadedb 26.9.1", two identities for one pinned pair (PAGE-SPEC rule 1).
+    if str(label or "").lower().startswith("arcadedb"):
+        _raw = re.sub(r"^arcadedb\s+", "", str(raw or ""), flags=re.I)
+        _m = re.search(r"\(build ([0-9a-f]{9})", _raw)
+        _sha = (commit or "").strip() or (_m.group(1) if _m else None)
+        _ver = re.sub(r"^server:", "", _raw.split(" (build")[0]).strip() or None
+        return _engine_identity(_ver, _sha)
     ver = _short_version(raw)
     if not ver:
         return None
@@ -630,7 +688,7 @@ def _dense_10m_entries():
             "n_docs": "9,990,000",
             "deployment": deployment_of(backend_key),
             "image": None,
-            "version_name": _engine_version(label, v),
+            "version_name": _engine_version(label, v, commit=_overlay_commit()),
             "host": "mini",
             "metrics": metrics,
         })
@@ -754,6 +812,7 @@ LANES = {
         "conditions": [
             "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
             "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
+            "The ArcadeDB (embedded) row without the view at SF10 was measured at ArcadeDB 26.8.1 on 2026-08-10 and is the one row in this table not yet re-run at the engine commit the page reports; the re-run is queued and this sentence goes away with it.",
             "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
             "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
         ],
@@ -849,7 +908,7 @@ def _e4_table():
     drivers usually drift from their lane's protocol; this is the one that
     did not.
     """
-    reps = sorted(E4_DIR.glob("decomp3m_2681_rep*.json"))
+    reps = sorted(E4_DIR.glob("decomp3m_*_rep*.json"))
     if not reps:
         return None
 
@@ -889,7 +948,7 @@ def _e4_table():
             "n_docs": str(meta.get("rows")),
             "deployment": "all three",
             "image": None,
-            "version_name": meta.get("engine_version"),
+            "version_name": _engine_identity(meta.get("engine_version"), None),
             "host": meta.get("host"),
             "metrics": metrics,
         })
@@ -899,6 +958,8 @@ def _e4_table():
         "title": "What the client/server split costs",
         "dataset": f"{meta.get('rows'):,}-row projection, one engine, three deployments",
         "conditions": [
+            *([f"Measured at ArcadeDB {meta.get('engine_version')} on {str(meta.get('ts_utc'))[:10]}. This table has not yet been re-run at the engine commit the rest of the page reports; the re-run is queued and this line goes away with it."]
+              if str(meta.get("engine_version") or "") and not str(meta.get("engine_version") or "").startswith("26.9.1") else []),
             f"Every number is milliseconds. One released engine "
             f"({meta.get('engine_version')}) in all three setups, "
             f"{meta.get('reps')} repetitions after {meta.get('warmup')} warmup, "
@@ -1079,7 +1140,8 @@ def _sparse_multipass_table():
                 "n_docs": str(cold[0].get("n_docs") or ""),
                 "deployment": deployment_of(backend),
                 "image": None,
-                "version_name": _engine_version(label, cold[0].get("engine_version")),
+                "version_name": _engine_version(label, _row_engine_string(cold[0]) or _campaign_engine_string(backend),
+                                                commit=_overlay_commit()),
                 "host": "mini",
                 "metrics": {
                     "cold p50 ms": {"median": round(c, 3), "min": round(c, 3),
@@ -1253,7 +1315,8 @@ def _l4_table(all_rows):
             # from the other), so the provenance block listed the same build
             # twice under two spellings and looked like two builds.
             "version_name": _engine_version(
-                label, rs[0].get("backend_version") or rs[0].get("engine_version")),
+                label, rs[0].get("backend_version") or rs[0].get("engine_version"),
+                commit=rs[0].get("engine_commit")),
             "host": rs[0].get("host"),
             "metrics": {},
         }
@@ -1312,7 +1375,28 @@ def _l4_table(all_rows):
 # conditions saying so.
 PYB = HERE.parent / "python-bindings"
 OVERHEAD = PYB / "jpype_overhead" / "results" / "mini_results.csv"
+# A re-measure at a pin lands beside the tracked file, named by the commit,
+# so the bench host's tree stays clean (a modified tracked file aborts every
+# queue script's git pull). The pinned file wins when it exists.
+if os.environ.get("BENCH_ENGINE_COMMIT", "").strip():
+    _ov_pin = OVERHEAD.with_name(f"mini_results_{os.environ['BENCH_ENGINE_COMMIT'].strip()}.csv")
+    if _ov_pin.exists():
+        OVERHEAD = _ov_pin
 PYB_FROZEN = PYB / "results" / "runs_paper.csv"
+
+
+def _overhead_provenance() -> dict:
+    """The PROVENANCE line bench_python/bench_round5 print (run_conditions as
+    JSON), if the results file carries one. The 2026-08-10 file does not."""
+    if not OVERHEAD.exists():
+        return {}
+    for line in OVERHEAD.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "PROVENANCE," in line:
+            try:
+                return json.loads(line.split("PROVENANCE,", 1)[1])
+            except Exception:
+                return {}
+    return {}
 
 
 def _overhead_medians():
@@ -1349,6 +1433,8 @@ def _python_cost_table():
     m = _overhead_medians()
     if not m:
         return None
+    _prov = _overhead_provenance()
+    _ident = _engine_identity(_prov.get("engine_version"), _prov.get("engine_commit")) if _prov else None
 
     def us(w, a):
         return m.get((w, a))
@@ -1366,8 +1452,8 @@ def _python_cost_table():
             "n_docs": None,
             "deployment": "embedded",
             "image": None,
-            "version_name": None,
-            "host": None,
+            "version_name": _ident,
+            "host": _prov.get("host") if _prov else None,
             "metrics": {
                 "time ms": {"median": round(value_us / 1000, 3), "min": round(value_us / 1000, 3),
                             "max": round(value_us / 1000, 3), "n": 1},
@@ -1391,13 +1477,23 @@ def _python_cost_table():
         "id": "pycost",
         "title": "What Python costs",
         "dataset": "Same engine, same query, called from Java and from Python",
+        # THE RATIOS IN THESE SENTENCES ARE COMPUTED, not typed: 1.28x, 1.63x and
+        # 13.8x sat here as literals from the 2026-08-10 measurement while the
+        # table below them was regenerated from the data, and page_check's
+        # prose gate reads arcadedb.ts, not this file.
         "conditions": [
+            *([("This table's artifact carries no engine identity (it predates "
+                "the provenance stamp); the re-measure at the engine commit the "
+                "rest of the page reports is queued and this line goes away with it.")]
+              if not _ident else []),
             "The engine itself runs at the same speed either way. What Python "
             "is charged for is moving results across the boundary, which is why "
-            "the vector search costs 1.28x and the scan 1.63x rather than "
+            f"the vector search costs {us('vector', 'P-raw-call') / jv:.2f}x and the scan "
+            f"{us('query', 'P-columns-100000') / jq:.2f}x rather than "
             "anything scaling with the work the engine did.",
             "The path you choose inside Python matters far more than the "
-            "language boundary does. Asking for row objects is 13.8x slower "
+            "language boundary does. Asking for row objects is "
+            f"{us('query', 'P-tolist-100000') / us('query', 'P-columns-100000'):.1f}x slower "
             "than asking for columns over the same query, so the practical "
             "advice is to use the columnar or batched call for anything large.",
         ],
@@ -1616,8 +1712,9 @@ def main() -> int:
                 # which listed as two unrelated builds.
                 "version_name": _engine_version(
                     label,
-                    names.get(image) if image else rs[0].get("engine_version"),
-                    image),
+                    rs[0].get("engine_version") if str(backend).startswith("arcadedb")
+                    else (names.get(image) if image else rs[0].get("engine_version")),
+                    image, commit=rs[0].get("engine_commit")),
                 "host": rs[0].get("host") or None,
                 "metrics": {},
             }
