@@ -1044,7 +1044,7 @@ def _e4_table():
             "n_docs": str(meta.get("rows")),
             "deployment": "all three",
             "image": None,
-            "version_name": _engine_identity(meta.get("engine_version"), None),
+            "version_name": _engine_identity(meta.get("engine_version"), meta.get("engine_commit")),
             "host": meta.get("host"),
             "metrics": metrics,
         })
@@ -1313,6 +1313,28 @@ LIFECYCLE_SCENARIOS = [
 LIFECYCLE_WITHHELD = {"graph_gav": "probe scope under revision; see PAGE-SPEC 4c"}
 
 
+def _lc_vector_note(rows):
+    """The disclosure sentence for the vector situation, with its numbers
+    computed from the rows it describes (they were typed until 2026-09-08;
+    10M then arrived and the sentence still said 1M was the top)."""
+    def med(scale, field):
+        vals = [_num(r.get(field)) for r in rows
+                if r.get("workload") == "vector" and r.get("scale") == scale
+                and not str(r.get("backend", "")).endswith("_server") and _num(r.get(field)) is not None]
+        return statistics.median(vals) if vals else None
+    parts = []
+    for scale, label in (("lc10k", "10k"), ("lc1m", "1M"), ("lc10m", "10M")):
+        v = med(scale, "clean_session_ms")
+        if v is not None:
+            parts.append(f"{v / 1000:.1f} s at {label}" if v >= 1000 else f"{v:.0f} ms at {label}")
+    rd = med("lc10m", "read_session_ms")
+    tail = (f", and a session with one search in it at 10M is {rd / 1000:.1f} s" if rd else "")
+    return ("Known at this engine build: a vector database's no-op session close grows with the index ("
+            + ", ".join(parts) + ")" + tail
+            + ", because the first search after a write started a full asynchronous graph rebuild and close() waited on it. "
+            "Filed as #7183, fixed upstream in #7191 for 26.10.1; the October re-pin re-measures it.")
+
+
 def _lifecycle_table(all_rows):
     """Built from the FROZEN CSV, like every other table in this file.
 
@@ -1379,7 +1401,7 @@ def _lifecycle_table(all_rows):
             "session number, because a millisecond open inside a process that takes "
             "half a second to reach its first database call is not a millisecond to "
             "whoever launched it.",
-            "Known at this engine build: a vector database's no-op session close grows with the index (6 ms at 10k, 96 ms at 1M), because the first search after a write started a full asynchronous graph rebuild and close waited on it. Reported as ArcadeDB issue #7183 and fixed upstream in #7191 for 26.10.1; the rows here are as measured on 8d6af9475.",
+            _lc_vector_note(rows),
             "A clean close should be O(what was written), not O(what is stored): "
             "write nothing and closing should cost the same at 10k rows and 10M.",
         ] + [f"`{k}` is withheld: {v}" for k, v in sorted(LIFECYCLE_WITHHELD.items())],

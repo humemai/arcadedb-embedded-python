@@ -318,9 +318,20 @@ def load_canonical(apply_corpus=True):
         # So: an uninformative label is tolerated when a digest backs it, and
         # refused when nothing does.
         if "server" in str(r.get("backend", "")):
-            ver = str(r.get("engine_version") or "")
+            # The served arm's banner lands in engine_version (l1, l2, l3s),
+            # backend_version (l4: the lane stamps engine_version from the
+            # wheel import, which the client image does not have) or
+            # lib_version (the dense driver). Any of them naming a version is
+            # the witness; 2026-09-08 the L4 document-server rows were dropped
+            # here with "unknown (PackageNotFoundError)" in engine_version and
+            # "server:26.9.1-SNAPSHOT (build 8d6af9475...)" in backend_version.
+            # A local pinned image (arcadedb-c25:<commit>) with engine_commit
+            # stamped is the other witness the campaign pair carries.
+            ver = " ".join(str(r.get(k) or "") for k in ("engine_version", "backend_version", "lib_version"))
             named = bool(re.search(r"\d+\.\d+\.\d+", ver))
-            if not named and "@sha256:" not in str(r.get("server_image_ref") or ""):
+            ref = str(r.get("server_image_ref") or "")
+            pinned_local = ref.startswith("arcadedb-c25:") and bool(r.get("engine_commit")) and ref.endswith(str(r.get("engine_commit")))
+            if not named and "@sha256:" not in ref and not pinned_local:
                 continue
         # `gav` separates the graph lane's two OLAP arms. BENCH_GAV=0 runs the
         # analytical queries WITHOUT the Graph Analytical View, which is the
