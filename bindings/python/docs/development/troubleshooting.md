@@ -178,7 +178,7 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g")
 | `-Xmx<size>` | Maximum heap memory | `-Xmx8g` (8 gigabytes) |
 | `-Xms<size>` | Initial heap size (recommended: same as `-Xmx`) | `-Xms8g` |
 | `-XX:MaxDirectMemorySize=<size>` | Limit off-heap direct buffers | `-XX:MaxDirectMemorySize=8g` |
-| `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>` | Override for the vectors cached during the graph build (default `0`, automatic; leave it) | `-Darcadedb.vectorIndex.graphBuildCacheSize=3000` |
+| `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>` | Override for the vectors cached during the graph build (default `0`, automatic; leave it) | `-Darcadedb.vectorIndex.graphBuildCacheSize=2000000` (only to bound a build on a small heap) |
 | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>` | Mutations before graph rebuild (default: 100) | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=200` |
 
 **Vector Index Memory Tuning:**
