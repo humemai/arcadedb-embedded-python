@@ -1,0 +1,2 @@
+results/verify_9010582b79/cache_arcadedb_dense_embedded.stderr:cache enabled: size=9990000 of 9990000
+results/verify_9010582b79/cache_arcadedb_dense_embedded_int8.stderr:cache enabled: size=9990000 of 9990000

@@ -1,0 +1,2 @@
+{"arm": "arcadedb_dense_embedded", "quantization": "fp32", "build_s": 2305.4, "heap": "24g", "cache_chosen": 9990000, "cache_total": 9990000, "engine": "9010582b79"}
+{"arm": "arcadedb_dense_embedded_int8", "quantization": "INT8", "build_s": 1887.7, "heap": "24g", "cache_chosen": 9990000, "cache_total": 9990000, "engine": "9010582b79"}

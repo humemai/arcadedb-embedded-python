@@ -1,0 +1,3 @@
+2026-09-07 08:39:50.619 INFO  [LSMVectorIndex] Building graph with 10000000 vectors using property 'emb' (cache enabled: size=10000000 of 10000000)
+2026-09-07 09:26:21.122 WARNI [LSMVectorIndex] Graph build left 4 of 10000000 vectors unreachable for index V_0_3519579072811: serving them from the delta scan, and recording them in the graph manifest so a reopened session serves them the same way (issue #7190). A later rebuild does not repair this - a Vamana build orphans a fresh set - so the count does not converge downwards
+2026-09-07 09:27:01.423 INFO  [LSMVectorIndex] Built graph for index: V_0_3519579072811Traceback (most recent call last):
