@@ -403,6 +403,39 @@ def _check_page_atomicity(page_path):
     return checked, bad
 
 
+LIVE_JSON = PAGE_TS.parents[3] / "data" / "arcadedb-benchmarks.json"
+
+
+def _check_no_arcadedb_row_lost(payload):
+    """Every table that shows an ArcadeDB row on the LIVE page still shows one.
+
+    2026-09-07: the 8d6af9475 campaign never re-ran e2, the exporter withheld
+    the 08-14 ArcadeDB rows (engine_version "arcadedb-embedded" identifies no
+    build, correctly), and the fresh E2 table carried only the two
+    comparators. The exporter SAID so, in a line nobody reads in a 200-line
+    log, and no gate failed. A published table without our own engine in it
+    is not a publish, it is a deletion. Compared against the site's current
+    data file, so the rule needs no list to maintain."""
+    if not LIVE_JSON.exists():
+        print(f"  (no live page data at {LIVE_JSON}; nothing to compare)")
+        return 0, 0
+    live = json.loads(LIVE_JSON.read_text(encoding="utf-8"))
+    _is_arc = lambda e: bool(e.get("is_arcadedb")) or str(e.get("backend", "")).startswith("ArcadeDB")
+    live_has = {t["id"] for t in live.get("tables", []) if any(_is_arc(e) for e in t.get("entries", []))}
+    fresh = {t["id"]: t for t in payload.get("tables", [])}
+    checked = bad = 0
+    for tid in sorted(live_has):
+        checked += 1
+        t = fresh.get(tid)
+        if t is None:
+            print(f"  LOST   table {tid}: on the live page, not in the export")
+            bad += 1
+        elif not any(_is_arc(e) for e in t.get("entries", [])):
+            print(f"  LOST   table {tid}: live page has ArcadeDB, export has {[e.get('backend') for e in t.get('entries', [])][:4]}")
+            bad += 1
+    return checked, bad
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", default=str(DEFAULT_JSON))
@@ -468,7 +501,10 @@ def main() -> int:
     a_checked, a_bad = _check_page_atomicity(PAGE_TS)
     print(f"\n{a_checked} page count(s) checked against the artifact, "
           f"{a_bad} disagree")
-    return 1 if (bad or d_bad or p_bad or a_bad) else 0
+    print("\nno table loses its ArcadeDB row against the live page")
+    l_checked, l_bad = _check_no_arcadedb_row_lost(payload)
+    print(f"\n{l_checked} table(s) checked against the live page, {l_bad} lost ArcadeDB")
+    return 1 if (bad or d_bad or p_bad or a_bad or l_bad) else 0
 
 
 if __name__ == "__main__":
