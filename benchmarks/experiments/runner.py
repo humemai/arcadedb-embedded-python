@@ -842,6 +842,10 @@ BACKENDS["arcadedb_sparse_server_fp32"] = dict(BACKENDS["arcadedb_sparse_server"
 # image with requests, pinned server image, heap/GC parity.
 BACKENDS["arcadedb_e2_server"] = dict(BACKENDS["arcadedb_server"])
 BACKENDS["arcadedb_ts_doc_server"] = dict(BACKENDS["arcadedb_server"])
+# Missed on 2026-09-07 (BUGS F22): the lane list named this arm, the registry
+# did not, and the laptop smoke ran the lane script directly so the runner's
+# KeyError only fired on mini, before any cell.
+BACKENDS["arcadedb_ts_native_server"] = dict(BACKENDS["arcadedb_server"])
 # E4's decomposition needs the wheel (in-process arms) AND a served arm, so its
 # client is the wheel image and the server the pinned one.
 BACKENDS["arcadedb_e4"] = dict(BACKENDS["arcadedb_server"], image="dbbench:arcadedb")
