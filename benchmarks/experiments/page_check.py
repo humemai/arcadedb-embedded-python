@@ -146,7 +146,49 @@ PROSE = [
     # nothing checked it (it is 1.2x on 8d6af9475).
     ("dense.steady.ratio", r"a (\d+(?:\.\d+)?)x win, with the comparators",
      ("ratio", ("t5_dense_ts.tex", "Qdrant (fp32)", 2), ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 2))),
+    # PAGE-DERIVED PINS. These sentences quote tables that exist only on the
+    # page (pycost, l2olap's view gain, l3smp's gains), so the reference is a
+    # function of the exported JSON rather than a paper cell. 2026-09-07: five
+    # of them were stale on the live page after the re-pin (1.28x/1.63x/13.8x/
+    # 6.5x/2.4x/1.18x/1.13x/nine times) because nothing checked them.
+    ("pycost.vector.ratio", r"a vector search costs (\d+(?:\.\d+)?)x",
+     lambda P: P("pycost", "Python", "vector search", "vs Java")),
+    ("pycost.scan.ratio", r"a 100k-row scan (\d+(?:\.\d+)?)x",
+     lambda P: P("pycost", "Python, to_columns", "100k-row scan", "vs Java")),
+    ("pycost.rows_vs_columns", r"row objects is (\d+(?:\.\d+)?)x slower",
+     lambda P: P("pycost", "Python, to_list", "100k-row scan", "time ms") / P("pycost", "Python, to_columns", "100k-row scan", "time ms")),
+    ("l2olap.view.top_degree", r"The view is worth (\d+(?:\.\d+)?)x on top degree",
+     lambda P: P("l2olap", "ArcadeDB (embedded)", "sf10", "most friends ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "most friends ms")),
+    ("l2olap.view.other_two", r"about (\d+(?:\.\d+)?)x on the other two",
+     lambda P: (P("l2olap", "ArcadeDB (embedded)", "sf10", "average friend age ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "average friend age ms")
+                + P("l2olap", "ArcadeDB (embedded)", "sf10", "friends in same city ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "friends in same city ms")) / 2),
+    ("l3smp.max_gain.small", r"largest gain by any engine is (\d+(?:\.\d+)?)x at a million",
+     lambda P: P.max("l3smp", "small", "gain")),
+    ("l3smp.max_gain.medium", r"and (\d+(?:\.\d+)?)x at 8\.84 million",
+     lambda P: P.max("l3smp", "medium", "gain")),
+    ("dense.second_pass", r"ArcadeDB alone gains about (\d+(?:\.\d+)?)x on a second pass",
+     lambda P: P("l3d", "ArcadeDB (embedded, fp32)", "deep10m", "cold p50 ms") / P("l3d", "ArcadeDB (embedded, fp32)", "deep10m", "warm p50 ms")),
 ]
+
+
+_PAGE = None
+
+
+class _PageCells:
+    """Callable accessor over the exported JSON for the page-derived pins."""
+    def __init__(self, payload):
+        self.t = {t["id"]: t for t in payload.get("tables", [])}
+
+    def __call__(self, table, backend, scale, column):
+        for e in self.t[table]["entries"]:
+            if e["backend"] == backend and str(e.get("scale")) == str(scale):
+                return float(e["metrics"][column]["median"])
+        raise KeyError((table, backend, scale, column))
+
+    def max(self, table, scale, column):
+        vals = [float(e["metrics"][column]["median"]) for e in self.t[table]["entries"]
+                if str(e.get("scale")) == str(scale) and column in e["metrics"]]
+        return max(vals)
 
 # repos are siblings, same assumption refresh_web_page.py makes
 PAGE_TS = Path(__file__).resolve().parents[2].parent / "humem.ai" / \
@@ -267,7 +309,14 @@ def _check_prose(page_ts):
                   f"{len(hits)} places")
             bad += 1
             continue
-        if ref[0] == "ratio":
+        if callable(ref):
+            try:
+                table_val = ref(_PAGE)
+            except (KeyError, ZeroDivisionError, TypeError) as exc:
+                print(f"  STALE  {pid:24s} page cell missing: {exc}")
+                bad += 1
+                continue
+        elif ref[0] == "ratio":
             _a, _b = C.cell(*ref[1]), C.cell(*ref[2])
             table_val = (_a / _b) if (_a and _b) else None
         else:
@@ -297,7 +346,7 @@ def _check_prose(page_ts):
         ok = abs(printed - want) <= 0.5 * 10 ** -decimals + 1e-9
         checked += 1
         print(f"  {'ok    ' if ok else 'DIFFER'} {pid:24s} "
-              f"page={printed:<11.6g} paper={want:<13.6g} {ref[1]}")
+              f"page={printed:<11.6g} paper={want:<13.6g} {'(page)' if callable(ref) else ref[1]}")
         if not ok:
             bad += 1
     return checked, bad
@@ -514,6 +563,8 @@ def main() -> int:
     d_checked, d_bad = _check_dense_10m(payload)
 
     print(f"\nprose: {PAGE_TS}")
+    global _PAGE
+    _PAGE = _PageCells(payload)
     p_checked, p_bad = _check_prose(PAGE_TS)
     print(f"\n{p_checked} prose numbers checked against the paper, "
           f"{p_bad} disagree")

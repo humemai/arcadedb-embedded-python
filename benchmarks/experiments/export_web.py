@@ -643,7 +643,7 @@ def _dense_10m_entries():
         hits = sorted(root.glob(f"mp_{arm}_b*.json"))
         if not hits:
             continue
-        cold, warm, recall, build, ver = [], [], [], [], set()
+        cold, warm, recall, build, peak, ver = [], [], [], [], [], set()
         for h in hits:
             passes = json.loads(h.read_text(encoding="utf-8"))
             if not passes:
@@ -653,6 +653,7 @@ def _dense_10m_entries():
                 _ev = passes[0]["lib_version"]      # the served arm's engine, learned on connect()
             ver.add(_ev)
             build.append({"build_s": passes[0].get("build_s")})
+            peak.append({"peak_anon_mib_sum": passes[0].get("peak_anon_mib_sum")})
             cold.append({"p50": passes[0].get("p50")})
             for p in passes[1:]:
                 warm.append({"p50": p.get("p50")})
@@ -667,6 +668,21 @@ def _dense_10m_entries():
                 metrics[label_] = got
         if not metrics:
             continue
+        # Peak memory is in the multipass files (pass 0 carries the build);
+        # disk is not, and comes from the campaign cell of the same arm.
+        # The campaign backend name carries the precision (arcadedb_dense_
+        # embedded_int8); the arm table keys ArcadeDB's int8 arm by token.
+        _cb = backend_key if (not arm.endswith("int8") or backend_key.endswith("_int8")) else backend_key + "_int8"
+        # Peak memory and disk from the campaign cell of the same arm: the
+        # served arm's multipass file sees only the client container (3.6 GiB
+        # against the pair's 28), and no file carries disk. Same build, same
+        # envelope; the overlay's own peak is the fallback.
+        _pk = _campaign_stat(_cb, "deep10m", "peak_anon_mib_sum") or _agg(peak, "peak_anon_mib_sum")
+        if _pk is not None:
+            metrics["peak memory GiB"] = _pk
+        _dk = _campaign_stat(_cb, "deep10m", "disk_data_mb")
+        if _dk is not None:
+            metrics["disk GiB"] = _dk
         # Only OUR arms carry a version string; the comparator containers do
         # not expose one to this driver and record "unknown (...)". Reporting
         # that as a build would be worse than reporting nothing.
@@ -700,7 +716,39 @@ def _dense_10m_entries():
 # page both talk in GiB, and a column headed "GiB" printing 8256 would be a
 # defect the reader has to catch. Divide here, once, rather than in each table
 # spec where the next lane to add memory would forget it.
-_UNIT_DIVISOR = {"peak_anon_mib_sum": 1024.0, "end_anon_mib_sum": 1024.0}
+_UNIT_DIVISOR = {"peak_anon_mib_sum": 1024.0, "end_anon_mib_sum": 1024.0, "disk_data_mb": 1024.0}
+DISK_NOTE = ("Disk is what the workload left on disk, in GiB: the engine's writable layer "
+             "plus its volumes after the cell, minus the same engine's empty footprint. It is "
+             "read after the queries, so it includes anything querying wrote; a server "
+             "reading is taken once two samples agree within 1%, an embedded reading once on "
+             "the stopped container. A blank cell means the engine's containers were not "
+             "sampled (Milvus's sparse stack) or the row predates the disk reading (the dense "
+             "comparators at 1M).")
+
+
+def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
+    """_agg of one field over the newest campaign row per rep for (backend,
+    scale): the overlay files (multipass) carry no disk reading, but the
+    campaign cell of the same arm in the same envelope does, and the on-disk
+    size is a property of the build, not of which pass was timed."""
+    newest = {}
+    try:
+        with open(HERE / "results" / "runs.jsonl") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if r.get("backend") != backend or r.get("scale") != scale or r.get("error"):
+                    continue
+                if r.get("lane") not in lanes or r.get("rc", 0) not in (0, None):
+                    continue
+                k = (r.get("workload"), r.get("rep"))
+                if k not in newest or str(r.get("ts_utc")) > str(newest[k].get("ts_utc")):
+                    newest[k] = r
+    except FileNotFoundError:
+        return None
+    return _agg(list(newest.values()), field)
 
 
 def _agg(rows, field):
@@ -725,7 +773,8 @@ LANES = {
         "dataset": "Big-ANN'23 Sparse (real SPLADE over MS MARCO)",
         "metrics": [("query_p50_ms", "p50 ms"), ("recall_at_10", "recall@10"),
                     ("build_s", "build s"),
-                    ("peak_anon_mib_sum", "peak memory GiB")],
+                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    ("disk_data_mb", "disk GiB")],
         "conditions": [
             "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
             "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
@@ -746,7 +795,8 @@ LANES = {
         "metrics": [("query_p50_ms", "cold p50 ms"),
                     ("recall_at_10", "recall@10"),
                     ("build_s", "build s"),
-                    ("peak_anon_mib_sum", "peak memory GiB")],
+                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    ("disk_data_mb", "disk GiB")],
         "conditions": [
             "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
             "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
@@ -766,7 +816,8 @@ LANES = {
         # were the only axis anyone deploys on.
         "metrics": [("point_p50_ms", "point p50 ms"), ("hop1_p50_ms", "1-hop p50 ms"),
                     ("hop2_p50_ms", "2-hop p50 ms"), ("write_p50_ms", "write p50 ms"),
-                    ("peak_anon_mib_sum", "peak memory GiB")],
+                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    ("disk_data_mb", "disk GiB")],
         # OLTP only. The OLAP rows live in the l2olap table below, which is
         # also where the GAV ablation belongs: at SF10 the OLAP cell splits
         # into view-on and view-off, and this table does not group on gav, so
@@ -808,7 +859,8 @@ LANES = {
         "metrics": [("friend_age_by_city_mean_ms", "average friend age ms"),
                     ("same_city_edges_mean_ms", "friends in same city ms"),
                     ("top_degree_mean_ms", "most friends ms"),
-                    ("peak_anon_mib_sum", "peak memory GiB")],
+                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    ("disk_data_mb", "disk GiB")],
         "conditions": [
             "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
             "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
@@ -822,7 +874,8 @@ LANES = {
         "dataset": "Synthetic orders workload",
         "metrics": [("read_p50_ms", "read p50 ms"), ("insert_p50_ms", "insert p50 ms"),
                     ("oltp_ops_per_s", "OLTP ops/s"), ("olap_total_ms", "OLAP total ms"),
-                    ("peak_anon_mib_sum", "peak memory GiB")],
+                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    ("disk_data_mb", "disk GiB")],
         # The memory column is the one cell on this page a reader can most
         # easily misread, because the gap looks like two orders of magnitude
         # and is mostly an accounting boundary. Stated here rather than left
@@ -836,7 +889,8 @@ LANES = {
         "dataset": "TPC-H queries, TPC-C new-order",
         "metrics": [("q1_ms", "Q1 ms"), ("q6_ms", "Q6 ms"),
                     ("neworder_p50_ms", "new-order p50 ms"), ("oltp_ops_per_s", "OLTP ops/s"),
-                    ("peak_anon_mib_sum", "peak memory GiB")],
+                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    ("disk_data_mb", "disk GiB")],
         "conditions": [
             "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
             "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
@@ -847,7 +901,8 @@ LANES = {
         "title": "Cross-model transaction",
         "dataset": "Vector hit to graph traversal to document update, in one transaction",
         "metrics": [("hybrid_p50_ms", "p50 ms"), ("hybrid_p99_ms", "p99 ms"),
-                    ("peak_anon_mib_sum", "peak memory GiB")],
+                    ("peak_anon_mib_sum", "peak memory GiB"),
+                    ("disk_data_mb", "disk GiB")],
         # HYBRID ONLY. The atomicity workload has no latency to print, so
         # while every metric here was a latency its rows came out empty and
         # collapsed invisibly onto the hybrid ones. Adding peak memory, which
@@ -1014,6 +1069,8 @@ L4_METRICS = [
     # The page says what the query does; the papers keep the TSBS term.
     (("q_last_unbounded_ms", "q_last_ms"), "newest reading ms"),
     ("q_global_ms", "12h aggregate ms"),
+    ("peak_anon_mib_sum", "peak memory GiB"),
+    ("disk_data_mb", "disk GiB"),
 ]
 
 
@@ -1150,6 +1207,10 @@ def _sparse_multipass_table():
                                     "max": round(w, 3), "n": len(warm)},
                     "gain": {"median": round(c / w, 2), "min": round(c / w, 2),
                              "max": round(c / w, 2), "n": 1},
+                    **({"peak memory GiB": _campaign_stat(backend, tier, "peak_anon_mib_sum") or _agg(cold, "peak_anon_mib_sum")}
+                       if (_campaign_stat(backend, tier, "peak_anon_mib_sum") or _agg(cold, "peak_anon_mib_sum")) else {}),
+                    **({"disk GiB": _campaign_stat(backend, tier, "disk_data_mb")}
+                       if _campaign_stat(backend, tier, "disk_data_mb") else {}),
                 },
             })
     if not entries:
@@ -1853,6 +1914,17 @@ def main() -> int:
             tables.append(extra)
 
     hosts = sorted({r["host"] for r in rows if r.get("host")})
+    # ON-DISK SIZE, said once per table that prints it (PAGE-SPEC 4a). The
+    # number is the engine's writable layer plus its volumes after the cell,
+    # minus the same engine's empty footprint; a server reading is taken after
+    # two samples agree within 1%, an embedded one once on the stopped
+    # container. It is a post-run reading, not the build-point reading 4a asks
+    # for, and says so. Milvus's sparse stack is not sampled (blank cell).
+    for _t in tables:
+        if any("disk GiB" in e.get("metrics", {}) for e in _t.get("entries", [])):
+            _t.setdefault("conditions", [])
+            if DISK_NOTE not in _t["conditions"]:
+                _t["conditions"].append(DISK_NOTE)
     payload = {
         "source": "benchmarks/experiments/results/runs_paper.csv",
         "generator": "benchmarks/experiments/export_web.py",

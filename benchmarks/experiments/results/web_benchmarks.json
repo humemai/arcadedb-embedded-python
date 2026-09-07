@@ -451,13 +451,15 @@
         "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
         "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
         "Every number here is the first timed pass after the index is built. Running the same engines again over an index they have already read shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. That is worth stating because the dense table below is NOT like this, where ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
-        "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers."
+        "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
       "columns": [
         "p50 ms",
         "recall@10",
         "build s",
-        "peak memory GiB"
+        "peak memory GiB",
+        "disk GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -498,6 +500,12 @@
               "min": 16.7462,
               "max": 16.8096,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 13.0806,
+              "min": 13.0805,
+              "max": 13.0806,
+              "n": 5
             }
           }
         },
@@ -536,6 +544,12 @@
               "median": 16.7674,
               "min": 16.7567,
               "max": 16.7892,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 16.2461,
+              "min": 16.2461,
+              "max": 16.2462,
               "n": 5
             }
           }
@@ -576,6 +590,12 @@
               "min": 16.88,
               "max": 16.9285,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 13.096,
+              "min": 13.0783,
+              "max": 13.1358,
+              "n": 5
             }
           }
         },
@@ -614,6 +634,12 @@
               "median": 17.375,
               "min": 17.35,
               "max": 17.4103,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 8.0066,
+              "min": 8.0063,
+              "max": 8.0068,
               "n": 5
             }
           }
@@ -693,6 +719,12 @@
               "min": 14.5646,
               "max": 14.8021,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 12.2731,
+              "min": 12.2707,
+              "max": 12.2734,
+              "n": 5
             }
           }
         },
@@ -731,6 +763,12 @@
               "median": 8.3591,
               "min": 8.282,
               "max": 8.4055,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.4752,
+              "min": 1.4751,
+              "max": 1.4752,
               "n": 5
             }
           }
@@ -771,6 +809,12 @@
               "min": 8.369,
               "max": 8.4479,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 1.8318,
+              "min": 1.8318,
+              "max": 1.8318,
+              "n": 5
             }
           }
         },
@@ -810,6 +854,12 @@
               "min": 8.5557,
               "max": 8.669,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 1.5016,
+              "min": 1.4929,
+              "max": 1.5048,
+              "n": 5
             }
           }
         },
@@ -848,6 +898,12 @@
               "median": 9.0536,
               "min": 9.0061,
               "max": 9.1035,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.9053,
+              "min": 0.9052,
+              "max": 0.9053,
               "n": 5
             }
           }
@@ -927,6 +983,12 @@
               "min": 2.0881,
               "max": 2.4558,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 1.4492,
+              "min": 1.4489,
+              "max": 1.4521,
+              "n": 5
             }
           }
         },
@@ -965,6 +1027,12 @@
               "median": 2.9963,
               "min": 2.9546,
               "max": 3.1028,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1524,
+              "min": 0.1524,
+              "max": 0.1524,
               "n": 5
             }
           }
@@ -1005,6 +1073,12 @@
               "min": 3.1242,
               "max": 3.2947,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1884,
+              "min": 0.1884,
+              "max": 0.1885,
+              "n": 5
             }
           }
         },
@@ -1044,6 +1118,12 @@
               "min": 4.3573,
               "max": 4.3759,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1924,
+              "min": 0.1908,
+              "max": 0.194,
+              "n": 5
             }
           }
         },
@@ -1082,6 +1162,12 @@
               "median": 4.7812,
               "min": 4.7698,
               "max": 4.7941,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0946,
+              "min": 0.0946,
+              "max": 0.0948,
               "n": 5
             }
           }
@@ -1161,6 +1247,12 @@
               "min": 0.6608,
               "max": 0.7037,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.2485,
+              "min": 0.1886,
+              "max": 0.2502,
+              "n": 5
             }
           }
         }
@@ -1182,7 +1274,8 @@
         "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
         "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
         "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried 26 to 28 small segments and read 2.3x slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
-        "ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting."
+        "ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
       "columns": [
         "cold p50 ms",
@@ -1229,6 +1322,12 @@
               "min": 7.301,
               "max": 7.633,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.8022,
+              "min": 0.8022,
+              "max": 0.8023,
+              "n": 5
             }
           }
         },
@@ -1267,6 +1366,12 @@
               "median": 8.2511,
               "min": 8.2397,
               "max": 8.2898,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.9329,
+              "min": 0.9329,
+              "max": 0.933,
               "n": 5
             }
           }
@@ -1307,6 +1412,12 @@
               "min": 7.4477,
               "max": 7.5976,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.8063,
+              "min": 0.7991,
+              "max": 0.8603,
+              "n": 5
             }
           }
         },
@@ -1345,6 +1456,12 @@
               "median": 8.2979,
               "min": 8.2724,
               "max": 8.3111,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.9741,
+              "min": 0.9644,
+              "max": 0.986,
               "n": 5
             }
           }
@@ -1619,6 +1736,18 @@
               "min": 2299.1,
               "max": 2436.95,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 28.2854,
+              "min": 28.2683,
+              "max": 28.3062,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 7.5631,
+              "min": 7.5631,
+              "max": 7.5631,
+              "n": 5
             }
           }
         },
@@ -1657,6 +1786,18 @@
               "median": 3767.22,
               "min": 3749.75,
               "max": 3806.25,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 28.2528,
+              "min": 28.2351,
+              "max": 28.3337,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 8.5682,
+              "min": 8.5682,
+              "max": 8.5682,
               "n": 5
             }
           }
@@ -1697,6 +1838,18 @@
               "min": 3278.88,
               "max": 3440.14,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 28.4233,
+              "min": 28.3813,
+              "max": 28.5216,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 7.6028,
+              "min": 7.5702,
+              "max": 7.6273,
+              "n": 5
             }
           }
         },
@@ -1735,6 +1888,18 @@
               "median": 4801.39,
               "min": 4700.59,
               "max": 4830.91,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 28.414,
+              "min": 28.3623,
+              "max": 28.5513,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 8.5915,
+              "min": 8.5778,
+              "max": 8.6274,
               "n": 5
             }
           }
@@ -1775,6 +1940,18 @@
               "min": 529.22,
               "max": 636.85,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 5.9402,
+              "min": 5.9215,
+              "max": 6.1772,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 4.4174,
+              "min": 4.4165,
+              "max": 4.4281,
+              "n": 5
             }
           }
         },
@@ -1813,6 +1990,18 @@
               "median": 3855.82,
               "min": 3852.6,
               "max": 3868.12,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 12.6682,
+              "min": 12.6586,
+              "max": 12.691,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 6.5866,
+              "min": 6.5866,
+              "max": 6.5866,
               "n": 5
             }
           }
@@ -1853,6 +2042,18 @@
               "min": 831.35,
               "max": 852.52,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 25.1768,
+              "min": 24.9387,
+              "max": 25.3081,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 8.0837,
+              "min": 8.0837,
+              "max": 8.0837,
+              "n": 5
             }
           }
         },
@@ -1891,6 +2092,18 @@
               "median": 225.95,
               "min": 225.74,
               "max": 242.7,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 13.3463,
+              "min": 13.0329,
+              "max": 13.7962,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 6.8206,
+              "min": 6.815,
+              "max": 6.8234,
               "n": 5
             }
           }
@@ -1931,6 +2144,18 @@
               "min": 1381.21,
               "max": 1745.54,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 15.4601,
+              "min": 15.4275,
+              "max": 16.1101,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 29.4868,
+              "min": 29.483,
+              "max": 29.5605,
+              "n": 5
             }
           }
         },
@@ -1969,6 +2194,18 @@
               "median": 1408.18,
               "min": 1399.38,
               "max": 1774.59,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 12.8816,
+              "min": 11.9559,
+              "max": 13.3345,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 21.8661,
+              "min": 20.5773,
+              "max": 21.9332,
               "n": 5
             }
           }
@@ -2009,6 +2246,18 @@
               "min": 429.21,
               "max": 521.97,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 6.9306,
+              "min": 6.8618,
+              "max": 7.2979,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 5.3465,
+              "min": 5.3463,
+              "max": 5.358,
+              "n": 5
             }
           }
         },
@@ -2047,6 +2296,18 @@
               "median": 58.32,
               "min": 57.95,
               "max": 63.92,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 3.653,
+              "min": 3.6025,
+              "max": 3.7585,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.1237,
+              "min": 1.1237,
+              "max": 1.1237,
               "n": 5
             }
           }
@@ -2087,6 +2348,18 @@
               "min": 71.13,
               "max": 78.33,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 3.6023,
+              "min": 3.6023,
+              "max": 3.6025,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 3.8033,
+              "min": 3.8033,
+              "max": 3.8033,
+              "n": 5
             }
           }
         }
@@ -2107,14 +2380,16 @@
       "title": "Graph traversal",
       "dataset": "LDBC-SNB Interactive (SF1, SF10)",
       "conditions": [
-        "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions."
+        "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
       "columns": [
         "point p50 ms",
         "1-hop p50 ms",
         "2-hop p50 ms",
         "write p50 ms",
-        "peak memory GiB"
+        "peak memory GiB",
+        "disk GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -2161,6 +2436,12 @@
               "min": 1.7406,
               "max": 1.8715,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0122,
+              "min": 0.0122,
+              "max": 0.0122,
+              "n": 5
             }
           }
         },
@@ -2205,6 +2486,12 @@
               "median": 3.3167,
               "min": 3.3146,
               "max": 3.3418,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0677,
+              "min": 0.0677,
+              "max": 0.0677,
               "n": 5
             }
           }
@@ -2251,6 +2538,12 @@
               "min": 0.2097,
               "max": 0.2336,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0054,
+              "min": 0.0054,
+              "max": 0.0055,
+              "n": 5
             }
           }
         },
@@ -2295,6 +2588,12 @@
               "median": 4.6454,
               "min": 4.6284,
               "max": 4.6486,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0009,
+              "min": 0.0008,
+              "max": 0.0009,
               "n": 5
             }
           }
@@ -2341,6 +2640,12 @@
               "min": 8.026,
               "max": 8.0742,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1255,
+              "min": 0.1255,
+              "max": 0.1255,
+              "n": 5
             }
           }
         },
@@ -2385,6 +2690,12 @@
               "median": 7.9321,
               "min": 7.9278,
               "max": 7.9462,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1792,
+              "min": 0.1583,
+              "max": 0.1836,
               "n": 5
             }
           }
@@ -2431,6 +2742,12 @@
               "min": 0.3413,
               "max": 0.3897,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0493,
+              "min": 0.0491,
+              "max": 0.0505,
+              "n": 5
             }
           }
         },
@@ -2476,6 +2793,12 @@
               "min": 12.9374,
               "max": 12.9676,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.6584,
+              "min": 0.6584,
+              "max": 0.6584,
+              "n": 5
             }
           }
         }
@@ -2498,13 +2821,15 @@
         "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
         "The ArcadeDB (embedded) row without the view at SF10 was measured at ArcadeDB 26.8.1 on 2026-08-10 and is the one row in this table not yet re-run at the engine commit the page reports; the re-run is queued and this sentence goes away with it.",
         "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
-        "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap."
+        "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
       "columns": [
         "average friend age ms",
         "friends in same city ms",
         "most friends ms",
-        "peak memory GiB"
+        "peak memory GiB",
+        "disk GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -2545,6 +2870,12 @@
               "min": 8.055,
               "max": 8.1414,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1255,
+              "min": 0.1255,
+              "max": 0.1255,
+              "n": 5
             }
           }
         },
@@ -2583,6 +2914,12 @@
               "median": 8.1526,
               "min": 8.1011,
               "max": 8.226,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1573,
+              "min": 0.1573,
+              "max": 0.1573,
               "n": 5
             }
           }
@@ -2623,6 +2960,12 @@
               "min": 7.9789,
               "max": 8.0103,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1668,
+              "min": 0.1325,
+              "max": 0.1791,
+              "n": 5
             }
           }
         },
@@ -2661,6 +3004,12 @@
               "median": 0.3577,
               "min": 0.3403,
               "max": 0.3631,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.03,
+              "min": 0.03,
+              "max": 0.0301,
               "n": 5
             }
           }
@@ -2701,6 +3050,12 @@
               "min": 12.9125,
               "max": 12.9317,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.6584,
+              "min": 0.6584,
+              "max": 0.6584,
+              "n": 5
             }
           }
         }
@@ -2715,14 +3070,16 @@
       "title": "Tabular OLTP and OLAP",
       "dataset": "Synthetic orders workload",
       "conditions": [
-        "PostgreSQL's memory cell is not comparable to the other two. It keeps its data in shared memory and in the file cache the kernel holds for it, and this column counts neither, so it reads 0.12 GiB where the run's actual peak was 3.85. Most of even that 0.12 is our own benchmark client rather than the database: 0.105 of it. We checked that this is the measure and not the setting, by giving a PostgreSQL container a 2 GB buffer pool and watching this column stay at 5 MiB."
+        "PostgreSQL's memory cell is not comparable to the other two. It keeps its data in shared memory and in the file cache the kernel holds for it, and this column counts neither, so it reads 0.12 GiB where the run's actual peak was 3.85. Most of even that 0.12 is our own benchmark client rather than the database: 0.105 of it. We checked that this is the measure and not the setting, by giving a PostgreSQL container a 2 GB buffer pool and watching this column stay at 5 MiB.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
       "columns": [
         "read p50 ms",
         "insert p50 ms",
         "OLTP ops/s",
         "OLAP total ms",
-        "peak memory GiB"
+        "peak memory GiB",
+        "disk GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -2769,6 +3126,12 @@
               "min": 12.9028,
               "max": 13.2564,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 2.1835,
+              "min": 2.1834,
+              "max": 2.1836,
+              "n": 10
             }
           }
         },
@@ -2814,6 +3177,12 @@
               "min": 12.9347,
               "max": 13.0591,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 2.1983,
+              "min": 2.1838,
+              "max": 2.2441,
+              "n": 10
             }
           }
         },
@@ -2859,6 +3228,12 @@
               "min": 1.9235,
               "max": 1.9929,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.7149,
+              "min": 0.6352,
+              "max": 0.7948,
+              "n": 10
             }
           }
         },
@@ -2904,6 +3279,12 @@
               "min": 0.0958,
               "max": 0.1091,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 3.4444,
+              "min": 3.4442,
+              "max": 3.4445,
+              "n": 10
             }
           }
         },
@@ -2949,6 +3330,12 @@
               "min": 0.0656,
               "max": 0.0802,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 6.4444,
+              "min": 6.4443,
+              "max": 6.4445,
+              "n": 10
             }
           }
         }
@@ -2969,14 +3356,16 @@
       "conditions": [
         "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
         "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
-        "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database."
+        "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
       "columns": [
         "Q1 ms",
         "Q6 ms",
         "new-order p50 ms",
         "OLTP ops/s",
-        "peak memory GiB"
+        "peak memory GiB",
+        "disk GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -3023,6 +3412,12 @@
               "min": 6.6379,
               "max": 6.6603,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.6189,
+              "min": 0.6188,
+              "max": 0.6189,
+              "n": 10
             }
           }
         },
@@ -3068,6 +3463,12 @@
               "min": 9.2052,
               "max": 9.2683,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.6482,
+              "min": 0.6225,
+              "max": 0.6627,
+              "n": 10
             }
           }
         },
@@ -3113,6 +3514,12 @@
               "min": 3.3409,
               "max": 3.37,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0713,
+              "min": 0.0709,
+              "max": 0.0719,
+              "n": 10
             }
           }
         },
@@ -3158,6 +3565,12 @@
               "min": 3.3459,
               "max": 3.372,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.7879,
+              "min": 0.7878,
+              "max": 0.788,
+              "n": 10
             }
           }
         },
@@ -3203,6 +3616,12 @@
               "min": 3.3565,
               "max": 3.3826,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.7879,
+              "min": 0.7878,
+              "max": 0.788,
+              "n": 10
             }
           }
         }
@@ -3223,12 +3642,14 @@
       "conditions": [
         "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
         "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
-        "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do."
+        "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
       "columns": [
         "p50 ms",
         "p99 ms",
-        "peak memory GiB"
+        "peak memory GiB",
+        "disk GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -3263,6 +3684,12 @@
               "min": 1.8936,
               "max": 2.1836,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0384,
+              "min": 0.0384,
+              "max": 0.0384,
+              "n": 5
             }
           }
         },
@@ -3295,6 +3722,12 @@
               "median": 6.7942,
               "min": 6.7846,
               "max": 6.8202,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0012,
+              "min": 0.0012,
+              "max": 0.0012,
               "n": 5
             }
           }
@@ -3329,6 +3762,12 @@
               "min": 0.7977,
               "max": 0.8063,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0009,
+              "min": 0.0009,
+              "max": 0.0009,
+              "n": 5
             }
           }
         }
@@ -3349,7 +3788,8 @@
       "conditions": [
         "Cold is the first timed pass after the index is built. Warm is the median of five more passes over a DIFFERENT half of the query set, so a warm number cannot be explained by the engine having already answered that exact query. Both halves are drawn from the same 1,000 dev queries in the same order.",
         "One build per engine here, against five in the table above, which is why these are a separate table rather than two more columns on it. Reading a warm number from this protocol beside a cold number from that one is the mistake this table exists to avoid.",
-        "The order is the same cold and warm at both sizes. The dense table further down is not like this: there ArcadeDB alone gains about nine times on a second pass, so which pass you time decides the ranking, and it has to say which."
+        "The order is the same cold and warm at both sizes. The dense table further down is not like this: there ArcadeDB alone gains about nine times on a second pass, so which pass you time decides the ranking, and it has to say which.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
       "columns": [
         "cold p50 ms",
@@ -3391,6 +3831,18 @@
               "min": 1.04,
               "max": 1.04,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 16.791,
+              "min": 16.7462,
+              "max": 16.8096,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 13.0806,
+              "min": 13.0805,
+              "max": 13.0806,
+              "n": 5
             }
           }
         },
@@ -3424,6 +3876,18 @@
               "min": 1.0,
               "max": 1.0,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 16.7674,
+              "min": 16.7567,
+              "max": 16.7892,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 16.2461,
+              "min": 16.2461,
+              "max": 16.2462,
+              "n": 5
             }
           }
         },
@@ -3457,6 +3921,18 @@
               "min": 1.04,
               "max": 1.04,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 16.906,
+              "min": 16.88,
+              "max": 16.9285,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 13.096,
+              "min": 13.0783,
+              "max": 13.1358,
+              "n": 5
             }
           }
         },
@@ -3490,6 +3966,18 @@
               "min": 1.0,
               "max": 1.0,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 17.375,
+              "min": 17.35,
+              "max": 17.4103,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 8.0066,
+              "min": 8.0063,
+              "max": 8.0068,
+              "n": 5
             }
           }
         },
@@ -3523,6 +4011,12 @@
               "min": 1.04,
               "max": 1.04,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 16.8279,
+              "min": 16.7812,
+              "max": 18.2701,
+              "n": 5
             }
           }
         },
@@ -3556,6 +4050,18 @@
               "min": 1.0,
               "max": 1.0,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 14.6536,
+              "min": 14.5646,
+              "max": 14.8021,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 12.2731,
+              "min": 12.2707,
+              "max": 12.2734,
+              "n": 5
             }
           }
         },
@@ -3589,6 +4095,18 @@
               "min": 1.09,
               "max": 1.09,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 8.3591,
+              "min": 8.282,
+              "max": 8.4055,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.4752,
+              "min": 1.4751,
+              "max": 1.4752,
+              "n": 5
             }
           }
         },
@@ -3622,6 +4140,18 @@
               "min": 1.08,
               "max": 1.08,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 8.418,
+              "min": 8.369,
+              "max": 8.4479,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.8318,
+              "min": 1.8318,
+              "max": 1.8318,
+              "n": 5
             }
           }
         },
@@ -3655,6 +4185,18 @@
               "min": 1.14,
               "max": 1.14,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 8.6235,
+              "min": 8.5557,
+              "max": 8.669,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.5016,
+              "min": 1.4929,
+              "max": 1.5048,
+              "n": 5
             }
           }
         },
@@ -3688,6 +4230,18 @@
               "min": 1.14,
               "max": 1.14,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 9.0536,
+              "min": 9.0061,
+              "max": 9.1035,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.9053,
+              "min": 0.9052,
+              "max": 0.9053,
+              "n": 5
             }
           }
         },
@@ -3721,6 +4275,12 @@
               "min": 0.75,
               "max": 0.75,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 4.7643,
+              "min": 4.6914,
+              "max": 5.6972,
+              "n": 5
             }
           }
         },
@@ -3754,6 +4314,18 @@
               "min": 0.99,
               "max": 0.99,
               "n": 1
+            },
+            "peak memory GiB": {
+              "median": 2.2725,
+              "min": 2.0881,
+              "max": 2.4558,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.4492,
+              "min": 1.4489,
+              "max": 1.4521,
+              "n": 5
             }
           }
         }
@@ -3768,12 +4340,15 @@
       "conditions": [
         "No engine takes a settle step, and that was measured rather than assumed: sealing the write buffer makes the aggregation faster and the last-point query slower, since the unsealed tail a scan walks is where the newest point lives. Settling only ours would have been a one-sided advantage. (Rows disagree on this; treat with care.)",
         "One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark. A matched one-tag/ten-tag run prices the schema at 2.0x on ingest and 2.6x faster on last-point.",
-        "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound: telling the engine to look only at the past hour made it slower, 0.860 ms against 0.720, because evaluating the time filter costs more than the scan it saves."
+        "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound: telling the engine to look only at the past hour made it slower, 0.860 ms against 0.720, because evaluating the time filter costs more than the scan it saves.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
       "columns": [
         "ingest pts/s",
         "newest reading ms",
-        "12h aggregate ms"
+        "12h aggregate ms",
+        "peak memory GiB",
+        "disk GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -3806,6 +4381,18 @@
               "min": 19.25,
               "max": 28.36,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.7164,
+              "min": 1.6036,
+              "max": 1.7229,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0876,
+              "min": 0.0876,
+              "max": 0.0876,
+              "n": 5
             }
           }
         },
@@ -3836,6 +4423,18 @@
               "median": 1536.18,
               "min": 1513.89,
               "max": 1557.66,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 6.2453,
+              "min": 6.1102,
+              "max": 6.2913,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.2459,
+              "min": 0.2459,
+              "max": 0.2459,
               "n": 5
             }
           }
@@ -3868,6 +4467,18 @@
               "min": 2.03,
               "max": 2.26,
               "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.3048,
+              "min": 1.2992,
+              "max": 1.3256,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1604,
+              "min": 0.1604,
+              "max": 0.1604,
+              "n": 5
             }
           }
         },
@@ -3898,6 +4509,18 @@
               "median": 4.58,
               "min": 4.39,
               "max": 4.8,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.9537,
+              "min": 0.9241,
+              "max": 0.9655,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0113,
+              "min": 0.0113,
+              "max": 0.0113,
               "n": 5
             }
           }
