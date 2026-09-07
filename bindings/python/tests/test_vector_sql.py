@@ -819,13 +819,17 @@ class TestVectorSQL:
 
         query_vec = [0.9, 0.1]
 
-        # By index name. This used to sit inside `try: ... except Exception:
-        # pass`, so the assertion could never fail the test (2026-09-07).
+        # schema:indexes lists both the logical index (Item[vec]) and its
+        # internal component (Item_0_<id>), in no fixed order, and only the
+        # logical name is a vector index to vectorNeighbors. This query used to
+        # take indexes[0] inside `try: ... except Exception: pass`, so it was
+        # both silent and order-dependent (2026-09-07).
+        assert any(n == "Item[vec]" for n in indexes), indexes
         rs = test_db.query(
-            "sql", f"SELECT vectorNeighbors('{index_name}', {query_vec}, 1) as res"
+            "sql", f"SELECT vectorNeighbors('Item[vec]', {query_vec}, 1) as res"
         )
         res = next(rs).get("res")
-        assert len(res) > 0
+        assert len(res) == 1
 
     def test_vector_neighbors_accepts_parameterized_index_and_vector(self, test_db):
         """SQL vectorNeighbors should accept bound index and vector parameters."""
