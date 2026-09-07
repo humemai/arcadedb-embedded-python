@@ -1,3 +1,14 @@
-2026-09-07 08:39:50.619 INFO  [LSMVectorIndex] Building graph with 10000000 vectors using property 'emb' (cache enabled: size=10000000 of 10000000)
-2026-09-07 09:26:21.122 WARNI [LSMVectorIndex] Graph build left 4 of 10000000 vectors unreachable for index V_0_3519579072811: serving them from the delta scan, and recording them in the graph manifest so a reopened session serves them the same way (issue #7190). A later rebuild does not repair this - a Vamana build orphans a fresh set - so the count does not converge downwards
-2026-09-07 09:27:01.423 INFO  [LSMVectorIndex] Built graph for index: V_0_3519579072811Traceback (most recent call last):
+2026-09-07 11:49:59.350 INFO  [LSMVectorIndex] Building graph with 10000000 vectors using property 'emb' (cache enabled: size=10000000 of 10000000)
+2026-09-07 12:39:06.246 WARNI [LSMVectorIndex] Graph build left 5 of 10000000 vectors unreachable for index V_0_14927148912994: serving them from the delta scan, and recording them in the graph manifest so a reopened session serves them the same way (issue #7190). A later rebuild does not repair this - a Vamana build orphans a fresh set - so the count does not converge downwards
+2026-09-07 12:39:46.072 INFO  [LSMVectorIndex] Built graph for index: V_0_14927148912994
+2026-09-07 12:39:58.351 INFO  [LSMVectorIndex] Starting async graph rebuild (accumulated 100000 mutations, threshold: 50000, index: V_0_14927148912994)
+2026-09-07 12:39:58.353 INFO  [LSMVectorIndex] Acquired rebuild permit for index: V_0_14927148912994 (available permits: 0)
+2026-09-07 12:39:58.397 INFO  [LSMVectorIndex] Freed 1142 MB of the 5816 MB page read cache so the graph rebuild of vector index V_0_14927148912994 (about 11244 MB for 10100000 nodes) fits the 11351 MB of available heap that arcadedb.vectorIndex.rebuildMaxHeapPercent allows it. Those pages are read back from disk on demand, and the cache is process-wide, so some of them may belong to another datab
+2026-09-07 12:40:13.280 INFO  [LSMVectorIndex] Building graph with 10100000 vectors using property 'emb' (cache enabled: size=10100000 of 10100000)
+2026-09-07 12:48:29.224 INFO  [LSMVectorIndex$2] Inactivity timeout expired (15000 ms), triggering graph rebuild for 2500000 pending mutations (index: V_0_14927148912994)
+2026-09-07 13:21:26.872 WARNI [LSMVectorIndex] Graph build left 4 of 10100000 vectors unreachable for index V_0_14927148912994: serving them from the delta scan, and recording them in the graph manifest so a reopened session serves them the same way (issue #7190). A later rebuild does not repair this - a Vamana build orphans a fresh set - so the count does not converge downwards
+2026-09-07 13:22:06.991 INFO  [LSMVectorIndex] Built graph for index: V_0_14927148912994
+2026-09-07 13:22:06.991 INFO  [LSMVectorIndex] Async graph rebuild completed for index: V_0_14927148912994
+2026-09-07 13:22:06.991 INFO  [LSMVectorIndex] Starting async graph rebuild (accumulated 2400000 mutations, threshold: 50000, index: V_0_14927148912994)
+2026-09-07 13:22:06.992 INFO  [LSMVectorIndex] Acquired rebuild permit for index: V_0_14927148912994 (available permits: 0)
+2026-09-07 13:22:06.994 WARNI [LSMVectorIndex] Deferring the graph rebuild of vector index V_0_14927148912994: it needs about 13121 MB (12497000 nodes, plus the 3730 MB the graph it replaces costs to keep resident so searches keep working) against 7718 MB of the 8575 MB currently available heap that arcadedb.vectorIndex.rebuildMaxHeapPercent allows it, and the 4315 MB of evictable page cache that
