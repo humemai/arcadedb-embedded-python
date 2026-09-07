@@ -44,18 +44,17 @@ def cleanup_test_dirs():
         try:
             if server.is_started():
                 server.stop()
-        except Exception:
-            pass  # nosec B110
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+
+            warnings.warn(f"server cleanup: stop failed: {exc!r}", stacklevel=1)
 
     # Give servers time to release locks
     time.sleep(0.5)
 
     for path in dirs:
         if os.path.exists(path):
-            try:
-                shutil.rmtree(path, ignore_errors=True)
-            except Exception:
-                pass  # nosec B110
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def test_server_pattern_recommended(cleanup_test_dirs):
@@ -684,8 +683,9 @@ def test_http_api_access_pattern(cleanup_test_dirs):
     # Create same test type (already exists, but included for fair comparison)
     try:
         db.command("sql", "CREATE DOCUMENT TYPE BenchItem")
-    except Exception:
-        pass  # nosec B110
+    except Exception as exc:  # noqa: BLE001
+        if "already exists" not in str(exc).lower():
+            raise
 
     # Same mixed operations
     for i in range(num_operations):

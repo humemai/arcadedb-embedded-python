@@ -87,7 +87,7 @@ class TestVectorParams:
                 # Try getter
                 val = metadata.isStoreVectorsInGraph()
             except Exception:
-                pass  # nosec B110
+                val = None  # neither accessor: the string fallback below decides
 
         if val is None:
             # Try inspecting the string representation as a fallback for verification

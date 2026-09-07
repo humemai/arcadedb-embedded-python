@@ -468,8 +468,8 @@ def test_transactions(temp_db_path):
             with db.transaction():
                 db.command("sql", "INSERT INTO TransactionTest SET id = 3")
                 raise Exception("Intentional error")
-        except Exception:
-            pass  # nosec B110
+        except Exception as exc:  # noqa: BLE001
+            assert "Intentional error" in str(exc), exc
 
         # Verify rollback worked
         result = db.query("sql", "SELECT count(*) as count FROM TransactionTest")

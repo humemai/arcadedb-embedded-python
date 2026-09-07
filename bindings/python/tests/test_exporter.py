@@ -881,8 +881,10 @@ class TestAllDataTypes:
             try:
                 if db:
                     db.close()
-            except Exception:
-                pass  # nosec B110
+            except Exception as exc:  # noqa: BLE001
+                import warnings
+
+                warnings.warn(f"exporter test: close failed: {exc!r}", stacklevel=1)
 
 
 if __name__ == "__main__":

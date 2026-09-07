@@ -819,16 +819,13 @@ class TestVectorSQL:
 
         query_vec = [0.9, 0.1]
 
-        # Try using index name
-        try:
-            rs = test_db.query(
-                "sql", f"SELECT vectorNeighbors('{index_name}', {query_vec}, 1) as res"
-            )
-            res = next(rs).get("res")
-            # Should return list of RIDs or similar
-            assert len(res) > 0
-        except Exception:
-            pass  # nosec B110
+        # By index name. This used to sit inside `try: ... except Exception:
+        # pass`, so the assertion could never fail the test (2026-09-07).
+        rs = test_db.query(
+            "sql", f"SELECT vectorNeighbors('{index_name}', {query_vec}, 1) as res"
+        )
+        res = next(rs).get("res")
+        assert len(res) > 0
 
     def test_vector_neighbors_accepts_parameterized_index_and_vector(self, test_db):
         """SQL vectorNeighbors should accept bound index and vector parameters."""
