@@ -262,17 +262,18 @@ def main():
     if MODE == "bounded" and os.environ.get("PROBE_WAIT_REBUILD") == "1":
         t0 = time.time()
         while time.time() - t0 < 7200:
-            st = stats()
-            if not st.get("asyncRebuildInProgress"):
+            # NOT `st`: that is the statistics module; a local assignment made it local to main() and the p50 line raised UnboundLocalError after a one-hour 10M build (2026-09-07 qCQ, BUGS F20). pyflakes and a laptop smoke both catch it.
+            _s = stats()
+            if not _s.get("asyncRebuildInProgress"):
                 break
             time.sleep(5)
-        st = stats()
+        _s = stats()
         warmup()
         lat = timed_pass()
-        rec = {"delta_target": "after_rebuild", "delta_count": st.get("deltaVectorsCount"),
-               "graph_nodes": st.get("graphNodeCount"), "graph_state": st.get("graphState"),
-               "async_rebuild_in_progress": st.get("asyncRebuildInProgress"),
-               "rebuilds_deferred_for_memory": st.get("rebuildsDeferredForMemory"),
+        rec = {"delta_target": "after_rebuild", "delta_count": _s.get("deltaVectorsCount"),
+               "graph_nodes": _s.get("graphNodeCount"), "graph_state": _s.get("graphState"),
+               "async_rebuild_in_progress": _s.get("asyncRebuildInProgress"),
+               "rebuilds_deferred_for_memory": _s.get("rebuildsDeferredForMemory"),
                "waited_s": round(time.time() - t0, 1),
                "p50_ms": round(st.median(lat), 3), "n_queries": len(lat)}
         with open(OUT, "a") as f:
