@@ -121,6 +121,102 @@ class ArcadeE2:
         self.db.close()
 
 
+class ArcadeE2Server(ArcadeE2):
+    """The same operation against the ArcadeDB SERVER over HTTP, in one server
+    transaction (2026-09-07, user: both deployments for every ArcadeDB row).
+
+    The transaction is the HTTP session one: POST /begin/bench opens it and
+    returns `arcadedb-session-id`, every command carries that header, and the
+    operation ends in /commit or /rollback. The injected crash raises after the
+    three writes and BEFORE the commit, and the trial's rollback is explicit,
+    which is what a client that dies mid-operation gets from the server anyway
+    (an uncommitted session is discarded). Same SQL as the embedded arm; the
+    vector query takes its parameters by name because the HTTP API has no
+    positional binding.
+    """
+    name = "arcadedb_e2_server"
+
+    def __init__(self):
+        import requests
+        self.rq = requests.Session()
+        self.rq.auth = ("root", "dbbenchpass")
+        host = os.environ["BENCH_SERVER_HOST"]
+        port = os.environ.get("BENCH_SERVER_PORT", "2480")
+        self.base = f"http://{host}:{port}/api/v1"
+        try:
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            self.version = "server:" + (info.json().get("version") or "?")
+        except Exception:  # noqa: BLE001
+            self.version = "server:unknown"
+
+    def _post(self, kind, command, params=None, language="sql", sid=None, timeout=600):
+        payload = {"language": language, "command": command}
+        if params:
+            payload["params"] = params
+        headers = {"arcadedb-session-id": sid} if sid else None
+        r = self.rq.post(f"{self.base}/{kind}/bench", json=payload, headers=headers, timeout=timeout)
+        r.raise_for_status()
+        return r.json().get("result", [])
+
+    def _script(self, statements, sid=None):
+        return self._post("command", ";".join(statements), language="sqlscript", sid=sid)
+
+    def build(self, vecs, edges):
+        for ddl in ("CREATE VERTEX TYPE Product", "CREATE PROPERTY Product.pid INTEGER",
+                    "CREATE PROPERTY Product.views INTEGER",
+                    "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS",
+                    "CREATE INDEX ON Product (pid) UNIQUE", "CREATE EDGE TYPE RELATED"):
+            self._post("command", ddl)
+        buf = []
+        for i in range(len(vecs)):
+            emb = ",".join(f"{x:.6g}" for x in vecs[i].tolist())
+            buf.append(f"CREATE VERTEX Product SET pid = {i}, views = 0, embedding = [{emb}]")
+            if len(buf) >= 1000:
+                self._script(buf); buf = []
+        if buf:
+            self._script(buf); buf = []
+        for sidx, didx in edges:
+            buf.append(f"CREATE EDGE RELATED FROM (SELECT FROM Product WHERE pid = {sidx}) "
+                       f"TO (SELECT FROM Product WHERE pid = {didx})")
+            if len(buf) >= 1000:
+                self._script(buf); buf = []
+        if buf:
+            self._script(buf)
+        self._post("command", f'''CREATE INDEX ON Product (embedding) LSM_VECTOR
+                   METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
+                   "beamWidth": 100, "storeVectorsInGraph": false }}''', timeout=3600)
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        r = self.rq.post(f"{self.base}/begin/bench", timeout=60)
+        r.raise_for_status()
+        sid = r.headers.get("arcadedb-session-id")
+        try:
+            rows = self._post("query", "SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef)))",
+                              {"idx": "Product[embedding]", "q": [float(x) for x in qvec], "k": K, "ef": 100}, sid=sid)
+            pids = [int(r["pid"]) for r in rows]
+            rel = self._post("query", f"SELECT expand(out('RELATED')) FROM Product WHERE pid = {pids[0]}", sid=sid)
+            touched = pids[:3] + [int(r["pid"]) for r in rel[:3]]
+            for p_ in set(touched):
+                self._post("command", f"UPDATE Product SET views = views + 1 WHERE pid = {p_}", sid=sid)
+            if crash:
+                raise RuntimeError("injected-crash")
+            self.rq.post(f"{self.base}/commit/bench", headers={"arcadedb-session-id": sid}, timeout=60).raise_for_status()
+        except Exception:
+            try:
+                self.rq.post(f"{self.base}/rollback/bench", headers={"arcadedb-session-id": sid}, timeout=60)
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        return len(touched)
+
+    def total_views(self):
+        r = self._post("query", "SELECT sum(views) AS s FROM Product")
+        return int(r[0]["s"] or 0)
+
+    def close(self):
+        self.rq.close()
+
+
 def _srows(res):
     """surrealdb 2.x embedded returns flat row lists; older/ws shapes nest
     under [{"result": ...}] -- normalize both."""
@@ -319,7 +415,7 @@ class ComposedE2:
         self.neo.close()
 
 
-BACKENDS = {c.name: c for c in (ArcadeE2, SurrealE2, ComposedE2)}
+BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, ComposedE2)}
 
 
 def main():

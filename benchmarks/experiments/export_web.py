@@ -344,6 +344,7 @@ DISPLAY_NAMES = {
     "arcadedb_sparse_embedded_fp32": "ArcadeDB (embedded, fp32)",
     "arcadedb_sparse_embedded_nocompact": "ArcadeDB (embedded, no settle step)",
     "arcadedb_e2": "ArcadeDB (one transaction)",
+    "arcadedb_e2_server": "ArcadeDB (server, one transaction)",
     "composed_qdrant_neo4j": "Qdrant + Neo4j (no shared transaction)",
     "surrealdb_e2": "SurrealDB",
     "qdrant_sparse": "Qdrant", "qdrant_dense": "Qdrant",
@@ -1119,6 +1120,7 @@ L4_METRICS = [
 L4_CANON_LABELS = {
     "arcadedb_ts_native": "arcadedb (native TIMESERIES)",
     "arcadedb_ts_doc":    "arcadedb (document path)",
+    "arcadedb_ts_doc_server": "arcadedb (server, document path)",
     "questdb":            "questdb",
     "duckdb":             "duckdb",
 }
@@ -1403,6 +1405,7 @@ def _l4_table(all_rows):
     # topology lookup does not reach it. QuestDB is a server (ILP ingest on
     # 9009, SQL over pg-wire, see l4_tsbs.py); the other two run in-process.
     L4_DEPLOYMENT = {"arcadedb (native TIMESERIES)": "embedded",
+                     "arcadedb (server, document path)": "server",
                      "arcadedb (document path)": "embedded",
                      "questdb": "server", "duckdb": "embedded"}
     entries = []

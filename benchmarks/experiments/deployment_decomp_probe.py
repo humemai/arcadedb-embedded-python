@@ -84,6 +84,30 @@ def gen_rows(total: int):
         }
 
 
+def ensure_docker_db(session, base_url: str, auth, db_name: str, total: int) -> None:
+    """The served arm needs the same corpus in the container. August's run
+    loaded it by hand; this loads it over HTTP: create the database, the
+    schema, then SQLSCRIPT batches of INSERTs. Not timed."""
+    r = session.post(f"{base_url}/api/v1/server", auth=auth,
+                     json={"command": f"create database {db_name}"}, timeout=120)
+    if r.status_code not in (200, 400):   # 400: already exists
+        r.raise_for_status()
+    def cmd(text, language="sql"):
+        rr = session.post(f"{base_url}/api/v1/command/{db_name}", auth=auth,
+                          json={"language": language, "command": text}, timeout=600)
+        rr.raise_for_status()
+    for stmt in SCHEMA:
+        cmd(stmt)
+    buf = []
+    for row in gen_rows(total):
+        buf.append(f"INSERT INTO orders SET id = {row['id']}, customer_id = {row['customer_id']}, "
+                   f"amount = {row['amount']}, region = '{row['region']}'")
+        if len(buf) >= 5000:
+            cmd(";".join(buf), "sqlscript"); buf = []
+    if buf:
+        cmd(";".join(buf), "sqlscript")
+
+
 def load_embedded(db, total: int) -> None:
     for stmt in SCHEMA:
         db.command("sql", stmt)
@@ -272,6 +296,8 @@ def main() -> int:
         if args.docker:
             dsess = requests.Session()
             dauth = ("root", args.docker_password)
+            ensure_docker_db(dsess, args.docker.rstrip("/"), dauth, DB_NAME, ROWS)
+            print(f"loaded {ROWS:,} rows into the served database at {args.docker}", flush=True)
             arms["docker_http"] = http_runner(dsess, args.docker.rstrip("/"),
                                               dauth, DB_NAME)
             results["docker_http"] = {}

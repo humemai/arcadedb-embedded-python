@@ -837,6 +837,14 @@ BACKENDS = {
 # topology, images, heap and GC settings to the byte; only the adapter's DDL
 # differs (l3_sparse.ArcadeServerFP32, 2026-09-07).
 BACKENDS["arcadedb_sparse_server_fp32"] = dict(BACKENDS["arcadedb_sparse_server"])
+# Served arms for the lanes that had none (user, 2026-09-07: both deployments
+# for every ArcadeDB row). Same container shape as arcadedb_server: client
+# image with requests, pinned server image, heap/GC parity.
+BACKENDS["arcadedb_e2_server"] = dict(BACKENDS["arcadedb_server"])
+BACKENDS["arcadedb_ts_doc_server"] = dict(BACKENDS["arcadedb_server"])
+# E4's decomposition needs the wheel (in-process arms) AND a served arm, so its
+# client is the wheel image and the server the pinned one.
+BACKENDS["arcadedb_e4"] = dict(BACKENDS["arcadedb_server"], image="dbbench:arcadedb")
 
 # ---------------------------------------------------------------- local engine
 # FAST-ITERATION MODE. The project page is no longer pinned to a PyPI release: the
@@ -983,6 +991,11 @@ LANE_CORPUS = {
 
 
 LANES = {
+    # E4: the client/server split decomposed (embedded / in-process HTTP /
+    # separate container), one backend, one workload, five reps. The runner
+    # gives it what the August hand launch had: a pinned server container on
+    # the cell network, cpuset and memory parity, the wheel in the client.
+    "e4": ("e4_decomp.py", ["arcadedb_e4"], ["decomp"]),
     # lane -> (bench script, backends, workloads)
     "l1": ("l1_tabular.py",
            ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres",
@@ -997,7 +1010,7 @@ LANES = {
                "postgres_tuned"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
-           ["arcadedb_e2", "surrealdb_e2", "composed_qdrant_neo4j"],
+           ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "composed_qdrant_neo4j"],
            ["hybrid", "atomicity"]),
     # L5 measures OPEN and CLOSE, which every embedded deployment does and no
     # benchmark measures. Situations ride the WORKLOAD axis, so each is its own
@@ -1054,7 +1067,7 @@ LANES = {
            # arms run: the document path is what ordinary SQL gives you, the
            # native path is the engine asked in its own idiom, and the page
            # prints both rather than choosing the flattering one.
-           ["arcadedb_ts_doc", "arcadedb_ts_native", "questdb", "duckdb"],
+           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "questdb", "duckdb"],
            ["ingest"]),
 }
 

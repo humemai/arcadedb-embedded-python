@@ -109,6 +109,65 @@ class ArcadeTS:
         self.db.close()
 
 
+class ArcadeTSServer(ArcadeTS):
+    """The document path against the ArcadeDB SERVER over HTTP (2026-09-07).
+    Same schema and the same three queries; the ingest goes as SQLSCRIPT
+    batches of 5,000 INSERTs, so the ingest column measures the HTTP path a
+    client without the wheel gets. The native TIMESERIES arm has no served
+    form: it is an embedded API."""
+    name = "arcadedb_ts_doc_server"
+
+    def connect(self):
+        import requests
+        self.rq = requests.Session()
+        self.rq.auth = ("root", "dbbenchpass")
+        host = os.environ["BENCH_SERVER_HOST"]
+        port = os.environ.get("BENCH_SERVER_PORT", "2480")
+        self.base = f"http://{host}:{port}/api/v1"
+        try:
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            self._ver = "server:" + (info.json().get("version") or "?")
+        except Exception:  # noqa: BLE001
+            self._ver = "server:unknown"
+
+    def version(self):
+        return self._ver
+
+    def _post(self, kind, command, language="sql", timeout=600):
+        r = self.rq.post(f"{self.base}/{kind}/bench",
+                         json={"language": language, "command": command}, timeout=timeout)
+        r.raise_for_status()
+        return r.json().get("result", [])
+
+    def ingest(self, pts):
+        self._post("command", "CREATE DOCUMENT TYPE Point")
+        for c, t in (("host", "STRING"), ("ts", "LONG"), ("uu", "DOUBLE"),
+                     ("us", "DOUBLE"), ("ui", "DOUBLE")):
+            self._post("command", f"CREATE PROPERTY Point.{c} {t}")
+        self._post("command", "CREATE INDEX ON Point (host, ts) UNIQUE")
+        buf = []
+        for h, ts, uu, us, ui in pts:
+            buf.append(f"INSERT INTO Point SET host='{h}', ts={ts}, uu={uu}, us={us}, ui={ui}")
+            if len(buf) >= 5000:
+                self._post("command", ";".join(buf), language="sqlscript"); buf = []
+        if buf:
+            self._post("command", ";".join(buf), language="sqlscript")
+
+    def q_last(self):
+        return self._post("query", f"SELECT ts, uu FROM Point WHERE host='{HOST}' ORDER BY ts DESC LIMIT 1")
+
+    def q_range(self):
+        return self._post("query", f"SELECT (ts - ts % 60) AS m, max(uu) AS v FROM Point WHERE host='{HOST}' "
+                                   f"AND ts >= {T0} AND ts < {T0+3600} GROUP BY m ORDER BY m")
+
+    def q_global(self):
+        return self._post("query", f"SELECT (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
+                                   f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY h ORDER BY h")
+
+    def close(self):
+        self.rq.close()
+
+
 class ArcadeNativeTS(ArcadeTS):
     """ArcadeDB's native TIMESERIES type, promoted from l4_native_probe.py into the lane.
 
@@ -396,7 +455,7 @@ class QuestTS:
 # adding a served arm cannot forget to update the role test.
 _CLIENT_SERVER = {"questdb"}
 
-BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeNativeTS, DuckTS, QuestTS)}
+BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, DuckTS, QuestTS)}
 
 
 def main():
