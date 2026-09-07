@@ -11,5 +11,5 @@ Versions pinned (all on PyPI):
 - LadybugDB: `ladybug==0.18.1`.
 - DuckDB 1.5.4, SQLite 3.46.1, Chroma 1.5.9 (unchanged).
 
-The paper and poster were re-measured on mini and updated to these versions and
+The paper and poster were re-measured on the benchmark host and updated to these versions and
 numbers (2026-07-11). Prior campaigns archived under results/archive_*.

@@ -1,7 +1,7 @@
 # Python Bindings vs Java Native: Performance & Memory Report
 
 Measured 2026-07-03/04 · Engine 26.8.1-SNAPSHOT (lineage since renamed 26.7.2-SNAPSHOT upstream) · Maintainer laptop (diagnostic
-numbers — paper-grade numbers must be re-measured on tk@mini) · Raw data:
+numbers — paper-grade numbers must be re-measured on the benchmark host) · Raw data:
 `results/all_results.csv` · Change history: `git log bindings/python` (this work
 spans commits `fdcf3e78db..686996e379`).
 
@@ -196,11 +196,11 @@ Same quarantine-and-gate method applied to the wheel contents (82MB → **70.8MB
   (java.desktop is statically required by jts-core/commons-lang3; native-symbol
   stripping; Lucene sub-jar bisection) are crumbs or rule-violations.
 
-## Paper-grade verification on tk@mini (2026-07-05)
+## Paper-grade verification on the benchmark host (2026-07-05)
 
 Independent machine (20 cores, idle), 5 runs/layer, same wheel:
 
-| layer | mini | laptop | verdict |
+| layer | benchmark host | laptop | verdict |
 |---|---|---|---|
 | Vector J-SQL / P-SQL | 4.08 ± 0.17 / **4.45 ± 0.09ms (1.09×)** | 4.41 / 5.09 (1.15×) | replicated, tighter |
 | J-direct / P-wrapper | 2.63 ± 0.06 / 2.91 ± 0.03ms (1.11×) | 2.48 / 2.69 (1.08×) | replicated |

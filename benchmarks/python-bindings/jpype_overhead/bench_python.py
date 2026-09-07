@@ -500,7 +500,7 @@ def _emit_provenance(phase):
     table, two page_check pins and three claims_check pins (1.28, 1.63, 13.81)
     all rest on it, and the only provenance that exists anywhere is a sentence
     in REPORT.md naming a 26.8.1-SNAPSHOT laptop session, which is neither the
-    paper's pin nor the mini re-measure that actually produced the file.
+    paper's pin nor the benchmark-host re-measure that actually produced the file.
 
     Printed rather than written to a path because this script's whole output
     contract is stdout lines the collector tees into the CSV; a sidecar would
