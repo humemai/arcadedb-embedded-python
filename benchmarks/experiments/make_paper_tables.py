@@ -151,6 +151,7 @@ NAMES = {
     # infer.
     "arcadedb_dense_embedded_int8": "ArcadeDB (emb, int8)",
     "qdrant_dense_int8": "Qdrant (int8)", "milvus_dense_int8": "Milvus (int8)",
+    "arcadedb_dense_server_int8": "ArcadeDB (srv, int8)", "sqlite_vec_dense_int8": "sqlite-vec (int8)",
     "chroma_dense": "Chroma (fp32)", "lancedb_dense": "LanceDB (int8)",
     "sqlite_vec_dense": "sqlite-vec (fp32)",
     "duckdb_vss_dense": "DuckDB-VSS (fp32)",

@@ -121,6 +121,22 @@ def cell(table, row_label, col):
     return None
 
 
+def cell_text(table, row_label, col):
+    """The printed number of one cell, as text, so a checker can read how many
+    decimals the table prints and compare at that precision."""
+    path = os.path.join(TABLES, table)
+    for line in open(path):
+        line = line.strip()
+        if not line.startswith(row_label):
+            continue
+        cells = [c.strip() for c in line.rstrip("\\\\").split("&")][1:]
+        if col >= len(cells):
+            return None
+        m = re.match(r"([0-9]*\.?[0-9]+)", cells[col].replace("{", "").replace("}", ""))
+        return m.group(1) if m else None
+    return None
+
+
 def gib(rows, field, **kw):
     """MiB field -> GiB. The prose divided by 1000 here and called it GiB,
     which inflated every memory number ~2.4%; the figure pipeline had it right

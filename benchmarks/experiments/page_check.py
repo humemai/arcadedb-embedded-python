@@ -123,16 +123,29 @@ PROSE = [
     ("dense.arcadedb.cold", r"that is (\d+(?:\.\d+)?) ?ms for ArcadeDB",
      ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 1)),
     ("dense.qdrant.cold", r"against Qdrant's (\d+(?:\.\d+)?) and Chroma's",
-     ("t5_dense_ts.tex", "Qdrant", 1)),
+     ("t5_dense_ts.tex", "Qdrant (fp32)", 1)),
     ("dense.chroma.cold", r"and Chroma's (\d+(?:\.\d+)?)",
-     ("t5_dense_ts.tex", "Chroma", 1)),
+     ("t5_dense_ts.tex", "Chroma (fp32)", 1)),
     # Steady state, quoted to show the gap is ours alone. Column 2.
     ("dense.arcadedb.warm", r"ArcadeDB answers in (\d+(?:\.\d+)?) ?ms",
      ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 2)),
     ("dense.qdrant.warm", r"Qdrant moves to (\d+(?:\.\d+)?)",
-     ("t5_dense_ts.tex", "Qdrant", 2)),
+     ("t5_dense_ts.tex", "Qdrant (fp32)", 2)),
     ("dense.chroma.warm", r"and Chroma to (\d+(?:\.\d+)?)",
-     ("t5_dense_ts.tex", "Chroma", 2)),
+     ("t5_dense_ts.tex", "Chroma (fp32)", 2)),
+    # Row labels carry the precision: a bare "Qdrant" prefix-matched "Qdrant
+    # (int8)" (1.13) while the figure divides by Qdrant (fp32) (1.26).
+    # Recall, column 4, printed as a percentage (scale 100). These decide WHICH
+    # comparator the dense bar divides by, so they are claims, not colour.
+    ("dense.chroma.recall", r"Chroma\s+returns (\d+(?:\.\d+)?)% of the true neighbours",
+     ("t5_dense_ts.tex", "Chroma (fp32)", 4), 100.0),
+    ("dense.arcadedb.recall", r"where ArcadeDB returns (\d+(?:\.\d+)?)%",
+     ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 4), 100.0),
+    # The steady-state ratio, Qdrant warm over ArcadeDB warm. A "ratio" ref is
+    # two cells; the 2026-08 prose said 1.4x from the 26.8.1 overlay and
+    # nothing checked it (it is 1.2x on 8d6af9475).
+    ("dense.steady.ratio", r"a (\d+(?:\.\d+)?)x win, with the comparators",
+     ("ratio", ("t5_dense_ts.tex", "Qdrant (fp32)", 2), ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 2))),
 ]
 
 # repos are siblings, same assumption refresh_web_page.py makes
@@ -197,8 +210,12 @@ def _check_dense_10m(payload):
                 print(f"  ABSENT {label:28s} {name}: page={got} paper={want}")
                 bad += 1
                 continue
-            # T5 prints 3 significant figures, so compare there.
-            ok = abs(got - want) <= max(0.005 * abs(want), 0.005)
+            # Compare at the precision T5 PRINTS: half a unit in the last
+            # printed place. "0.82" against the page's 0.815 is agreement, and
+            # the old 0.5%-of-value rule (0.0041) called it a DIFFER.
+            _txt = C.cell_text(*(("t5_dense_ts.tex", trow, col)))
+            _dec = len(_txt.split(".")[1]) if _txt and "." in _txt else 0
+            ok = abs(got - want) <= 0.5 * 10 ** -_dec + 1e-9
             checked += 1
             if not ok:
                 print(f"  DIFFER {label:28s} {name}: page={got:.6g} "
@@ -250,7 +267,11 @@ def _check_prose(page_ts):
                   f"{len(hits)} places")
             bad += 1
             continue
-        table_val = C.cell(*ref)
+        if ref[0] == "ratio":
+            _a, _b = C.cell(*ref[1]), C.cell(*ref[2])
+            table_val = (_a / _b) if (_a and _b) else None
+        else:
+            table_val = C.cell(*ref)
         if table_val is None:
             print(f"  STALE  {pid:24s} no cell {ref} in the paper")
             bad += 1
