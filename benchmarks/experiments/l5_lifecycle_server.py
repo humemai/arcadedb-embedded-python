@@ -32,7 +32,10 @@ class HttpDb:
     def __init__(self, base, session):
         self.base, self.rq, self.buf = base, session, []
 
-    def _post(self, kind, command, language="sql", timeout=900):
+    # A 10M vector index build over one HTTP command takes the better part of
+    # an hour; the 900 s default timed out the served lc10m vector cell
+    # (2026-09-08). Build-time posts get four hours; queries keep 900 s.
+    def _post(self, kind, command, language="sql", timeout=14400):
         r = self.rq.post(f"{self.base}/{kind}/{DB}",
                          json={"language": language, "command": command}, timeout=timeout)
         r.raise_for_status()
@@ -59,7 +62,7 @@ class HttpDb:
 
     def query(self, language, text):
         self.commit()
-        return self._post("query", text, language)
+        return self._post("query", text, language, timeout=900)
 
 
 def server_cmd(rq, root, command):
