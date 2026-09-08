@@ -852,8 +852,14 @@ def dense_ts_table(rows):
         lines.append(" & ".join([
             label, fmt(build, "build"), fmt(cold50, "cold"), fmt(warm, "warm"),
             fmt(cold99, "cold99"), fmt(recall, "recall", digits=3)]) + r" \\")
-    ts = [json.loads(l) for l in open(os.path.join(RESULTS, "l4_tsbs.jsonl"))
-          if l.strip()]
+    # CANONICAL ROWS AT THE PIN (2026-09-08). This read results/l4_tsbs.jsonl,
+    # the 2026-08-08 file at 26.8.1 with legacy backend names, and the native
+    # row from results/ts_2681 (below), so T5's time-series block stayed on the
+    # old engine while the page moved; provenance flagged T5 as mixing three
+    # versions. The l4 lane now carries all ArcadeDB arms at the pin
+    # (arcadedb_ts_doc, arcadedb_ts_native, and their served twins) beside the
+    # comparators, so the block reads the same rows the page does.
+    ts = [r for r in load_canonical() if r.get("lane") == "l4"]
     lines += [r"\midrule",
               r"\multicolumn{6}{l}{\textit{Time series, TSBS cpu-only "
               r"(2.59M points)}} \\",
@@ -894,8 +900,10 @@ def dense_ts_table(rows):
     # each with its own last-point key, so a missing directory silently changed
     # both the engine line and the quantity being reported. The cascade is
     # gone: the release artifacts or nothing.
-    native = [json.load(open(fp)) for fp in
-              glob.glob(os.path.join(RESULTS, "ts_2681", "nosettle_r*.json"))]
+    native = [r for r in ts if r.get("backend") == "arcadedb_ts_native"]
+    if not native:   # the lane has no native row at the pin: the 26.8.1 probe, with its warning
+        native = [json.load(open(fp)) for fp in
+                  glob.glob(os.path.join(RESULTS, "ts_2681", "nosettle_r*.json"))]
     last_key = "q_last_unbounded_ms"
     # ts_2681 REPLACED ts59, which was the last published cell measured on a
     # pre-release wheel (26.8.1.dev23). A version sweep found it; this row is
@@ -923,10 +931,13 @@ def dense_ts_table(rows):
             r"ArcadeDB (native TS)", mmm(native, "ingest_pts_per_s"),
             mmm(native, last_key), mmm(native, "q_range_ms"),
             mmm(native, "q_global_ms")]) + " & " + chr(92)*2)
-    for be in ("arcadedb", "duckdb", "questdb"):
+    for be in ("arcadedb_ts_native_server", "arcadedb_ts_doc", "arcadedb_ts_doc_server", "duckdb", "questdb"):
         g = [r for r in ts if r["backend"] == be]
-        label = ("ArcadeDB (document path)" if be == "arcadedb"
-                 else NAMES[be])
+        if not g:
+            continue
+        label = {"arcadedb_ts_doc": "ArcadeDB (document path)",
+                 "arcadedb_ts_doc_server": "ArcadeDB (srv, document path)",
+                 "arcadedb_ts_native_server": "ArcadeDB (srv, native TS)"}.get(be, NAMES.get(be, be))
         lines.append(" & ".join([
             label, mmm(g, "ingest_pts_per_s"), mmm(g, "q_last_ms"),
             mmm(g, "q_range_ms"), mmm(g, "q_global_ms")]) + " & " + chr(92)*2)

@@ -134,7 +134,7 @@ FEEDS = {
     # fed the superseded dev-era dense rows and are deliberately NOT listed,
     # so the unmapped-input check reports them as the dead overlays they are.
     # batch1 was read by the time-series half and never mapped: a blind spot.
-    "T5": [None, "ts_2681"],   # None -> make_paper_tables.dense_mp_dir() at import
+    "T5": [None],   # time-series rows come from load_canonical() since 2026-09-08   # None -> make_paper_tables.dense_mp_dir() at import
 }
 import make_paper_tables as _MPT
 FEEDS["T5"][0] = os.path.basename(_MPT.dense_mp_dir())
