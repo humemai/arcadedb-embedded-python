@@ -332,6 +332,48 @@ with arcadedb.create_database(db_path) as db:
     print(f"   ⏱️  All queries time: {time.time() - step_start:.3f}s")
     print()
 
+    # ---------------------------------------------------------------------------
+    # First pass versus second pass
+    # ---------------------------------------------------------------------------
+    # ArcadeDB pages its vector index in from disk on demand, so the first time a
+    # query set runs it pays for the pages it touches and the second time it
+    # finds them resident. Engines that hold the index in memory do not move
+    # between passes. The project page measures this at ten million vectors
+    # (a first pass of ~9 ms, a repeat of ~1 ms); at 10,000 documents the effect
+    # is small but the shape is the same. Fresh query vectors, so pass 1 really
+    # is their first search.
+    print("🔁 Step 5b: First pass versus second pass over one query set")
+    pass_queries = [
+        create_mock_embedding(f"category_{c}", f"pass-query-{i}")
+        for i, c in enumerate(
+            np.random.choice(range(1, NUM_CATEGORIES + 1), size=20, replace=True)
+        )
+    ]
+    pass_ms = []
+    pass_hits = []
+    for pass_no in (1, 2):
+        hits = []
+        t0 = time.perf_counter()
+        for q in pass_queries:
+            rows = db.query(
+                "sql",
+                "SELECT title FROM (SELECT expand(vectorNeighbors(?, ?, ?)))",
+                "Article[embedding]",
+                q,
+                5,
+            ).to_list()
+            hits.append([r.get("title") for r in rows])
+        pass_ms.append((time.perf_counter() - t0) * 1000 / len(pass_queries))
+        pass_hits.append(hits)
+    same = sum(1 for a, b in zip(*pass_hits) if a == b)
+    print(
+        f"   pass 1 (cold): {pass_ms[0]:.2f} ms per query; pass 2 (warm): {pass_ms[1]:.2f} ms per query"
+    )
+    print(
+        f"   identical top-5 on {same}/{len(pass_queries)} queries; the second pass is faster because the index pages are resident, not because the answer changed"
+    )
+    print()
+
     # -----------------------------------------------------------------------------
     # Step 7: INT8-Encoded Dense Vectors
     # -----------------------------------------------------------------------------

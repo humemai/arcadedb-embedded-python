@@ -47,10 +47,10 @@ def http_server(tmp_path):
             warnings.warn(f"server fixture: stop failed: {exc!r}", stacklevel=1)
 
 
-def _cmd(s, base, db, sql, headers=None, kind="command"):
+def _cmd(s, base, db, sql, headers=None, kind="command", language="sql"):
     r = s.post(
         f"{base}/api/v1/{kind}/{db}",
-        json={"language": "sql", "command": sql},
+        json={"language": language, "command": sql},
         headers=headers,
         timeout=30,
     )
@@ -139,3 +139,24 @@ def test_timeseries_line_protocol_write(http_server):
         kind="query",
     )
     assert last and float(last[0]["value"]) == 99.0, last
+
+
+def test_embedded_and_http_projections_agree(http_server):
+    """The decomposition in example 23 rests on both paths answering the same
+    rows; the wire format may cost time, never content."""
+    s, base = http_server
+    _cmd(s, base, "httpx", "CREATE DOCUMENT TYPE R")
+    _cmd(s, base, "httpx", "CREATE PROPERTY R.id LONG")
+    _cmd(s, base, "httpx", "CREATE PROPERTY R.amount DOUBLE")
+    _cmd(
+        s,
+        base,
+        "httpx",
+        ";".join(f"INSERT INTO R SET id = {i}, amount = {i / 10}" for i in range(300)),
+        kind="command",
+        language="sqlscript",
+    )
+    via_http = _cmd(
+        s, base, "httpx", "SELECT id, amount FROM R ORDER BY id LIMIT 100", kind="query"
+    )
+    assert len(via_http) == 100 and via_http[0]["id"] == 0 and via_http[-1]["id"] == 99

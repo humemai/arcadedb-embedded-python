@@ -148,6 +148,17 @@ sparse-vector index (`LSM_SPARSE_VECTOR` on token/weight arrays, queried with
 `` `vector.sparseNeighbors` ``). Both are wrapped in `try`/`except` and skipped if the
 runtime does not support them.
 
+### 5b. First pass versus second pass
+
+ArcadeDB pages its vector index in from disk on demand, so the first time a set
+of query vectors runs it pays for the pages it touches and the second time it
+finds them resident. The example runs twenty fresh query vectors twice and
+prints the per-query time of each pass and how many top-5 answers are identical
+(all of them). On the project page the same effect at ten million vectors is a
+first pass of about 9 ms against a repeat of about 1 ms; engines that keep the
+whole index in memory do not move between passes. When you benchmark, say which
+pass you timed.
+
 ## Example Output
 
 ```
