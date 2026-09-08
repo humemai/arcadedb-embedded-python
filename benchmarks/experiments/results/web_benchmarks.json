@@ -625,7 +625,7 @@
           "workload": "search",
           "n_docs": "8841823",
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:63f25cb3afb9 (host unknown)",
           "metrics": {
@@ -682,7 +682,7 @@
           "workload": "search",
           "n_docs": "8841823",
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:8a32e3fc7cf7 (host unknown)",
           "metrics": {
@@ -1018,7 +1018,7 @@
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:e0b175b02561 (host unknown)",
           "metrics": {
@@ -1075,7 +1075,7 @@
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:188a19504c20 (host unknown)",
           "metrics": {
@@ -1411,7 +1411,7 @@
           "workload": "search",
           "n_docs": "100000",
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:45e6c5d14619 (host unknown)",
           "metrics": {
@@ -1468,7 +1468,7 @@
           "workload": "search",
           "n_docs": "100000",
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:6d3eb38d0e38 (host unknown)",
           "metrics": {
@@ -1822,7 +1822,7 @@
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:eefc88bae1ac (host unknown)",
           "metrics": {
@@ -1873,7 +1873,7 @@
           "workload": "search",
           "n_docs": "1000000",
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:673e277df47d (host unknown)",
           "metrics": {
@@ -3031,7 +3031,7 @@
           "workload": "oltp",
           "n_docs": null,
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
@@ -3283,7 +3283,7 @@
           "workload": "oltp",
           "n_docs": null,
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
@@ -3600,7 +3600,7 @@
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
@@ -3645,7 +3645,7 @@
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
@@ -3882,7 +3882,7 @@
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
@@ -3927,7 +3927,7 @@
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
@@ -4122,7 +4122,7 @@
           "workload": "atomicity",
           "n_docs": null,
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
@@ -4311,7 +4311,7 @@
           "workload": "",
           "n_docs": null,
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
@@ -4645,7 +4645,7 @@
           "workload": "",
           "n_docs": null,
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
@@ -4924,7 +4924,7 @@
           "workload": "hybrid",
           "n_docs": null,
           "deployment": "server",
-          "image": "arcadedata/arcadedb:26.8.1@sha256:49036720b1678b9c7a6dbf22fc34a812c8d7bed15508c22cbb02c0dddc0ca16a",
+          "image": "arcadedb-c25:8d6af9475",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {

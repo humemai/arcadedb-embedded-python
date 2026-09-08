@@ -1837,7 +1837,13 @@ def main() -> int:
                 "workload": workload,
                 "n_docs": rs[0].get("n_docs") or None,
                 "deployment": deployment_of(backend),
-                "image": image,
+                # OUR served rows name the image that ran (the row's
+                # server_image_ref, arcadedb-c25:<commit>), never the registry's
+                # default string; the page carried arcadedata/arcadedb:26.8.1@sha256
+                # on every served ArcadeDB row until 2026-09-08 (BUGS F16, the
+                # field the label fix did not touch).
+                "image": (rs[0].get("server_image_ref") or rs[0].get("server_image") or image)
+                         if str(backend).startswith("arcadedb") else image,
                 # A served backend is identified by its pinned image; an
                 # embedded one has no image, and used to end up with no build
                 # line at all. So the sparse, graph and tabular tables named
