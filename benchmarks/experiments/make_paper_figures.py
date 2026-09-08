@@ -758,8 +758,9 @@ def f4_one_vs_n(rows):
     # same shape: a cascade whose job was to find SOMETHING to plot, which is
     # exactly the behaviour that lets a figure disagree with its own table
     # without failing. One released source, or nothing.
-    _native = [r for r in ts if r.get("backend") == "arcadedb_ts_native"] or [
-        json.load(open(fp)) for fp in _glob.glob(os.path.join(RESULTS, "ts_2681", "nosettle_r*.json"))]
+    _native = [r for r in ts if r.get("backend") == "arcadedb_ts_native"]
+    if not _native:
+        raise SystemExit("no arcadedb_ts_native rows at the pin (ts_2681 fallback retired 2026-09-08)")
 
     def _ts_native_med(f):
         v = [r[f] for r in _native if isinstance(r.get(f), (int, float))]

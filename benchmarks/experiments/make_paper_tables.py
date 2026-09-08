@@ -582,20 +582,23 @@ def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
     tiers = ("tiny", "small", "medium")
     if any(len(out.get(t, [])) < 5 for t in tiers):
         missing = [t for t in tiers if len(out.get(t, [])) < 5]
-        sys.stderr.write(f"pinned sparse rows incomplete at {missing}; T4 uses sparse_2681\n")
+        sys.stderr.write(f"pinned sparse rows incomplete at {missing}\n")
         return None
     versions = {str(r.get("engine_version")) for t in tiers for r in out[t]}
     if len(versions) != 1:
-        sys.stderr.write(f"pinned sparse rows span {sorted(versions)}; T4 uses sparse_2681\n")
+        sys.stderr.write(f"pinned sparse rows span {sorted(versions)}\n")
         return None
     return out
 
 
 def _sparse_2681_rows(arm="arcadedb_sparse_embedded"):
+    """The pinned sparse rows, or refuse. The name is historical (T4 read the
+    sparse_2681 overlay until 2026-08); since 2026-09-08 there is no overlay
+    fallback: incomplete or mixed pinned rows stop the generation."""
     pinned = _pinned_sparse_rows(arm)
-    if pinned is not None:
-        return pinned
-    return _sparse_2681_rows_overlay(arm)
+    if pinned is None:
+        raise SystemExit(f"pinned sparse rows for {arm} incomplete or mixed (see stderr); no fallback")
+    return pinned
 
 
 def _sparse_2681_rows_overlay(arm="arcadedb_sparse_embedded"):
@@ -696,23 +699,21 @@ MP_BUILDS = 5
 
 
 def dense_mp_dir():
-    """results/dense_mp5_<pin> when qCJ has written EVERY arm's five builds,
-    else results/dense_mp5_2681. One resolver for the table, the figures, the
-    exporter and the checks, so they cannot disagree about which directory
-    "the dense overlay" is. All-or-nothing for the same reason export_web's
-    _pinned_dir is: a half-written pinned directory must not supersede a
-    complete overlay file by file."""
+    """results/dense_mp5_<pin>, complete, or refuse. PINNED ONLY since
+    2026-09-08: the fallback to dense_mp5_2681 was a way to publish an older
+    engine's overlay quietly when the pinned one was incomplete (it did, on
+    2026-09-06, until page_check caught the 8.87 vs 8.75 disagreement). One
+    resolver for the table, the figures, the exporter and the checks."""
     pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
-    if pin:
-        cand = os.path.join(RESULTS, f"dense_mp5_{pin}")
-        if os.path.isdir(cand):
-            missing = [f"mp_{a}_b{b}.json" for a in MP_ARMS for b in range(1, MP_BUILDS + 1)
-                       if not os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
-            if not missing:
-                return cand
-            sys.stderr.write(f"dense_mp5_{pin}: {len(missing)} of {len(MP_ARMS) * MP_BUILDS} "
-                             f"files missing (e.g. {missing[0]}); using dense_mp5_2681\n")
-    return os.path.join(RESULTS, "dense_mp5_2681")
+    if not pin:
+        raise SystemExit("BENCH_ENGINE_COMMIT is unset: the dense overlay is pinned only")
+    cand = os.path.join(RESULTS, f"dense_mp5_{pin}")
+    missing = [f"mp_{a}_b{b}.json" for a in MP_ARMS for b in range(1, MP_BUILDS + 1)
+               if not os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
+    if missing:
+        raise SystemExit(f"dense_mp5_{pin}: {len(missing)} of {len(MP_ARMS) * MP_BUILDS} files missing "
+                         f"(e.g. {missing[0]}); no fallback, re-run the arm")
+    return cand
 
 
 def _dense_multipass():
@@ -901,9 +902,8 @@ def dense_ts_table(rows):
     # both the engine line and the quantity being reported. The cascade is
     # gone: the release artifacts or nothing.
     native = [r for r in ts if r.get("backend") == "arcadedb_ts_native"]
-    if not native:   # the lane has no native row at the pin: the 26.8.1 probe, with its warning
-        native = [json.load(open(fp)) for fp in
-                  glob.glob(os.path.join(RESULTS, "ts_2681", "nosettle_r*.json"))]
+    if not native:
+        raise SystemExit("no arcadedb_ts_native rows at the pin; no fallback (ts_2681 retired 2026-09-08)")
     # The lane's native arm records the unbounded last-point under q_last_ms
     # (its q_last() is the unbounded form since 2026-08-27); the 26.8.1 probe
     # used q_last_unbounded_ms. Take whichever the rows carry.

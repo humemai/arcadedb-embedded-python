@@ -96,46 +96,28 @@ _UNUSABLE_VERSION = re.compile(
 
 
 def _dense_overlay_is_pinned():
-    """True when the 10M dense rows come from the pinned multipass re-run
-    (DECISIONS #56 applies to exactly that directory), so the disclosure
-    appears with the rows it describes and not before."""
+    """Always, since 2026-09-08: dense_mp_dir() refuses instead of falling back."""
     import make_paper_tables as _MPT
-    return not str(_MPT.dense_mp_dir()).endswith("dense_mp5_2681")
+    _MPT.dense_mp_dir()
+    return True
 
 
 def _pinned_dir(name, expected=None):
-    """results/<name>_<pin> when the campaign has re-run it, else results/<name>.
-
-    Same rule the dense table uses: a pinned re-run supersedes the pre-pin
-    overlay, and when there is no re-run the overlay stands unchanged rather
-    than the table vanishing. BENCH_ENGINE_COMMIT names the pin; without it
-    nothing is preferred, so a local export cannot silently pick up a directory
-    the campaign has not finished writing.
-    """
+    """results/<name>_<pin>, complete, or refuse. PINNED ONLY since 2026-09-08
+    (the fallback to results/<name> published a 26.8.1 overlay when the pinned
+    one was incomplete; that is a wrong number, not a safety net)."""
     pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
-    if pin:
-        cand = HERE / "results" / f"{name}_{pin}"
-        if cand.is_dir():
-            # ALL OR NOTHING. A pinned re-run that has only started supersedes a
-            # COMPLETE overlay file by file, and every caller skips what is
-            # missing, so a partial directory does not shrink the table visibly
-            # -- it publishes the subset that happens to exist. On 2026-08-30
-            # results/sparse_mp_b7c6c800d held 1 of the 12 files that
-            # results/sparse_mp holds, and that one file is an ArcadeDB arm, so
-            # a pinned export would have published a 6-engine multipass
-            # comparison as a single ArcadeDB row while still calling it the
-            # comparison. Same defect the deep10m overlay was fixed for.
-            if expected:
-                missing = [f for f in expected if not (cand / f).is_file()]
-                if missing:
-                    print(f"  NOTE: {cand.name} has {len(missing)} of "
-                          f"{len(expected)} files missing; using the complete "
-                          f"overlay results/{name} instead. Missing: "
-                          f"{', '.join(missing[:4])}"
-                          f"{' ...' if len(missing) > 4 else ''}")
-                    return HERE / "results" / name
-            return cand
-    return HERE / "results" / name
+    if not pin:
+        raise SystemExit(f"BENCH_ENGINE_COMMIT is unset: {name} is pinned only")
+    cand = HERE / "results" / f"{name}_{pin}"
+    if not cand.is_dir():
+        raise SystemExit(f"{cand.name} missing; no fallback, re-run the lane")
+    if expected:
+        missing = [f for f in expected if not (cand / f).is_file()]
+        if missing:
+            raise SystemExit(f"{cand.name} has {len(missing)} of {len(expected)} files missing "
+                             f"({', '.join(missing[:4])}{' ...' if len(missing) > 4 else ''}); no fallback")
+    return cand
 
 
 def _comparator_versions(rows):
@@ -582,7 +564,7 @@ SOURCES = {
     "l1": "benchmarks/experiments/results/runs_paper.csv",
     "l1tpc": "benchmarks/experiments/results/runs_paper.csv",
     "e2": "benchmarks/experiments/results/runs_paper.csv",
-    "l4": "benchmarks/experiments/results/l4_tsbs.jsonl",
+    "l4": "benchmarks/experiments/results/runs_paper.csv",
     "e4": "benchmarks/experiments/results/e4decomp_2681",
     "pycost": "benchmarks/python-bindings/jpype_overhead/results/mini_results.csv",
     "pyb_tabular": "benchmarks/python-bindings/results/runs_paper.csv",
@@ -982,10 +964,9 @@ GLOBAL_CONDITIONS = [
 # Resolved the same way, and for the same reason -- e4decomp_2681 is a 2026-08-07
 # artifact on 26.8.1, so a pinned re-run must be able to supersede it without an
 # edit here. The "_2681" name is kept as the fallback because that is what exists.
-E4_DIR = (HERE / "results" / f"e4decomp_{os.environ.get('BENCH_ENGINE_COMMIT', '').strip()}"
-          if (HERE / "results" / f"e4decomp_{os.environ.get('BENCH_ENGINE_COMMIT', '').strip()}").is_dir()
-             and os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
-          else HERE / "results" / "e4decomp_2681")
+E4_DIR = HERE / "results" / f"e4decomp_{os.environ.get('BENCH_ENGINE_COMMIT', '').strip() or 'UNPINNED'}"
+if not E4_DIR.is_dir():
+    raise SystemExit(f"{E4_DIR.name} missing; E4 is pinned only since 2026-09-08 (e4decomp_2681 retired), run the e4 lane")
 
 # Named so the page can say what each step is rather than showing three opaque
 # arm names. embedded -> inproc_http isolates the wire format with the process
@@ -1425,7 +1406,9 @@ def _lifecycle_table(all_rows):
 
 def _l4_table(all_rows):
     # Canonical first; the 2026-08 files are the fallback, not the source.
-    grouped = _l4_canonical(all_rows) or _l4_rows()
+    grouped = _l4_canonical(all_rows)
+    if not grouped:
+        raise SystemExit("no canonical l4 rows at the pin; the legacy l4_tsbs.jsonl/ts_2681 readers were retired 2026-09-08")
     if not grouped:
         return None
 
