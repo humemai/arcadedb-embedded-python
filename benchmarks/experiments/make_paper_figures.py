@@ -737,7 +737,7 @@ def f4_one_vs_n(rows):
 
     # Canonical l4 rows at the pin (2026-09-08), the same rows T5 now prints;
     # results/l4_tsbs.jsonl was the 2026-08-08 file at 26.8.1 with legacy names.
-    ts = [r for r in _T.load_canonical() if r.get("lane") == "l4"]
+    ts = [r for r in canonical() if r.get("lane") == "l4"]
 
     def tsmed(be, f):
         return st.median([r[f] for r in ts if r["backend"] == be])
