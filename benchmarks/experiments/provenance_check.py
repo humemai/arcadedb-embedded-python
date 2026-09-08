@@ -167,8 +167,9 @@ if _MPT._pinned_sparse_rows() is not None:
 # is also the cleanest evidence for the l4 gap: e2, l1, l1tpc, l2, l3d, l3s,
 # and no l4 at all.
 FEEDS_FILES = {
+    # T5's time-series block reads load_canonical() (runs.jsonl) since
+    # 2026-09-08; results/l4_tsbs.jsonl (2026-08-08, 26.8.1) feeds nothing.
     "T2/T3/T5": ["runs.jsonl"],
-    "T5": ["l4_tsbs.jsonl"],
 }
 
 # Engine changes big enough that measuring on the wrong side of one produces a
