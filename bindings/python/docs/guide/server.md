@@ -348,7 +348,7 @@ rows = s.post(f"{base_url}/api/v1/query/mydb", json={
 ```
 
 In-process, the same type is fed with `db.async_executor().append_samples(...)`
-(see [Time Series End to End](../../examples/17_timeseries_end_to_end.md)), which
+(see [Time Series End to End](../examples/17_timeseries_end_to_end.md)), which
 skips the parse and the socket; the HTTP path is what any client without the
 wheel gets.
 
