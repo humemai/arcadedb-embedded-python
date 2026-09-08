@@ -34,7 +34,7 @@ Nothing is installed into the reader's Python. Two mechanisms are used:
   setup. `ARCADEDB_VERSION=26.9.1 ./benchmarks/python-bindings/reproduce_hybrid.sh` runs the
   same workflow on another release.
 
-## Reproduce the hybrid workflow (paper section "Three models in one process")
+## Reproduce the hybrid workflow (paper section "Documents, graph, and vectors in one process")
 
 One command, from anywhere in the repository. It needs only `uv`, not Docker:
 
