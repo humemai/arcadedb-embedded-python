@@ -735,8 +735,9 @@ def f4_one_vs_n(rows):
              and isinstance(r.get(f), (int, float))]
         return st.median(g) if g else None
 
-    ts = [json.loads(l) for l in open(os.path.join(RESULTS, "l4_tsbs.jsonl"))
-          if l.strip()]
+    # Canonical l4 rows at the pin (2026-09-08), the same rows T5 now prints;
+    # results/l4_tsbs.jsonl was the 2026-08-08 file at 26.8.1 with legacy names.
+    ts = [r for r in _T.load_canonical() if r.get("lane") == "l4"]
 
     def tsmed(be, f):
         return st.median([r[f] for r in ts if r["backend"] == be])
@@ -757,8 +758,8 @@ def f4_one_vs_n(rows):
     # same shape: a cascade whose job was to find SOMETHING to plot, which is
     # exactly the behaviour that lets a figure disagree with its own table
     # without failing. One released source, or nothing.
-    _native = [json.load(open(fp)) for fp in
-               _glob.glob(os.path.join(RESULTS, "ts_2681", "nosettle_r*.json"))]
+    _native = [r for r in ts if r.get("backend") == "arcadedb_ts_native"] or [
+        json.load(open(fp)) for fp in _glob.glob(os.path.join(RESULTS, "ts_2681", "nosettle_r*.json"))]
 
     def _ts_native_med(f):
         v = [r[f] for r in _native if isinstance(r.get(f), (int, float))]

@@ -904,7 +904,10 @@ def dense_ts_table(rows):
     if not native:   # the lane has no native row at the pin: the 26.8.1 probe, with its warning
         native = [json.load(open(fp)) for fp in
                   glob.glob(os.path.join(RESULTS, "ts_2681", "nosettle_r*.json"))]
-    last_key = "q_last_unbounded_ms"
+    # The lane's native arm records the unbounded last-point under q_last_ms
+    # (its q_last() is the unbounded form since 2026-08-27); the 26.8.1 probe
+    # used q_last_unbounded_ms. Take whichever the rows carry.
+    last_key = "q_last_unbounded_ms" if any(r.get("q_last_unbounded_ms") is not None for r in native) else "q_last_ms"
     # ts_2681 REPLACED ts59, which was the last published cell measured on a
     # pre-release wheel (26.8.1.dev23). A version sweep found it; this row is
     # the re-measure. It also records cpuset/heap/mem_cap/producer/role/host,
