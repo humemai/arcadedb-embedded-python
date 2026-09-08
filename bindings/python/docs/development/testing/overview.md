@@ -106,6 +106,20 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_vector.py`](test-vector.md) | Vector API and nearest-neighbor search behavior |
 | [`test_vector_params_verification.py`](test-vector-params-verification.md) | Vector param validation |
 | [`test_vector_sql.py`](test-vector-sql.md) | SQL vector functions, index creation, and search flows |
+| [`test_bulk_insert.py`](test-bulk-insert.md) | Tests for Database.insert_many and AsyncExecutor.create_record. |
+| [`test_cross_model_atomicity.py`](test-cross-model-atomicity.md) | The project page's cross-model story, at test size: search, hop and update in one transact |
+| [`test_example11_degree_matching.py`](test-example11-degree-matching.md) | Example 11 compares ArcadeDB against hnswlib-derived vector backends. |
+| [`test_graph.py`](test-graph.md) | Graph API Tests |
+| [`test_jar_provenance.py`](test-jar-provenance.md) | The wheel can say which engine it carries, not just which version it is. |
+| [`test_jvm.py`](test-jvm.md) | Tests for start_jvm() re-entry behavior once the JVM is running. |
+| [`test_logging_helper.py`](test-logging-helper.md) | Tests for the internal _logging helper. |
+| [`test_resultset_arrow.py`](test-resultset-arrow.md) | Tests for ResultSet.to_arrow(). |
+| [`test_server_http_endpoints.py`](test-server-http-endpoints.md) | The three server HTTP features the bindings document but do not wrap (guide/server.md, "Tr |
+| [`test_server_packaging.py`](test-server-packaging.md) | The server stack is actually IN the wheel, and the API is reachable. |
+| [`test_server_wire_protocols.py`](test-server-wire-protocols.md) | The wire protocols the wheel bundles are actually reachable. |
+| [`test_sparse_quantization_compact.py`](test-sparse-quantization-compact.md) | Sparse index weight precision and the settle step, plus the dense search beam argument: th |
+| [`test_vector_second_pass.py`](test-vector-second-pass.md) | A repeated query set returns the same neighbours as its first pass: the warm second pass t |
+| [`test_wheel_platform_tag.py`](test-wheel-platform-tag.md) | Regression tests for issue #4037: wheel manylinux platform tag. |
 | `test_wheel_platform_tag.py` | Built wheel platform tag verification |
 
 ## Common Testing Workflows

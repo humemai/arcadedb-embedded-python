@@ -237,6 +237,21 @@ nav:
       - RESTORE SQL: development/testing/test-restore-sql.md
       - Graph Algorithms SQL: development/testing/test-graph-algorithms-sql.md
       - Hash Index Schema: development/testing/test-hash-index-schema.md
+    - More Test Files:
+      - Bulk Insert: development/testing/test-bulk-insert.md
+      - Cross-Model Atomicity: development/testing/test-cross-model-atomicity.md
+      - Example 11 Degree-Matching: development/testing/test-example11-degree-matching.md
+      - Graph API: development/testing/test-graph.md
+      - JAR Provenance: development/testing/test-jar-provenance.md
+      - JVM: development/testing/test-jvm.md
+      - Logging Helper: development/testing/test-logging-helper.md
+      - ResultSet Arrow: development/testing/test-resultset-arrow.md
+      - Server HTTP Endpoint: development/testing/test-server-http-endpoints.md
+      - Server Packaging: development/testing/test-server-packaging.md
+      - Server Wire Protocol: development/testing/test-server-wire-protocols.md
+      - Sparse Precision And Compaction: development/testing/test-sparse-quantization-compact.md
+      - Vector Second-Pass: development/testing/test-vector-second-pass.md
+      - Wheel Platform Tag: development/testing/test-wheel-platform-tag.md
     - Best Practices: development/testing/best-practices.md
   - Release Workflow: development/release.md
   - Troubleshooting: development/troubleshooting.md
