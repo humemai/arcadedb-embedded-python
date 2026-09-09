@@ -317,6 +317,10 @@ DISPLAY_NAMES = {
     "arcadedb_graph_server": "ArcadeDB (server)",
     "arcadedb_dense_embedded": "ArcadeDB (embedded)",
     "arcadedb_dense_server": "ArcadeDB (server)",
+    # The int8 arms fell through to the bare "ArcadeDB" default and the dense
+    # table showed two rows both labelled "ArcadeDB (int8)" at 1M (2026-09-09).
+    "arcadedb_dense_embedded_int8": "ArcadeDB (embedded)",
+    "arcadedb_dense_server_int8": "ArcadeDB (server)",
     # Name the quantization on BOTH sparse rows. Left as a bare
     # "ArcadeDB (embedded)" next to "ArcadeDB (embedded, fp32)", the
     # default row reads as the plain one and the ablation as a variant, when
@@ -1707,6 +1711,54 @@ def _embedded_vs_tables():
     return tables
 
 
+# One row order for every table, applied last so no builder has to remember
+# it. The reader asked for it on 2026-09-09: l3smp appended the served fp32
+# arm after the comparators, l3d listed fp32 before int8 at 10M and Qdrant
+# before Chroma, lifecycle sorted lc100k before lc10k as strings.
+#
+# Within a tier: our engine first, then the comparators alphabetically. Within
+# an engine: embedded before server, int8 before fp32. The sort is stable, so
+# rows a builder already ordered deliberately (plain before GAV, native before
+# document, lifecycle situations) keep that order inside each group.
+SCALE_ORDER = ["tiny", "small", "medium", "large", "deep10m",
+               "sf1", "sf10", "tpch1", "tpch10",
+               "lc10k", "lc100k", "lc1m", "lc10m"]
+DEPLOYMENT_ORDER = {"embedded": 0, "server": 1}
+PRECISION_ORDER = {"int8": 0, "fp32": 1}
+
+
+def _finish_table(table: dict) -> dict:
+    entries = table["entries"]
+    seen = []
+    for e in entries:
+        if e.get("scale") not in seen:
+            seen.append(e.get("scale"))
+
+    def scale_rank(e):
+        sc = e.get("scale")
+        return (SCALE_ORDER.index(sc) if sc in SCALE_ORDER
+                else len(SCALE_ORDER) + seen.index(sc))
+
+    def key(e):
+        base = re.sub(r"\s*\(.*$", "", str(e["backend"])).lower()
+        return (scale_rank(e), 0 if e.get("is_arcadedb") else 1, base,
+                DEPLOYMENT_ORDER.get(e.get("deployment"), 2),
+                PRECISION_ORDER.get(e.get("precision"), 2))
+    table["entries"] = sorted(entries, key=key)
+    # Every metric a row carries is a column the page shows. l3smp carried
+    # peak memory and disk in its rows and listed neither, so the page showed
+    # neither (the renderer trusts `columns`).
+    cols = list(table["columns"])
+    extra = []
+    for e in table["entries"]:
+        for m in e.get("metrics", {}):
+            if m not in cols and m not in extra:
+                extra.append(m)
+    tail = [m for m in ("peak memory GiB", "disk GiB") if m in extra]
+    table["columns"] = cols + [m for m in extra if m not in tail] + tail
+    return table
+
+
 def main() -> int:
     if not FROZEN.exists():
         print(f"missing {FROZEN}; run make_paper_tables.py first", file=sys.stderr)
@@ -1939,8 +1991,9 @@ def main() -> int:
                             if lane != "l3d" else
                             # warm exists only where a second pass was run,
                             # so it sits beside cold rather than replacing it
-                            ["cold p50 ms", "warm p50 ms",
-                             "recall@10", "build s"]),
+                            ["cold p50 ms", "warm p50 ms", "cold p99 ms",
+                             "recall@10", "build s",
+                             "peak memory GiB", "disk GiB"]),
                 "withheld_scales": withheld,
                 "withheld_reason": (
                     "Comparator rows exist at these tiers but ArcadeDB's were "
@@ -2045,7 +2098,7 @@ def main() -> int:
             "what the frozen rows can prove."
         ),
         "hosts_recorded": hosts,
-        "tables": tables,
+        "tables": [_finish_table(t) for t in tables],
     }
 
     # A table can draw on more than one artifact, so this is a LIST. It was a
