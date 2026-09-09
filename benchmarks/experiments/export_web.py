@@ -1394,7 +1394,7 @@ def _lifecycle_table(all_rows):
             "whoever launched it.",
             _lc_vector_note(rows),
             "A clean close should be O(what was written), not O(what is stored): "
-            "write nothing and closing should cost the same at 10k rows and 10M.",
+            "write nothing and closing should cost the same at 10k documents and 10M.",
         ] + [f"`{k}` is withheld: {v}" for k, v in sorted(LIFECYCLE_WITHHELD.items())],
         "columns": ["JVM start ms", "first open ms", "cold process ms"]
                    + [f"{k} session ms" for k, _ in LIFECYCLE_SCENARIOS],
@@ -1611,7 +1611,7 @@ def _python_cost_table():
     add("Java, in process", "100k-document scan", jq, jq, "baseline", "J-allcols-100000")
     add("Python, to_columns", "100k-document scan", us("query", "P-columns-100000"), jq, "columnar", "P-columns-100000")
     add("Python, to_json_list", "100k-document scan", us("query", "P-jsonbatch-100000"), jq, "batched JSON", "P-jsonbatch-100000")
-    add("Python, to_list", "100k-document scan", us("query", "P-tolist-100000"), jq, "row objects", "P-tolist-100000")
+    add("Python, to_list", "100k-document scan", us("query", "P-tolist-100000"), jq, "record objects", "P-tolist-100000")
 
     if not rows_out:
         return None
@@ -1634,7 +1634,7 @@ def _python_cost_table():
             f"{us('query', 'P-columns-100000') / jq:.2f}x rather than "
             "anything scaling with the work the engine did.",
             "The path you choose inside Python matters far more than the "
-            "language boundary does. Asking for row objects is "
+            "language boundary does. Asking for record objects is "
             f"{us('query', 'P-tolist-100000') / us('query', 'P-columns-100000'):.1f}x slower "
             "than asking for columns over the same query, so the practical "
             "advice is to use the columnar or batched call for anything large.",

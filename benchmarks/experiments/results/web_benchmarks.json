@@ -6003,7 +6003,7 @@
         "The SESSION is open + action + close. Reporting open and close alone hides work triggered between them.",
         "Cold start is measured in a fresh subprocess and reported beside every session number, because a millisecond open inside a process that takes half a second to reach its first database call is not a millisecond to whoever launched it.",
         "Known at this engine build: a vector database's no-op session close grows with the index (8 ms at 10k, 98 ms at 1M, 1.4 s at 10M), and a session with one search in it at 10M is 17.6 s, because the first search after a write started a full asynchronous graph rebuild and close() waited on it. Filed as #7183, fixed upstream in #7191 for 26.10.1; the October re-pin re-measures it.",
-        "A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k rows and 10M.",
+        "A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k documents and 10M.",
         "`graph_gav` is withheld: probe scope under revision; see PAGE-SPEC 4c"
       ],
       "columns": [
@@ -8863,7 +8863,7 @@
       "dataset": "Same engine, same query, called from Java and from Python",
       "conditions": [
         "The engine itself runs at the same speed either way. What Python is charged for is moving results across the boundary, which is why the vector search costs 1.17x and the scan 1.74x rather than anything scaling with the work the engine did.",
-        "The path you choose inside Python matters far more than the language boundary does. Asking for row objects is 14.9x slower than asking for columns over the same query, so the practical advice is to use the columnar or batched call for anything large."
+        "The path you choose inside Python matters far more than the language boundary does. Asking for record objects is 14.9x slower than asking for columns over the same query, so the practical advice is to use the columnar or batched call for anything large."
       ],
       "columns": [
         "time ms",
@@ -9001,7 +9001,7 @@
           "backend": "Python, to_list",
           "is_arcadedb": true,
           "scale": "100k-document scan",
-          "workload": "row objects",
+          "workload": "record objects",
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
