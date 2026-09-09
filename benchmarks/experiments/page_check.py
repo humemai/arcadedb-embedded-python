@@ -441,7 +441,7 @@ def _check_page_atomicity(page_path):
 
     checks = [
         ("page.e2.trials",
-         r"interrupted (\d+) operations against each system",
+         r"interrupted (\d+) trials against each system",
          lambda: totals["arcadedb_e2"] and totals["arcadedb_e2"][0]),
         ("page.e2.composed_torn",
          r"left half-updated in all (\d+)",

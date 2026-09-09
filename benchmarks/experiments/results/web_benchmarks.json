@@ -88,7 +88,7 @@
   ],
   "conditions": [
     "Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.",
-    "Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it deliberately leaves out the file cache the kernel keeps on the engine's behalf. That makes it the honest number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.",
+    "Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it leaves out the file cache the kernel keeps on the engine's behalf. That is the right number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.",
     "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
     "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
     "Comparators are pinned by sha256 image digest, not by a floating tag."
@@ -486,7 +486,7 @@
       "conditions": [
         "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
         "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
-        "Every number here is the first timed pass after the index is built. Running the same engines again over an index they have already read shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. That is worth stating because the dense table below is NOT like this, where ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
+        "Every number here is cold, the first timed pass after the index is built. Warm, the same engines run again over an index they have already read, shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. The dense table below is not like this: there ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
         "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
@@ -1694,7 +1694,7 @@
     {
       "id": "l3d",
       "title": "Dense vector search",
-      "dataset": "DEEP-10M (deep-image-96-angular) and SIFT-scale tiers",
+      "dataset": "DEEP-10M (deep-image-96-angular) and SIFT-1M",
       "conditions": [
         "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
         "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
@@ -5069,7 +5069,7 @@
       "dataset": "Big-ANN'23 Sparse, one build per engine, cold then warm",
       "conditions": [
         "Cold is the first timed pass after the index is built. Warm is the median of five more passes over a DIFFERENT half of the query set, so a warm number cannot be explained by the engine having already answered that exact query. Both halves are drawn from the same 1,000 dev queries in the same order.",
-        "One build per engine here, against five in the table above, which is why these are a separate table rather than two more columns on it. Reading a warm number from this protocol beside a cold number from that one is the mistake this table exists to avoid.",
+        "One build per engine here, against five in the table above, which is why these are a separate table rather than two more columns on it. Reading a warm number from this protocol beside a cold number from that one would compare two different protocols.",
         "The order is the same cold and warm at both sizes. The dense table further down is not like this: there ArcadeDB alone gains about nine times on a second pass, so which pass you time decides the ranking, and it has to say which.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
       ],
@@ -8574,8 +8574,8 @@
       "title": "What the client/server split costs",
       "dataset": "200,000-document projection, one engine, three deployments",
       "conditions": [
-        "Every number is milliseconds. One released engine (26.9.1.dev0) in all three setups, 15 repetitions after 3 warmup, identical cpuset 0-11, memory cap 8g and heap 6g.",
-        "All three setups turn the answer into Python objects the same way, so the difference is how the database was deployed and not how we read the result.",
+        "Every number is milliseconds. One released engine (26.9.1.dev0) in all three deployments, 15 repetitions after 3 warmup, identical cpuset 0-11, memory cap 8g and heap 6g.",
+        "All three deployments turn the answer into Python objects the same way, so the difference is how the database was deployed and not how we read the result.",
         "The separate container runs on the same machine, talking over the local network interface. It says what running the database beside your program costs, and says nothing about a database on another machine across a real network.",
         "The separate-process column goes slightly negative at the smaller result sizes. That is not a container being faster than an in-process server; it is the boundary term sitting below what this design can resolve, so run-to-run noise swamps it and the sign flips. Reported rather than clamped to zero, because the negative values are the evidence for the claim: at these sizes co-locating costs nothing measurable. The packing cost, in the column beside it, stays firmly positive at every size."
       ],

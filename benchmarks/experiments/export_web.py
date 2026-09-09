@@ -780,13 +780,13 @@ LANES = {
         "conditions": [
             "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
             "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
-            "Every number here is the first timed pass after the index is built. Running the same engines again over an index they have already read shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. That is worth stating because the dense table below is NOT like this, where ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
+            "Every number here is cold, the first timed pass after the index is built. Warm, the same engines run again over an index they have already read, shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. The dense table below is not like this: there ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
             "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
         ],
     },
     "l3d": {
         "title": "Dense vector search",
-        "dataset": "DEEP-10M (deep-image-96-angular) and SIFT-scale tiers",
+        "dataset": "DEEP-10M (deep-image-96-angular) and SIFT-1M",
         # "cold" rather than a bare "p50" because the two passes are different
         # quantities and the page now says so. Both lanes measure the cold
         # column identically: l3d_dense runs 20 untimed warmups then ONE timed
@@ -957,7 +957,7 @@ LANES = {
 
 GLOBAL_CONDITIONS = [
     "Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.",
-    "Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it deliberately leaves out the file cache the kernel keeps on the engine's behalf. That makes it the honest number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.",
+    "Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it leaves out the file cache the kernel keeps on the engine's behalf. That is the right number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.",
     "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
     "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
     "Comparators are pinned by sha256 image digest, not by a floating tag.",
@@ -1048,11 +1048,11 @@ def _e4_table():
             *([f"Measured at ArcadeDB {meta.get('engine_version')} on {str(meta.get('ts_utc'))[:10]}. This table has not yet been re-run at the engine commit the rest of the page reports; the re-run is queued and this line goes away with it."]
               if str(meta.get("engine_version") or "") and not str(meta.get("engine_version") or "").startswith("26.9.1") else []),
             f"Every number is milliseconds. One released engine "
-            f"({meta.get('engine_version')}) in all three setups, "
+            f"({meta.get('engine_version')}) in all three deployments, "
             f"{meta.get('reps')} repetitions after {meta.get('warmup')} warmup, "
             f"identical cpuset {meta.get('cpuset')}, memory cap {meta.get('mem_cap')} "
             f"and heap {meta.get('heap')}.",
-            "All three setups turn the answer into Python objects the same "
+            "All three deployments turn the answer into Python objects the same "
             "way, so the difference is how the database was deployed and not "
             "how we read the result.",
             "The separate container runs on the same machine, talking over the "
@@ -1267,7 +1267,7 @@ def _sparse_multipass_table():
             "One build per engine here, against five in the table above, which "
             "is why these are a separate table rather than two more columns on "
             "it. Reading a warm number from this protocol beside a cold number "
-            "from that one is the mistake this table exists to avoid.",
+            "from that one would compare two different protocols.",
             "The order is the same cold and warm at both sizes. The dense table "
             "further down is not like this: there ArcadeDB alone gains about "
             "nine times on a second pass, so which pass you time decides the "
@@ -1996,7 +1996,7 @@ def main() -> int:
                              "peak memory GiB", "disk GiB"]),
                 "withheld_scales": withheld,
                 "withheld_reason": (
-                    "Comparator rows exist at these tiers but ArcadeDB's were "
+                    "Comparator rows exist at these sizes but ArcadeDB's were "
                     "measured on a pre-release build, which this project does "
                     "not publish. They return at the next release re-pin."
                 ) if withheld else None,
