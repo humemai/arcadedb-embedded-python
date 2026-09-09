@@ -153,10 +153,10 @@ PROSE = [
     # 6.5x/2.4x/1.18x/1.13x/nine times) because nothing checked them.
     ("pycost.vector.ratio", r"a vector search costs (\d+(?:\.\d+)?)x",
      lambda P: P("pycost", "Python", "vector search", "vs Java")),
-    ("pycost.scan.ratio", r"a 100k-row scan (\d+(?:\.\d+)?)x",
-     lambda P: P("pycost", "Python, to_columns", "100k-row scan", "vs Java")),
+    ("pycost.scan.ratio", r"a 100k-document scan (\d+(?:\.\d+)?)x",
+     lambda P: P("pycost", "Python, to_columns", "100k-document scan", "vs Java")),
     ("pycost.rows_vs_columns", r"row objects is (\d+(?:\.\d+)?)x slower",
-     lambda P: P("pycost", "Python, to_list", "100k-row scan", "time ms") / P("pycost", "Python, to_columns", "100k-row scan", "time ms")),
+     lambda P: P("pycost", "Python, to_list", "100k-document scan", "time ms") / P("pycost", "Python, to_columns", "100k-document scan", "time ms")),
     ("l2olap.view.top_degree", r"[Tt]he view is worth (\d+(?:\.\d+)?)x on top degree",
      lambda P: P("l2olap", "ArcadeDB (embedded)", "sf10", "most friends ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "most friends ms")),
     ("l2olap.view.other_two", r"about (\d+(?:\.\d+)?)x on the other two",

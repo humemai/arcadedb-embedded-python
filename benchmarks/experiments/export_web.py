@@ -489,7 +489,7 @@ SCALE_LABELS = {
     # own vocabulary rather than ours; the person count says how big that is.
     ("l2", "sf1"): "SF1 (11k people)",
     ("l2", "sf10"): "SF10 (73k people)",
-    ("l1", "medium"): "20M rows",
+    ("l1", "medium"): "20M records",
     ("l1tpc", "tpch1"): "SF1",
     ("e2", "e2"): "50k products",
     # TSBS publishes its corpus as a point count, which is what the ingest
@@ -875,7 +875,7 @@ LANES = {
         ],
     },
     "l1olap": {
-        "title": "Tabular OLAP, query by query",
+        "title": "Document OLAP, query by query",
         "dataset": "Synthetic orders workload, the five analytical queries behind the OLAP total",
         "lane_source": "l1",
         "only_workload": "olap",
@@ -900,11 +900,11 @@ LANES = {
         ],
     },
     "l1": {
-        "title": "Tabular OLTP and OLAP",
+        "title": "Documents: OLTP and OLAP",
         "dataset": "Synthetic orders workload",
         "metrics": [("read_p50_ms", "read p50 ms"), ("insert_p50_ms", "insert p50 ms"),
                     ("update_p50_ms", "update p50 ms"),
-                    ("oltp_ops_per_s", "OLTP ops/s"), ("ingest_rows_per_s", "ingest rows/s"),
+                    ("oltp_ops_per_s", "OLTP ops/s"), ("ingest_rows_per_s", "ingest records/s"),
                     ("olap_total_ms", "OLAP total ms"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
@@ -917,7 +917,7 @@ LANES = {
         ],
     },
     "l1tpc": {
-        "title": "Tabular (TPC-H and TPC-C shapes)",
+        "title": "Documents (TPC-H and TPC-C shapes)",
         "dataset": "TPC-H queries, TPC-C new-order",
         "metrics": [("q1_ms", "Q1 ms"), ("q6_ms", "Q6 ms"),
                     ("neworder_p50_ms", "new-order p50 ms"), ("oltp_ops_per_s", "OLTP ops/s"),
@@ -1028,7 +1028,7 @@ def _e4_table():
                               "max": round(value, 4), "n": len(loaded)}
 
         entries.append({
-            "backend": f"{int(size):,} rows",
+            "backend": f"{int(size):,} documents",
             "is_arcadedb": True,
             "scale": f"{int(size):,}",
             "workload": "projection",
@@ -1043,7 +1043,7 @@ def _e4_table():
     return {
         "id": "e4",
         "title": "What the client/server split costs",
-        "dataset": f"{meta.get('rows'):,}-row projection, one engine, three deployments",
+        "dataset": f"{meta.get('rows'):,}-document projection, one engine, three deployments",
         "conditions": [
             *([f"Measured at ArcadeDB {meta.get('engine_version')} on {str(meta.get('ts_utc'))[:10]}. This table has not yet been re-run at the engine commit the rest of the page reports; the re-run is queued and this line goes away with it."]
               if str(meta.get("engine_version") or "") and not str(meta.get("engine_version") or "").startswith("26.9.1") else []),
@@ -1608,10 +1608,10 @@ def _python_cost_table():
     jv, jq = us("vector", "J-direct"), us("query", "J-allcols-100000")
     add("Java, in process", "vector search", jv, jv, "baseline", "J-direct")
     add("Python", "vector search", us("vector", "P-raw-call"), jv, "same call", "P-raw-call")
-    add("Java, in process", "100k-row scan", jq, jq, "baseline", "J-allcols-100000")
-    add("Python, to_columns", "100k-row scan", us("query", "P-columns-100000"), jq, "columnar", "P-columns-100000")
-    add("Python, to_json_list", "100k-row scan", us("query", "P-jsonbatch-100000"), jq, "batched JSON", "P-jsonbatch-100000")
-    add("Python, to_list", "100k-row scan", us("query", "P-tolist-100000"), jq, "row objects", "P-tolist-100000")
+    add("Java, in process", "100k-document scan", jq, jq, "baseline", "J-allcols-100000")
+    add("Python, to_columns", "100k-document scan", us("query", "P-columns-100000"), jq, "columnar", "P-columns-100000")
+    add("Python, to_json_list", "100k-document scan", us("query", "P-jsonbatch-100000"), jq, "batched JSON", "P-jsonbatch-100000")
+    add("Python, to_list", "100k-document scan", us("query", "P-tolist-100000"), jq, "row objects", "P-tolist-100000")
 
     if not rows_out:
         return None
