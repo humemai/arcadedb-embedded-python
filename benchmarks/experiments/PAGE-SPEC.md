@@ -767,3 +767,15 @@ Amends §2 (tables), §4a (disk) and the arm lists above. DECISIONS #58, #60, #6
 **Every typed number in `arcadedb.ts` is pinned** by `page_check.PROSE`, including page-only tables through `lambda P:` references over the exported JSON; a reworded sentence fails ABSENT. `page_check` also fails if any table loses its ArcadeDB row against the live page.
 
 **Identity:** every ArcadeDB row is named from its own engine string and commit (`arcadedb 26.9.1-dev · 8d6af9475`), never from an image tag. The page header lists the identities actually present.
+
+## 2026-09-10 addendum: cells, not rows
+
+The 8d6af9475 page was complete by rows and had blank cells. The rules that came out of the audit:
+
+- **One row order, one column pass.** `export_web._finish_table()` runs last over every table: tier, ArcadeDB first, then comparators alphabetically; embedded before server; int8 before fp32; stable inside a group. Every metric a row carries becomes a column, peak memory and disk last. A builder owns its numbers, not its layout.
+- **p50 and p99 on every latency column**, cold and warm where a second pass exists. Transactional lanes had the samples already; the analytical lanes (graph OLAP, document OLAP, TPC-H Q1/Q6, time-series queries) now run 100 iterations per query per rep and record `*_p50_ms` and `*_p99_ms` beside the mean/median fields they always had (DECISIONS #63). p95 is not shown anywhere.
+- **Disk on every table.** A blank disk cell is a row measured before the instrument (2026-08-14) or an engine with no disk at all; the E2 spec's `in_memory` names the latter and the note under the table says so. Neo4j runs with `NEO4J_db_tx__log_preallocate=false` and a 5 s checkpoint, because the delta-of-allocated-blocks reading is blind to preallocated files (BUGS F27).
+- **Both dense sizes read one protocol.** `_dense_overlay_entries(scale)` reads `dense_mp5_<pin>` for 10M and `dense_mp5_small_<pin>` for 1M; a partial directory refuses.
+- **Rendering.** Integers print as integers (0, not 0.00; 40, not 40.0); values below 0.1 print with two significant digits; a missing value is a dash.
+- **Vocabulary.** Documents, not tables; one word per concept (Python package, embedded/server, comparator, size, cold/warm, trial). The page never says tabular or relational.
+- **Before calling a page complete**, scan the exported JSON per column for blank cells and per row for a missing version (BUGS F26 has the one-liner). The freeze counts rows; the reader sees cells.
