@@ -538,7 +538,7 @@ BACKENDS = {
                        # short checkpoint interval lands the store on disk
                        # before the sample instead of at the 15-minute default.
                        "-e", "NEO4J_db_tx__log_preallocate=false",
-                       "-e", "NEO4J_db_checkpoint_interval__time=5s",
+                       "-e", "NEO4J_db_checkpoint_interval_time=5s",
                        # PAGE CACHE, which for Neo4j is the load-bearing
                        # setting and was never set. The image entrypoint
                        # hard-codes 512M (docker-entrypoint.sh), and it does
@@ -588,7 +588,7 @@ BACKENDS = {
                        # short checkpoint interval lands the store on disk
                        # before the sample instead of at the 15-minute default.
                        "-e", "NEO4J_db_tx__log_preallocate=false",
-                       "-e", "NEO4J_db_checkpoint_interval__time=5s",
+                       "-e", "NEO4J_db_checkpoint_interval_time=5s",
                        # PAGE CACHE, which for Neo4j is the load-bearing
                        # setting and was never set. The image entrypoint
                        # hard-codes 512M (docker-entrypoint.sh), and it does
