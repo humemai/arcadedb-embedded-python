@@ -833,7 +833,7 @@ LANES = {
         "metrics": [("point_p50_ms", "point p50 ms"), ("point_p99_ms", "point p99 ms"),
                     ("hop1_p50_ms", "1-hop p50 ms"), ("hop1_p99_ms", "1-hop p99 ms"),
                     ("hop2_p50_ms", "2-hop p50 ms"), ("hop2_p99_ms", "2-hop p99 ms"),
-                    ("write_p50_ms", "write p50 ms"),
+                    ("write_p50_ms", "write p50 ms"), ("write_p99_ms", "write p99 ms"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         # OLTP only. The OLAP rows live in the l2olap table below, which is

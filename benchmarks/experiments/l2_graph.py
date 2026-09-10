@@ -544,7 +544,9 @@ def main():
         out.update(_read_pass("warm_"))     # same queries, index now resident
         # Writes stay single-pass on purpose. A second write pass is not a
         # warm repeat, it is a different workload against a larger graph.
-        n_writes = min(100, n_q)
+        # 1000 writes, not 100: a p99 over 95 timed samples is the second
+        # slowest write, not a tail. Ten samples deep at 1000 (2026-09-10).
+        n_writes = min(1000, n_q)
         lat = []
         for w, pid in enumerate(ids[:n_writes]):
             new_id = write_id_base + w
@@ -555,6 +557,9 @@ def main():
         lat.sort()
         out["write_p50_ms"] = round(pct(lat, 0.50), 3)
         out["write_p95_ms"] = round(pct(lat, 0.95), 3)
+        # The reads recorded p99 and the writes stopped at p95, so the page
+        # had a p99 beside every latency except this one (2026-09-10).
+        out["write_p99_ms"] = round(pct(lat, 0.99), 3)
         out["oltp_total_s"] = round(time.perf_counter() - total_t0, 2)
     else:
         for qname, text in OLAP_QUERIES.items():
