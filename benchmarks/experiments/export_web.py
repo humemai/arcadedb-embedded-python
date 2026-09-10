@@ -806,8 +806,8 @@ LANES = {
         # column identically: l3d_dense runs 20 untimed warmups then ONE timed
         # pass, and dense_multipass_driver runs those same 20 warmups before
         # each of its five, so overlay pass 0 IS the campaign protocol. The
-        # small tier has no second pass, so it shows a dash there rather than a
-        # number borrowed from a different measurement.
+        # Since 2026-09-10 (qDB) the 1M size has its own multipass overlay, so
+        # both sizes carry cold and warm from one protocol.
         "metrics": [("query_p50_ms", "cold p50 ms"), ("query_p99_ms", "cold p99 ms"),
                     ("recall_at_10", "recall@10"),
                     ("build_s", "build s"),

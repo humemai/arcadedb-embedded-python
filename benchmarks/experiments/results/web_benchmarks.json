@@ -1605,34 +1605,46 @@
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
-          "n_docs": "1000000",
+          "n_docs": "1,000,000",
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:4ceff83630d9 (host unknown)",
+          "host": "mini",
           "metrics": {
             "cold p50 ms": {
-              "median": 1.478,
-              "min": 1.424,
-              "max": 1.509,
+              "median": 1.35,
+              "min": 1.336,
+              "max": 1.397,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 2.465,
-              "min": 2.385,
-              "max": 2.868,
+              "median": 2.246,
+              "min": 2.182,
+              "max": 2.281,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 0.8385,
+              "min": 0.698,
+              "max": 0.916,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 1.141,
+              "min": 0.969,
+              "max": 1.336,
+              "n": 20
             },
             "recall@10": {
-              "median": 0.9827,
-              "min": 0.9817,
+              "median": 0.9817,
+              "min": 0.9805,
               "max": 0.983,
-              "n": 5
+              "n": 20
             },
             "build s": {
-              "median": 242.94,
-              "min": 242.23,
-              "max": 246.19,
+              "median": 229.52,
+              "min": 227.5,
+              "max": 239.89,
               "n": 5
             },
             "peak memory GiB": {
@@ -1656,34 +1668,46 @@
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
-          "n_docs": "1000000",
+          "n_docs": "1,000,000",
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:d654eb18400d (host unknown)",
+          "host": "mini",
           "metrics": {
             "cold p50 ms": {
-              "median": 2.052,
-              "min": 2.046,
-              "max": 2.154,
+              "median": 1.952,
+              "min": 1.901,
+              "max": 1.993,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 4.533,
-              "min": 4.44,
-              "max": 4.923,
+              "median": 4.168,
+              "min": 4.102,
+              "max": 4.276,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 0.7785,
+              "min": 0.703,
+              "max": 0.894,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 1.1335,
+              "min": 0.885,
+              "max": 1.277,
+              "n": 20
             },
             "recall@10": {
-              "median": 0.9886,
-              "min": 0.988,
+              "median": 0.988,
+              "min": 0.987,
               "max": 0.9888,
-              "n": 5
+              "n": 20
             },
             "build s": {
-              "median": 166.25,
-              "min": 159.3,
-              "max": 170.47,
+              "median": 155.12,
+              "min": 148.33,
+              "max": 159.67,
               "n": 5
             },
             "peak memory GiB": {
@@ -1707,34 +1731,46 @@
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
-          "n_docs": "1000000",
+          "n_docs": "1,000,000",
           "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
+          "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:673e277df47d (host unknown)",
+          "host": "mini",
           "metrics": {
             "cold p50 ms": {
-              "median": 2.515,
-              "min": 2.351,
-              "max": 2.633,
+              "median": 2.346,
+              "min": 2.244,
+              "max": 2.446,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 4.15,
-              "min": 3.846,
-              "max": 4.337,
+              "median": 3.626,
+              "min": 3.378,
+              "max": 3.691,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 1.736,
+              "min": 1.64,
+              "max": 1.899,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 2.193,
+              "min": 2.015,
+              "max": 2.452,
+              "n": 20
             },
             "recall@10": {
-              "median": 0.9836,
-              "min": 0.9811,
-              "max": 0.9841,
-              "n": 5
+              "median": 0.9829,
+              "min": 0.982,
+              "max": 0.9835,
+              "n": 20
             },
             "build s": {
-              "median": 311.27,
-              "min": 299.36,
-              "max": 317.31,
+              "median": 296.77,
+              "min": 293.78,
+              "max": 299.99,
               "n": 5
             },
             "peak memory GiB": {
@@ -1758,34 +1794,46 @@
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
-          "n_docs": "1000000",
+          "n_docs": "1,000,000",
           "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
+          "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:eefc88bae1ac (host unknown)",
+          "host": "mini",
           "metrics": {
             "cold p50 ms": {
-              "median": 3.077,
-              "min": 2.916,
-              "max": 3.231,
+              "median": 2.914,
+              "min": 2.868,
+              "max": 3.053,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 5.875,
-              "min": 5.826,
-              "max": 6.507,
+              "median": 5.575,
+              "min": 5.426,
+              "max": 5.662,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 1.7305,
+              "min": 1.682,
+              "max": 1.885,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 2.159,
+              "min": 2.044,
+              "max": 2.333,
+              "n": 20
             },
             "recall@10": {
-              "median": 0.9872,
-              "min": 0.9868,
-              "max": 0.9888,
-              "n": 5
+              "median": 0.9887,
+              "min": 0.9881,
+              "max": 0.9894,
+              "n": 20
             },
             "build s": {
-              "median": 231.31,
-              "min": 230.03,
-              "max": 235.53,
+              "median": 230.96,
+              "min": 225.34,
+              "max": 236.03,
               "n": 5
             },
             "peak memory GiB": {
@@ -1809,34 +1857,46 @@
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
-          "n_docs": "1000000",
+          "n_docs": "1,000,000",
           "deployment": "embedded",
           "image": null,
           "version_name": "chroma 1.5.9",
-          "host": "container:e1f6b802094c (host unknown)",
+          "host": "mini",
           "metrics": {
             "cold p50 ms": {
-              "median": 0.665,
-              "min": 0.654,
-              "max": 0.702,
+              "median": 0.639,
+              "min": 0.625,
+              "max": 0.644,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 0.893,
-              "min": 0.887,
-              "max": 0.9,
+              "median": 0.791,
+              "min": 0.772,
+              "max": 0.916,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 0.6535,
+              "min": 0.623,
+              "max": 0.683,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 0.8745,
+              "min": 0.764,
+              "max": 1.022,
+              "n": 20
             },
             "recall@10": {
               "median": 0.9748,
-              "min": 0.9744,
-              "max": 0.977,
-              "n": 5
+              "min": 0.9742,
+              "max": 0.9752,
+              "n": 20
             },
             "build s": {
-              "median": 150.94,
-              "min": 148.6,
-              "max": 151.29,
+              "median": 150.63,
+              "min": 147.36,
+              "max": 151.84,
               "n": 5
             },
             "peak memory GiB": {
@@ -1860,34 +1920,46 @@
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
-          "n_docs": "1000000",
+          "n_docs": "1,000,000",
           "deployment": "embedded",
           "image": null,
           "version_name": "duckdb vss 1.5.5",
-          "host": "container:31c2896725a8 (host unknown)",
+          "host": "mini",
           "metrics": {
             "cold p50 ms": {
-              "median": 1.774,
-              "min": 1.768,
-              "max": 1.915,
+              "median": 1.778,
+              "min": 1.773,
+              "max": 1.787,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 3.652,
-              "min": 3.044,
-              "max": 4.172,
+              "median": 3.867,
+              "min": 3.353,
+              "max": 4.663,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 1.8,
+              "min": 1.769,
+              "max": 1.822,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 2.101,
+              "min": 2.038,
+              "max": 2.16,
+              "n": 20
             },
             "recall@10": {
-              "median": 0.975,
-              "min": 0.9727,
-              "max": 0.9769,
-              "n": 5
+              "median": 0.9761,
+              "min": 0.9741,
+              "max": 0.9765,
+              "n": 20
             },
             "build s": {
-              "median": 59.18,
-              "min": 59.08,
-              "max": 59.64,
+              "median": 59.37,
+              "min": 58.5,
+              "max": 59.78,
               "n": 5
             },
             "peak memory GiB": {
@@ -1911,34 +1983,46 @@
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
-          "n_docs": "1000000",
+          "n_docs": "1,000,000",
           "deployment": "embedded",
           "image": null,
           "version_name": "lancedb 0.37.1",
-          "host": "container:307b00c732ea (host unknown)",
+          "host": "mini",
           "metrics": {
             "cold p50 ms": {
-              "median": 1.462,
+              "median": 1.482,
               "min": 1.429,
-              "max": 1.49,
+              "max": 1.504,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 1.888,
-              "min": 1.822,
-              "max": 2.526,
+              "median": 3.092,
+              "min": 1.878,
+              "max": 3.841,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 1.478,
+              "min": 1.442,
+              "max": 1.513,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 1.902,
+              "min": 1.85,
+              "max": 3.594,
+              "n": 20
             },
             "recall@10": {
-              "median": 0.9601,
-              "min": 0.9589,
-              "max": 0.9612,
-              "n": 5
+              "median": 0.9611,
+              "min": 0.9605,
+              "max": 0.9622,
+              "n": 20
             },
             "build s": {
-              "median": 21.32,
-              "min": 20.71,
-              "max": 21.48,
+              "median": 20.94,
+              "min": 20.2,
+              "max": 22.94,
               "n": 5
             },
             "peak memory GiB": {
@@ -1962,34 +2046,46 @@
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
-          "n_docs": "1000000",
+          "n_docs": "1,000,000",
           "deployment": "server",
-          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+          "image": null,
           "version_name": "milvus v2.6.13",
-          "host": "container:b7978b92403c (host unknown)",
+          "host": "mini",
           "metrics": {
             "cold p50 ms": {
               "median": 0.995,
               "min": 0.993,
-              "max": 1.005,
+              "max": 1.012,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 1.999,
-              "min": 1.277,
-              "max": 2.206,
+              "median": 1.526,
+              "min": 1.299,
+              "max": 2.167,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 0.971,
+              "min": 0.953,
+              "max": 1.021,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 1.307,
+              "min": 1.147,
+              "max": 2.12,
+              "n": 20
             },
             "recall@10": {
-              "median": 0.9753,
-              "min": 0.9749,
-              "max": 0.9757,
-              "n": 5
+              "median": 0.9747,
+              "min": 0.9739,
+              "max": 0.9747,
+              "n": 20
             },
             "build s": {
-              "median": 178.84,
-              "min": 123.97,
-              "max": 180.12,
+              "median": 180.3,
+              "min": 175.71,
+              "max": 184.24,
               "n": 5
             },
             "peak memory GiB": {
@@ -2013,34 +2109,46 @@
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
-          "n_docs": "1000000",
+          "n_docs": "1,000,000",
           "deployment": "server",
-          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "qdrant v1.18.2",
-          "host": "container:366593306c17 (host unknown)",
+          "image": null,
+          "version_name": "qdrant 1.18.2",
+          "host": "mini",
           "metrics": {
             "cold p50 ms": {
-              "median": 1.047,
-              "min": 1.026,
-              "max": 1.137,
+              "median": 1.082,
+              "min": 1.056,
+              "max": 1.276,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 1.363,
-              "min": 1.356,
-              "max": 1.464,
+              "median": 1.411,
+              "min": 1.392,
+              "max": 1.594,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 1.1265,
+              "min": 1.007,
+              "max": 1.307,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 1.457,
+              "min": 1.286,
+              "max": 1.639,
+              "n": 20
             },
             "recall@10": {
-              "median": 0.9955,
-              "min": 0.9945,
-              "max": 0.9964,
-              "n": 5
+              "median": 0.9956,
+              "min": 0.9949,
+              "max": 0.9956,
+              "n": 20
             },
             "build s": {
-              "median": 42.85,
-              "min": 42.09,
-              "max": 44.73,
+              "median": 43.53,
+              "min": 41.36,
+              "max": 44.89,
               "n": 5
             },
             "peak memory GiB": {
@@ -2064,34 +2172,46 @@
           "scale": "small",
           "scale_label": "1M",
           "workload": "search",
-          "n_docs": "1000000",
+          "n_docs": "1,000,000",
           "deployment": "embedded",
           "image": null,
           "version_name": "sqlite-vec 0.1.9",
-          "host": "container:fea4c18c8c86 (host unknown)",
+          "host": "mini",
           "metrics": {
             "cold p50 ms": {
-              "median": 118.299,
-              "min": 114.454,
-              "max": 120.312,
+              "median": 126.426,
+              "min": 125.95,
+              "max": 127.232,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 120.187,
-              "min": 116.271,
-              "max": 122.276,
+              "median": 128.838,
+              "min": 128.573,
+              "max": 129.802,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 126.422,
+              "min": 125.925,
+              "max": 127.208,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 128.859,
+              "min": 127.952,
+              "max": 130.11,
+              "n": 20
             },
             "recall@10": {
               "median": 0.9991,
               "min": 0.9991,
               "max": 0.9991,
-              "n": 5
+              "n": 20
             },
             "build s": {
-              "median": 8.07,
-              "min": 7.5,
-              "max": 8.78,
+              "median": 7.86,
+              "min": 7.69,
+              "max": 9.13,
               "n": 5
             },
             "peak memory GiB": {
@@ -2955,6 +3075,7 @@
         "2-hop p50 ms",
         "2-hop p99 ms",
         "write p50 ms",
+        "write p99 ms",
         "peak memory GiB",
         "disk GiB"
       ],
