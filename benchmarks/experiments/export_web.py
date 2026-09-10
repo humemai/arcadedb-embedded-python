@@ -658,12 +658,13 @@ def _dense_overlay_entries(scale="deep10m"):
             peak.append({"peak_anon_mib_sum": passes[0].get("peak_anon_mib_sum")})
             cold.append({"p50": passes[0].get("p50"), "p99": passes[0].get("p99")})
             for p in passes[1:]:
-                warm.append({"p50": p.get("p50")})
+                warm.append({"p50": p.get("p50"), "p99": p.get("p99")})
                 recall.append({"r": p.get("recall_at_10")})
         metrics = {}
         for label_, rows_, field in (("cold p50 ms", cold, "p50"),
                                      ("cold p99 ms", cold, "p99"),
                                      ("warm p50 ms", warm, "p50"),
+                                     ("warm p99 ms", warm, "p99"),
                                      ("recall@10", recall, "r"),
                                      ("build s", build, "build_s")):
             got = _agg(rows_, field)
@@ -1241,6 +1242,8 @@ def _sparse_multipass_table():
                 continue
             c = cold[0]["query_p50_ms"]
             w = statistics.median(r["query_p50_ms"] for r in warm)
+            c99 = cold[0].get("query_p99_ms")
+            w99 = statistics.median(r["query_p99_ms"] for r in warm if r.get("query_p99_ms") is not None) if any(r.get("query_p99_ms") is not None for r in warm) else None
             entries.append({
                 "backend": label,
                 "is_arcadedb": "arcade" in backend,
@@ -1259,6 +1262,8 @@ def _sparse_multipass_table():
                                     "max": round(c, 3), "n": 1},
                     "warm p50 ms": {"median": round(w, 3), "min": round(w, 3),
                                     "max": round(w, 3), "n": len(warm)},
+                    **({"cold p99 ms": {"median": round(c99, 3), "min": round(c99, 3), "max": round(c99, 3), "n": 1}} if c99 is not None else {}),
+                    **({"warm p99 ms": {"median": round(w99, 3), "min": round(w99, 3), "max": round(w99, 3), "n": len(warm)}} if w99 is not None else {}),
                     "gain": {"median": round(c / w, 2), "min": round(c / w, 2),
                              "max": round(c / w, 2), "n": 1},
                     **({"peak memory GiB": _campaign_stat(backend, tier, "peak_anon_mib_sum") or _agg(cold, "peak_anon_mib_sum")}
@@ -1288,7 +1293,7 @@ def _sparse_multipass_table():
             "nine times on a second pass, so which pass you time decides the "
             "ranking, and it has to say which.",
         ],
-        "columns": ["cold p50 ms", "warm p50 ms", "gain"],
+        "columns": ["cold p50 ms", "cold p99 ms", "warm p50 ms", "warm p99 ms", "gain"],
         "withheld_scales": [],
         "withheld_reason": None,
         "source_paths": ["benchmarks/experiments/results/sparse_mp"],
@@ -2026,8 +2031,8 @@ def main() -> int:
                             if lane != "l3d" else
                             # warm exists only where a second pass was run,
                             # so it sits beside cold rather than replacing it
-                            ["cold p50 ms", "warm p50 ms", "cold p99 ms",
-                             "recall@10", "build s",
+                            ["cold p50 ms", "cold p99 ms", "warm p50 ms",
+                             "warm p99 ms", "recall@10", "build s",
                              "peak memory GiB", "disk GiB"]),
                 "withheld_scales": withheld,
                 "withheld_reason": (
