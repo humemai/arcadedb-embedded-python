@@ -831,7 +831,7 @@ LANES = {
         # memory. A page that omits the resource axis reads as if latency
         # were the only axis anyone deploys on.
         "metrics": [("point_p50_ms", "point p50 ms"), ("point_p99_ms", "point p99 ms"),
-                    ("hop1_p50_ms", "1-hop p50 ms"),
+                    ("hop1_p50_ms", "1-hop p50 ms"), ("hop1_p99_ms", "1-hop p99 ms"),
                     ("hop2_p50_ms", "2-hop p50 ms"), ("hop2_p99_ms", "2-hop p99 ms"),
                     ("write_p50_ms", "write p50 ms"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
@@ -916,8 +916,9 @@ LANES = {
     "l1": {
         "title": "Documents: OLTP and OLAP",
         "dataset": "Synthetic orders workload",
-        "metrics": [("read_p50_ms", "read p50 ms"), ("insert_p50_ms", "insert p50 ms"),
-                    ("update_p50_ms", "update p50 ms"),
+        "metrics": [("read_p50_ms", "read p50 ms"), ("read_p99_ms", "read p99 ms"),
+                    ("insert_p50_ms", "insert p50 ms"), ("insert_p99_ms", "insert p99 ms"),
+                    ("update_p50_ms", "update p50 ms"), ("update_p99_ms", "update p99 ms"),
                     ("oltp_ops_per_s", "OLTP ops/s"), ("ingest_rows_per_s", "ingest records/s"),
                     ("olap_total_ms", "OLAP total ms"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
@@ -934,7 +935,8 @@ LANES = {
         "title": "Documents (TPC-H and TPC-C shapes)",
         "dataset": "TPC-H queries, TPC-C new-order",
         "metrics": [("q1_ms", "Q1 ms"), ("q6_ms", "Q6 ms"),
-                    ("neworder_p50_ms", "new-order p50 ms"), ("oltp_ops_per_s", "OLTP ops/s"),
+                    ("neworder_p50_ms", "new-order p50 ms"), ("neworder_p99_ms", "new-order p99 ms"),
+                    ("oltp_ops_per_s", "OLTP ops/s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         "conditions": [
@@ -1398,6 +1400,13 @@ def _lifecycle_table(all_rows):
             got = _agg(rs, f"{key}_session_ms")
             if got is not None:
                 entry["metrics"][f"{key} session ms"] = got
+        # The rows carried peak memory and disk from the start; the page
+        # never read them here (2026-09-10).
+        for field, label in (("peak_anon_mib_sum", "peak memory GiB"),
+                             ("disk_data_mb", "disk GiB")):
+            got = _agg(rs, field)
+            if got is not None:
+                entry["metrics"][label] = got
         if entry["metrics"]:
             entries.append(entry)
 
