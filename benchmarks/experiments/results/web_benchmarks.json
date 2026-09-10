@@ -488,7 +488,7 @@
         "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
         "Every number here is cold, the first timed pass after the index is built. Warm, the same engines run again over an index they have already read, shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. The dense table below is not like this: there ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
         "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14)."
       ],
       "columns": [
         "p50 ms",
@@ -1700,7 +1700,7 @@
         "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
         "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried 26 to 28 small segments and read 2.3x slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
         "ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14)."
       ],
       "columns": [
         "cold p50 ms",
@@ -2426,7 +2426,7 @@
           "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "chroma 1.5.9",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -2483,7 +2483,7 @@
           "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "duckdb vss 1.5.5",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -2540,7 +2540,7 @@
           "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "lancedb 0.37.1",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -2597,7 +2597,7 @@
           "n_docs": "9,990,000",
           "deployment": "server",
           "image": null,
-          "version_name": null,
+          "version_name": "milvus v2.6.13",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -2654,7 +2654,7 @@
           "n_docs": "9,990,000",
           "deployment": "server",
           "image": null,
-          "version_name": null,
+          "version_name": "milvus v2.6.13",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -2711,7 +2711,7 @@
           "n_docs": "9,990,000",
           "deployment": "server",
           "image": null,
-          "version_name": null,
+          "version_name": "qdrant 1.18.2",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -2768,7 +2768,7 @@
           "n_docs": "9,990,000",
           "deployment": "server",
           "image": null,
-          "version_name": null,
+          "version_name": "qdrant 1.18.2",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -2825,7 +2825,7 @@
           "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "sqlite-vec 0.1.9",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -2882,7 +2882,7 @@
           "n_docs": "9,990,000",
           "deployment": "embedded",
           "image": null,
-          "version_name": null,
+          "version_name": "sqlite-vec 0.1.9",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -2947,7 +2947,7 @@
       "dataset": "LDBC-SNB Interactive (SF1, SF10)",
       "conditions": [
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14)."
       ],
       "columns": [
         "point p50 ms",
@@ -3485,7 +3485,7 @@
         "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
         "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
         "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14)."
       ],
       "columns": [
         "average friend age ms",
@@ -4227,7 +4227,7 @@
       "dataset": "Synthetic orders workload",
       "conditions": [
         "PostgreSQL's memory cell is not comparable to the other two. It keeps its data in shared memory and in the file cache the kernel holds for it, and this column counts neither, so it reads 0.12 GiB where the run's actual peak was 3.85. Most of even that 0.12 is our own benchmark client rather than the database: 0.105 of it. We checked that this is the measure and not the setting, by giving a PostgreSQL container a 2 GB buffer pool and watching this column stay at 5 MiB.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14)."
       ],
       "columns": [
         "read p50 ms",
@@ -4575,7 +4575,7 @@
         "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
         "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
         "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14)."
       ],
       "columns": [
         "Q1 ms",
@@ -4861,7 +4861,7 @@
         "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
         "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
         "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14)."
       ],
       "columns": [
         "p50 ms",
@@ -5071,7 +5071,7 @@
         "Cold is the first timed pass after the index is built. Warm is the median of five more passes over a DIFFERENT half of the query set, so a warm number cannot be explained by the engine having already answered that exact query. Both halves are drawn from the same 1,000 dev queries in the same order.",
         "One build per engine here, against five in the table above, which is why these are a separate table rather than two more columns on it. Reading a warm number from this protocol beside a cold number from that one would compare two different protocols.",
         "The order is the same cold and warm at both sizes. The dense table further down is not like this: there ArcadeDB alone gains about nine times on a second pass, so which pass you time decides the ranking, and it has to say which.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14)."
       ],
       "columns": [
         "cold p50 ms",
@@ -5715,7 +5715,7 @@
         "No engine takes a settle step, and that was measured rather than assumed: sealing the write buffer makes the aggregation faster and the last-point query slower, since the unsealed tail a scan walks is where the newest point lives. Settling only ours would have been a one-sided advantage. (Rows disagree on this; treat with care.)",
         "One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark. A matched one-tag/ten-tag run prices the schema at 2.0x on ingest and 2.6x faster on last-point.",
         "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound: telling the engine to look only at the past hour made it slower, 0.860 ms against 0.720, because evaluating the time filter costs more than the scan it saves.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell means the engine's containers were not sampled (Milvus's sparse stack) or the row predates the disk reading (the dense comparators at 1M)."
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14)."
       ],
       "columns": [
         "ingest pts/s",
@@ -6004,6 +6004,7 @@
         "Cold start is measured in a fresh subprocess and reported beside every session number, because a millisecond open inside a process that takes half a second to reach its first database call is not a millisecond to whoever launched it.",
         "Known at this engine build: a vector database's no-op session close grows with the index (8 ms at 10k, 98 ms at 1M, 1.4 s at 10M), and a session with one search in it at 10M is 17.6 s, because the first search after a write started a full asynchronous graph rebuild and close() waited on it. Filed as #7183, fixed upstream in #7191 for 26.10.1; the October re-pin re-measures it.",
         "A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k documents and 10M.",
+        "Server rows have no JVM start, first open or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.",
         "`graph_gav` is withheld: probe scope under revision; see PAGE-SPEC 4c"
       ],
       "columns": [

@@ -683,6 +683,11 @@ def _dense_10m_entries():
         # not expose one to this driver and record "unknown (...)". Reporting
         # that as a build would be worse than reporting nothing.
         v = next((x for x in ver if x and not str(x).startswith("unknown")), None)
+        # The comparator files stamp nothing usable, but the same arm ran in
+        # the campaign lane at this size with its version recorded; the page
+        # showed nine unversioned rows at 10M for that (2026-09-10).
+        if v is None and not ours:
+            v = _campaign_engine_string(_cb)
         out.append({
             "backend": label,
             "is_arcadedb": ours,
@@ -718,9 +723,8 @@ DISK_NOTE = ("Disk is what the workload left on disk, in GiB: the engine's writa
              "plus its volumes after the cell, minus the same engine's empty footprint. It is "
              "read after the queries, so it includes anything querying wrote; a server "
              "reading is taken once two samples agree within 1%, an embedded reading once on "
-             "the stopped container. A blank cell means the engine's containers were not "
-             "sampled (Milvus's sparse stack) or the row predates the disk reading (the dense "
-             "comparators at 1M).")
+             "the stopped container. A blank cell is a row measured before the disk "
+             "reading existed (2026-08-14).")
 
 
 def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
@@ -1395,6 +1399,9 @@ def _lifecycle_table(all_rows):
             _lc_vector_note(rows),
             "A clean close should be O(what was written), not O(what is stored): "
             "write nothing and closing should cost the same at 10k documents and 10M.",
+            "Server rows have no JVM start, first open or cold process: the server is "
+            "already running when the probe connects, so those three columns describe "
+            "the embedded process only. The session columns are measured for both.",
         ] + [f"`{k}` is withheld: {v}" for k, v in sorted(LIFECYCLE_WITHHELD.items())],
         "columns": ["JVM start ms", "first open ms", "cold process ms"]
                    + [f"{k} session ms" for k, _ in LIFECYCLE_SCENARIOS],
