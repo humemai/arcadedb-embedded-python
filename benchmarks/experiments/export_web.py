@@ -955,8 +955,8 @@ LANES = {
     "l1tpc": {
         "title": "Documents (TPC-H and TPC-C shapes)",
         "dataset": "TPC-H queries, TPC-C new-order",
-        "metrics": [("q1_ms", "Q1 ms"), ("q1_p99_ms", "Q1 p99 ms"),
-                    ("q6_ms", "Q6 ms"), ("q6_p99_ms", "Q6 p99 ms"),
+        "metrics": [("q1_ms", "Q1 p50 ms"), ("q1_p99_ms", "Q1 p99 ms"),
+                    ("q6_ms", "Q6 p50 ms"), ("q6_p99_ms", "Q6 p99 ms"),
                     ("neworder_p50_ms", "new-order p50 ms"), ("neworder_p99_ms", "new-order p99 ms"),
                     ("oltp_ops_per_s", "OLTP ops/s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
@@ -1141,9 +1141,9 @@ L4_METRICS = [
     # "last-point" is TSBS's own name for this query and it reads as "the
     # final point" rather than "the newest one", which is what it means.
     # The page says what the query does; the papers keep the TSBS term.
-    (("q_last_unbounded_ms", "q_last_ms"), "newest reading ms"),
+    (("q_last_unbounded_ms", "q_last_ms"), "newest reading p50 ms"),
     ("q_last_p99_ms", "newest reading p99 ms"),
-    ("q_global_ms", "12h aggregate ms"),
+    ("q_global_ms", "12h aggregate p50 ms"),
     ("q_global_p99_ms", "12h aggregate p99 ms"),
     ("peak_anon_mib_sum", "peak memory GiB"),
     ("disk_data_mb", "disk GiB"),

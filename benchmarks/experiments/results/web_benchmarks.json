@@ -5106,8 +5106,10 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on."
       ],
       "columns": [
-        "Q1 ms",
-        "Q6 ms",
+        "Q1 p50 ms",
+        "Q1 p99 ms",
+        "Q6 p50 ms",
+        "Q6 p99 ms",
         "new-order p50 ms",
         "new-order p99 ms",
         "OLTP ops/s",
@@ -5130,16 +5132,28 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "Q1 ms": {
-              "median": 10503.99,
-              "min": 10394.73,
-              "max": 10590.89,
+            "Q1 p50 ms": {
+              "median": 10224.85,
+              "min": 10143.5,
+              "max": 10400.25,
               "n": 5
             },
-            "Q6 ms": {
-              "median": 792.59,
-              "min": 782.34,
-              "max": 807.44,
+            "Q1 p99 ms": {
+              "median": 10360.3,
+              "min": 10291.89,
+              "max": 10625.09,
+              "n": 5
+            },
+            "Q6 p50 ms": {
+              "median": 766.87,
+              "min": 762.22,
+              "max": 774.08,
+              "n": 5
+            },
+            "Q6 p99 ms": {
+              "median": 787.0,
+              "min": 780.69,
+              "max": 817.67,
               "n": 5
             },
             "new-order p50 ms": {
@@ -5187,16 +5201,28 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "Q1 ms": {
-              "median": 10562.76,
-              "min": 10543.49,
-              "max": 10729.88,
+            "Q1 p50 ms": {
+              "median": 10287.38,
+              "min": 10199.54,
+              "max": 10354.87,
               "n": 5
             },
-            "Q6 ms": {
-              "median": 799.48,
-              "min": 790.39,
-              "max": 817.93,
+            "Q1 p99 ms": {
+              "median": 10541.37,
+              "min": 10419.01,
+              "max": 11425.06,
+              "n": 5
+            },
+            "Q6 p50 ms": {
+              "median": 776.61,
+              "min": 770.47,
+              "max": 845.07,
+              "n": 5
+            },
+            "Q6 p99 ms": {
+              "median": 797.81,
+              "min": 792.27,
+              "max": 856.7,
               "n": 5
             },
             "new-order p50 ms": {
@@ -5224,8 +5250,8 @@
               "n": 5
             },
             "disk GiB": {
-              "median": 0.6482,
-              "min": 0.6225,
+              "median": 0.6492,
+              "min": 0.6386,
               "max": 0.6627,
               "n": 10
             }
@@ -5244,16 +5270,28 @@
           "version_name": "duckdb 1.5.5",
           "host": null,
           "metrics": {
-            "Q1 ms": {
-              "median": 15.41,
-              "min": 14.98,
+            "Q1 p50 ms": {
+              "median": 15.49,
+              "min": 15.29,
               "max": 15.71,
               "n": 5
             },
-            "Q6 ms": {
-              "median": 7.51,
-              "min": 7.24,
-              "max": 7.79,
+            "Q1 p99 ms": {
+              "median": 16.93,
+              "min": 16.8,
+              "max": 17.11,
+              "n": 5
+            },
+            "Q6 p50 ms": {
+              "median": 7.23,
+              "min": 7.15,
+              "max": 7.33,
+              "n": 5
+            },
+            "Q6 p99 ms": {
+              "median": 8.69,
+              "min": 8.17,
+              "max": 9.34,
               "n": 5
             },
             "new-order p50 ms": {
@@ -5282,7 +5320,7 @@
             },
             "disk GiB": {
               "median": 0.0713,
-              "min": 0.0709,
+              "min": 0.0707,
               "max": 0.0719,
               "n": 10
             }
@@ -5301,16 +5339,28 @@
           "version_name": "postgres 17.10",
           "host": null,
           "metrics": {
-            "Q1 ms": {
-              "median": 1071.22,
-              "min": 1064.01,
-              "max": 1078.78,
+            "Q1 p50 ms": {
+              "median": 330.66,
+              "min": 329.42,
+              "max": 332.11,
               "n": 5
             },
-            "Q6 ms": {
-              "median": 117.94,
-              "min": 117.62,
-              "max": 118.4,
+            "Q1 p99 ms": {
+              "median": 1073.73,
+              "min": 1061.09,
+              "max": 1103.5,
+              "n": 5
+            },
+            "Q6 p50 ms": {
+              "median": 105.85,
+              "min": 104.85,
+              "max": 106.34,
+              "n": 5
+            },
+            "Q6 p99 ms": {
+              "median": 109.59,
+              "min": 108.34,
+              "max": 110.63,
               "n": 5
             },
             "new-order p50 ms": {
@@ -5338,8 +5388,8 @@
               "n": 5
             },
             "disk GiB": {
-              "median": 0.7879,
-              "min": 0.7878,
+              "median": 0.788,
+              "min": 0.788,
               "max": 0.788,
               "n": 10
             }
@@ -5358,16 +5408,28 @@
           "version_name": "postgres 17.10",
           "host": null,
           "metrics": {
-            "Q1 ms": {
-              "median": 342.12,
-              "min": 337.21,
-              "max": 343.67,
+            "Q1 p50 ms": {
+              "median": 336.82,
+              "min": 333.9,
+              "max": 339.13,
               "n": 5
             },
-            "Q6 ms": {
-              "median": 109.02,
-              "min": 107.53,
-              "max": 110.66,
+            "Q1 p99 ms": {
+              "median": 348.05,
+              "min": 344.98,
+              "max": 350.84,
+              "n": 5
+            },
+            "Q6 p50 ms": {
+              "median": 101.07,
+              "min": 100.58,
+              "max": 102.38,
+              "n": 5
+            },
+            "Q6 p99 ms": {
+              "median": 108.98,
+              "min": 107.17,
+              "max": 110.69,
               "n": 5
             },
             "new-order p50 ms": {
@@ -5395,8 +5457,8 @@
               "n": 5
             },
             "disk GiB": {
-              "median": 0.7879,
-              "min": 0.7878,
+              "median": 0.788,
+              "min": 0.7879,
               "max": 0.788,
               "n": 10
             }
@@ -6455,9 +6517,9 @@
       ],
       "columns": [
         "ingest pts/s",
-        "newest reading ms",
+        "newest reading p50 ms",
         "newest reading p99 ms",
-        "12h aggregate ms",
+        "12h aggregate p50 ms",
         "12h aggregate p99 ms",
         "peak memory GiB",
         "disk GiB"
@@ -6482,7 +6544,7 @@
               "max": 1950431.2,
               "n": 5
             },
-            "newest reading ms": {
+            "newest reading p50 ms": {
               "median": 0.42,
               "min": 0.41,
               "max": 0.45,
@@ -6494,7 +6556,7 @@
               "max": 83.54,
               "n": 5
             },
-            "12h aggregate ms": {
+            "12h aggregate p50 ms": {
               "median": 20.03,
               "min": 18.14,
               "max": 31.45,
@@ -6537,7 +6599,7 @@
               "max": 41012.4,
               "n": 5
             },
-            "newest reading ms": {
+            "newest reading p50 ms": {
               "median": 0.57,
               "min": 0.51,
               "max": 0.62,
@@ -6549,7 +6611,7 @@
               "max": 2.41,
               "n": 5
             },
-            "12h aggregate ms": {
+            "12h aggregate p50 ms": {
               "median": 1521.1,
               "min": 1490.09,
               "max": 1536.13,
@@ -6592,7 +6654,7 @@
               "max": 56487.4,
               "n": 5
             },
-            "newest reading ms": {
+            "newest reading p50 ms": {
               "median": 1.3,
               "min": 1.29,
               "max": 1.34,
@@ -6604,7 +6666,7 @@
               "max": 3.62,
               "n": 5
             },
-            "12h aggregate ms": {
+            "12h aggregate p50 ms": {
               "median": 1595.64,
               "min": 1507.89,
               "max": 1653.68,
@@ -6647,7 +6709,7 @@
               "max": 598158.9,
               "n": 5
             },
-            "newest reading ms": {
+            "newest reading p50 ms": {
               "median": 10.61,
               "min": 10.42,
               "max": 10.69,
@@ -6659,7 +6721,7 @@
               "max": 64.95,
               "n": 5
             },
-            "12h aggregate ms": {
+            "12h aggregate p50 ms": {
               "median": 3.81,
               "min": 3.68,
               "max": 4.19,
@@ -6702,7 +6764,7 @@
               "max": 1886764.5,
               "n": 5
             },
-            "newest reading ms": {
+            "newest reading p50 ms": {
               "median": 1.31,
               "min": 1.29,
               "max": 1.32,
@@ -6714,7 +6776,7 @@
               "max": 4.95,
               "n": 5
             },
-            "12h aggregate ms": {
+            "12h aggregate p50 ms": {
               "median": 4.48,
               "min": 4.43,
               "max": 4.54,
@@ -6757,7 +6819,7 @@
               "max": 1309655.4,
               "n": 5
             },
-            "newest reading ms": {
+            "newest reading p50 ms": {
               "median": 0.64,
               "min": 0.6,
               "max": 0.69,
@@ -6769,7 +6831,7 @@
               "max": 5.44,
               "n": 5
             },
-            "12h aggregate ms": {
+            "12h aggregate p50 ms": {
               "median": 1.88,
               "min": 1.77,
               "max": 2.04,
