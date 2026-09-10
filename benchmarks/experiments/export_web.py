@@ -563,7 +563,7 @@ SOURCES = {
     # Two tiers, two artifacts: small comes from the campaign's frozen rows,
     # DEEP-10M from the matched multipass overlay. Both are published.
     "l3d": ["benchmarks/experiments/results/runs_paper.csv",
-            "benchmarks/experiments/results/dense_mp5_<pin or 2681>"],   # resolved in _dense_10m_entries
+            "benchmarks/experiments/results/dense_mp5_<pin or 2681>"],   # resolved in _dense_overlay_entries
     "l2": "benchmarks/experiments/results/runs_paper.csv",
     "l1": "benchmarks/experiments/results/runs_paper.csv",
     "l1tpc": "benchmarks/experiments/results/runs_paper.csv",
@@ -608,7 +608,7 @@ DENSE_10M_ARMS = [
 ]
 
 
-def _dense_10m_entries():
+def _dense_overlay_entries(scale="deep10m"):
     """The DEEP-10M tier, every engine, both passes.
 
     THIS TIER WAS WITHHELD AND SHOULD NOT HAVE BEEN. The withheld note said
@@ -630,11 +630,18 @@ def _dense_10m_entries():
     together because separating them is the point: only ArcadeDB moves.
     """
     import make_paper_tables as _MPT
-    root = Path(_MPT.dense_mp_dir())
+    # One protocol at both sizes since 2026-09-10 (BUGS F26): deep10m reads
+    # dense_mp5_<pin>, small reads dense_mp5_small_<pin>, both pinned-only.
+    if scale == "deep10m":
+        root, arms, n_docs = Path(_MPT.dense_mp_dir()), DENSE_10M_ARMS, "9,990,000"
+    else:
+        root = Path(_MPT.dense_mp_small_dir())
+        arms = [a for a in DENSE_10M_ARMS if a[0] in _MPT.MP_ARMS_SMALL]
+        n_docs = "1,000,000"
     if not root.is_dir():
         return []
     out = []
-    for arm, backend_key, label, ours in DENSE_10M_ARMS:
+    for arm, backend_key, label, ours in arms:
         hits = sorted(root.glob(f"mp_{arm}_b*.json"))
         if not hits:
             continue
@@ -673,10 +680,10 @@ def _dense_10m_entries():
         # served arm's multipass file sees only the client container (3.6 GiB
         # against the pair's 28), and no file carries disk. Same build, same
         # envelope; the overlay's own peak is the fallback.
-        _pk = _campaign_stat(_cb, "deep10m", "peak_anon_mib_sum") or _agg(peak, "peak_anon_mib_sum")
+        _pk = _campaign_stat(_cb, scale, "peak_anon_mib_sum") or _agg(peak, "peak_anon_mib_sum")
         if _pk is not None:
             metrics["peak memory GiB"] = _pk
-        _dk = _campaign_stat(_cb, "deep10m", "disk_data_mb")
+        _dk = _campaign_stat(_cb, scale, "disk_data_mb")
         if _dk is not None:
             metrics["disk GiB"] = _dk
         # Only OUR arms carry a version string; the comparator containers do
@@ -699,10 +706,10 @@ def _dense_10m_entries():
             # ArcadeDB's two arms, which share one backend name.
             "precision": ("int8" if arm == "int8"
                           else DENSE_PRECISION.get(backend_key, "fp32")),
-            "scale": "deep10m",
-            "scale_label": scale_label("l3d", "deep10m"),
+            "scale": scale,
+            "scale_label": scale_label("l3d", scale),
             "workload": "search",
-            "n_docs": "9,990,000",
+            "n_docs": n_docs,
             "deployment": deployment_of(backend_key),
             "image": None,
             "version_name": _engine_version(label, v, commit=_overlay_commit()),
@@ -1968,10 +1975,19 @@ def main() -> int:
             # single-pass rows stay in the CSV for l3d_params and the ablation;
             # they are never this table. "Never both" still holds: it is all
             # overlay or, with no overlay on disk, all CSV.
-            _mp = _dense_10m_entries()
+            _mp = _dense_overlay_entries("deep10m")
             if _mp:
                 entries = [e for e in entries if e["scale"] != "deep10m"]
                 entries.extend(_mp)
+            # The 1M size reads its own multipass overlay the same way, so the
+            # warm column exists at both sizes and both read one protocol.
+            # dense_mp_small_dir() refuses a partial directory; while the
+            # overlay is absent (qDB not yet landed) the size stays on the
+            # single-pass rows, cold only.
+            _mps = _dense_overlay_entries("small")
+            if _mps:
+                entries = [e for e in entries if e["scale"] != "small"]
+                entries.extend(_mps)
         if entries:
             # A scale where the comparators have rows and ArcadeDB does not
             # reads as "ArcadeDB could not do this tier", which is a claim the

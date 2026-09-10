@@ -206,7 +206,7 @@ PAGE_TS = Path(__file__).resolve().parents[2].parent / "humem.ai" / \
 # The page's DEEP-10M rows against T5's, cell for cell.
 #
 # Both sides read results/dense_mp5_2681, but through two separate
-# implementations: export_web._dense_10m_entries for the page and
+# implementations: export_web._dense_overlay_entries for the page and
 # make_paper_tables for the paper. That is the "two generators aggregate
 # independently" hazard this file's docstring opens with, now applied to the
 # tier that was withheld until 2026-08-13 and so never had a pin at all.

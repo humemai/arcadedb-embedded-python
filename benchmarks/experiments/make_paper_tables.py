@@ -696,6 +696,10 @@ MP_ARMS = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus", "milvus_int8",
            "qdrant", "qdrant_int8", "chroma", "duckvss", "lancedb",
            "sqlitevec", "sqlitevec_int8")
 MP_BUILDS = 5
+# The 1M twin (qDB, 2026-09-10): the same protocol without the int8 comparator
+# arms, which exist only at 10M.
+MP_ARMS_SMALL = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus",
+                 "qdrant", "chroma", "duckvss", "lancedb", "sqlitevec")
 
 
 def dense_mp_dir():
@@ -712,6 +716,24 @@ def dense_mp_dir():
                if not os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
     if missing:
         raise SystemExit(f"dense_mp5_{pin}: {len(missing)} of {len(MP_ARMS) * MP_BUILDS} files missing "
+                         f"(e.g. {missing[0]}); no fallback, re-run the arm")
+    return cand
+
+
+def dense_mp_small_dir():
+    """results/dense_mp5_small_<pin>: the 1M multipass overlay. Absent is
+    allowed until qDB lands (the size then reads single-pass rows, cold only);
+    a partial directory refuses, like dense_mp_dir()."""
+    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+    if not pin:
+        raise SystemExit("BENCH_ENGINE_COMMIT is unset: the dense overlay is pinned only")
+    cand = os.path.join(RESULTS, f"dense_mp5_small_{pin}")
+    if not os.path.isdir(cand):
+        return cand
+    missing = [f"mp_{a}_b{b}.json" for a in MP_ARMS_SMALL for b in range(1, MP_BUILDS + 1)
+               if not os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
+    if missing:
+        raise SystemExit(f"dense_mp5_small_{pin}: {len(missing)} of {len(MP_ARMS_SMALL) * MP_BUILDS} files missing "
                          f"(e.g. {missing[0]}); no fallback, re-run the arm")
     return cand
 
