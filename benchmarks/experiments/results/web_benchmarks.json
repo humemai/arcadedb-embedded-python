@@ -14,7 +14,6 @@
       "1.5.5"
     ],
     "duckdb_vss_dense": [
-      "1.5.4",
       "1.5.5"
     ],
     "elasticsearch_sparse": [
@@ -24,18 +23,16 @@
       "ladybug:0.19.1"
     ],
     "lancedb_dense": [
-      "0.34.0",
       "0.37.1"
     ],
     "milvus_dense": [
-      "3.0.0",
       "milvus:pkg/v2.6.13"
     ],
     "milvus_dense_int8": [
       "milvus:pkg/v2.6.13"
     ],
     "milvus_sparse": [
-      "milvus"
+      "milvus:pkg/v2.6.13"
     ],
     "neo4j_graph": [
       "neo4j:5.26.28"
@@ -49,7 +46,6 @@
       "PostgreSQL 17.10"
     ],
     "qdrant_dense": [
-      "1.18.0",
       "qdrant:1.18.2"
     ],
     "qdrant_dense_int8": [
@@ -73,12 +69,8 @@
   },
   "comparator_version_split": [
     "duckdb",
-    "duckdb_vss_dense",
-    "lancedb_dense",
-    "milvus_dense",
     "postgres",
-    "postgres_tuned",
-    "qdrant_dense"
+    "postgres_tuned"
   ],
   "arcadedb_engines": [
     "arcadedb 26.9.1-dev \u00b7 8d6af9475"
@@ -100,8 +92,9 @@
     "container:00a3f5177b2c (host unknown)",
     "container:018b8e5925d9 (host unknown)",
     "container:02be295b83ba (host unknown)",
+    "container:02e5f67c3cd1 (host unknown)",
     "container:032ef161c942 (host unknown)",
-    "container:037cc8d17757 (host unknown)",
+    "container:03f5c353112a (host unknown)",
     "container:066ef9a8bacb (host unknown)",
     "container:06eb563ac188 (host unknown)",
     "container:0730b83ae518 (host unknown)",
@@ -114,17 +107,17 @@
     "container:0aa56c6a8e2f (host unknown)",
     "container:0bab68860ad2 (host unknown)",
     "container:0bb4ca782e34 (host unknown)",
+    "container:0cdebe976601 (host unknown)",
     "container:0d767e8da998 (host unknown)",
-    "container:0f03325832f1 (host unknown)",
     "container:0f4673a1dc82 (host unknown)",
     "container:0ff5a6f02422 (host unknown)",
     "container:1014a3225250 (host unknown)",
     "container:10b45b6b828e (host unknown)",
     "container:11b6065da920 (host unknown)",
-    "container:12cbcdbc0fe0 (host unknown)",
     "container:12e62d494424 (host unknown)",
     "container:139d3c8f1bd8 (host unknown)",
     "container:13afa66012d2 (host unknown)",
+    "container:13ba82b65cf8 (host unknown)",
     "container:148c80348eeb (host unknown)",
     "container:155b5c187b88 (host unknown)",
     "container:16123ce46910 (host unknown)",
@@ -138,43 +131,50 @@
     "container:1bdf52ac9a13 (host unknown)",
     "container:1c760263f74e (host unknown)",
     "container:1cb88b5f0687 (host unknown)",
-    "container:1d679a9679a9 (host unknown)",
     "container:1f574fa5772d (host unknown)",
     "container:1fd99dfdede3 (host unknown)",
-    "container:20281f9ea94b (host unknown)",
+    "container:210f14f81f4d (host unknown)",
     "container:214fe8a4b13a (host unknown)",
     "container:23e2c7a02c1d (host unknown)",
     "container:24021d5788d5 (host unknown)",
-    "container:24289644770a (host unknown)",
     "container:246aaf7f2354 (host unknown)",
+    "container:24718e20df8d (host unknown)",
     "container:248391021cd8 (host unknown)",
     "container:24dc1c976a55 (host unknown)",
+    "container:2596e52f1a5d (host unknown)",
     "container:25ece5b76009 (host unknown)",
     "container:2925b9b26111 (host unknown)",
     "container:295b760908a6 (host unknown)",
-    "container:29bfc3a02147 (host unknown)",
     "container:2c03db4f2460 (host unknown)",
     "container:2c71a6790cb0 (host unknown)",
-    "container:2db7ecffce68 (host unknown)",
     "container:2de5ddfe8c21 (host unknown)",
     "container:2e2d1017adbf (host unknown)",
+    "container:2e4a2c49f76c (host unknown)",
     "container:2ebfc5116b75 (host unknown)",
     "container:2efa230c3ddf (host unknown)",
     "container:2fc8678baf8c (host unknown)",
     "container:30052c2f0cf3 (host unknown)",
+    "container:3068fd69800e (host unknown)",
+    "container:307b00c732ea (host unknown)",
     "container:30cd7e9192c1 (host unknown)",
     "container:31911d414581 (host unknown)",
+    "container:31c2896725a8 (host unknown)",
     "container:31d292d824e7 (host unknown)",
     "container:31e807f52a8c (host unknown)",
+    "container:332d041ed47c (host unknown)",
+    "container:33df25a17869 (host unknown)",
     "container:33ed64e2098c (host unknown)",
     "container:3411350a268e (host unknown)",
     "container:34589d8b141b (host unknown)",
+    "container:348a762aabf7 (host unknown)",
     "container:34a64918d356 (host unknown)",
     "container:353ccb850167 (host unknown)",
     "container:3653d425120e (host unknown)",
+    "container:366593306c17 (host unknown)",
     "container:36fd6c9caab2 (host unknown)",
     "container:379fbe804ff3 (host unknown)",
     "container:37cbb652fb53 (host unknown)",
+    "container:385079e12929 (host unknown)",
     "container:386d97dd4c07 (host unknown)",
     "container:38be79ca78d9 (host unknown)",
     "container:39105bef125f (host unknown)",
@@ -184,13 +184,13 @@
     "container:3f8fc7299a8a (host unknown)",
     "container:40411823c868 (host unknown)",
     "container:419932f15a5c (host unknown)",
-    "container:425a1a4f6226 (host unknown)",
     "container:43d521031738 (host unknown)",
     "container:43f617498809 (host unknown)",
     "container:453523ba732e (host unknown)",
     "container:45536368c21f (host unknown)",
     "container:45924b93a481 (host unknown)",
     "container:45e6c5d14619 (host unknown)",
+    "container:46e9d583b951 (host unknown)",
     "container:478b574891d8 (host unknown)",
     "container:479414ed3094 (host unknown)",
     "container:48ad3b584715 (host unknown)",
@@ -202,38 +202,36 @@
     "container:49a9959fc31d (host unknown)",
     "container:4a0dae2f3a30 (host unknown)",
     "container:4a276a4e1a0e (host unknown)",
+    "container:4a760a37d3a7 (host unknown)",
     "container:4b8a1ed70179 (host unknown)",
     "container:4cd42e79f492 (host unknown)",
     "container:4ceff83630d9 (host unknown)",
     "container:4d31ed15af17 (host unknown)",
-    "container:4d37dcfbc6b2 (host unknown)",
-    "container:4d64466ed2b6 (host unknown)",
     "container:4eaeeb3f8a9c (host unknown)",
+    "container:4f6c5ba2f382 (host unknown)",
+    "container:4fde7e147ff7 (host unknown)",
     "container:502f9ba282e5 (host unknown)",
     "container:505ec3b6a081 (host unknown)",
     "container:50ca4c00c4d4 (host unknown)",
     "container:540e6dc1d521 (host unknown)",
-    "container:5522a41a0d39 (host unknown)",
+    "container:5440e5d98766 (host unknown)",
     "container:568be83406cf (host unknown)",
     "container:56f0522c999b (host unknown)",
     "container:5700f1096187 (host unknown)",
     "container:5715b625bee7 (host unknown)",
     "container:5723dfa448f1 (host unknown)",
-    "container:58221737d184 (host unknown)",
     "container:58317c0548b8 (host unknown)",
     "container:5957e0e88955 (host unknown)",
     "container:59b8bb5ac7e8 (host unknown)",
     "container:59fbd8c227d0 (host unknown)",
     "container:5a11f76f1f5b (host unknown)",
     "container:5b3db757207d (host unknown)",
-    "container:5b55f042c789 (host unknown)",
     "container:5c2e53311ad7 (host unknown)",
-    "container:5ce296705313 (host unknown)",
     "container:5d15c68cfbf4 (host unknown)",
     "container:5dc396e140fa (host unknown)",
     "container:5de28d5d5957 (host unknown)",
     "container:5eb42d466fd2 (host unknown)",
-    "container:61aaf46bcf55 (host unknown)",
+    "container:5fb8048b7b2f (host unknown)",
     "container:62c4cc638f62 (host unknown)",
     "container:63e3e1a15f4c (host unknown)",
     "container:63ec69b9e5db (host unknown)",
@@ -241,10 +239,10 @@
     "container:6436c30b020e (host unknown)",
     "container:64ea1055f147 (host unknown)",
     "container:6508e0c00dd3 (host unknown)",
+    "container:668ea8fdac4f (host unknown)",
     "container:673e277df47d (host unknown)",
     "container:67603bb27186 (host unknown)",
     "container:677f85a846d9 (host unknown)",
-    "container:6793970f7145 (host unknown)",
     "container:6803ddfce4ec (host unknown)",
     "container:698f824022a7 (host unknown)",
     "container:69cc94347bba (host unknown)",
@@ -252,66 +250,61 @@
     "container:6a46e3c8a1ed (host unknown)",
     "container:6ae3f3c76a86 (host unknown)",
     "container:6af743447822 (host unknown)",
-    "container:6b37fa7237ac (host unknown)",
     "container:6b4b0dd0db2d (host unknown)",
-    "container:6c480816165c (host unknown)",
     "container:6ce139d19184 (host unknown)",
     "container:6d3eb38d0e38 (host unknown)",
     "container:6dcd2c035cec (host unknown)",
     "container:6df539b1b2f1 (host unknown)",
     "container:6e5c33eefc14 (host unknown)",
+    "container:6e9b51476402 (host unknown)",
     "container:6ffcf54428db (host unknown)",
     "container:7093719d106f (host unknown)",
-    "container:7139819b613e (host unknown)",
-    "container:71429689decc (host unknown)",
     "container:721a5bc1c56d (host unknown)",
     "container:7293c9a6fc88 (host unknown)",
+    "container:72b5bc0b41cc (host unknown)",
     "container:73a72dc6b343 (host unknown)",
     "container:741bcda92f1b (host unknown)",
     "container:742445a2ea10 (host unknown)",
     "container:745ff410c244 (host unknown)",
-    "container:754fcd77f980 (host unknown)",
-    "container:762da21d467e (host unknown)",
+    "container:75719bdd73a1 (host unknown)",
     "container:76c31a5c244d (host unknown)",
     "container:777d83bc35ad (host unknown)",
     "container:77d0d0c52b8e (host unknown)",
     "container:77dd8173d40b (host unknown)",
     "container:793c4f17e248 (host unknown)",
-    "container:7a0472ce673b (host unknown)",
-    "container:7a12d04ab069 (host unknown)",
+    "container:7b2de57e8af2 (host unknown)",
     "container:7b47b18f14ac (host unknown)",
     "container:7b830271fdbd (host unknown)",
     "container:7cda220d6b9b (host unknown)",
     "container:7e7ae744896c (host unknown)",
     "container:7e915b3d4241 (host unknown)",
-    "container:7ecebfa7e200 (host unknown)",
-    "container:7ef36148a330 (host unknown)",
     "container:7f5ec55fc56d (host unknown)",
-    "container:7f9ee66096df (host unknown)",
     "container:80aacaeec322 (host unknown)",
     "container:819f89a3f98c (host unknown)",
     "container:81fd3427ba4c (host unknown)",
     "container:822825b1bd5f (host unknown)",
     "container:824308314c1a (host unknown)",
     "container:840bd446e964 (host unknown)",
-    "container:84fe5cba2699 (host unknown)",
     "container:8508eaf43bdc (host unknown)",
     "container:8677db61bd70 (host unknown)",
     "container:86a99d9e9c43 (host unknown)",
+    "container:885cf3283205 (host unknown)",
     "container:894d6dbf295e (host unknown)",
     "container:8a02a7b3b96b (host unknown)",
     "container:8a32e3fc7cf7 (host unknown)",
     "container:8aeaffff4e7a (host unknown)",
-    "container:8b55c7c2c89e (host unknown)",
     "container:8b60b7498aa1 (host unknown)",
     "container:8b7296de5613 (host unknown)",
     "container:8bab7bccb305 (host unknown)",
     "container:8c039a0c6c97 (host unknown)",
+    "container:8c22637cf563 (host unknown)",
     "container:8c39559e28a9 (host unknown)",
+    "container:8c598024c3f4 (host unknown)",
     "container:8d1de24dc975 (host unknown)",
     "container:8dba6e7f6a03 (host unknown)",
     "container:8dbbbf45df36 (host unknown)",
     "container:8ddead54ad9e (host unknown)",
+    "container:9013cbd81dc0 (host unknown)",
     "container:927dbd968242 (host unknown)",
     "container:937495f67303 (host unknown)",
     "container:9425c93c41a3 (host unknown)",
@@ -323,35 +316,30 @@
     "container:9645b2d0a026 (host unknown)",
     "container:96f291e20f56 (host unknown)",
     "container:98494c43d6dc (host unknown)",
-    "container:985e483d5c68 (host unknown)",
+    "container:989d80f7737a (host unknown)",
     "container:9926ff23a946 (host unknown)",
     "container:99490fc158e2 (host unknown)",
     "container:9a42228a702e (host unknown)",
     "container:9b0bbd9335b6 (host unknown)",
+    "container:9b11fc36c3af (host unknown)",
     "container:9b96848fee46 (host unknown)",
     "container:9c6515624284 (host unknown)",
     "container:9c670a48aa74 (host unknown)",
-    "container:9d5d2ade0776 (host unknown)",
     "container:9da769cd7a97 (host unknown)",
     "container:9ff2a27f3826 (host unknown)",
     "container:a027b378c966 (host unknown)",
     "container:a21121535594 (host unknown)",
-    "container:a52de3ac7cea (host unknown)",
     "container:a64f3d238609 (host unknown)",
     "container:a77a51628b76 (host unknown)",
     "container:a7ab3bc5ee93 (host unknown)",
-    "container:a8515aa8e7ba (host unknown)",
     "container:a90efaaf5b7f (host unknown)",
     "container:a9c0d7b9fc06 (host unknown)",
     "container:aa18c876e4b8 (host unknown)",
     "container:aafd017ec2ba (host unknown)",
-    "container:ab38fe54321d (host unknown)",
     "container:ab4344150a60 (host unknown)",
+    "container:ab4af7ab2bf6 (host unknown)",
     "container:ab63b2b5a998 (host unknown)",
-    "container:aca11fb4b981 (host unknown)",
     "container:ace5216c38b5 (host unknown)",
-    "container:ad70b78fb1de (host unknown)",
-    "container:adc947ad08c0 (host unknown)",
     "container:ae82b7da5949 (host unknown)",
     "container:aefa8e29018e (host unknown)",
     "container:afc5ef3b5655 (host unknown)",
@@ -360,17 +348,20 @@
     "container:b17fb9ccc77b (host unknown)",
     "container:b2b5ef96301c (host unknown)",
     "container:b2cef56934fe (host unknown)",
+    "container:b32f50b9a5a9 (host unknown)",
     "container:b39b7a4abbe4 (host unknown)",
     "container:b3cfae7e31dc (host unknown)",
     "container:b3d66733f144 (host unknown)",
-    "container:b4ebdea30988 (host unknown)",
     "container:b509030096c0 (host unknown)",
     "container:b52209f56c26 (host unknown)",
+    "container:b54a4d212e73 (host unknown)",
     "container:b59cec414272 (host unknown)",
     "container:b5e2dfab48fe (host unknown)",
+    "container:b7978b92403c (host unknown)",
     "container:b839c3b79f69 (host unknown)",
     "container:b8864f5b96e5 (host unknown)",
     "container:b936a4ab5cd6 (host unknown)",
+    "container:b951ba4f10ab (host unknown)",
     "container:b966840ae96e (host unknown)",
     "container:b968be65efb8 (host unknown)",
     "container:bb2d3d6f13fd (host unknown)",
@@ -387,14 +378,13 @@
     "container:bf4e942d925c (host unknown)",
     "container:c01818605fb4 (host unknown)",
     "container:c03a726cb285 (host unknown)",
+    "container:c066386d60d5 (host unknown)",
     "container:c1394db92804 (host unknown)",
     "container:c142f2b7ae40 (host unknown)",
     "container:c1c94238b8c9 (host unknown)",
     "container:c1ff803dcaf7 (host unknown)",
     "container:c2a19dd0a573 (host unknown)",
     "container:c2c737a2ac4c (host unknown)",
-    "container:c3a75f9eae6f (host unknown)",
-    "container:c3ca7f7e387f (host unknown)",
     "container:c45476600d0e (host unknown)",
     "container:c4d814e24a9e (host unknown)",
     "container:c4f3b747604a (host unknown)",
@@ -407,18 +397,18 @@
     "container:c9f35452bde2 (host unknown)",
     "container:cbb92a326aed (host unknown)",
     "container:cc1f2b2b6e22 (host unknown)",
-    "container:ccff7eb02d00 (host unknown)",
     "container:cdf80a395ddf (host unknown)",
     "container:cfc7312c5a11 (host unknown)",
+    "container:cfca663a6b98 (host unknown)",
     "container:d01151c71c5c (host unknown)",
     "container:d1e0a5f07ee6 (host unknown)",
     "container:d220434e67de (host unknown)",
     "container:d25a3da55a2b (host unknown)",
+    "container:d27870fff6a6 (host unknown)",
     "container:d2bb991e0e81 (host unknown)",
     "container:d2f8757e3a8d (host unknown)",
     "container:d2f95762a321 (host unknown)",
     "container:d2fb615cdf1d (host unknown)",
-    "container:d419cc379a33 (host unknown)",
     "container:d5d0129da647 (host unknown)",
     "container:d654eb18400d (host unknown)",
     "container:d79362bb599f (host unknown)",
@@ -429,14 +419,15 @@
     "container:da8555a4594a (host unknown)",
     "container:daa52b1b107e (host unknown)",
     "container:dd516f6f0aab (host unknown)",
+    "container:ddc3d3286cb8 (host unknown)",
     "container:dfc40e0e74ed (host unknown)",
     "container:e06cba51efe1 (host unknown)",
     "container:e0b175b02561 (host unknown)",
+    "container:e1f6b802094c (host unknown)",
     "container:e22e4e7ffe6a (host unknown)",
     "container:e252c422db5f (host unknown)",
     "container:e2daa6c96d75 (host unknown)",
     "container:e3616efaf613 (host unknown)",
-    "container:e399801893a2 (host unknown)",
     "container:e4123a3ef89a (host unknown)",
     "container:e4371072a603 (host unknown)",
     "container:e4953966cde4 (host unknown)",
@@ -469,13 +460,14 @@
     "container:f70bdcdb0e80 (host unknown)",
     "container:f712358bca93 (host unknown)",
     "container:f724d6bc93c8 (host unknown)",
-    "container:f73a88d7d465 (host unknown)",
     "container:f7ff88ca3285 (host unknown)",
     "container:fbdbad51bde4 (host unknown)",
     "container:fc11454887e7 (host unknown)",
     "container:fdb82375a49c (host unknown)",
     "container:fdf655eba421 (host unknown)",
     "container:fe46884b2388 (host unknown)",
+    "container:fea4c18c8c86 (host unknown)",
+    "container:ff8851d9e598 (host unknown)",
     "container:ff9179584a3a (host unknown)"
   ],
   "tables": [
@@ -797,25 +789,25 @@
           "n_docs": "100000",
           "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": null,
-          "host": "container:7a12d04ab069 (host unknown)",
+          "version_name": "milvus v2.6.13",
+          "host": "container:4a760a37d3a7 (host unknown)",
           "metrics": {
             "p50 ms": {
-              "median": 2.959,
-              "min": 2.925,
-              "max": 3.037,
+              "median": 3.014,
+              "min": 3.002,
+              "max": 3.072,
               "n": 5
             },
             "p95 ms": {
-              "median": 6.437,
-              "min": 6.313,
-              "max": 6.496,
+              "median": 6.337,
+              "min": 6.303,
+              "max": 6.489,
               "n": 5
             },
             "p99 ms": {
-              "median": 7.778,
-              "min": 7.721,
-              "max": 8.049,
+              "median": 7.68,
+              "min": 7.617,
+              "max": 7.796,
               "n": 5
             },
             "recall@10": {
@@ -825,15 +817,21 @@
               "n": 5
             },
             "build s": {
-              "median": 10.94,
-              "min": 10.85,
-              "max": 11.17,
+              "median": 18.06,
+              "min": 17.91,
+              "max": 18.36,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 1.2705,
-              "min": 1.2668,
-              "max": 1.3163,
+              "median": 1.3164,
+              "min": 1.3054,
+              "max": 1.3769,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.2709,
+              "min": 0.2706,
+              "max": 0.271,
               "n": 5
             }
           }
@@ -1190,25 +1188,25 @@
           "n_docs": "1000000",
           "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": null,
-          "host": "container:b4ebdea30988 (host unknown)",
+          "version_name": "milvus v2.6.13",
+          "host": "container:2596e52f1a5d (host unknown)",
           "metrics": {
             "p50 ms": {
-              "median": 9.041,
-              "min": 8.809,
-              "max": 9.134,
+              "median": 9.401,
+              "min": 8.175,
+              "max": 9.513,
               "n": 5
             },
             "p95 ms": {
-              "median": 24.908,
-              "min": 23.989,
-              "max": 25.291,
+              "median": 25.398,
+              "min": 22.842,
+              "max": 26.873,
               "n": 5
             },
             "p99 ms": {
-              "median": 30.713,
-              "min": 29.316,
-              "max": 31.906,
+              "median": 36.663,
+              "min": 29.908,
+              "max": 37.609,
               "n": 5
             },
             "recall@10": {
@@ -1218,15 +1216,21 @@
               "n": 5
             },
             "build s": {
-              "median": 102.15,
-              "min": 100.83,
-              "max": 103.46,
+              "median": 120.03,
+              "min": 109.46,
+              "max": 121.24,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 4.7643,
-              "min": 4.6914,
-              "max": 5.6972,
+              "median": 5.5321,
+              "min": 5.1766,
+              "max": 6.0622,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 4.6167,
+              "min": 4.4504,
+              "max": 4.6487,
               "n": 5
             }
           }
@@ -1583,25 +1587,25 @@
           "n_docs": "8841823",
           "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": null,
-          "host": "container:a52de3ac7cea (host unknown)",
+          "version_name": "milvus v2.6.13",
+          "host": "container:24718e20df8d (host unknown)",
           "metrics": {
             "p50 ms": {
-              "median": 38.998,
-              "min": 38.331,
-              "max": 40.442,
+              "median": 37.553,
+              "min": 35.23,
+              "max": 38.696,
               "n": 5
             },
             "p95 ms": {
-              "median": 117.375,
-              "min": 112.807,
-              "max": 120.207,
+              "median": 110.447,
+              "min": 105.758,
+              "max": 115.301,
               "n": 5
             },
             "p99 ms": {
-              "median": 158.78,
-              "min": 145.008,
-              "max": 187.917,
+              "median": 137.192,
+              "min": 131.335,
+              "max": 154.796,
               "n": 5
             },
             "recall@10": {
@@ -1611,15 +1615,21 @@
               "n": 5
             },
             "build s": {
-              "median": 1002.91,
-              "min": 996.07,
-              "max": 1008.21,
+              "median": 1032.21,
+              "min": 1018.69,
+              "max": 1039.31,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 16.8279,
-              "min": 16.7812,
-              "max": 18.2701,
+              "median": 16.1567,
+              "min": 15.5033,
+              "max": 17.9854,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 48.6757,
+              "min": 48.369,
+              "max": 50.5772,
               "n": 5
             }
           }
@@ -1929,36 +1939,42 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "chroma 1.5.9",
-          "host": "container:aca11fb4b981 (host unknown)",
+          "host": "container:e1f6b802094c (host unknown)",
           "metrics": {
             "cold p50 ms": {
-              "median": 0.641,
-              "min": 0.571,
-              "max": 0.676,
+              "median": 0.665,
+              "min": 0.654,
+              "max": 0.702,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 0.77,
-              "min": 0.672,
-              "max": 0.932,
+              "median": 0.893,
+              "min": 0.887,
+              "max": 0.9,
               "n": 5
             },
             "recall@10": {
-              "median": 0.975,
-              "min": 0.9738,
-              "max": 0.9758,
+              "median": 0.9748,
+              "min": 0.9744,
+              "max": 0.977,
               "n": 5
             },
             "build s": {
-              "median": 146.0,
-              "min": 144.91,
-              "max": 146.63,
+              "median": 150.94,
+              "min": 148.6,
+              "max": 151.29,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 1.1409,
-              "min": 1.1405,
-              "max": 1.1581,
+              "median": 1.1507,
+              "min": 1.1424,
+              "max": 1.1513,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.7779,
+              "min": 0.7778,
+              "max": 0.7779,
               "n": 5
             }
           }
@@ -1973,37 +1989,43 @@
           "n_docs": "1000000",
           "deployment": "embedded",
           "image": null,
-          "version_name": "duckdb vss 1.5.4",
-          "host": "container:7ef36148a330 (host unknown)",
+          "version_name": "duckdb vss 1.5.5",
+          "host": "container:31c2896725a8 (host unknown)",
           "metrics": {
             "cold p50 ms": {
-              "median": 1.795,
-              "min": 1.777,
-              "max": 1.806,
+              "median": 1.774,
+              "min": 1.768,
+              "max": 1.915,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 4.116,
-              "min": 3.36,
-              "max": 4.693,
+              "median": 3.652,
+              "min": 3.044,
+              "max": 4.172,
               "n": 5
             },
             "recall@10": {
-              "median": 0.9749,
-              "min": 0.9722,
-              "max": 0.9751,
+              "median": 0.975,
+              "min": 0.9727,
+              "max": 0.9769,
               "n": 5
             },
             "build s": {
-              "median": 59.67,
-              "min": 58.94,
-              "max": 59.75,
+              "median": 59.18,
+              "min": 59.08,
+              "max": 59.64,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 2.8109,
-              "min": 2.5768,
-              "max": 2.9229,
+              "median": 2.9191,
+              "min": 2.7906,
+              "max": 2.9458,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.7658,
+              "min": 0.7657,
+              "max": 0.7658,
               "n": 5
             }
           }
@@ -2018,37 +2040,43 @@
           "n_docs": "1000000",
           "deployment": "embedded",
           "image": null,
-          "version_name": "lancedb 0.34.0",
-          "host": "container:4d64466ed2b6 (host unknown)",
+          "version_name": "lancedb 0.37.1",
+          "host": "container:307b00c732ea (host unknown)",
           "metrics": {
             "cold p50 ms": {
-              "median": 1.458,
-              "min": 1.455,
-              "max": 1.482,
+              "median": 1.462,
+              "min": 1.429,
+              "max": 1.49,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 1.83,
-              "min": 1.739,
-              "max": 1.849,
+              "median": 1.888,
+              "min": 1.822,
+              "max": 2.526,
               "n": 5
             },
             "recall@10": {
-              "median": 0.96,
-              "min": 0.959,
-              "max": 0.9611,
+              "median": 0.9601,
+              "min": 0.9589,
+              "max": 0.9612,
               "n": 5
             },
             "build s": {
-              "median": 20.97,
-              "min": 20.4,
-              "max": 21.49,
+              "median": 21.32,
+              "min": 20.71,
+              "max": 21.48,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 2.2191,
-              "min": 1.898,
-              "max": 2.2817,
+              "median": 1.9514,
+              "min": 1.8886,
+              "max": 1.9648,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.8537,
+              "min": 0.8533,
+              "max": 0.854,
               "n": 5
             }
           }
@@ -2063,37 +2091,43 @@
           "n_docs": "1000000",
           "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": null,
-          "host": "container:6793970f7145 (host unknown)",
+          "version_name": "milvus v2.6.13",
+          "host": "container:b7978b92403c (host unknown)",
           "metrics": {
             "cold p50 ms": {
-              "median": 3.492,
-              "min": 3.029,
-              "max": 3.795,
+              "median": 0.995,
+              "min": 0.993,
+              "max": 1.005,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 5.978,
-              "min": 4.29,
-              "max": 6.961,
+              "median": 1.999,
+              "min": 1.277,
+              "max": 2.206,
               "n": 5
             },
             "recall@10": {
-              "median": 0.9937,
-              "min": 0.9927,
-              "max": 0.9944,
+              "median": 0.9753,
+              "min": 0.9749,
+              "max": 0.9757,
               "n": 5
             },
             "build s": {
-              "median": 17.37,
-              "min": 16.76,
-              "max": 19.22,
+              "median": 178.84,
+              "min": 123.97,
+              "max": 180.12,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 2.5153,
-              "min": 2.3687,
-              "max": 2.5549,
+              "median": 3.6075,
+              "min": 3.3674,
+              "max": 3.6609,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.6343,
+              "min": 1.5652,
+              "max": 1.7533,
               "n": 5
             }
           }
@@ -2109,36 +2143,42 @@
           "deployment": "server",
           "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
           "version_name": "qdrant v1.18.2",
-          "host": "container:5522a41a0d39 (host unknown)",
+          "host": "container:366593306c17 (host unknown)",
           "metrics": {
             "cold p50 ms": {
-              "median": 1.044,
-              "min": 1.042,
-              "max": 1.09,
+              "median": 1.047,
+              "min": 1.026,
+              "max": 1.137,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 1.402,
-              "min": 1.351,
-              "max": 1.481,
+              "median": 1.363,
+              "min": 1.356,
+              "max": 1.464,
               "n": 5
             },
             "recall@10": {
               "median": 0.9955,
-              "min": 0.9954,
-              "max": 0.9959,
+              "min": 0.9945,
+              "max": 0.9964,
               "n": 5
             },
             "build s": {
-              "median": 43.98,
-              "min": 43.28,
-              "max": 44.3,
+              "median": 42.85,
+              "min": 42.09,
+              "max": 44.73,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 0.6534,
-              "min": 0.6486,
-              "max": 0.6988,
+              "median": 0.6734,
+              "min": 0.6551,
+              "max": 0.6961,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.5892,
+              "min": 0.5891,
+              "max": 0.5893,
               "n": 5
             }
           }
@@ -2154,18 +2194,18 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "sqlite-vec 0.1.9",
-          "host": "container:7a0472ce673b (host unknown)",
+          "host": "container:fea4c18c8c86 (host unknown)",
           "metrics": {
             "cold p50 ms": {
-              "median": 141.06,
-              "min": 137.787,
-              "max": 141.547,
+              "median": 118.299,
+              "min": 114.454,
+              "max": 120.312,
               "n": 5
             },
             "cold p99 ms": {
-              "median": 143.653,
-              "min": 143.38,
-              "max": 143.975,
+              "median": 120.187,
+              "min": 116.271,
+              "max": 122.276,
               "n": 5
             },
             "recall@10": {
@@ -2175,15 +2215,21 @@
               "n": 5
             },
             "build s": {
-              "median": 7.63,
-              "min": 7.43,
-              "max": 7.68,
+              "median": 8.07,
+              "min": 7.5,
+              "max": 8.78,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 0.0385,
-              "min": 0.0385,
-              "max": 0.0385,
+              "median": 0.0392,
+              "min": 0.0392,
+              "max": 0.0392,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.4993,
+              "min": 0.4993,
+              "max": 0.4994,
               "n": 5
             }
           }
@@ -5320,7 +5366,7 @@
           "n_docs": "1000000",
           "deployment": "server",
           "image": null,
-          "version_name": null,
+          "version_name": "milvus v2.6.13",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -5342,9 +5388,15 @@
               "n": 1
             },
             "peak memory GiB": {
-              "median": 4.7643,
-              "min": 4.6914,
-              "max": 5.6972,
+              "median": 5.5321,
+              "min": 5.1766,
+              "max": 6.0622,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 4.6167,
+              "min": 4.4504,
+              "max": 4.6487,
               "n": 5
             }
           }
@@ -5629,7 +5681,7 @@
           "n_docs": "8841823",
           "deployment": "server",
           "image": null,
-          "version_name": null,
+          "version_name": "milvus v2.6.13",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -5651,9 +5703,15 @@
               "n": 1
             },
             "peak memory GiB": {
-              "median": 16.8279,
-              "min": 16.7812,
-              "max": 18.2701,
+              "median": 16.1567,
+              "min": 15.5033,
+              "max": 17.9854,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 48.6757,
+              "min": 48.369,
+              "max": 50.5772,
               "n": 5
             }
           }

@@ -1923,7 +1923,11 @@ def main() -> int:
                 "version_name": _engine_version(
                     label,
                     rs[0].get("engine_version") if str(backend).startswith("arcadedb")
-                    else (names.get(image) if image else rs[0].get("engine_version")),
+                    # A served comparator whose image has no entry in the pin
+                    # table's names (Milvus) still stamps its server version
+                    # on the row; the page showed Milvus unversioned for it.
+                    else ((names.get(image) or rs[0].get("engine_version")) if image
+                          else rs[0].get("engine_version")),
                     image, commit=rs[0].get("engine_commit")),
                 "host": rs[0].get("host") or None,
                 "metrics": {},
