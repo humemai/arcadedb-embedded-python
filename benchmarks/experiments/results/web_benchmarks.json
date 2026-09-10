@@ -3075,7 +3075,6 @@
         "2-hop p50 ms",
         "2-hop p99 ms",
         "write p50 ms",
-        "write p99 ms",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -3656,9 +3655,9 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14)."
       ],
       "columns": [
-        "average friend age ms",
-        "friends in same city ms",
-        "most friends ms",
+        "average friend age p50 ms",
+        "friends in same city p50 ms",
+        "most friends p50 ms",
         "view build s",
         "peak memory GiB",
         "disk GiB"
@@ -3679,22 +3678,22 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 108.46,
-              "min": 104.88,
-              "max": 110.39,
+            "average friend age p50 ms": {
+              "median": 105.44,
+              "min": 103.77,
+              "max": 107.83,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 140.12,
-              "min": 138.85,
-              "max": 144.79,
+            "friends in same city p50 ms": {
+              "median": 151.81,
+              "min": 150.42,
+              "max": 161.05,
               "n": 5
             },
-            "most friends ms": {
-              "median": 47.95,
-              "min": 46.19,
-              "max": 57.59,
+            "most friends p50 ms": {
+              "median": 43.54,
+              "min": 42.38,
+              "max": 59.19,
               "n": 5
             },
             "peak memory GiB": {
@@ -3724,22 +3723,22 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 75.18,
-              "min": 71.9,
-              "max": 77.47,
+            "average friend age p50 ms": {
+              "median": 74.58,
+              "min": 68.45,
+              "max": 76.98,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 46.86,
-              "min": 43.89,
-              "max": 50.34,
+            "friends in same city p50 ms": {
+              "median": 43.97,
+              "min": 43.5,
+              "max": 46.48,
               "n": 5
             },
-            "most friends ms": {
-              "median": 14.57,
-              "min": 13.63,
-              "max": 15.44,
+            "most friends p50 ms": {
+              "median": 13.65,
+              "min": 13.07,
+              "max": 15.42,
               "n": 5
             },
             "view build s": {
@@ -3775,22 +3774,22 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 116.01,
-              "min": 109.52,
-              "max": 122.09,
+            "average friend age p50 ms": {
+              "median": 115.27,
+              "min": 108.08,
+              "max": 120.68,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 117.05,
-              "min": 110.74,
-              "max": 121.54,
+            "friends in same city p50 ms": {
+              "median": 117.69,
+              "min": 109.95,
+              "max": 120.94,
               "n": 5
             },
-            "most friends ms": {
-              "median": 46.7,
-              "min": 44.98,
-              "max": 49.88,
+            "most friends p50 ms": {
+              "median": 45.95,
+              "min": 42.01,
+              "max": 48.4,
               "n": 5
             },
             "peak memory GiB": {
@@ -3820,22 +3819,22 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 54.57,
-              "min": 53.7,
-              "max": 57.2,
+            "average friend age p50 ms": {
+              "median": 55.23,
+              "min": 54.39,
+              "max": 59.18,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 50.26,
-              "min": 49.65,
-              "max": 50.87,
+            "friends in same city p50 ms": {
+              "median": 49.51,
+              "min": 48.72,
+              "max": 50.67,
               "n": 5
             },
-            "most friends ms": {
-              "median": 15.96,
-              "min": 15.67,
-              "max": 17.35,
+            "most friends p50 ms": {
+              "median": 15.76,
+              "min": 15.55,
+              "max": 17.02,
               "n": 5
             },
             "view build s": {
@@ -3871,21 +3870,21 @@
           "version_name": "ladybugdb 0.19.1",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 9.5,
-              "min": 9.47,
+            "average friend age p50 ms": {
+              "median": 9.34,
+              "min": 9.21,
               "max": 9.9,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 10.11,
-              "min": 9.83,
-              "max": 10.18,
+            "friends in same city p50 ms": {
+              "median": 10.1,
+              "min": 9.98,
+              "max": 10.2,
               "n": 5
             },
-            "most friends ms": {
-              "median": 0.93,
-              "min": 0.91,
+            "most friends p50 ms": {
+              "median": 0.88,
+              "min": 0.85,
               "max": 0.94,
               "n": 5
             },
@@ -3916,22 +3915,22 @@
           "version_name": "neo4j 5-community",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 58.48,
-              "min": 56.55,
-              "max": 60.46,
+            "average friend age p50 ms": {
+              "median": 58.16,
+              "min": 56.45,
+              "max": 59.82,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 63.19,
-              "min": 61.96,
-              "max": 64.71,
+            "friends in same city p50 ms": {
+              "median": 61.97,
+              "min": 61.65,
+              "max": 63.49,
               "n": 5
             },
-            "most friends ms": {
-              "median": 40.48,
-              "min": 37.95,
-              "max": 43.34,
+            "most friends p50 ms": {
+              "median": 39.22,
+              "min": 35.9,
+              "max": 40.15,
               "n": 5
             },
             "peak memory GiB": {
@@ -3961,22 +3960,22 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 1186.12,
-              "min": 1090.3,
-              "max": 1213.46,
+            "average friend age p50 ms": {
+              "median": 1184.7,
+              "min": 1090.35,
+              "max": 1216.96,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 1169.19,
-              "min": 1089.78,
-              "max": 1190.53,
+            "friends in same city p50 ms": {
+              "median": 1148.49,
+              "min": 1084.72,
+              "max": 1178.68,
               "n": 5
             },
-            "most friends ms": {
-              "median": 372.56,
-              "min": 354.06,
-              "max": 379.5,
+            "most friends p50 ms": {
+              "median": 365.48,
+              "min": 349.88,
+              "max": 376.32,
               "n": 5
             },
             "peak memory GiB": {
@@ -4006,22 +4005,22 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 461.23,
-              "min": 456.21,
-              "max": 469.99,
+            "average friend age p50 ms": {
+              "median": 457.6,
+              "min": 451.97,
+              "max": 469.11,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 469.01,
-              "min": 465.04,
-              "max": 489.62,
+            "friends in same city p50 ms": {
+              "median": 465.28,
+              "min": 451.28,
+              "max": 495.3,
               "n": 5
             },
-            "most friends ms": {
-              "median": 59.95,
-              "min": 58.41,
-              "max": 60.83,
+            "most friends p50 ms": {
+              "median": 58.78,
+              "min": 57.84,
+              "max": 59.38,
               "n": 5
             },
             "view build s": {
@@ -4057,22 +4056,22 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 1248.5,
-              "min": 1206.48,
-              "max": 1261.83,
+            "average friend age p50 ms": {
+              "median": 1246.09,
+              "min": 1206.33,
+              "max": 1266.73,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 1247.91,
-              "min": 1199.67,
-              "max": 1265.06,
+            "friends in same city p50 ms": {
+              "median": 1240.43,
+              "min": 1194.87,
+              "max": 1260.28,
               "n": 5
             },
-            "most friends ms": {
-              "median": 371.03,
-              "min": 370.57,
-              "max": 378.47,
+            "most friends p50 ms": {
+              "median": 370.23,
+              "min": 368.91,
+              "max": 376.22,
               "n": 5
             },
             "peak memory GiB": {
@@ -4102,22 +4101,22 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 484.43,
-              "min": 470.69,
-              "max": 487.07,
+            "average friend age p50 ms": {
+              "median": 479.04,
+              "min": 468.93,
+              "max": 485.65,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 475.71,
-              "min": 465.33,
-              "max": 486.42,
+            "friends in same city p50 ms": {
+              "median": 475.42,
+              "min": 462.12,
+              "max": 487.16,
               "n": 5
             },
-            "most friends ms": {
-              "median": 63.06,
-              "min": 62.6,
-              "max": 63.67,
+            "most friends p50 ms": {
+              "median": 61.49,
+              "min": 60.86,
+              "max": 62.85,
               "n": 5
             },
             "view build s": {
@@ -4153,22 +4152,22 @@
           "version_name": "ladybugdb 0.19.1",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 58.61,
-              "min": 56.4,
-              "max": 59.78,
+            "average friend age p50 ms": {
+              "median": 57.65,
+              "min": 56.15,
+              "max": 60.14,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 65.21,
-              "min": 64.24,
-              "max": 65.36,
+            "friends in same city p50 ms": {
+              "median": 65.3,
+              "min": 63.55,
+              "max": 65.52,
               "n": 5
             },
-            "most friends ms": {
-              "median": 2.87,
-              "min": 2.83,
-              "max": 3.01,
+            "most friends p50 ms": {
+              "median": 2.82,
+              "min": 2.76,
+              "max": 2.88,
               "n": 5
             },
             "peak memory GiB": {
@@ -4198,22 +4197,22 @@
           "version_name": "neo4j 5-community",
           "host": null,
           "metrics": {
-            "average friend age ms": {
-              "median": 594.83,
-              "min": 591.56,
-              "max": 600.38,
+            "average friend age p50 ms": {
+              "median": 594.68,
+              "min": 589.16,
+              "max": 598.29,
               "n": 5
             },
-            "friends in same city ms": {
-              "median": 666.17,
-              "min": 633.39,
-              "max": 676.72,
+            "friends in same city p50 ms": {
+              "median": 665.26,
+              "min": 632.89,
+              "max": 676.73,
               "n": 5
             },
-            "most friends ms": {
-              "median": 335.13,
-              "min": 324.16,
-              "max": 336.49,
+            "most friends p50 ms": {
+              "median": 334.25,
+              "min": 324.56,
+              "max": 336.82,
               "n": 5
             },
             "peak memory GiB": {

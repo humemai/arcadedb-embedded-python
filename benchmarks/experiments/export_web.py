@@ -875,9 +875,15 @@ LANES = {
         "lane_source": "l2",
         "only_scales": {"sf1", "sf10"},
         "only_workload": "olap",
-        "metrics": [("friend_age_by_city_mean_ms", "average friend age ms"),
-                    ("same_city_edges_mean_ms", "friends in same city ms"),
-                    ("top_degree_mean_ms", "most friends ms"),
+        # p50, not the mean the page printed until 2026-09-10 (the lane's own
+        # comment says p50 first, and it recorded one); p99 arrives with the
+        # 100-iteration rows (F29).
+        "metrics": [("friend_age_by_city_p50_ms", "average friend age p50 ms"),
+                    ("friend_age_by_city_p99_ms", "average friend age p99 ms"),
+                    ("same_city_edges_p50_ms", "friends in same city p50 ms"),
+                    ("same_city_edges_p99_ms", "friends in same city p99 ms"),
+                    ("top_degree_p50_ms", "most friends p50 ms"),
+                    ("top_degree_p99_ms", "most friends p99 ms"),
                     ("gav_build_s", "view build s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
@@ -897,7 +903,19 @@ LANES = {
                     ("olap_top_customers_ms", "top customers ms"),
                     ("olap_filtered_avg_ms", "filtered average ms"),
                     ("olap_status_histogram_ms", "status histogram ms"),
-                    ("olap_range_agg_ms", "range aggregate ms")],
+                    ("olap_range_agg_ms", "range aggregate ms"),
+                    # p50/p99 over 100 iterations (F29); the mean columns above
+                    # come out once every row carries these.
+                    ("olap_agg_by_region_p50_ms", "aggregate by region p50 ms"),
+                    ("olap_agg_by_region_p99_ms", "aggregate by region p99 ms"),
+                    ("olap_top_customers_p50_ms", "top customers p50 ms"),
+                    ("olap_top_customers_p99_ms", "top customers p99 ms"),
+                    ("olap_filtered_avg_p50_ms", "filtered average p50 ms"),
+                    ("olap_filtered_avg_p99_ms", "filtered average p99 ms"),
+                    ("olap_status_histogram_p50_ms", "status histogram p50 ms"),
+                    ("olap_status_histogram_p99_ms", "status histogram p99 ms"),
+                    ("olap_range_agg_p50_ms", "range aggregate p50 ms"),
+                    ("olap_range_agg_p99_ms", "range aggregate p99 ms")],
         "conditions": [
             "The same five queries whose sum is the OLAP total in the table above, one column each, so a reader can see which shapes an engine is slow on rather than one number.",
         ],
@@ -921,6 +939,7 @@ LANES = {
                     ("update_p50_ms", "update p50 ms"), ("update_p99_ms", "update p99 ms"),
                     ("oltp_ops_per_s", "OLTP ops/s"), ("ingest_rows_per_s", "ingest records/s"),
                     ("olap_total_ms", "OLAP total ms"),
+                    ("olap_total_p50_ms", "OLAP total p50 ms"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         # The memory column is the one cell on this page a reader can most
@@ -934,7 +953,8 @@ LANES = {
     "l1tpc": {
         "title": "Documents (TPC-H and TPC-C shapes)",
         "dataset": "TPC-H queries, TPC-C new-order",
-        "metrics": [("q1_ms", "Q1 ms"), ("q6_ms", "Q6 ms"),
+        "metrics": [("q1_ms", "Q1 ms"), ("q1_p99_ms", "Q1 p99 ms"),
+                    ("q6_ms", "Q6 ms"), ("q6_p99_ms", "Q6 p99 ms"),
                     ("neworder_p50_ms", "new-order p50 ms"), ("neworder_p99_ms", "new-order p99 ms"),
                     ("oltp_ops_per_s", "OLTP ops/s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
@@ -1120,7 +1140,9 @@ L4_METRICS = [
     # final point" rather than "the newest one", which is what it means.
     # The page says what the query does; the papers keep the TSBS term.
     (("q_last_unbounded_ms", "q_last_ms"), "newest reading ms"),
+    ("q_last_p99_ms", "newest reading p99 ms"),
     ("q_global_ms", "12h aggregate ms"),
+    ("q_global_p99_ms", "12h aggregate p99 ms"),
     ("peak_anon_mib_sum", "peak memory GiB"),
     ("disk_data_mb", "disk GiB"),
 ]
@@ -1789,7 +1811,12 @@ def _finish_table(table: dict) -> dict:
             if m not in cols and m not in extra:
                 extra.append(m)
     tail = [m for m in ("peak memory GiB", "disk GiB") if m in extra]
-    table["columns"] = cols + [m for m in extra if m not in tail] + tail
+    cols = cols + [m for m in extra if m not in tail] + tail
+    # And no column without a value in any row: a metric a lane records only
+    # since a given date would otherwise print a column of dashes until the
+    # re-run lands (the analytical p99s, 2026-09-10).
+    present = {m for e in table["entries"] for m, v in e.get("metrics", {}).items() if v is not None}
+    table["columns"] = [c for c in cols if c in present]
     return table
 
 

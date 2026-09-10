@@ -158,10 +158,10 @@ PROSE = [
     ("pycost.rows_vs_columns", r"record objects is (\d+(?:\.\d+)?)x slower",
      lambda P: P("pycost", "Python, to_list", "100k-document scan", "time ms") / P("pycost", "Python, to_columns", "100k-document scan", "time ms")),
     ("l2olap.view.top_degree", r"[Tt]he view is worth (\d+(?:\.\d+)?)x on top degree",
-     lambda P: P("l2olap", "ArcadeDB (embedded)", "sf10", "most friends ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "most friends ms")),
+     lambda P: P("l2olap", "ArcadeDB (embedded)", "sf10", "most friends p50 ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "most friends p50 ms")),
     ("l2olap.view.other_two", r"about (\d+(?:\.\d+)?)x on the other two",
-     lambda P: (P("l2olap", "ArcadeDB (embedded)", "sf10", "average friend age ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "average friend age ms")
-                + P("l2olap", "ArcadeDB (embedded)", "sf10", "friends in same city ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "friends in same city ms")) / 2),
+     lambda P: (P("l2olap", "ArcadeDB (embedded)", "sf10", "average friend age p50 ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "average friend age p50 ms")
+                + P("l2olap", "ArcadeDB (embedded)", "sf10", "friends in same city p50 ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "friends in same city p50 ms")) / 2),
     ("l3smp.max_gain.small", r"largest gain by any engine is (\d+(?:\.\d+)?)x at a million",
      lambda P: P.max("l3smp", "small", "gain")),
     ("l3smp.max_gain.medium", r"and (\d+(?:\.\d+)?)x at 8\.84 million",
