@@ -17,7 +17,9 @@ SCALE_PERSONS = {"micro": 2_000, "tiny": 10_000, "small": 100_000,
 # OLTP query count per scale (per operation); OLAP iterations are fixed small
 SCALE_OLTP_QUERIES = {"micro": 50, "tiny": 200, "small": 500, "medium": 200,
                       "large": 100}
-OLAP_ITERATIONS = 5
+# 100, not 5 (2026-09-10, BUGS F29): a p99 needs a hundred samples to be a
+# percentile rather than the slowest run. ~2.7 s per pass for ArcadeDB at SF10.
+OLAP_ITERATIONS = 100
 
 GRAPH_SEED = 20260708
 PICK_SEED = 777

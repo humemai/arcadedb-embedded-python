@@ -24,7 +24,7 @@ import time
 DATA = os.environ.get("BENCH_TPC_DATA", "/data/tpch")
 SF = os.environ.get("BENCH_TPC_SF", "1")
 OLTP_OPS = 1_000
-OLAP_ITER = 5
+OLAP_ITER = 100   # was 5; a p99 needs the samples (2026-09-10, BUGS F29)
 SEED = 20260722
 BATCH = 10_000
 
@@ -375,6 +375,8 @@ def main():
                 times.append((time.perf_counter() - t) * 1000)
                 ref = r
             out[f"{which}_ms"] = round(statistics.median(times), 2)
+            _s = sorted(times)
+            out[f"{which}_p99_ms"] = round(_s[max(0, int(0.99 * (len(_s) - 1)))], 2)
             # COLD AND WARM, both free: this loop discards no warmup, so the
             # published median already BLENDS the first touch with the
             # repeats, and how much it blends depends on OLAP_ITER. Q1 and Q6

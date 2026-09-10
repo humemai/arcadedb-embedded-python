@@ -23,7 +23,7 @@ REGIONS = ["na", "eu", "apac", "latam", "mea"]
 STATUSES = ["placed", "paid", "shipped", "delivered", "returned"]
 OLTP_OPS = 5_000
 OLTP_MIX = (0.6, 0.2, 0.2)  # point read / insert / update
-OLAP_RUNS = 7
+OLAP_RUNS = 100   # was 7; a p99 needs the samples (2026-09-10, BUGS F29)
 WARMUP_OLTP = 200
 WARMUP_OLAP = 1
 
@@ -202,9 +202,17 @@ class Base:
                     runs.append(dt)
             out[f"olap_{name}_ms"] = round(statistics.mean(runs) * 1e3, 3)
             out[f"cold_olap_{name}_ms"] = round(cold * 1e3, 3)
+            # p50 and p99 beside the mean the field has always carried; the
+            # page prints these, the mean stays for the rows that predate them.
+            _s = sorted(runs)
+            out[f"olap_{name}_p50_ms"] = round(statistics.median(_s) * 1e3, 3)
+            out[f"olap_{name}_p99_ms"] = round(_s[max(0, int(0.99 * (len(_s) - 1)))] * 1e3, 3)
         out["olap_total_ms"] = round(sum(v for k, v in out.items()
                                          if k.startswith("olap_") and k.endswith("_ms")
-                                         and k != "olap_total_ms"), 3)
+                                         and k != "olap_total_ms"
+                                         and not k.endswith(("_p50_ms", "_p99_ms"))), 3)
+        out["olap_total_p50_ms"] = round(sum(v for k, v in out.items()
+                                             if k.startswith("olap_") and k.endswith("_p50_ms")), 3)
         out["cold_olap_total_ms"] = round(sum(v for k, v in out.items()
                                               if k.startswith("cold_olap_")
                                               and k.endswith("_ms")

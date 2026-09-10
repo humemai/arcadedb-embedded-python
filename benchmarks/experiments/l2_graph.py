@@ -586,6 +586,8 @@ def main():
             out[f"{qname}_p50_ms"] = round(statistics.median(lat_sorted), 2)
             out[f"{qname}_p95_ms"] = round(
                 lat_sorted[max(0, int(0.95 * (len(lat_sorted) - 1)))], 2)
+            out[f"{qname}_p99_ms"] = round(
+                lat_sorted[max(0, int(0.99 * (len(lat_sorted) - 1)))], 2)
             out[f"{qname}_mean_ms"] = round(statistics.mean(lat), 2)
             out[f"{qname}_min_ms"] = round(min(lat), 2)
             out[f"{qname}_iters"] = len(lat)

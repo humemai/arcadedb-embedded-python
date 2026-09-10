@@ -11,7 +11,7 @@ Queries (TSBS-flavored):
   q_range  1h of one host, per-minute max(usage_user)
   q_global 12h across all hosts, hourly avg(usage_user)
 
-Metrics per rep: ingest points/s, per-query median ms over 10 iterations.
+Metrics per rep: ingest points/s, per-query p50 and p99 ms over QITER iterations.
 """
 import argparse
 import json
@@ -31,7 +31,7 @@ LIMIT = int(os.environ.get("BENCH_TS_LIMIT") or os.environ.get("TSBS_LIMIT", "0"
 # registered lane has one, PAPER_SCALES keys on it, and load_canonical drops a
 # row whose scale is not listed for its lane.
 SCALE_POINTS = {"ts100": 2_592_000}
-QITER = 10
+QITER = 100   # was 10; a p99 needs the samples (2026-09-10, BUGS F29)
 HOST = "host_42"
 T0 = 1767225600  # 2026-01-01T00:00:00Z epoch seconds
 
@@ -601,6 +601,8 @@ def main():
             ref = getattr(b, qn)()
             times.append((time.perf_counter() - t) * 1000)
         out[f"{qn}_ms"] = round(statistics.median(times), 2)
+        _s = sorted(times)
+        out[f"{qn}_p99_ms"] = round(_s[max(0, int(0.99 * (len(_s) - 1)))], 2)
         out[f"{qn}_rows"] = len(ref) if ref is not None else 0
 
     # ASSERT THE SHAPES, do not merely record them. The lane already knew the
