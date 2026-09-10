@@ -530,14 +530,15 @@ BACKENDS = {
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
-                       # DISK READING (2026-09-10, BUGS F27). Neo4j preallocates
-                       # 2 x 256 MiB of transaction log at start, so the
-                       # before/after difference container_disk() takes missed
-                       # everything that fit inside it: SF1 read 0.9 MB. With
-                       # preallocation off the log holds its real bytes, and a
-                       # short checkpoint interval lands the store on disk
-                       # before the sample instead of at the 15-minute default.
-                       "-e", "NEO4J_db_tx__log_preallocate=false",
+                       # DISK READING (2026-09-10, BUGS F27). SF1 read 0.9 MB
+                       # because the store had not been checkpointed when the
+                       # sample was taken (15-minute default); a 5 s interval
+                       # lands it on disk first and costs nothing on writes
+                       # (laptop A/B on the pinned image: 7.67 vs 7.67 ms p50).
+                       # Preallocation is left at its default: turning it off
+                       # made single-edge writes 65% slower (12.65 ms), which
+                       # is not Neo4j's write latency. So the disk value counts
+                       # the 256 MiB log files Neo4j allocates as it goes.
                        "-e", "NEO4J_db_checkpoint_interval_time=5s",
                        # PAGE CACHE, which for Neo4j is the load-bearing
                        # setting and was never set. The image entrypoint
@@ -580,14 +581,15 @@ BACKENDS = {
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
-                       # DISK READING (2026-09-10, BUGS F27). Neo4j preallocates
-                       # 2 x 256 MiB of transaction log at start, so the
-                       # before/after difference container_disk() takes missed
-                       # everything that fit inside it: SF1 read 0.9 MB. With
-                       # preallocation off the log holds its real bytes, and a
-                       # short checkpoint interval lands the store on disk
-                       # before the sample instead of at the 15-minute default.
-                       "-e", "NEO4J_db_tx__log_preallocate=false",
+                       # DISK READING (2026-09-10, BUGS F27). SF1 read 0.9 MB
+                       # because the store had not been checkpointed when the
+                       # sample was taken (15-minute default); a 5 s interval
+                       # lands it on disk first and costs nothing on writes
+                       # (laptop A/B on the pinned image: 7.67 vs 7.67 ms p50).
+                       # Preallocation is left at its default: turning it off
+                       # made single-edge writes 65% slower (12.65 ms), which
+                       # is not Neo4j's write latency. So the disk value counts
+                       # the 256 MiB log files Neo4j allocates as it goes.
                        "-e", "NEO4J_db_checkpoint_interval_time=5s",
                        # PAGE CACHE, which for Neo4j is the load-bearing
                        # setting and was never set. The image entrypoint

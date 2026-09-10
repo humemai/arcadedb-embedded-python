@@ -732,7 +732,9 @@ DISK_NOTE = ("Disk is what the workload left on disk, in GiB: the engine's writa
              "read after the queries, so it includes anything querying wrote; a server "
              "reading is taken once two samples agree within 1%, an embedded reading once on "
              "the stopped container. A blank cell is a row measured before the disk "
-             "reading existed (2026-08-14).")
+             "reading existed (2026-08-14). Neo4j's value includes the transaction-log "
+             "files it preallocates in 256 MiB steps, which is how Neo4j uses disk; "
+             "turning that off would have slowed its writes by 65%, so it stays on.")
 
 
 def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
