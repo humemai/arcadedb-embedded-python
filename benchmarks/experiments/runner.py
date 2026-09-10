@@ -530,6 +530,15 @@ BACKENDS = {
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
+                       # DISK READING (2026-09-10, BUGS F27). Neo4j preallocates
+                       # 2 x 256 MiB of transaction log at start, so the
+                       # before/after difference container_disk() takes missed
+                       # everything that fit inside it: SF1 read 0.9 MB. With
+                       # preallocation off the log holds its real bytes, and a
+                       # short checkpoint interval lands the store on disk
+                       # before the sample instead of at the 15-minute default.
+                       "-e", "NEO4J_db_tx__log_preallocate=false",
+                       "-e", "NEO4J_db_checkpoint_interval__time=5s",
                        # PAGE CACHE, which for Neo4j is the load-bearing
                        # setting and was never set. The image entrypoint
                        # hard-codes 512M (docker-entrypoint.sh), and it does
@@ -571,6 +580,15 @@ BACKENDS = {
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
+                       # DISK READING (2026-09-10, BUGS F27). Neo4j preallocates
+                       # 2 x 256 MiB of transaction log at start, so the
+                       # before/after difference container_disk() takes missed
+                       # everything that fit inside it: SF1 read 0.9 MB. With
+                       # preallocation off the log holds its real bytes, and a
+                       # short checkpoint interval lands the store on disk
+                       # before the sample instead of at the 15-minute default.
+                       "-e", "NEO4J_db_tx__log_preallocate=false",
+                       "-e", "NEO4J_db_checkpoint_interval__time=5s",
                        # PAGE CACHE, which for Neo4j is the load-bearing
                        # setting and was never set. The image entrypoint
                        # hard-codes 512M (docker-entrypoint.sh), and it does
@@ -1405,6 +1423,11 @@ def container_disk(cid, settle_s=3.0, tries=3):
         prev = total
         if i < tries - 1:
             time.sleep(settle_s)
+    if tries == 1:
+        # One sample by request (the client container, read on the stopped
+        # container): nothing to converge, and every embedded row carried
+        # "did not converge" for it.
+        return out
     out["disk_settled"] = False
     out["disk_note"] = note or "did not converge"
     return out

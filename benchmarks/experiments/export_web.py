@@ -958,10 +958,14 @@ LANES = {
         # injections per system, composed half-updated in all 200, both single
         # engines in none.
         "only_workload": "hybrid",
+        # SurrealDB runs in-process at mem://, and the composed arm's Qdrant
+        # half at :memory:; neither has a disk footprint (2026-09-10, F27).
+        "in_memory": ("surrealdb_e2",),
         "conditions": [
             "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
             "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
             "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
+            "SurrealDB runs in memory (mem://), so its disk cell is blank: it leaves nothing on disk. The composed stack's Qdrant half also runs in memory (:memory:), so its disk value is Neo4j's alone.",
         ],
     },
 }
@@ -1933,6 +1937,10 @@ def main() -> int:
                 "metrics": {},
             }
             for field, label in spec["metrics"]:
+                if field == "disk_data_mb" and backend in spec.get("in_memory", ()):
+                    # An engine with no disk at all reads as a blank with the
+                    # note below, not as 0.00 (SurrealDB at mem://).
+                    continue
                 src = rs
                 if field in MEM_FIELDS and src_lane in MERGED_WORKLOAD_LANES:
                     # See MEM_FIELDS above: this lane's rows were merged across
