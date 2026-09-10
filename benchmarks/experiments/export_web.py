@@ -784,7 +784,9 @@ LANES = {
     "l3s": {
         "title": "Sparse vector search",
         "dataset": "Big-ANN'23 Sparse (real SPLADE over MS MARCO)",
-        "metrics": [("query_p50_ms", "p50 ms"), ("query_p95_ms", "p95 ms"), ("query_p99_ms", "p99 ms"),
+        # p50 and p99 only, like every other table: p95 never changed a reading
+        # and cost a column on a phone. It stays in the rows and the CSV.
+        "metrics": [("query_p50_ms", "p50 ms"), ("query_p99_ms", "p99 ms"),
                     ("recall_at_10", "recall@10"),
                     ("build_s", "build s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
