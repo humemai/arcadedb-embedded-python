@@ -422,6 +422,46 @@ class DuckTS:
         self.cx.close()
 
 
+class SQLiteTS:
+    """SQLite at its defaults: one table, executemany in one transaction per
+    50,000 points, then an index on (host, ts), which is what the ArcadeDB
+    document path also carries (2026-09-11)."""
+    name = "sqlite"
+
+    def connect(self):
+        import sqlite3
+        self._sqlite3 = sqlite3
+        self.cx = sqlite3.connect("/tmp/l4_sqlite.db")
+
+    def version(self):
+        return f"sqlite {self._sqlite3.sqlite_version}"
+
+    def ingest(self, pts):
+        self.cx.execute("CREATE TABLE p (host TEXT, ts INTEGER, uu REAL, us REAL, ui REAL)")
+        for lo in range(0, len(pts), 50_000):
+            self.cx.executemany("INSERT INTO p VALUES (?,?,?,?,?)", pts[lo:lo + 50_000])
+            self.cx.commit()
+        self.cx.execute("CREATE INDEX p_host_ts ON p (host, ts)")
+        self.cx.commit()
+
+    def q_last(self):
+        return self.cx.execute(
+            f"SELECT ts, uu FROM p WHERE host='{HOST}' ORDER BY ts DESC LIMIT 1").fetchall()
+
+    def q_range(self):
+        return self.cx.execute(
+            f"SELECT (ts - ts % 60) AS m, max(uu) FROM p WHERE host='{HOST}' "
+            f"AND ts >= {T0} AND ts < {T0+3600} GROUP BY m ORDER BY m").fetchall()
+
+    def q_global(self):
+        return self.cx.execute(
+            f"SELECT (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
+            f"AND ts < {T0+43200} GROUP BY h ORDER BY h").fetchall()
+
+    def close(self):
+        self.cx.close()
+
+
 class QuestTS:
     name = "questdb"
 
@@ -526,7 +566,7 @@ class QuestTS:
 # adding a served arm cannot forget to update the role test.
 _CLIENT_SERVER = {"questdb"}
 
-BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, QuestTS)}
+BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, QuestTS)}
 
 
 def main():

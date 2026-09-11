@@ -407,6 +407,12 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:duckdb",
     },
+    # SQLite through the client image's standard library; the version is
+    # stamped from sqlite3.sqlite_version and the image digest pins it.
+    "sqlite": {
+        "topology": "embedded",
+        "image": "dbbench:client",
+    },
     # ---- l4 time series -------------------------------------------------
     # THE ARCADEDB ARMS ARE THREE, NOT ONE, and the split is the point. The
     # native TIMESERIES arm publishes its headline with two opt-in fast paths
@@ -1022,7 +1028,7 @@ LANES = {
     "e4": ("e4_decomp.py", ["arcadedb_e4"], ["decomp"]),
     # lane -> (bench script, backends, workloads)
     "l1": ("l1_tabular.py",
-           ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres",
+           ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "postgres",
             "postgres_tuned"],
            ["oltp", "olap"]),
     "l2": ("l2_graph.py",
@@ -1030,7 +1036,7 @@ LANES = {
             "neo4j_graph", "ladybug_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
-              ["arcadedb_embedded", "arcadedb_server", "duckdb", "postgres",
+              ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "postgres",
                "postgres_tuned"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
@@ -1091,7 +1097,7 @@ LANES = {
            # arms run: the document path is what ordinary SQL gives you, the
            # native path is the engine asked in its own idiom, and the page
            # prints both rather than choosing the flattering one.
-           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb"],
+           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite"],
            ["ingest"]),
 }
 

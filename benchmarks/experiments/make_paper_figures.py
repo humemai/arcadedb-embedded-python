@@ -802,10 +802,10 @@ def f4_one_vs_n(rows):
                     recall(lane, scale, wl, b) if with_recall else None)
                 for b in backends}
 
-    DOC = ("postgres", "postgres_tuned", "duckdb")
+    DOC = ("postgres", "postgres_tuned", "duckdb", "sqlite")
     GRAPH = ("ladybug_graph", "neo4j_graph")
     SPARSE = ("qdrant_sparse", "milvus_sparse", "elasticsearch_sparse")
-    TSC = ("questdb", "duckdb")
+    TSC = ("questdb", "duckdb", "sqlite")
 
     def dense_row(label, scale):
         ours_c = _dense_overlay_p50(warm=False, scale=scale)

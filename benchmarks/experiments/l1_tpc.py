@@ -102,6 +102,56 @@ class DuckTPC:
         self.cx.close()
 
 
+Q1_SQLITE = Q1_DUCK.replace("DATE '1998-09-02'", "'1998-09-02'")
+Q6_SQLITE = Q6_DUCK.replace("DATE '1994-01-01'", "'1994-01-01'").replace("DATE '1995-01-01'", "'1995-01-01'")
+
+
+class SQLiteTPC:
+    """SQLite at its defaults; dates as ISO text like the ArcadeDB arm, so the
+    comparisons are lexicographic and equal to chronological (2026-09-11)."""
+    name = "sqlite"
+
+    def connect(self):
+        import sqlite3
+        self.cx = sqlite3.connect("/tmp/tpc_sqlite.db")
+        self.version = f"sqlite {sqlite3.sqlite_version}"
+
+    def build(self, li, part):
+        self.cx.execute("CREATE TABLE lineitem (l_orderkey INTEGER, l_partkey INTEGER, "
+                        "l_quantity REAL, l_extendedprice REAL, l_discount REAL, "
+                        "l_returnflag TEXT, l_linestatus TEXT, l_shipdate TEXT)")
+        self.cx.execute("CREATE TABLE part (p_partkey INTEGER PRIMARY KEY, p_retailprice REAL, stock INTEGER)")
+        self.cx.execute("CREATE TABLE orders_new (okey INTEGER, pkey INTEGER, qty INTEGER)")
+        rows = li[LI_COLS].itertuples(index=False, name=None)
+        buf = []
+        for r in rows:
+            buf.append(r)
+            if len(buf) >= 50_000:
+                self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?)", buf)
+                self.cx.commit(); buf = []
+        if buf:
+            self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?)", buf)
+            self.cx.commit()
+        self.cx.executemany("INSERT INTO part VALUES (?,?,100)",
+                            list(part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)))
+        self.cx.commit()
+        self.cx.execute("CREATE INDEX li_shipdate ON lineitem (l_shipdate)")
+        self.cx.commit()
+
+    def olap(self, which):
+        q = Q1_SQLITE if which == "q1" else Q6_SQLITE
+        return self.cx.execute(q).fetchall()
+
+    def new_order(self, i, pkey):
+        self.cx.execute("SELECT p_retailprice, stock FROM part WHERE p_partkey=?", (pkey,)).fetchone()
+        self.cx.execute("INSERT INTO orders_new VALUES (?, ?, ?)", (i, pkey, 1))
+        self.cx.execute("UPDATE part SET stock = stock - 1 WHERE p_partkey=?", (pkey,))
+        self.cx.commit()
+
+    def close(self):
+        self.cx.close()
+
+
 class PostgresTPC:
     name = "postgres"
 
@@ -343,7 +393,7 @@ class PostgresTunedTPC(PostgresTPC):
     name = "postgres_tuned"
 
 
-BACKENDS = {c.name: c for c in (DuckTPC, PostgresTPC, PostgresTunedTPC,
+BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, PostgresTPC, PostgresTunedTPC,
                                 ArcadeTPC, ArcadeServerTPC)}
 
 

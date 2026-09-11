@@ -347,7 +347,7 @@ DISPLAY_NAMES = {
     "sqlite_vec_dense": "sqlite-vec", "duckdb_vss_dense": "DuckDB VSS",
     "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
     "postgres": "PostgreSQL", "postgres_tuned": "PostgreSQL (tuned)",
-    "duckdb": "DuckDB", "questdb": "QuestDB",
+    "duckdb": "DuckDB", "questdb": "QuestDB", "sqlite": "SQLite",
     "arcadedb": "ArcadeDB",
     "sqlite": "SQLite", "chroma": "Chroma", "ladybug": "LadybugDB",
 }
@@ -1203,6 +1203,7 @@ L4_CANON_LABELS = {
     "arcadedb_ts_doc_server": "arcadedb (server, document path)",
     "arcadedb_ts_native_server": "arcadedb (server, native TIMESERIES)",
     "questdb":            "questdb",
+    "sqlite":             "sqlite",
     "duckdb":             "duckdb",
 }
 
@@ -1524,7 +1525,7 @@ def _l4_table(all_rows):
         return None
 
     order = ["arcadedb (native TIMESERIES)", "arcadedb (document path)",
-             "questdb", "duckdb"]
+             "questdb", "duckdb", "sqlite"]
     # This lane predates runner.BACKENDS and keeps its own adapters, so the
     # topology lookup does not reach it. QuestDB is a server (ILP ingest on
     # 9009, SQL over pg-wire, see l4_tsbs.py); the other two run in-process.
@@ -1532,7 +1533,7 @@ def _l4_table(all_rows):
                      "arcadedb (server, document path)": "server",
                      "arcadedb (server, native TIMESERIES)": "server",
                      "arcadedb (document path)": "embedded",
-                     "questdb": "server", "duckdb": "embedded"}
+                     "questdb": "server", "duckdb": "embedded", "sqlite": "embedded"}
     entries = []
     for label in sorted(grouped, key=lambda k: (order.index(k) if k in order else 99, k)):
         rs = grouped[label]

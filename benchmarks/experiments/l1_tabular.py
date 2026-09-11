@@ -281,6 +281,55 @@ class DuckDB(Base):
         self.exec("CREATE INDEX idx_orders_customer ON orders (customer_id)")
 
 
+class SQLite(Base):
+    """SQLite through the standard library, at its defaults (rollback journal,
+    synchronous=FULL, so it fsyncs at every commit like PostgreSQL). The
+    comparator an embedded user expects on this table (2026-09-11)."""
+    name = "sqlite"
+
+    def connect(self):
+        import sqlite3
+        self._sqlite3 = sqlite3
+        self.con = sqlite3.connect("/tmp/l1.sqlite")
+        self.version = f"sqlite {sqlite3.sqlite_version}"
+
+    def close(self):
+        self.con.close()
+
+    def reopen(self):
+        self.con = self._sqlite3.connect("/tmp/l1.sqlite")
+
+    def exec(self, sql, params=None):
+        self.con.execute(sql, params or ())
+
+    def query_all(self, sql, params=None):
+        return self.con.execute(sql, params or ()).fetchall()
+
+    def begin_batch(self):
+        pass                      # sqlite3 opens the transaction on the first write
+
+    def commit_batch(self):
+        self.con.commit()
+
+    def ingest(self, n, batch=5_000):  # idiomatic bulk path: executemany per transaction
+        self.exec("DROP INDEX IF EXISTS idx_orders_id")
+        self.exec("DROP INDEX IF EXISTS idx_orders_customer")
+        sql = f"INSERT INTO orders {COLS_SQL} VALUES (?,?,?,?,?,?,?,?)"
+        chunk = []
+        for row in gen_rows(n):
+            chunk.append(row)
+            if len(chunk) >= 50_000:
+                self.con.executemany(sql, chunk)
+                self.con.commit()
+                chunk = []
+        if chunk:
+            self.con.executemany(sql, chunk)
+            self.con.commit()
+        self.exec("CREATE INDEX idx_orders_id ON orders (id)")
+        self.exec("CREATE INDEX idx_orders_customer ON orders (customer_id)")
+        self.con.commit()
+
+
 class Postgres(Base):
     name = "postgres"
     placeholder = "%s"
@@ -495,7 +544,7 @@ class PostgresTuned(Postgres):
     name = "postgres_tuned"
 
 
-BACKENDS = {c.name: c for c in [DuckDB, Postgres, PostgresTuned,
+BACKENDS = {c.name: c for c in [DuckDB, SQLite, Postgres, PostgresTuned,
                                 ArcadeEmbedded, ArcadeServer]}
 
 
