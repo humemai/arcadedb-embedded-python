@@ -339,8 +339,9 @@ DISPLAY_NAMES = {
     "arcadedb_e2_server": "ArcadeDB (server, one transaction)",
     "composed_qdrant_neo4j": "Qdrant + Neo4j (no shared transaction)",
     "surrealdb_e2": "SurrealDB",
-    "qdrant_sparse": "Qdrant", "qdrant_dense": "Qdrant",
-    "milvus_sparse": "Milvus", "milvus_dense": "Milvus",
+    "qdrant_sparse": "Qdrant", "qdrant_dense": "Qdrant", "qdrant_dense_int8": "Qdrant",
+    "milvus_sparse": "Milvus", "milvus_dense": "Milvus", "milvus_dense_int8": "Milvus",
+    "sqlite_vec_dense_int8": "sqlite-vec",
     "elasticsearch_sparse": "Elasticsearch",
     "chroma_dense": "Chroma", "lancedb_dense": "LanceDB",
     "sqlite_vec_dense": "sqlite-vec", "duckdb_vss_dense": "DuckDB VSS",
@@ -1382,6 +1383,142 @@ def _lc_vector_note(rows):
             "Filed as #7183, fixed upstream in #7191 for 26.10.1; the October re-pin re-measures it.")
 
 
+# ---------------------------------------------------------------- ingest
+# The ingest and build numbers were on the page from the start, one column
+# each on four different tables, so nobody could read them side by side. This
+# table puts every load, ingest and index build the harness times next to
+# each other, one row per engine and size, grouped by data model.
+INGEST_SPEC = [
+    # lane, workload, group label, rate field (None = derived or absent),
+    # seconds field, what the count field is called in the rows
+    ("l1", "oltp", "Documents, streamed inserts", "ingest_rows_per_s", "ingest_s", "n_rows"),
+    ("l1tpc", "oltp", "Documents, TPC-H tables", None, "build_s", None),
+    ("l2", "oltp", "Graph, vertices and edges", "__graph__", "build_s", "n_persons_ingested"),
+    ("l4", "ingest", "Time series, points", "ingest_pts_per_s", "ingest_s", "n_points"),
+    ("l3d", "search", "Dense vectors, index build", "build_docs_per_s", "build_s", "n_docs"),
+    ("l3s", "search", "Sparse vectors, index build", "build_docs_per_s", "build_s", "n_docs"),
+    ("e2", "hybrid", "Cross-model set, vectors, edges and index", None, "build_s", None),
+]
+
+
+def _ingest_table(all_rows, tables=()):
+    names = _image_version_names()
+    dense_table = next((t for t in tables if t["id"] == "l3d"), None)
+    grouped = {}
+    for r in all_rows:
+        for lane, wl, group, rate_f, sec_f, n_f in INGEST_SPEC:
+            if r.get("lane") != lane or r.get("workload") != wl:
+                continue
+            be = str(r.get("backend") or "")
+            if be == "arcadedb_sparse_embedded_nocompact":
+                continue
+            if lane == "l2" and be.startswith("arcadedb") and str(r.get("gav")) == "False":
+                continue
+            grouped.setdefault((lane, r.get("scale"), be), []).append(r)
+    entries = []
+    for (lane, scale, be), rs in grouped.items():
+        spec = next(x for x in INGEST_SPEC if x[0] == lane)
+        _, _, group, rate_f, sec_f, n_f = spec
+        metrics = {}
+        if rate_f == "__graph__":
+            vals = [((_num(r.get("n_persons_ingested")) or 0) + (_num(r.get("n_edges_ingested")) or 0)) / _num(r.get("build_s"))
+                    for r in rs if _num(r.get("build_s"))]
+            if vals:
+                v = sorted(vals)
+                metrics["records/s"] = {"median": round(v[len(v) // 2], 1), "min": round(v[0], 1),
+                                        "max": round(v[-1], 1), "n": len(v)}
+        elif rate_f:
+            got = _agg(rs, rate_f)
+            if got is not None:
+                metrics["records/s"] = got
+        got = _agg(rs, sec_f)
+        if got is not None:
+            metrics["load s"] = got
+        for f, label in (("peak_anon_mib_sum", "peak memory GiB"), ("disk_data_mb", "disk GiB")):
+            got = _agg(rs, f)
+            if got is not None:
+                metrics[label] = got
+        if not metrics:
+            continue
+        base = L4_CANON_LABELS.get(be, display_name(be)) if lane == "l4" else display_name(be)
+        prec = DENSE_PRECISION.get(be) if lane == "l3d" else (SPARSE_PRECISION.get(be) if lane == "l3s" else None)
+        if prec and lane == "l3d":
+            base = f"{base[:-1]}, {prec})" if base.endswith(")") else f"{base} ({prec})"
+        image = BACKENDS.get(be, {}).get("server_image")
+        n = None
+        if n_f:
+            n = _num(rs[0].get(n_f))
+            if lane == "l2":
+                n = (_num(rs[0].get("n_persons_ingested")) or 0) + (_num(rs[0].get("n_edges_ingested")) or 0)
+        # The dense table's builds come from the multipass overlay (five
+        # builds per arm at the pin); the single-pass campaign rows at 10M
+        # include served builds from before the cache fix. One number per
+        # build on the page: take the dense table's cell.
+        if lane == "l3d" and dense_table is not None:
+            hit = next((e for e in dense_table["entries"] if e["backend"] == base and e["scale"] == scale), None)
+            if hit and hit["metrics"].get("build s"):
+                metrics["load s"] = hit["metrics"]["build s"]
+                b = hit["metrics"]["build s"]["median"]
+                if n and b:
+                    metrics["records/s"] = {"median": round(n / b, 1), "min": round(n / b, 1), "max": round(n / b, 1), "n": hit["metrics"]["build s"].get("n", 1)}
+                for lab in ("peak memory GiB", "disk GiB"):
+                    if hit["metrics"].get(lab):
+                        metrics[lab] = hit["metrics"][lab]
+        entries.append({
+            "backend": f"{group}: {base}",
+            "is_arcadedb": be.startswith("arcadedb"),
+            "precision": prec,
+            "scale": f"{lane}:{scale}",
+            "scale_label": scale_label(lane, scale),
+            "workload": "ingest",
+            "n_docs": f"{int(n):,}" if isinstance(n, (int, float)) and n else None,
+            "deployment": deployment_of(be),
+            "image": (rs[0].get("server_image_ref") or rs[0].get("server_image") or image)
+                     if be.startswith("arcadedb") else image,
+            "version_name": _engine_version(
+                display_name(be),
+                (_row_engine_string(rs[0]) or rs[0].get("engine_version")) if be.startswith("arcadedb")
+                else ((names.get(image) or _row_engine_string(rs[0]) or rs[0].get("engine_version")) if image
+                      else (_row_engine_string(rs[0]) or rs[0].get("engine_version"))),
+                image, commit=rs[0].get("engine_commit")),
+            "host": rs[0].get("host") or None,
+            "metrics": metrics,
+        })
+    if not entries:
+        return None
+    # group order = the spec's order; the final pass keeps it because each
+    # group's scale strings are its own (lane:scale)
+    order = {x[2]: i for i, x in enumerate(INGEST_SPEC)}
+    entries.sort(key=lambda e: (order[e["backend"].split(":")[0]],
+                                SCALE_ORDER.index(e["scale"].split(":")[1])
+                                if e["scale"].split(":")[1] in SCALE_ORDER else 99))
+    return {
+        "id": "ingest",
+        "title": "Ingest and index build",
+        "dataset": "every load the harness times, side by side",
+        "conditions": [
+            "records/s is what the engine took in per second on its own bulk path: ArcadeDB "
+            "batches of 500 INSERT statements per transaction (documents), the Java API in "
+            "5,000-record transactions (graph), the async time-series executor (native "
+            "time series), INSERT per point (time series as documents); PostgreSQL COPY, DuckDB "
+            "Arrow or DataFrame inserts, Neo4j UNWIND batches, QuestDB line protocol, each "
+            "vector engine's own upsert. For the vector rows the rate is documents per second "
+            "over the whole build, ingest plus index.",
+            "load s is the wall-clock time of that load, index build included where the lane "
+            "builds one. For TPC-H and the cross-model set only the time is recorded.",
+            "The served ArcadeDB rows go through the HTTP command endpoint with values as "
+            "text, except the native time-series server row, which uses the line-protocol "
+            "endpoint; that is where the embedded-to-served gap on ingest comes from.",
+        ],
+        "columns": ["records/s", "load s", "peak memory GiB", "disk GiB"],
+        "withheld_scales": [],
+        "withheld_reason": None,
+        "source_paths": ["benchmarks/experiments/results/runs_paper.csv"],
+        "source_urls": [f"{REPO}/benchmarks/experiments/results/runs_paper.csv"],
+        "entries": entries,
+    }
+
+
 def _lifecycle_table(all_rows):
     """Built from the FROZEN CSV, like every other table in this file.
 
@@ -2117,8 +2254,8 @@ def main() -> int:
     # The function stays because the SciPy paper still publishes these rows and
     # a future page may want them WITH the matrix. Restoring them means adding
     # the matrix too, and re-adding their cells to page_check.MAPPING.
-    for extra in (_sparse_multipass_table(), _l4_table(rows), _lifecycle_table(rows),
-                  _e4_table(), _python_cost_table()):
+    for extra in (_sparse_multipass_table(), _l4_table(rows), _ingest_table(rows, tables),
+                  _lifecycle_table(rows), _e4_table(), _python_cost_table()):
         if extra and extra["entries"]:
             tables.append(extra)
 
