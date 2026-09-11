@@ -1048,7 +1048,7 @@ LANES = {
         # half at :memory:; neither has a disk footprint (2026-09-10, F27).
         "in_memory": ("surrealdb_e2",),
         "conditions": [
-            "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
+            "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
             "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
             "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
             "SurrealDB runs in memory (mem://), so its disk cell is blank: it leaves nothing on disk. The composed stack's Qdrant half also runs in memory (:memory:), so its disk value is Neo4j's alone.",
@@ -1896,7 +1896,7 @@ INGEST_NOTES = {
             "and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."),
     "l3s": ("Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and "
             "float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT "
-            "statements as sqlscript batches over HTTP; Qdrant, Milvus and Elasticsearch upsert or "
+            "statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or "
             "bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush "
             "and load)."),
 }
@@ -1957,7 +1957,7 @@ def _finish_table(table: dict) -> dict:
     if note and any("ingest" in c for c in table["columns"]) and note not in table.get("conditions", []):
         table["conditions"] = list(table.get("conditions", [])) + [note]
     # Which way is better, per column, so the header can say it (2026-09-11).
-    # Rates, throughput, recall and gain go up; times and footprints go down;
+    # Rates, throughput, recall, and gain go up; times and footprints go down;
     # plain counts (trials, crashes raised) have no direction.
     dirs = {}
     for c in table["columns"]:
