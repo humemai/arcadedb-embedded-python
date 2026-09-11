@@ -477,13 +477,16 @@ class SurrealGraph(Base):
                 self.db.insert("person", buf); buf = []
         if buf:
             self.db.insert("person", buf)
-        stmts = []
+        # insert_relation, not RELATE statements: 5,000 edges took 34.6 s as
+        # RELATEs over the wire and 0.6 s as one bulk relation insert on the
+        # 3.2.4 server (laptop, 2026-09-11); same hop results either way.
+        buf = []
         for src, dst, since in gen_edges(n_persons):
-            stmts.append(f"RELATE person:{src}->knows->person:{dst} SET since = {since}")
-            if len(stmts) >= 500:   # one multi-statement request; 5000 stalled the ws path
-                self.db.query(";".join(stmts)); stmts = []
-        if stmts:
-            self.db.query(";".join(stmts))
+            buf.append({"in": RecordID("person", src), "out": RecordID("person", dst), "since": since})
+            if len(buf) >= INGEST_BATCH:
+                self.db.insert_relation("knows", buf); buf = []
+        if buf:
+            self.db.insert_relation("knows", buf)
 
     @staticmethod
     def _rows(res):

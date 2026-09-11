@@ -62,3 +62,14 @@ SQLite (documents tiny, time series full corpus), pgvector dense (micro, recall
 1.0) and sparse (micro), Neo4j vector index (micro, recall 0.999), TimescaleDB
 (full corpus). The TPC adapters have no laptop corpus and are exercised by their
 queue script's first cell.
+
+SurrealDB single-model adapters (2026-09-11, engine 2.0.0 embedded through the
+SDK and 3.2.4 served, a 0.01-scale TPC-H corpus generated with DuckDB, LDBC
+micro, SIFT 5k): documents new-order 2,598 ops/s embedded and 112 ops/s served
+(one round trip per statement), Q1 3.1 s embedded and 0.54 s served at 1/100
+of SF1; graph builds 7.7 s embedded and 5.9 s served, point/hop1/hop2 0.15 /
+8.1 / 128 ms embedded and 1.1 / 1.5 / 3.1 ms served, OLAP 1.8 s embedded and
+0.1 to 0.43 s served; dense recall@10 0.9996 embedded and 0.9979 served.
+Found and fixed on the way: string ids become string keys (F31), ORDER BY
+after GROUP BY on 2.0.0, and RELATE statements 60x slower than the SDK's
+bulk relation insert.
