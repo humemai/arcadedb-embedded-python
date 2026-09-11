@@ -484,6 +484,14 @@ def _check_page_atomicity(page_path):
 LIVE_JSON = PAGE_TS.parents[3] / "data" / "arcadedb-benchmarks.json"
 
 
+# Tables removed from the page on purpose, with the reason. Anything else
+# that disappears against the live page is a defect and fails below.
+RETIRED_TABLES = {
+    "ingest": "2026-09-11: folded into load columns on the graph, TPC and "
+              "cross-model tables at the user's request; lived one day",
+}
+
+
 def _check_no_arcadedb_row_lost(payload):
     """Every table that shows an ArcadeDB row on the LIVE page still shows one.
 
@@ -503,6 +511,9 @@ def _check_no_arcadedb_row_lost(payload):
     fresh = {t["id"]: t for t in payload.get("tables", [])}
     checked = bad = 0
     for tid in sorted(live_has):
+        if tid in RETIRED_TABLES:
+            print(f"  retired table {tid}: {RETIRED_TABLES[tid]}")
+            continue
         checked += 1
         t = fresh.get(tid)
         if t is None:
