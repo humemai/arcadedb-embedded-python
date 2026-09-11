@@ -882,7 +882,7 @@ def f4_one_vs_n(rows):
         sparse_row("Sparse 1M p50", "small", warm_tier=True),
         sparse_row("Sparse 8.84M p50", "medium", warm_tier=True),
         # time series
-        row("TS ingest pts/s", True,
+        row("TS ingest points/s", True,
             (tsmed("arcadedb_ts_native", "ingest_pts_per_s"), None), None,
             {b: (tsmed(b, "ingest_pts_per_s"), None, None) for b in TSC}, note="one pass"),
         row("TS newest reading p50", False,

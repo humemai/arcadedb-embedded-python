@@ -3348,7 +3348,7 @@
         "2-hop p99 ms",
         "write p50 ms",
         "write p99 ms",
-        "ingest records/s",
+        "ingest vertices+edges/s",
         "ingest total s",
         "peak memory GiB",
         "disk GiB"
@@ -3417,7 +3417,7 @@
               "max": 1.016,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 89443.662,
               "min": 87794.9309,
               "max": 90291.4692,
@@ -3504,7 +3504,7 @@
               "max": 2.134,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 25572.4832,
               "min": 25267.2414,
               "max": 25745.2703,
@@ -3591,7 +3591,7 @@
               "max": 19.281,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 388806.1224,
               "min": 359462.2642,
               "max": 405351.0638,
@@ -3678,7 +3678,7 @@
               "max": 21.422,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 37282.7789,
               "min": 36497.1264,
               "max": 38179.3587,
@@ -3765,7 +3765,7 @@
               "max": 0.974,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 87632.7503,
               "min": 87251.2407,
               "max": 88718.9464,
@@ -3852,7 +3852,7 @@
               "max": 2.156,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 28081.2807,
               "min": 27944.2415,
               "max": 28223.6446,
@@ -3939,7 +3939,7 @@
               "max": 19.158,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 543133.0623,
               "min": 530201.3228,
               "max": 549085.2055,
@@ -4026,7 +4026,7 @@
               "max": 21.47,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 43999.1438,
               "min": 43758.9738,
               "max": 44448.0151,
@@ -4075,8 +4075,6 @@
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
       ],
       "columns": [
-        "ingest records/s",
-        "ingest total s",
         "average friend age p50 ms",
         "average friend age p99 ms",
         "friends in same city p50 ms",
@@ -4084,6 +4082,8 @@
         "most friends p50 ms",
         "most friends p99 ms",
         "view build s",
+        "ingest vertices+edges/s",
+        "ingest total s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -4103,7 +4103,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 88201.3889,
               "min": 86205.8824,
               "max": 89025.7009,
@@ -4178,7 +4178,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 59910.3774,
               "min": 58440.184,
               "max": 60289.557,
@@ -4259,7 +4259,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 25167.107,
               "min": 24936.5183,
               "max": 25267.2414,
@@ -4334,7 +4334,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 22334.7011,
               "min": 22152.907,
               "max": 22599.6441,
@@ -4415,7 +4415,7 @@
           "version_name": "ladybugdb 0.19.1",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 405351.0638,
               "min": 396906.25,
               "max": 414163.0435,
@@ -4490,7 +4490,7 @@
           "version_name": "neo4j 5-community",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 36497.1264,
               "min": 36150.8539,
               "max": 37282.7789,
@@ -4565,7 +4565,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 87594.4493,
               "min": 87137.4348,
               "max": 88172.5033,
@@ -4640,7 +4640,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 80134.3862,
               "min": 79624.9901,
               "max": 80845.5426,
@@ -4721,7 +4721,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 28251.4942,
               "min": 28085.2158,
               "max": 28484.3803,
@@ -4796,7 +4796,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 27435.4689,
               "min": 27375.5088,
               "max": 27605.5234,
@@ -4877,7 +4877,7 @@
           "version_name": "ladybugdb 0.19.1",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 546092.9155,
               "min": 520561.2987,
               "max": 549085.2055,
@@ -4952,7 +4952,7 @@
           "version_name": "neo4j 5-community",
           "host": null,
           "metrics": {
-            "ingest records/s": {
+            "ingest vertices+edges/s": {
               "median": 44183.4436,
               "min": 43816.3752,
               "max": 44398.7816,
@@ -5190,9 +5190,9 @@
         "update p50 ms",
         "update p99 ms",
         "OLTP ops/s",
-        "ingest records/s",
-        "ingest total s",
         "OLAP total ms",
+        "ingest documents/s",
+        "ingest total s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -5254,7 +5254,7 @@
               "max": 7642.0,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest documents/s": {
               "median": 28983.75,
               "min": 28228.8,
               "max": 29275.3,
@@ -5341,7 +5341,7 @@
               "max": 1422.2,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest documents/s": {
               "median": 26901.0,
               "min": 26358.2,
               "max": 27168.6,
@@ -5428,7 +5428,7 @@
               "max": 273.9,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest documents/s": {
               "median": 305997.55,
               "min": 299439.6,
               "max": 334007.0,
@@ -5515,7 +5515,7 @@
               "max": 552.8,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest documents/s": {
               "median": 315179.8,
               "min": 311095.3,
               "max": 321870.2,
@@ -5602,7 +5602,7 @@
               "max": 502.5,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest documents/s": {
               "median": 333727.95,
               "min": 332046.2,
               "max": 344960.8,
@@ -5663,7 +5663,7 @@
         "new-order p50 ms",
         "new-order p99 ms",
         "OLTP ops/s",
-        "ingest records/s",
+        "ingest documents/s",
         "ingest total s",
         "peak memory GiB",
         "disk GiB"
@@ -5726,7 +5726,7 @@
               "max": 2194.1,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest documents/s": {
               "median": 41107.4046,
               "min": 39858.6901,
               "max": 43353.0131,
@@ -5807,7 +5807,7 @@
               "max": 857.5,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest documents/s": {
               "median": 32148.6112,
               "min": 31363.6203,
               "max": 33186.423,
@@ -5888,7 +5888,7 @@
               "max": 109.1,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest documents/s": {
               "median": 2457555.3057,
               "min": 2006865.6958,
               "max": 2844594.0367,
@@ -5969,7 +5969,7 @@
               "max": 393.6,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest documents/s": {
               "median": 363509.5442,
               "min": 335019.7191,
               "max": 371775.4796,
@@ -6050,7 +6050,7 @@
               "max": 406.5,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest documents/s": {
               "median": 362125.8886,
               "min": 343557.6177,
               "max": 371998.5003,
@@ -6096,14 +6096,14 @@
         "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
         "SurrealDB runs in memory (mem://), so its disk cell is blank: it leaves nothing on disk. The composed stack's Qdrant half also runs in memory (:memory:), so its disk value is Neo4j's alone.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
-        "Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB inserts through its Python client into an in-memory database; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
+        "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB inserts through its Python client into an in-memory database; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
       ],
       "columns": [
         "p50 ms",
         "p99 ms",
         "CPU s",
-        "ingest records/s",
-        "ingest total s",
+        "ingest+index vertices+edges/s",
+        "ingest+index total s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -6141,13 +6141,13 @@
               "max": 69.2525,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest+index vertices+edges/s": {
               "median": 19212.1037,
               "min": 18365.2893,
               "max": 21299.0415,
               "n": 5
             },
-            "ingest total s": {
+            "ingest+index total s": {
               "median": 10.41,
               "min": 9.39,
               "max": 10.89,
@@ -6198,13 +6198,13 @@
               "max": 78.8561,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest+index vertices+edges/s": {
               "median": 14398.7041,
               "min": 14034.9474,
               "max": 14836.6469,
               "n": 5
             },
-            "ingest total s": {
+            "ingest+index total s": {
               "median": 13.89,
               "min": 13.48,
               "max": 14.25,
@@ -6255,13 +6255,13 @@
               "max": 38.9205,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest+index vertices+edges/s": {
               "median": 34541.9689,
               "min": 33955.5178,
               "max": 34964.6853,
               "n": 5
             },
-            "ingest total s": {
+            "ingest+index total s": {
               "median": 5.79,
               "min": 5.72,
               "max": 5.89,
@@ -6312,13 +6312,13 @@
               "max": 338.6213,
               "n": 5
             },
-            "ingest records/s": {
+            "ingest+index vertices+edges/s": {
               "median": 599.5144,
               "min": 598.1696,
               "max": 602.0953,
               "n": 5
             },
-            "ingest total s": {
+            "ingest+index total s": {
               "median": 333.6,
               "min": 332.17,
               "max": 334.35,
@@ -7351,12 +7351,12 @@
         "Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP."
       ],
       "columns": [
-        "ingest pts/s",
-        "ingest total s",
         "newest reading p50 ms",
         "newest reading p99 ms",
         "12h aggregate p50 ms",
         "12h aggregate p99 ms",
+        "ingest points/s",
+        "ingest total s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -7374,7 +7374,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:921e4bcaa889 (host unknown)",
           "metrics": {
-            "ingest pts/s": {
+            "ingest points/s": {
               "median": 1879320.6,
               "min": 1757652.4,
               "max": 1950431.2,
@@ -7435,7 +7435,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:3984e057559c (host unknown)",
           "metrics": {
-            "ingest pts/s": {
+            "ingest points/s": {
               "median": 40650.5,
               "min": 40542.7,
               "max": 41012.4,
@@ -7496,7 +7496,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:d2fbad1c62e4 (host unknown)",
           "metrics": {
-            "ingest pts/s": {
+            "ingest points/s": {
               "median": 54767.2,
               "min": 54499.7,
               "max": 56487.4,
@@ -7557,7 +7557,7 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "container:675508771e6a (host unknown)",
           "metrics": {
-            "ingest pts/s": {
+            "ingest points/s": {
               "median": 581435.4,
               "min": 569615.6,
               "max": 598158.9,
@@ -7618,7 +7618,7 @@
           "version_name": "duckdb 1.5.5",
           "host": "container:5350ee266f29 (host unknown)",
           "metrics": {
-            "ingest pts/s": {
+            "ingest points/s": {
               "median": 1864993.9,
               "min": 1600767.6,
               "max": 1886764.5,
@@ -7679,7 +7679,7 @@
           "version_name": "questdb 9.1.1",
           "host": "container:8168f0f3f66b (host unknown)",
           "metrics": {
-            "ingest pts/s": {
+            "ingest points/s": {
               "median": 1295085.7,
               "min": 1282972.1,
               "max": 1309655.4,

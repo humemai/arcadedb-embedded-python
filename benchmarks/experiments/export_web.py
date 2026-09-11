@@ -863,7 +863,7 @@ LANES = {
                     ("hop1_p50_ms", "1-hop p50 ms"), ("hop1_p99_ms", "1-hop p99 ms"),
                     ("hop2_p50_ms", "2-hop p50 ms"), ("hop2_p99_ms", "2-hop p99 ms"),
                     ("write_p50_ms", "write p50 ms"), ("write_p99_ms", "write p99 ms"),
-                    (_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest records/s"),
+                    (_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest vertices+edges/s"),
                     ("build_s", "ingest total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
@@ -909,7 +909,7 @@ LANES = {
         # p50, not the mean the page printed until 2026-09-10 (the lane's own
         # comment says p50 first, and it recorded one); p99 arrives with the
         # 100-iteration rows (F29).
-        "metrics": [(_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest records/s"),
+        "metrics": [(_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest vertices+edges/s"),
                     ("build_s", "ingest total s"),
                     ("friend_age_by_city_p50_ms", "average friend age p50 ms"),
                     ("friend_age_by_city_p99_ms", "average friend age p99 ms"),
@@ -970,7 +970,7 @@ LANES = {
         "metrics": [("read_p50_ms", "read p50 ms"), ("read_p99_ms", "read p99 ms"),
                     ("insert_p50_ms", "insert p50 ms"), ("insert_p99_ms", "insert p99 ms"),
                     ("update_p50_ms", "update p50 ms"), ("update_p99_ms", "update p99 ms"),
-                    ("oltp_ops_per_s", "OLTP ops/s"), ("ingest_rows_per_s", "ingest records/s"),
+                    ("oltp_ops_per_s", "OLTP ops/s"), ("ingest_rows_per_s", "ingest documents/s"),
                     ("ingest_s", "ingest total s"),
                     ("olap_total_ms", "OLAP total ms"),
                     ("olap_total_p50_ms", "OLAP total p50 ms"),
@@ -991,7 +991,7 @@ LANES = {
                     ("q6_ms", "Q6 p50 ms"), ("q6_p99_ms", "Q6 p99 ms"),
                     ("neworder_p50_ms", "new-order p50 ms"), ("neworder_p99_ms", "new-order p99 ms"),
                     ("oltp_ops_per_s", "OLTP ops/s"),
-                    (_rate(("n_lineitem", "n_part"), "build_s"), "ingest records/s"),
+                    (_rate(("n_lineitem", "n_part"), "build_s"), "ingest documents/s"),
                     ("build_s", "ingest total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
@@ -1006,8 +1006,8 @@ LANES = {
         "dataset": "Vector hit to graph traversal to document update, in one transaction",
         "metrics": [("hybrid_p50_ms", "p50 ms"), ("hybrid_p99_ms", "p99 ms"),
                     ("cpu_usec_sum", "CPU s"),
-                    (_rate(("n_products", "n_edges"), "build_s"), "ingest records/s"),
-                    ("build_s", "ingest total s"),
+                    (_rate(("n_products", "n_edges"), "build_s"), "ingest+index vertices+edges/s"),
+                    ("build_s", "ingest+index total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         # HYBRID ONLY. The atomicity workload has no latency to print, so
@@ -1181,7 +1181,7 @@ L4_SHAPE = {"scale": "2.59M points", "workload": "TSBS cpu-only"}
 # record a single unbounded number under the plainer name. Preferring the
 # unbounded field everywhere keeps the column comparing like with like.
 L4_METRICS = [
-    ("ingest_pts_per_s", "ingest pts/s"),
+    ("ingest_pts_per_s", "ingest points/s"),
     ("ingest_s", "ingest total s"),
     # "last-point" is TSBS's own name for this query and it reads as "the
     # final point" rather than "the newest one", which is what it means.
@@ -1852,7 +1852,7 @@ INGEST_NOTES = {
            "5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as "
            "sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, "
            "its native bulk path."),
-    "e2": ("Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 "
+    "e2": ("ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 "
            "records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served "
            "sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE "
            "INDEX; SurrealDB inserts through its Python client into an in-memory database; the "
@@ -1906,6 +1906,21 @@ def _finish_table(table: dict) -> dict:
                 extra.append(m)
     tail = [m for m in ("peak memory GiB", "disk GiB") if m in extra]
     cols = cols + [m for m in extra if m not in tail] + tail
+    # ONE ORDER FOR EVERY TABLE (2026-09-11): the workload's own columns in
+    # the order its spec lists them, then recall, then the ingest pair (rate,
+    # then total), then peak memory, then disk. Tables used to put ingest
+    # wherever the spec happened to list it.
+    def _rank(c):
+        if c == "recall@10":
+            return 1
+        if c.startswith("ingest"):
+            return 2 if "/s" in c else 3
+        if c == "peak memory GiB":
+            return 4
+        if c == "disk GiB":
+            return 5
+        return 0
+    cols = sorted(cols, key=lambda c: (_rank(c), cols.index(c)))
     # And no column without a value in any row: a metric a lane records only
     # since a given date would otherwise print a column of dashes until the
     # re-run lands (the analytical p99s, 2026-09-10).
