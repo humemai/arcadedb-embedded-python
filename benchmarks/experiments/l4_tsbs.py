@@ -14,6 +14,7 @@ Queries (TSBS-flavored):
 Metrics per rep: ingest points/s, per-query p50 and p99 ms over QITER iterations.
 """
 import argparse
+import datetime as _dt
 import json
 import os
 import statistics
@@ -521,6 +522,59 @@ class MongoTS:
         self.cl.close()
 
 
+class TimescaleTS:
+    """TimescaleDB 2.28 on PostgreSQL 17 (2026-09-11): a hypertable on ts,
+    COPY ingest, time_bucket for the two aggregates; server memory fitted to
+    the cap like the PostgreSQL tuned arm."""
+    name = "timescaledb"
+
+    def connect(self):
+        import psycopg
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.cx = psycopg.connect(f"host={host} dbname=bench user=postgres password=dbbenchpass", autocommit=True)
+        with self.cx.cursor() as c:
+            c.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
+            c.execute("SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'")
+            self._v = c.fetchone()[0]
+            c.execute("SELECT version()")
+            self._pv = c.fetchone()[0].split(" (")[0]
+
+    def version(self):
+        return f"timescaledb {self._v} on {self._pv}"
+
+    def ingest(self, pts):
+        with self.cx.cursor() as c:
+            c.execute("CREATE TABLE p (host TEXT, ts TIMESTAMPTZ NOT NULL, uu DOUBLE PRECISION, us DOUBLE PRECISION, ui DOUBLE PRECISION)")
+            c.execute("SELECT create_hypertable('p', 'ts')")
+            with c.copy("COPY p (host, ts, uu, us, ui) FROM STDIN") as cp:
+                for h, t, uu, us, ui in pts:
+                    cp.write_row((h, _dt.datetime.fromtimestamp(t, _dt.timezone.utc), uu, us, ui))
+            c.execute("CREATE INDEX p_host_ts ON p (host, ts DESC)")
+
+    def _t(self, s):
+        return _dt.datetime.fromtimestamp(s, _dt.timezone.utc)
+
+    def q_last(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT ts, uu FROM p WHERE host = %s ORDER BY ts DESC LIMIT 1", (HOST,))
+            return c.fetchall()
+
+    def q_range(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT time_bucket('1 minute', ts) AS m, max(uu) FROM p WHERE host = %s AND ts >= %s AND ts < %s GROUP BY m ORDER BY m",
+                      (HOST, self._t(T0), self._t(T0 + 3600)))
+            return c.fetchall()
+
+    def q_global(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT time_bucket('1 hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s GROUP BY h ORDER BY h",
+                      (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def close(self):
+        self.cx.close()
+
+
 class QuestTS:
     name = "questdb"
 
@@ -625,7 +679,7 @@ class QuestTS:
 # adding a served arm cannot forget to update the role test.
 _CLIENT_SERVER = {"questdb"}
 
-BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, QuestTS)}
+BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS)}
 
 
 def main():

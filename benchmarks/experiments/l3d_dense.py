@@ -820,6 +820,98 @@ class Qdrant(Base):
         return [int(p.id) for p in res.points]
 
 
+class PgVector(Base):
+    """pgvector 0.8 on PostgreSQL 17 (2026-09-11): a vector(DIM) column, COPY
+    ingest, HNSW at the matched operating point (m=COMPARATOR_M,
+    ef_construction=EF_CONSTRUCTION, hnsw.ef_search=EF_SEARCH), L2 distance.
+    The server runs with shared_buffers, effective_cache_size and
+    maintenance_work_mem fitted to the cell's cap (runner.BACKENDS), the same
+    resource fitting the Neo4j page cache and DuckDB's thread pool get; at the
+    defaults (64 MB maintenance_work_mem) a 10M HNSW build would not finish
+    in the envelope, which makes the comparison meaningless rather than
+    unfair."""
+    quantization = "fp32"
+    name = "pgvector_dense"
+
+    def connect(self):
+        import psycopg
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.cx = psycopg.connect(f"host={host} dbname=bench user=postgres password=dbbenchpass",
+                                  autocommit=True)
+        with self.cx.cursor() as c:
+            c.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            c.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+            ev = c.fetchone()[0]
+            c.execute("SELECT version()")
+            pv = c.fetchone()[0].split(" (")[0]
+        self.version = f"pgvector:{ev} on {pv}"
+
+    def build(self, vecs):
+        with self.cx.cursor() as c:
+            c.execute(f"CREATE TABLE articles (vid INTEGER, embedding vector({DIM}))")
+            with c.copy("COPY articles (vid, embedding) FROM STDIN") as cp:
+                for i in range(len(vecs)):
+                    cp.write_row((i, "[" + ",".join("%.9g" % x for x in vecs[i]) + "]"))
+            c.execute(f"CREATE INDEX ON articles USING hnsw (embedding vector_l2_ops) "
+                      f"WITH (m = {COMPARATOR_M}, ef_construction = {EF_CONSTRUCTION})")
+            c.execute(f"SET hnsw.ef_search = {EF_SEARCH}")
+
+    def search(self, qvec, k):
+        with self.cx.cursor() as c:
+            c.execute("SELECT vid FROM articles ORDER BY embedding <-> %s::vector LIMIT %s",
+                      ("[" + ",".join("%.9g" % x for x in qvec) + "]", k))
+            return [int(r[0]) for r in c.fetchall()]
+
+    def close(self):
+        self.cx.close()
+
+
+class Neo4jVector(Base):
+    """Neo4j's own vector index (2026-09-11): Article nodes with an embedding
+    property loaded through UNWIND batches over bolt, then CREATE VECTOR INDEX
+    at the matched operating point (vector.hnsw.m, vector.hnsw.ef_construction)
+    with euclidean similarity; queries through db.index.vector.queryNodes.
+    Neo4j exposes no per-query ef_search; the note under the table says so."""
+    quantization = "fp32"
+    name = "neo4j_dense"
+
+    def connect(self):
+        from neo4j import GraphDatabase
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.drv = GraphDatabase.driver(f"bolt://{host}:7687", auth=("neo4j", "dbbenchpass"))
+        with self.drv.session() as s:
+            v = s.run("CALL dbms.components() YIELD versions RETURN versions[0] AS v").single()["v"]
+        self.version = f"neo4j:{v}"
+
+    def build(self, vecs):
+        with self.drv.session() as s:
+            for i in range(0, len(vecs), BATCH):
+                rows = [{"vid": i + j, "e": vecs[i + j].tolist()} for j in range(len(vecs[i:i + BATCH]))]
+                s.run("UNWIND $rows AS r CREATE (:Article {vid: r.vid, embedding: r.e})", rows=rows).consume()
+            s.run(f"CREATE VECTOR INDEX art_emb IF NOT EXISTS FOR (a:Article) ON (a.embedding) "
+                  f"OPTIONS {{indexConfig: {{`vector.dimensions`: {DIM}, "
+                  f"`vector.similarity_function`: 'euclidean', "
+                  f"`vector.hnsw.m`: {COMPARATOR_M}, `vector.hnsw.ef_construction`: {EF_CONSTRUCTION}}}}}").consume()
+            s.run("CALL db.awaitIndexes(36000)").consume()
+
+    def search(self, qvec, k):
+        with self.drv.session() as s:
+            # Cypher 25 SEARCH clause (GA in 2026.02); db.index.vector.queryNodes
+            # is deprecated since 2026.04 and warned on every call.
+            # SEARCH has no candidate-count option, and LIMIT k alone returned
+            # half the true neighbours at micro scale (recall 0.50 against 0.94
+            # through the deprecated procedure). Asking the index for
+            # EF_SEARCH candidates and keeping the best k is the same operating
+            # point every other engine runs at (ef_search=100).
+            r = s.run("CYPHER 25 MATCH (a:Article) SEARCH a IN (VECTOR INDEX art_emb FOR $q LIMIT $ef) "
+                      "SCORE AS score RETURN a.vid AS vid ORDER BY score DESC LIMIT $k",
+                      k=k, ef=max(k, EF_SEARCH), q=qvec.tolist()).data()
+        return [int(x["vid"]) for x in r]
+
+    def close(self):
+        self.drv.close()
+
+
 class Milvus(Base):
     # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
     # quantized says so on the class, so the row never has to consult an
@@ -1145,6 +1237,7 @@ class MilvusInt8(Milvus):
 
 BACKENDS = {b.name: b for b in
             (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus,
+             PgVector, Neo4jVector,
              ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8,
              ArcadeServerInt8, SqliteVecInt8)}
 

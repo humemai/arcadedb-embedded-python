@@ -395,6 +395,54 @@ class Qdrant(Base):
         return ids
 
 
+class PgVectorSparse(Base):
+    """pgvector 0.8 sparsevec on PostgreSQL 17 (2026-09-11): one
+    sparsevec(DIMENSIONS) column, COPY ingest in pgvector's text form
+    ('{i:v,...}/dims', 1-based indices), an HNSW index with sparsevec_ip_ops at
+    pgvector's own defaults (sparse search has no matched operating point
+    across engines; see the table note), inner-product ranking. pgvector
+    indexes sparse vectors with at most 1,000 non-zero entries; SPLADE
+    documents here carry ~127 on average."""
+    name = "pgvector_sparse"
+
+    def connect(self):
+        import psycopg
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.cx = psycopg.connect(f"host={host} dbname=bench user=postgres password=dbbenchpass",
+                                  autocommit=True)
+        with self.cx.cursor() as c:
+            c.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            c.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+            ev = c.fetchone()[0]
+            c.execute("SELECT version()")
+            pv = c.fetchone()[0].split(" (")[0]
+            c.execute(f"CREATE TABLE docs (id INTEGER, emb sparsevec({DIMENSIONS}))")
+        self.version = f"pgvector:{ev} on {pv}"
+
+    @staticmethod
+    def _sv(idx, vals):
+        return "{" + ",".join(f"{int(i) + 1}:{float(v):.7g}" for i, v in zip(idx, vals)) + f"}}/{DIMENSIONS}"
+
+    def build(self, n_docs):
+        with self.cx.cursor() as c:
+            with c.copy("COPY docs (id, emb) FROM STDIN") as cp:
+                for i, idx, vals in gen_docs(n_docs):
+                    cp.write_row((i, self._sv(idx, vals)))
+            c.execute("CREATE INDEX ON docs USING hnsw (emb sparsevec_ip_ops)")
+
+    def search(self, idx, vals, k):
+        with self.cx.cursor() as c:
+            c.execute("SELECT id FROM docs ORDER BY emb <#> %s::sparsevec LIMIT %s",
+                      (self._sv(idx, vals), k))
+            return [int(r[0]) for r in c.fetchall()]
+
+    def resolve(self, ids):
+        return ids
+
+    def close(self):
+        self.cx.close()
+
+
 class Milvus(Base):
     name = "milvus_sparse"
     COLL = "docs"
@@ -555,7 +603,7 @@ class ArcadeServerFP32(ArcadeServer):
 
 BACKENDS = {c.name: c for c in
             [ArcadeEmbedded, ArcadeEmbeddedFP32, ArcadeEmbeddedNoCompact, ArcadeServerFP32,
-             ArcadeServer, Qdrant, Milvus, Elastic]}
+             ArcadeServer, Qdrant, Milvus, PgVectorSparse, Elastic]}
 
 
 def main():

@@ -349,6 +349,7 @@ DISPLAY_NAMES = {
     "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
     "postgres": "PostgreSQL", "postgres_tuned": "PostgreSQL (tuned)",
     "duckdb": "DuckDB", "questdb": "QuestDB", "sqlite": "SQLite", "mongodb": "MongoDB",
+    "timescaledb": "TimescaleDB", "pgvector_dense": "pgvector", "pgvector_sparse": "pgvector", "neo4j_dense": "Neo4j",
     "arcadedb": "ArcadeDB",
     "sqlite": "SQLite", "chroma": "Chroma", "ladybug": "LadybugDB",
 }
@@ -438,6 +439,7 @@ SPARSE_PRECISION = {
     "arcadedb_sparse_server_fp32": "fp32",
     "qdrant_sparse": "fp32",
     "milvus_sparse": "fp32",
+    "pgvector_sparse": "fp32",  # sparsevec stores float4 values
     "elasticsearch_sparse": "~9-bit",
 }
 
@@ -445,6 +447,8 @@ DENSE_PRECISION = {
     "arcadedb_dense_embedded": "fp32",
     "arcadedb_dense_server": "fp32",
     "chroma_dense": "fp32",
+    "pgvector_dense": "fp32",   # vector(96/128), no quantization used
+    "neo4j_dense": "fp32",      # float property list, no quantization option
     "qdrant_dense": "fp32",
     "milvus_dense": "fp32",
     "duckdb_vss_dense": "fp32",
@@ -607,6 +611,10 @@ DENSE_10M_ARMS = [
     ("qdrant_int8", "qdrant_dense_int8", "Qdrant (int8)", False),
     ("sqlitevec_int8", "sqlite_vec_dense_int8", "sqlite-vec (int8)", False),
     ("sqlitevec", "sqlite_vec_dense", "sqlite-vec (fp32)", False),
+    # 2026-09-11 additions; their overlay files appear when qDK lands and the
+    # rows are skipped until then.
+    ("pgvector", "pgvector_dense", "pgvector (fp32)", False),
+    ("neo4jvec", "neo4j_dense", "Neo4j (fp32)", False),
 ]
 
 
@@ -1206,6 +1214,7 @@ L4_CANON_LABELS = {
     "questdb":            "questdb",
     "sqlite":             "sqlite",
     "mongodb":            "mongodb",
+    "timescaledb":        "timescaledb",
     "duckdb":             "duckdb",
 }
 
@@ -1276,6 +1285,7 @@ def _l4_rows():
 # directory to count as complete (the fp32 served arm was added 2026-09-07).
 SPARSE_MP_OPTIONAL_ARMS = [
     ("arc_srv_fp32", "arcadedb_sparse_server_fp32", "ArcadeDB (server, fp32)"),
+    ("pgvector", "pgvector_sparse", "pgvector"),   # 2026-09-11, files land with qDK
 ]
 SPARSE_MP_ARMS = [
     ("arc_int8", "arcadedb_sparse_embedded", "ArcadeDB (embedded, int8)"),
@@ -1527,7 +1537,7 @@ def _l4_table(all_rows):
         return None
 
     order = ["arcadedb (native TIMESERIES)", "arcadedb (document path)",
-             "questdb", "duckdb", "sqlite", "mongodb"]
+             "questdb", "duckdb", "sqlite", "mongodb", "timescaledb"]
     # This lane predates runner.BACKENDS and keeps its own adapters, so the
     # topology lookup does not reach it. QuestDB is a server (ILP ingest on
     # 9009, SQL over pg-wire, see l4_tsbs.py); the other two run in-process.
@@ -1535,7 +1545,7 @@ def _l4_table(all_rows):
                      "arcadedb (server, document path)": "server",
                      "arcadedb (server, native TIMESERIES)": "server",
                      "arcadedb (document path)": "embedded",
-                     "questdb": "server", "duckdb": "embedded", "sqlite": "embedded", "mongodb": "server"}
+                     "questdb": "server", "duckdb": "embedded", "sqlite": "embedded", "mongodb": "server", "timescaledb": "server"}
     entries = []
     for label in sorted(grouped, key=lambda k: (order.index(k) if k in order else 99, k)):
         rs = grouped[label]

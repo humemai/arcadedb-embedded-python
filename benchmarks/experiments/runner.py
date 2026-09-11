@@ -418,6 +418,19 @@ BACKENDS = {
     # MongoDB only allows those on a replica set; the adapter initiates the
     # single-node set on connect. No auth: the image runs open without
     # MONGO_INITDB_ROOT_*, like the other comparators on the cell network.
+    # TimescaleDB 2.28.3 on PostgreSQL 17, memory fitted like the tuned
+    # PostgreSQL arm.
+    "timescaledb": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "timescale/timescaledb@sha256:189fd4822991918322c1f0d17e5adcf42853bf022a3d0dbdb56da61c5f811286",  # 2.28.3-pg17
+        "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
+        "server_port": 5432,
+        "ready_regex": r"(?s)PostgreSQL init process complete.*"
+                       r"database system is ready to accept connections",
+    },
     "mongodb": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -544,7 +557,7 @@ BACKENDS = {
     "neo4j_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",  # 5-community
+        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
         # heap parity with the ArcadeDB deployments (same per-scale heap)
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
@@ -596,7 +609,7 @@ BACKENDS = {
     "composed_qdrant_neo4j": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
+        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -824,6 +837,45 @@ BACKENDS = {
         "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
+    },
+    # pgvector 0.8.6 on PostgreSQL 17. maintenance_work_mem at half the cap:
+    # the HNSW build spills to a slow path when the graph outgrows it, and at
+    # the 64 MB default a 10M build does not finish inside the envelope.
+    # shared_buffers a quarter of the cap so the index can be resident, the
+    # way every other comparator holds its index in memory from the build.
+    "pgvector_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",  # 0.8.6-pg17
+        "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
+        "server_port": 5432,
+        "ready_regex": r"(?s)PostgreSQL init process complete.*"
+                       r"database system is ready to accept connections",
+    },
+    "pgvector_sparse": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",  # 0.8.6-pg17
+        "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
+        "server_port": 5432,
+        "ready_regex": r"(?s)PostgreSQL init process complete.*"
+                       r"database system is ready to accept connections",
+    },
+    # Neo4j's own vector index, on the same pinned Neo4j the graph lane runs.
+    "neo4j_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
+        "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
+                       "-e", "NEO4J_server_memory_heap_initial__size={heap}",
+                       "-e", "NEO4J_server_memory_heap_max__size={heap}",
+                       "-e", "NEO4J_server_memory_pagecache_size={pagecache}"],
+        "server_port": 7687,
+        "ready_regex": r"Started\.",
     },
     "milvus_dense": {
         "topology": "client_server",
@@ -1067,13 +1119,13 @@ LANES = {
     "l3s": ("l3_sparse.py",
             ["arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32",
              "arcadedb_sparse_embedded_nocompact", "arcadedb_sparse_server",
-             "arcadedb_sparse_server_fp32",
+             "arcadedb_sparse_server_fp32", "pgvector_sparse",
              "qdrant_sparse", "milvus_sparse", "elasticsearch_sparse"],
             ["search"]),
     "l3d": ("l3d_dense.py",
             ["arcadedb_dense_embedded", "arcadedb_dense_server", "chroma_dense", "lancedb_dense",
              "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
-             "milvus_dense",
+             "milvus_dense", "pgvector_dense", "neo4j_dense",
              # int8 arms for every dense engine that ships a quantized index.
              # Chroma, DuckDB-VSS and sqlite-vec have none; LanceDB is int8
              # already (IVF_HNSW_SQ is its only HNSW offering).
@@ -1110,7 +1162,7 @@ LANES = {
            # arms run: the document path is what ordinary SQL gives you, the
            # native path is the engine asked in its own idiom, and the page
            # prints both rather than choosing the flattering one.
-           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite", "mongodb"],
+           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite", "mongodb", "timescaledb"],
            ["ingest"]),
 }
 
@@ -1526,6 +1578,7 @@ MP_LABELS = {
     "qdrant_dense": "qdrant", "qdrant_dense_int8": "qdrant_int8",
     "chroma_dense": "chroma", "duckdb_vss_dense": "duckvss",
     "lancedb_dense": "lancedb",
+    "pgvector_dense": "pgvector", "neo4j_dense": "neo4jvec",
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
 }
 
@@ -1539,6 +1592,7 @@ MP_LABELS.update({
     "arcadedb_sparse_server": "arc_srv",
     "arcadedb_sparse_server_fp32": "arc_srv_fp32", "qdrant_sparse": "qdrant",
     "milvus_sparse": "milvus", "elasticsearch_sparse": "elastic",
+    "pgvector_sparse": "pgvector",
 })
 
 
@@ -1618,7 +1672,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # backend's server_cmd has no placeholders and formats to itself.
             srv_gb = max(1, server_mem // (1 << 30))
             server_cmd = [c.format(sb=f"{max(1, srv_gb // 4)}GB",
-                                   ecs=f"{max(1, srv_gb * 3 // 4)}GB")
+                                   ecs=f"{max(1, srv_gb * 3 // 4)}GB",
+                                   mwm=f"{max(1, srv_gb // 2)}GB")
                           for c in be.get("server_cmd", [])]
             # What it was actually launched with, so a reader of the row does
             # not have to re-derive it from the scale.
