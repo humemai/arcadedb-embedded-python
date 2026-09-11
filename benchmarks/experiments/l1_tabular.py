@@ -294,16 +294,29 @@ class DuckDB(Base):
         self.exec("CREATE INDEX idx_orders_customer ON orders (customer_id)")
 
 
+def sqlite_pragmas(con):
+    """The SQLite settings the user chose (DECISIONS #70), on every SQLite
+    arm: foreign keys enforced (no schema here declares one, so it costs
+    nothing and is stated for completeness), WAL journal, synchronous=NORMAL."""
+    con.execute("PRAGMA foreign_keys=ON")
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
+
+
 class SQLite(Base):
-    """SQLite through the standard library, at its defaults (rollback journal,
-    synchronous=FULL, so it fsyncs at every commit like PostgreSQL). The
-    comparator an embedded user expects on this table (2026-09-11)."""
+    """SQLite through the standard library, in WAL mode with synchronous=NORMAL
+    (DECISIONS #70): the rollback-journal default fsyncs twice per commit and
+    is the configuration nobody ships; WAL+NORMAL is the common production
+    setting and still durable across process crashes. Disclosed on the page
+    beside ArcadeDB's txWalFlush=0. The comparator an embedded user expects
+    on this table (2026-09-11)."""
     name = "sqlite"
 
     def connect(self):
         import sqlite3
         self._sqlite3 = sqlite3
         self.con = sqlite3.connect("/tmp/l1.sqlite")
+        sqlite_pragmas(self.con)
         self.version = f"sqlite {sqlite3.sqlite_version}"
 
     def close(self):
@@ -311,6 +324,7 @@ class SQLite(Base):
 
     def reopen(self):
         self.con = self._sqlite3.connect("/tmp/l1.sqlite")
+        sqlite_pragmas(self.con)
 
     def exec(self, sql, params=None):
         self.con.execute(sql, params or ())

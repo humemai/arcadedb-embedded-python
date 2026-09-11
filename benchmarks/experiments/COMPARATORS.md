@@ -13,7 +13,7 @@ publishes is what the engine reports at connect time, never the tag.
 | ArcadeDB | wheel + `arcadedb-c25:<commit>` built from one commit | `26.9.1-dev · 8d6af9475` | all | embedded and served | Python package / Java API; sqlscript over HTTP when served |
 | PostgreSQL | `postgres@sha256:de1e13ca…` | 17.10 | documents (synthetic, TPC) | served | COPY FROM STDIN |
 | DuckDB | `dbbench:duckdb` (duckdb==1.5.5) | 1.5.5 | documents, time series, dense (VSS) | embedded | DataFrame / Arrow INSERT SELECT |
-| SQLite | `dbbench:client` stdlib sqlite3 | 3.50.x (image's Python) | documents, TPC, time series | embedded | executemany per transaction |
+| SQLite | `dbbench:client` stdlib sqlite3 | 3.50.x (image's Python) | documents, TPC, time series | embedded | executemany per transaction. Not at its defaults, by decision (#70): `PRAGMA foreign_keys=ON; journal_mode=WAL; synchronous=NORMAL`, the common production setting; the default rollback journal with synchronous=FULL fsyncs twice per commit. Disclosed in the page's durability note. |
 | Neo4j | `neo4j@sha256:4bae36af…` | 5-community | graph, composed cross-model | served | UNWIND batches over bolt |
 | LadybugDB | `ladybug==0.19.1` | 0.19.1 | graph | embedded | COPY from CSV |
 | Qdrant | `qdrant/qdrant@sha256:75eab8c4…` | v1.18.2 | dense, sparse, composed cross-model | served | upsert batches, gRPC |

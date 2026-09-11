@@ -1064,7 +1064,9 @@ GLOBAL_CONDITIONS = [
     "Comparators are pinned by sha256 image digest, not by a floating tag.",
     "Durability is at each engine's default, and the defaults differ: ArcadeDB does "
     "not flush its write-ahead log at commit (txWalFlush=0), PostgreSQL and Neo4j "
-    "fsync at every commit. On a laptop, the same mixed read/insert/update workload "
+    "fsync at every commit, and SQLite is the one comparator not at its default: it runs "
+    "in WAL mode with synchronous=NORMAL, the common production setting, because its "
+    "default rollback journal fsyncs twice per commit. On a laptop, the same mixed read/insert/update workload "
     "on ArcadeDB embedded runs about 10x slower with fsync at commit (inserts 0.3 ms "
     "to 6.4 ms), so on the write rows (document OLTP, TPC-C new-order, graph writes, "
     "the cross-model transaction) ArcadeDB's lead is largely this default plus the "

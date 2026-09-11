@@ -107,13 +107,17 @@ Q6_SQLITE = Q6_DUCK.replace("DATE '1994-01-01'", "'1994-01-01'").replace("DATE '
 
 
 class SQLiteTPC:
-    """SQLite at its defaults; dates as ISO text like the ArcadeDB arm, so the
-    comparisons are lexicographic and equal to chronological (2026-09-11)."""
+    """SQLite in WAL mode with synchronous=NORMAL (DECISIONS #70, disclosed);
+    dates as ISO text like the ArcadeDB arm, so the comparisons are
+    lexicographic and equal to chronological (2026-09-11)."""
     name = "sqlite"
 
     def connect(self):
         import sqlite3
         self.cx = sqlite3.connect("/tmp/tpc_sqlite.db")
+        self.cx.execute("PRAGMA foreign_keys=ON")   # no schema here declares one; stated for completeness
+        self.cx.execute("PRAGMA journal_mode=WAL")
+        self.cx.execute("PRAGMA synchronous=NORMAL")
         self.version = f"sqlite {sqlite3.sqlite_version}"
 
     def build(self, li, part):

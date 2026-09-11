@@ -424,15 +424,19 @@ class DuckTS:
 
 
 class SQLiteTS:
-    """SQLite at its defaults: one table, executemany in one transaction per
-    50,000 points, then an index on (host, ts), which is what the ArcadeDB
-    document path also carries (2026-09-11)."""
+    """SQLite in WAL mode with synchronous=NORMAL (DECISIONS #70, disclosed):
+    one table, executemany in one transaction per 50,000 points, then an
+    index on (host, ts), which is what the ArcadeDB document path also
+    carries (2026-09-11)."""
     name = "sqlite"
 
     def connect(self):
         import sqlite3
         self._sqlite3 = sqlite3
         self.cx = sqlite3.connect("/tmp/l4_sqlite.db")
+        self.cx.execute("PRAGMA foreign_keys=ON")   # no schema here declares one; stated for completeness
+        self.cx.execute("PRAGMA journal_mode=WAL")
+        self.cx.execute("PRAGMA synchronous=NORMAL")
 
     def version(self):
         return f"sqlite {self._sqlite3.sqlite_version}"
