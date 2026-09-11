@@ -763,12 +763,14 @@ def main():
             t = time.perf_counter()
             ref = getattr(b, qn)()
             times.append((time.perf_counter() - t) * 1000)
-        out[f"{qn}_ms"] = round(statistics.median(times), 2)
+        # Four decimals, not two: SQLite's index-backed newest reading takes
+        # about 4 us and two decimals printed it as 0.00 ms (2026-09-12).
+        out[f"{qn}_ms"] = round(statistics.median(times), 4)
         _s = sorted(times)
-        out[f"{qn}_p99_ms"] = round(_s[max(0, int(0.99 * (len(_s) - 1)))], 2)
+        out[f"{qn}_p99_ms"] = round(_s[max(0, int(0.99 * (len(_s) - 1)))], 4)
         # The first run is the cold number every other lane records; the
         # summary figure's first-pass panel needs it (2026-09-11).
-        out[f"{qn}_cold_ms"] = round(times[0], 2)
+        out[f"{qn}_cold_ms"] = round(times[0], 4)
         out[f"{qn}_rows"] = len(ref) if ref is not None else 0
 
     # ASSERT THE SHAPES, do not merely record them. The lane already knew the
@@ -788,7 +790,7 @@ def main():
             _s = time.perf_counter()
             _ref = b.q_last_windowed()
             _t.append((time.perf_counter() - _s) * 1000)
-        out["q_last_windowed_ms"] = round(statistics.median(_t), 2)
+        out["q_last_windowed_ms"] = round(statistics.median(_t), 4)
         out["q_last_windowed_rows"] = len(_ref) if _ref is not None else 0
         out["last_window_s"] = 86400 * 40
 
