@@ -482,17 +482,17 @@ DENSE_PRECISION = {
 # because it is the grouping key and page_check pins cells by it; this is the
 # rendered string only.
 SCALE_LABELS = {
-    ("l3s", "tiny"): "100k",
-    ("l3s", "small"): "1M",
-    ("l3s", "medium"): "8.84M",
-    ("l3d", "small"): "1M",
-    ("l3d", "deep10m"): "9.99M",
+    ("l3s", "tiny"): "100k vectors",
+    ("l3s", "small"): "1M vectors",
+    ("l3s", "medium"): "8.84M vectors",
+    ("l3d", "small"): "1M vectors",
+    ("l3d", "deep10m"): "9.99M vectors",
     # LDBC publishes its tiers as scale factors, so SF1/SF10 are the corpus's
     # own vocabulary rather than ours; the person count says how big that is.
     ("l2", "sf1"): "SF1 (11k people)",
     ("l2", "sf10"): "SF10 (73k people)",
     ("l1", "medium"): "20M orders (synthetic)",
-    ("l1tpc", "tpch1"): "TPC-H SF1",
+    ("l1tpc", "tpch1"): "TPC-H SF1 (6.0M line items)",
     ("e2", "e2"): "50k products",
     # TSBS publishes its corpus as a point count, which is what the ingest
     # column is per second of.
@@ -852,7 +852,7 @@ LANES = {
         ],
     },
     "l2": {
-        "title": "Graph traversal",
+        "title": "Graph OLTP",
         "dataset": "LDBC-SNB Interactive (SF1, SF10)",
         # Peak anon last, and present at all because the page had no memory
         # column anywhere while every lane has measured it since the #52 fix.
@@ -902,7 +902,7 @@ LANES = {
     # with an ablation row that is dashed at one scale invites the reader to
     # read the dash as a failure.
     "l2olap": {
-        "title": "Graph analytics, with and without the Graph Analytical View",
+        "title": "Graph OLAP, with and without the Graph Analytical View",
         "dataset": "LDBC-SNB, SF10",
         "lane_source": "l2",
         "only_scales": {"sf1", "sf10"},
@@ -2030,12 +2030,12 @@ def _restructure_tables(tables, rows):
         src = by["l1tpc"]
         base = {"withheld_scales": [], "withheld_reason": None,
                 "source_paths": src.get("source_paths"), "source_urls": src.get("source_urls")}
-        tables.append({"id": "docs_oltp", "title": "Document transactions",
+        tables.append({"id": "docs_oltp", "title": "Document OLTP",
                        "dataset": "TPC-C new-order on the TPC-H SF1 tables",
                        "conditions": list(src["conditions"]),
                        "columns": ["new-order p50 ms", "new-order p99 ms", "OLTP ops/s"],
                        "entries": [clone(e, OLTP_KEEP) for e in src["entries"]], **base})
-        tables.append({"id": "docs_olap", "title": "Document analytics",
+        tables.append({"id": "docs_olap", "title": "Document OLAP",
                        "dataset": "TPC-H Q1 and Q6 at SF1",
                        "conditions": list(src["conditions"]),
                        "columns": ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"],
