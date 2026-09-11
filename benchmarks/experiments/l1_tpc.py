@@ -218,6 +218,80 @@ class MongoTPC:
         self.cl.close()
 
 
+class SurrealTPC:
+    """SurrealDB embedded through its Python SDK on SurrealKV (engine 2.0.0):
+    lineitem and part as tables, part keyed by record id, dates as ISO text,
+    Q1/Q6 in SurrealQL, new-order as one BEGIN/COMMIT transaction
+    (2026-09-11). The served twin runs the 3.2.4 server on RocksDB."""
+    name = "surrealdb_tpc"   # not "surrealdb": that is the cross-model lane's old row name
+    URL = "surrealkv:///tmp/tpc_surrealkv"
+
+    def _open(self):
+        import shutil
+        from surrealdb import Surreal
+        shutil.rmtree("/tmp/tpc_surrealkv", ignore_errors=True)
+        self.db = Surreal(self.URL)
+        self.db.use("bench", "bench")
+        self.version = "surrealdb-embedded:" + str(self.db.version()).replace("surrealdb-", "")
+
+    def connect(self):
+        self._open()
+        self.db.query("REMOVE TABLE IF EXISTS lineitem; REMOVE TABLE IF EXISTS part; REMOVE TABLE IF EXISTS orders_new")
+
+    def build(self, li, part):
+        buf = []
+        for t in li[LI_COLS].itertuples(index=False, name=None):
+            buf.append(dict(zip(LI_COLS, t)))
+            if len(buf) >= BATCH:
+                self.db.insert("lineitem", buf); buf = []
+        if buf:
+            self.db.insert("lineitem", buf)
+        from surrealdb import RecordID   # a string id would become a string key
+        pr = [{"id": RecordID("part", int(k)), "p_partkey": int(k), "p_retailprice": float(v), "stock": 100}
+              for k, v in part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)]
+        for s0 in range(0, len(pr), BATCH):
+            self.db.insert("part", pr[s0:s0 + BATCH])
+        self.db.query("DEFINE INDEX li_shipdate ON lineitem FIELDS l_shipdate")
+
+    Q1 = ("SELECT l_returnflag, l_linestatus, math::sum(l_quantity) AS sum_qty, math::sum(l_extendedprice) AS sum_base, "
+          "math::sum(l_extendedprice * (1 - l_discount)) AS sum_disc, math::mean(l_quantity) AS avg_qty, count() AS n "
+          "FROM lineitem WHERE l_shipdate <= '1998-09-02' GROUP BY l_returnflag, l_linestatus ORDER BY l_returnflag, l_linestatus")
+    Q6 = ("SELECT math::sum(l_extendedprice * l_discount) AS revenue FROM lineitem WHERE l_shipdate >= '1994-01-01' "
+          "AND l_shipdate < '1995-01-01' AND l_discount >= 0.05 AND l_discount <= 0.07 AND l_quantity < 24 GROUP ALL")
+
+    @staticmethod
+    def _rows(res):
+        if isinstance(res, list) and res and isinstance(res[0], dict) and "result" in res[0]:
+            res = res[-1]["result"]
+        return res if isinstance(res, list) else ([res] if res is not None else [])
+
+    def olap(self, which):
+        return self._rows(self.db.query(self.Q1 if which == "q1" else self.Q6))
+
+    def new_order(self, i, pkey):
+        self.db.query(f"BEGIN; SELECT p_retailprice, stock FROM ONLY part:{pkey}; "
+                      f"CREATE orders_new SET okey = {i}, pkey = {pkey}, qty = 1; "
+                      f"UPDATE part:{pkey} SET stock -= 1; COMMIT;")
+
+    def close(self):
+        try:
+            self.db.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class SurrealServedTPC(SurrealTPC):
+    name = "surrealdb_tpc_server"
+
+    def _open(self):
+        from surrealdb import Surreal
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.db = Surreal(f"ws://{host}:8000/rpc")
+        self.db.signin({"username": "root", "password": "root"})
+        self.db.use("bench", "bench")
+        self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
+
+
 class PostgresTPC:
     name = "postgres"
 
@@ -459,7 +533,7 @@ class PostgresTunedTPC(PostgresTPC):
     name = "postgres_tuned"
 
 
-BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, MongoTPC, PostgresTPC, PostgresTunedTPC,
+BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, MongoTPC, SurrealTPC, SurrealServedTPC, PostgresTPC, PostgresTunedTPC,
                                 ArcadeTPC, ArcadeServerTPC)}
 
 

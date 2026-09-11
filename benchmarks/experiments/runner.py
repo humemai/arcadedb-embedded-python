@@ -635,6 +635,37 @@ BACKENDS = {
         "server_port": 7687,
         "ready_regex": r"Started\.",
     },
+    # SurrealDB on the single-model tables (2026-09-11): embedded through the
+    # Python SDK (engine 2.0.0 on its SurrealKV disk store, in the client
+    # container) and served (3.2.4 on RocksDB). One engine, both modes, like
+    # ArcadeDB.
+    "surrealdb_graph": {"topology": "embedded", "image": "dbbench:client"},
+    "surrealdb_graph_server": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_port": 8000,
+        "ready_regex": r"Started web server",
+    },
+    "surrealdb_tpc": {"topology": "embedded", "image": "dbbench:client"},
+    "surrealdb_tpc_server": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_port": 8000,
+        "ready_regex": r"Started web server",
+    },
+    "surrealdb_dense": {"topology": "embedded", "image": "dbbench:client"},
+    "surrealdb_dense_server": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_port": 8000,
+        "ready_regex": r"Started web server",
+    },
     "surrealdb_e2_server": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1135,11 +1166,11 @@ LANES = {
            ["oltp", "olap"]),
     "l2": ("l2_graph.py",
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
-            "neo4j_graph", "ladybug_graph"],
+            "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
-              ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "postgres",
-               "postgres_tuned"],
+              ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "surrealdb_tpc",
+               "surrealdb_tpc_server", "postgres", "postgres_tuned"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
@@ -1163,7 +1194,7 @@ LANES = {
     "l3d": ("l3d_dense.py",
             ["arcadedb_dense_embedded", "arcadedb_dense_server", "chroma_dense", "lancedb_dense",
              "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
-             "milvus_dense", "pgvector_dense", "neo4j_dense",
+             "milvus_dense", "pgvector_dense", "neo4j_dense", "surrealdb_dense", "surrealdb_dense_server",
              # int8 arms for every dense engine that ships a quantized index.
              # Chroma, DuckDB-VSS and sqlite-vec have none; LanceDB is int8
              # already (IVF_HNSW_SQ is its only HNSW offering).
@@ -1617,6 +1648,7 @@ MP_LABELS = {
     "chroma_dense": "chroma", "duckdb_vss_dense": "duckvss",
     "lancedb_dense": "lancedb",
     "pgvector_dense": "pgvector", "neo4j_dense": "neo4jvec",
+    "surrealdb_dense": "surreal", "surrealdb_dense_server": "surrealsrv",
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
 }
 

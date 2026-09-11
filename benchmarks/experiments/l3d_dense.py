@@ -912,6 +912,67 @@ class Neo4jVector(Base):
         self.drv.close()
 
 
+class SurrealDense(Base):
+    """SurrealDB embedded through its Python SDK on SurrealKV (engine 2.0.0):
+    article records with an embedding array under a SurrealQL HNSW index at
+    the matched operating point (M=COMPARATOR_M, EFC=EF_CONSTRUCTION), the
+    <|k,ef|> nearest-neighbour operator at EF_SEARCH (2026-09-11). The served
+    twin runs the 3.2.4 server on RocksDB."""
+    quantization = "fp32"
+    name = "surrealdb_dense"
+    URL = "surrealkv:///tmp/l3d_surrealkv"
+
+    def _open(self):
+        import shutil
+        from surrealdb import Surreal
+        shutil.rmtree("/tmp/l3d_surrealkv", ignore_errors=True)
+        self.db = Surreal(self.URL)
+        self.db.use("bench", "bench")
+        self.version = "surrealdb-embedded:" + str(self.db.version()).replace("surrealdb-", "")
+
+    def connect(self):
+        self._open()
+        self.db.query("REMOVE TABLE IF EXISTS article")
+
+    def build(self, vecs):
+        self.db.query(f"DEFINE INDEX art_emb ON article FIELDS embedding HNSW DIMENSION {DIM} DIST EUCLIDEAN TYPE F32 "
+                      f"EFC {EF_CONSTRUCTION} M {COMPARATOR_M}")
+        from surrealdb import RecordID   # a string id would become a string key
+        for i in range(0, len(vecs), 5_000):
+            chunk = vecs[i:i + 5_000]
+            self.db.insert("article", [{"id": RecordID("article", i + j), "vid": i + j, "embedding": chunk[j].tolist()}
+                                       for j in range(len(chunk))])
+
+    @staticmethod
+    def _rows(res):
+        if isinstance(res, list) and res and isinstance(res[0], dict) and "result" in res[0]:
+            res = res[-1]["result"]
+        return res if isinstance(res, list) else ([res] if res is not None else [])
+
+    def search(self, qvec, k):
+        q = "[" + ",".join("%.9g" % float(x) for x in qvec) + "]"
+        rows = self._rows(self.db.query(f"SELECT vid FROM article WHERE embedding <|{k},{EF_SEARCH}|> {q}"))
+        return [int(r["vid"]) for r in rows]
+
+    def close(self):
+        try:
+            self.db.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class SurrealDenseServer(SurrealDense):
+    name = "surrealdb_dense_server"
+
+    def _open(self):
+        from surrealdb import Surreal
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.db = Surreal(f"ws://{host}:8000/rpc")
+        self.db.signin({"username": "root", "password": "root"})
+        self.db.use("bench", "bench")
+        self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
+
+
 class Milvus(Base):
     # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
     # quantized says so on the class, so the row never has to consult an
@@ -1237,7 +1298,7 @@ class MilvusInt8(Milvus):
 
 BACKENDS = {b.name: b for b in
             (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus,
-             PgVector, Neo4jVector,
+             PgVector, Neo4jVector, SurrealDense, SurrealDenseServer,
              ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8,
              ArcadeServerInt8, SqliteVecInt8)}
 

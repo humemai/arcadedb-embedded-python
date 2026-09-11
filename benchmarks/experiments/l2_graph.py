@@ -65,6 +65,19 @@ class Base:
     def run_cypher_write(self, text):
         self.run_cypher(text)
 
+    # NAME-BASED HOOKS (2026-09-11): the loops call these, and the defaults
+    # format the shared Cypher text, so an engine without Cypher (SurrealDB)
+    # can answer the same question in its own language by overriding three
+    # methods while the mix, counts and statistics stay identical.
+    def run_read(self, op, pid):
+        return self.run_cypher(OLTP_READS[op].format(id=pid))
+
+    def run_write(self, pid, new_id):
+        self.run_cypher_write(OLTP_WRITE.format(id=pid, new_id=new_id))
+
+    def run_olap(self, qname):
+        return self.run_cypher(OLAP_QUERIES[qname])
+
     def close(self):
         pass
 
@@ -432,8 +445,101 @@ class LadybugGraph(Base):
         return len(list(self.conn.execute(text)))
 
 
+class SurrealGraph(Base):
+    """SurrealDB through its Python SDK on the SDK's SurrealKV disk store
+    (engine 2.0.0), the same LDBC questions in SurrealQL: person records with
+    record ids, KNOWS as a RELATE edge table (2026-09-11). The served twin
+    below runs the 3.2.4 server on RocksDB."""
+    name = "surrealdb_graph"
+    URL = "surrealkv:///tmp/l2_surrealkv"
+
+    def _open(self):
+        import shutil
+        from surrealdb import Surreal
+        shutil.rmtree("/tmp/l2_surrealkv", ignore_errors=True)
+        self.db = Surreal(self.URL)
+        self.db.use("bench", "bench")
+        self.version = "surrealdb-embedded:" + str(self.db.version()).replace("surrealdb-", "")
+
+    def connect(self):
+        self._open()
+        self.db.query("REMOVE TABLE IF EXISTS knows; REMOVE TABLE IF EXISTS person")
+        self.db.query("DEFINE TABLE person SCHEMALESS; DEFINE TABLE knows TYPE RELATION IN person OUT person SCHEMALESS")
+
+    def build(self, n_persons):
+        # RecordID, not "person:7": the SDK stores a string id as a string
+        # KEY, and person:7 then names nothing (laptop smoke, 2026-09-11).
+        from surrealdb import RecordID
+        buf = []
+        for i, name, age, city in gen_persons(n_persons):
+            buf.append({"id": RecordID("person", i), "pid": i, "name": name, "age": age, "city": city})
+            if len(buf) >= INGEST_BATCH:
+                self.db.insert("person", buf); buf = []
+        if buf:
+            self.db.insert("person", buf)
+        stmts = []
+        for src, dst, since in gen_edges(n_persons):
+            stmts.append(f"RELATE person:{src}->knows->person:{dst} SET since = {since}")
+            if len(stmts) >= 500:   # one multi-statement request; 5000 stalled the ws path
+                self.db.query(";".join(stmts)); stmts = []
+        if stmts:
+            self.db.query(";".join(stmts))
+
+    @staticmethod
+    def _rows(res):
+        if isinstance(res, list) and res and isinstance(res[0], dict) and "result" in res[0]:
+            res = res[-1]["result"]
+        return res if isinstance(res, list) else ([res] if res is not None else [])
+
+    def run_read(self, op, pid):
+        if op == "point":
+            r = self.db.query(f"SELECT name, age FROM ONLY person:{pid}")
+        elif op == "hop1":
+            r = self.db.query(f"SELECT count(->knows->person) AS n, math::mean(->knows->person.age) AS a FROM ONLY person:{pid}")
+        else:
+            r = self.db.query(f"SELECT array::len(array::distinct(->knows->person->knows->person)) AS n FROM ONLY person:{pid}")
+        return len(self._rows(r))
+
+    def run_write(self, pid, new_id):
+        self.db.query(f"CREATE person:{new_id} SET pid = {new_id}, name = 'w{new_id}', age = 33, city = 'city_0'; "
+                      f"RELATE person:{pid}->knows->person:{new_id} SET since = 2026")
+
+    OLAP = {
+        "top_degree": "SELECT pid, count(->knows) AS d FROM person ORDER BY d DESC LIMIT 10",
+        # subquery form: on 2.0.0 ORDER BY after GROUP BY sorted by the group
+        # key, not n (laptop smoke, 2026-09-11); 3.2.4 accepts both forms
+        "same_city_edges": "SELECT * FROM (SELECT in.city AS c, count() AS n FROM knows WHERE in.city = out.city GROUP BY c) ORDER BY n DESC LIMIT 10",
+        "friend_age_by_city": "SELECT * FROM (SELECT in.city AS c, math::mean(out.age) AS a, count() AS n FROM knows GROUP BY c) ORDER BY n DESC LIMIT 10",
+    }
+
+    def run_olap(self, qname):
+        return len(self._rows(self.db.query(self.OLAP[qname])))
+
+    def run_cypher(self, text):
+        raise NotImplementedError("SurrealDB runs SurrealQL through the name-based hooks")
+
+    def close(self):
+        try:
+            self.db.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class SurrealGraphServer(SurrealGraph):
+    name = "surrealdb_graph_server"
+
+    def _open(self):
+        from surrealdb import Surreal
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.db = Surreal(f"ws://{host}:8000/rpc")
+        self.db.signin({"username": "root", "password": "root"})
+        self.db.use("bench", "bench")
+        self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
+
+
 ADAPTERS = {a.name: a for a in
-            [ArcadeGraphEmbedded, ArcadeGraphServer, Neo4jGraph, LadybugGraph]}
+            [ArcadeGraphEmbedded, ArcadeGraphServer, Neo4jGraph, LadybugGraph,
+             SurrealGraph, SurrealGraphServer]}
 
 
 def pct(sorted_ms, q):
@@ -531,7 +637,7 @@ def main():
                 lat = []
                 for w, pid in enumerate(ids):
                     t = time.perf_counter()
-                    ad.run_cypher(tmpl.format(id=pid))
+                    ad.run_read(op, pid)
                     if w >= 5:  # warmups discarded
                         lat.append((time.perf_counter() - t) * 1000)
                 lat.sort()
@@ -551,7 +657,7 @@ def main():
         for w, pid in enumerate(ids[:n_writes]):
             new_id = write_id_base + w
             t = time.perf_counter()
-            ad.run_cypher_write(OLTP_WRITE.format(id=pid, new_id=new_id))
+            ad.run_write(pid, new_id)
             if w >= 5:
                 lat.append((time.perf_counter() - t) * 1000)
         lat.sort()
@@ -571,12 +677,12 @@ def main():
             # that reports one number without saying which side it is on is
             # reporting an arbitrary point on that curve.
             _c0 = time.perf_counter()
-            rows0 = ad.run_cypher(text)  # first touch, now measured
+            rows0 = ad.run_olap(qname)  # first touch, now measured
             out[f"cold_{qname}_ms"] = round((time.perf_counter() - _c0) * 1000, 2)
             lat = []
             for _ in range(OLAP_ITERATIONS):
                 t = time.perf_counter()
-                ad.run_cypher(text)
+                ad.run_olap(qname)
                 lat.append((time.perf_counter() - t) * 1000)
             # p50 FIRST, because the page prints these as times and asserts
             # elsewhere that pycost is its only non-p50 ms column. Three of these

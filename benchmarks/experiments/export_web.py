@@ -280,14 +280,19 @@ def _engine_version(label: str, raw: str | None,
         _sha = (commit or "").strip() or (_m.group(1) if _m else None)
         _ver = re.sub(r"^server:", "", _raw.split(" (build")[0]).strip() or None
         return _engine_identity(_ver, _sha)
-    ver = _short_version(raw)
-    if not ver:
-        return None
     if image:
         repo = image.split("@")[0].split(":")[0]
         engine = repo.rsplit("/", 1)[-1].lower()
     else:
         engine = label.split(" (")[0].strip().lower()
+    # A composed row stamps every part ("qdrant-local:1.19.0+neo4j:5.26.28");
+    # the version that belongs to the image's engine is the one after ITS
+    # name, not the first version-shaped token (which gave "neo4j 1.19.0").
+    _raw = str(raw or "")
+    _k = _raw.lower().find(f"{engine}:")
+    ver = _short_version(_raw[_k + len(engine) + 1:] if _k >= 0 else _raw)
+    if not ver:
+        return None
     return f"{engine} {ver}"
 
 
@@ -353,6 +358,9 @@ DISPLAY_NAMES = {
     "postgres": "PostgreSQL", "postgres_tuned": "PostgreSQL (tuned)",
     "duckdb": "DuckDB", "questdb": "QuestDB", "sqlite": "SQLite", "mongodb": "MongoDB",
     "timescaledb": "TimescaleDB", "pgvector_dense": "pgvector", "pgvector_sparse": "pgvector", "neo4j_dense": "Neo4j",
+    "surrealdb_tpc": "SurrealDB (embedded)", "surrealdb_tpc_server": "SurrealDB (server)",
+    "surrealdb_graph": "SurrealDB (embedded)", "surrealdb_graph_server": "SurrealDB (server)",
+    "surrealdb_dense": "SurrealDB (embedded)", "surrealdb_dense_server": "SurrealDB (server)",
     "arcadedb": "ArcadeDB",
     "sqlite": "SQLite", "chroma": "Chroma", "ladybug": "LadybugDB",
 }
@@ -451,6 +459,7 @@ DENSE_PRECISION = {
     "arcadedb_dense_server": "fp32",
     "chroma_dense": "fp32",
     "pgvector_dense": "fp32",   # vector(96/128), no quantization used
+    "surrealdb_dense": "fp32", "surrealdb_dense_server": "fp32",   # HNSW TYPE F32
     "neo4j_dense": "fp32",      # float property list, no quantization option
     "qdrant_dense": "fp32",
     "milvus_dense": "fp32",
@@ -618,6 +627,8 @@ DENSE_10M_ARMS = [
     # rows are skipped until then.
     ("pgvector", "pgvector_dense", "pgvector (fp32)", False),
     ("neo4jvec", "neo4j_dense", "Neo4j (fp32)", False),
+    ("surreal", "surrealdb_dense", "SurrealDB (embedded, fp32)", False),
+    ("surrealsrv", "surrealdb_dense_server", "SurrealDB (server, fp32)", False),
 ]
 
 
@@ -2160,6 +2171,20 @@ def main() -> int:
             if backend == "arcadedb_sparse_embedded_nocompact":
                 continue
             image = BACKENDS.get(backend, {}).get("server_image")
+            # A comparator row names the image it RAN on (server_image, a bare
+            # digest). When the runner has since been re-pinned and the re-run
+            # has not landed, the config's image is the wrong one: the Neo4j
+            # graph rows measured on 5-community would have carried the
+            # 2026.07.1 digest and name (publish rehearsal, 2026-09-11). Same
+            # digest: keep the config's ref and its tag name. Different: the
+            # row's digest on the config's repository, and the row's own
+            # engine_version as the name.
+            _row_digest = rs[0].get("server_image") if not str(backend).startswith("arcadedb") else None
+            if _row_digest and "@" in str(_row_digest):   # some lanes record the full ref
+                _row_digest = str(_row_digest).split("@", 1)[1]
+            _stale_pin = bool(image and _row_digest and "@" in image and image.split("@")[1] != _row_digest)
+            if _stale_pin:
+                image = image.split("@")[0] + "@" + _row_digest
             label = display_name(backend)
             if lane == "l3d":
                 prec = DENSE_PRECISION.get(backend)
@@ -2218,7 +2243,7 @@ def main() -> int:
                     # A served comparator whose image has no entry in the pin
                     # table's names (Milvus) still stamps its server version
                     # on the row; the page showed Milvus unversioned for it.
-                    else ((names.get(image) or rs[0].get("engine_version")) if image
+                    else ((names.get(image) or rs[0].get("engine_version")) if (image and not _stale_pin)
                           else rs[0].get("engine_version")),
                     image, commit=rs[0].get("engine_commit")),
                 "host": rs[0].get("host") or None,

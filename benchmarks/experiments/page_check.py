@@ -169,7 +169,7 @@ PROSE = [
     ("e2atom.composed.torn", r"left torn in (\d+) of 40 trials",
      lambda P: P("e2atom", "Qdrant + Neo4j (no shared transaction)", "e2", "torn results")),
     ("e2atom.arcadedb.torn", r"ArcadeDB and SurrealDB in (\d+) of 40",
-     lambda P: max(P("e2atom", "ArcadeDB (one transaction)", "e2", "torn results"), P("e2atom", "SurrealDB", "e2", "torn results"))),
+     lambda P: max(P("e2atom", "ArcadeDB (one transaction)", "e2", "torn results"), P("e2atom", "SurrealDB (embedded)", "e2", "torn results"))),
     ("dense.second_pass", r"ArcadeDB alone gains about (\d+(?:\.\d+)?)x on a second pass",
      lambda P: P("l3d", "ArcadeDB (embedded, fp32)", "deep10m", "cold p50 ms") / P("l3d", "ArcadeDB (embedded, fp32)", "deep10m", "warm p50 ms")),
 ]
