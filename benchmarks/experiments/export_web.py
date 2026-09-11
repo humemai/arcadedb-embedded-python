@@ -667,16 +667,16 @@ def _dense_overlay_entries(scale="deep10m"):
                                      ("warm p50 ms", warm, "p50"),
                                      ("warm p99 ms", warm, "p99"),
                                      ("recall@10", recall, "r"),
-                                     ("ingest total s", build, "build_s")):
+                                     ("ingest+index total s", build, "build_s")):
             got = _agg(rows_, field)
             if got is not None:
                 metrics[label_] = got
         if not metrics:
             continue
-        if metrics.get("ingest total s") and metrics["ingest total s"]["median"]:
-            _b = metrics["ingest total s"]
+        if metrics.get("ingest+index total s") and metrics["ingest+index total s"]["median"]:
+            _b = metrics["ingest+index total s"]
             _n = 9_990_000 if scale == "deep10m" else 1_000_000
-            metrics["ingest vectors/s"] = {"median": round(_n / _b["median"], 1), "min": round(_n / _b["max"], 1),
+            metrics["ingest+index vectors/s"] = {"median": round(_n / _b["median"], 1), "min": round(_n / _b["max"], 1),
                                            "max": round(_n / _b["min"], 1), "n": _b["n"]}
         # Peak memory is in the multipass files (pass 0 carries the build);
         # disk is not, and comes from the campaign cell of the same arm.
@@ -813,13 +813,13 @@ LANES = {
         # and cost a column on a phone. It stays in the rows and the CSV.
         "metrics": [("query_p50_ms", "p50 ms"), ("query_p99_ms", "p99 ms"),
                     ("recall_at_10", "recall@10"),
-                    ("build_docs_per_s", "ingest docs/s"),
-                    ("build_s", "ingest total s"),
+                    ("build_docs_per_s", "ingest+index docs/s"),
+                    ("build_s", "ingest+index total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         "conditions": [
             "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
-            "ingest total s is the whole load, index build included; ingest docs/s divides the document count by it.",
+            "ingest+index total s is one timer around inserting the documents and building the index; the two are not timed separately (Qdrant builds its index while ingesting, so the split is not defined there). ingest+index docs/s divides the document count by it.",
             "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
             "Every number here is cold, the first timed pass after the index is built. Warm, the same engines run again over an index they have already read, shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. The dense table below is not like this: there ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
             "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
@@ -837,12 +837,12 @@ LANES = {
         # both sizes carry cold and warm from one protocol.
         "metrics": [("query_p50_ms", "cold p50 ms"), ("query_p99_ms", "cold p99 ms"),
                     ("recall_at_10", "recall@10"),
-                    ("build_docs_per_s", "ingest vectors/s"),
-                    ("build_s", "ingest total s"),
+                    ("build_docs_per_s", "ingest+index vectors/s"),
+                    ("build_s", "ingest+index total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         "conditions": [
-            "ingest total s is the whole load, index build included; ingest vectors/s divides the vector count by it.",
+            "ingest+index total s is one timer around inserting the vectors and building the index; the two are not timed separately (Qdrant and Chroma build the index while ingesting, so the split is not defined there). ingest+index vectors/s divides the vector count by it.",
             "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
             "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
             "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried 26 to 28 small segments and read 2.3x slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
@@ -909,7 +909,9 @@ LANES = {
         # p50, not the mean the page printed until 2026-09-10 (the lane's own
         # comment says p50 first, and it recorded one); p99 arrives with the
         # 100-iteration rows (F29).
-        "metrics": [("friend_age_by_city_p50_ms", "average friend age p50 ms"),
+        "metrics": [(_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest records/s"),
+                    ("build_s", "ingest total s"),
+                    ("friend_age_by_city_p50_ms", "average friend age p50 ms"),
                     ("friend_age_by_city_p99_ms", "average friend age p99 ms"),
                     ("same_city_edges_p50_ms", "friends in same city p50 ms"),
                     ("same_city_edges_p99_ms", "friends in same city p99 ms"),
@@ -1313,6 +1315,7 @@ def _sparse_multipass_table():
                 continue
             c = cold[0]["query_p50_ms"]
             w = statistics.median(r["query_p50_ms"] for r in warm)
+            _bs = _num(cold[0].get("build_s")); _nd = _num(cold[0].get("n_docs"))
             c99 = cold[0].get("query_p99_ms")
             w99 = statistics.median(r["query_p99_ms"] for r in warm if r.get("query_p99_ms") is not None) if any(r.get("query_p99_ms") is not None for r in warm) else None
             entries.append({
@@ -1337,6 +1340,9 @@ def _sparse_multipass_table():
                     **({"warm p99 ms": {"median": round(w99, 3), "min": round(w99, 3), "max": round(w99, 3), "n": len(warm)}} if w99 is not None else {}),
                     "gain": {"median": round(c / w, 2), "min": round(c / w, 2),
                              "max": round(c / w, 2), "n": 1},
+                    **({"ingest+index docs/s": {"median": round(_nd / _bs, 1), "min": round(_nd / _bs, 1), "max": round(_nd / _bs, 1), "n": 1},
+                        "ingest+index total s": {"median": round(_bs, 2), "min": round(_bs, 2), "max": round(_bs, 2), "n": 1}}
+                       if (_bs and _nd) else {}),
                     **({"peak memory GiB": _campaign_stat(backend, tier, "peak_anon_mib_sum") or _agg(cold, "peak_anon_mib_sum")}
                        if (_campaign_stat(backend, tier, "peak_anon_mib_sum") or _agg(cold, "peak_anon_mib_sum")) else {}),
                     **({"disk GiB": _campaign_stat(backend, tier, "disk_data_mb")}
@@ -2115,8 +2121,8 @@ def main() -> int:
                             # warm exists only where a second pass was run,
                             # so it sits beside cold rather than replacing it
                             ["cold p50 ms", "cold p99 ms", "warm p50 ms",
-                             "warm p99 ms", "recall@10", "ingest vectors/s",
-                             "ingest total s", "peak memory GiB", "disk GiB"]),
+                             "warm p99 ms", "recall@10", "ingest+index vectors/s",
+                             "ingest+index total s", "peak memory GiB", "disk GiB"]),
                 "withheld_scales": withheld,
                 "withheld_reason": (
                     "Comparator rows exist at these sizes but ArcadeDB's were "
