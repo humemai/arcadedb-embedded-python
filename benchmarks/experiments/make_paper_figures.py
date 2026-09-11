@@ -25,8 +25,8 @@ RESULTS = os.path.join(HERE, "results")
 # The paper source is deliberately not in this repository. Point
 # BENCH_PAPER_DIR at the directory holding paper.tex and its generated
 # tables/ and figures/ subdirectories.
-_PAPER_DIR = os.environ.get(
-    "BENCH_PAPER_DIR", os.path.join(HERE, "..", "..", "paper"))
+_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(HERE, "results", "generated"))   # see make_paper_tables
+os.makedirs(_PAPER_DIR, exist_ok=True)
 FIGS = os.path.join(_PAPER_DIR, "figures")
 
 plt.rcParams.update({"font.size": 8, "axes.grid": True, "grid.alpha": 0.3,
@@ -124,6 +124,10 @@ def _check_no_orphan_figures():
     WEB_ONLY_FIGURES with a reason. Same shape as f3's refuse-to-draw guard.
     """
     used = set()
+    if not any(n.endswith(".tex") for n in os.listdir(_PAPER_DIR)):
+        # No paper source here (2026-09-11): every figure is web-only and the
+        # page's own build is the check that it is used.
+        return
     for name in sorted(os.listdir(_PAPER_DIR)):
         if not name.endswith(".tex"):
             continue

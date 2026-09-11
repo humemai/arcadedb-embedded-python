@@ -9,7 +9,7 @@ computed from.
   pinned image digests, identical cpuset and memory caps per cell. Every
   number that reaches the paper comes from a serial re-run.
 - `python-bindings/` — **binding vs binding, and Python vs Java.** The same
-  engine reached through the Python package: graph, vector and tabular lanes
+  engine reached through the Python package: document, graph, and vector lanes
   against SQLite, DuckDB, LadybugDB and Chroma, plus `jpype_overhead/`, which
   times the binding against Java-native execution on identical JARs to show
   what crossing the CPython-JVM boundary costs.
@@ -23,7 +23,7 @@ repository-root `.gitignore` for both suites rather than in per-directory
 files, so one suite's `results/` convention cannot silently govern the other.
 
 Thesis (evidence-audited): multi-model unification over one page/WAL/MVCC
-transaction pipeline — documents, graph, KV, time series, and vectors, with
+transaction pipeline — documents, graph, vectors, and time series (key-value is not measured), with
 every index type committing in the same transaction and Raft replicating
 model-agnostic WAL page diffs. No individual mechanism is claimed as novel.
 

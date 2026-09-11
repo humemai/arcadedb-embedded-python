@@ -113,6 +113,8 @@ tier, so it is applied rather than merely disclosed.
 
 **Measured 2026-08-01. Audit complete across all seven comparator runtimes: DuckDB is the only offender.**
 
+> **2026-09-11 currency note:** the September comparators (MongoDB, TimescaleDB, pgvector, PG+AGE, SurrealDB, and SQLite) are not yet in this table.
+
 Two corrections worth keeping, because the wrong answers were nearly recorded:
 
 *Total OS threads is not pool sizing.* A first sweep counted threads per server
@@ -130,7 +132,8 @@ neither asks Qdrant anything. Its real pools are cpuset-shaped.
 Consequence for published numbers: every DuckDB cell measured before this fix
 ran oversubscribed. The bias runs **against** DuckDB, which wins that lane
 regardless, so nothing self-serving rests on it — but the tabular rows must be
-re-measured at the freeze rather than carried over.
+re-measured at the freeze rather than carried over (done at the 8d6af9475
+campaign).
 
 **F7. Same effective base-layer degree across dense backends per scale.**
 Enforced by `fairness_check.py`. Engines spell graph degree differently: one
@@ -256,9 +259,9 @@ than for us. See F8 above for the numbers and the scope.
 - **Vendor settle steps** that have no equivalent elsewhere (Elasticsearch
   forcemerge, Milvus flush+load, Qdrant green-wait, ArcadeDB `COMPACT INDEX`).
   Each engine gets *its own*; none goes unmatched by the others having theirs.
-- **Operating points deliberately not matched**, e.g. the int8 dense row at
-  16 GiB heap against fp32 at 24 GiB. Both appear in the table with the heap
-  named in the row label.
+- **Operating points deliberately not matched**, e.g. the fp32 arms at 9.99M
+  with the build cache pinned to the corpus against INT8 at 100,000 (DECISIONS
+  #56), stated in the l3d condition.
 - **Quality/precision differences** (int8 vs fp32 postings, ES pruning).
   Report recall next to latency, always.
 
@@ -268,8 +271,8 @@ Anything else that differs is a defect, not an override.
 
 | # | where | what differed | worth | status |
 |---|---|---|---|---|
-| 1 | T5 dense (F4) | ArcadeDB 1 build + 5 passes, table uses 2--5; comparators 5 builds + 1 pass each | 4.0--6.1x | disclosed in caption; queue61 re-measures comparators |
-| 2 | T5 dense (F3) | envelope raised 28g/16g -> 36g/24g on 2026-07-20 and only ArcadeDB re-measured | 29% more memory | queue61 gives comparators 36g |
+| 1 | T5 dense (F4) | ArcadeDB 1 build + 5 passes, table uses 2--5; comparators 5 builds + 1 pass each | 4.0--6.1x | resolved 2026-09-03 |
+| 2 | T5 dense (F3) | envelope raised 28g/16g -> 36g/24g on 2026-07-20 and only ArcadeDB re-measured | 29% more memory | resolved 2026-09-03 |
 | 3 | T5 time series (F4) | ArcadeDB probe has a 30 s settle; `l4_tsbs` comparators have none | 2.23x one way, 2.5x the other | resolved: table prints the unsettled arm |
 
 Violation 2 is the sharpest lesson. The envelope was raised for a good reason
@@ -322,6 +325,8 @@ the lane script. Protocol audit of every lane, completed 2026-07-31:
 | L3d dense | comparators via the lane script, **ArcadeDB via overlay drivers** | violation 1 |
 | L4 time series | comparators via `l4_tsbs`, **ArcadeDB via `l4_native_probe`** | violation 3 |
 
+> **2026-09-11 currency note:** L3s has nine backends and E2 seven; L4's native arm is in `l4_tsbs.py`; only L3d still publishes an overlay-driver row (`dense_multipass_driver.py`, run through the runner).
+
 Every clean lane puts each backend through one script, so warmup and settle
 are decided once and apply to everyone. Both violations are the two lanes
 where an ArcadeDB row comes from somewhere else. Every bespoke driver was written to answer a narrow question (close
@@ -362,8 +367,8 @@ call per batch to a server that parallelises internally), which is the
 deployment axis the paper already reports.
 
 What survives is narrow and ours: embedded pays N JNI crossings per batch
-where a client pays one. Sparse build time is not a published column, and
-#5577 bounds the dense one at roughly 7% insertion, so no paper number moves.
+where a client pays one. Sparse ingest+index time is a published column since
+2026-09-11 and the producer asymmetry above applies to it, and #5577 bounds the dense one at roughly 7% insertion, so no paper number moves.
 
 The general rule this yields: **a CPU percentage is a fact about a container,
 not about an engine.** Attributing one requires knowing who was asking for

@@ -141,7 +141,8 @@ is green. The reason is arithmetic: a defect found at stage 3 costs a full pass.
    to `runs.jsonl`.
 2. **Small.** One tier up, N=5, real corpora, every metric recorded. This is
    where the gates run for the first time: `fairness_check`,
-   `provenance_check`, `claims_check`, `page_check`.
+   `provenance_check`, `claims_check`, `page_check` (`claims_check` only when the
+   paper is being refreshed; page publishes use `--page-only`).
 3. **Big.** The published tiers.
 
 Between stages, run the gates and read the monitor's SUSPECT section. A stage
@@ -220,13 +221,16 @@ that it fits -- room only one engine gets, in a lane whose whole claim is a
 matched operating point. That is the apples-to-oranges default the policy
 exists to equalize.
 
-So the cache is bounded to `graphBuildCacheSize=100000`, which is the engine's
-OWN pre-#3144 default rather than a number we invented, and the tier keeps the
-36g/24g envelope it has always had. The bound is recorded on every row as
-`graph_build_cache_size` and `graph_build_cache_policy`: an override that only
-lives in a comment is not disclosed to anyone reading the artifact.
-`BENCH_DENSE_BUILD_CACHE=0` restores auto-sizing, so the cost of the default
-stays measurable rather than asserted.
+So the cache was bounded, for that campaign, to `graphBuildCacheSize=100000`,
+which is the engine's OWN pre-#3144 default rather than a number we invented,
+and the tier kept the 36g/24g envelope it has always had. The bound is
+recorded on every row as `graph_build_cache_size` and
+`graph_build_cache_policy`: an override that only lives in a comment is not
+disclosed to anyone reading the artifact. `BENCH_DENSE_BUILD_CACHE` selects the
+policy on the row, so the cost of the default stays measurable rather than
+asserted.
+
+> **2026-09-11 currency note:** SUPERSEDED 2026-08-30 (DECISIONS #52): the campaign runs the engine default; #56 pins the fp32 multipass arms to the corpus.
 
 What the default costs, measured while finding this: at 24g heap the auto-sized
 build stalls at 93.8% with -Xmx full at 98.2% and ~7 cores on GC; given a 36g
@@ -281,7 +285,7 @@ markers is silent through a crash, and silence looks like "still running".
 
 ```sh
 bash build_images.sh                 # Phase A; refuses a pre-release pin
-source campaign_env.sh               # the six BENCH_* dataset switches
+source campaign_env.sh               # the eleven BENCH_* dataset switches
 campaign_env_check                   # asserts every corpus is present
 python3 -u runner.py --lanes ... --scale ... --reps 5
 ```

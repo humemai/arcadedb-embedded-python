@@ -37,6 +37,8 @@ predates the entire commit-pinning era.
 `merge_campaign.py` has not been run for b7c6c800d or 8d6af9475. Archiving a
 campaign file would delete the campaign.
 
+> **2026-09-11 currency note:** SUPERSEDED: merged before the 2026-09-03 freeze (`runs_paper.csv` holds 598 rows at 8d6af9475 and 104 at b7c6c800d); the order-of-operations rule stands.
+
 This is a trap, because those files report "no reader" when you grep the
 publishing scripts -- not because they are dead, but because **the merge step
 that would make them read has not happened yet**. The same reasoning nearly
@@ -73,11 +75,10 @@ These are NOT dead. They feed published cells and are the reason the
 
 | dir | feeds | pin era |
 |---|---|---|
-| `sparse_mp/` | `l3smp` multipass table (`export_web`) | 2026-08 overlay |
+| `sparse_mp/` | retired; warm columns on `l3s` from `sparse_mp_<pin>` | 2026-08 overlay |
 | `sparse_mp_<pin>/` | same table when COMPLETE; see the all-or-nothing rule below. `sparse_mp_b7c6c800d` (1 of 12 files) was removed 2026-09-04; `sparse_mp_8d6af9475` is written by qCL via `runner.py --driver sparse_multipass_driver.py` | current pin, qCL |
-| `e4decomp/`, `e4decomp_2681/` | `e4` deployment table (`export_web`) | 2026-08 overlay |
 | `e4_decomp/` | `claims_check` only | 2026-08 |
-| `dense_mp_2681/` | `make_paper_tables`, `make_paper_figures` | 2026-08 |
+| `e4decomp/`, `e4decomp_2681/`, `dense_mp_2681/` | archived 2026-09-07 (DECISIONS #62) | 2026-08, archived |
 | `lifecycle/` | `export_web`, `make_paper_tables` | 2026-08 |
 | `probe/` | `export_web`, `make_paper_tables`, `claims_check` | 2026-08 |
 | `summary/` | `make_paper_figures`, `make_paper_tables`, `page_check`, `claims_check` | 2026-08 |
@@ -88,8 +89,8 @@ These are NOT dead. They feed published cells and are the reason the
 pinned directory does not make a table visibly short -- callers skip missing
 files, so it publishes whichever subset exists. `sparse_mp_b7c6c800d` held 1 of
 12 files, and that one is an ArcadeDB arm, so a pinned export would have shipped
-the six-engine comparison as a single ArcadeDB row. Fixed 2026-08-30; the
-fallback now prints what was missing.
+the six-engine comparison as a single ArcadeDB row. A partial pinned directory refuses the
+export (`make_paper_tables` raises; no fallback).
 
 ## Evidence and quarantine, kept deliberately
 
@@ -151,8 +152,9 @@ merge. **Do not hand-edit the frozen CSV**; re-freeze after the campaign.
 `queue-archive-20260830/` on the bench host holds the 15 retired `qB*` scripts.
 They pin `b7c6c800d` and verify the pair with `build_engine_pair.sh`, which
 checks a locally COMPILED pair -- the wrong claim for a pair assembled from
-upstream's published jars. Live scripts are `qCA` -> `qCB` -> `qCC` -> `qCD`,
-each gated on `verify_pair_c25.sh`.
+upstream's published jars. Live scripts (2026-09-11): `qDE` -> `qDH` -> `qDI` -> `qDJ` -> `qDK` -> `qDL` ->
+`qDM` -> `qDN` -> `qDO`, each gated on `verify_pair_c25.sh`; finished scripts
+live in `~/queue_archive` on mini.
 
 ## `evidence/`: tracked copies of what an upstream report cites
 
@@ -170,7 +172,8 @@ move; `results/` stays the working store.
 `results/dense_mp5_<BENCH_ENGINE_COMMIT>` only when every one of the 13 arms
 (`fp32 int8 arcsrv arcsrv_int8 milvus milvus_int8 qdrant qdrant_int8 chroma
 duckvss lancedb sqlitevec sqlitevec_int8`) has all five `mp_<arm>_b<n>.json`
-files, else `results/dense_mp5_2681`. T5, f4/f8's dense bars, the page's 10M
+files, else refuses. `dense_mp5_small_<pin>` feeds the 1M tier with
+`MP_ARMS_SMALL`. T5, f4/f8's dense bars, the page's 10M
 dense table, F4 in `fairness_check` and `provenance_check`'s FEEDS all call it,
 so they cannot disagree. qCJ writes the pinned directory through
 `runner.py --driver dense_multipass_driver.py --driver-out-dir dense_mp5_8d6af9475`;

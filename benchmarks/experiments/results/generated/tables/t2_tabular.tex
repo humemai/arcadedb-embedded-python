@@ -1,0 +1,10 @@
+\begin{tabular}{lrrrrr}
+\toprule
+System & OLTP (ops/s) & Ins.\ p99 (ms) & Q1 (ms) & Q6 (ms) & Peak anon (GiB) \\
+\midrule
+ArcadeDB (emb) & 7.5k [6.8k--7.6k] & 0.350 [0.33--0.41] & 10.2k & 767 & 13.01 [12.9--13.3] \\
+ArcadeDB (srv) & 1.4k [1.3k--1.4k] & 1.14 [1.1--1.2] & 10.3k & 777 & 13.02 [12.9--13.1] \\
+DuckDB & 267 [257--274] & 15.94 [12.3--18.6] & 15.49 & 7.23 & 1.98 [1.9--2.0] \\
+PostgreSQL & 510 [468--553] & 4.23 [3.0--8.2] & 331 & 106 & 0.098 [0.096--0.109] \\
+\bottomrule
+\end{tabular}

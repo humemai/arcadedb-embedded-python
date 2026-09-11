@@ -587,7 +587,12 @@ SOURCES = {
     "l1tpc": "benchmarks/experiments/results/runs_paper.csv",
     "e2": "benchmarks/experiments/results/runs_paper.csv",
     "l4": "benchmarks/experiments/results/runs_paper.csv",
-    "e4": "benchmarks/experiments/results/e4decomp_2681",
+    "e4": "benchmarks/experiments/results/e4decomp_" + (os.environ.get("BENCH_ENGINE_COMMIT", "").strip() or "UNPINNED"),
+    "l2olap": "benchmarks/experiments/results/runs_paper.csv",
+    "e2atom": "benchmarks/experiments/results/runs_paper.csv",
+    "lifecycle": "benchmarks/experiments/results/runs_paper.csv",
+    "docs_oltp": "benchmarks/experiments/results/runs_paper.csv",
+    "docs_olap": "benchmarks/experiments/results/runs_paper.csv",
     "pycost": "benchmarks/python-bindings/jpype_overhead/results/mini_results.csv",
     "pyb_tabular": "benchmarks/python-bindings/results/runs_paper.csv",
     "pyb_graph": "benchmarks/python-bindings/results/runs_paper.csv",
@@ -844,7 +849,7 @@ LANES = {
             "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
             "ingest+index total s is one timer around inserting the documents and building the index; the two are not timed separately (Qdrant builds its index while ingesting, so the split is not defined there). ingest+index vectors/s divides the document count by it.",
             "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
-            "Every number here is cold, the first timed pass after the index is built. Warm, the same engines run again over an index they have already read, shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. The dense table below is not like this: there ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
+            "Cold is the first timed pass after the index is built; warm is the same engine run again over an index it has already read, and gain is cold over warm. Here a second pass changes little and the order of the table is the same either way. The dense table below is not like this: there ArcadeDB gains the most on a second pass and the order depends on which pass you time.",
             "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
         ],
     },
@@ -1158,8 +1163,8 @@ def _e4_table():
         "conditions": [
             *([f"Measured at ArcadeDB {meta.get('engine_version')} on {str(meta.get('ts_utc'))[:10]}. This table has not yet been re-run at the engine commit the rest of the page reports; the re-run is queued and this line goes away with it."]
               if str(meta.get("engine_version") or "") and not str(meta.get("engine_version") or "").startswith("26.9.1") else []),
-            f"Every number is milliseconds. One released engine "
-            f"({meta.get('engine_version')}) in all three deployments, "
+            f"Every number is milliseconds. One engine build "
+            f"({_engine_identity(meta.get('engine_version'), meta.get('engine_commit'))}) in all three deployments, "
             f"{meta.get('reps')} repetitions after {meta.get('warmup')} warmup, "
             f"identical cpuset {meta.get('cpuset')}, memory cap {meta.get('mem_cap')} "
             f"and heap {meta.get('heap')}.",
@@ -1604,12 +1609,11 @@ def _l4_table(all_rows):
         "conditions": [
             # The two-arm explanation moved into the page caption, where a
             # reader meets the rows; saying it in both places said it twice.
-            "No engine takes a settle step, and that was measured rather than "
-            "assumed: sealing the write buffer makes the aggregation faster and "
-            "the last-point query slower, since the unsealed tail a scan walks "
-            "is where the newest point lives. Settling only ours would have "
-            "been a one-sided advantage."
-            + ("" if symmetric else " (Rows disagree on this; treat with care.)"),
+            "No engine settles inside the ingest timer. QuestDB's WAL apply runs after the clock stops, "
+            "and the newest-reading query is asked unbounded on every engine, so the unsealed tail a scan "
+            "walks costs the same everywhere. Sealing the write buffer makes the aggregation faster and the "
+            "last-point query slower, and settling only ours would have been a one-sided advantage."
+            + ("" if symmetric else " Rows that record a settle time did that settling after the timer stopped."),
             "One tag and three fields, not the ten and ten the TSBS cpu schema "
             "defines. The reduction is applied identically to every engine, so "
             "the comparison is internally fair, but it is not the full "
@@ -1678,7 +1682,10 @@ def _overhead_medians():
             # float(...))` created key k and then raised, leaving an empty list
             # that statistics.median refused (2026-09-07, first pinned file).
             try:
-                val = float(row[6])
+                # Column 7 is p50. Column 6 is the MEAN, and the page printed
+                # it as a median from 2026-09-07 to 2026-09-11 under a global
+                # condition that says every cell is a median (PAGE-PLAN S9).
+                val = float(row[7])
             except ValueError:
                 continue
             if row[2] != "RESULT":

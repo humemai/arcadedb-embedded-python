@@ -91,8 +91,12 @@ RESULTS = os.path.join(HERE, "results")
 # The paper source is deliberately not in this repository. Point
 # BENCH_PAPER_DIR at the directory holding paper.tex and its generated
 # tables/ and figures/ subdirectories.
-_PAPER_DIR = os.environ.get(
-    "BENCH_PAPER_DIR", os.path.join(HERE, "..", "..", "paper"))
+# 2026-09-11: the paper directory is gone (the ICDE draft was dropped; the
+# order is project page, then preprint, then a conference paper). The
+# generated tables live in the repo under results/generated, which is what
+# page_check pins against. BENCH_PAPER_DIR still overrides for a future paper.
+_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(HERE, "results", "generated"))
+os.makedirs(_PAPER_DIR, exist_ok=True)
 OUT = os.path.join(_PAPER_DIR, "tables")
 
 # Every published cell is N=5. A row outside 1..5 is a probe, not a repetition;

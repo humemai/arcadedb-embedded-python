@@ -84,9 +84,8 @@ def min_of(rows, field, **kw):
 # tables/ and figures/ subdirectories. Resolved at import but never opened
 # here, so make_paper_figures can import this module for its result-loading
 # helpers without the paper being present.
-_PAPER_DIR = os.environ.get(
-    "BENCH_PAPER_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "paper"))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(_HERE, "results", "generated"))   # see make_paper_tables
 TABLES = os.path.join(_PAPER_DIR, "tables")
 PAPER = os.path.join(_PAPER_DIR, "paper.tex")
 

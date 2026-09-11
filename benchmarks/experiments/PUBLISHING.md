@@ -8,12 +8,14 @@ humem.ai/projects/arcadedb without going wrong on the way.
 ## The command
 
 ```
-BENCH_PAPER_DIR=<dir with paper.tex> python refresh_web_page.py
+BENCH_PAPER_DIR=<dir with paper.tex> python refresh_web_page.py --page-only
 ```
 
 That is the whole routine. It regenerates the tables and figures, exports the
 page data, runs all four gates, syncs the JSON and the figures the page
-references, builds the site, and prints the diff for you to read. It does not
+references, builds the site, and prints the diff for you to read. `--page-only`
+drops `claims_check` and makes `page_check`'s paper section advisory (DECISIONS
+#58). It does not
 commit: reading the diff before publishing is the point, not an afterthought.
 
 Run it after **any** re-measure, after any change to the tables or figures,
@@ -25,27 +27,13 @@ referencing an asset that was never written).
 
 ## The one rule
 
-> **The page shows what the papers show.**
+> **Every page table is generated from frozen rows, listed in the manifest,
+> pinned by `page_check`, and links its source.**
 >
-> Adapting a presentation is fine. Inventing a result is not, or the papers
-> stop being the thing that was reviewed.
+> Adapting a presentation is fine. A cell that traces to no frozen row is not.
 
-Concretely, every table on the page should correspond to one in a paper:
-
-| Paper | Tables |
-|---|---|
-| ICDE | `t2_tabular`, `t3_graph`, `t4_sparse`, `t5_dense_ts` |
-| SciPy | `tbl-capability`, `tbl-tabular`, `tbl-graph`, `tbl-vector`, `tbl-latency`, `tbl-transport` |
-
-The page's "What Python costs" is the one deliberate adaptation: it merges
-SciPy's `tbl-latency` and `tbl-transport` into the question a reader actually
-arrives with. The numbers are unchanged. That is the line — reshaping how a
-result is presented, not producing a result nobody reviewed.
-
-Two page tables were removed on 2026-08-12 for failing this rule: an E2 table
-and an E4 table. Both experiments are real and both are in the ICDE paper, but
-as **figures plus prose**, with no table behind either. The tables had been
-built for the page alone.
+This is PAGE-SPEC.md §6. The papers draw from the page, not the reverse
+(DECISIONS #58).
 
 ## Why it is a script and not a checklist
 
@@ -79,9 +67,9 @@ warn:
 |---|---|
 | `provenance_check` | does every cell trace to a run |
 | `fairness_check` | F1–F9 comparison invariants |
-| `claims_check` | does the paper's hand-typed prose match the data |
-| `page_check.MAPPING` | do the page's table cells agree with the paper |
-| `page_check.PROSE` | do the page's hand-typed prose numbers agree with the paper |
+| `claims_check` | does the paper's hand-typed prose match the data (skipped under `--page-only`) |
+| `page_check.MAPPING` | do the page's table cells agree with the generated tables |
+| `page_check.PROSE` | do the page's hand-typed prose numbers agree with the tables and the page-derived pins |
 | `_check_no_orphan_figures` | is every generated figure cited by a `.tex` |
 | refresh step 5 | is every figure the page references a generated one |
 
@@ -103,7 +91,8 @@ the last surface with no equivalent.
 
 ## Adding a table to the page
 
-1. Confirm it exists in a paper (table above). If it does not, stop.
+1. Confirm it is generated from frozen rows and add it to `export_web.LANES` or
+   a builder; add its cells to `page_check` pins.
 2. Add it to `export_web.py` if the data is not already exported.
 3. Reference it from `arcadedb.ts`.
 4. Add its headline cells to `page_check.MAPPING`, so the page and the paper

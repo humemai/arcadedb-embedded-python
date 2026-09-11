@@ -33,9 +33,9 @@ disagreed with the note and the earlier work turned out to be right.
    experiment, distinguished by flags rather than by name.
 4. **Check which file you have.** Several lanes split one comparison across
    two files.
-5. **If it contradicts the paper, suspect yourself first.** `claims_check`
-   pins the paper's prose against the data and passes 79/79. A disagreement is
-   far more likely to be a misread field than a wrong paper.
+5. **If it contradicts the generated tables or the page, suspect yourself
+   first.** The paper prose is stale until the October rewrite (DECISIONS #58).
+   A disagreement is far more likely to be a misread field than a wrong table.
 
 ## Field traps, specifically
 
@@ -45,19 +45,12 @@ returns 12 rows, one per hour, and medians ~25.0 ms on the native path.
 plausible "aggregation" numbers. Reading the second as the first makes the
 paper appear wrong by 5.7x, and it is not.
 
-**Last-point has two variants, and only on one source.** The native probe
-records `q_last_unbounded_ms` (0.720) and `q_last_ms` (0.860, recency
-windowed). The other engines record one number as `q_last_ms`. The paper
-quotes the unbounded one because it is the faster of the two measured. Reading
-only `q_last_unbounded_ms` blanks three of four rows.
+**Last-point is one field.** Every l4 lane row records `q_last_ms` (unbounded);
+`q_last_unbounded_ms` exists only in the retired probe files.
 
-**ArcadeDB has two time-series arms, in two different files.** The native
-`TIMESERIES` type is in `results/ts_2681/nosettle_r*.json` at ~1.86M pts/s.
-The general-purpose document path is in `results/l4_tsbs.jsonl` at ~40.1k,
-alongside QuestDB and DuckDB. A table built from the second file alone shows
-our slowest arm against everyone else's best and reads as a 46x loss. The
-papers report both arms precisely so that ratio is read as what the
-specialized layout buys.
+**ArcadeDB has two time-series arms, both lane rows.** Both arms, embedded and
+served, are l4 rows in the frozen CSV (backend `arcadedb_ts_native`,
+`arcadedb_ts_doc`, and their `_server` twins); the page prints all four.
 
 **`engine_version` is deliberately null for non-ArcadeDB rows in L4.** Use
 `backend_version`. `run_conditions()` stamps `engine_version` from the
@@ -71,12 +64,8 @@ comment in that file.
 Its docstring is explicit that pooling them "would report a number the paper
 never claims". Assert the flags rather than globbing the directory.
 
-**The main lanes' `engine_version` column is not publishable.** `qdrant_dense`
-records `?`; sparse Qdrant and Milvus record only `"qdrant"` and `"milvus"`;
-`l1 arcadedb_server` records `"server:latest"` while running a pinned digest.
-The authoritative source is `runner.py`'s `BACKENDS`, which pins every
-comparator by sha256. `build_images.sh` does NOT answer this: those are client
-libraries (`qdrant-client==1.18.0`), not servers (Qdrant v1.18.2).
+**A comparator row's version and digest are read from the row** (`server_image`,
+`engine_version`); `runner.BACKENDS` describes future rows only (BUGS F32).
 
 **`host` is recorded on two lanes of seven.** Sparse and dense have it; the
 rest record the container but not the machine. Do not imply a uniform
@@ -109,14 +98,15 @@ results, tables or the page:
     BENCH_PAPER_DIR=<dir with paper.tex> python provenance_check.py   # does a cell trace to a run
     BENCH_PAPER_DIR=<...>                python fairness_check.py     # F1-F9
     BENCH_PAPER_DIR=<...>                python claims_check.py       # paper prose vs data
-    BENCH_PAPER_DIR=<...>                python page_check.py         # page vs paper
+    BENCH_PAPER_DIR=<...>                python page_check.py         # page cells vs generated tables, prose vs pins
 
-`page_check.py` is not circular even though both artifacts derive from the
-same rows: it compares the page against the paper's hand-transcribed
-constants, which is the part that can drift. It catches the `q_range_ms`
-mistake mechanically.
+`page_check.py` pins page cells to the generated tables and page prose through
+lambda pins over the exported JSON; `--page-only` reports the paper section
+(DECISIONS #58). It catches the `q_range_ms` mistake mechanically.
 
 Publishing any of this to humem.ai is one command, and PUBLISHING.md says
 which one and why it is a command rather than a checklist. The short version:
-the page shows what the papers show, `figures/` is output and the `.tex` files
-are the manifest, and copying assets by hand has no step that removes one.
+every page table and figure is generated from frozen rows, listed in the page
+manifest, pinned by `page_check`, and carries a source link to a tracked
+artifact (PAGE-SPEC §6); `figures/` is output, and copying assets by hand has no
+step that removes one.

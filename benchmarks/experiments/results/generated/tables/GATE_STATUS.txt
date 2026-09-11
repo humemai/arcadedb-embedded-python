@@ -1,0 +1,11 @@
+GATES CLEAN
+
+Tables in this directory were generated with the
+audit scripts in the state below. A failure here does not
+mean a table is wrong; it means an invariant those tables
+depend on was not holding when they were written.
+
+--- fairness_check.py (exit 0) ---
+    0 fairness invariant failure(s)
+--- provenance_check.py (exit 0) ---
+    0 BAD finding(s): 0 (NOT CHECKED) caption, 0 missing run conditions, 0 version/landmark

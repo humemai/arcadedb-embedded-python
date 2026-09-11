@@ -527,7 +527,7 @@
         "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
         "ingest+index total s is one timer around inserting the documents and building the index; the two are not timed separately (Qdrant builds its index while ingesting, so the split is not defined there). ingest+index vectors/s divides the document count by it.",
         "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
-        "Every number here is cold, the first timed pass after the index is built. Warm, the same engines run again over an index they have already read, shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. The dense table below is not like this: there ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
+        "Cold is the first timed pass after the index is built; warm is the same engine run again over an index it has already read, and gain is cold over warm. Here a second pass changes little and the order of the table is the same either way. The dense table below is not like this: there ArcadeDB gains the most on a second pass and the order depends on which pass you time.",
         "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "Cold p50 and p99 are the first timed pass after the build, median of five builds. Warm and gain come from a separate run of the same arms: one build per engine, then five more passes over a different half of the query set, so a warm number cannot be explained by the engine having already answered that exact query; gain is that run's cold over its warm. 100k has no second-pass run.",
@@ -5368,10 +5368,14 @@
         "peak memory GiB": "down",
         "disk GiB": "down"
       },
-      "source_paths": [],
-      "source_urls": [],
-      "source_path": null,
-      "source_url": null
+      "source_paths": [
+        "benchmarks/experiments/results/runs_paper.csv"
+      ],
+      "source_urls": [
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
       "id": "e2atom",
@@ -5524,10 +5528,14 @@
       "directions": {
         "torn results": "down"
       },
-      "source_paths": [],
-      "source_urls": [],
-      "source_path": null,
-      "source_url": null
+      "source_paths": [
+        "benchmarks/experiments/results/runs_paper.csv"
+      ],
+      "source_urls": [
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
       "id": "e2",
@@ -5799,7 +5807,7 @@
       "title": "Time series",
       "dataset": "TSBS cpu-only, 2,592,000 points",
       "conditions": [
-        "No engine takes a settle step, and that was measured rather than assumed: sealing the write buffer makes the aggregation faster and the last-point query slower, since the unsealed tail a scan walks is where the newest point lives. Settling only ours would have been a one-sided advantage. (Rows disagree on this; treat with care.)",
+        "No engine settles inside the ingest timer. QuestDB's WAL apply runs after the clock stops, and the newest-reading query is asked unbounded on every engine, so the unsealed tail a scan walks costs the same everywhere. Sealing the write buffer makes the aggregation faster and the last-point query slower, and settling only ours would have been a one-sided advantage. Rows that record a settle time did that settling after the timer stopped.",
         "One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark. A matched one-tag/ten-tag run prices the schema at 2.0x on ingest and 2.6x faster on last-point.",
         "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound: telling the engine to look only at the past hour made it slower, 0.860 ms against 0.720, because evaluating the time filter costs more than the scan it saves.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
@@ -9353,10 +9361,14 @@
           }
         }
       ],
-      "source_paths": [],
-      "source_urls": [],
-      "source_path": null,
-      "source_url": null,
+      "source_paths": [
+        "benchmarks/experiments/results/runs_paper.csv"
+      ],
+      "source_urls": [
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv",
       "directions": {
         "JVM start ms": "down",
         "first open ms": "down",
@@ -9375,7 +9387,7 @@
       "title": "What the client/server split costs",
       "dataset": "200,000-document projection, one engine, three deployments",
       "conditions": [
-        "Every number is milliseconds. One released engine (26.9.1.dev0) in all three deployments, 15 repetitions after 3 warmup, identical cpuset 0-11, memory cap 8g and heap 6g.",
+        "Every number is milliseconds. One engine build (arcadedb 26.9.1-dev \u00b7 8d6af9475) in all three deployments, 15 repetitions after 3 warmup, identical cpuset 0-11, memory cap 8g and heap 6g.",
         "All three deployments turn the answer into Python objects the same way, so the difference is how the database was deployed and not how we read the result.",
         "The separate container runs on the same machine, talking over the local network interface. It says what running the database beside your program costs, and says nothing about a database on another machine across a real network.",
         "The separate-process column goes slightly negative at the smaller result sizes. That is not a container being faster than an in-process server; it is the boundary term sitting below what this design can resolve, so run-to-run noise swamps it and the sign flips. Reported rather than clamped to zero, because the negative values are the evidence for the claim: at these sizes co-locating costs nothing measurable. The packing cost, in the column beside it, stays firmly positive at every size."
@@ -9657,21 +9669,21 @@
         "separate process ms": "down"
       },
       "source_paths": [
-        "benchmarks/experiments/results/e4decomp_2681"
+        "benchmarks/experiments/results/e4decomp_8d6af9475"
       ],
       "source_urls": [
-        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/e4decomp_2681"
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/e4decomp_8d6af9475"
       ],
-      "source_path": "benchmarks/experiments/results/e4decomp_2681",
-      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/e4decomp_2681"
+      "source_path": "benchmarks/experiments/results/e4decomp_8d6af9475",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/e4decomp_8d6af9475"
     },
     {
       "id": "pycost",
       "title": "What Python costs",
       "dataset": "Same engine, same query, called from Java and from Python",
       "conditions": [
-        "The engine itself runs at the same speed either way. What Python is charged for is moving results across the boundary, which is why the vector search costs 1.17x and the scan 1.74x rather than anything scaling with the work the engine did.",
-        "The path you choose inside Python matters far more than the language boundary does. Asking for record objects is 14.9x slower than asking for columns over the same query, so the practical advice is to use the columnar or batched call for anything large."
+        "The engine itself runs at the same speed either way. What Python is charged for is moving results across the boundary, which is why the vector search costs 1.04x and the scan 1.75x rather than anything scaling with the work the engine did.",
+        "The path you choose inside Python matters far more than the language boundary does. Asking for record objects is 15.1x slower than asking for columns over the same query, so the practical advice is to use the columnar or batched call for anything large."
       ],
       "columns": [
         "time ms",
@@ -9692,9 +9704,9 @@
           "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 1.658,
-              "min": 1.658,
-              "max": 1.658,
+              "median": 1.518,
+              "min": 1.518,
+              "max": 1.518,
               "n": 5
             },
             "vs Java": {
@@ -9717,15 +9729,15 @@
           "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 1.946,
-              "min": 1.946,
-              "max": 1.946,
+              "median": 1.581,
+              "min": 1.581,
+              "max": 1.581,
               "n": 5
             },
             "vs Java": {
-              "median": 1.17,
-              "min": 1.17,
-              "max": 1.17,
+              "median": 1.04,
+              "min": 1.04,
+              "max": 1.04,
               "n": 5
             }
           }
@@ -9742,9 +9754,9 @@
           "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 147.859,
-              "min": 147.859,
-              "max": 147.859,
+              "median": 145.256,
+              "min": 145.256,
+              "max": 145.256,
               "n": 5
             },
             "vs Java": {
@@ -9767,15 +9779,15 @@
           "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 257.98,
-              "min": 257.98,
-              "max": 257.98,
+              "median": 254.649,
+              "min": 254.649,
+              "max": 254.649,
               "n": 5
             },
             "vs Java": {
-              "median": 1.74,
-              "min": 1.74,
-              "max": 1.74,
+              "median": 1.75,
+              "min": 1.75,
+              "max": 1.75,
               "n": 5
             }
           }
@@ -9792,15 +9804,15 @@
           "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 386.767,
-              "min": 386.767,
-              "max": 386.767,
+              "median": 383.988,
+              "min": 383.988,
+              "max": 383.988,
               "n": 5
             },
             "vs Java": {
-              "median": 2.62,
-              "min": 2.62,
-              "max": 2.62,
+              "median": 2.64,
+              "min": 2.64,
+              "max": 2.64,
               "n": 5
             }
           }
@@ -9817,15 +9829,15 @@
           "host": "mini",
           "metrics": {
             "time ms": {
-              "median": 3853.804,
-              "min": 3853.804,
-              "max": 3853.804,
+              "median": 3856.661,
+              "min": 3856.661,
+              "max": 3856.661,
               "n": 5
             },
             "vs Java": {
-              "median": 26.06,
-              "min": 26.06,
-              "max": 26.06,
+              "median": 26.55,
+              "min": 26.55,
+              "max": 26.55,
               "n": 5
             }
           }
@@ -10152,8 +10164,12 @@
       ],
       "withheld_scales": [],
       "withheld_reason": null,
-      "source_paths": [],
-      "source_urls": [],
+      "source_paths": [
+        "benchmarks/experiments/results/runs_paper.csv"
+      ],
+      "source_urls": [
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
+      ],
       "directions": {
         "new-order p50 ms": "down",
         "new-order p99 ms": "down",
@@ -10163,8 +10179,8 @@
         "peak memory GiB": "down",
         "disk GiB": "down"
       },
-      "source_path": null,
-      "source_url": null
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     },
     {
       "id": "docs_olap",
@@ -10505,8 +10521,12 @@
       ],
       "withheld_scales": [],
       "withheld_reason": null,
-      "source_paths": [],
-      "source_urls": [],
+      "source_paths": [
+        "benchmarks/experiments/results/runs_paper.csv"
+      ],
+      "source_urls": [
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
+      ],
       "directions": {
         "Q1 p50 ms": "down",
         "Q1 p99 ms": "down",
@@ -10517,8 +10537,8 @@
         "peak memory GiB": "down",
         "disk GiB": "down"
       },
-      "source_path": null,
-      "source_url": null
+      "source_path": "benchmarks/experiments/results/runs_paper.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
     }
   ]
 }

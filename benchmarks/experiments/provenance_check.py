@@ -251,8 +251,7 @@ def caption_versions():
     exactly as trustworthy as a driver that hardcodes its own version.
     """
     paper = os.path.join(
-        os.environ.get("BENCH_PAPER_DIR",
-                       os.path.join(HERE, "..", "..", "paper")),
+        os.environ.get("BENCH_PAPER_DIR", os.path.join(HERE, "results", "generated")),
         "paper.tex")
     paper = os.path.normpath(paper)
     try:
@@ -987,8 +986,8 @@ def main():
              f"{bad - bad_caption - bad_cond} version/landmark"
              if not args.table else ""))
     if not _CAPTION_CHECK_RAN and not args.table:
-        print("  WARNING: the caption-vs-data check did not run (paper.tex "
-              "not found). Set BENCH_PAPER_DIR; this is not a pass.")
+        print("  caption-vs-data check skipped: no paper.tex (the page carries "
+              "no paper captions since 2026-09-11; BENCH_PAPER_DIR would enable it)")
     return 1 if bad else 0
 
 

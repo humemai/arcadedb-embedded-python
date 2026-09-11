@@ -15,7 +15,7 @@ publishes is what the engine reports at connect time, never the tag.
 | DuckDB | `dbbench:duckdb` (duckdb==1.5.5) | 1.5.5 | documents, time series, dense (VSS) | embedded | DataFrame / Arrow INSERT SELECT |
 | SQLite | `dbbench:client` stdlib sqlite3 | 3.50.x (image's Python) | documents, TPC, time series | embedded | executemany per transaction. Not at its defaults, by decision (#70): `PRAGMA foreign_keys=ON; journal_mode=WAL; synchronous=NORMAL`, the common production setting; the default rollback journal with synchronous=FULL fsyncs twice per commit. Disclosed in the page's durability note. |
 | LadybugDB | `ladybug==0.19.1` | 0.19.1 | graph | embedded | COPY from CSV |
-| Qdrant | `qdrant/qdrant@sha256:75eab8c4…` | v1.18.2 | dense, sparse, composed cross-model | served | upsert batches, gRPC |
+| Qdrant | `qdrant/qdrant@sha256:75eab8c4…` | v1.18.2 | dense, sparse, composed cross-model (in-process local mode, in memory, until its own re-run) | served | upsert batches, gRPC |
 | Milvus | `milvusdb/milvus@sha256:0ea40276…` (embedded etcd) | v2.6.13 | dense, sparse | served | insert batches, flush, load |
 | Elasticsearch | pinned in runner | 9.4.1 | sparse | served | bulk index, refresh, force-merge |
 | Chroma, LanceDB, sqlite-vec | `dbbench:dense` (chromadb==1.5.9, lancedb==0.37.1, sqlite-vec==0.1.9) | as pinned | dense | embedded | add() / Arrow / executemany |
@@ -41,8 +41,9 @@ Every comparator is one of two things, and the page's Mode column says which: a
 server in its own container, reached from the client container over the cell
 network; or an engine embedded in the Python client process. An engine that
 genuinely offers both gets both rows, as ArcadeDB does; SurrealDB is that case
-(Python SDK on RocksDB, and the v3.2.4 server). Qdrant's "local mode" is a
-pure-Python reimplementation rather than the engine and is not run. Servers:
+(Python SDK on SurrealKV, and the v3.2.4 server). Qdrant's local mode is not run as a
+comparator on its own; the composed stack's vector half still runs it in memory
+(PROTOCOL §7). Servers:
 PostgreSQL, pgvector, TimescaleDB, MongoDB, Neo4j, Qdrant, Milvus,
 Elasticsearch, QuestDB, SurrealDB (served). Embedded: DuckDB, SQLite, LadybugDB,
 Chroma, LanceDB, sqlite-vec, SurrealDB (SDK).
@@ -51,7 +52,7 @@ Chroma, LanceDB, sqlite-vec, SurrealDB (SDK).
 
 - OrientDB: ArcadeDB is its successor; not a live comparison.
 - Cloud-only engines (Atlas-only features, Cosmos DB): cannot run in the envelope.
-- Repurposing a relational engine as a graph store, or the reverse, outside the cross-model transaction: out of scope by decision (DECISIONS #67).
+- Repurposing a relational engine as a graph store, or the reverse, outside the cross-model transaction: out of scope by decision (DECISIONS #68).
 
 ## Smoke tests before queueing (laptop, 2026-09-11)
 

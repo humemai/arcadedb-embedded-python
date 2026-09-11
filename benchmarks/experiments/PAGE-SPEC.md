@@ -18,9 +18,6 @@ those two would refuse.
    on 6 physical P-cores; see 0a), `workers=1`, `tier=paper`. Parallel shards exist for sweeps and exploration only and may
    never reach the page. Enforced: `runner.py` refuses `workers != 1` at paper
    tier; `load_canonical` drops partial cpusets.
-   *Known violation to clear: the 30 dense `deep10m` comparator rows are
-   `tier=sweep`. They must be re-run at paper tier before the dense 10M table is
-   published again.*
 2. **N=5, median [min-max].** Five repetitions per cell. Any table with a cell
    below n=5 states its n in a condition, and no page sentence may assert an n
    that a cell it covers does not meet.
@@ -121,7 +118,7 @@ host: it compiles, it runs probes, and nothing it produces reaches the page.
 | CPU | 12th Gen Intel Core i9-12900HK | Intel Core Ultra X9 388H |
 | topology | 1 socket, 14 cores, 20 threads: 6 P-cores with SMT (12 threads) + 8 E-cores | 16 cores, 16 threads, no SMT |
 | `cpuset 0-11` | the 12 P-core threads, verified by max frequency: cpu0-11 report 4900 MHz, cpu12-19 report 3800 MHz | **NOT the P-cores here.** The kernel reports `cpu_core = 0-3`, `cpu_atom = 4-15`, and max frequency agrees: cpu0-3 at 5100-5200 MHz, cpu4-11 at 4000, cpu12-15 at 3700. `0-11` on this machine is 4 P + 8 E, mixed. Laptop probes pin `0-3`. |
-| RAM | 61 GiB | 30 GiB |
+| RAM | 64 GiB installed (61.3 GiB usable) | 30 GiB |
 | storage | Samsung SSD 980 PRO 2 TB NVMe (root, `/home`, `/var/tmp`, all bench data) | Samsung MZVL22T0HDLB 1.9 TB NVMe |
 | OS / kernel | Ubuntu 26.04 LTS, 7.0.0-30-generic | Ubuntu 26.04 LTS, 7.0.0-29-generic |
 | Docker | 29.7.2 | |
@@ -177,7 +174,9 @@ row with `version_name: null` is not publishable.
 
 ## 2. Tables
 
-Eleven today, plus five added by the current plan. Every table needs: an id, a
+Twelve on the page today (the generated block at the end of this file is the
+list). Plan tables still unbuilt: `l3s_nocompact`, `l3d_params`, `l4_tentag`,
+`pyingest`, `pysweep`, `ops_recovery/failover/start`. Every table needs: an id, a
 title, a dataset line, explicit columns, explicit rows, a source link to a
 tracked artifact, and its conditions.
 
@@ -185,10 +184,10 @@ tracked artifact, and its conditions.
 
 | id | title | rows | columns |
 |---|---|---|---|
-| `l3s` | Sparse vector search | ArcadeDB emb int8 / emb fp32 / srv int8, Elasticsearch, Milvus, Qdrant | p50, **p95**, **p99**, recall@10, build s, peak mem |
+| `l3s` | Sparse vector search | ArcadeDB emb int8 / emb fp32 / srv int8 / srv fp32, Elasticsearch, Milvus, Qdrant (pgvector queued, qDK) | cold p50, cold p99, warm p50, warm p99, gain, recall@10, ingest+index vectors/s, ingest+index total s, peak memory GiB, disk GiB |
 | `l3smp` (retired 2026-09-11, folded into `l3s` as warm columns) | Sparse: what a second pass buys | same six | cold p50, warm p50, gain, **recall@10** |
 | `l3s_nocompact` | **NEW** — what the settle step buys | ArcadeDB emb int8 with/without COMPACT | p50 at 100k / 1M / 8.84M, ratio |
-| `l3d` | Dense vector search | ArcadeDB emb fp32 / srv fp32 / emb int8 / srv int8, Chroma, DuckDB-VSS, LanceDB, Milvus (fp32, int8), Qdrant (fp32, int8), sqlite-vec (fp32, int8) | cold p50, **cold p95/p99**, warm p50, recall@10, build s |
+| `l3d` | Dense vector search | ArcadeDB emb fp32 / srv fp32 / emb int8 / srv int8, Chroma, DuckDB-VSS, LanceDB, Milvus (fp32, int8), Qdrant (fp32, int8), sqlite-vec (fp32, int8) (pgvector, Neo4j, SurrealDB embedded and server queued, qDK and qDO) | cold p50, cold p99, warm p50, warm p99, recall@10, ingest+index vectors/s, ingest+index total s, peak memory GiB, disk GiB |
 | `l3d_params` | **NEW** — matched operating points | every dense arm | ef_construction, ef_search, degree_param, degree_family, quantization, index kind |
 
 Scales: `l3s` 100k / 1M / 8.84M; `l3d` 1M / 9.99M.
@@ -199,8 +198,10 @@ brute force, not an ANN index.
 
 #### Dense build cache: what the four ArcadeDB arms run, and why served fp32 is slow (2026-09-03)
 
-Every published `l3d` ArcadeDB row runs the engine default, `graphBuildCacheSize=0`,
-which sizes the HNSW build cache as 25% of *available* heap at build start
+The single-pass campaign rows run the engine default; the page's dense table
+reads the multipass overlays, where the fp32 arms at 9.99M are pinned to the
+corpus and INT8 runs 100,000 (paragraph below). The default, `graphBuildCacheSize=0`,
+sizes the HNSW build cache as 25% of *available* heap at build start
 (`graphBuildCacheMaxHeapPercent=25`, since #6513). The cache ablation at
 `8d6af9475` (`results/ablation_cache_8d6af9475.jsonl`, 21 cells, deep10m, heap
 24g both sides) shows that one default lands the two deployments in different
@@ -216,8 +217,8 @@ places:
 At a matched capacity the served and embedded arms are within 6-10% of each
 other at every point measured, so the served/embedded build gap on the page is
 the cache sizer, not the transport. Figure:
-`.notes/papers/icde-2027/figs/deep10m_build_vs_cache.png`. Full analysis in
-`.notes/papers/icde-2027/FINDINGS-20260830.md` sections 2, 6 and 7.
+`.notes/bench/figs/deep10m_build_vs_cache.png`. Full analysis in
+`.notes/bench/FINDINGS-20260830.md` sections 2, 6 and 7.
 
 **How the page handles it.** The `l3d` table publishes the default-policy rows
 as they are, since that is what a user gets, and the caption must say that the
@@ -235,53 +236,48 @@ cache **pinned to the corpus** (`graphBuildCacheSize=9,990,000` on
 **engine default** (100,000). User decision, on time. The caption of that table
 and the page's condition line must say: "ArcadeDB fp32 build cache pinned to
 the corpus size (9,990,000); INT8 at the engine default; comparators have no
-equivalent setting; see #7146 for the default's cost." The single-pass `l3d`
-rows elsewhere on the page stay at the default and are not to be mixed with
-these in one table.
+equivalent setting; see #7146 for the default's cost." No single-pass dense row
+is on the page; the single-pass campaign rows feed the paper checks only.
 
 ### Graph
 
 | id | title | rows | columns |
 |---|---|---|---|
-| `l2` | Graph traversal | ArcadeDB emb / srv, LadybugDB, Neo4j | point p50, 1-hop p50, 2-hop p50, **2-hop p99**, **point p99**, write p50, peak mem |
-| `l2olap` | Graph analytics ± the view | ArcadeDB emb GAV / emb / srv GAV, LadybugDB, Neo4j | three query times, **view build s**, peak mem *(annotated or dropped, see §4)* |
+| `l2` | Graph OLTP | ArcadeDB emb / srv, LadybugDB, Neo4j (SurrealDB embedded and server queued, qDO) | point, 1-hop, 2-hop, and write, each p50 and p99, ingest vertices+edges/s, ingest total s, peak memory GiB, disk GiB |
+| `l2olap` | Graph analytics ± the view | ArcadeDB embedded, embedded GAV, server, server GAV, LadybugDB, Neo4j | the three queries, each p50 and p99, ingest vertices+edges/s, ingest total s, peak memory GiB, disk GiB |
 
 Scales: `l2` SF1 + SF10; `l2olap` **SF1 + SF10** (SF10-only cannot show whether
 the view's benefit scales; 20 SF1 rows are already frozen).
 
-`l2` needs p99 because the p50 headline reverses there: 2-hop SF10 is 20.28 ms
-against Neo4j's 10.10.
+`l2` carries p99 on every latency (DECISIONS #63); the 2-hop SF10 reversal that
+motivated it (20.28 vs 10.10 at b7c6c800d) is gone at 8d6af9475 (1.67 vs 4.79).
 
-### Documents and time series (the synthetic `l1`, `l1olap`, `l1tpc` blocks are retired from the page since 2026-09-11, DECISIONS #67; the paper keeps them)
+### Documents and time series (the synthetic `l1`, `l1olap`, `l1tpc` blocks are retired from the page since 2026-09-11, DECISIONS #67; the paper keeps them. TPC now renders as `docs_oltp` and `docs_olap` with PostgreSQL (tuned) beside the default arm; SQLite, MongoDB, and SurrealDB are queued)
 
 | id | title | rows | columns |
 |---|---|---|---|
 | `l1` | Tabular OLTP and OLAP | ArcadeDB emb / srv, DuckDB, PostgreSQL | read p50, insert p50, **update p50**, OLTP ops/s, **ingest rows/s**, OLAP total, peak mem |
 | `l1olap` | **NEW** — OLAP breakdown | same four | the five analytical queries, one column each |
 | `l1tpc` | TPC-H / TPC-C | same four | Q1, Q6, new-order p50, OLTP ops/s, peak mem |
-| `l4` | Time series | ArcadeDB native TS / doc path, QuestDB, DuckDB | ingest pts/s, newest reading, 12h aggregate |
+| `l4` | Time series | ArcadeDB embedded and server, each native time series and document path, DuckDB, QuestDB (SQLite, MongoDB, and TimescaleDB queued, qDI, qDJ, qDM) | newest reading p50 and p99, 12h aggregate p50 and p99, ingest points/s, ingest total s, peak memory GiB, disk GiB |
 | `l4_tentag` | **NEW** — schema fidelity | same four | one-tag vs ten-tag, ratios only |
 
 `l1` must publish ingest rate beside OLTP ops/s: publishing the win without the
 loss is selective. `l1olap` turns one unexplained 70,807 ms cell into a
 structural row-store-vs-column-store story.
 
-`l4` is BLOCKED until QuestDB's WAL-apply poll moves outside its timed ingest
-region (see §5).
-
 ### Cross-model, deployment, embedded
 
 | id | title | rows | columns |
 |---|---|---|---|
-| `e2` | Cross-model transaction | ArcadeDB, Qdrant+Neo4j, SurrealDB | p50, p99, peak mem, **CPU s** |
-| `e2_atomicity` | **NEW** — what survives a crash | same three | trials, crash raised, torn count, disagreeing products |
-| `e4` | What the client/server split costs | 1 … 100,000 rows | in-process, in-process HTTP, separate container, packing cost, separate process, **p95/p99** |
+| `e2` | Cross-model transaction | ArcadeDB embedded and server, Qdrant + Neo4j, SurrealDB embedded (PG+pgvector+AGE, Neo4j vector index, and SurrealDB server queued, qDN) | p50 ms, p99 ms, CPU s, ingest+index vertices+edges/s, ingest+index total s, peak memory GiB, disk GiB |
+| `e2atom` | what survives a crash | same as `e2` | trials, crashes raised, torn results |
+| `e4` | What the client/server split costs | 1 … 100,000 rows | in-process, in-process HTTP, separate container, packing cost, separate process |
 | `pycost` | What Python costs | Java, Python, to_columns, to_json_list, to_list | **p50** (not mean), vs Java |
 | `pyingest` | **NEW** — the write side | serial SQL, async parallel, insert_many, insert_many parallel | rows/s |
 | `pysweep` | **NEW** — where the tax comes from | one-column vs group-by | ratio at 1k / 10k / 100k |
 
-`e2_atomicity` is the page's strongest claim and currently the only major one
-with no table: 40/40 torn for the composed stack against 0/40 for ArcadeDB and
+`e2atom` is the page's strongest claim: 40/40 torn for the composed stack against 0/40 for ArcadeDB and
 SurrealDB, and 235 of 1,500 products left disagreeing.
 
 `pycost` currently prints column 6 of `mini_results.csv`, which is the **mean**;
@@ -292,19 +288,19 @@ a p50.
 
 | id | title | rows | columns |
 |---|---|---|---|
-| `lifecycle` | **NEW** — session cost, open to close | empty, doc, doc_idx{1,10,30}, hash, fulltext, geo, sparse, ts, graph, graph_gav, vector, vector2, mixed | cold-start decomposition (4 columns, below), then per scenario: open ms, **action ms**, close ms, **session ms**, at 10k / 100k / 1M / 10M |
-| `ops_build` | **NEW** — load and build cost | every engine, every lane | build s, rows/s |
+| `lifecycle` | session cost, open to close | doc, doc_idx10, empty, graph, sparse, ts, vector, each embedded and server; 10k, 100k, 1M, and 10M for doc, ts, and vector (graph_gav withheld) | JVM start ms, first open ms, cold process ms, clean, read, write, write_own, and write_own_read session ms, peak memory GiB, disk GiB |
+| `ops_build` | load and build cost | realised as columns (the ingest pair, the disk column); see the addenda | ingest rate, ingest total s |
 | `ops_recovery` | **NEW** — crash recovery | ArcadeDB, 2 WAL settings | trials, contiguous, duplicates, recovery s |
 | `ops_failover` | **NEW** — Raft failover | 3-node ArcadeDB | trials, acked writes present, ambiguous, election s, failover s |
 | `ops_start` | **NEW** — cold start | ArcadeDB emb / srv, LadybugDB, Qdrant, sqlite-vec | create+DDL s, reopen ms, connect s |
-| `ops_disk` | **NEW** — on-disk footprint | every engine, every lane | bytes after the engine's own settle step (see §4a) |
+| `ops_disk` | on-disk footprint | realised as columns (the ingest pair, the disk column); see the addenda | disk GiB |
 
 `lifecycle` is both a page table and a regression gate — see §4.
 
 **Status 2026-08-25: the lane has produced its first paper-candidate sweep.**
 107 cells on mini through the wheel at engine pin `5010b306c9`, eight situations
 across 10k / 100k / 1M and four across 10M. Full matrix in
-`.notes/papers/icde-2027/lifecycle-open-close.md`, section "2026-08-25". The
+`.notes/bench/lifecycle-open-close.md`, section "2026-08-25". The
 headline shape: everything is flat across a 1000x range except the vector index,
 which is the only situation that scales in BOTH directions — 1,378.8 ms to open
 at 10M ([#6722](https://github.com/ArcadeData/arcadedb/issues/6722)) and
@@ -327,6 +323,8 @@ the close. See `lifecycle-open-close.md`, section "2026-08-25 evening".
 n=3 for its cheap columns. Everything at 1M and below is n=3 or n=5.
 `ops_disk` needs `runner.container_disk` wired; it is implemented and carried by
 zero frozen rows.
+
+> **2026-09-11 currency note:** superseded 2026-09-07: disk GiB is on every page table.
 
 **The seven scenarios, because "open and close cost" was too few questions.**
 A database is not only opened and closed; it is built, read, written to, and
@@ -374,13 +372,13 @@ Six maximum. A figure per table is a gallery, not an argument.
 
 | stem | status | contents |
 |---|---|---|
-| `f4_one_vs_n` | published, needs fix | ArcadeDB vs best specialist at equal recall, log ratio. MUST include the two worst rows (graph analytics 0.11x, tabular OLAP 0.0015x) or stop calling itself the whole evaluation. |
+| `f4_one_vs_n` | published | ArcadeDB vs best specialist at equal recall, log ratio. Exhaustive two-panel per DECISIONS #64, synthetic document rows dropped per #67. |
 | `f7_e2_hybrid` | published | cross-model transaction latency |
 | `f8_deployment` | published | embedded vs server across result sizes |
 | `f3_sparse_perquery` | blocked on data | per-query latency vs summed posting length, Spearman 0.95. `engine_commit` now lands (2026-08-25, 1,000 rows at `5010b306c9`, checked by reading the rows back rather than trusting rc=0). Re-running once at the new pin so the figure and the lifecycle table describe the same engine. |
-| `f6_memory_ceiling` | BLOCKED | peak anon at DEEP-10M. Draws NO ArcadeDB bar today. Needs ArcadeDB `peak_anon_mib_sum` at deep10m AND comparators re-run at matched envelope. |
-| `f9_build_cost` | **NEW** | build seconds per engine per lane, log scale. The largest ArcadeDB deficit on the page and currently only trailing columns. |
-| `f10_lifecycle` | **NEW, candidate** | close ms vs rows, per situation, log-log. Only if `lifecycle` shows the O(stored) shape after the current fixes; if close is flat everywhere the table suffices. |
+| `f6_memory_ceiling` | published (ArcadeDB bars at the 24g heap; comparators cleared 2026-09-03) | peak anon at DEEP-10M. |
+| `f9_build_cost` | **NEW** (unbuilt as of 2026-09-11) | build seconds per engine per lane, log scale. The largest ArcadeDB deficit on the page and currently only trailing columns. |
+| `f10_lifecycle` | **NEW, candidate** (unbuilt as of 2026-09-11) | close ms vs rows, per situation, log-log. Only if `lifecycle` shows the O(stored) shape after the current fixes; if close is flat everywhere the table suffices. |
 
 Deleted and NOT to be resurrected: `f5_sparse_scaling` — it captioned a real
 8.84M measurement as a synthetic corpus.
@@ -402,7 +400,7 @@ sit under the ~100 ms at which a script stops feeling instant.
 
 **"Getting started" is two numbers, not one**, and older notes quoting a single
 ~160 ms conflated them (that figure is also unsourced and was not taken on mini;
-see the annotation in `.notes/papers/icde-2027/lifecycle-open-close.md`).
+see the annotation in `.notes/bench/lifecycle-open-close.md`).
 Measured 2026-08-24 on an idle laptop, `26.9.1.dev0`, n=5:
 
 | path | to its first engine call |
@@ -442,8 +440,9 @@ Two optional accelerators did not.
 **Fixed since the last matrix ran, and therefore unmeasured:** #5747 (our PR
 #5787), #6489 (our PR #6490), #6503 (Luca's #6513), #6518. The q75 matrix ran on
 `26.8.1.dev23` and its `vector` clean close reads **8,223 ms** at 100k and
-**34,504 ms** at 1M. Re-running it on the frozen commit is a before/after of our
-own fixes and the first honest answer to "what does it cost to close".
+**34,504 ms** at 1M.
+
+> **2026-09-11 currency note:** SUPERSEDED 2026-09-03: measured at 8d6af9475, the page's lifecycle table.
 
 **Still open and worth pursuing** (each is a candidate upstream issue, not a
 caveat to write around):
@@ -488,7 +487,8 @@ caveat to write around):
   upstream and neither belongs on the page as an open defect.
   What remains, and what the page should carry instead: a session that writes and
   then searches still pays the rebuild, 128,543 ms at 1M, and the identical work
-  costs 2,032 ms if the session did not write. Being root-caused before filing.
+  costs 2,032 ms if the session did not write. Filed as #7183, fixed upstream in
+  #7191 for 26.10.1; the October re-pin re-measures it.
 - Cold open is now measurable: `pagecache.evict()` drops a database's files with
   `posix_fadvise(DONTNEED)` and verifies with `mincore` that they left. No root,
   and it evicts only the named files, so the rest of the host stays warm and the
@@ -544,7 +544,8 @@ already scheduled and nothing schedules one. That item would have shipped as
 "ArcadeDB now takes its settle step" while doing nothing at all.
 
 So land it deliberately, before the full multi-lane campaign, never between
-reps of a running one. Disk is not a published column today, and measuring it
+reps of a running one. Disk is a published post-run column (addendum
+2026-09-07); the build-point reading is the October target, and measuring it
 at a slightly wrong point costs far less than breaking every cell.
 
 ## 4b. GAV is measured with the view ON and OFF, everywhere
@@ -555,15 +556,12 @@ cell runs BOTH arms:
 
     {embedded, server} x {SF1, SF10} x {BENCH_GAV=1, BENCH_GAV=0}   = 8 cells
 
-Frozen data covers **one** of those eight (embedded SF10, `gav=False`). The view's
+All eight cells are frozen at 8d6af9475 and `l2olap` shows them. The view's
 build cost is charged to the arm that builds it, and published as a column.
 
 Labelling: `l2_graph.main()` stamps `out["gav"]` as a real boolean and sets
-`backend_arm="nogav"` for the off arm, which is correct. But every GAV-ON row in
-the frozen set carries `gav=''` because it predates that stamping, and `''` is
-also what every non-graph lane carries — so an empty string means both "view on"
-and "view irrelevant here". The next campaign fixes this by construction; until
-then the two arms are told apart by an absence.
+`backend_arm="nogav"` for the off arm, which is correct. Fixed: every frozen
+graph OLAP row stamps a real boolean.
 
 `BENCH_GAV` is in the runner's env allowlist. It was once missing, which would
 have built the view anyway and written rows labelled as the ablation, rc=0,
@@ -573,18 +571,19 @@ indistinguishable from a real one.
 2026-08-21 on a 100k-vertex, 400k-edge synthetic graph at engine `3ec4f07e0`:
 an openCypher two-hop count (`MATCH (a:P)-[:E]->(b:P)-[:E]->(c:P) RETURN
 count(*)`) is **7% SLOWER** with the view than without, stable across session
-lengths 1, 2, 3 and 5 (1.08x, 1.06x, 1.07x, 1.07x). The published 5.9x speedup
+lengths 1, 2, 3 and 5 (1.08x, 1.06x, 1.07x, 1.07x). The published speedup, the pinned top-degree ratio (6.9x at 8d6af9475),
 comes from the lane's property-aggregation queries over neighbourhoods, which
 is a different access pattern. So the view's benefit is query-shape dependent,
 and a probe that substitutes a convenient query measures nothing about the
 view the page publishes.
 
-What the same measurement DOES establish, and what belongs beside the 5.9x: the
+What the same measurement DOES establish, and what belongs beside the pinned top-degree ratio (6.9x at 8d6af9475): the
 view's fixed cost per session is real and large. A session that opens and closes
 without querying at all costs **414.6 ms with the view against 11.5 ms without,
 36x**, because the CSR is rebuilt by a full graph scan on every open
 (`CSRBuilder: 100000 nodes, 400000 edges, 4.2 MB, 384-622 ms` on every open).
-The 5.9x is a within-session property that each open re-pays.
+The pinned top-degree ratio (6.9x at 8d6af9475) is a within-session property
+that each open re-pays.
 
 ---
 
@@ -647,9 +646,7 @@ unbounded whole-graph 2-hop, so 16,087 ms at 1M measures the query written, not
 the view. Rule 7 half-applied. It needs a bounded seed set AND a per-cycle
 assertion that the view was used.
 
-**Still blocking the page, all ours:** `export_web.py` has no lifecycle table, so
-104 clean rows have nowhere to render; `n_docs`; `graph_gav`; then `l2` and the
-dense campaign.
+**Still withheld:** lifecycle `graph_gav` (`export_web` LIFECYCLE_WITHHELD).
 
 ---
 
@@ -659,12 +656,12 @@ dense campaign.
 |---|---|---|
 | ~~`l3s` medium, Milvus + Qdrant~~ | ~~pools two corpora~~ | **CLEARED 2026-08-21**: `PAPER_CORPUS` in `load_canonical` admits only the corpus each tier publishes, fingerprinted on `(n_docs, dims)`. Rows still need re-publishing |
 | ~~`l3d` deep10m, all comparators~~ | ~~`tier=sweep`, envelope 28g/16g, `version_name: null`~~ | **CLEARED 2026-09-03**: 5 clean paper-tier rows per comparator at the matched 36g/24g envelope in `runs_page_8d6af9475.jsonl` (Milvus re-measured after `df807f112`, the rest carried forward from `b7c6c800d`) |
-| `f6_memory_ceiling` | draws no ArcadeDB bar | ArcadeDB deep10m memory rows exist |
-| `l4` ratios | QuestDB's WAL-apply poll was inside its timed ingest. **Code fixed 2026-08-22** (`QuestTS.settle()` runs outside the timer); the published rows still carry the old timing | **Lane ran clean 2026-08-25, 20 rows 0 errors, all four arms — and every row carries `engine_commit=None`, so none may be published.** Re-run at the new pin in qAA |
-| `l4` ArcadeDB native TIMESERIES row | comes from `l4_native_probe.py`, a BESPOKE PROBE, not the lane script, and runs two opt-in fast paths (`TS_PRIMITIVE=1`, `TS_NUMPY=1`) that no comparator gets. FAIRNESS F6b is precisely "bespoke drivers investigate, lane scripts publish". The 1.86M pts/s headline is a probe number sitting in a table of lane numbers | the native arm is promoted into `l4_tsbs.py` as a fourth backend and re-run, or the row is withdrawn |
+| ~~`f6_memory_ceiling`~~ | ~~draws no ArcadeDB bar~~ | **CLEARED 2026-09-03**: ArcadeDB deep10m memory rows exist and the figure draws them |
+| ~~`l4` ratios~~ | ~~QuestDB's WAL-apply poll was inside its timed ingest. Code fixed 2026-08-22 (`QuestTS.settle()` runs outside the timer); the published rows still carried the old timing~~ | **CLEARED 2026-09-03**: re-run at the pin, every row stamped |
+| ~~`l4` ArcadeDB native TIMESERIES row~~ | ~~came from `l4_native_probe.py`, a bespoke probe, not the lane script, and ran two opt-in fast paths (`TS_PRIMITIVE=1`, `TS_NUMPY=1`) that no comparator got~~ | **CLEARED 2026-09-08**: lane row through `_l4_canonical` |
 | any peak-memory comparison across ArcadeDB variants | `-Xms=-Xmx` commits the heap, so the column measures reservation, not demand | never — state it beside every such column |
-| `postgres_tuned` | has never run: 0 rows, display name only | it runs |
-| `hosts_recorded` | 100 container IDs annotated "(host unknown)"; a row records a container id, not a host | do not render it. Publish the 0a machine block instead, which is read from `lscpu`/`lsblk` rather than derived from a row |
+| ~~`postgres_tuned`~~ | ~~has never run: 0 rows, display name only~~ | **CLEARED**: 20 rows; "PostgreSQL (tuned)" on `docs_oltp` and `docs_olap` |
+| `hosts_recorded` | 382 container IDs (payload `setup.hosts`) annotated "(host unknown)"; a row records a container id, not a host | do not render it. Publish the 0a machine block instead, which is read from `lscpu`/`lsblk` rather than derived from a row |
 
 ---
 
@@ -676,32 +673,32 @@ Ordered by whether a published cell depends on it.
 
 | measurement | cost | why |
 |---|---|---|
-| l4 re-run with the corrected ingest timer | ~2 h | the code is fixed; the rows are not |
-| native TIMESERIES promoted to the lane, then re-run | ~4 h | a probe number cannot sit in a lane table (F6b) |
-| dense comparators at deep10m, paper tier, matched envelope, pinned versions | ~2-3 d | three independent disqualifiers on the current rows |
+| DONE 2026-09-03: l4 re-run with the corrected ingest timer | ~2 h | the code is fixed; the rows are not |
+| DONE 2026-09-08: native TIMESERIES promoted to the lane, then re-run | ~4 h | a probe number cannot sit in a lane table (F6b) |
+| DONE 2026-09-03: dense comparators at deep10m, paper tier, matched envelope, pinned versions | ~2-3 d | three independent disqualifiers on the current rows |
 | `f3` sparse per-query re-run with `engine_commit` stamped | ~4 h | unblocks the best unbuilt figure |
 
 **New tables the page does not have yet:**
 
 | measurement | cost | status |
 |---|---|---|
-| lifecycle: cold/warm open, close x3 modes, 8 situations, 2 sizes | ~3 h | lane BUILT and smoke-tested; needs a campaign run on the frozen pair |
-| on-disk footprint | free | lands automatically now; qO rows already carry `disk_data_mb` |
+| DONE (published): lifecycle: cold/warm open, close x3 modes, 8 situations, 2 sizes | ~3 h | lane BUILT and smoke-tested; needs a campaign run on the frozen pair |
+| DONE (published): on-disk footprint | free | lands automatically now; qO rows already carry `disk_data_mb` |
 | crash recovery, Raft failover, cold start | free | measured, never published |
 | **import / export** | ~1 d, lane to build | **The largest blind spot on the page.** Nothing here measures `IMPORT DATABASE` / `EXPORT DATABASE` or backup+restore, and for an embedded engine those are lifecycle operations a user hits as often as open and close. Examples 15 and 16 already contrast import-database against transactional ingest, so the shape exists; it is not a lane and produces no rows. GATED, though: upstream #6471 (JSONL export silently skips un-serializable records with no aggregate error) and #6460 (JSONL import does not remap LINK-typed values, fix in flight as #6654) are open CORRECTNESS bugs. Benchmarking a path that silently drops records would produce a throughput number for the wrong work. Build the lane, but publish only once those two land |
-| load and build cost table | free | in frozen rows already |
-| atomicity table (torn counts) | free | in frozen rows already |
-| ingest A/B, jpype size sweep, nocompact ablation, l2olap SF1 | free | in frozen rows already |
+| DONE (published as the ingest pair): load and build cost table | free | in frozen rows already |
+| DONE (published as `e2atom`): atomicity table (torn counts) | free | in frozen rows already |
+| DONE (`l2olap` SF1 published): ingest A/B, jpype size sweep, nocompact ablation, l2olap SF1 | free | in frozen rows already |
 
 **Ablations, worth running but blocking nothing:**
 
 | measurement | cost | why |
 |---|---|---|
 | ~~`graphBuildCacheMaxHeapPercent` sweep~~ | done | **ANSWERED 2026-08-23.** 25% is the right default and the page can now say so with evidence instead of publishing it as "whatever the engine does". At deep10m: 10% costs **10,786 s** against 25%'s **2,274 s**, a 4.7x penalty, while 40% and 60% are slightly WORSE than 25% (2,421 and 2,423) because the extra cache takes heap the build needs. Query p50 and recall are flat throughout (7.4-8.4 ms, 0.952-0.955), so the knob touches build only. NOTE the staging lesson: the same sweep at `small` looked FLAT across all four percentages, because auto-sizing granted the whole 1,000,000-vector corpus at every one of them. A tier that cannot exercise a knob reports a plateau that says nothing. |
-| ~~GAV on/off at the missing 7 of 8 cells~~ | done | **MEASURED 2026-08-23**, all 8 cells at N=5. The view is worth 2.50x to 6.55x at SF10 depending on the query and 1.50x to 3.70x at SF1, so the benefit GROWS with the graph and the single "5.9x" the page prints is one query's number out of a range. View build is 2.06 s at SF10 against 1,771 ms saved per pass of the three queries, so it amortises in about one pass. |
+| ~~GAV on/off at the missing 7 of 8 cells~~ | done | **MEASURED 2026-08-23**, all 8 cells at N=5. The view is worth 2.50x to 6.55x at SF10 depending on the query and 1.50x to 3.70x at SF1, so the benefit GROWS with the graph and the single pinned top-degree ratio (6.9x at 8d6af9475) the page prints is one query's number out of a range. View build is 2.06 s at SF10 against 1,771 ms saved per pass of the three queries, so it amortises in about one pass. |
 | int8 disk overhead (#3143 revisit) | ~1 h | our own issue, closed COMPLETED in May, yet int8 measures 13% MORE disk than fp32 at deep10m (8773.8 vs 7744.6 MB) |
-| pgvector arm | ~2-3 d | the most conspicuous absence |
-| single-engine E2 alternative (Neo4j native vector index) | ~2-3 d | tests the "any other pair" claim |
+| pgvector arm | adapters landed 2026-09-11, queued qDK / qDN | the most conspicuous absence |
+| single-engine E2 alternative (Neo4j native vector index) | adapters landed 2026-09-11, queued qDK / qDN | tests the "any other pair" claim |
 
 **Deliberately not measured:** concurrency. It needs a non-Python load generator,
 our own harness is censored above ~4 clients by GIL queueing, and a bad
@@ -758,7 +755,9 @@ Amends §2 (tables), §4a (disk) and the arm lists above. DECISIONS #58, #60, #6
 
 **Tables now on the page (13):** `l3s`, `l3smp`, `l3d`, `l2`, `l2olap`, `l1`, `l1olap` (NEW: the five analytical queries, one column each), `l1tpc`, `l4`, `e2`, `e2atom` (NEW: trials, crashes raised, torn results), `lifecycle`, `e4`, `pycost`. `l3d_params` waits on a renderer for text cells; `l3s_nocompact`, `l4_tentag`, `pyingest`, `pysweep`, `ops_build/recovery/failover/start` are still unbuilt.
 
-**Columns added from fields the rows already carried:** `p95`/`p99` (l3s), `cold p99` (l3d), `point p99` and `2-hop p99` (l2), `view build s` (l2olap, absent on rows without the view), `update p50` and `ingest rows/s` (l1), `CPU s` (e2), `peak memory GiB` on the multipass-fed tables (from the campaign cell of the same arm; the served arm's multipass file sees only the client container), and **`disk GiB` on every table that has it**.
+> **2026-09-11 currency note:** SUPERSEDED 2026-09-11 by the generated block below (12 tables; `l3smp`, `l1`, `l1olap`, `l1tpc` retired).
+
+**Columns added from fields the rows already carried:** `p95`/`p99` (l3s; p95 removed 2026-09-10), `cold p99` (l3d), `point p99` and `2-hop p99` (l2), `view build s` (l2olap, absent on rows without the view), `update p50` and `ingest rows/s` (l1), `CPU s` (e2), `peak memory GiB` on the multipass-fed tables (from the campaign cell of the same arm; the served arm's multipass file sees only the client container), and **`disk GiB` on every table that has it**.
 
 **`ops_disk` is realised as a column, not a table.** `disk_data_mb` = the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is a post-run reading, not the build-point reading §4a asks for, and every table that prints it says so in its conditions. Blank where the engine's containers were not sampled (Milvus's sparse stack) or the row predates the wiring (dense comparators at 1M). §4a's stricter protocol stays the October target.
 
@@ -774,7 +773,7 @@ The 8d6af9475 page was complete by rows and had blank cells. The rules that came
 
 - **One row order, one column pass.** `export_web._finish_table()` runs last over every table: tier, ArcadeDB first, then comparators alphabetically; embedded before server; int8 before fp32; stable inside a group. Every metric a row carries becomes a column, peak memory and disk last. A builder owns its numbers, not its layout.
 - **p50 and p99 on every latency column**, cold and warm where a second pass exists. Transactional lanes had the samples already; the analytical lanes (graph OLAP, document OLAP, TPC-H Q1/Q6, time-series queries) now run 100 iterations per query per rep and record `*_p50_ms` and `*_p99_ms` beside the mean/median fields they always had (DECISIONS #63). p95 is not shown anywhere.
-- **Disk on every table.** A blank disk cell is a row measured before the instrument (2026-08-14) or an engine with no disk at all; the E2 spec's `in_memory` names the latter and the note under the table says so. Neo4j runs with `NEO4J_db_tx__log_preallocate=false` and a 5 s checkpoint, because the delta-of-allocated-blocks reading is blind to preallocated files (BUGS F27).
+- **Disk on every table.** A blank disk cell is a row measured before the instrument (2026-08-14) or an engine with no disk at all; the E2 spec's `in_memory` names the latter and the note under the table says so. Neo4j runs with a 5 s checkpoint interval only; its disk value includes the preallocated 256 MiB log files and DISK_NOTE says so (BUGS F27).
 - **Both dense sizes read one protocol.** `_dense_overlay_entries(scale)` reads `dense_mp5_<pin>` for 10M and `dense_mp5_small_<pin>` for 1M; a partial directory refuses.
 - **Rendering.** Integers print as integers (0, not 0.00; 40, not 40.0); values below 0.1 print with two significant digits; a missing value is a dash.
 - **Vocabulary.** Documents, not tables; one word per concept (Python package, embedded/server, comparator, size, cold/warm, trial). The page never says tabular or relational.
@@ -794,9 +793,9 @@ Every table carries a Size column and direction arrows; ingest is a pair of colu
 | `l2olap` | Graph OLAP, with and without the Graph Analytical View | ArcadeDB (embedded), ArcadeDB (embedded, GAV), ArcadeDB (server), ArcadeDB (server, GAV), LadybugDB, Neo4j | SF1 (11k people), SF10 (73k people) | ingest vertices+edges/s, ingest total s, average friend age p50 ms, average friend age p99 ms, friends in same city p50 ms, friends in same city p99 ms, most friends p50 ms, most friends p99 ms, peak memory GiB, disk GiB |
 | `e2atom` | Cross-model transaction: what survives a crash | ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) | 50k products | trials, crashes raised, torn results |
 | `e2` | Cross-model transaction | ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) | 50k products | p50 ms, p99 ms, CPU s, ingest+index vertices+edges/s, ingest+index total s, peak memory GiB, disk GiB |
-| `l4` | Time series | DuckDB, QuestDB, arcadedb (document path), arcadedb (native TIMESERIES), arcadedb (server, document path), arcadedb (server, native TIMESERIES) | 2.59M points | ingest points/s, ingest total s, newest reading p50 ms, newest reading p99 ms, 12h aggregate p50 ms, 12h aggregate p99 ms, peak memory GiB, disk GiB |
-| `lifecycle` | Session cost, open to close | doc, doc (server), doc_idx10, doc_idx10 (server), empty, empty (server), graph, graph (server), sparse, sparse (server), ts, ts (server), vector, vector (server) | 100k, 10M, 10k, 1M | JVM start ms, first open ms, cold process ms, clean session ms, read session ms, write session ms, write_own session ms, write_own_read session ms, peak memory GiB, disk GiB |
-| `e4` | What the client/server split costs | 1 documents, 1,000 documents, 10 documents, 10,000 documents, 100 documents, 100,000 documents | 1, 1,000, 10, 10,000, 100, 100,000 | in-process ms, in-process server, HTTP ms, separate container, HTTP ms, packing cost ms, separate process ms |
+| `l4` | Time series | ArcadeDB (embedded, document path), ArcadeDB (embedded, native time series), ArcadeDB (server, document path), ArcadeDB (server, native time series), DuckDB, QuestDB | 2.59M points | ingest points/s, ingest total s, newest reading p50 ms, newest reading p99 ms, 12h aggregate p50 ms, 12h aggregate p99 ms, peak memory GiB, disk GiB |
+| `lifecycle` | Session cost, open to close | doc, doc (server), doc_idx10, doc_idx10 (server), empty, empty (server), graph, graph (server), sparse, sparse (server), ts, ts (server), vector, vector (server) | 10k, 100k, 1M, 10M | JVM start ms, first open ms, cold process ms, clean session ms, read session ms, write session ms, write_own session ms, write_own_read session ms, peak memory GiB, disk GiB |
+| `e4` | What the client/server split costs | 1 documents, 1,000 documents, 10 documents, 10,000 documents, 100 documents, 100,000 documents | 1, 10, 100, 1,000, 10,000, 100,000 | in-process ms, in-process server, HTTP ms, separate container, HTTP ms, packing cost ms, separate process ms |
 | `pycost` | What Python costs | Java, in process, Python, Python, to_columns, Python, to_json_list, Python, to_list | 100k-document scan, vector search | time ms, vs Java |
 | `docs_oltp` | Document OLTP | ArcadeDB (embedded), ArcadeDB (server), DuckDB, PostgreSQL, PostgreSQL (tuned) | TPC-H SF1 (6.0M line items) | new-order p50 ms, new-order p99 ms, OLTP ops/s, ingest documents/s, ingest total s, peak memory GiB, disk GiB |
 | `docs_olap` | Document OLAP | ArcadeDB (embedded), ArcadeDB (server), DuckDB, PostgreSQL, PostgreSQL (tuned) | TPC-H SF1 (6.0M line items) | Q1 p50 ms, Q1 p99 ms, Q6 p50 ms, Q6 p99 ms, ingest documents/s, ingest total s, peak memory GiB, disk GiB |
