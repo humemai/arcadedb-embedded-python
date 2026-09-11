@@ -1431,6 +1431,20 @@ LIFECYCLE_SCENARIOS = [
     ("write_own", "reopen, commit into the structure's OWN data, close"),
     ("write_own_read", "write then read in one session"),
 ]
+# Reader-facing names for the page (2026-09-11): the harness keys above stay
+# in the rows and the source CSV, the page says what the session did.
+LIFECYCLE_SCENARIO_LABELS = {
+    "clean": "open and close ms",
+    "read": "one query ms",
+    "write": "one write ms",
+    "write_own": "write into the structure ms",
+    "write_own_read": "write, then query ms",
+}
+LIFECYCLE_SITUATION_LABELS = {
+    "empty": "Empty database", "doc": "Documents", "doc_idx10": "Documents, ten indexes",
+    "graph": "Graph", "graph_gav": "Graph with the analytical view", "vector": "Dense vectors",
+    "sparse": "Sparse vectors", "ts": "Time series",
+}
 
 # Situations whose probe is not yet trustworthy. graph_gav's read reaches the
 # view now (it is issued in cypher; SQL cannot reach a Graph Analytical View at
@@ -1484,8 +1498,9 @@ def _lifecycle_table(all_rows):
     for (situation, scale, _srv), rs in sorted(by.items()):
         if situation in LIFECYCLE_WITHHELD:
             continue
+        _name = LIFECYCLE_SITUATION_LABELS.get(situation, situation)
         entry = {
-            "backend": f"{situation} (server)" if _srv else situation,
+            "backend": f"{_name} (server)" if _srv else f"{_name} (embedded)",
             "is_arcadedb": True,
             "scale": scale,
             "scale_label": scale_label("lifecycle", scale),
@@ -1511,11 +1526,18 @@ def _lifecycle_table(all_rows):
         for key, _desc in LIFECYCLE_SCENARIOS:
             got = _agg(rs, f"{key}_session_ms")
             if got is not None:
-                entry["metrics"][f"{key} session ms"] = got
+                entry["metrics"][LIFECYCLE_SCENARIO_LABELS[key]] = got
         # The rows carried peak memory and disk from the start; the page
-        # never read them here (2026-09-10).
+        # never read them here (2026-09-10). Disk is SERVER ROWS ONLY: the
+        # embedded database lives on a host bind mount (/lcdb) so its page
+        # cache can be evicted for the cold columns, and the disk reading
+        # (writable layer plus volumes) does not see a bind mount. Every
+        # embedded row read 0.0 GiB beside a 5.6 GiB server twin at 10M
+        # (2026-09-11); a blind spot is a blank, not a zero.
         for field, label in (("peak_anon_mib_sum", "peak memory GiB"),
                              ("disk_data_mb", "disk GiB")):
+            if label == "disk GiB" and not _srv:
+                continue
             got = _agg(rs, field)
             if got is not None:
                 entry["metrics"][label] = got
@@ -1538,12 +1560,16 @@ def _lifecycle_table(all_rows):
             _lc_vector_note(rows),
             "A clean close should be O(what was written), not O(what is stored): "
             "write nothing and closing should cost the same at 10k documents and 10M.",
-            "Server rows have no JVM start, first open or cold process: the server is "
+            "Server rows have no JVM start, first open, or cold process: the server is "
             "already running when the probe connects, so those three columns describe "
             "the embedded process only. The session columns are measured for both.",
-        ] + [f"`{k}` is withheld: {v}" for k, v in sorted(LIFECYCLE_WITHHELD.items())],
+            "Disk is shown for server rows only. The embedded database sits on a host "
+            "bind mount so its page cache can be evicted before the cold columns, and "
+            "the disk reading does not see a bind mount; the server twin's disk is the "
+            "same database's size.",
+        ] + [f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}" for k, v in sorted(LIFECYCLE_WITHHELD.items())],
         "columns": ["JVM start ms", "first open ms", "cold process ms"]
-                   + [f"{k} session ms" for k, _ in LIFECYCLE_SCENARIOS],
+                   + [LIFECYCLE_SCENARIO_LABELS[k] for k, _ in LIFECYCLE_SCENARIOS],
         "withheld_scales": [],
         "withheld_reason": None,
         "entries": entries,

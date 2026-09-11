@@ -530,7 +530,7 @@
         "Cold is the first timed pass after the index is built; warm is the same engine run again over an index it has already read, and gain is cold over warm. Here a second pass changes little and the order of the table is the same either way. The dense table below is not like this: there ArcadeDB gains the most on a second pass and the order depends on which pass you time.",
         "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
-        "Cold p50 and p99 are the first timed pass after the build, median of five builds. Warm and gain come from a separate run of the same arms: one build per engine, then five more passes over a different half of the query set, so a warm number cannot be explained by the engine having already answered that exact query; gain is that run's cold over its warm. 100k has no second-pass run.",
+        "Cold p50 and p99 are the first timed pass after the build, median of five builds. Warm and gain come from a separate run of the same arms: one build per engine, then five more passes over a different half of the query set, so a warm number cannot be explained by the engine having already answered that exact query; gain is that run's cold over its warm. 100k has no second-pass run yet.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load)."
       ],
       "columns": [
@@ -6221,19 +6221,20 @@
         "Cold start is measured in a fresh subprocess and reported beside every session number, because a millisecond open inside a process that takes half a second to reach its first database call is not a millisecond to whoever launched it.",
         "Known at this engine build: a vector database's no-op session close grows with the index (8 ms at 10k, 98 ms at 1M, 1.4 s at 10M), and a session with one search in it at 10M is 17.6 s, because the first search after a write started a full asynchronous graph rebuild and close() waited on it. Filed as #7183, fixed upstream in #7191 for 26.10.1; the October re-pin re-measures it.",
         "A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k documents and 10M.",
-        "Server rows have no JVM start, first open or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.",
-        "`graph_gav` is withheld: probe scope under revision; see PAGE-SPEC 4c",
+        "Server rows have no JVM start, first open, or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.",
+        "Disk is shown for server rows only. The embedded database sits on a host bind mount so its page cache can be evicted before the cold columns, and the disk reading does not see a bind mount; the server twin's disk is the same database's size.",
+        "Graph with the analytical view is withheld: probe scope under revision; see PAGE-SPEC 4c",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on."
       ],
       "columns": [
         "JVM start ms",
         "first open ms",
         "cold process ms",
-        "clean session ms",
-        "read session ms",
-        "write session ms",
-        "write_own session ms",
-        "write_own_read session ms",
+        "open and close ms",
+        "one query ms",
+        "one write ms",
+        "write into the structure ms",
+        "write, then query ms",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -6241,787 +6242,7 @@
       "withheld_reason": null,
       "entries": [
         {
-          "backend": "doc",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "embedded",
-          "image": "dbbench:arcadedb",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:8dba6e7f6a03 (host unknown)",
-          "metrics": {
-            "JVM start ms": {
-              "median": 178.064,
-              "min": 172.428,
-              "max": 192.379,
-              "n": 5
-            },
-            "first open ms": {
-              "median": 151.541,
-              "min": 142.655,
-              "max": 155.304,
-              "n": 5
-            },
-            "cold process ms": {
-              "median": 439.681,
-              "min": 438.074,
-              "max": 468.96,
-              "n": 5
-            },
-            "clean session ms": {
-              "median": 4.737,
-              "min": 4.678,
-              "max": 5.958,
-              "n": 5
-            },
-            "read session ms": {
-              "median": 5.267,
-              "min": 5.206,
-              "max": 5.556,
-              "n": 5
-            },
-            "write session ms": {
-              "median": 13.191,
-              "min": 12.14,
-              "max": 13.557,
-              "n": 5
-            },
-            "write_own session ms": {
-              "median": 13.794,
-              "min": 13.284,
-              "max": 14.195,
-              "n": 5
-            },
-            "write_own_read session ms": {
-              "median": 13.313,
-              "min": 13.05,
-              "max": 13.786,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.3539,
-              "min": 0.3419,
-              "max": 0.3771,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "doc (server)",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "server",
-          "image": "",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "",
-          "metrics": {
-            "clean session ms": {
-              "median": 7.407,
-              "min": 7.053,
-              "max": 7.688,
-              "n": 3
-            },
-            "read session ms": {
-              "median": 9.522,
-              "min": 8.99,
-              "max": 9.747,
-              "n": 3
-            },
-            "write session ms": {
-              "median": 16.084,
-              "min": 15.498,
-              "max": 17.108,
-              "n": 3
-            },
-            "write_own session ms": {
-              "median": 17.354,
-              "min": 16.913,
-              "max": 18.448,
-              "n": 3
-            },
-            "write_own_read session ms": {
-              "median": 19.192,
-              "min": 18.171,
-              "max": 25.147,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 0.3662,
-              "min": 0.3632,
-              "max": 0.3714,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0005,
-              "min": 0.0005,
-              "max": 0.0005,
-              "n": 3
-            }
-          }
-        },
-        {
-          "backend": "doc_idx10",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "embedded",
-          "image": "dbbench:arcadedb",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:c142f2b7ae40 (host unknown)",
-          "metrics": {
-            "JVM start ms": {
-              "median": 180.14,
-              "min": 178.87,
-              "max": 189.393,
-              "n": 5
-            },
-            "first open ms": {
-              "median": 167.113,
-              "min": 160.88,
-              "max": 171.787,
-              "n": 5
-            },
-            "cold process ms": {
-              "median": 466.477,
-              "min": 450.254,
-              "max": 483.26,
-              "n": 5
-            },
-            "clean session ms": {
-              "median": 11.049,
-              "min": 10.321,
-              "max": 22.606,
-              "n": 5
-            },
-            "read session ms": {
-              "median": 11.81,
-              "min": 11.679,
-              "max": 22.24,
-              "n": 5
-            },
-            "write session ms": {
-              "median": 22.193,
-              "min": 18.812,
-              "max": 42.272,
-              "n": 5
-            },
-            "write_own session ms": {
-              "median": 40.121,
-              "min": 38.783,
-              "max": 45.73,
-              "n": 5
-            },
-            "write_own_read session ms": {
-              "median": 39.473,
-              "min": 39.011,
-              "max": 46.342,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.7795,
-              "min": 0.7675,
-              "max": 0.7826,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "doc_idx10 (server)",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "server",
-          "image": "",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "",
-          "metrics": {
-            "clean session ms": {
-              "median": 17.402,
-              "min": 13.122,
-              "max": 23.53,
-              "n": 3
-            },
-            "read session ms": {
-              "median": 17.739,
-              "min": 16.406,
-              "max": 20.208,
-              "n": 3
-            },
-            "write session ms": {
-              "median": 35.358,
-              "min": 22.669,
-              "max": 43.128,
-              "n": 3
-            },
-            "write_own session ms": {
-              "median": 75.924,
-              "min": 67.192,
-              "max": 77.873,
-              "n": 3
-            },
-            "write_own_read session ms": {
-              "median": 71.245,
-              "min": 47.567,
-              "max": 71.541,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 0.7856,
-              "min": 0.7741,
-              "max": 0.7899,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0033,
-              "min": 0.0033,
-              "max": 0.0033,
-              "n": 3
-            }
-          }
-        },
-        {
-          "backend": "empty",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "embedded",
-          "image": "dbbench:arcadedb",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:ab4344150a60 (host unknown)",
-          "metrics": {
-            "JVM start ms": {
-              "median": 181.588,
-              "min": 180.055,
-              "max": 184.765,
-              "n": 5
-            },
-            "first open ms": {
-              "median": 156.112,
-              "min": 145.576,
-              "max": 168.159,
-              "n": 5
-            },
-            "cold process ms": {
-              "median": 449.316,
-              "min": 433.013,
-              "max": 469.4,
-              "n": 5
-            },
-            "clean session ms": {
-              "median": 4.436,
-              "min": 4.001,
-              "max": 9.174,
-              "n": 5
-            },
-            "read session ms": {
-              "median": 4.235,
-              "min": 4.01,
-              "max": 15.872,
-              "n": 5
-            },
-            "write session ms": {
-              "median": 12.587,
-              "min": 12.486,
-              "max": 22.74,
-              "n": 5
-            },
-            "write_own session ms": {
-              "median": 13.356,
-              "min": 12.805,
-              "max": 13.882,
-              "n": 5
-            },
-            "write_own_read session ms": {
-              "median": 13.208,
-              "min": 13.042,
-              "max": 15.176,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.2456,
-              "min": 0.2261,
-              "max": 0.2468,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "empty (server)",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "server",
-          "image": "",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "",
-          "metrics": {
-            "clean session ms": {
-              "median": 6.956,
-              "min": 6.865,
-              "max": 7.552,
-              "n": 3
-            },
-            "read session ms": {
-              "median": 6.902,
-              "min": 6.824,
-              "max": 7.12,
-              "n": 3
-            },
-            "write session ms": {
-              "median": 15.317,
-              "min": 14.396,
-              "max": 15.385,
-              "n": 3
-            },
-            "write_own session ms": {
-              "median": 15.667,
-              "min": 15.126,
-              "max": 15.979,
-              "n": 3
-            },
-            "write_own_read session ms": {
-              "median": 17.259,
-              "min": 14.778,
-              "max": 18.264,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 0.2988,
-              "min": 0.2927,
-              "max": 0.3045,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0002,
-              "min": 0.0002,
-              "max": 0.0002,
-              "n": 3
-            }
-          }
-        },
-        {
-          "backend": "graph",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "embedded",
-          "image": "dbbench:arcadedb",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:58317c0548b8 (host unknown)",
-          "metrics": {
-            "JVM start ms": {
-              "median": 191.717,
-              "min": 165.531,
-              "max": 195.663,
-              "n": 5
-            },
-            "first open ms": {
-              "median": 160.108,
-              "min": 144.635,
-              "max": 162.096,
-              "n": 5
-            },
-            "cold process ms": {
-              "median": 465.876,
-              "min": 441.872,
-              "max": 486.707,
-              "n": 5
-            },
-            "clean session ms": {
-              "median": 6.477,
-              "min": 5.932,
-              "max": 7.196,
-              "n": 5
-            },
-            "read session ms": {
-              "median": 8.609,
-              "min": 8.429,
-              "max": 13.219,
-              "n": 5
-            },
-            "write session ms": {
-              "median": 14.862,
-              "min": 13.943,
-              "max": 18.684,
-              "n": 5
-            },
-            "write_own session ms": {
-              "median": 13.861,
-              "min": 12.266,
-              "max": 18.739,
-              "n": 5
-            },
-            "write_own_read session ms": {
-              "median": 13.925,
-              "min": 13.308,
-              "max": 16.567,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 2.0468,
-              "min": 2.0049,
-              "max": 2.0554,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "graph (server)",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "server",
-          "image": "",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "",
-          "metrics": {
-            "clean session ms": {
-              "median": 8.597,
-              "min": 8.17,
-              "max": 10.953,
-              "n": 3
-            },
-            "read session ms": {
-              "median": 12.472,
-              "min": 12.224,
-              "max": 12.824,
-              "n": 3
-            },
-            "write session ms": {
-              "median": 18.169,
-              "min": 17.414,
-              "max": 21.458,
-              "n": 3
-            },
-            "write_own session ms": {
-              "median": 17.923,
-              "min": 17.837,
-              "max": 23.734,
-              "n": 3
-            },
-            "write_own_read session ms": {
-              "median": 18.816,
-              "min": 17.297,
-              "max": 19.992,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 2.075,
-              "min": 1.9858,
-              "max": 2.1453,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0033,
-              "min": 0.0033,
-              "max": 0.0033,
-              "n": 3
-            }
-          }
-        },
-        {
-          "backend": "sparse",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "embedded",
-          "image": "dbbench:arcadedb",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:67603bb27186 (host unknown)",
-          "metrics": {
-            "JVM start ms": {
-              "median": 181.169,
-              "min": 179.021,
-              "max": 187.367,
-              "n": 5
-            },
-            "first open ms": {
-              "median": 164.047,
-              "min": 157.942,
-              "max": 173.41,
-              "n": 5
-            },
-            "cold process ms": {
-              "median": 458.681,
-              "min": 443.41,
-              "max": 464.782,
-              "n": 5
-            },
-            "clean session ms": {
-              "median": 5.311,
-              "min": 5.223,
-              "max": 6.137,
-              "n": 5
-            },
-            "read session ms": {
-              "median": 5.844,
-              "min": 5.699,
-              "max": 12.532,
-              "n": 5
-            },
-            "write session ms": {
-              "median": 13.234,
-              "min": 12.58,
-              "max": 17.814,
-              "n": 5
-            },
-            "write_own session ms": {
-              "median": 25.192,
-              "min": 22.945,
-              "max": 35.775,
-              "n": 5
-            },
-            "write_own_read session ms": {
-              "median": 25.183,
-              "min": 24.243,
-              "max": 26.918,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 1.0378,
-              "min": 1.0005,
-              "max": 1.0489,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "sparse (server)",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "server",
-          "image": "",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "",
-          "metrics": {
-            "clean session ms": {
-              "median": 7.725,
-              "min": 7.59,
-              "max": 8.062,
-              "n": 3
-            },
-            "read session ms": {
-              "median": 11.051,
-              "min": 9.483,
-              "max": 22.876,
-              "n": 3
-            },
-            "write session ms": {
-              "median": 17.774,
-              "min": 16.384,
-              "max": 23.981,
-              "n": 3
-            },
-            "write_own session ms": {
-              "median": 30.902,
-              "min": 25.626,
-              "max": 34.059,
-              "n": 3
-            },
-            "write_own_read session ms": {
-              "median": 28.711,
-              "min": 26.149,
-              "max": 30.76,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 1.1594,
-              "min": 1.1163,
-              "max": 1.1768,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0044,
-              "min": 0.0044,
-              "max": 0.0044,
-              "n": 3
-            }
-          }
-        },
-        {
-          "backend": "ts",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "embedded",
-          "image": "dbbench:arcadedb",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:c2c737a2ac4c (host unknown)",
-          "metrics": {
-            "JVM start ms": {
-              "median": 179.825,
-              "min": 175.774,
-              "max": 190.775,
-              "n": 5
-            },
-            "first open ms": {
-              "median": 170.815,
-              "min": 160.159,
-              "max": 183.719,
-              "n": 5
-            },
-            "cold process ms": {
-              "median": 475.759,
-              "min": 451.266,
-              "max": 493.967,
-              "n": 5
-            },
-            "clean session ms": {
-              "median": 18.931,
-              "min": 10.878,
-              "max": 22.366,
-              "n": 5
-            },
-            "read session ms": {
-              "median": 11.177,
-              "min": 10.505,
-              "max": 18.74,
-              "n": 5
-            },
-            "write session ms": {
-              "median": 21.957,
-              "min": 19.148,
-              "max": 36.386,
-              "n": 5
-            },
-            "write_own session ms": {
-              "median": 23.774,
-              "min": 21.191,
-              "max": 28.385,
-              "n": 5
-            },
-            "write_own_read session ms": {
-              "median": 22.151,
-              "min": 18.256,
-              "max": 35.251,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 1.9976,
-              "min": 1.9336,
-              "max": 2.1313,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "ts (server)",
-          "is_arcadedb": true,
-          "scale": "lc10k",
-          "scale_label": "10k",
-          "workload": "session",
-          "n_docs": "10000",
-          "deployment": "server",
-          "image": "",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "",
-          "metrics": {
-            "clean session ms": {
-              "median": 12.735,
-              "min": 12.635,
-              "max": 12.773,
-              "n": 3
-            },
-            "read session ms": {
-              "median": 14.766,
-              "min": 14.007,
-              "max": 15.968,
-              "n": 3
-            },
-            "write session ms": {
-              "median": 24.39,
-              "min": 24.139,
-              "max": 24.776,
-              "n": 3
-            },
-            "write_own session ms": {
-              "median": 23.826,
-              "min": 22.249,
-              "max": 24.708,
-              "n": 3
-            },
-            "write_own_read session ms": {
-              "median": 24.495,
-              "min": 23.831,
-              "max": 25.63,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 1.9645,
-              "min": 1.9097,
-              "max": 2.0648,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0017,
-              "min": 0.0017,
-              "max": 0.0017,
-              "n": 3
-            }
-          }
-        },
-        {
-          "backend": "vector",
+          "backend": "Dense vectors (embedded)",
           "is_arcadedb": true,
           "scale": "lc10k",
           "scale_label": "10k",
@@ -7050,31 +6271,31 @@
               "max": 516.354,
               "n": 5
             },
-            "clean session ms": {
+            "open and close ms": {
               "median": 8.415,
               "min": 8.272,
               "max": 21.734,
               "n": 5
             },
-            "read session ms": {
+            "one query ms": {
               "median": 23.332,
               "min": 21.319,
               "max": 25.485,
               "n": 5
             },
-            "write session ms": {
+            "one write ms": {
               "median": 15.672,
               "min": 15.314,
               "max": 39.653,
               "n": 5
             },
-            "write_own session ms": {
+            "write into the structure ms": {
               "median": 18.832,
               "min": 17.058,
               "max": 19.052,
               "n": 5
             },
-            "write_own_read session ms": {
+            "write, then query ms": {
               "median": 555.759,
               "min": 494.448,
               "max": 572.01,
@@ -7085,17 +6306,11 @@
               "min": 2.7256,
               "max": 2.7505,
               "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 5
             }
           }
         },
         {
-          "backend": "vector (server)",
+          "backend": "Dense vectors (server)",
           "is_arcadedb": true,
           "scale": "lc10k",
           "scale_label": "10k",
@@ -7106,31 +6321,31 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
+            "open and close ms": {
               "median": 9.651,
               "min": 9.545,
               "max": 9.765,
               "n": 3
             },
-            "read session ms": {
+            "one query ms": {
               "median": 36.532,
               "min": 35.981,
               "max": 37.837,
               "n": 3
             },
-            "write session ms": {
+            "one write ms": {
               "median": 19.191,
               "min": 19.077,
               "max": 20.115,
               "n": 3
             },
-            "write_own session ms": {
+            "write into the structure ms": {
               "median": 21.188,
               "min": 19.724,
               "max": 21.507,
               "n": 3
             },
-            "write_own_read session ms": {
+            "write, then query ms": {
               "median": 559.283,
               "min": 477.18,
               "max": 640.633,
@@ -7151,385 +6366,367 @@
           }
         },
         {
-          "backend": "doc",
+          "backend": "Documents (embedded)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:b52209f56c26 (host unknown)",
+          "host": "container:8dba6e7f6a03 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 184.736,
-              "min": 181.289,
-              "max": 192.98,
+              "median": 178.064,
+              "min": 172.428,
+              "max": 192.379,
               "n": 5
             },
             "first open ms": {
-              "median": 156.033,
-              "min": 150.268,
-              "max": 158.06,
+              "median": 151.541,
+              "min": 142.655,
+              "max": 155.304,
               "n": 5
             },
             "cold process ms": {
-              "median": 447.854,
-              "min": 441.682,
-              "max": 458.826,
+              "median": 439.681,
+              "min": 438.074,
+              "max": 468.96,
               "n": 5
             },
-            "clean session ms": {
-              "median": 4.616,
-              "min": 4.54,
-              "max": 6.22,
+            "open and close ms": {
+              "median": 4.737,
+              "min": 4.678,
+              "max": 5.958,
               "n": 5
             },
-            "read session ms": {
-              "median": 4.861,
-              "min": 4.809,
-              "max": 5.428,
+            "one query ms": {
+              "median": 5.267,
+              "min": 5.206,
+              "max": 5.556,
               "n": 5
             },
-            "write session ms": {
-              "median": 13.283,
-              "min": 12.78,
-              "max": 21.207,
+            "one write ms": {
+              "median": 13.191,
+              "min": 12.14,
+              "max": 13.557,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 12.507,
-              "min": 12.113,
-              "max": 20.795,
+            "write into the structure ms": {
+              "median": 13.794,
+              "min": 13.284,
+              "max": 14.195,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 13.979,
-              "min": 13.238,
-              "max": 19.194,
+            "write, then query ms": {
+              "median": 13.313,
+              "min": 13.05,
+              "max": 13.786,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 0.8326,
-              "min": 0.8173,
-              "max": 0.8597,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 0.3539,
+              "min": 0.3419,
+              "max": 0.3771,
               "n": 5
             }
           }
         },
         {
-          "backend": "doc (server)",
+          "backend": "Documents (server)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 6.632,
-              "min": 6.509,
-              "max": 6.707,
+            "open and close ms": {
+              "median": 7.407,
+              "min": 7.053,
+              "max": 7.688,
               "n": 3
             },
-            "read session ms": {
-              "median": 9.144,
-              "min": 8.795,
-              "max": 9.346,
+            "one query ms": {
+              "median": 9.522,
+              "min": 8.99,
+              "max": 9.747,
               "n": 3
             },
-            "write session ms": {
-              "median": 15.996,
-              "min": 15.8,
-              "max": 16.574,
+            "one write ms": {
+              "median": 16.084,
+              "min": 15.498,
+              "max": 17.108,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 16.074,
-              "min": 14.762,
-              "max": 17.709,
+            "write into the structure ms": {
+              "median": 17.354,
+              "min": 16.913,
+              "max": 18.448,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 18.36,
-              "min": 17.864,
-              "max": 20.525,
+            "write, then query ms": {
+              "median": 19.192,
+              "min": 18.171,
+              "max": 25.147,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 0.908,
-              "min": 0.891,
-              "max": 0.9161,
+              "median": 0.3662,
+              "min": 0.3632,
+              "max": 0.3714,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.0031,
-              "min": 0.0031,
-              "max": 0.0031,
+              "median": 0.0005,
+              "min": 0.0005,
+              "max": 0.0005,
               "n": 3
             }
           }
         },
         {
-          "backend": "doc_idx10",
+          "backend": "Documents, ten indexes (embedded)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:99490fc158e2 (host unknown)",
+          "host": "container:c142f2b7ae40 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 184.81,
-              "min": 181.245,
-              "max": 189.771,
+              "median": 180.14,
+              "min": 178.87,
+              "max": 189.393,
               "n": 5
             },
             "first open ms": {
-              "median": 168.818,
-              "min": 157.058,
-              "max": 174.278,
+              "median": 167.113,
+              "min": 160.88,
+              "max": 171.787,
               "n": 5
             },
             "cold process ms": {
-              "median": 470.891,
-              "min": 455.092,
-              "max": 476.221,
+              "median": 466.477,
+              "min": 450.254,
+              "max": 483.26,
               "n": 5
             },
-            "clean session ms": {
-              "median": 10.963,
-              "min": 9.981,
-              "max": 23.456,
+            "open and close ms": {
+              "median": 11.049,
+              "min": 10.321,
+              "max": 22.606,
               "n": 5
             },
-            "read session ms": {
-              "median": 11.206,
-              "min": 10.789,
-              "max": 11.854,
+            "one query ms": {
+              "median": 11.81,
+              "min": 11.679,
+              "max": 22.24,
               "n": 5
             },
-            "write session ms": {
-              "median": 20.32,
-              "min": 16.426,
-              "max": 45.976,
+            "one write ms": {
+              "median": 22.193,
+              "min": 18.812,
+              "max": 42.272,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 38.852,
-              "min": 38.292,
-              "max": 43.812,
+            "write into the structure ms": {
+              "median": 40.121,
+              "min": 38.783,
+              "max": 45.73,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 38.739,
-              "min": 38.232,
-              "max": 39.087,
+            "write, then query ms": {
+              "median": 39.473,
+              "min": 39.011,
+              "max": 46.342,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 2.6576,
-              "min": 2.647,
-              "max": 2.7278,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 0.7795,
+              "min": 0.7675,
+              "max": 0.7826,
               "n": 5
             }
           }
         },
         {
-          "backend": "doc_idx10 (server)",
+          "backend": "Documents, ten indexes (server)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 24.008,
-              "min": 12.634,
-              "max": 24.377,
+            "open and close ms": {
+              "median": 17.402,
+              "min": 13.122,
+              "max": 23.53,
               "n": 3
             },
-            "read session ms": {
-              "median": 21.8,
-              "min": 15.004,
-              "max": 24.203,
+            "one query ms": {
+              "median": 17.739,
+              "min": 16.406,
+              "max": 20.208,
               "n": 3
             },
-            "write session ms": {
-              "median": 28.77,
-              "min": 23.033,
-              "max": 44.256,
+            "one write ms": {
+              "median": 35.358,
+              "min": 22.669,
+              "max": 43.128,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 41.685,
-              "min": 39.976,
-              "max": 61.032,
+            "write into the structure ms": {
+              "median": 75.924,
+              "min": 67.192,
+              "max": 77.873,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 44.465,
-              "min": 42.789,
-              "max": 60.187,
+            "write, then query ms": {
+              "median": 71.245,
+              "min": 47.567,
+              "max": 71.541,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 2.0866,
-              "min": 2.0131,
-              "max": 2.2044,
+              "median": 0.7856,
+              "min": 0.7741,
+              "max": 0.7899,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.0196,
-              "min": 0.0196,
-              "max": 0.0196,
+              "median": 0.0033,
+              "min": 0.0033,
+              "max": 0.0033,
               "n": 3
             }
           }
         },
         {
-          "backend": "empty",
+          "backend": "Empty database (embedded)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:48ad3b584715 (host unknown)",
+          "host": "container:ab4344150a60 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 185.339,
-              "min": 178.28,
-              "max": 193.127,
+              "median": 181.588,
+              "min": 180.055,
+              "max": 184.765,
               "n": 5
             },
             "first open ms": {
-              "median": 155.049,
-              "min": 150.962,
-              "max": 167.373,
+              "median": 156.112,
+              "min": 145.576,
+              "max": 168.159,
               "n": 5
             },
             "cold process ms": {
-              "median": 460.832,
-              "min": 438.564,
-              "max": 470.118,
+              "median": 449.316,
+              "min": 433.013,
+              "max": 469.4,
               "n": 5
             },
-            "clean session ms": {
-              "median": 4.229,
-              "min": 4.024,
-              "max": 6.83,
+            "open and close ms": {
+              "median": 4.436,
+              "min": 4.001,
+              "max": 9.174,
               "n": 5
             },
-            "read session ms": {
-              "median": 4.238,
-              "min": 3.997,
-              "max": 5.496,
+            "one query ms": {
+              "median": 4.235,
+              "min": 4.01,
+              "max": 15.872,
               "n": 5
             },
-            "write session ms": {
-              "median": 12.784,
-              "min": 11.559,
-              "max": 19.617,
+            "one write ms": {
+              "median": 12.587,
+              "min": 12.486,
+              "max": 22.74,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 13.452,
-              "min": 13.067,
-              "max": 21.841,
+            "write into the structure ms": {
+              "median": 13.356,
+              "min": 12.805,
+              "max": 13.882,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 13.782,
-              "min": 12.674,
-              "max": 19.494,
+            "write, then query ms": {
+              "median": 13.208,
+              "min": 13.042,
+              "max": 15.176,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 0.245,
-              "min": 0.2271,
-              "max": 0.2476,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 0.2456,
+              "min": 0.2261,
+              "max": 0.2468,
               "n": 5
             }
           }
         },
         {
-          "backend": "empty (server)",
+          "backend": "Empty database (server)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 7.557,
-              "min": 7.255,
-              "max": 9.903,
+            "open and close ms": {
+              "median": 6.956,
+              "min": 6.865,
+              "max": 7.552,
               "n": 3
             },
-            "read session ms": {
-              "median": 7.354,
-              "min": 6.677,
-              "max": 7.366,
+            "one query ms": {
+              "median": 6.902,
+              "min": 6.824,
+              "max": 7.12,
               "n": 3
             },
-            "write session ms": {
-              "median": 15.382,
-              "min": 15.186,
-              "max": 23.3,
+            "one write ms": {
+              "median": 15.317,
+              "min": 14.396,
+              "max": 15.385,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 15.486,
-              "min": 15.398,
-              "max": 15.737,
+            "write into the structure ms": {
+              "median": 15.667,
+              "min": 15.126,
+              "max": 15.979,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 15.475,
-              "min": 14.858,
-              "max": 17.793,
+            "write, then query ms": {
+              "median": 17.259,
+              "min": 14.778,
+              "max": 18.264,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 0.2899,
-              "min": 0.2854,
-              "max": 0.3078,
+              "median": 0.2988,
+              "min": 0.2927,
+              "max": 0.3045,
               "n": 3
             },
             "disk GiB": {
@@ -7541,397 +6738,379 @@
           }
         },
         {
-          "backend": "graph",
+          "backend": "Graph (embedded)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:b5e2dfab48fe (host unknown)",
+          "host": "container:58317c0548b8 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 181.233,
-              "min": 179.391,
-              "max": 187.709,
+              "median": 191.717,
+              "min": 165.531,
+              "max": 195.663,
               "n": 5
             },
             "first open ms": {
-              "median": 159.513,
-              "min": 149.79,
-              "max": 167.843,
+              "median": 160.108,
+              "min": 144.635,
+              "max": 162.096,
               "n": 5
             },
             "cold process ms": {
-              "median": 456.051,
-              "min": 447.688,
-              "max": 469.982,
+              "median": 465.876,
+              "min": 441.872,
+              "max": 486.707,
               "n": 5
             },
-            "clean session ms": {
-              "median": 5.923,
-              "min": 5.766,
-              "max": 22.389,
+            "open and close ms": {
+              "median": 6.477,
+              "min": 5.932,
+              "max": 7.196,
               "n": 5
             },
-            "read session ms": {
-              "median": 8.708,
-              "min": 7.968,
-              "max": 14.848,
+            "one query ms": {
+              "median": 8.609,
+              "min": 8.429,
+              "max": 13.219,
               "n": 5
             },
-            "write session ms": {
-              "median": 15.215,
-              "min": 13.711,
-              "max": 19.98,
+            "one write ms": {
+              "median": 14.862,
+              "min": 13.943,
+              "max": 18.684,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 13.285,
-              "min": 12.764,
-              "max": 16.116,
+            "write into the structure ms": {
+              "median": 13.861,
+              "min": 12.266,
+              "max": 18.739,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 14.179,
-              "min": 13.801,
-              "max": 14.782,
+            "write, then query ms": {
+              "median": 13.925,
+              "min": 13.308,
+              "max": 16.567,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 2.7599,
-              "min": 2.7471,
-              "max": 2.7798,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 2.0468,
+              "min": 2.0049,
+              "max": 2.0554,
               "n": 5
             }
           }
         },
         {
-          "backend": "graph (server)",
+          "backend": "Graph (server)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 8.178,
-              "min": 7.821,
-              "max": 9.04,
+            "open and close ms": {
+              "median": 8.597,
+              "min": 8.17,
+              "max": 10.953,
               "n": 3
             },
-            "read session ms": {
-              "median": 11.233,
-              "min": 10.982,
-              "max": 11.367,
+            "one query ms": {
+              "median": 12.472,
+              "min": 12.224,
+              "max": 12.824,
               "n": 3
             },
-            "write session ms": {
-              "median": 16.64,
-              "min": 15.79,
-              "max": 28.826,
+            "one write ms": {
+              "median": 18.169,
+              "min": 17.414,
+              "max": 21.458,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 16.363,
-              "min": 15.517,
-              "max": 17.186,
+            "write into the structure ms": {
+              "median": 17.923,
+              "min": 17.837,
+              "max": 23.734,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 18.652,
-              "min": 18.308,
-              "max": 19.868,
+            "write, then query ms": {
+              "median": 18.816,
+              "min": 17.297,
+              "max": 19.992,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 2.7451,
-              "min": 2.7296,
-              "max": 2.7463,
+              "median": 2.075,
+              "min": 1.9858,
+              "max": 2.1453,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.0303,
-              "min": 0.0303,
-              "max": 0.0303,
+              "median": 0.0033,
+              "min": 0.0033,
+              "max": 0.0033,
               "n": 3
             }
           }
         },
         {
-          "backend": "sparse",
+          "backend": "Sparse vectors (embedded)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:1abb4fe15d50 (host unknown)",
+          "host": "container:67603bb27186 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 181.172,
-              "min": 178.359,
-              "max": 182.321,
+              "median": 181.169,
+              "min": 179.021,
+              "max": 187.367,
               "n": 5
             },
             "first open ms": {
-              "median": 159.489,
-              "min": 154.599,
-              "max": 172.832,
+              "median": 164.047,
+              "min": 157.942,
+              "max": 173.41,
               "n": 5
             },
             "cold process ms": {
-              "median": 447.667,
-              "min": 442.943,
-              "max": 468.324,
+              "median": 458.681,
+              "min": 443.41,
+              "max": 464.782,
               "n": 5
             },
-            "clean session ms": {
-              "median": 5.426,
-              "min": 5.241,
-              "max": 10.234,
+            "open and close ms": {
+              "median": 5.311,
+              "min": 5.223,
+              "max": 6.137,
               "n": 5
             },
-            "read session ms": {
-              "median": 6.09,
-              "min": 5.903,
-              "max": 10.085,
+            "one query ms": {
+              "median": 5.844,
+              "min": 5.699,
+              "max": 12.532,
               "n": 5
             },
-            "write session ms": {
-              "median": 12.701,
-              "min": 12.243,
-              "max": 13.193,
+            "one write ms": {
+              "median": 13.234,
+              "min": 12.58,
+              "max": 17.814,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 20.991,
-              "min": 19.406,
-              "max": 24.612,
+            "write into the structure ms": {
+              "median": 25.192,
+              "min": 22.945,
+              "max": 35.775,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 18.72,
-              "min": 17.429,
-              "max": 23.425,
+            "write, then query ms": {
+              "median": 25.183,
+              "min": 24.243,
+              "max": 26.918,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 2.7277,
-              "min": 2.7188,
-              "max": 2.7368,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 1.0378,
+              "min": 1.0005,
+              "max": 1.0489,
               "n": 5
             }
           }
         },
         {
-          "backend": "sparse (server)",
+          "backend": "Sparse vectors (server)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 7.535,
-              "min": 7.357,
-              "max": 7.703,
+            "open and close ms": {
+              "median": 7.725,
+              "min": 7.59,
+              "max": 8.062,
               "n": 3
             },
-            "read session ms": {
-              "median": 9.896,
-              "min": 9.653,
-              "max": 11.485,
+            "one query ms": {
+              "median": 11.051,
+              "min": 9.483,
+              "max": 22.876,
               "n": 3
             },
-            "write session ms": {
-              "median": 15.844,
-              "min": 15.84,
-              "max": 16.999,
+            "one write ms": {
+              "median": 17.774,
+              "min": 16.384,
+              "max": 23.981,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 27.481,
-              "min": 25.917,
-              "max": 28.7,
+            "write into the structure ms": {
+              "median": 30.902,
+              "min": 25.626,
+              "max": 34.059,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 27.665,
-              "min": 26.958,
-              "max": 27.872,
+            "write, then query ms": {
+              "median": 28.711,
+              "min": 26.149,
+              "max": 30.76,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 4.1154,
-              "min": 4.0746,
-              "max": 4.1164,
+              "median": 1.1594,
+              "min": 1.1163,
+              "max": 1.1768,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.0384,
-              "min": 0.0384,
-              "max": 0.0384,
+              "median": 0.0044,
+              "min": 0.0044,
+              "max": 0.0044,
               "n": 3
             }
           }
         },
         {
-          "backend": "ts",
+          "backend": "Time series (embedded)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:8bab7bccb305 (host unknown)",
+          "host": "container:c2c737a2ac4c (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 180.411,
-              "min": 178.942,
-              "max": 186.501,
+              "median": 179.825,
+              "min": 175.774,
+              "max": 190.775,
               "n": 5
             },
             "first open ms": {
-              "median": 168.042,
-              "min": 166.008,
-              "max": 176.505,
+              "median": 170.815,
+              "min": 160.159,
+              "max": 183.719,
               "n": 5
             },
             "cold process ms": {
-              "median": 481.671,
-              "min": 466.953,
-              "max": 489.292,
+              "median": 475.759,
+              "min": 451.266,
+              "max": 493.967,
               "n": 5
             },
-            "clean session ms": {
-              "median": 10.614,
-              "min": 10.067,
-              "max": 21.206,
+            "open and close ms": {
+              "median": 18.931,
+              "min": 10.878,
+              "max": 22.366,
               "n": 5
             },
-            "read session ms": {
-              "median": 10.502,
-              "min": 10.402,
-              "max": 18.246,
+            "one query ms": {
+              "median": 11.177,
+              "min": 10.505,
+              "max": 18.74,
               "n": 5
             },
-            "write session ms": {
-              "median": 22.087,
-              "min": 20.214,
-              "max": 35.689,
+            "one write ms": {
+              "median": 21.957,
+              "min": 19.148,
+              "max": 36.386,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 21.437,
-              "min": 15.961,
-              "max": 29.495,
+            "write into the structure ms": {
+              "median": 23.774,
+              "min": 21.191,
+              "max": 28.385,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 20.496,
-              "min": 17.753,
-              "max": 39.418,
+            "write, then query ms": {
+              "median": 22.151,
+              "min": 18.256,
+              "max": 35.251,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 2.6945,
-              "min": 2.6809,
-              "max": 2.7095,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 1.9976,
+              "min": 1.9336,
+              "max": 2.1313,
               "n": 5
             }
           }
         },
         {
-          "backend": "ts (server)",
+          "backend": "Time series (server)",
           "is_arcadedb": true,
-          "scale": "lc100k",
-          "scale_label": "100k",
+          "scale": "lc10k",
+          "scale_label": "10k",
           "workload": "session",
-          "n_docs": "100000",
+          "n_docs": "10000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 11.862,
-              "min": 11.779,
-              "max": 20.223,
+            "open and close ms": {
+              "median": 12.735,
+              "min": 12.635,
+              "max": 12.773,
               "n": 3
             },
-            "read session ms": {
-              "median": 15.096,
-              "min": 14.037,
-              "max": 19.27,
+            "one query ms": {
+              "median": 14.766,
+              "min": 14.007,
+              "max": 15.968,
               "n": 3
             },
-            "write session ms": {
-              "median": 24.212,
-              "min": 21.973,
-              "max": 36.32,
+            "one write ms": {
+              "median": 24.39,
+              "min": 24.139,
+              "max": 24.776,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 20.57,
-              "min": 19.5,
-              "max": 38.987,
+            "write into the structure ms": {
+              "median": 23.826,
+              "min": 22.249,
+              "max": 24.708,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 25.927,
-              "min": 22.072,
-              "max": 32.336,
+            "write, then query ms": {
+              "median": 24.495,
+              "min": 23.831,
+              "max": 25.63,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 2.6747,
-              "min": 2.6734,
-              "max": 2.6781,
+              "median": 1.9645,
+              "min": 1.9097,
+              "max": 2.0648,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.003,
-              "min": 0.003,
-              "max": 0.003,
+              "median": 0.0017,
+              "min": 0.0017,
+              "max": 0.0017,
               "n": 3
             }
           }
         },
         {
-          "backend": "vector",
+          "backend": "Dense vectors (embedded)",
           "is_arcadedb": true,
           "scale": "lc100k",
           "scale_label": "100k",
@@ -7960,31 +7139,31 @@
               "max": 522.889,
               "n": 5
             },
-            "clean session ms": {
+            "open and close ms": {
               "median": 16.656,
               "min": 16.02,
               "max": 16.807,
               "n": 5
             },
-            "read session ms": {
+            "one query ms": {
               "median": 100.017,
               "min": 98.244,
               "max": 103.181,
               "n": 5
             },
-            "write session ms": {
+            "one write ms": {
               "median": 23.48,
               "min": 22.955,
               "max": 32.612,
               "n": 5
             },
-            "write_own session ms": {
+            "write into the structure ms": {
               "median": 24.18,
               "min": 23.039,
               "max": 34.162,
               "n": 5
             },
-            "write_own_read session ms": {
+            "write, then query ms": {
               "median": 207.629,
               "min": 195.158,
               "max": 225.427,
@@ -7995,17 +7174,11 @@
               "min": 2.9257,
               "max": 3.0187,
               "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 5
             }
           }
         },
         {
-          "backend": "vector (server)",
+          "backend": "Dense vectors (server)",
           "is_arcadedb": true,
           "scale": "lc100k",
           "scale_label": "100k",
@@ -8016,31 +7189,31 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
+            "open and close ms": {
               "median": 10.522,
               "min": 10.459,
               "max": 21.09,
               "n": 3
             },
-            "read session ms": {
+            "one query ms": {
               "median": 114.556,
               "min": 109.58,
               "max": 119.697,
               "n": 3
             },
-            "write session ms": {
+            "one write ms": {
               "median": 18.019,
               "min": 17.559,
               "max": 19.437,
               "n": 3
             },
-            "write_own session ms": {
+            "write into the structure ms": {
               "median": 27.691,
               "min": 26.168,
               "max": 28.093,
               "n": 3
             },
-            "write_own_read session ms": {
+            "write, then query ms": {
               "median": 211.875,
               "min": 145.91,
               "max": 215.954,
@@ -8061,385 +7234,367 @@
           }
         },
         {
-          "backend": "doc",
+          "backend": "Documents (embedded)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:2fc8678baf8c (host unknown)",
+          "host": "container:b52209f56c26 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 182.929,
-              "min": 179.345,
-              "max": 192.218,
+              "median": 184.736,
+              "min": 181.289,
+              "max": 192.98,
               "n": 5
             },
             "first open ms": {
-              "median": 146.89,
-              "min": 145.419,
-              "max": 151.698,
+              "median": 156.033,
+              "min": 150.268,
+              "max": 158.06,
               "n": 5
             },
             "cold process ms": {
-              "median": 435.459,
-              "min": 433.793,
-              "max": 451.656,
+              "median": 447.854,
+              "min": 441.682,
+              "max": 458.826,
               "n": 5
             },
-            "clean session ms": {
-              "median": 4.647,
-              "min": 4.428,
-              "max": 15.183,
+            "open and close ms": {
+              "median": 4.616,
+              "min": 4.54,
+              "max": 6.22,
               "n": 5
             },
-            "read session ms": {
-              "median": 4.947,
-              "min": 4.866,
-              "max": 16.228,
+            "one query ms": {
+              "median": 4.861,
+              "min": 4.809,
+              "max": 5.428,
               "n": 5
             },
-            "write session ms": {
-              "median": 13.338,
-              "min": 12.06,
-              "max": 23.12,
+            "one write ms": {
+              "median": 13.283,
+              "min": 12.78,
+              "max": 21.207,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 14.073,
-              "min": 13.941,
-              "max": 22.545,
+            "write into the structure ms": {
+              "median": 12.507,
+              "min": 12.113,
+              "max": 20.795,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 13.859,
-              "min": 13.678,
-              "max": 22.923,
+            "write, then query ms": {
+              "median": 13.979,
+              "min": 13.238,
+              "max": 19.194,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 4.6877,
-              "min": 4.1402,
-              "max": 6.1722,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 0.8326,
+              "min": 0.8173,
+              "max": 0.8597,
               "n": 5
             }
           }
         },
         {
-          "backend": "doc (server)",
+          "backend": "Documents (server)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 6.101,
-              "min": 5.909,
-              "max": 21.612,
+            "open and close ms": {
+              "median": 6.632,
+              "min": 6.509,
+              "max": 6.707,
               "n": 3
             },
-            "read session ms": {
-              "median": 7.906,
-              "min": 7.7,
-              "max": 8.915,
+            "one query ms": {
+              "median": 9.144,
+              "min": 8.795,
+              "max": 9.346,
               "n": 3
             },
-            "write session ms": {
-              "median": 14.423,
-              "min": 12.848,
-              "max": 20.759,
+            "one write ms": {
+              "median": 15.996,
+              "min": 15.8,
+              "max": 16.574,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 15.278,
-              "min": 15.228,
-              "max": 28.381,
+            "write into the structure ms": {
+              "median": 16.074,
+              "min": 14.762,
+              "max": 17.709,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 18.323,
-              "min": 18.148,
-              "max": 29.287,
+            "write, then query ms": {
+              "median": 18.36,
+              "min": 17.864,
+              "max": 20.525,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 4.4365,
-              "min": 4.262,
-              "max": 4.4605,
+              "median": 0.908,
+              "min": 0.891,
+              "max": 0.9161,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.03,
-              "min": 0.03,
-              "max": 0.03,
+              "median": 0.0031,
+              "min": 0.0031,
+              "max": 0.0031,
               "n": 3
             }
           }
         },
         {
-          "backend": "doc_idx10",
+          "backend": "Documents, ten indexes (embedded)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:d7e9f41bc9b8 (host unknown)",
+          "host": "container:99490fc158e2 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 181.0,
-              "min": 177.72,
-              "max": 193.308,
+              "median": 184.81,
+              "min": 181.245,
+              "max": 189.771,
               "n": 5
             },
             "first open ms": {
-              "median": 172.385,
-              "min": 166.563,
-              "max": 173.52,
+              "median": 168.818,
+              "min": 157.058,
+              "max": 174.278,
               "n": 5
             },
             "cold process ms": {
-              "median": 476.232,
-              "min": 468.121,
-              "max": 491.84,
+              "median": 470.891,
+              "min": 455.092,
+              "max": 476.221,
               "n": 5
             },
-            "clean session ms": {
-              "median": 22.307,
-              "min": 22.039,
-              "max": 27.851,
+            "open and close ms": {
+              "median": 10.963,
+              "min": 9.981,
+              "max": 23.456,
               "n": 5
             },
-            "read session ms": {
-              "median": 23.077,
-              "min": 22.92,
-              "max": 26.911,
+            "one query ms": {
+              "median": 11.206,
+              "min": 10.789,
+              "max": 11.854,
               "n": 5
             },
-            "write session ms": {
-              "median": 35.531,
-              "min": 34.937,
-              "max": 36.892,
+            "one write ms": {
+              "median": 20.32,
+              "min": 16.426,
+              "max": 45.976,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 56.596,
-              "min": 54.397,
-              "max": 91.002,
+            "write into the structure ms": {
+              "median": 38.852,
+              "min": 38.292,
+              "max": 43.812,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 55.935,
-              "min": 55.101,
-              "max": 71.451,
+            "write, then query ms": {
+              "median": 38.739,
+              "min": 38.232,
+              "max": 39.087,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 10.4264,
-              "min": 10.4058,
-              "max": 10.6041,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 2.6576,
+              "min": 2.647,
+              "max": 2.7278,
               "n": 5
             }
           }
         },
         {
-          "backend": "doc_idx10 (server)",
+          "backend": "Documents, ten indexes (server)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 22.904,
-              "min": 22.854,
-              "max": 55.608,
+            "open and close ms": {
+              "median": 24.008,
+              "min": 12.634,
+              "max": 24.377,
               "n": 3
             },
-            "read session ms": {
-              "median": 33.319,
-              "min": 26.84,
-              "max": 48.586,
+            "one query ms": {
+              "median": 21.8,
+              "min": 15.004,
+              "max": 24.203,
               "n": 3
             },
-            "write session ms": {
-              "median": 34.918,
-              "min": 30.399,
-              "max": 59.333,
+            "one write ms": {
+              "median": 28.77,
+              "min": 23.033,
+              "max": 44.256,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 87.224,
-              "min": 59.481,
-              "max": 90.063,
+            "write into the structure ms": {
+              "median": 41.685,
+              "min": 39.976,
+              "max": 61.032,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 65.904,
-              "min": 59.513,
-              "max": 90.988,
+            "write, then query ms": {
+              "median": 44.465,
+              "min": 42.789,
+              "max": 60.187,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 10.3545,
-              "min": 10.3349,
-              "max": 10.3575,
+              "median": 2.0866,
+              "min": 2.0131,
+              "max": 2.2044,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.2244,
-              "min": 0.2244,
-              "max": 0.2244,
+              "median": 0.0196,
+              "min": 0.0196,
+              "max": 0.0196,
               "n": 3
             }
           }
         },
         {
-          "backend": "empty",
+          "backend": "Empty database (embedded)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:5d15c68cfbf4 (host unknown)",
+          "host": "container:48ad3b584715 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 181.985,
-              "min": 179.559,
-              "max": 186.276,
+              "median": 185.339,
+              "min": 178.28,
+              "max": 193.127,
               "n": 5
             },
             "first open ms": {
-              "median": 153.42,
-              "min": 147.129,
-              "max": 159.953,
+              "median": 155.049,
+              "min": 150.962,
+              "max": 167.373,
               "n": 5
             },
             "cold process ms": {
-              "median": 440.711,
-              "min": 431.167,
-              "max": 459.318,
+              "median": 460.832,
+              "min": 438.564,
+              "max": 470.118,
               "n": 5
             },
-            "clean session ms": {
-              "median": 5.348,
-              "min": 4.287,
-              "max": 6.276,
+            "open and close ms": {
+              "median": 4.229,
+              "min": 4.024,
+              "max": 6.83,
               "n": 5
             },
-            "read session ms": {
-              "median": 5.38,
-              "min": 4.316,
-              "max": 8.822,
+            "one query ms": {
+              "median": 4.238,
+              "min": 3.997,
+              "max": 5.496,
               "n": 5
             },
-            "write session ms": {
-              "median": 17.957,
-              "min": 12.785,
-              "max": 22.332,
+            "one write ms": {
+              "median": 12.784,
+              "min": 11.559,
+              "max": 19.617,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 14.392,
-              "min": 12.449,
-              "max": 22.084,
+            "write into the structure ms": {
+              "median": 13.452,
+              "min": 13.067,
+              "max": 21.841,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 13.468,
-              "min": 13.09,
-              "max": 22.1,
+            "write, then query ms": {
+              "median": 13.782,
+              "min": 12.674,
+              "max": 19.494,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 0.4664,
-              "min": 0.4589,
-              "max": 0.4686,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 0.245,
+              "min": 0.2271,
+              "max": 0.2476,
               "n": 5
             }
           }
         },
         {
-          "backend": "empty (server)",
+          "backend": "Empty database (server)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 8.146,
-              "min": 7.308,
-              "max": 8.586,
+            "open and close ms": {
+              "median": 7.557,
+              "min": 7.255,
+              "max": 9.903,
               "n": 3
             },
-            "read session ms": {
-              "median": 7.149,
-              "min": 6.451,
-              "max": 8.024,
+            "one query ms": {
+              "median": 7.354,
+              "min": 6.677,
+              "max": 7.366,
               "n": 3
             },
-            "write session ms": {
-              "median": 15.824,
-              "min": 14.995,
-              "max": 15.87,
+            "one write ms": {
+              "median": 15.382,
+              "min": 15.186,
+              "max": 23.3,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 17.951,
-              "min": 15.938,
-              "max": 22.622,
+            "write into the structure ms": {
+              "median": 15.486,
+              "min": 15.398,
+              "max": 15.737,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 17.649,
-              "min": 15.583,
-              "max": 21.052,
+            "write, then query ms": {
+              "median": 15.475,
+              "min": 14.858,
+              "max": 17.793,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 0.5187,
-              "min": 0.5056,
-              "max": 0.5276,
+              "median": 0.2899,
+              "min": 0.2854,
+              "max": 0.3078,
               "n": 3
             },
             "disk GiB": {
@@ -8451,397 +7606,379 @@
           }
         },
         {
-          "backend": "graph",
+          "backend": "Graph (embedded)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:e3616efaf613 (host unknown)",
+          "host": "container:b5e2dfab48fe (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 178.181,
-              "min": 176.254,
-              "max": 182.359,
+              "median": 181.233,
+              "min": 179.391,
+              "max": 187.709,
               "n": 5
             },
             "first open ms": {
-              "median": 145.976,
-              "min": 144.745,
-              "max": 147.033,
+              "median": 159.513,
+              "min": 149.79,
+              "max": 167.843,
               "n": 5
             },
             "cold process ms": {
-              "median": 433.545,
-              "min": 430.278,
-              "max": 437.576,
+              "median": 456.051,
+              "min": 447.688,
+              "max": 469.982,
               "n": 5
             },
-            "clean session ms": {
-              "median": 5.789,
-              "min": 5.738,
-              "max": 22.399,
+            "open and close ms": {
+              "median": 5.923,
+              "min": 5.766,
+              "max": 22.389,
               "n": 5
             },
-            "read session ms": {
-              "median": 9.067,
-              "min": 7.992,
-              "max": 20.184,
+            "one query ms": {
+              "median": 8.708,
+              "min": 7.968,
+              "max": 14.848,
               "n": 5
             },
-            "write session ms": {
-              "median": 14.092,
-              "min": 13.521,
-              "max": 18.24,
+            "one write ms": {
+              "median": 15.215,
+              "min": 13.711,
+              "max": 19.98,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 12.092,
-              "min": 11.542,
-              "max": 15.345,
+            "write into the structure ms": {
+              "median": 13.285,
+              "min": 12.764,
+              "max": 16.116,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 14.138,
-              "min": 11.826,
-              "max": 14.756,
+            "write, then query ms": {
+              "median": 14.179,
+              "min": 13.801,
+              "max": 14.782,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 10.5327,
-              "min": 10.5062,
-              "max": 10.5598,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 2.7599,
+              "min": 2.7471,
+              "max": 2.7798,
               "n": 5
             }
           }
         },
         {
-          "backend": "graph (server)",
+          "backend": "Graph (server)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 7.815,
-              "min": 7.258,
-              "max": 7.868,
+            "open and close ms": {
+              "median": 8.178,
+              "min": 7.821,
+              "max": 9.04,
               "n": 3
             },
-            "read session ms": {
-              "median": 10.381,
-              "min": 10.359,
-              "max": 10.674,
+            "one query ms": {
+              "median": 11.233,
+              "min": 10.982,
+              "max": 11.367,
               "n": 3
             },
-            "write session ms": {
-              "median": 17.571,
-              "min": 15.117,
-              "max": 27.361,
+            "one write ms": {
+              "median": 16.64,
+              "min": 15.79,
+              "max": 28.826,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 18.459,
-              "min": 14.46,
-              "max": 23.209,
+            "write into the structure ms": {
+              "median": 16.363,
+              "min": 15.517,
+              "max": 17.186,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 18.37,
-              "min": 17.671,
-              "max": 33.868,
+            "write, then query ms": {
+              "median": 18.652,
+              "min": 18.308,
+              "max": 19.868,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 10.5165,
-              "min": 10.49,
-              "max": 10.519,
+              "median": 2.7451,
+              "min": 2.7296,
+              "max": 2.7463,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.2996,
-              "min": 0.2996,
-              "max": 0.2996,
+              "median": 0.0303,
+              "min": 0.0303,
+              "max": 0.0303,
               "n": 3
             }
           }
         },
         {
-          "backend": "sparse",
+          "backend": "Sparse vectors (embedded)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:77dd8173d40b (host unknown)",
+          "host": "container:1abb4fe15d50 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 178.378,
-              "min": 177.017,
-              "max": 180.567,
+              "median": 181.172,
+              "min": 178.359,
+              "max": 182.321,
               "n": 5
             },
             "first open ms": {
-              "median": 154.951,
-              "min": 154.276,
-              "max": 162.414,
+              "median": 159.489,
+              "min": 154.599,
+              "max": 172.832,
               "n": 5
             },
             "cold process ms": {
-              "median": 440.312,
-              "min": 437.456,
-              "max": 454.052,
+              "median": 447.667,
+              "min": 442.943,
+              "max": 468.324,
               "n": 5
             },
-            "clean session ms": {
-              "median": 5.293,
-              "min": 5.251,
-              "max": 5.723,
+            "open and close ms": {
+              "median": 5.426,
+              "min": 5.241,
+              "max": 10.234,
               "n": 5
             },
-            "read session ms": {
-              "median": 6.181,
-              "min": 5.989,
-              "max": 6.283,
+            "one query ms": {
+              "median": 6.09,
+              "min": 5.903,
+              "max": 10.085,
               "n": 5
             },
-            "write session ms": {
-              "median": 12.898,
-              "min": 12.299,
-              "max": 13.529,
+            "one write ms": {
+              "median": 12.701,
+              "min": 12.243,
+              "max": 13.193,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 22.411,
-              "min": 19.3,
-              "max": 24.605,
+            "write into the structure ms": {
+              "median": 20.991,
+              "min": 19.406,
+              "max": 24.612,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 22.915,
-              "min": 21.97,
-              "max": 24.657,
+            "write, then query ms": {
+              "median": 18.72,
+              "min": 17.429,
+              "max": 23.425,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 10.4653,
-              "min": 10.433,
-              "max": 10.4724,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 2.7277,
+              "min": 2.7188,
+              "max": 2.7368,
               "n": 5
             }
           }
         },
         {
-          "backend": "sparse (server)",
+          "backend": "Sparse vectors (server)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 7.232,
-              "min": 6.986,
-              "max": 22.01,
+            "open and close ms": {
+              "median": 7.535,
+              "min": 7.357,
+              "max": 7.703,
               "n": 3
             },
-            "read session ms": {
-              "median": 12.991,
-              "min": 8.981,
-              "max": 21.532,
+            "one query ms": {
+              "median": 9.896,
+              "min": 9.653,
+              "max": 11.485,
               "n": 3
             },
-            "write session ms": {
-              "median": 16.064,
-              "min": 14.721,
-              "max": 19.363,
+            "one write ms": {
+              "median": 15.844,
+              "min": 15.84,
+              "max": 16.999,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 27.084,
-              "min": 24.631,
-              "max": 41.466,
+            "write into the structure ms": {
+              "median": 27.481,
+              "min": 25.917,
+              "max": 28.7,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 26.063,
-              "min": 25.135,
-              "max": 27.284,
+            "write, then query ms": {
+              "median": 27.665,
+              "min": 26.958,
+              "max": 27.872,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 10.5089,
-              "min": 10.5058,
-              "max": 10.5192,
+              "median": 4.1154,
+              "min": 4.0746,
+              "max": 4.1164,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.3839,
-              "min": 0.3839,
-              "max": 0.3839,
+              "median": 0.0384,
+              "min": 0.0384,
+              "max": 0.0384,
               "n": 3
             }
           }
         },
         {
-          "backend": "ts",
+          "backend": "Time series (embedded)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:b39b7a4abbe4 (host unknown)",
+          "host": "container:8bab7bccb305 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 187.103,
-              "min": 179.173,
-              "max": 195.968,
+              "median": 180.411,
+              "min": 178.942,
+              "max": 186.501,
               "n": 5
             },
             "first open ms": {
-              "median": 165.157,
-              "min": 159.906,
-              "max": 175.618,
+              "median": 168.042,
+              "min": 166.008,
+              "max": 176.505,
               "n": 5
             },
             "cold process ms": {
-              "median": 471.924,
-              "min": 460.47,
-              "max": 492.853,
+              "median": 481.671,
+              "min": 466.953,
+              "max": 489.292,
               "n": 5
             },
-            "clean session ms": {
-              "median": 10.493,
-              "min": 10.031,
-              "max": 14.177,
+            "open and close ms": {
+              "median": 10.614,
+              "min": 10.067,
+              "max": 21.206,
               "n": 5
             },
-            "read session ms": {
-              "median": 10.486,
-              "min": 10.097,
-              "max": 16.136,
+            "one query ms": {
+              "median": 10.502,
+              "min": 10.402,
+              "max": 18.246,
               "n": 5
             },
-            "write session ms": {
-              "median": 19.807,
-              "min": 16.764,
-              "max": 24.568,
+            "one write ms": {
+              "median": 22.087,
+              "min": 20.214,
+              "max": 35.689,
               "n": 5
             },
-            "write_own session ms": {
-              "median": 20.749,
-              "min": 16.584,
-              "max": 22.991,
+            "write into the structure ms": {
+              "median": 21.437,
+              "min": 15.961,
+              "max": 29.495,
               "n": 5
             },
-            "write_own_read session ms": {
-              "median": 17.418,
-              "min": 16.607,
-              "max": 26.279,
+            "write, then query ms": {
+              "median": 20.496,
+              "min": 17.753,
+              "max": 39.418,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 10.098,
-              "min": 10.0854,
-              "max": 10.1041,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 2.6945,
+              "min": 2.6809,
+              "max": 2.7095,
               "n": 5
             }
           }
         },
         {
-          "backend": "ts (server)",
+          "backend": "Time series (server)",
           "is_arcadedb": true,
-          "scale": "lc1m",
-          "scale_label": "1M",
+          "scale": "lc100k",
+          "scale_label": "100k",
           "workload": "session",
-          "n_docs": "1000000",
+          "n_docs": "100000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 12.808,
-              "min": 12.145,
-              "max": 23.03,
+            "open and close ms": {
+              "median": 11.862,
+              "min": 11.779,
+              "max": 20.223,
               "n": 3
             },
-            "read session ms": {
-              "median": 14.658,
-              "min": 13.376,
-              "max": 20.867,
+            "one query ms": {
+              "median": 15.096,
+              "min": 14.037,
+              "max": 19.27,
               "n": 3
             },
-            "write session ms": {
-              "median": 24.592,
-              "min": 22.723,
-              "max": 34.309,
+            "one write ms": {
+              "median": 24.212,
+              "min": 21.973,
+              "max": 36.32,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 21.25,
-              "min": 20.608,
-              "max": 31.83,
+            "write into the structure ms": {
+              "median": 20.57,
+              "min": 19.5,
+              "max": 38.987,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 23.877,
-              "min": 22.857,
-              "max": 39.375,
+            "write, then query ms": {
+              "median": 25.927,
+              "min": 22.072,
+              "max": 32.336,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 10.1426,
-              "min": 10.1416,
-              "max": 10.1429,
+              "median": 2.6747,
+              "min": 2.6734,
+              "max": 2.6781,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.0187,
-              "min": 0.0187,
-              "max": 0.0187,
+              "median": 0.003,
+              "min": 0.003,
+              "max": 0.003,
               "n": 3
             }
           }
         },
         {
-          "backend": "vector",
+          "backend": "Dense vectors (embedded)",
           "is_arcadedb": true,
           "scale": "lc1m",
           "scale_label": "1M",
@@ -8870,31 +8007,31 @@
               "max": 515.038,
               "n": 5
             },
-            "clean session ms": {
+            "open and close ms": {
               "median": 98.359,
               "min": 95.861,
               "max": 101.39,
               "n": 5
             },
-            "read session ms": {
+            "one query ms": {
               "median": 878.562,
               "min": 876.163,
               "max": 895.944,
               "n": 5
             },
-            "write session ms": {
+            "one write ms": {
               "median": 94.261,
               "min": 92.891,
               "max": 115.909,
               "n": 5
             },
-            "write_own session ms": {
+            "write into the structure ms": {
               "median": 94.093,
               "min": 91.838,
               "max": 112.691,
               "n": 5
             },
-            "write_own_read session ms": {
+            "write, then query ms": {
               "median": 1810.295,
               "min": 1745.817,
               "max": 1862.122,
@@ -8905,17 +8042,11 @@
               "min": 12.2611,
               "max": 13.4278,
               "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 5
             }
           }
         },
         {
-          "backend": "vector (server)",
+          "backend": "Dense vectors (server)",
           "is_arcadedb": true,
           "scale": "lc1m",
           "scale_label": "1M",
@@ -8926,31 +8057,31 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
+            "open and close ms": {
               "median": 11.355,
               "min": 10.539,
               "max": 21.763,
               "n": 3
             },
-            "read session ms": {
+            "one query ms": {
               "median": 919.285,
               "min": 907.697,
               "max": 935.826,
               "n": 3
             },
-            "write session ms": {
+            "one write ms": {
               "median": 22.297,
               "min": 20.352,
               "max": 31.548,
               "n": 3
             },
-            "write_own session ms": {
+            "write into the structure ms": {
               "median": 102.783,
               "min": 99.056,
               "max": 103.54,
               "n": 3
             },
-            "write_own_read session ms": {
+            "write, then query ms": {
               "median": 2043.372,
               "min": 2026.117,
               "max": 2173.79,
@@ -8971,267 +8102,751 @@
           }
         },
         {
-          "backend": "doc",
+          "backend": "Documents (embedded)",
           "is_arcadedb": true,
-          "scale": "lc10m",
-          "scale_label": "10M",
+          "scale": "lc1m",
+          "scale_label": "1M",
           "workload": "session",
-          "n_docs": "10000000",
+          "n_docs": "1000000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:824308314c1a (host unknown)",
+          "host": "container:2fc8678baf8c (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 180.482,
-              "min": 179.857,
-              "max": 182.371,
-              "n": 3
+              "median": 182.929,
+              "min": 179.345,
+              "max": 192.218,
+              "n": 5
             },
             "first open ms": {
-              "median": 144.399,
-              "min": 142.801,
-              "max": 145.445,
-              "n": 3
+              "median": 146.89,
+              "min": 145.419,
+              "max": 151.698,
+              "n": 5
             },
             "cold process ms": {
-              "median": 428.621,
-              "min": 428.263,
-              "max": 429.211,
-              "n": 3
+              "median": 435.459,
+              "min": 433.793,
+              "max": 451.656,
+              "n": 5
             },
-            "clean session ms": {
-              "median": 5.062,
-              "min": 5.05,
-              "max": 5.457,
-              "n": 3
+            "open and close ms": {
+              "median": 4.647,
+              "min": 4.428,
+              "max": 15.183,
+              "n": 5
             },
-            "read session ms": {
-              "median": 5.296,
-              "min": 5.165,
-              "max": 6.146,
-              "n": 3
+            "one query ms": {
+              "median": 4.947,
+              "min": 4.866,
+              "max": 16.228,
+              "n": 5
             },
-            "write session ms": {
-              "median": 12.428,
-              "min": 11.389,
-              "max": 13.263,
-              "n": 3
+            "one write ms": {
+              "median": 13.338,
+              "min": 12.06,
+              "max": 23.12,
+              "n": 5
             },
-            "write_own session ms": {
-              "median": 14.009,
-              "min": 13.734,
-              "max": 14.554,
-              "n": 3
+            "write into the structure ms": {
+              "median": 14.073,
+              "min": 13.941,
+              "max": 22.545,
+              "n": 5
             },
-            "write_own_read session ms": {
-              "median": 13.442,
-              "min": 13.001,
-              "max": 14.41,
-              "n": 3
+            "write, then query ms": {
+              "median": 13.859,
+              "min": 13.678,
+              "max": 22.923,
+              "n": 5
             },
             "peak memory GiB": {
-              "median": 15.3188,
-              "min": 15.276,
-              "max": 15.33,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 3
+              "median": 4.6877,
+              "min": 4.1402,
+              "max": 6.1722,
+              "n": 5
             }
           }
         },
         {
-          "backend": "doc (server)",
+          "backend": "Documents (server)",
           "is_arcadedb": true,
-          "scale": "lc10m",
-          "scale_label": "10M",
+          "scale": "lc1m",
+          "scale_label": "1M",
           "workload": "session",
-          "n_docs": "10000000",
+          "n_docs": "1000000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 6.074,
-              "min": 5.988,
-              "max": 6.297,
+            "open and close ms": {
+              "median": 6.101,
+              "min": 5.909,
+              "max": 21.612,
               "n": 3
             },
-            "read session ms": {
-              "median": 7.649,
-              "min": 7.604,
-              "max": 8.144,
+            "one query ms": {
+              "median": 7.906,
+              "min": 7.7,
+              "max": 8.915,
               "n": 3
             },
-            "write session ms": {
-              "median": 14.833,
-              "min": 13.207,
-              "max": 15.282,
+            "one write ms": {
+              "median": 14.423,
+              "min": 12.848,
+              "max": 20.759,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 13.914,
-              "min": 12.862,
-              "max": 24.571,
+            "write into the structure ms": {
+              "median": 15.278,
+              "min": 15.228,
+              "max": 28.381,
               "n": 3
             },
-            "write_own_read session ms": {
-              "median": 15.786,
-              "min": 15.297,
-              "max": 30.262,
+            "write, then query ms": {
+              "median": 18.323,
+              "min": 18.148,
+              "max": 29.287,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 15.2809,
-              "min": 15.277,
-              "max": 15.2964,
+              "median": 4.4365,
+              "min": 4.262,
+              "max": 4.4605,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.2982,
-              "min": 0.2982,
-              "max": 0.2982,
+              "median": 0.03,
+              "min": 0.03,
+              "max": 0.03,
               "n": 3
             }
           }
         },
         {
-          "backend": "ts",
+          "backend": "Documents, ten indexes (embedded)",
           "is_arcadedb": true,
-          "scale": "lc10m",
-          "scale_label": "10M",
+          "scale": "lc1m",
+          "scale_label": "1M",
           "workload": "session",
-          "n_docs": "10000000",
+          "n_docs": "1000000",
           "deployment": "embedded",
           "image": "dbbench:arcadedb",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:95b46e8afd5e (host unknown)",
+          "host": "container:d7e9f41bc9b8 (host unknown)",
           "metrics": {
             "JVM start ms": {
-              "median": 185.988,
-              "min": 185.742,
-              "max": 186.442,
-              "n": 3
+              "median": 181.0,
+              "min": 177.72,
+              "max": 193.308,
+              "n": 5
             },
             "first open ms": {
-              "median": 172.476,
-              "min": 172.136,
-              "max": 175.875,
-              "n": 3
+              "median": 172.385,
+              "min": 166.563,
+              "max": 173.52,
+              "n": 5
             },
             "cold process ms": {
-              "median": 477.586,
-              "min": 474.824,
-              "max": 493.019,
-              "n": 3
+              "median": 476.232,
+              "min": 468.121,
+              "max": 491.84,
+              "n": 5
             },
-            "clean session ms": {
-              "median": 10.478,
-              "min": 10.354,
-              "max": 23.391,
-              "n": 3
+            "open and close ms": {
+              "median": 22.307,
+              "min": 22.039,
+              "max": 27.851,
+              "n": 5
             },
-            "read session ms": {
-              "median": 11.187,
-              "min": 10.822,
-              "max": 22.47,
-              "n": 3
+            "one query ms": {
+              "median": 23.077,
+              "min": 22.92,
+              "max": 26.911,
+              "n": 5
             },
-            "write session ms": {
-              "median": 21.389,
-              "min": 18.79,
-              "max": 40.651,
-              "n": 3
+            "one write ms": {
+              "median": 35.531,
+              "min": 34.937,
+              "max": 36.892,
+              "n": 5
             },
-            "write_own session ms": {
-              "median": 22.298,
-              "min": 18.637,
-              "max": 41.186,
-              "n": 3
+            "write into the structure ms": {
+              "median": 56.596,
+              "min": 54.397,
+              "max": 91.002,
+              "n": 5
             },
-            "write_own_read session ms": {
-              "median": 19.676,
-              "min": 19.058,
-              "max": 41.249,
-              "n": 3
+            "write, then query ms": {
+              "median": 55.935,
+              "min": 55.101,
+              "max": 71.451,
+              "n": 5
             },
             "peak memory GiB": {
-              "median": 15.2349,
-              "min": 15.2115,
-              "max": 15.2475,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 3
+              "median": 10.4264,
+              "min": 10.4058,
+              "max": 10.6041,
+              "n": 5
             }
           }
         },
         {
-          "backend": "ts (server)",
+          "backend": "Documents, ten indexes (server)",
           "is_arcadedb": true,
-          "scale": "lc10m",
-          "scale_label": "10M",
+          "scale": "lc1m",
+          "scale_label": "1M",
           "workload": "session",
-          "n_docs": "10000000",
+          "n_docs": "1000000",
           "deployment": "server",
           "image": "",
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
-              "median": 13.464,
-              "min": 12.757,
-              "max": 21.564,
+            "open and close ms": {
+              "median": 22.904,
+              "min": 22.854,
+              "max": 55.608,
               "n": 3
             },
-            "read session ms": {
-              "median": 14.849,
+            "one query ms": {
+              "median": 33.319,
+              "min": 26.84,
+              "max": 48.586,
+              "n": 3
+            },
+            "one write ms": {
+              "median": 34.918,
+              "min": 30.399,
+              "max": 59.333,
+              "n": 3
+            },
+            "write into the structure ms": {
+              "median": 87.224,
+              "min": 59.481,
+              "max": 90.063,
+              "n": 3
+            },
+            "write, then query ms": {
+              "median": 65.904,
+              "min": 59.513,
+              "max": 90.988,
+              "n": 3
+            },
+            "peak memory GiB": {
+              "median": 10.3545,
+              "min": 10.3349,
+              "max": 10.3575,
+              "n": 3
+            },
+            "disk GiB": {
+              "median": 0.2244,
+              "min": 0.2244,
+              "max": 0.2244,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "Empty database (embedded)",
+          "is_arcadedb": true,
+          "scale": "lc1m",
+          "scale_label": "1M",
+          "workload": "session",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": "dbbench:arcadedb",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "container:5d15c68cfbf4 (host unknown)",
+          "metrics": {
+            "JVM start ms": {
+              "median": 181.985,
+              "min": 179.559,
+              "max": 186.276,
+              "n": 5
+            },
+            "first open ms": {
+              "median": 153.42,
+              "min": 147.129,
+              "max": 159.953,
+              "n": 5
+            },
+            "cold process ms": {
+              "median": 440.711,
+              "min": 431.167,
+              "max": 459.318,
+              "n": 5
+            },
+            "open and close ms": {
+              "median": 5.348,
+              "min": 4.287,
+              "max": 6.276,
+              "n": 5
+            },
+            "one query ms": {
+              "median": 5.38,
+              "min": 4.316,
+              "max": 8.822,
+              "n": 5
+            },
+            "one write ms": {
+              "median": 17.957,
+              "min": 12.785,
+              "max": 22.332,
+              "n": 5
+            },
+            "write into the structure ms": {
+              "median": 14.392,
+              "min": 12.449,
+              "max": 22.084,
+              "n": 5
+            },
+            "write, then query ms": {
+              "median": 13.468,
+              "min": 13.09,
+              "max": 22.1,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.4664,
+              "min": 0.4589,
+              "max": 0.4686,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Empty database (server)",
+          "is_arcadedb": true,
+          "scale": "lc1m",
+          "scale_label": "1M",
+          "workload": "session",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": "",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "",
+          "metrics": {
+            "open and close ms": {
+              "median": 8.146,
+              "min": 7.308,
+              "max": 8.586,
+              "n": 3
+            },
+            "one query ms": {
+              "median": 7.149,
+              "min": 6.451,
+              "max": 8.024,
+              "n": 3
+            },
+            "one write ms": {
+              "median": 15.824,
+              "min": 14.995,
+              "max": 15.87,
+              "n": 3
+            },
+            "write into the structure ms": {
+              "median": 17.951,
+              "min": 15.938,
+              "max": 22.622,
+              "n": 3
+            },
+            "write, then query ms": {
+              "median": 17.649,
+              "min": 15.583,
+              "max": 21.052,
+              "n": 3
+            },
+            "peak memory GiB": {
+              "median": 0.5187,
+              "min": 0.5056,
+              "max": 0.5276,
+              "n": 3
+            },
+            "disk GiB": {
+              "median": 0.0002,
+              "min": 0.0002,
+              "max": 0.0002,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "Graph (embedded)",
+          "is_arcadedb": true,
+          "scale": "lc1m",
+          "scale_label": "1M",
+          "workload": "session",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": "dbbench:arcadedb",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "container:e3616efaf613 (host unknown)",
+          "metrics": {
+            "JVM start ms": {
+              "median": 178.181,
+              "min": 176.254,
+              "max": 182.359,
+              "n": 5
+            },
+            "first open ms": {
+              "median": 145.976,
+              "min": 144.745,
+              "max": 147.033,
+              "n": 5
+            },
+            "cold process ms": {
+              "median": 433.545,
+              "min": 430.278,
+              "max": 437.576,
+              "n": 5
+            },
+            "open and close ms": {
+              "median": 5.789,
+              "min": 5.738,
+              "max": 22.399,
+              "n": 5
+            },
+            "one query ms": {
+              "median": 9.067,
+              "min": 7.992,
+              "max": 20.184,
+              "n": 5
+            },
+            "one write ms": {
+              "median": 14.092,
+              "min": 13.521,
+              "max": 18.24,
+              "n": 5
+            },
+            "write into the structure ms": {
+              "median": 12.092,
+              "min": 11.542,
+              "max": 15.345,
+              "n": 5
+            },
+            "write, then query ms": {
+              "median": 14.138,
+              "min": 11.826,
+              "max": 14.756,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 10.5327,
+              "min": 10.5062,
+              "max": 10.5598,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Graph (server)",
+          "is_arcadedb": true,
+          "scale": "lc1m",
+          "scale_label": "1M",
+          "workload": "session",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": "",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "",
+          "metrics": {
+            "open and close ms": {
+              "median": 7.815,
+              "min": 7.258,
+              "max": 7.868,
+              "n": 3
+            },
+            "one query ms": {
+              "median": 10.381,
+              "min": 10.359,
+              "max": 10.674,
+              "n": 3
+            },
+            "one write ms": {
+              "median": 17.571,
+              "min": 15.117,
+              "max": 27.361,
+              "n": 3
+            },
+            "write into the structure ms": {
+              "median": 18.459,
+              "min": 14.46,
+              "max": 23.209,
+              "n": 3
+            },
+            "write, then query ms": {
+              "median": 18.37,
+              "min": 17.671,
+              "max": 33.868,
+              "n": 3
+            },
+            "peak memory GiB": {
+              "median": 10.5165,
+              "min": 10.49,
+              "max": 10.519,
+              "n": 3
+            },
+            "disk GiB": {
+              "median": 0.2996,
+              "min": 0.2996,
+              "max": 0.2996,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "Sparse vectors (embedded)",
+          "is_arcadedb": true,
+          "scale": "lc1m",
+          "scale_label": "1M",
+          "workload": "session",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": "dbbench:arcadedb",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "container:77dd8173d40b (host unknown)",
+          "metrics": {
+            "JVM start ms": {
+              "median": 178.378,
+              "min": 177.017,
+              "max": 180.567,
+              "n": 5
+            },
+            "first open ms": {
+              "median": 154.951,
+              "min": 154.276,
+              "max": 162.414,
+              "n": 5
+            },
+            "cold process ms": {
+              "median": 440.312,
+              "min": 437.456,
+              "max": 454.052,
+              "n": 5
+            },
+            "open and close ms": {
+              "median": 5.293,
+              "min": 5.251,
+              "max": 5.723,
+              "n": 5
+            },
+            "one query ms": {
+              "median": 6.181,
+              "min": 5.989,
+              "max": 6.283,
+              "n": 5
+            },
+            "one write ms": {
+              "median": 12.898,
+              "min": 12.299,
+              "max": 13.529,
+              "n": 5
+            },
+            "write into the structure ms": {
+              "median": 22.411,
+              "min": 19.3,
+              "max": 24.605,
+              "n": 5
+            },
+            "write, then query ms": {
+              "median": 22.915,
+              "min": 21.97,
+              "max": 24.657,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 10.4653,
+              "min": 10.433,
+              "max": 10.4724,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Sparse vectors (server)",
+          "is_arcadedb": true,
+          "scale": "lc1m",
+          "scale_label": "1M",
+          "workload": "session",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": "",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "",
+          "metrics": {
+            "open and close ms": {
+              "median": 7.232,
+              "min": 6.986,
+              "max": 22.01,
+              "n": 3
+            },
+            "one query ms": {
+              "median": 12.991,
+              "min": 8.981,
+              "max": 21.532,
+              "n": 3
+            },
+            "one write ms": {
+              "median": 16.064,
               "min": 14.721,
-              "max": 21.814,
+              "max": 19.363,
               "n": 3
             },
-            "write session ms": {
-              "median": 28.657,
-              "min": 26.387,
-              "max": 41.498,
+            "write into the structure ms": {
+              "median": 27.084,
+              "min": 24.631,
+              "max": 41.466,
               "n": 3
             },
-            "write_own session ms": {
-              "median": 26.561,
-              "min": 24.748,
-              "max": 42.507,
-              "n": 3
-            },
-            "write_own_read session ms": {
-              "median": 22.599,
-              "min": 21.805,
-              "max": 42.578,
+            "write, then query ms": {
+              "median": 26.063,
+              "min": 25.135,
+              "max": 27.284,
               "n": 3
             },
             "peak memory GiB": {
-              "median": 15.2705,
-              "min": 15.2597,
-              "max": 15.2731,
+              "median": 10.5089,
+              "min": 10.5058,
+              "max": 10.5192,
               "n": 3
             },
             "disk GiB": {
-              "median": 0.0586,
-              "min": 0.0586,
-              "max": 0.0587,
+              "median": 0.3839,
+              "min": 0.3839,
+              "max": 0.3839,
               "n": 3
             }
           }
         },
         {
-          "backend": "vector",
+          "backend": "Time series (embedded)",
+          "is_arcadedb": true,
+          "scale": "lc1m",
+          "scale_label": "1M",
+          "workload": "session",
+          "n_docs": "1000000",
+          "deployment": "embedded",
+          "image": "dbbench:arcadedb",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "container:b39b7a4abbe4 (host unknown)",
+          "metrics": {
+            "JVM start ms": {
+              "median": 187.103,
+              "min": 179.173,
+              "max": 195.968,
+              "n": 5
+            },
+            "first open ms": {
+              "median": 165.157,
+              "min": 159.906,
+              "max": 175.618,
+              "n": 5
+            },
+            "cold process ms": {
+              "median": 471.924,
+              "min": 460.47,
+              "max": 492.853,
+              "n": 5
+            },
+            "open and close ms": {
+              "median": 10.493,
+              "min": 10.031,
+              "max": 14.177,
+              "n": 5
+            },
+            "one query ms": {
+              "median": 10.486,
+              "min": 10.097,
+              "max": 16.136,
+              "n": 5
+            },
+            "one write ms": {
+              "median": 19.807,
+              "min": 16.764,
+              "max": 24.568,
+              "n": 5
+            },
+            "write into the structure ms": {
+              "median": 20.749,
+              "min": 16.584,
+              "max": 22.991,
+              "n": 5
+            },
+            "write, then query ms": {
+              "median": 17.418,
+              "min": 16.607,
+              "max": 26.279,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 10.098,
+              "min": 10.0854,
+              "max": 10.1041,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Time series (server)",
+          "is_arcadedb": true,
+          "scale": "lc1m",
+          "scale_label": "1M",
+          "workload": "session",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": "",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "",
+          "metrics": {
+            "open and close ms": {
+              "median": 12.808,
+              "min": 12.145,
+              "max": 23.03,
+              "n": 3
+            },
+            "one query ms": {
+              "median": 14.658,
+              "min": 13.376,
+              "max": 20.867,
+              "n": 3
+            },
+            "one write ms": {
+              "median": 24.592,
+              "min": 22.723,
+              "max": 34.309,
+              "n": 3
+            },
+            "write into the structure ms": {
+              "median": 21.25,
+              "min": 20.608,
+              "max": 31.83,
+              "n": 3
+            },
+            "write, then query ms": {
+              "median": 23.877,
+              "min": 22.857,
+              "max": 39.375,
+              "n": 3
+            },
+            "peak memory GiB": {
+              "median": 10.1426,
+              "min": 10.1416,
+              "max": 10.1429,
+              "n": 3
+            },
+            "disk GiB": {
+              "median": 0.0187,
+              "min": 0.0187,
+              "max": 0.0187,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "Dense vectors (embedded)",
           "is_arcadedb": true,
           "scale": "lc10m",
           "scale_label": "10M",
@@ -9260,31 +8875,31 @@
               "max": 510.949,
               "n": 3
             },
-            "clean session ms": {
+            "open and close ms": {
               "median": 1420.452,
               "min": 1408.697,
               "max": 1485.894,
               "n": 3
             },
-            "read session ms": {
+            "one query ms": {
               "median": 17620.427,
               "min": 17586.891,
               "max": 17745.624,
               "n": 3
             },
-            "write session ms": {
+            "one write ms": {
               "median": 1490.846,
               "min": 1417.905,
               "max": 1516.505,
               "n": 3
             },
-            "write_own session ms": {
+            "write into the structure ms": {
               "median": 1488.131,
               "min": 1434.468,
               "max": 1488.306,
               "n": 3
             },
-            "write_own_read session ms": {
+            "write, then query ms": {
               "median": 17837.959,
               "min": 17779.71,
               "max": 17869.481,
@@ -9295,17 +8910,11 @@
               "min": 24.6814,
               "max": 24.7265,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 3
             }
           }
         },
         {
-          "backend": "vector (server)",
+          "backend": "Dense vectors (server)",
           "is_arcadedb": true,
           "scale": "lc10m",
           "scale_label": "10M",
@@ -9316,31 +8925,31 @@
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
           "host": "",
           "metrics": {
-            "clean session ms": {
+            "open and close ms": {
               "median": 20.411,
               "min": 20.411,
               "max": 20.411,
               "n": 1
             },
-            "read session ms": {
+            "one query ms": {
               "median": 18120.302,
               "min": 18120.302,
               "max": 18120.302,
               "n": 1
             },
-            "write session ms": {
+            "one write ms": {
               "median": 15.869,
               "min": 15.869,
               "max": 15.869,
               "n": 1
             },
-            "write_own session ms": {
+            "write into the structure ms": {
               "median": 1490.804,
               "min": 1490.804,
               "max": 1490.804,
               "n": 1
             },
-            "write_own_read session ms": {
+            "write, then query ms": {
               "median": 18203.524,
               "min": 18203.524,
               "max": 18203.524,
@@ -9359,6 +8968,254 @@
               "n": 1
             }
           }
+        },
+        {
+          "backend": "Documents (embedded)",
+          "is_arcadedb": true,
+          "scale": "lc10m",
+          "scale_label": "10M",
+          "workload": "session",
+          "n_docs": "10000000",
+          "deployment": "embedded",
+          "image": "dbbench:arcadedb",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "container:824308314c1a (host unknown)",
+          "metrics": {
+            "JVM start ms": {
+              "median": 180.482,
+              "min": 179.857,
+              "max": 182.371,
+              "n": 3
+            },
+            "first open ms": {
+              "median": 144.399,
+              "min": 142.801,
+              "max": 145.445,
+              "n": 3
+            },
+            "cold process ms": {
+              "median": 428.621,
+              "min": 428.263,
+              "max": 429.211,
+              "n": 3
+            },
+            "open and close ms": {
+              "median": 5.062,
+              "min": 5.05,
+              "max": 5.457,
+              "n": 3
+            },
+            "one query ms": {
+              "median": 5.296,
+              "min": 5.165,
+              "max": 6.146,
+              "n": 3
+            },
+            "one write ms": {
+              "median": 12.428,
+              "min": 11.389,
+              "max": 13.263,
+              "n": 3
+            },
+            "write into the structure ms": {
+              "median": 14.009,
+              "min": 13.734,
+              "max": 14.554,
+              "n": 3
+            },
+            "write, then query ms": {
+              "median": 13.442,
+              "min": 13.001,
+              "max": 14.41,
+              "n": 3
+            },
+            "peak memory GiB": {
+              "median": 15.3188,
+              "min": 15.276,
+              "max": 15.33,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "Documents (server)",
+          "is_arcadedb": true,
+          "scale": "lc10m",
+          "scale_label": "10M",
+          "workload": "session",
+          "n_docs": "10000000",
+          "deployment": "server",
+          "image": "",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "",
+          "metrics": {
+            "open and close ms": {
+              "median": 6.074,
+              "min": 5.988,
+              "max": 6.297,
+              "n": 3
+            },
+            "one query ms": {
+              "median": 7.649,
+              "min": 7.604,
+              "max": 8.144,
+              "n": 3
+            },
+            "one write ms": {
+              "median": 14.833,
+              "min": 13.207,
+              "max": 15.282,
+              "n": 3
+            },
+            "write into the structure ms": {
+              "median": 13.914,
+              "min": 12.862,
+              "max": 24.571,
+              "n": 3
+            },
+            "write, then query ms": {
+              "median": 15.786,
+              "min": 15.297,
+              "max": 30.262,
+              "n": 3
+            },
+            "peak memory GiB": {
+              "median": 15.2809,
+              "min": 15.277,
+              "max": 15.2964,
+              "n": 3
+            },
+            "disk GiB": {
+              "median": 0.2982,
+              "min": 0.2982,
+              "max": 0.2982,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "Time series (embedded)",
+          "is_arcadedb": true,
+          "scale": "lc10m",
+          "scale_label": "10M",
+          "workload": "session",
+          "n_docs": "10000000",
+          "deployment": "embedded",
+          "image": "dbbench:arcadedb",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "container:95b46e8afd5e (host unknown)",
+          "metrics": {
+            "JVM start ms": {
+              "median": 185.988,
+              "min": 185.742,
+              "max": 186.442,
+              "n": 3
+            },
+            "first open ms": {
+              "median": 172.476,
+              "min": 172.136,
+              "max": 175.875,
+              "n": 3
+            },
+            "cold process ms": {
+              "median": 477.586,
+              "min": 474.824,
+              "max": 493.019,
+              "n": 3
+            },
+            "open and close ms": {
+              "median": 10.478,
+              "min": 10.354,
+              "max": 23.391,
+              "n": 3
+            },
+            "one query ms": {
+              "median": 11.187,
+              "min": 10.822,
+              "max": 22.47,
+              "n": 3
+            },
+            "one write ms": {
+              "median": 21.389,
+              "min": 18.79,
+              "max": 40.651,
+              "n": 3
+            },
+            "write into the structure ms": {
+              "median": 22.298,
+              "min": 18.637,
+              "max": 41.186,
+              "n": 3
+            },
+            "write, then query ms": {
+              "median": 19.676,
+              "min": 19.058,
+              "max": 41.249,
+              "n": 3
+            },
+            "peak memory GiB": {
+              "median": 15.2349,
+              "min": 15.2115,
+              "max": 15.2475,
+              "n": 3
+            }
+          }
+        },
+        {
+          "backend": "Time series (server)",
+          "is_arcadedb": true,
+          "scale": "lc10m",
+          "scale_label": "10M",
+          "workload": "session",
+          "n_docs": "10000000",
+          "deployment": "server",
+          "image": "",
+          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
+          "host": "",
+          "metrics": {
+            "open and close ms": {
+              "median": 13.464,
+              "min": 12.757,
+              "max": 21.564,
+              "n": 3
+            },
+            "one query ms": {
+              "median": 14.849,
+              "min": 14.721,
+              "max": 21.814,
+              "n": 3
+            },
+            "one write ms": {
+              "median": 28.657,
+              "min": 26.387,
+              "max": 41.498,
+              "n": 3
+            },
+            "write into the structure ms": {
+              "median": 26.561,
+              "min": 24.748,
+              "max": 42.507,
+              "n": 3
+            },
+            "write, then query ms": {
+              "median": 22.599,
+              "min": 21.805,
+              "max": 42.578,
+              "n": 3
+            },
+            "peak memory GiB": {
+              "median": 15.2705,
+              "min": 15.2597,
+              "max": 15.2731,
+              "n": 3
+            },
+            "disk GiB": {
+              "median": 0.0586,
+              "min": 0.0586,
+              "max": 0.0587,
+              "n": 3
+            }
+          }
         }
       ],
       "source_paths": [
@@ -9373,11 +9230,11 @@
         "JVM start ms": "down",
         "first open ms": "down",
         "cold process ms": "down",
-        "clean session ms": "down",
-        "read session ms": "down",
-        "write session ms": "down",
-        "write_own session ms": "down",
-        "write_own_read session ms": "down",
+        "open and close ms": "down",
+        "one query ms": "down",
+        "one write ms": "down",
+        "write into the structure ms": "down",
+        "write, then query ms": "down",
         "peak memory GiB": "down",
         "disk GiB": "down"
       }

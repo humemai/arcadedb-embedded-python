@@ -170,6 +170,10 @@ PROSE = [
      lambda P: P("e2atom", "Qdrant + Neo4j (no shared transaction)", "e2", "torn results")),
     ("e2atom.arcadedb.torn", r"ArcadeDB and SurrealDB in (\d+) of 40",
      lambda P: max(P("e2atom", "ArcadeDB (one transaction)", "e2", "torn results"), P("e2atom", "SurrealDB (embedded)", "e2", "torn results"))),
+    ("lifecycle.cold_process", r"reaches its first database call in about (\d+(?:\.\d+)?) s",
+     lambda P: round(P("lifecycle", "Empty database (embedded)", "lc10k", "cold process ms") / 1000, 2)),
+    ("lifecycle.clean_session", r"opening and closing an empty database costs about (\d+(?:\.\d+)?) ms",
+     lambda P: P("lifecycle", "Empty database (embedded)", "lc10k", "open and close ms")),
     ("dense.second_pass", r"ArcadeDB alone gains about (\d+(?:\.\d+)?)x on a second pass",
      lambda P: P("l3d", "ArcadeDB (embedded, fp32)", "deep10m", "cold p50 ms") / P("l3d", "ArcadeDB (embedded, fp32)", "deep10m", "warm p50 ms")),
 ]
