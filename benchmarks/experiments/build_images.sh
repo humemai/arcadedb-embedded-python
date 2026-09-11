@@ -77,8 +77,15 @@ case "$_pin" in
 esac
 echo "arcadedb pin: $_pin"
 
-targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense)
+targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age)
 for be in "${targets[@]}"; do
+  if [ "$be" = "pg-age" ]; then
+    # PostgreSQL 17 + pgvector + Apache AGE, a server image (Dockerfile.pgage),
+    # the cross-model lane's "one engine" rival (2026-09-11).
+    echo "=== dbbench:pg-age (Dockerfile.pgage)"
+    docker build -q -t dbbench:pg-age -f Dockerfile.pgage . >/dev/null && echo "  ok"
+    continue
+  fi
   echo "=== dbbench:$be (${PKGS[$be]})"
   docker build -q -t "dbbench:$be" --build-arg PIP_PACKAGES="${PKGS[$be]}" \
     -f Dockerfile.bench . >/dev/null && echo "  ok"

@@ -1,0 +1,7 @@
+# PostgreSQL 17 + pgvector 0.8.6 + Apache AGE 1.6.0: the "one engine" rival to
+# the cross-model transaction (pgvector hit, Cypher hop through AGE, row update,
+# one transaction). Base image pinned by digest; AGE from the PGDG apt repo the
+# postgres image already carries. Built as dbbench:pg-age by build_images.sh.
+FROM pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-17-age \
+    && rm -rf /var/lib/apt/lists/*

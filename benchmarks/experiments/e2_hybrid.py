@@ -226,20 +226,30 @@ def _srows(res):
 
 
 class SurrealE2:
+    """SurrealDB embedded through its Python SDK, on the SDK's SurrealKV disk
+    store (2026-09-11; it ran at mem:// before, which no other engine on the
+    table was allowed). The SDK bundles engine 2.0.0; the served twin below
+    runs the 3.2.4 server on RocksDB."""
     name = "surrealdb_e2"
+    URL = "surrealkv:///tmp/e2_surrealkv"
 
     def __init__(self):
+        import shutil
         from surrealdb import Surreal
-        self.db = Surreal("mem://")
+        shutil.rmtree("/tmp/e2_surrealkv", ignore_errors=True)
+        self.db = Surreal(self.URL)
         self.db.use("bench", "bench")
-        # THE DRIVER'S version, not its name (#156). Note this is the Python
-        # client: this arm runs SurrealDB IN-PROCESS at mem://, so there is no
-        # server to ask, which is itself the disclosure #153 is about.
-        from importlib.metadata import version as _v
-        self.version = "surrealdb-py:" + _v("surrealdb")
+        try:
+            self.version = "surrealdb-embedded:" + str(self.db.version()).replace("surrealdb-", "")
+        except Exception:  # noqa: BLE001
+            from importlib.metadata import version as _v
+            self.version = "surrealdb-py:" + _v("surrealdb")
 
     def build(self, vecs, edges):
         q = self.db.query
+        # A fresh cell gets a fresh server; a reused one (laptop smoke) must
+        # not fail on "index already exists".
+        q("REMOVE TABLE IF EXISTS related; REMOVE TABLE IF EXISTS product")
         q(f"DEFINE INDEX pe ON product FIELDS embedding "
           f"HNSW DIMENSION {DIM} DIST EUCLIDEAN")
         for s in range(0, len(vecs), BATCH):
@@ -291,6 +301,156 @@ class SurrealE2:
 
     def close(self):
         pass
+
+
+class SurrealServedE2(SurrealE2):
+    """SurrealDB 3.2.4 server on RocksDB, reached over WebSocket; the same
+    SurrealQL as the embedded arm."""
+    name = "surrealdb_e2_server"
+
+    def __init__(self):
+        from surrealdb import Surreal
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.db = Surreal(f"ws://{host}:8000/rpc")
+        self.db.signin({"username": "root", "password": "root"})
+        self.db.use("bench", "bench")
+        self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
+
+
+class PgAgeE2:
+    """PostgreSQL 17 with pgvector and Apache AGE in one database: the vector
+    hit is an HNSW query on a vector column, the hop is Cypher through AGE
+    over RELATED edges, the update is a row update, all inside one
+    transaction. The strongest "one engine" rival to the claim this lane
+    tests (2026-09-11)."""
+    name = "pg_age_e2"
+
+    def __init__(self):
+        import psycopg
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.cx = psycopg.connect(f"host={host} dbname=bench user=postgres password=dbbenchpass",
+                                  autocommit=False)
+        with self.cx.cursor() as c:
+            c.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            c.execute("CREATE EXTENSION IF NOT EXISTS age")
+            c.execute("SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector','age')")
+            ext = dict(c.fetchall())
+            c.execute("SELECT version()")
+            pv = c.fetchone()[0].split(" (")[0]
+        self.cx.commit()
+        self.version = f"{pv} + pgvector:{ext.get('vector')} + age:{ext.get('age')}"
+
+    def _cur(self):
+        c = self.cx.cursor()
+        c.execute("LOAD 'age'")
+        c.execute('SET search_path = ag_catalog, "$user", public')
+        return c
+
+    def build(self, vecs, edges):
+        c = self._cur()
+        # A fresh cell gets a fresh server; a reused one (laptop smoke) starts clean.
+        c.execute("DROP TABLE IF EXISTS product")
+        c.execute("SELECT ag_catalog.drop_graph('e2graph', true) FROM ag_catalog.ag_graph WHERE name = 'e2graph'")
+        self.cx.commit()
+        c = self._cur()
+        c.execute(f"CREATE TABLE product (pid INTEGER PRIMARY KEY, views INTEGER NOT NULL DEFAULT 0, embedding vector({DIM}))")
+        with c.copy("COPY product (pid, views, embedding) FROM STDIN") as cp:
+            for i in range(len(vecs)):
+                cp.write_row((i, 0, "[" + ",".join("%.9g" % x for x in vecs[i]) + "]"))
+        c.execute("CREATE INDEX ON product USING hnsw (embedding vector_l2_ops) WITH (m = 16, ef_construction = 100)")
+        c.execute("SELECT create_graph('e2graph')")
+        c.execute("SELECT * FROM cypher('e2graph', $$ CREATE (:Product {pid: -1}) $$) AS (v agtype)")
+        c.execute("SELECT * FROM cypher('e2graph', $$ MATCH (p:Product {pid: -1}) DELETE p $$) AS (v agtype)")
+        c.execute("""CREATE INDEX ON e2graph."Product" USING btree (ag_catalog.agtype_access_operator(properties, '"pid"'::agtype))""")
+        for s in range(0, len(vecs), BATCH):
+            c.execute("SELECT * FROM cypher('e2graph', $$ UNWIND $rows AS r CREATE (:Product {pid: r}) $$, %s) AS (v agtype)",
+                      (json.dumps({"rows": list(range(s, min(s + BATCH, len(vecs))))}),))
+        for s in range(0, len(edges), BATCH):
+            c.execute("SELECT * FROM cypher('e2graph', $$ UNWIND $rows AS r MATCH (a:Product {pid: r.s}), (b:Product {pid: r.d}) CREATE (a)-[:RELATED]->(b) $$, %s) AS (v agtype)",
+                      (json.dumps({"rows": [{"s": a, "d": b} for a, b in edges[s:s + BATCH]]}),))
+        self.cx.commit()
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        c = self._cur()
+        c.execute("SET LOCAL hnsw.ef_search = 100")
+        c.execute("SELECT pid FROM product ORDER BY embedding <-> %s::vector LIMIT %s",
+                  ("[" + ",".join("%.9g" % float(x) for x in qvec) + "]", K))
+        pids = [int(r[0]) for r in c.fetchall()]
+        c.execute(f"SELECT * FROM cypher('e2graph', $$ MATCH (a:Product {{pid: {pids[0]}}})-[:RELATED]->(b) RETURN b.pid $$) AS (pid agtype)")
+        rel = [int(str(r[0])) for r in c.fetchall()]
+        touched = pids[:3] + rel[:3]
+        c.execute("UPDATE product SET views = views + 1 WHERE pid = ANY(%s)", (list(set(touched)),))
+        if crash:
+            self.cx.rollback()
+            raise RuntimeError("injected-crash")
+        self.cx.commit()
+        return len(touched)
+
+    def total_views(self):
+        c = self._cur()
+        c.execute("SELECT sum(views) FROM product")
+        v = int(c.fetchone()[0] or 0)
+        self.cx.commit()
+        return v
+
+    def close(self):
+        self.cx.close()
+
+
+class Neo4jE2:
+    """Neo4j 2026.07 alone: Product nodes with an embedding property under its
+    vector index, RELATED edges, the views counter on the node; the hit, the
+    hop and the update run in one explicit transaction (2026-09-11)."""
+    name = "neo4j_e2"
+
+    def __init__(self):
+        from neo4j import GraphDatabase
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.drv = GraphDatabase.driver(f"bolt://{host}:7687", auth=("neo4j", "dbbenchpass"))
+        with self.drv.session() as s:
+            v = s.run("CALL dbms.components() YIELD versions RETURN versions[0] AS v").single()["v"]
+        self.version = f"neo4j:{v}"
+
+    def build(self, vecs, edges):
+        with self.drv.session() as s:
+            s.run("CREATE CONSTRAINT IF NOT EXISTS FOR (p:Product) REQUIRE p.pid IS UNIQUE").consume()
+            for b0 in range(0, len(vecs), BATCH):
+                rows = [{"pid": i, "e": vecs[i].tolist()} for i in range(b0, min(b0 + BATCH, len(vecs)))]
+                s.run("UNWIND $rows AS r CREATE (:Product {pid: r.pid, views: 0, embedding: r.e})", rows=rows).consume()
+            eb = [{"s": a, "d": b} for a, b in edges]
+            for b0 in range(0, len(eb), BATCH):
+                s.run("UNWIND $rows AS r MATCH (a:Product {pid: r.s}), (b:Product {pid: r.d}) CREATE (a)-[:RELATED]->(b)",
+                      rows=eb[b0:b0 + BATCH]).consume()
+            s.run(f"CREATE VECTOR INDEX prod_emb IF NOT EXISTS FOR (p:Product) ON (p.embedding) "
+                  f"OPTIONS {{indexConfig: {{`vector.dimensions`: {DIM}, `vector.similarity_function`: 'euclidean', "
+                  f"`vector.hnsw.m`: 16, `vector.hnsw.ef_construction`: 100}}}}").consume()
+            s.run("CALL db.awaitIndexes(36000)").consume()
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        with self.drv.session() as s:
+            tx = s.begin_transaction()
+            try:
+                hits = tx.run("CYPHER 25 MATCH (p:Product) SEARCH p IN (VECTOR INDEX prod_emb FOR $q LIMIT 100) "
+                              "SCORE AS sc RETURN p.pid AS pid ORDER BY sc DESC LIMIT $k",
+                              q=[float(x) for x in qvec], k=K).data()
+                pids = [int(h["pid"]) for h in hits]
+                rel = tx.run("MATCH (p:Product {pid: $p})-[:RELATED]->(q) RETURN q.pid AS pid LIMIT 3", p=pids[0]).data()
+                touched = pids[:3] + [int(r["pid"]) for r in rel]
+                tx.run("UNWIND $ps AS p MATCH (n:Product {pid: p}) SET n.views = n.views + 1", ps=list(set(touched))).consume()
+                if crash:
+                    tx.rollback()
+                    raise RuntimeError("injected-crash")
+                tx.commit()
+            finally:
+                tx.close()
+        return len(touched)
+
+    def total_views(self):
+        with self.drv.session() as s:
+            return int(s.run("MATCH (n:Product) RETURN sum(n.views) AS s").single()["s"] or 0)
+
+    def close(self):
+        self.drv.close()
 
 
 class ComposedE2:
@@ -415,7 +575,7 @@ class ComposedE2:
         self.neo.close()
 
 
-BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, ComposedE2)}
+BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, PgAgeE2, Neo4jE2, ComposedE2)}
 
 
 def main():

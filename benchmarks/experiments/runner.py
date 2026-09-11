@@ -606,6 +606,43 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:client",
     },
+    # THE RIVAL "ONE ENGINE" STACKS (2026-09-11). PostgreSQL with pgvector and
+    # Apache AGE in one database (a locally built image, Dockerfile.pgage;
+    # the row records the three component versions at connect), Neo4j with
+    # its own vector index, and SurrealDB 3.2.4 served on RocksDB (a path in
+    # the container's writable layer: the image runs unprivileged and cannot
+    # write a bind mount). Each does the whole operation in one transaction,
+    # like ArcadeDB and unlike the composed stack.
+    "pg_age_e2": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "dbbench:pg-age",  # PostgreSQL 17.11 + pgvector 0.8.6 + AGE 1.7.0, built from Dockerfile.pgage
+        "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
+        "server_port": 5432,
+        "ready_regex": r"(?s)PostgreSQL init process complete.*"
+                       r"database system is ready to accept connections",
+    },
+    "neo4j_e2": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
+        "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
+                       "-e", "NEO4J_server_memory_heap_initial__size={heap}",
+                       "-e", "NEO4J_server_memory_heap_max__size={heap}",
+                       "-e", "NEO4J_server_memory_pagecache_size={pagecache}"],
+        "server_port": 7687,
+        "ready_regex": r"Started\.",
+    },
+    "surrealdb_e2_server": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_port": 8000,
+        "ready_regex": r"Started web server",
+    },
     "composed_qdrant_neo4j": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1105,7 +1142,8 @@ LANES = {
                "postgres_tuned"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
-           ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "composed_qdrant_neo4j"],
+           ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
+            "pg_age_e2", "neo4j_e2", "composed_qdrant_neo4j"],
            ["hybrid", "atomicity"]),
     # L5 measures OPEN and CLOSE, which every embedded deployment does and no
     # benchmark measures. Situations ride the WORKLOAD axis, so each is its own
