@@ -478,7 +478,7 @@
       "dataset": "Big-ANN'23 Sparse (real SPLADE over MS MARCO)",
       "conditions": [
         "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
-        "ingest+index total s is one timer around inserting the documents and building the index; the two are not timed separately (Qdrant builds its index while ingesting, so the split is not defined there). ingest+index docs/s divides the document count by it.",
+        "ingest+index total s is one timer around inserting the documents and building the index; the two are not timed separately (Qdrant builds its index while ingesting, so the split is not defined there). ingest+index vectors/s divides the document count by it.",
         "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
         "Every number here is cold, the first timed pass after the index is built. Warm, the same engines run again over an index they have already read, shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. The dense table below is not like this: there ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
         "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
@@ -489,7 +489,7 @@
         "p50 ms",
         "p99 ms",
         "recall@10",
-        "ingest+index docs/s",
+        "ingest+index vectors/s",
         "ingest+index total s",
         "peak memory GiB",
         "disk GiB"
@@ -528,7 +528,7 @@
               "max": 0.995,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 10822.8,
               "min": 10704.0,
               "max": 11065.7,
@@ -585,7 +585,7 @@
               "max": 1.0,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 11483.5,
               "min": 11151.8,
               "max": 11844.2,
@@ -642,7 +642,7 @@
               "max": 0.995,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 3956.7,
               "min": 3809.7,
               "max": 4074.7,
@@ -699,7 +699,7 @@
               "max": 1.0,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 3863.4,
               "min": 3834.5,
               "max": 3908.9,
@@ -756,7 +756,7 @@
               "max": 0.997,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 2869.0,
               "min": 2852.4,
               "max": 2930.0,
@@ -813,7 +813,7 @@
               "max": 1.0,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 5538.6,
               "min": 5445.6,
               "max": 5583.5,
@@ -870,7 +870,7 @@
               "max": 1.0,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 11848.3,
               "min": 11688.0,
               "max": 12423.0,
@@ -927,7 +927,7 @@
               "max": 0.9935,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 10581.1,
               "min": 10402.9,
               "max": 10668.2,
@@ -984,7 +984,7 @@
               "max": 1.0,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 10584.3,
               "min": 10415.8,
               "max": 10956.0,
@@ -1041,7 +1041,7 @@
               "max": 0.9935,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 4023.0,
               "min": 3994.0,
               "max": 4094.7,
@@ -1098,7 +1098,7 @@
               "max": 1.0,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 3967.4,
               "min": 3854.0,
               "max": 4029.7,
@@ -1155,7 +1155,7 @@
               "max": 0.9972,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 2980.8,
               "min": 2968.0,
               "max": 3010.3,
@@ -1212,7 +1212,7 @@
               "max": 1.0,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 8331.4,
               "min": 8248.3,
               "max": 9135.8,
@@ -1269,7 +1269,7 @@
               "max": 1.0,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 10548.2,
               "min": 10217.8,
               "max": 10838.0,
@@ -1326,7 +1326,7 @@
               "max": 0.9914,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 9614.0,
               "min": 9494.3,
               "max": 9675.0,
@@ -1383,7 +1383,7 @@
               "max": 0.9999,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 9713.9,
               "min": 9699.3,
               "max": 9766.1,
@@ -1440,7 +1440,7 @@
               "max": 0.9914,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 3826.1,
               "min": 3815.6,
               "max": 3863.3,
@@ -1497,7 +1497,7 @@
               "max": 0.9999,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 3842.6,
               "min": 3756.3,
               "max": 3903.4,
@@ -1554,7 +1554,7 @@
               "max": 0.9968,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 2826.8,
               "min": 2825.3,
               "max": 2874.2,
@@ -1611,7 +1611,7 @@
               "max": 0.9999,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 8565.9,
               "min": 8507.4,
               "max": 8679.6,
@@ -1668,7 +1668,7 @@
               "max": 0.9999,
               "n": 5
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 4858.3,
               "min": 4813.1,
               "max": 4871.9,
@@ -6359,7 +6359,7 @@
         "warm p50 ms",
         "warm p99 ms",
         "gain",
-        "ingest+index docs/s",
+        "ingest+index vectors/s",
         "ingest+index total s",
         "peak memory GiB",
         "disk GiB"
@@ -6412,7 +6412,7 @@
               "max": 1.09,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 10458.1,
               "min": 10458.1,
               "max": 10458.1,
@@ -6481,7 +6481,7 @@
               "max": 1.08,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 10577.5,
               "min": 10577.5,
               "max": 10577.5,
@@ -6550,7 +6550,7 @@
               "max": 1.14,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 3872.5,
               "min": 3872.5,
               "max": 3872.5,
@@ -6619,7 +6619,7 @@
               "max": 1.15,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 4013.8,
               "min": 4013.8,
               "max": 4013.8,
@@ -6688,7 +6688,7 @@
               "max": 1.14,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 2943.5,
               "min": 2943.5,
               "max": 2943.5,
@@ -6757,7 +6757,7 @@
               "max": 0.75,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 7828.4,
               "min": 7828.4,
               "max": 7828.4,
@@ -6826,7 +6826,7 @@
               "max": 0.99,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 10344.5,
               "min": 10344.5,
               "max": 10344.5,
@@ -6895,7 +6895,7 @@
               "max": 1.04,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 9534.0,
               "min": 9534.0,
               "max": 9534.0,
@@ -6964,7 +6964,7 @@
               "max": 1.0,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 9675.0,
               "min": 9675.0,
               "max": 9675.0,
@@ -7033,7 +7033,7 @@
               "max": 1.04,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 3880.3,
               "min": 3880.3,
               "max": 3880.3,
@@ -7102,7 +7102,7 @@
               "max": 1.06,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 3856.9,
               "min": 3856.9,
               "max": 3856.9,
@@ -7171,7 +7171,7 @@
               "max": 1.0,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 2831.4,
               "min": 2831.4,
               "max": 2831.4,
@@ -7240,7 +7240,7 @@
               "max": 1.04,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 8143.9,
               "min": 8143.9,
               "max": 8143.9,
@@ -7309,7 +7309,7 @@
               "max": 1.0,
               "n": 1
             },
-            "ingest+index docs/s": {
+            "ingest+index vectors/s": {
               "median": 4814.0,
               "min": 4814.0,
               "max": 4814.0,
