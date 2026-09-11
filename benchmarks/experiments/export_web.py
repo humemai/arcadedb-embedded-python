@@ -28,6 +28,7 @@ exists, and the page says so instead of implying a uniform environment.
 from __future__ import annotations
 
 import csv
+import collections
 import json
 import os
 import re
@@ -39,7 +40,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from runner import BACKENDS  # noqa: E402  (path set above)
+from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path set above)
 
 FROZEN = HERE / "results" / "runs_paper.csv"
 OUT = HERE / "results" / "web_benchmarks.json"
@@ -490,8 +491,8 @@ SCALE_LABELS = {
     # own vocabulary rather than ours; the person count says how big that is.
     ("l2", "sf1"): "SF1 (11k people)",
     ("l2", "sf10"): "SF10 (73k people)",
-    ("l1", "medium"): "20M records",
-    ("l1tpc", "tpch1"): "SF1",
+    ("l1", "medium"): "20M orders (synthetic)",
+    ("l1tpc", "tpch1"): "TPC-H SF1",
     ("e2", "e2"): "50k products",
     # TSBS publishes its corpus as a point count, which is what the ingest
     # column is per second of.
@@ -1930,7 +1931,118 @@ def _finish_table(table: dict) -> dict:
     note = INGEST_NOTES.get(table["id"])
     if note and any("ingest" in c for c in table["columns"]) and note not in table.get("conditions", []):
         table["conditions"] = list(table.get("conditions", [])) + [note]
+    # Which way is better, per column, so the header can say it (2026-09-11).
+    # Rates, throughput, recall and gain go up; times and footprints go down;
+    # plain counts (trials, crashes raised) have no direction.
+    dirs = {}
+    for c in table["columns"]:
+        if c in ("trials", "crashes raised"):
+            continue
+        if "/s" in c or c in ("recall@10", "gain"):
+            dirs[c] = "up"
+        elif c.endswith(" ms") or c.endswith(" s") or c.endswith(" GiB") or c in ("torn results", "vs Java"):
+            dirs[c] = "down"
+    table["directions"] = dirs
     return table
+
+
+# The host's hardware, typed once per host name and attached to the payload
+# for every host the rows name; a row from an unknown host stops the export
+# rather than publishing numbers with no machine behind them.
+HOST_HARDWARE = {
+    "mini": {
+        "cpu": "Intel Core i9-12900HK, 14 cores (6 performance, 8 efficient), 20 threads, 24 MiB L3",
+        "memory": "64 GiB",
+        "storage": "Samsung 980 PRO 2 TB NVMe",
+        "os": "Ubuntu 26.04 LTS, Linux 7.0, Docker 29",
+    },
+}
+
+
+# The machine every published row ran on. Typed once, like the "mini" the
+# overlay entries carry, because no lane stamps the host into its rows yet
+# (they stamp the container id; BENCH_HOST is exported by every queue script
+# and never recorded). October: record BENCH_HOST in every row and derive
+# this from the rows instead.
+PAGE_HOST = "mini"
+
+
+def _host_hardware(hosts):
+    named = sorted({h for h in hosts if h and not str(h).startswith("container:")} | {PAGE_HOST})
+    missing = [h for h in named if h not in HOST_HARDWARE]
+    if missing:
+        raise SystemExit(f"rows name a host with no HOST_HARDWARE entry: {missing}")
+    return {h: HOST_HARDWARE[h] for h in named}
+
+
+def _restructure_tables(tables, rows):
+    """Page-level reshaping that no single lane can do (2026-09-11):
+
+    - the sparse second-pass table folds into the sparse search table as warm
+      columns, the way the dense table already shows both passes;
+    - the three document tables (synthetic orders, its five queries, TPC)
+      become two, by workload: transactions and analytics, with the dataset in
+      the Size column, the way the graph section is split.
+    The tables that fed them are retired (page_check.RETIRED_TABLES)."""
+    by = {t["id"]: t for t in tables}
+    if "l3s" in by and "l3smp" in by:
+        mp = {(e["backend"], e["scale"]): e for e in by["l3smp"]["entries"]}
+        for e in by["l3s"]["entries"]:
+            m = e["metrics"]
+            if "p50 ms" in m:
+                m["cold p50 ms"] = m.pop("p50 ms")
+            if "p99 ms" in m:
+                m["cold p99 ms"] = m.pop("p99 ms")
+            src = mp.get((e["backend"], e["scale"]))
+            if src:
+                for k in ("warm p50 ms", "warm p99 ms", "gain"):
+                    if k in src["metrics"]:
+                        m[k] = src["metrics"][k]
+        t = by["l3s"]
+        t["columns"] = (["cold p50 ms", "cold p99 ms", "warm p50 ms", "warm p99 ms", "gain"]
+                        + [c for c in t["columns"] if c not in ("p50 ms", "p99 ms")])
+        t["conditions"] = list(t["conditions"]) + [
+            "Cold p50 and p99 are the first timed pass after the build, median of five builds. "
+            "Warm and gain come from a separate run of the same arms: one build per engine, then "
+            "five more passes over a different half of the query set, so a warm number cannot be "
+            "explained by the engine having already answered that exact query; gain is that run's "
+            "cold over its warm. 100k has no second-pass run.",
+        ]
+        t["source_paths"] = list(t.get("source_paths") or []) + list(by["l3smp"].get("source_paths") or [])
+        t["source_urls"] = list(t.get("source_urls") or []) + list(by["l3smp"].get("source_urls") or [])
+        tables.remove(by["l3smp"])
+    if all(k in by for k in ("l1", "l1olap", "l1tpc")):
+        # THE PAGE SHOWS THE STANDARD DOCUMENT BENCHMARKS ONLY (2026-09-11).
+        # The synthetic 20M-order workload and TPC measure different things
+        # (reads/inserts/updates against a new-order transaction; five bespoke
+        # aggregates against Q1/Q6), so one table per workload holding both
+        # was half blank. TPC-C is the transactions table, TPC-H the
+        # analytics table; the synthetic set stays in the paper and the
+        # harness.
+        def clone(e, keep):
+            n = dict(e)
+            n["metrics"] = {k: v for k, v in e["metrics"].items() if k in keep}
+            return n
+        OLTP_KEEP = {"new-order p50 ms", "new-order p99 ms", "OLTP ops/s",
+                     "ingest documents/s", "ingest total s", "peak memory GiB", "disk GiB"}
+        OLAP_KEEP = {"Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms",
+                     "ingest documents/s", "ingest total s", "peak memory GiB", "disk GiB"}
+        src = by["l1tpc"]
+        base = {"withheld_scales": [], "withheld_reason": None,
+                "source_paths": src.get("source_paths"), "source_urls": src.get("source_urls")}
+        tables.append({"id": "docs_oltp", "title": "Document transactions",
+                       "dataset": "TPC-C new-order on the TPC-H SF1 tables",
+                       "conditions": list(src["conditions"]),
+                       "columns": ["new-order p50 ms", "new-order p99 ms", "OLTP ops/s"],
+                       "entries": [clone(e, OLTP_KEEP) for e in src["entries"]], **base})
+        tables.append({"id": "docs_olap", "title": "Document analytics",
+                       "dataset": "TPC-H Q1 and Q6 at SF1",
+                       "conditions": list(src["conditions"]),
+                       "columns": ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"],
+                       "entries": [clone(e, OLAP_KEEP) for e in src["entries"]], **base})
+        for i in ("l1", "l1olap", "l1tpc"):
+            tables.remove(by[i])
+    return tables
 
 
 def main() -> int:
@@ -2007,8 +2119,14 @@ def main() -> int:
                 continue
             if only_scales and scale not in only_scales:
                 continue
-            if spec.get("only_workload") and workload != spec["only_workload"]:
-                continue
+            # Row-level, not group-level: merged lanes (l1, l1tpc) group both
+            # workloads under one key with a blank label, so a group-level
+            # test never matched and the per-query OLAP table was empty from
+            # the day the merge landed until 2026-09-11 (BUGS F30).
+            if spec.get("only_workload"):
+                rs = [r for r in rs if r.get("workload") == spec["only_workload"]]
+                if not rs:
+                    continue
             # The no-settle ablation is MEASURED but not PUBLISHED, and the
             # page was the only place it appeared. Neither paper reports it:
             # T4 is a clean head-to-head, one ArcadeDB row against three
@@ -2289,7 +2407,16 @@ def main() -> int:
             "what the frozen rows can prove."
         ),
         "hosts_recorded": hosts,
-        "tables": [_finish_table(t) for t in tables],
+        "setup": {
+            # Lanes that record the container rather than the machine stamp
+            # "container:<id> (host unknown)"; the named hosts are the ones
+            # that must have hardware on record.
+            "hosts": _host_hardware(hosts),
+            "cpuset": collections.Counter(str(r.get("cpuset")) for r in rows if r.get("cpuset")).most_common(1)[0][0],
+            "memory_cap_by_size": MEM_BY_SCALE,
+            "jvm_heap_by_size": HEAP_BY_SCALE,
+        },
+        "tables": [_finish_table(t) for t in _restructure_tables(tables, rows)],
     }
 
     # A table can draw on more than one artifact, so this is a LIST. It was a

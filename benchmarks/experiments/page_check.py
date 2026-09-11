@@ -57,10 +57,6 @@ DEFAULT_JSON = HERE / "results" / "web_benchmarks.json"
 # the exporter uses means a future rename moves both sides together.
 MAPPING = {
     # L1 tabular, OLTP throughput
-    "l1.arcadedb.oltp":   ("l1", "arcadedb_embedded", "OLTP ops/s"),
-    "l1.server.oltp":     ("l1", "arcadedb_server", "OLTP ops/s"),
-    "l1.postgres.oltp":   ("l1", "postgres", "OLTP ops/s"),
-    "l1.duckdb.oltp":     ("l1", "duckdb", "OLTP ops/s"),
     # L2 graph, 2-hop traversal
     "l2.arcadedb.hop2_p50": ("l2", "arcadedb_graph_embedded", "2-hop p50 ms"),
     "l2.neo4j.hop2_p50":    ("l2", "neo4j_graph", "2-hop p50 ms"),
@@ -163,11 +159,11 @@ PROSE = [
      lambda P: (P("l2olap", "ArcadeDB (embedded)", "sf10", "average friend age p50 ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "average friend age p50 ms")
                 + P("l2olap", "ArcadeDB (embedded)", "sf10", "friends in same city p50 ms") / P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "friends in same city p50 ms")) / 2),
     ("l3smp.max_gain.small", r"largest gain by any engine is (\d+(?:\.\d+)?)x at a million",
-     lambda P: P.max("l3smp", "small", "gain")),
+     lambda P: P.max("l3s", "small", "gain")),
     ("l3smp.max_gain.medium", r"and (\d+(?:\.\d+)?)x at 8\.84 million",
-     lambda P: P.max("l3smp", "medium", "gain")),
+     lambda P: P.max("l3s", "medium", "gain")),
     ("l3smp.max_gain.medium.pct", r"no engine gains more than (\d+)%",
-     lambda P: round((P.max("l3smp", "medium", "gain") - 1) * 100)),
+     lambda P: round((P.max("l3s", "medium", "gain") - 1) * 100)),
     ("e2atom.trials", r"interrupted mid-way, (\d+) trials per run",
      lambda P: P("e2atom", "ArcadeDB (one transaction)", "e2", "trials")),
     ("e2atom.composed.torn", r"left torn in (\d+) of 40 trials",
@@ -489,6 +485,10 @@ LIVE_JSON = PAGE_TS.parents[3] / "data" / "arcadedb-benchmarks.json"
 RETIRED_TABLES = {
     "ingest": "2026-09-11: folded into load columns on the graph, TPC and "
               "cross-model tables at the user's request; lived one day",
+    "l3smp": "2026-09-11: its warm columns and gain moved onto the sparse search table (l3s)",
+    "l1": "2026-09-11: the synthetic 20M-order workload stays in the paper; the page shows TPC only",
+    "l1olap": "2026-09-11: never rendered (BUGS F30); its queries are the synthetic set, paper only",
+    "l1tpc": "2026-09-11: split by workload into docs_oltp (new-order) and docs_olap (Q1, Q6)",
 }
 
 
@@ -595,7 +595,31 @@ def main() -> int:
     print("\nno table loses its ArcadeDB row against the live page")
     l_checked, l_bad = _check_no_arcadedb_row_lost(payload)
     print(f"\n{l_checked} table(s) checked against the live page, {l_bad} lost ArcadeDB")
-    return 1 if (bad or d_bad or p_bad or a_bad or l_bad) else 0
+    h_bad = _check_setup_prose(payload)
+    return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad) else 0
+
+
+def _check_setup_prose(payload):
+    """The page's hardware paragraph must name every host's CPU (the model
+    token) and the cpuset the rows ran on; a re-pin on another machine then
+    fails here until the prose is rewritten (2026-09-11)."""
+    setup = payload.get("setup") or {}
+    try:
+        prose = PAGE_TS.read_text(encoding="utf-8")
+    except Exception:
+        print("  (no page prose file; setup check skipped)")
+        return 0
+    bad = 0
+    for host, hw in (setup.get("hosts") or {}).items():
+        token = hw["cpu"].split(",")[0].split()[-1]   # e.g. i9-12900HK
+        if token not in prose:
+            print(f"  SETUP  host {host}: CPU {token} not named in the page prose"); bad += 1
+    cpuset = setup.get("cpuset")
+    if cpuset and f"cpuset {cpuset}" not in prose and f"CPUs {cpuset}" not in prose:
+        print(f"  SETUP  cpuset {cpuset} not named in the page prose"); bad += 1
+    if not bad:
+        print(f"  setup prose names the host CPU and cpuset {cpuset}")
+    return bad
 
 
 if __name__ == "__main__":

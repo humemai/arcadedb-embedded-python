@@ -366,7 +366,6 @@ F4_VS_TABLE = {
     # label -> (table, row, col, pass): the figure's value at that pass must
     # equal the table's cell. The TS aggregate cell is the 100-iteration
     # median, a repeat-pass number; every other cell is a first pass.
-    "OLTP ops/s":      ("t2_tabular.tex", "ArcadeDB (emb)", 0, "cold"),
     "Graph 1-hop p50": ("t3_graph.tex", "ArcadeDB (emb) & SF10", 1, "cold"),
     "Sparse 100k p50": ("sparse", "ArcadeDB (emb, int8)", "100k", "cold"),
     "Sparse 1M p50":   ("sparse", "ArcadeDB (emb, int8)", "1M", "cold"),
@@ -834,14 +833,8 @@ def f4_one_vs_n(rows):
 
     entries = [
         # documents
-        row("OLTP ops/s", True,
-            (med("l1", "medium", "oltp", "arcadedb_embedded", "oltp_ops_per_s"), None), None,
-            comps_rows("l1", "medium", "oltp", DOC, "oltp_ops_per_s", None), note="one pass"),
-        row("OLAP total p50", False,
-            (med("l1", "medium", "olap", "arcadedb_embedded", "cold_olap_total_ms"), None),
-            med("l1", "medium", "olap", "arcadedb_embedded", "olap_total_p50_ms"),
-            comps_rows("l1", "medium", "olap", DOC, "cold_olap_total_ms", "olap_total_p50_ms"),
-            note="pending"),
+        # The synthetic 20M-order rows (OLTP ops/s, OLAP total) left the page
+        # on 2026-09-11; the figure shows what the page's tables show.
         row("TPC-H Q1", False,
             (med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "cold_q1_ms"), None),
             med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "warm_q1_ms"),
@@ -940,7 +933,7 @@ def f4_one_vs_n(rows):
         ax.set_title(title, fontsize=7, pad=3)
         ax.tick_params(axis="x", labelsize=6)
     # thin separators between the model groups, in the paper's order
-    for k in (5, 10, 12, 15, 18):
+    for k in (3, 8, 10, 13, 16):
         for ax in (axc, axw):
             ax.axhline(n - k - 0.5, color="0.85", lw=0.5, zorder=0)
     axc.set_yticks(ys)
