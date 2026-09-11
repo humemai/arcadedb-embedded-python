@@ -3953,7 +3953,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5-community",
+          "version_name": "neo4j 5.26.28",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -4301,7 +4301,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5-community",
+          "version_name": "neo4j 5.26.28",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -4827,7 +4827,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5-community",
+          "version_name": "neo4j 5.26.28",
           "host": null,
           "metrics": {
             "ingest vertices+edges/s": {
@@ -5289,7 +5289,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5-community",
+          "version_name": "neo4j 5.26.28",
           "host": null,
           "metrics": {
             "ingest vertices+edges/s": {
@@ -5464,7 +5464,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5-community",
+          "version_name": "neo4j 5.26.28",
           "host": null,
           "metrics": {
             "trials": {
@@ -5488,7 +5488,7 @@
           }
         },
         {
-          "backend": "SurrealDB",
+          "backend": "SurrealDB (embedded)",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5677,7 +5677,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5-community",
+          "version_name": "neo4j 5.26.28",
           "host": null,
           "metrics": {
             "p50 ms": {
@@ -5725,7 +5725,7 @@
           }
         },
         {
-          "backend": "SurrealDB",
+          "backend": "SurrealDB (embedded)",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
