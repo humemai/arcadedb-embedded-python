@@ -603,6 +603,9 @@ def main():
         out[f"{qn}_ms"] = round(statistics.median(times), 2)
         _s = sorted(times)
         out[f"{qn}_p99_ms"] = round(_s[max(0, int(0.99 * (len(_s) - 1)))], 2)
+        # The first run is the cold number every other lane records; the
+        # summary figure's first-pass panel needs it (2026-09-11).
+        out[f"{qn}_cold_ms"] = round(times[0], 2)
         out[f"{qn}_rows"] = len(ref) if ref is not None else 0
 
     # ASSERT THE SHAPES, do not merely record them. The lane already knew the
