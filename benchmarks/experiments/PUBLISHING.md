@@ -8,7 +8,7 @@ humem.ai/projects/arcadedb without going wrong on the way.
 ## The command
 
 ```
-BENCH_PAPER_DIR=<dir with paper.tex> python refresh_web_page.py --page-only
+BENCH_ENGINE_COMMIT=<pin> python refresh_web_page.py   # page-only is the only mode; tables and figures land in results/generated
 ```
 
 That is the whole routine. It regenerates the tables and figures, exports the

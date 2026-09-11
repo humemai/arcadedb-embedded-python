@@ -95,10 +95,10 @@ tidied away.
 Four, and they answer different questions. Run all of them after touching
 results, tables or the page:
 
-    BENCH_PAPER_DIR=<dir with paper.tex> python provenance_check.py   # does a cell trace to a run
-    BENCH_PAPER_DIR=<...>                python fairness_check.py     # F1-F9
-    BENCH_PAPER_DIR=<...>                python claims_check.py       # paper prose vs data
-    BENCH_PAPER_DIR=<...>                python page_check.py         # page cells vs generated tables, prose vs pins
+    BENCH_ENGINE_COMMIT=<pin> python provenance_check.py   # does a cell trace to a run
+    BENCH_ENGINE_COMMIT=<pin> python fairness_check.py     # F1-F9
+    # claims_check.py is not a page gate (no paper since 2026-09-11)
+    BENCH_ENGINE_COMMIT=<pin> python page_check.py         # page cells vs generated tables, prose vs pins
 
 `page_check.py` pins page cells to the generated tables and page prose through
 lambda pins over the exported JSON; `--page-only` reports the paper section
