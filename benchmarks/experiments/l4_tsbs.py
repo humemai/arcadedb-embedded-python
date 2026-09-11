@@ -462,6 +462,65 @@ class SQLiteTS:
         self.cx.close()
 
 
+class MongoTS:
+    """MongoDB 8.2 native time-series collection (timeField ts, metaField
+    host, seconds granularity), insert_many in 50,000-point batches, the
+    three queries as find/aggregate (2026-09-11)."""
+    name = "mongodb"
+
+    def connect(self):
+        import pymongo
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.cl = pymongo.MongoClient(f"mongodb://{host}:27017/?directConnection=true",
+                                      serverSelectionTimeoutMS=60000)
+        try:
+            self.cl.admin.command("replSetInitiate", {"_id": "rs0", "members": [{"_id": 0, "host": f"{host}:27017"}]})
+        except pymongo.errors.OperationFailure:
+            pass
+        for _ in range(120):
+            try:
+                if self.cl.admin.command("hello").get("isWritablePrimary"):
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.5)
+        self.db = self.cl["bench"]
+
+    def version(self):
+        return f"mongodb {self.cl.server_info()['version']}"
+
+    def ingest(self, pts):
+        import datetime as _dt
+        self.db.drop_collection("p")
+        self.db.create_collection("p", timeseries={"timeField": "ts", "metaField": "host", "granularity": "seconds"})
+        col = self.db["p"]
+        for lo in range(0, len(pts), 50_000):
+            col.insert_many([{"host": p[0], "ts": _dt.datetime.fromtimestamp(p[1], _dt.timezone.utc),
+                              "uu": p[2], "us": p[3], "ui": p[4]} for p in pts[lo:lo + 50_000]], ordered=False)
+
+    def _t(self, s):
+        import datetime as _dt
+        return _dt.datetime.fromtimestamp(s, _dt.timezone.utc)
+
+    def q_last(self):
+        return list(self.db["p"].find({"host": HOST}, {"ts": 1, "uu": 1}).sort("ts", -1).limit(1))
+
+    def q_range(self):
+        return list(self.db["p"].aggregate([
+            {"$match": {"host": HOST, "ts": {"$gte": self._t(T0), "$lt": self._t(T0 + 3600)}}},
+            {"$group": {"_id": {"$dateTrunc": {"date": "$ts", "unit": "minute"}}, "v": {"$max": "$uu"}}},
+            {"$sort": {"_id": 1}}]))
+
+    def q_global(self):
+        return list(self.db["p"].aggregate([
+            {"$match": {"ts": {"$gte": self._t(T0), "$lt": self._t(T0 + 43200)}}},
+            {"$group": {"_id": {"$dateTrunc": {"date": "$ts", "unit": "hour"}}, "v": {"$avg": "$uu"}}},
+            {"$sort": {"_id": 1}}]))
+
+    def close(self):
+        self.cl.close()
+
+
 class QuestTS:
     name = "questdb"
 
@@ -566,7 +625,7 @@ class QuestTS:
 # adding a served arm cannot forget to update the role test.
 _CLIENT_SERVER = {"questdb"}
 
-BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, QuestTS)}
+BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, QuestTS)}
 
 
 def main():

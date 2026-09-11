@@ -146,31 +146,44 @@ class Base:
                 self.exec(sql, r)
             self.commit_batch()
 
+    # THE THREE OLTP OPERATIONS AND ONE OLAP QUERY ARE HOOKS (2026-09-11), so
+    # an engine without SQL (MongoDB) can join this lane by overriding four
+    # methods while the loops, the mix, the counts and the statistics stay
+    # exactly what the SQL engines run. The defaults reproduce the SQL path.
+    def op_read(self, rid):
+        self.query_all(f"SELECT * FROM orders WHERE id = {self.placeholder}", (rid,))
+
+    def op_insert(self, row):
+        ph = self.placeholder
+        self.begin_batch()
+        self.exec(f"INSERT INTO orders {self.insert_cols} VALUES ({','.join([ph]*8)})", row)
+        self.commit_batch()
+
+    def op_update(self, rid):
+        self.begin_batch()
+        self.exec(f"UPDATE orders SET status = 'paid' WHERE id = {self.placeholder}", (rid,))
+        self.commit_batch()
+
+    def olap_run(self, name, sql):
+        self.query_all(sql)
+
     def oltp(self, n_rows):
         rng = random.Random(99)
         lat = {"read": [], "insert": [], "update": []}
         next_id = n_rows
-        ph = self.placeholder
-        ins_sql = f"INSERT INTO orders {self.insert_cols} VALUES ({','.join([ph]*8)})"
         for i in range(OLTP_OPS + WARMUP_OLTP):
             r = rng.random()
             t0 = time.perf_counter()
             if r < OLTP_MIX[0]:
-                self.query_all(f"SELECT * FROM orders WHERE id = {ph}",
-                               (rng.randrange(n_rows),))
+                self.op_read(rng.randrange(n_rows))
                 kind = "read"
             elif r < OLTP_MIX[0] + OLTP_MIX[1]:
                 row = next(gen_rows(1, seed=next_id))
-                self.begin_batch()
-                self.exec(ins_sql, (next_id,) + row[1:])
-                self.commit_batch()
+                self.op_insert((next_id,) + row[1:])
                 next_id += 1
                 kind = "insert"
             else:
-                self.begin_batch()
-                self.exec(f"UPDATE orders SET status = 'paid' WHERE id = {ph}",
-                          (rng.randrange(n_rows),))
-                self.commit_batch()
+                self.op_update(rng.randrange(n_rows))
                 kind = "update"
             if i >= WARMUP_OLTP:
                 lat[kind].append(time.perf_counter() - t0)
@@ -187,7 +200,7 @@ class Base:
             cold = None
             for i in range(OLAP_RUNS + WARMUP_OLAP):
                 t0 = time.perf_counter()
-                self.query_all(sql)
+                self.olap_run(name, sql)
                 dt = time.perf_counter() - t0
                 # THE COLD NUMBER WAS ALREADY BEING MEASURED AND THROWN AWAY.
                 # Iteration 0 is the first touch of this query against a cache
@@ -328,6 +341,88 @@ class SQLite(Base):
         self.exec("CREATE INDEX idx_orders_id ON orders (id)")
         self.exec("CREATE INDEX idx_orders_customer ON orders (customer_id)")
         self.con.commit()
+
+
+class MongoDB(Base):
+    """MongoDB 8.2 over pymongo, one document per order, on a single-node
+    replica set (the server is started with --replSet; connect() initiates it).
+    Indexes on id (unique) and customer_id, like the SQL engines. The OLAP
+    queries are the five aggregation pipelines below, the same questions as
+    OLAP_SQL (2026-09-11)."""
+    name = "mongodb"
+    FIELDS = ["id", "customer_id", "region", "status", "amount", "quantity", "ts_epoch", "note"]
+
+    def connect(self):
+        import pymongo
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self._pymongo = pymongo
+        self.cl = pymongo.MongoClient(f"mongodb://{host}:27017/?directConnection=true",
+                                      serverSelectionTimeoutMS=60000)
+        try:
+            self.cl.admin.command("replSetInitiate", {"_id": "rs0", "members": [{"_id": 0, "host": f"{host}:27017"}]})
+        except pymongo.errors.OperationFailure:
+            pass                      # already initiated
+        for _ in range(120):
+            try:
+                if self.cl.admin.command("hello").get("isWritablePrimary"):
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.5)
+        self.version = f"mongodb {self.cl.server_info()['version']}"
+        self.db = self.cl["bench"]
+        self.col = self.db["orders"]
+
+    def close(self):
+        self.cl.close()
+
+    def reopen(self):
+        self.connect()
+
+    def schema(self):
+        self.col.drop()
+        self.col.create_index("id", unique=True)
+        self.col.create_index("customer_id")
+
+    def _doc(self, row):
+        return dict(zip(self.FIELDS, row))
+
+    def ingest(self, n, batch=5_000):  # idiomatic bulk path: insert_many, unordered
+        self.col.drop_indexes()
+        buf = []
+        for row in gen_rows(n):
+            buf.append(self._doc(row))
+            if len(buf) >= 50_000:
+                self.col.insert_many(buf, ordered=False)
+                buf = []
+        if buf:
+            self.col.insert_many(buf, ordered=False)
+        self.col.create_index("id", unique=True)
+        self.col.create_index("customer_id")
+
+    def op_read(self, rid):
+        self.col.find_one({"id": rid})
+
+    def op_insert(self, row):
+        self.col.insert_one(self._doc(row))
+
+    def op_update(self, rid):
+        self.col.update_one({"id": rid}, {"$set": {"status": "paid"}})
+
+    PIPELINES = {
+        "agg_by_region": [{"$group": {"_id": "$region", "c": {"$sum": 1}, "s": {"$sum": "$amount"}}}],
+        "top_customers": [{"$match": {"status": "delivered"}},
+                          {"$group": {"_id": "$customer_id", "s": {"$sum": "$amount"}}},
+                          {"$sort": {"s": -1}}, {"$limit": 10}],
+        "filtered_avg": [{"$match": {"region": "eu", "quantity": {"$gte": 4}}},
+                         {"$group": {"_id": None, "a": {"$avg": "$amount"}, "q": {"$avg": "$quantity"}}}],
+        "status_histogram": [{"$group": {"_id": "$status", "c": {"$sum": 1}}}, {"$sort": {"c": -1}}],
+        "range_agg": [{"$match": {"ts_epoch": {"$gte": 1650000000, "$lte": 1700000000}}},
+                      {"$group": {"_id": None, "c": {"$sum": 1}, "s": {"$sum": "$amount"}}}],
+    }
+
+    def olap_run(self, name, sql):
+        list(self.col.aggregate(self.PIPELINES[name], allowDiskUse=True))
 
 
 class Postgres(Base):
@@ -544,7 +639,7 @@ class PostgresTuned(Postgres):
     name = "postgres_tuned"
 
 
-BACKENDS = {c.name: c for c in [DuckDB, SQLite, Postgres, PostgresTuned,
+BACKENDS = {c.name: c for c in [DuckDB, SQLite, MongoDB, Postgres, PostgresTuned,
                                 ArcadeEmbedded, ArcadeServer]}
 
 

@@ -152,6 +152,72 @@ class SQLiteTPC:
         self.cx.close()
 
 
+class MongoTPC:
+    """MongoDB 8.2: lineitem and part as collections, ISO-text dates like the
+    ArcadeDB and SQLite arms, Q1/Q6 as aggregation pipelines, new-order as
+    one multi-document transaction (which is why the server runs as a
+    single-node replica set) (2026-09-11)."""
+    name = "mongodb"
+
+    def connect(self):
+        import pymongo
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.cl = pymongo.MongoClient(f"mongodb://{host}:27017/?directConnection=true",
+                                      serverSelectionTimeoutMS=60000)
+        try:
+            self.cl.admin.command("replSetInitiate", {"_id": "rs0", "members": [{"_id": 0, "host": f"{host}:27017"}]})
+        except pymongo.errors.OperationFailure:
+            pass
+        for _ in range(120):
+            try:
+                if self.cl.admin.command("hello").get("isWritablePrimary"):
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.5)
+        self.version = f"mongodb {self.cl.server_info()['version']}"
+        self.db = self.cl["bench"]
+
+    def build(self, li, part):
+        lc, pc, oc = self.db["lineitem"], self.db["part"], self.db["orders_new"]
+        lc.drop(); pc.drop(); oc.drop()
+        buf = []
+        for t in li[LI_COLS].itertuples(index=False, name=None):
+            buf.append(dict(zip(LI_COLS, t)))
+            if len(buf) >= 50_000:
+                lc.insert_many(buf, ordered=False); buf = []
+        if buf:
+            lc.insert_many(buf, ordered=False)
+        pc.insert_many([{"p_partkey": int(k), "p_retailprice": float(v), "stock": 100}
+                        for k, v in part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)],
+                       ordered=False)
+        pc.create_index("p_partkey", unique=True)
+        lc.create_index("l_shipdate")
+
+    Q1 = [{"$match": {"l_shipdate": {"$lte": "1998-09-02"}}},
+          {"$group": {"_id": {"f": "$l_returnflag", "s": "$l_linestatus"},
+                      "sum_qty": {"$sum": "$l_quantity"}, "sum_base": {"$sum": "$l_extendedprice"},
+                      "sum_disc": {"$sum": {"$multiply": ["$l_extendedprice", {"$subtract": [1, "$l_discount"]}]}},
+                      "avg_qty": {"$avg": "$l_quantity"}, "n": {"$sum": 1}}},
+          {"$sort": {"_id.f": 1, "_id.s": 1}}]
+    Q6 = [{"$match": {"l_shipdate": {"$gte": "1994-01-01", "$lt": "1995-01-01"},
+                      "l_discount": {"$gte": 0.05, "$lte": 0.07}, "l_quantity": {"$lt": 24}}},
+          {"$group": {"_id": None, "revenue": {"$sum": {"$multiply": ["$l_extendedprice", "$l_discount"]}}}}]
+
+    def olap(self, which):
+        return list(self.db["lineitem"].aggregate(self.Q1 if which == "q1" else self.Q6, allowDiskUse=True))
+
+    def new_order(self, i, pkey):
+        with self.cl.start_session() as sess:
+            with sess.start_transaction():
+                self.db["part"].find_one({"p_partkey": pkey}, {"p_retailprice": 1, "stock": 1}, session=sess)
+                self.db["orders_new"].insert_one({"okey": i, "pkey": pkey, "qty": 1}, session=sess)
+                self.db["part"].update_one({"p_partkey": pkey}, {"$inc": {"stock": -1}}, session=sess)
+
+    def close(self):
+        self.cl.close()
+
+
 class PostgresTPC:
     name = "postgres"
 
@@ -393,7 +459,7 @@ class PostgresTunedTPC(PostgresTPC):
     name = "postgres_tuned"
 
 
-BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, PostgresTPC, PostgresTunedTPC,
+BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, MongoTPC, PostgresTPC, PostgresTunedTPC,
                                 ArcadeTPC, ArcadeServerTPC)}
 
 

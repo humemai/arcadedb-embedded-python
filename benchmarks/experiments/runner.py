@@ -413,6 +413,19 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:client",
     },
+    # MongoDB 8.2 (8.0 refuses to start on Linux >= 6.19, SERVER-121912).
+    # --replSet: TPC-C new-order is one multi-document transaction, and
+    # MongoDB only allows those on a replica set; the adapter initiates the
+    # single-node set on connect. No auth: the image runs open without
+    # MONGO_INITDB_ROOT_*, like the other comparators on the cell network.
+    "mongodb": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",  # 8.2.12
+        "server_cmd": ["--replSet", "rs0", "--bind_ip_all"],
+        "server_port": 27017,
+        "ready_regex": r"Waiting for connections",
+    },
     # ---- l4 time series -------------------------------------------------
     # THE ARCADEDB ARMS ARE THREE, NOT ONE, and the split is the point. The
     # native TIMESERIES arm publishes its headline with two opt-in fast paths
@@ -1028,7 +1041,7 @@ LANES = {
     "e4": ("e4_decomp.py", ["arcadedb_e4"], ["decomp"]),
     # lane -> (bench script, backends, workloads)
     "l1": ("l1_tabular.py",
-           ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "postgres",
+           ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "postgres",
             "postgres_tuned"],
            ["oltp", "olap"]),
     "l2": ("l2_graph.py",
@@ -1036,7 +1049,7 @@ LANES = {
             "neo4j_graph", "ladybug_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
-              ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "postgres",
+              ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "postgres",
                "postgres_tuned"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
@@ -1097,7 +1110,7 @@ LANES = {
            # arms run: the document path is what ordinary SQL gives you, the
            # native path is the engine asked in its own idiom, and the page
            # prints both rather than choosing the flattering one.
-           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite"],
+           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite", "mongodb"],
            ["ingest"]),
 }
 
