@@ -3077,6 +3077,7 @@
         "2-hop p99 ms",
         "write p50 ms",
         "write p99 ms",
+        "load s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -3142,6 +3143,12 @@
               "median": 0.853,
               "min": 0.819,
               "max": 1.016,
+              "n": 5
+            },
+            "load s": {
+              "median": 2.13,
+              "min": 2.11,
+              "max": 2.17,
               "n": 5
             },
             "peak memory GiB": {
@@ -3219,6 +3226,12 @@
               "max": 2.134,
               "n": 5
             },
+            "load s": {
+              "median": 7.45,
+              "min": 7.4,
+              "max": 7.54,
+              "n": 5
+            },
             "peak memory GiB": {
               "median": 3.3277,
               "min": 3.3198,
@@ -3292,6 +3305,12 @@
               "median": 19.172,
               "min": 12.983,
               "max": 19.281,
+              "n": 5
+            },
+            "load s": {
+              "median": 0.49,
+              "min": 0.47,
+              "max": 0.53,
               "n": 5
             },
             "peak memory GiB": {
@@ -3369,6 +3388,12 @@
               "max": 21.422,
               "n": 5
             },
+            "load s": {
+              "median": 5.11,
+              "min": 4.99,
+              "max": 5.22,
+              "n": 5
+            },
             "peak memory GiB": {
               "median": 4.6199,
               "min": 4.6077,
@@ -3442,6 +3467,12 @@
               "median": 0.924,
               "min": 0.794,
               "max": 0.974,
+              "n": 5
+            },
+            "load s": {
+              "median": 22.87,
+              "min": 22.59,
+              "max": 22.97,
               "n": 5
             },
             "peak memory GiB": {
@@ -3519,6 +3550,12 @@
               "max": 2.156,
               "n": 5
             },
+            "load s": {
+              "median": 71.37,
+              "min": 71.01,
+              "max": 71.72,
+              "n": 5
+            },
             "peak memory GiB": {
               "median": 7.933,
               "min": 7.916,
@@ -3594,6 +3631,12 @@
               "max": 19.158,
               "n": 5
             },
+            "load s": {
+              "median": 3.69,
+              "min": 3.65,
+              "max": 3.78,
+              "n": 5
+            },
             "peak memory GiB": {
               "median": 0.3663,
               "min": 0.3577,
@@ -3667,6 +3710,12 @@
               "median": 17.329,
               "min": 13.735,
               "max": 21.47,
+              "n": 5
+            },
+            "load s": {
+              "median": 45.55,
+              "min": 45.09,
+              "max": 45.8,
               "n": 5
             },
             "peak memory GiB": {
@@ -4674,6 +4723,7 @@
         "update p99 ms",
         "OLTP ops/s",
         "ingest records/s",
+        "ingest s",
         "OLAP total ms",
         "peak memory GiB",
         "disk GiB"
@@ -4740,6 +4790,12 @@
               "median": 28983.75,
               "min": 28228.8,
               "max": 29275.3,
+              "n": 10
+            },
+            "ingest s": {
+              "median": 690.045,
+              "min": 683.17,
+              "max": 708.5,
               "n": 10
             },
             "OLAP total ms": {
@@ -4823,6 +4879,12 @@
               "max": 27168.6,
               "n": 10
             },
+            "ingest s": {
+              "median": 743.47,
+              "min": 736.14,
+              "max": 758.78,
+              "n": 10
+            },
             "OLAP total ms": {
               "median": 66043.597,
               "min": 65878.473,
@@ -4902,6 +4964,12 @@
               "median": 305997.55,
               "min": 299439.6,
               "max": 334007.0,
+              "n": 10
+            },
+            "ingest s": {
+              "median": 65.36,
+              "min": 59.88,
+              "max": 66.79,
               "n": 10
             },
             "OLAP total ms": {
@@ -4985,6 +5053,12 @@
               "max": 321870.2,
               "n": 10
             },
+            "ingest s": {
+              "median": 63.455,
+              "min": 62.14,
+              "max": 64.29,
+              "n": 10
+            },
             "OLAP total ms": {
               "median": 3388.939,
               "min": 3359.713,
@@ -5066,6 +5140,12 @@
               "max": 344960.8,
               "n": 10
             },
+            "ingest s": {
+              "median": 59.93,
+              "min": 57.98,
+              "max": 60.23,
+              "n": 10
+            },
             "OLAP total ms": {
               "median": 3437.88,
               "min": 3323.9,
@@ -5114,6 +5194,7 @@
         "new-order p50 ms",
         "new-order p99 ms",
         "OLTP ops/s",
+        "load s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -5174,6 +5255,12 @@
               "min": 1876.2,
               "max": 2194.1,
               "n": 5
+            },
+            "load s": {
+              "median": 150.855,
+              "min": 143.04,
+              "max": 155.58,
+              "n": 10
             },
             "peak memory GiB": {
               "median": 6.6436,
@@ -5244,6 +5331,12 @@
               "max": 857.5,
               "n": 5
             },
+            "load s": {
+              "median": 192.935,
+              "min": 186.86,
+              "max": 197.72,
+              "n": 10
+            },
             "peak memory GiB": {
               "median": 9.2164,
               "min": 9.2052,
@@ -5312,6 +5405,12 @@
               "min": 91.8,
               "max": 109.1,
               "n": 5
+            },
+            "load s": {
+              "median": 2.525,
+              "min": 2.18,
+              "max": 3.09,
+              "n": 10
             },
             "peak memory GiB": {
               "median": 3.356,
@@ -5382,6 +5481,12 @@
               "max": 393.6,
               "n": 5
             },
+            "load s": {
+              "median": 17.06,
+              "min": 16.68,
+              "max": 18.51,
+              "n": 10
+            },
             "peak memory GiB": {
               "median": 3.3522,
               "min": 3.3459,
@@ -5451,6 +5556,12 @@
               "max": 406.5,
               "n": 5
             },
+            "load s": {
+              "median": 17.125,
+              "min": 16.67,
+              "max": 18.05,
+              "n": 10
+            },
             "peak memory GiB": {
               "median": 3.364,
               "min": 3.3565,
@@ -5490,6 +5601,7 @@
         "p50 ms",
         "p99 ms",
         "CPU s",
+        "load s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -5525,6 +5637,12 @@
               "median": 65.7963,
               "min": 53.5616,
               "max": 69.2525,
+              "n": 5
+            },
+            "load s": {
+              "median": 10.41,
+              "min": 9.39,
+              "max": 10.89,
               "n": 5
             },
             "peak memory GiB": {
@@ -5572,6 +5690,12 @@
               "max": 78.8561,
               "n": 5
             },
+            "load s": {
+              "median": 13.89,
+              "min": 13.48,
+              "max": 14.25,
+              "n": 5
+            },
             "peak memory GiB": {
               "median": 4.0528,
               "min": 4.0457,
@@ -5617,6 +5741,12 @@
               "max": 38.9205,
               "n": 5
             },
+            "load s": {
+              "median": 5.79,
+              "min": 5.72,
+              "max": 5.89,
+              "n": 5
+            },
             "peak memory GiB": {
               "median": 6.8004,
               "min": 6.7968,
@@ -5660,6 +5790,12 @@
               "median": 337.9146,
               "min": 336.3943,
               "max": 338.6213,
+              "n": 5
+            },
+            "load s": {
+              "median": 333.6,
+              "min": 332.17,
+              "max": 334.35,
               "n": 5
             },
             "peak memory GiB": {
@@ -6867,2785 +7003,6 @@
       ],
       "source_path": "benchmarks/experiments/results/runs_paper.csv",
       "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"
-    },
-    {
-      "id": "ingest",
-      "title": "Ingest and index build",
-      "dataset": "every load the harness times, side by side",
-      "conditions": [
-        "records/s is what the engine took in per second on its own bulk path: ArcadeDB batches of 500 INSERT statements per transaction (documents), the Java API in 5,000-record transactions (graph), the async time-series executor (native time series), INSERT per point (time series as documents); PostgreSQL COPY, DuckDB Arrow or DataFrame inserts, Neo4j UNWIND batches, QuestDB line protocol, each vector engine's own upsert. For the vector rows the rate is documents per second over the whole build, ingest plus index.",
-        "load s is the wall-clock time of that load, index build included where the lane builds one. For TPC-H and the cross-model set only the time is recorded.",
-        "The served ArcadeDB rows go through the HTTP command endpoint with values as text, except the native time-series server row, which uses the line-protocol endpoint; that is where the embedded-to-served gap on ingest comes from.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on."
-      ],
-      "columns": [
-        "records/s",
-        "load s",
-        "peak memory GiB",
-        "disk GiB"
-      ],
-      "withheld_scales": [],
-      "withheld_reason": null,
-      "source_paths": [],
-      "source_urls": [],
-      "entries": [
-        {
-          "backend": "Documents, streamed inserts: ArcadeDB (embedded)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l1:medium",
-          "scale_label": "20M records",
-          "workload": "ingest",
-          "n_docs": "20,000,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 29047.1,
-              "min": 28546.0,
-              "max": 29263.6,
-              "n": 5
-            },
-            "load s": {
-              "median": 688.54,
-              "min": 683.44,
-              "max": 700.62,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 13.008,
-              "min": 12.9028,
-              "max": 13.2564,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 2.1835,
-              "min": 2.1834,
-              "max": 2.1836,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Documents, streamed inserts: ArcadeDB (server)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l1:medium",
-          "scale_label": "20M records",
-          "workload": "ingest",
-          "n_docs": "20,000,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 26947.3,
-              "min": 26556.7,
-              "max": 27168.6,
-              "n": 5
-            },
-            "load s": {
-              "median": 742.19,
-              "min": 736.14,
-              "max": 753.11,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 13.022,
-              "min": 12.9347,
-              "max": 13.0591,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 2.1931,
-              "min": 2.1838,
-              "max": 2.2221,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Documents, streamed inserts: DuckDB",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l1:medium",
-          "scale_label": "20M records",
-          "workload": "ingest",
-          "n_docs": "20,000,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "duckdb 1.5.5",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 307395.8,
-              "min": 304956.6,
-              "max": 322584.9,
-              "n": 5
-            },
-            "load s": {
-              "median": 65.06,
-              "min": 62.0,
-              "max": 65.58,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 1.9834,
-              "min": 1.9235,
-              "max": 1.9929,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.7945,
-              "min": 0.7945,
-              "max": 0.7948,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Documents, streamed inserts: PostgreSQL",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l1:medium",
-          "scale_label": "20M records",
-          "workload": "ingest",
-          "n_docs": "20,000,000",
-          "deployment": "server",
-          "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
-          "version_name": "postgres 17.10",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 314760.9,
-              "min": 311095.3,
-              "max": 319895.8,
-              "n": 5
-            },
-            "load s": {
-              "median": 63.54,
-              "min": 62.52,
-              "max": 64.29,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.0979,
-              "min": 0.0958,
-              "max": 0.1091,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 3.4444,
-              "min": 3.4444,
-              "max": 3.4445,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Documents, streamed inserts: PostgreSQL (tuned)",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l1:medium",
-          "scale_label": "20M records",
-          "workload": "ingest",
-          "n_docs": "20,000,000",
-          "deployment": "server",
-          "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
-          "version_name": "postgres 17.10",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 334340.0,
-              "min": 332625.4,
-              "max": 344960.8,
-              "n": 5
-            },
-            "load s": {
-              "median": 59.82,
-              "min": 57.98,
-              "max": 60.13,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.0773,
-              "min": 0.0656,
-              "max": 0.0802,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 6.4444,
-              "min": 6.4444,
-              "max": 6.4445,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Documents, TPC-H tables: ArcadeDB (embedded)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l1tpc:tpch1",
-          "scale_label": "SF1",
-          "workload": "ingest",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "load s": {
-              "median": 151.88,
-              "min": 150.46,
-              "max": 155.58,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 6.6436,
-              "min": 6.6379,
-              "max": 6.6603,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.6189,
-              "min": 0.6189,
-              "max": 0.6189,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Documents, TPC-H tables: ArcadeDB (server)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l1tpc:tpch1",
-          "scale_label": "SF1",
-          "workload": "ingest",
-          "n_docs": null,
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "load s": {
-              "median": 196.1,
-              "min": 195.81,
-              "max": 197.72,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 9.2164,
-              "min": 9.2052,
-              "max": 9.2683,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.6538,
-              "min": 0.6386,
-              "max": 0.6627,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Documents, TPC-H tables: DuckDB",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l1tpc:tpch1",
-          "scale_label": "SF1",
-          "workload": "ingest",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "duckdb 1.5.5",
-          "host": null,
-          "metrics": {
-            "load s": {
-              "median": 2.46,
-              "min": 2.18,
-              "max": 2.9,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 3.356,
-              "min": 3.3409,
-              "max": 3.37,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0717,
-              "min": 0.0714,
-              "max": 0.0719,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Documents, TPC-H tables: PostgreSQL",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l1tpc:tpch1",
-          "scale_label": "SF1",
-          "workload": "ingest",
-          "n_docs": null,
-          "deployment": "server",
-          "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
-          "version_name": "postgres 17.10",
-          "host": null,
-          "metrics": {
-            "load s": {
-              "median": 17.56,
-              "min": 17.17,
-              "max": 18.51,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 3.3522,
-              "min": 3.3459,
-              "max": 3.372,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.788,
-              "min": 0.788,
-              "max": 0.788,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Documents, TPC-H tables: PostgreSQL (tuned)",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l1tpc:tpch1",
-          "scale_label": "SF1",
-          "workload": "ingest",
-          "n_docs": null,
-          "deployment": "server",
-          "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
-          "version_name": "postgres 17.10",
-          "host": null,
-          "metrics": {
-            "load s": {
-              "median": 17.69,
-              "min": 16.96,
-              "max": 18.05,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 3.364,
-              "min": 3.3565,
-              "max": 3.3826,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.788,
-              "min": 0.788,
-              "max": 0.788,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Graph, vertices and edges: ArcadeDB (embedded)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l2:sf1",
-          "scale_label": "SF1 (11k people)",
-          "workload": "ingest",
-          "n_docs": "190,515",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 89443.7,
-              "min": 87794.9,
-              "max": 90291.5,
-              "n": 5
-            },
-            "load s": {
-              "median": 2.13,
-              "min": 2.11,
-              "max": 2.17,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 1.752,
-              "min": 1.7307,
-              "max": 1.7791,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0123,
-              "min": 0.0123,
-              "max": 0.0123,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Graph, vertices and edges: ArcadeDB (server)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l2:sf1",
-          "scale_label": "SF1 (11k people)",
-          "workload": "ingest",
-          "n_docs": "190,515",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 25572.5,
-              "min": 25267.2,
-              "max": 25745.3,
-              "n": 5
-            },
-            "load s": {
-              "median": 7.45,
-              "min": 7.4,
-              "max": 7.54,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 3.3277,
-              "min": 3.3198,
-              "max": 3.3988,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0683,
-              "min": 0.0683,
-              "max": 0.0683,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Graph, vertices and edges: LadybugDB",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l2:sf1",
-          "scale_label": "SF1 (11k people)",
-          "workload": "ingest",
-          "n_docs": "190,515",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "ladybugdb 0.19.1",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 388806.1,
-              "min": 359462.3,
-              "max": 405351.1,
-              "n": 5
-            },
-            "load s": {
-              "median": 0.49,
-              "min": 0.47,
-              "max": 0.53,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.2158,
-              "min": 0.2142,
-              "max": 0.2187,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0055,
-              "min": 0.0055,
-              "max": 0.0056,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Graph, vertices and edges: Neo4j",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l2:sf1",
-          "scale_label": "SF1 (11k people)",
-          "workload": "ingest",
-          "n_docs": "190,515",
-          "deployment": "server",
-          "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5-community",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 37282.8,
-              "min": 36497.1,
-              "max": 38179.4,
-              "n": 5
-            },
-            "load s": {
-              "median": 5.11,
-              "min": 4.99,
-              "max": 5.22,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 4.6199,
-              "min": 4.6077,
-              "max": 4.6557,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0151,
-              "min": 0.015,
-              "max": 0.0152,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Graph, vertices and edges: ArcadeDB (embedded)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l2:sf10",
-          "scale_label": "SF10 (73k people)",
-          "workload": "ingest",
-          "n_docs": "2,004,161",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 87632.8,
-              "min": 87251.2,
-              "max": 88718.9,
-              "n": 5
-            },
-            "load s": {
-              "median": 22.87,
-              "min": 22.59,
-              "max": 22.97,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 8.0491,
-              "min": 8.0102,
-              "max": 8.1203,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.1255,
-              "min": 0.1255,
-              "max": 0.1255,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Graph, vertices and edges: ArcadeDB (server)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l2:sf10",
-          "scale_label": "SF10 (73k people)",
-          "workload": "ingest",
-          "n_docs": "2,004,161",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 28081.3,
-              "min": 27944.2,
-              "max": 28223.6,
-              "n": 5
-            },
-            "load s": {
-              "median": 71.37,
-              "min": 71.01,
-              "max": 71.72,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 7.933,
-              "min": 7.916,
-              "max": 7.9387,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.1626,
-              "min": 0.1255,
-              "max": 0.1792,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Graph, vertices and edges: LadybugDB",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l2:sf10",
-          "scale_label": "SF10 (73k people)",
-          "workload": "ingest",
-          "n_docs": "2,004,161",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "ladybugdb 0.19.1",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 543133.1,
-              "min": 530201.3,
-              "max": 549085.2,
-              "n": 5
-            },
-            "load s": {
-              "median": 3.69,
-              "min": 3.65,
-              "max": 3.78,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.3663,
-              "min": 0.3577,
-              "max": 0.3766,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0518,
-              "min": 0.0513,
-              "max": 0.0525,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Graph, vertices and edges: Neo4j",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l2:sf10",
-          "scale_label": "SF10 (73k people)",
-          "workload": "ingest",
-          "n_docs": "2,004,161",
-          "deployment": "server",
-          "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5-community",
-          "host": null,
-          "metrics": {
-            "records/s": {
-              "median": 43999.1,
-              "min": 43759.0,
-              "max": 44448.0,
-              "n": 5
-            },
-            "load s": {
-              "median": 45.55,
-              "min": 45.09,
-              "max": 45.8,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 12.9638,
-              "min": 12.9528,
-              "max": 12.9925,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.6657,
-              "min": 0.6657,
-              "max": 0.6657,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Time series, points: arcadedb (document path)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l4:ts100",
-          "scale_label": "2.59M points",
-          "workload": "ingest",
-          "n_docs": "2,592,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:3984e057559c (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 40650.5,
-              "min": 40542.7,
-              "max": 41012.4,
-              "n": 5
-            },
-            "load s": {
-              "median": 63.76,
-              "min": 63.2,
-              "max": 63.93,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 6.2409,
-              "min": 6.1317,
-              "max": 6.2863,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.2459,
-              "min": 0.2459,
-              "max": 0.2459,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Time series, points: arcadedb (native TIMESERIES)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l4:ts100",
-          "scale_label": "2.59M points",
-          "workload": "ingest",
-          "n_docs": "2,592,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:921e4bcaa889 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 1879320.6,
-              "min": 1757652.4,
-              "max": 1950431.2,
-              "n": 5
-            },
-            "load s": {
-              "median": 1.38,
-              "min": 1.33,
-              "max": 1.47,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 4.2865,
-              "min": 3.3586,
-              "max": 5.4207,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0876,
-              "min": 0.0876,
-              "max": 0.0876,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Time series, points: arcadedb (server, document path)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l4:ts100",
-          "scale_label": "2.59M points",
-          "workload": "ingest",
-          "n_docs": "2,592,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:d2fbad1c62e4 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 54767.2,
-              "min": 54499.7,
-              "max": 56487.4,
-              "n": 5
-            },
-            "load s": {
-              "median": 47.33,
-              "min": 45.89,
-              "max": 47.56,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 6.4779,
-              "min": 6.4271,
-              "max": 6.483,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.2915,
-              "min": 0.2898,
-              "max": 0.2935,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Time series, points: arcadedb (server, native TIMESERIES)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "l4:ts100",
-          "scale_label": "2.59M points",
-          "workload": "ingest",
-          "n_docs": "2,592,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:675508771e6a (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 581435.4,
-              "min": 569615.6,
-              "max": 598158.9,
-              "n": 5
-            },
-            "load s": {
-              "median": 4.46,
-              "min": 4.33,
-              "max": 4.55,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 3.9646,
-              "min": 3.9249,
-              "max": 4.0132,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.1265,
-              "min": 0.1212,
-              "max": 0.1298,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Time series, points: duckdb",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l4:ts100",
-          "scale_label": "2.59M points",
-          "workload": "ingest",
-          "n_docs": "2,592,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "duckdb 1.5.5",
-          "host": "container:5350ee266f29 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 1864993.9,
-              "min": 1600767.6,
-              "max": 1886764.5,
-              "n": 5
-            },
-            "load s": {
-              "median": 1.39,
-              "min": 1.37,
-              "max": 1.62,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.9585,
-              "min": 0.9532,
-              "max": 0.9658,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0113,
-              "min": 0.0113,
-              "max": 0.0113,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Time series, points: questdb",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "l4:ts100",
-          "scale_label": "2.59M points",
-          "workload": "ingest",
-          "n_docs": "2,592,000",
-          "deployment": "server",
-          "image": "questdb/questdb@sha256:e62916bd62087cc48ab56f10b72a183e8f6aa987b4d46e0f316be083bbee2373",
-          "version_name": "questdb 9.1.1",
-          "host": "container:8168f0f3f66b (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 1295085.7,
-              "min": 1282972.1,
-              "max": 1309655.4,
-              "n": 5
-            },
-            "load s": {
-              "median": 2.0,
-              "min": 1.98,
-              "max": 2.02,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 1.312,
-              "min": 1.3015,
-              "max": 1.3201,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.1604,
-              "min": 0.1604,
-              "max": 0.1604,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: ArcadeDB (embedded, int8)",
-          "is_arcadedb": true,
-          "precision": "int8",
-          "scale": "l3d:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:4ceff83630d9 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 4356.9,
-              "min": 4356.9,
-              "max": 4356.9,
-              "n": 5
-            },
-            "load s": {
-              "median": 229.52,
-              "min": 227.5,
-              "max": 239.89,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 8.2511,
-              "min": 8.2397,
-              "max": 8.2898,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.9329,
-              "min": 0.9329,
-              "max": 0.933,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: ArcadeDB (embedded, fp32)",
-          "is_arcadedb": true,
-          "precision": "fp32",
-          "scale": "l3d:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:d654eb18400d (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 6446.6,
-              "min": 6446.6,
-              "max": 6446.6,
-              "n": 5
-            },
-            "load s": {
-              "median": 155.12,
-              "min": 148.33,
-              "max": 159.67,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 7.3271,
-              "min": 7.301,
-              "max": 7.633,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.8022,
-              "min": 0.8022,
-              "max": 0.8023,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: ArcadeDB (server, int8)",
-          "is_arcadedb": true,
-          "precision": "int8",
-          "scale": "l3d:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:673e277df47d (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 3369.6,
-              "min": 3369.6,
-              "max": 3369.6,
-              "n": 5
-            },
-            "load s": {
-              "median": 296.77,
-              "min": 293.78,
-              "max": 299.99,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 8.2979,
-              "min": 8.2724,
-              "max": 8.3111,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.9741,
-              "min": 0.9644,
-              "max": 0.986,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: ArcadeDB (server, fp32)",
-          "is_arcadedb": true,
-          "precision": "fp32",
-          "scale": "l3d:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:eefc88bae1ac (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 4329.8,
-              "min": 4329.8,
-              "max": 4329.8,
-              "n": 5
-            },
-            "load s": {
-              "median": 230.96,
-              "min": 225.34,
-              "max": 236.03,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 7.4819,
-              "min": 7.4477,
-              "max": 7.5976,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.8063,
-              "min": 0.7991,
-              "max": 0.8603,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: Chroma (fp32)",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3d:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "chroma 1.5.9",
-          "host": "container:e1f6b802094c (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 6638.8,
-              "min": 6638.8,
-              "max": 6638.8,
-              "n": 5
-            },
-            "load s": {
-              "median": 150.63,
-              "min": 147.36,
-              "max": 151.84,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 1.1507,
-              "min": 1.1424,
-              "max": 1.1513,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.7779,
-              "min": 0.7778,
-              "max": 0.7779,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: DuckDB VSS (fp32)",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3d:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "duckdb vss 1.5.5",
-          "host": "container:31c2896725a8 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 16843.5,
-              "min": 16843.5,
-              "max": 16843.5,
-              "n": 5
-            },
-            "load s": {
-              "median": 59.37,
-              "min": 58.5,
-              "max": 59.78,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 2.9191,
-              "min": 2.7906,
-              "max": 2.9458,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.7658,
-              "min": 0.7657,
-              "max": 0.7658,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: LanceDB (int8)",
-          "is_arcadedb": false,
-          "precision": "int8",
-          "scale": "l3d:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "lancedb 0.37.1",
-          "host": "container:307b00c732ea (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 47755.5,
-              "min": 47755.5,
-              "max": 47755.5,
-              "n": 5
-            },
-            "load s": {
-              "median": 20.94,
-              "min": 20.2,
-              "max": 22.94,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 1.9514,
-              "min": 1.8886,
-              "max": 1.9648,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.8537,
-              "min": 0.8533,
-              "max": 0.854,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: Milvus (fp32)",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3d:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "server",
-          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": "milvus v2.6.13",
-          "host": "container:b7978b92403c (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 5546.3,
-              "min": 5546.3,
-              "max": 5546.3,
-              "n": 5
-            },
-            "load s": {
-              "median": 180.3,
-              "min": 175.71,
-              "max": 184.24,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 3.6075,
-              "min": 3.3674,
-              "max": 3.6609,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 1.6343,
-              "min": 1.5652,
-              "max": 1.7533,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: Qdrant (fp32)",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3d:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "server",
-          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "qdrant v1.18.2",
-          "host": "container:366593306c17 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 22972.7,
-              "min": 22972.7,
-              "max": 22972.7,
-              "n": 5
-            },
-            "load s": {
-              "median": 43.53,
-              "min": 41.36,
-              "max": 44.89,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.6734,
-              "min": 0.6551,
-              "max": 0.6961,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.5892,
-              "min": 0.5891,
-              "max": 0.5893,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: sqlite-vec (fp32)",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3d:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "sqlite-vec 0.1.9",
-          "host": "container:fea4c18c8c86 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 127226.5,
-              "min": 127226.5,
-              "max": 127226.5,
-              "n": 5
-            },
-            "load s": {
-              "median": 7.86,
-              "min": 7.69,
-              "max": 9.13,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.0392,
-              "min": 0.0392,
-              "max": 0.0392,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.4993,
-              "min": 0.4993,
-              "max": 0.4994,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: ArcadeDB (embedded, int8)",
-          "is_arcadedb": true,
-          "precision": "int8",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:166ad4fcd6ea (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 2651.8,
-              "min": 2651.8,
-              "max": 2651.8,
-              "n": 5
-            },
-            "load s": {
-              "median": 3767.22,
-              "min": 3749.75,
-              "max": 3806.25,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 28.2528,
-              "min": 28.2351,
-              "max": 28.3337,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 8.5682,
-              "min": 8.5682,
-              "max": 8.5682,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: ArcadeDB (embedded, fp32)",
-          "is_arcadedb": true,
-          "precision": "fp32",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:dfc40e0e74ed (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 4304.3,
-              "min": 4304.3,
-              "max": 4304.3,
-              "n": 5
-            },
-            "load s": {
-              "median": 2320.95,
-              "min": 2299.1,
-              "max": 2436.95,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 28.2854,
-              "min": 28.2683,
-              "max": 28.3062,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 7.5631,
-              "min": 7.5631,
-              "max": 7.5631,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: ArcadeDB (server, int8)",
-          "is_arcadedb": true,
-          "precision": "int8",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:479414ed3094 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 2080.6,
-              "min": 2080.6,
-              "max": 2080.6,
-              "n": 5
-            },
-            "load s": {
-              "median": 4801.39,
-              "min": 4700.59,
-              "max": 4830.91,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 28.414,
-              "min": 28.3623,
-              "max": 28.5513,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 8.5915,
-              "min": 8.5778,
-              "max": 8.6274,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: ArcadeDB (server, fp32)",
-          "is_arcadedb": true,
-          "precision": "fp32",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:be792ad767f6 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 3016.2,
-              "min": 3016.2,
-              "max": 3016.2,
-              "n": 5
-            },
-            "load s": {
-              "median": 3312.1,
-              "min": 3278.88,
-              "max": 3440.14,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 28.4233,
-              "min": 28.3813,
-              "max": 28.5216,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 7.6028,
-              "min": 7.5702,
-              "max": 7.6273,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: Chroma (fp32)",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "chroma 1.5.9",
-          "host": "container:63ec69b9e5db (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 2590.9,
-              "min": 2590.9,
-              "max": 2590.9,
-              "n": 5
-            },
-            "load s": {
-              "median": 3855.82,
-              "min": 3852.6,
-              "max": 3868.12,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 12.6682,
-              "min": 12.6586,
-              "max": 12.691,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 6.5866,
-              "min": 6.5866,
-              "max": 6.5866,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: DuckDB VSS (fp32)",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "duckdb vss 1.5.5",
-          "host": "container:6a46e3c8a1ed (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 11944.6,
-              "min": 11944.6,
-              "max": 11944.6,
-              "n": 5
-            },
-            "load s": {
-              "median": 836.36,
-              "min": 831.35,
-              "max": 852.52,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 25.1768,
-              "min": 24.9387,
-              "max": 25.3081,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 8.0837,
-              "min": 8.0837,
-              "max": 8.0837,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: LanceDB (int8)",
-          "is_arcadedb": false,
-          "precision": "int8",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "lancedb 0.37.1",
-          "host": "container:4eaeeb3f8a9c (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 44213.3,
-              "min": 44213.3,
-              "max": 44213.3,
-              "n": 5
-            },
-            "load s": {
-              "median": 225.95,
-              "min": 225.74,
-              "max": 242.7,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 13.3463,
-              "min": 13.0329,
-              "max": 13.7962,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 6.8206,
-              "min": 6.815,
-              "max": 6.8234,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: Milvus (int8)",
-          "is_arcadedb": false,
-          "precision": "int8",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "server",
-          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": "milvus v2.6.13",
-          "host": "container:38be79ca78d9 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 7094.3,
-              "min": 7094.3,
-              "max": 7094.3,
-              "n": 5
-            },
-            "load s": {
-              "median": 1408.18,
-              "min": 1399.38,
-              "max": 1774.59,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 12.8816,
-              "min": 11.9559,
-              "max": 13.3345,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 21.8661,
-              "min": 20.5773,
-              "max": 21.9332,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: Milvus (fp32)",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "server",
-          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": "milvus v2.6.13",
-          "host": "container:246aaf7f2354 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 7097.1,
-              "min": 7097.1,
-              "max": 7097.1,
-              "n": 5
-            },
-            "load s": {
-              "median": 1407.61,
-              "min": 1381.21,
-              "max": 1745.54,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 15.4601,
-              "min": 15.4275,
-              "max": 16.1101,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 29.4868,
-              "min": 29.483,
-              "max": 29.5605,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: Qdrant (int8)",
-          "is_arcadedb": false,
-          "precision": "int8",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "server",
-          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "qdrant v1.18.2",
-          "host": "container:2e2d1017adbf (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 21653.8,
-              "min": 21653.8,
-              "max": 21653.8,
-              "n": 5
-            },
-            "load s": {
-              "median": 461.35,
-              "min": 429.21,
-              "max": 521.97,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 6.9306,
-              "min": 6.8618,
-              "max": 7.2979,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 5.3465,
-              "min": 5.3463,
-              "max": 5.358,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: Qdrant (fp32)",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "server",
-          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "qdrant v1.18.2",
-          "host": "container:d2f8757e3a8d (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 16684.2,
-              "min": 16684.2,
-              "max": 16684.2,
-              "n": 5
-            },
-            "load s": {
-              "median": 598.77,
-              "min": 529.22,
-              "max": 636.85,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 5.9402,
-              "min": 5.9215,
-              "max": 6.1772,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 4.4174,
-              "min": 4.4165,
-              "max": 4.4281,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: sqlite-vec (int8)",
-          "is_arcadedb": false,
-          "precision": "int8",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "sqlite-vec 0.1.9",
-          "host": "container:bc0754ea5071 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 171296.3,
-              "min": 171296.3,
-              "max": 171296.3,
-              "n": 5
-            },
-            "load s": {
-              "median": 58.32,
-              "min": 57.95,
-              "max": 63.92,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 3.653,
-              "min": 3.6025,
-              "max": 3.7585,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 1.1237,
-              "min": 1.1237,
-              "max": 1.1237,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Dense vectors, index build: sqlite-vec (fp32)",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3d:deep10m",
-          "scale_label": "9.99M",
-          "workload": "ingest",
-          "n_docs": "9,990,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "sqlite-vec 0.1.9",
-          "host": "container:d220434e67de (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 138423.2,
-              "min": 138423.2,
-              "max": 138423.2,
-              "n": 5
-            },
-            "load s": {
-              "median": 72.17,
-              "min": 71.13,
-              "max": 78.33,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 3.6023,
-              "min": 3.6023,
-              "max": 3.6025,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 3.8033,
-              "min": 3.8033,
-              "max": 3.8033,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (embedded, int8)",
-          "is_arcadedb": true,
-          "precision": "int8",
-          "scale": "l3s:tiny",
-          "scale_label": "100k",
-          "workload": "ingest",
-          "n_docs": "100,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:62c4cc638f62 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 10822.8,
-              "min": 10704.0,
-              "max": 11065.7,
-              "n": 5
-            },
-            "load s": {
-              "median": 9.24,
-              "min": 9.04,
-              "max": 9.34,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 2.9963,
-              "min": 2.9546,
-              "max": 3.1028,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.1524,
-              "min": 0.1524,
-              "max": 0.1524,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (embedded, fp32)",
-          "is_arcadedb": true,
-          "precision": "fp32",
-          "scale": "l3s:tiny",
-          "scale_label": "100k",
-          "workload": "ingest",
-          "n_docs": "100,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:25ece5b76009 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 11483.5,
-              "min": 11151.8,
-              "max": 11844.2,
-              "n": 5
-            },
-            "load s": {
-              "median": 8.71,
-              "min": 8.44,
-              "max": 8.97,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 3.1528,
-              "min": 3.1242,
-              "max": 3.2947,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.1884,
-              "min": 0.1884,
-              "max": 0.1885,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (server, int8)",
-          "is_arcadedb": true,
-          "precision": "int8",
-          "scale": "l3s:tiny",
-          "scale_label": "100k",
-          "workload": "ingest",
-          "n_docs": "100,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:45e6c5d14619 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 3956.7,
-              "min": 3809.7,
-              "max": 4074.7,
-              "n": 5
-            },
-            "load s": {
-              "median": 25.27,
-              "min": 24.54,
-              "max": 26.25,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 4.3617,
-              "min": 4.3573,
-              "max": 4.3759,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.1924,
-              "min": 0.1908,
-              "max": 0.194,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (server, fp32)",
-          "is_arcadedb": true,
-          "precision": "fp32",
-          "scale": "l3s:tiny",
-          "scale_label": "100k",
-          "workload": "ingest",
-          "n_docs": "100,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:6d3eb38d0e38 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 3863.4,
-              "min": 3834.5,
-              "max": 3908.9,
-              "n": 5
-            },
-            "load s": {
-              "median": 25.88,
-              "min": 25.58,
-              "max": 26.08,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 4.3693,
-              "min": 4.3526,
-              "max": 4.3862,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.2282,
-              "min": 0.2261,
-              "max": 0.2287,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: Elasticsearch",
-          "is_arcadedb": false,
-          "precision": "~9-bit",
-          "scale": "l3s:tiny",
-          "scale_label": "100k",
-          "workload": "ingest",
-          "n_docs": "100,000",
-          "deployment": "server",
-          "image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",
-          "version_name": "elasticsearch 9.4.1",
-          "host": "container:f0057886a455 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 2869.0,
-              "min": 2852.4,
-              "max": 2930.0,
-              "n": 5
-            },
-            "load s": {
-              "median": 34.85,
-              "min": 34.13,
-              "max": 35.06,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 4.7812,
-              "min": 4.7698,
-              "max": 4.7941,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0946,
-              "min": 0.0946,
-              "max": 0.0948,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: Milvus",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3s:tiny",
-          "scale_label": "100k",
-          "workload": "ingest",
-          "n_docs": "100,000",
-          "deployment": "server",
-          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": "milvus v2.6.13",
-          "host": "container:4a760a37d3a7 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 5538.6,
-              "min": 5445.6,
-              "max": 5583.5,
-              "n": 5
-            },
-            "load s": {
-              "median": 18.06,
-              "min": 17.91,
-              "max": 18.36,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 1.3164,
-              "min": 1.3054,
-              "max": 1.3769,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.2709,
-              "min": 0.2706,
-              "max": 0.271,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: Qdrant",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3s:tiny",
-          "scale_label": "100k",
-          "workload": "ingest",
-          "n_docs": "100,000",
-          "deployment": "server",
-          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "qdrant v1.18.2",
-          "host": "container:c6fc870eb7eb (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 11848.3,
-              "min": 11688.0,
-              "max": 12423.0,
-              "n": 5
-            },
-            "load s": {
-              "median": 8.44,
-              "min": 8.05,
-              "max": 8.56,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.6919,
-              "min": 0.6608,
-              "max": 0.7037,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.2485,
-              "min": 0.1886,
-              "max": 0.2502,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (embedded, int8)",
-          "is_arcadedb": true,
-          "precision": "int8",
-          "scale": "l3s:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:353ccb850167 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 10581.1,
-              "min": 10402.9,
-              "max": 10668.2,
-              "n": 5
-            },
-            "load s": {
-              "median": 94.51,
-              "min": 93.74,
-              "max": 96.13,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 8.3591,
-              "min": 8.282,
-              "max": 8.4055,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 1.4752,
-              "min": 1.4751,
-              "max": 1.4752,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (embedded, fp32)",
-          "is_arcadedb": true,
-          "precision": "fp32",
-          "scale": "l3s:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:eda734f67bbd (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 10584.3,
-              "min": 10415.8,
-              "max": 10956.0,
-              "n": 5
-            },
-            "load s": {
-              "median": 94.48,
-              "min": 91.27,
-              "max": 96.01,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 8.418,
-              "min": 8.369,
-              "max": 8.4479,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 1.8318,
-              "min": 1.8318,
-              "max": 1.8318,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (server, int8)",
-          "is_arcadedb": true,
-          "precision": "int8",
-          "scale": "l3s:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:e0b175b02561 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 4023.0,
-              "min": 3994.0,
-              "max": 4094.7,
-              "n": 5
-            },
-            "load s": {
-              "median": 248.57,
-              "min": 244.22,
-              "max": 250.38,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 8.6235,
-              "min": 8.5557,
-              "max": 8.669,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 1.5016,
-              "min": 1.4929,
-              "max": 1.5048,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (server, fp32)",
-          "is_arcadedb": true,
-          "precision": "fp32",
-          "scale": "l3s:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:188a19504c20 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 3967.4,
-              "min": 3854.0,
-              "max": 4029.7,
-              "n": 5
-            },
-            "load s": {
-              "median": 252.05,
-              "min": 248.16,
-              "max": 259.47,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 8.652,
-              "min": 8.5755,
-              "max": 8.6822,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 1.8635,
-              "min": 1.8582,
-              "max": 1.8763,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: Elasticsearch",
-          "is_arcadedb": false,
-          "precision": "~9-bit",
-          "scale": "l3s:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "server",
-          "image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",
-          "version_name": "elasticsearch 9.4.1",
-          "host": "container:894d6dbf295e (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 2980.8,
-              "min": 2968.0,
-              "max": 3010.3,
-              "n": 5
-            },
-            "load s": {
-              "median": 335.48,
-              "min": 332.2,
-              "max": 336.93,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 9.0536,
-              "min": 9.0061,
-              "max": 9.1035,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.9053,
-              "min": 0.9052,
-              "max": 0.9053,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: Milvus",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3s:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "server",
-          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": "milvus v2.6.13",
-          "host": "container:2596e52f1a5d (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 8331.4,
-              "min": 8248.3,
-              "max": 9135.8,
-              "n": 5
-            },
-            "load s": {
-              "median": 120.03,
-              "min": 109.46,
-              "max": 121.24,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 5.5321,
-              "min": 5.1766,
-              "max": 6.0622,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 4.6167,
-              "min": 4.4504,
-              "max": 4.6487,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: Qdrant",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3s:small",
-          "scale_label": "1M",
-          "workload": "ingest",
-          "n_docs": "1,000,000",
-          "deployment": "server",
-          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "qdrant v1.18.2",
-          "host": "container:6a283bf26f96 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 10548.2,
-              "min": 10217.8,
-              "max": 10838.0,
-              "n": 5
-            },
-            "load s": {
-              "median": 94.8,
-              "min": 92.27,
-              "max": 97.87,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 2.2725,
-              "min": 2.0881,
-              "max": 2.4558,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 1.4492,
-              "min": 1.4489,
-              "max": 1.4521,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (embedded, int8)",
-          "is_arcadedb": true,
-          "precision": "int8",
-          "scale": "l3s:medium",
-          "scale_label": "8.84M",
-          "workload": "ingest",
-          "n_docs": "8,841,823",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:9645b2d0a026 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 9614.0,
-              "min": 9494.3,
-              "max": 9675.0,
-              "n": 5
-            },
-            "load s": {
-              "median": 919.68,
-              "min": 913.88,
-              "max": 931.28,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 16.791,
-              "min": 16.7462,
-              "max": 16.8096,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 13.0806,
-              "min": 13.0805,
-              "max": 13.0806,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (embedded, fp32)",
-          "is_arcadedb": true,
-          "precision": "fp32",
-          "scale": "l3s:medium",
-          "scale_label": "8.84M",
-          "workload": "ingest",
-          "n_docs": "8,841,823",
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:505ec3b6a081 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 9713.9,
-              "min": 9699.3,
-              "max": 9766.1,
-              "n": 5
-            },
-            "load s": {
-              "median": 910.22,
-              "min": 905.36,
-              "max": 911.59,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 16.7674,
-              "min": 16.7567,
-              "max": 16.7892,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 16.2461,
-              "min": 16.2461,
-              "max": 16.2462,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (server, int8)",
-          "is_arcadedb": true,
-          "precision": "int8",
-          "scale": "l3s:medium",
-          "scale_label": "8.84M",
-          "workload": "ingest",
-          "n_docs": "8,841,823",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:63f25cb3afb9 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 3826.1,
-              "min": 3815.6,
-              "max": 3863.3,
-              "n": 5
-            },
-            "load s": {
-              "median": 2310.93,
-              "min": 2288.67,
-              "max": 2317.31,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 16.906,
-              "min": 16.88,
-              "max": 16.9285,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 13.096,
-              "min": 13.0783,
-              "max": 13.1358,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: ArcadeDB (server, fp32)",
-          "is_arcadedb": true,
-          "precision": "fp32",
-          "scale": "l3s:medium",
-          "scale_label": "8.84M",
-          "workload": "ingest",
-          "n_docs": "8,841,823",
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:8a32e3fc7cf7 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 3842.6,
-              "min": 3756.3,
-              "max": 3903.4,
-              "n": 5
-            },
-            "load s": {
-              "median": 2301.0,
-              "min": 2265.16,
-              "max": 2353.87,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 16.925,
-              "min": 16.9216,
-              "max": 16.9537,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 16.268,
-              "min": 16.2458,
-              "max": 16.2807,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: Elasticsearch",
-          "is_arcadedb": false,
-          "precision": "~9-bit",
-          "scale": "l3s:medium",
-          "scale_label": "8.84M",
-          "workload": "ingest",
-          "n_docs": "8,841,823",
-          "deployment": "server",
-          "image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",
-          "version_name": "elasticsearch 9.4.1",
-          "host": "container:6803ddfce4ec (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 2826.8,
-              "min": 2825.3,
-              "max": 2874.2,
-              "n": 5
-            },
-            "load s": {
-              "median": 3127.85,
-              "min": 3076.22,
-              "max": 3129.54,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 17.375,
-              "min": 17.35,
-              "max": 17.4103,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 8.0066,
-              "min": 8.0063,
-              "max": 8.0068,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: Milvus",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3s:medium",
-          "scale_label": "8.84M",
-          "workload": "ingest",
-          "n_docs": "8,841,823",
-          "deployment": "server",
-          "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": "milvus v2.6.13",
-          "host": "container:24718e20df8d (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 8565.9,
-              "min": 8507.4,
-              "max": 8679.6,
-              "n": 5
-            },
-            "load s": {
-              "median": 1032.21,
-              "min": 1018.69,
-              "max": 1039.31,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 16.1567,
-              "min": 15.5033,
-              "max": 17.9854,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 48.6757,
-              "min": 48.369,
-              "max": 50.5772,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Sparse vectors, index build: Qdrant",
-          "is_arcadedb": false,
-          "precision": "fp32",
-          "scale": "l3s:medium",
-          "scale_label": "8.84M",
-          "workload": "ingest",
-          "n_docs": "8,841,823",
-          "deployment": "server",
-          "image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-          "version_name": "qdrant v1.18.2",
-          "host": "container:6ce139d19184 (host unknown)",
-          "metrics": {
-            "records/s": {
-              "median": 4858.3,
-              "min": 4813.1,
-              "max": 4871.9,
-              "n": 5
-            },
-            "load s": {
-              "median": 1819.93,
-              "min": 1814.87,
-              "max": 1837.04,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 14.6536,
-              "min": 14.5646,
-              "max": 14.8021,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 12.2731,
-              "min": 12.2707,
-              "max": 12.2734,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Cross-model set, vectors, edges and index: ArcadeDB (one transaction)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "e2:e2",
-          "scale_label": "50k products",
-          "workload": "ingest",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "load s": {
-              "median": 10.41,
-              "min": 9.39,
-              "max": 10.89,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 1.9229,
-              "min": 1.8936,
-              "max": 2.1836,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0384,
-              "min": 0.0384,
-              "max": 0.0384,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Cross-model set, vectors, edges and index: ArcadeDB (server, one transaction)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "e2:e2",
-          "scale_label": "50k products",
-          "workload": "ingest",
-          "n_docs": null,
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "load s": {
-              "median": 13.89,
-              "min": 13.48,
-              "max": 14.25,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 4.0528,
-              "min": 4.0457,
-              "max": 4.0683,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0991,
-              "min": 0.0412,
-              "max": 0.1023,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Cross-model set, vectors, edges and index: Qdrant + Neo4j (no shared transaction)",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "e2:e2",
-          "scale_label": "50k products",
-          "workload": "ingest",
-          "n_docs": null,
-          "deployment": "server",
-          "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5-community",
-          "host": null,
-          "metrics": {
-            "load s": {
-              "median": 5.79,
-              "min": 5.72,
-              "max": 5.89,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 6.8004,
-              "min": 6.7968,
-              "max": 6.8143,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0107,
-              "min": 0.0107,
-              "max": 0.0107,
-              "n": 5
-            }
-          }
-        },
-        {
-          "backend": "Cross-model set, vectors, edges and index: SurrealDB",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "e2:e2",
-          "scale_label": "50k products",
-          "workload": "ingest",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "surrealdb 2.0.0",
-          "host": null,
-          "metrics": {
-            "load s": {
-              "median": 333.6,
-              "min": 332.17,
-              "max": 334.35,
-              "n": 5
-            },
-            "peak memory GiB": {
-              "median": 0.8043,
-              "min": 0.7977,
-              "max": 0.8063,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.0009,
-              "min": 0.0009,
-              "max": 0.0009,
-              "n": 5
-            }
-          }
-        }
-      ],
-      "source_path": null,
-      "source_url": null
     },
     {
       "id": "lifecycle",
