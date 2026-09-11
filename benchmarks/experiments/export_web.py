@@ -1834,6 +1834,49 @@ DEPLOYMENT_ORDER = {"embedded": 0, "server": 1}
 PRECISION_ORDER = {"int8": 0, "fp32": 1}
 
 
+# The ingest path per engine and deployment, said under every table that
+# prints an ingest pair. Embedded goes through the Python package or the Java
+# API; served goes through HTTP with statements as text. Read from the lane
+# scripts, not from memory (2026-09-11).
+INGEST_NOTES = {
+    "l1": ("Ingest paths: ArcadeDB embedded sends batches of 500 INSERT statements as one "
+           "sqlscript per transaction through the Python package; ArcadeDB served sends the "
+           "same batches to the HTTP command endpoint; PostgreSQL uses COPY FROM STDIN; DuckDB "
+           "inserts 5,000-row DataFrames with INSERT INTO ... SELECT. The ArcadeDB indexes exist "
+           "before its load; PostgreSQL's and DuckDB's are created after theirs."),
+    "l1tpc": ("Ingest paths: ArcadeDB embedded loads through the Python package's insert_many in "
+              "10,000-row batches, one JSON payload per batch; served sends INSERT statements as "
+              "sqlscript batches over HTTP; PostgreSQL COPY FROM STDIN; DuckDB CREATE TABLE AS "
+              "SELECT from in-memory frames."),
+    "l2": ("Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in "
+           "5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as "
+           "sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, "
+           "its native bulk path."),
+    "e2": ("Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 "
+           "records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served "
+           "sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE "
+           "INDEX; SurrealDB inserts through its Python client into an in-memory database; the "
+           "composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."),
+    "l4": ("Ingest paths: the ArcadeDB document path issues INSERT per point through the Python "
+           "package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type "
+           "takes columns through the async executor's append_samples (embedded) or InfluxDB line "
+           "protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes "
+           "line protocol over TCP."),
+    "l3d": ("Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions "
+            "through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement "
+            "sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE "
+            "INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant "
+            "and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."),
+    "l3s": ("Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and "
+            "float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT "
+            "statements as sqlscript batches over HTTP; Qdrant, Milvus and Elasticsearch upsert or "
+            "bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush "
+            "and load)."),
+}
+INGEST_NOTES["l2olap"] = INGEST_NOTES["l2"]
+INGEST_NOTES["l3smp"] = INGEST_NOTES["l3s"]
+
+
 def _finish_table(table: dict) -> dict:
     entries = table["entries"]
     seen = []
@@ -1868,6 +1911,9 @@ def _finish_table(table: dict) -> dict:
     # re-run lands (the analytical p99s, 2026-09-10).
     present = {m for e in table["entries"] for m, v in e.get("metrics", {}).items() if v is not None}
     table["columns"] = [c for c in cols if c in present]
+    note = INGEST_NOTES.get(table["id"])
+    if note and any("ingest" in c for c in table["columns"]) and note not in table.get("conditions", []):
+        table["conditions"] = list(table.get("conditions", [])) + [note]
     return table
 
 
