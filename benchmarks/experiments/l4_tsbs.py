@@ -272,18 +272,24 @@ class ArcadeNativeTS(ArcadeTS):
             f"AND ts BETWEEN {a} AND {(T0 + 86400 * 40) * 1000} "
             f"ORDER BY ts DESC LIMIT 1").to_list()
 
+    # The two range queries use the half-open form (ts >= a AND ts < b), the
+    # same text the served twin and the document arms send. This arm alone
+    # used BETWEEN a AND b-1, and on the same engine that form answered the
+    # 12-hour aggregate in about 19 ms against 6.6 ms for the half-open form
+    # (laptop A/B, 2026-09-12, BUGS F33): the page printed 20 to 31 ms here
+    # beside 3.8 ms for the server, a gap that was the query text.
     def q_range(self):
         a, b = T0 * 1000, (T0 + 3600) * 1000
         return self.db.query("sql",
             f"SELECT ts.timeBucket('1m', ts) AS m, max(uu) AS v FROM Point "
-            f"WHERE host = '{HOST}' AND ts BETWEEN {a} AND {b - 1} "
+            f"WHERE host = '{HOST}' AND ts >= {a} AND ts < {b} "
             f"GROUP BY m ORDER BY m").to_list()
 
     def q_global(self):
         a, b = T0 * 1000, (T0 + 43200) * 1000
         return self.db.query("sql",
             f"SELECT ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point "
-            f"WHERE ts BETWEEN {a} AND {b - 1} "
+            f"WHERE ts >= {a} AND ts < {b} "
             f"GROUP BY h ORDER BY h").to_list()
 
     def settle(self):
