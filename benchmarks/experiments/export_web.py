@@ -1223,10 +1223,12 @@ L4_METRICS = [
 # backend -> the label this table has always used. Canonical rows name backends
 # the way runner.BACKENDS does; the legacy files named them by hand.
 L4_CANON_LABELS = {
-    "arcadedb_ts_native": "arcadedb (native TIMESERIES)",
-    "arcadedb_ts_doc":    "arcadedb (document path)",
-    "arcadedb_ts_doc_server": "arcadedb (server, document path)",
-    "arcadedb_ts_native_server": "arcadedb (server, native TIMESERIES)",
+    # Named like every other table's ArcadeDB rows (2026-09-11): the engine
+    # capitalised, the mode first, then which storage path the row took.
+    "arcadedb_ts_native": "ArcadeDB (embedded, native time series)",
+    "arcadedb_ts_doc":    "ArcadeDB (embedded, document path)",
+    "arcadedb_ts_doc_server": "ArcadeDB (server, document path)",
+    "arcadedb_ts_native_server": "ArcadeDB (server, native time series)",
     "questdb":            "questdb",
     "sqlite":             "sqlite",
     "mongodb":            "mongodb",
@@ -1278,7 +1280,7 @@ def _l4_rows():
         # numpy_cols= are part of what is being claimed, so assert rather than
         # assume: mixing arms would report a number no paper claims.
         if d.get("primitive") is True and d.get("numpy_cols") is True:
-            out["arcadedb (native TIMESERIES)"].append(d)
+            out["ArcadeDB (embedded, native time series)"].append(d)
 
     if L4_FILE.exists():
         for line in L4_FILE.read_text(encoding="utf-8").splitlines():
@@ -1289,7 +1291,7 @@ def _l4_rows():
             except json.JSONDecodeError:
                 continue
             backend = r.get("backend")
-            label = ("arcadedb (document path)" if backend == "arcadedb"
+            label = ("ArcadeDB (embedded, document path)" if backend == "arcadedb"
                      else str(backend))
             out[label].append(r)
 
@@ -1552,15 +1554,15 @@ def _l4_table(all_rows):
     if not grouped:
         return None
 
-    order = ["arcadedb (native TIMESERIES)", "arcadedb (document path)",
+    order = ["ArcadeDB (embedded, native time series)", "ArcadeDB (embedded, document path)",
              "questdb", "duckdb", "sqlite", "mongodb", "timescaledb"]
     # This lane predates runner.BACKENDS and keeps its own adapters, so the
     # topology lookup does not reach it. QuestDB is a server (ILP ingest on
     # 9009, SQL over pg-wire, see l4_tsbs.py); the other two run in-process.
-    L4_DEPLOYMENT = {"arcadedb (native TIMESERIES)": "embedded",
-                     "arcadedb (server, document path)": "server",
-                     "arcadedb (server, native TIMESERIES)": "server",
-                     "arcadedb (document path)": "embedded",
+    L4_DEPLOYMENT = {"ArcadeDB (embedded, native time series)": "embedded",
+                     "ArcadeDB (server, document path)": "server",
+                     "ArcadeDB (server, native time series)": "server",
+                     "ArcadeDB (embedded, document path)": "embedded",
                      "questdb": "server", "duckdb": "embedded", "sqlite": "embedded", "mongodb": "server", "timescaledb": "server"}
     entries = []
     for label in sorted(grouped, key=lambda k: (order.index(k) if k in order else 99, k)):

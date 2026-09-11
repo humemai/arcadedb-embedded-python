@@ -186,7 +186,7 @@ tracked artifact, and its conditions.
 | id | title | rows | columns |
 |---|---|---|---|
 | `l3s` | Sparse vector search | ArcadeDB emb int8 / emb fp32 / srv int8, Elasticsearch, Milvus, Qdrant | p50, **p95**, **p99**, recall@10, build s, peak mem |
-| `l3smp` | Sparse: what a second pass buys | same six | cold p50, warm p50, gain, **recall@10** |
+| `l3smp` (retired 2026-09-11, folded into `l3s` as warm columns) | Sparse: what a second pass buys | same six | cold p50, warm p50, gain, **recall@10** |
 | `l3s_nocompact` | **NEW** — what the settle step buys | ArcadeDB emb int8 with/without COMPACT | p50 at 100k / 1M / 8.84M, ratio |
 | `l3d` | Dense vector search | ArcadeDB emb fp32 / srv fp32 / emb int8 / srv int8, Chroma, DuckDB-VSS, LanceDB, Milvus (fp32, int8), Qdrant (fp32, int8), sqlite-vec (fp32, int8) | cold p50, **cold p95/p99**, warm p50, recall@10, build s |
 | `l3d_params` | **NEW** — matched operating points | every dense arm | ef_construction, ef_search, degree_param, degree_family, quantization, index kind |
@@ -252,7 +252,7 @@ the view's benefit scales; 20 SF1 rows are already frozen).
 `l2` needs p99 because the p50 headline reverses there: 2-hop SF10 is 20.28 ms
 against Neo4j's 10.10.
 
-### Tabular and time series
+### Documents and time series (the synthetic `l1`, `l1olap`, `l1tpc` blocks are retired from the page since 2026-09-11, DECISIONS #67; the paper keeps them)
 
 | id | title | rows | columns |
 |---|---|---|---|
@@ -781,3 +781,24 @@ The 8d6af9475 page was complete by rows and had blank cells. The rules that came
 - **Before calling a page complete**, scan the exported JSON per column for blank cells and per row for a missing version (BUGS F26 has the one-liner). The freeze counts rows; the reader sees cells.
 - **Ingest is a column pair, not a table (2026-09-11).** Every table whose rows loaded something shows `ingest <unit>/s` and `ingest total s`: records/s on documents, TPC (line items plus parts over load seconds), graph (persons plus edges) and the cross-model set (products plus edges); pts/s on time series; vectors/s on the sparse and dense tables (labelled ingest+index, one timer), where the total includes the index build and the note says so. Derived rates use `_rate(count_fields, seconds_field)` in the spec, aggregated per row like any field. A separate side-by-side table was built and dropped the same day at the user's request.
 - **Column order and ingest names (2026-09-11).** `_finish_table` orders every table the same way: the workload's own columns in spec order, then `recall@10`, then the ingest pair (rate, then total), then peak memory, then disk. Ingest rates name the type: `ingest documents/s` (documents, TPC), `ingest vertices+edges/s` (graph), `ingest points/s` (time series), `ingest+index vectors/s` (both vector tables), `ingest+index vertices+edges/s` (the cross-model set, whose load includes the vector index). The word "records" does not appear as a column name.
+
+## Published tables, 2026-09-11 (generated from results/web_benchmarks.json; regenerate this block when a table changes)
+
+Every table carries a Size column and direction arrows; ingest is a pair of columns where the lane records it. Rows: ArcadeDB first, comparators alphabetical, embedded before server, int8 before fp32.
+
+| id | title | rows | sizes | columns |
+|---|---|---|---|---|
+| `l3s` | Sparse vector search | ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8), Elasticsearch, Milvus, Qdrant | 100k vectors, 1M vectors, 8.84M vectors | recall@10, ingest+index vectors/s, ingest+index total s, peak memory GiB, disk GiB, cold p50 ms, cold p99 ms |
+| `l3d` | Dense vector search | ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8), Chroma (fp32), DuckDB VSS (fp32), LanceDB (int8), Milvus (fp32), Milvus (int8), Qdrant (fp32), Qdrant (int8), sqlite-vec (fp32), sqlite-vec (int8) | 1M vectors, 9.99M vectors | cold p50 ms, cold p99 ms, warm p50 ms, warm p99 ms, recall@10, ingest+index total s, ingest+index vectors/s, peak memory GiB, disk GiB |
+| `l2` | Graph OLTP | ArcadeDB (embedded), ArcadeDB (server), LadybugDB, Neo4j | SF1 (11k people), SF10 (73k people) | point p50 ms, point p99 ms, 1-hop p50 ms, 1-hop p99 ms, 2-hop p50 ms, 2-hop p99 ms, write p50 ms, write p99 ms, ingest vertices+edges/s, ingest total s, peak memory GiB, disk GiB |
+| `l2olap` | Graph OLAP, with and without the Graph Analytical View | ArcadeDB (embedded), ArcadeDB (embedded, GAV), ArcadeDB (server), ArcadeDB (server, GAV), LadybugDB, Neo4j | SF1 (11k people), SF10 (73k people) | ingest vertices+edges/s, ingest total s, average friend age p50 ms, average friend age p99 ms, friends in same city p50 ms, friends in same city p99 ms, most friends p50 ms, most friends p99 ms, peak memory GiB, disk GiB |
+| `e2atom` | Cross-model transaction: what survives a crash | ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) | 50k products | trials, crashes raised, torn results |
+| `e2` | Cross-model transaction | ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) | 50k products | p50 ms, p99 ms, CPU s, ingest+index vertices+edges/s, ingest+index total s, peak memory GiB, disk GiB |
+| `l4` | Time series | DuckDB, QuestDB, arcadedb (document path), arcadedb (native TIMESERIES), arcadedb (server, document path), arcadedb (server, native TIMESERIES) | 2.59M points | ingest points/s, ingest total s, newest reading p50 ms, newest reading p99 ms, 12h aggregate p50 ms, 12h aggregate p99 ms, peak memory GiB, disk GiB |
+| `lifecycle` | Session cost, open to close | doc, doc (server), doc_idx10, doc_idx10 (server), empty, empty (server), graph, graph (server), sparse, sparse (server), ts, ts (server), vector, vector (server) | 100k, 10M, 10k, 1M | JVM start ms, first open ms, cold process ms, clean session ms, read session ms, write session ms, write_own session ms, write_own_read session ms, peak memory GiB, disk GiB |
+| `e4` | What the client/server split costs | 1 documents, 1,000 documents, 10 documents, 10,000 documents, 100 documents, 100,000 documents | 1, 1,000, 10, 10,000, 100, 100,000 | in-process ms, in-process server, HTTP ms, separate container, HTTP ms, packing cost ms, separate process ms |
+| `pycost` | What Python costs | Java, in process, Python, Python, to_columns, Python, to_json_list, Python, to_list | 100k-document scan, vector search | time ms, vs Java |
+| `docs_oltp` | Document OLTP | ArcadeDB (embedded), ArcadeDB (server), DuckDB, PostgreSQL, PostgreSQL (tuned) | TPC-H SF1 (6.0M line items) | new-order p50 ms, new-order p99 ms, OLTP ops/s, ingest documents/s, ingest total s, peak memory GiB, disk GiB |
+| `docs_olap` | Document OLAP | ArcadeDB (embedded), ArcadeDB (server), DuckDB, PostgreSQL, PostgreSQL (tuned) | TPC-H SF1 (6.0M line items) | Q1 p50 ms, Q1 p99 ms, Q6 p50 ms, Q6 p99 ms, ingest documents/s, ingest total s, peak memory GiB, disk GiB |
+
+Queued additions (qDI to qDO): SQLite, MongoDB, SurrealDB (embedded, server) on the document tables; SurrealDB on graph; pgvector, Neo4j, SurrealDB on dense; pgvector on sparse; SQLite, MongoDB, TimescaleDB on time series; PostgreSQL + pgvector + AGE, Neo4j, SurrealDB (server) on the cross-model tables. The exporter already names them; the tables grow as the rows land.

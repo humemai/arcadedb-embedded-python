@@ -62,11 +62,11 @@ MAPPING = {
     "l2.neo4j.hop2_p50":    ("l2", "neo4j_graph", "2-hop p50 ms"),
     "l2.ladybug.hop2_p50":  ("l2", "ladybug_graph", "2-hop p50 ms"),
     # L4 time series: the lane where reading the wrong field is easiest
-    "l4.native.ingest":   ("l4", "arcadedb (native TIMESERIES)", "ingest points/s"),
-    "l4.native.q_global": ("l4", "arcadedb (native TIMESERIES)", "12h aggregate p50 ms"),
+    "l4.native.ingest":   ("l4", "ArcadeDB (embedded, native time series)", "ingest points/s"),
+    "l4.native.q_global": ("l4", "ArcadeDB (embedded, native time series)", "12h aggregate p50 ms"),
     "l4.questdb.ingest":  ("l4", "questdb", "ingest points/s"),
     "l4.duckdb.ingest":   ("l4", "duckdb", "ingest points/s"),
-    "l4.doc.q_global":    ("l4", "arcadedb (document path)", "12h aggregate p50 ms"),
+    "l4.doc.q_global":    ("l4", "ArcadeDB (embedded, document path)", "12h aggregate p50 ms"),
     # Python binding suite. The ratio cells are the ones a wrong arm silently
     # changes, so they are the ones most worth pinning: swapping P-raw-call for
     # P-SQL republishes 1.71 in place of 1.28 with every other check green.

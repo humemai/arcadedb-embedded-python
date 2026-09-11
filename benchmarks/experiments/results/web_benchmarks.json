@@ -5819,8 +5819,8 @@
       "withheld_reason": null,
       "entries": [
         {
-          "backend": "arcadedb (native TIMESERIES)",
-          "is_arcadedb": true,
+          "backend": "ArcadeDB (embedded, native time series)",
+          "is_arcadedb": false,
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",
           "n_docs": "2592000",
@@ -5880,8 +5880,8 @@
           }
         },
         {
-          "backend": "arcadedb (document path)",
-          "is_arcadedb": true,
+          "backend": "ArcadeDB (embedded, document path)",
+          "is_arcadedb": false,
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",
           "n_docs": "2592000",
@@ -5941,8 +5941,8 @@
           }
         },
         {
-          "backend": "arcadedb (server, document path)",
-          "is_arcadedb": true,
+          "backend": "ArcadeDB (server, document path)",
+          "is_arcadedb": false,
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",
           "n_docs": "2592000",
@@ -6002,8 +6002,8 @@
           }
         },
         {
-          "backend": "arcadedb (server, native TIMESERIES)",
-          "is_arcadedb": true,
+          "backend": "ArcadeDB (server, native time series)",
+          "is_arcadedb": false,
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",
           "n_docs": "2592000",
