@@ -57,6 +57,10 @@
     "questdb": [
       "(no version recorded)"
     ],
+    "sqlite": [
+      "(no version recorded)",
+      "sqlite 3.46.1"
+    ],
     "sqlite_vec_dense": [
       "0.1.9"
     ],
@@ -70,7 +74,8 @@
   "comparator_version_split": [
     "duckdb",
     "postgres",
-    "postgres_tuned"
+    "postgres_tuned",
+    "sqlite"
   ],
   "arcadedb_engines": [
     "arcadedb 26.9.1-dev \u00b7 8d6af9475"
@@ -134,6 +139,7 @@
     "container:1f574fa5772d (host unknown)",
     "container:1fd99dfdede3 (host unknown)",
     "container:210f14f81f4d (host unknown)",
+    "container:232de6b56afe (host unknown)",
     "container:23e2c7a02c1d (host unknown)",
     "container:24021d5788d5 (host unknown)",
     "container:246aaf7f2354 (host unknown)",
@@ -225,6 +231,7 @@
     "container:5a11f76f1f5b (host unknown)",
     "container:5b3db757207d (host unknown)",
     "container:5c2e53311ad7 (host unknown)",
+    "container:5c9fd34b62a8 (host unknown)",
     "container:5d15c68cfbf4 (host unknown)",
     "container:5dc396e140fa (host unknown)",
     "container:5de28d5d5957 (host unknown)",
@@ -269,6 +276,7 @@
     "container:77d0d0c52b8e (host unknown)",
     "container:77dd8173d40b (host unknown)",
     "container:793c4f17e248 (host unknown)",
+    "container:79cf279810aa (host unknown)",
     "container:7b2de57e8af2 (host unknown)",
     "container:7b47b18f14ac (host unknown)",
     "container:7b830271fdbd (host unknown)",
@@ -283,6 +291,7 @@
     "container:822825b1bd5f (host unknown)",
     "container:824308314c1a (host unknown)",
     "container:8508eaf43bdc (host unknown)",
+    "container:85deb37be0ef (host unknown)",
     "container:8677db61bd70 (host unknown)",
     "container:86a99d9e9c43 (host unknown)",
     "container:871e7ee15c38 (host unknown)",
@@ -468,6 +477,7 @@
     "container:fdf655eba421 (host unknown)",
     "container:fe46884b2388 (host unknown)",
     "container:fea4c18c8c86 (host unknown)",
+    "container:fed84432241c (host unknown)",
     "container:ff8851d9e598 (host unknown)",
     "container:ff9179584a3a (host unknown)"
   ],
@@ -6191,6 +6201,67 @@
               "n": 5
             }
           }
+        },
+        {
+          "backend": "SQLite",
+          "is_arcadedb": false,
+          "scale": "2.59M points",
+          "workload": "TSBS cpu-only",
+          "n_docs": "2592000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "sqlite 3.46.1",
+          "host": "container:79cf279810aa (host unknown)",
+          "metrics": {
+            "ingest points/s": {
+              "median": 1033680.5,
+              "min": 1015117.3,
+              "max": 1056063.5,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 2.51,
+              "min": 2.45,
+              "max": 2.55,
+              "n": 5
+            },
+            "newest reading p50 ms": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            },
+            "newest reading p99 ms": {
+              "median": 0.01,
+              "min": 0.01,
+              "max": 0.01,
+              "n": 5
+            },
+            "12h aggregate p50 ms": {
+              "median": 152.06,
+              "min": 145.17,
+              "max": 153.13,
+              "n": 5
+            },
+            "12h aggregate p99 ms": {
+              "median": 156.27,
+              "min": 150.31,
+              "max": 161.44,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.6904,
+              "min": 0.6904,
+              "max": 0.6906,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.114,
+              "min": 0.114,
+              "max": 0.114,
+              "n": 5
+            }
+          }
         }
       ],
       "directions": {
@@ -10017,6 +10088,63 @@
               "n": 10
             }
           }
+        },
+        {
+          "backend": "SQLite",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch1",
+          "scale_label": "TPC-H SF1 (6.0M line items)",
+          "workload": "",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "sqlite 3.46.1",
+          "host": null,
+          "metrics": {
+            "new-order p50 ms": {
+              "median": 0.011,
+              "min": 0.011,
+              "max": 0.012,
+              "n": 5
+            },
+            "new-order p99 ms": {
+              "median": 0.019,
+              "min": 0.017,
+              "max": 0.027,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 19884.9,
+              "min": 16252.7,
+              "max": 26787.4,
+              "n": 5
+            },
+            "ingest documents/s": {
+              "median": 333937.3612,
+              "min": 323992.4242,
+              "max": 341664.7383,
+              "n": 10
+            },
+            "ingest total s": {
+              "median": 18.57,
+              "min": 18.15,
+              "max": 19.14,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 3.363,
+              "min": 3.3444,
+              "max": 3.3739,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.39,
+              "min": 0.39,
+              "max": 0.39,
+              "n": 10
+            }
+          }
         }
       ],
       "withheld_scales": [],
@@ -10371,6 +10499,69 @@
               "median": 0.788,
               "min": 0.7879,
               "max": 0.788,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "SQLite",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch1",
+          "scale_label": "TPC-H SF1 (6.0M line items)",
+          "workload": "",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "sqlite 3.46.1",
+          "host": null,
+          "metrics": {
+            "Q1 p50 ms": {
+              "median": 9233.49,
+              "min": 9160.13,
+              "max": 9254.79,
+              "n": 5
+            },
+            "Q1 p99 ms": {
+              "median": 9267.54,
+              "min": 9196.5,
+              "max": 9392.23,
+              "n": 5
+            },
+            "Q6 p50 ms": {
+              "median": 1027.34,
+              "min": 1018.6,
+              "max": 1031.08,
+              "n": 5
+            },
+            "Q6 p99 ms": {
+              "median": 1033.03,
+              "min": 1024.97,
+              "max": 1039.08,
+              "n": 5
+            },
+            "ingest documents/s": {
+              "median": 333937.3612,
+              "min": 323992.4242,
+              "max": 341664.7383,
+              "n": 10
+            },
+            "ingest total s": {
+              "median": 18.57,
+              "min": 18.15,
+              "max": 19.14,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 3.363,
+              "min": 3.3444,
+              "max": 3.3739,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.39,
+              "min": 0.39,
+              "max": 0.39,
               "n": 10
             }
           }
