@@ -478,6 +478,7 @@
       "dataset": "Big-ANN'23 Sparse (real SPLADE over MS MARCO)",
       "conditions": [
         "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
+        "ingest total s is the whole load, index build included; ingest docs/s divides the document count by it.",
         "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
         "Every number here is cold, the first timed pass after the index is built. Warm, the same engines run again over an index they have already read, shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. The dense table below is not like this: there ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
         "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
@@ -487,7 +488,8 @@
         "p50 ms",
         "p99 ms",
         "recall@10",
-        "build s",
+        "ingest docs/s",
+        "ingest total s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -525,7 +527,13 @@
               "max": 0.995,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 10822.8,
+              "min": 10704.0,
+              "max": 11065.7,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 9.24,
               "min": 9.04,
               "max": 9.34,
@@ -576,7 +584,13 @@
               "max": 1.0,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 11483.5,
+              "min": 11151.8,
+              "max": 11844.2,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 8.71,
               "min": 8.44,
               "max": 8.97,
@@ -627,7 +641,13 @@
               "max": 0.995,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 3956.7,
+              "min": 3809.7,
+              "max": 4074.7,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 25.27,
               "min": 24.54,
               "max": 26.25,
@@ -678,7 +698,13 @@
               "max": 1.0,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 3863.4,
+              "min": 3834.5,
+              "max": 3908.9,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 25.88,
               "min": 25.58,
               "max": 26.08,
@@ -729,7 +755,13 @@
               "max": 0.997,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 2869.0,
+              "min": 2852.4,
+              "max": 2930.0,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 34.85,
               "min": 34.13,
               "max": 35.06,
@@ -780,7 +812,13 @@
               "max": 1.0,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 5538.6,
+              "min": 5445.6,
+              "max": 5583.5,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 18.06,
               "min": 17.91,
               "max": 18.36,
@@ -831,7 +869,13 @@
               "max": 1.0,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 11848.3,
+              "min": 11688.0,
+              "max": 12423.0,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 8.44,
               "min": 8.05,
               "max": 8.56,
@@ -882,7 +926,13 @@
               "max": 0.9935,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 10581.1,
+              "min": 10402.9,
+              "max": 10668.2,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 94.51,
               "min": 93.74,
               "max": 96.13,
@@ -933,7 +983,13 @@
               "max": 1.0,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 10584.3,
+              "min": 10415.8,
+              "max": 10956.0,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 94.48,
               "min": 91.27,
               "max": 96.01,
@@ -984,7 +1040,13 @@
               "max": 0.9935,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 4023.0,
+              "min": 3994.0,
+              "max": 4094.7,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 248.57,
               "min": 244.22,
               "max": 250.38,
@@ -1035,7 +1097,13 @@
               "max": 1.0,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 3967.4,
+              "min": 3854.0,
+              "max": 4029.7,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 252.05,
               "min": 248.16,
               "max": 259.47,
@@ -1086,7 +1154,13 @@
               "max": 0.9972,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 2980.8,
+              "min": 2968.0,
+              "max": 3010.3,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 335.48,
               "min": 332.2,
               "max": 336.93,
@@ -1137,7 +1211,13 @@
               "max": 1.0,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 8331.4,
+              "min": 8248.3,
+              "max": 9135.8,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 120.03,
               "min": 109.46,
               "max": 121.24,
@@ -1188,7 +1268,13 @@
               "max": 1.0,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 10548.2,
+              "min": 10217.8,
+              "max": 10838.0,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 94.8,
               "min": 92.27,
               "max": 97.87,
@@ -1239,7 +1325,13 @@
               "max": 0.9914,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 9614.0,
+              "min": 9494.3,
+              "max": 9675.0,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 919.68,
               "min": 913.88,
               "max": 931.28,
@@ -1290,7 +1382,13 @@
               "max": 0.9999,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 9713.9,
+              "min": 9699.3,
+              "max": 9766.1,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 910.22,
               "min": 905.36,
               "max": 911.59,
@@ -1341,7 +1439,13 @@
               "max": 0.9914,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 3826.1,
+              "min": 3815.6,
+              "max": 3863.3,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 2310.93,
               "min": 2288.67,
               "max": 2317.31,
@@ -1392,7 +1496,13 @@
               "max": 0.9999,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 3842.6,
+              "min": 3756.3,
+              "max": 3903.4,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 2301.0,
               "min": 2265.16,
               "max": 2353.87,
@@ -1443,7 +1553,13 @@
               "max": 0.9968,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 2826.8,
+              "min": 2825.3,
+              "max": 2874.2,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 3127.85,
               "min": 3076.22,
               "max": 3129.54,
@@ -1494,7 +1610,13 @@
               "max": 0.9999,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 8565.9,
+              "min": 8507.4,
+              "max": 8679.6,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 1032.21,
               "min": 1018.69,
               "max": 1039.31,
@@ -1545,7 +1667,13 @@
               "max": 0.9999,
               "n": 5
             },
-            "build s": {
+            "ingest docs/s": {
+              "median": 4858.3,
+              "min": 4813.1,
+              "max": 4871.9,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 1819.93,
               "min": 1814.87,
               "max": 1837.04,
@@ -1580,6 +1708,7 @@
       "title": "Dense vector search",
       "dataset": "DEEP-10M (deep-image-96-angular) and SIFT-1M",
       "conditions": [
+        "ingest total s is the whole load, index build included; ingest vectors/s divides the vector count by it.",
         "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
         "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
         "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried 26 to 28 small segments and read 2.3x slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
@@ -1592,7 +1721,8 @@
         "warm p50 ms",
         "warm p99 ms",
         "recall@10",
-        "build s",
+        "ingest vectors/s",
+        "ingest total s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -1642,10 +1772,16 @@
               "max": 0.983,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 229.52,
               "min": 227.5,
               "max": 239.89,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 4356.9,
+              "min": 4168.6,
+              "max": 4395.6,
               "n": 5
             },
             "peak memory GiB": {
@@ -1705,10 +1841,16 @@
               "max": 0.9888,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 155.12,
               "min": 148.33,
               "max": 159.67,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 6446.6,
+              "min": 6262.9,
+              "max": 6741.7,
               "n": 5
             },
             "peak memory GiB": {
@@ -1768,10 +1910,16 @@
               "max": 0.9835,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 296.77,
               "min": 293.78,
               "max": 299.99,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 3369.6,
+              "min": 3333.4,
+              "max": 3403.9,
               "n": 5
             },
             "peak memory GiB": {
@@ -1831,10 +1979,16 @@
               "max": 0.9894,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 230.96,
               "min": 225.34,
               "max": 236.03,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 4329.8,
+              "min": 4236.7,
+              "max": 4437.7,
               "n": 5
             },
             "peak memory GiB": {
@@ -1894,10 +2048,16 @@
               "max": 0.9752,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 150.63,
               "min": 147.36,
               "max": 151.84,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 6638.8,
+              "min": 6585.9,
+              "max": 6786.1,
               "n": 5
             },
             "peak memory GiB": {
@@ -1957,10 +2117,16 @@
               "max": 0.9765,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 59.37,
               "min": 58.5,
               "max": 59.78,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 16843.5,
+              "min": 16728.0,
+              "max": 17094.0,
               "n": 5
             },
             "peak memory GiB": {
@@ -2020,10 +2186,16 @@
               "max": 0.9622,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 20.94,
               "min": 20.2,
               "max": 22.94,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 47755.5,
+              "min": 43592.0,
+              "max": 49505.0,
               "n": 5
             },
             "peak memory GiB": {
@@ -2083,10 +2255,16 @@
               "max": 0.9747,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 180.3,
               "min": 175.71,
               "max": 184.24,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 5546.3,
+              "min": 5427.7,
+              "max": 5691.2,
               "n": 5
             },
             "peak memory GiB": {
@@ -2146,10 +2324,16 @@
               "max": 0.9956,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 43.53,
               "min": 41.36,
               "max": 44.89,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 22972.7,
+              "min": 22276.7,
+              "max": 24177.9,
               "n": 5
             },
             "peak memory GiB": {
@@ -2209,10 +2393,16 @@
               "max": 0.9991,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 7.86,
               "min": 7.69,
               "max": 9.13,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 127226.5,
+              "min": 109529.0,
+              "max": 130039.0,
               "n": 5
             },
             "peak memory GiB": {
@@ -2272,10 +2462,16 @@
               "max": 0.9444,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 3767.22,
               "min": 3749.75,
               "max": 3806.25,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 2651.8,
+              "min": 2624.6,
+              "max": 2664.2,
               "n": 5
             },
             "peak memory GiB": {
@@ -2335,10 +2531,16 @@
               "max": 0.9537,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 2320.95,
               "min": 2299.1,
               "max": 2436.95,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 4304.3,
+              "min": 4099.4,
+              "max": 4345.2,
               "n": 5
             },
             "peak memory GiB": {
@@ -2398,10 +2600,16 @@
               "max": 0.9454,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 4801.39,
               "min": 4700.59,
               "max": 4830.91,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 2080.6,
+              "min": 2067.9,
+              "max": 2125.3,
               "n": 5
             },
             "peak memory GiB": {
@@ -2461,10 +2669,16 @@
               "max": 0.9541,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 3312.1,
               "min": 3278.88,
               "max": 3440.14,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 3016.2,
+              "min": 2904.0,
+              "max": 3046.8,
               "n": 5
             },
             "peak memory GiB": {
@@ -2524,10 +2738,16 @@
               "max": 0.9361,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 3855.82,
               "min": 3852.6,
               "max": 3868.12,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 2590.9,
+              "min": 2582.6,
+              "max": 2593.1,
               "n": 5
             },
             "peak memory GiB": {
@@ -2587,10 +2807,16 @@
               "max": 0.9365,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 836.36,
               "min": 831.35,
               "max": 852.52,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 11944.6,
+              "min": 11718.2,
+              "max": 12016.6,
               "n": 5
             },
             "peak memory GiB": {
@@ -2650,10 +2876,16 @@
               "max": 0.9319,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 225.95,
               "min": 225.74,
               "max": 242.7,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 44213.3,
+              "min": 41161.9,
+              "max": 44254.5,
               "n": 5
             },
             "peak memory GiB": {
@@ -2713,10 +2945,16 @@
               "max": 0.9587,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 1408.18,
               "min": 1399.38,
               "max": 1774.59,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 7094.3,
+              "min": 5629.5,
+              "max": 7138.9,
               "n": 5
             },
             "peak memory GiB": {
@@ -2776,10 +3014,16 @@
               "max": 0.98,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 1407.61,
               "min": 1381.21,
               "max": 1745.54,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 7097.1,
+              "min": 5723.2,
+              "max": 7232.8,
               "n": 5
             },
             "peak memory GiB": {
@@ -2839,10 +3083,16 @@
               "max": 0.981,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 461.35,
               "min": 429.21,
               "max": 521.97,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 21653.8,
+              "min": 19139.0,
+              "max": 23275.3,
               "n": 5
             },
             "peak memory GiB": {
@@ -2902,10 +3152,16 @@
               "max": 0.9799,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 598.77,
               "min": 529.22,
               "max": 636.85,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 16684.2,
+              "min": 15686.6,
+              "max": 18876.8,
               "n": 5
             },
             "peak memory GiB": {
@@ -2965,10 +3221,16 @@
               "max": 0.92,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 58.32,
               "min": 57.95,
               "max": 63.92,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 171296.3,
+              "min": 156289.1,
+              "max": 172390.0,
               "n": 5
             },
             "peak memory GiB": {
@@ -3028,10 +3290,16 @@
               "max": 1.0,
               "n": 20
             },
-            "build s": {
+            "ingest total s": {
               "median": 72.17,
               "min": 71.13,
               "max": 78.33,
+              "n": 5
+            },
+            "ingest vectors/s": {
+              "median": 138423.2,
+              "min": 127537.3,
+              "max": 140447.1,
               "n": 5
             },
             "peak memory GiB": {
@@ -3077,7 +3345,8 @@
         "2-hop p99 ms",
         "write p50 ms",
         "write p99 ms",
-        "load s",
+        "ingest records/s",
+        "ingest total s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -3145,7 +3414,13 @@
               "max": 1.016,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 89443.662,
+              "min": 87794.9309,
+              "max": 90291.4692,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 2.13,
               "min": 2.11,
               "max": 2.17,
@@ -3226,7 +3501,13 @@
               "max": 2.134,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 25572.4832,
+              "min": 25267.2414,
+              "max": 25745.2703,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 7.45,
               "min": 7.4,
               "max": 7.54,
@@ -3307,7 +3588,13 @@
               "max": 19.281,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 388806.1224,
+              "min": 359462.2642,
+              "max": 405351.0638,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 0.49,
               "min": 0.47,
               "max": 0.53,
@@ -3388,7 +3675,13 @@
               "max": 21.422,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 37282.7789,
+              "min": 36497.1264,
+              "max": 38179.3587,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 5.11,
               "min": 4.99,
               "max": 5.22,
@@ -3469,7 +3762,13 @@
               "max": 0.974,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 87632.7503,
+              "min": 87251.2407,
+              "max": 88718.9464,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 22.87,
               "min": 22.59,
               "max": 22.97,
@@ -3550,7 +3849,13 @@
               "max": 2.156,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 28081.2807,
+              "min": 27944.2415,
+              "max": 28223.6446,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 71.37,
               "min": 71.01,
               "max": 71.72,
@@ -3631,7 +3936,13 @@
               "max": 19.158,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 543133.0623,
+              "min": 530201.3228,
+              "max": 549085.2055,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 3.69,
               "min": 3.65,
               "max": 3.78,
@@ -3712,7 +4023,13 @@
               "max": 21.47,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 43999.1438,
+              "min": 43758.9738,
+              "max": 44448.0151,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 45.55,
               "min": 45.09,
               "max": 45.8,
@@ -4723,7 +5040,7 @@
         "update p99 ms",
         "OLTP ops/s",
         "ingest records/s",
-        "ingest s",
+        "ingest total s",
         "OLAP total ms",
         "peak memory GiB",
         "disk GiB"
@@ -4792,7 +5109,7 @@
               "max": 29275.3,
               "n": 10
             },
-            "ingest s": {
+            "ingest total s": {
               "median": 690.045,
               "min": 683.17,
               "max": 708.5,
@@ -4879,7 +5196,7 @@
               "max": 27168.6,
               "n": 10
             },
-            "ingest s": {
+            "ingest total s": {
               "median": 743.47,
               "min": 736.14,
               "max": 758.78,
@@ -4966,7 +5283,7 @@
               "max": 334007.0,
               "n": 10
             },
-            "ingest s": {
+            "ingest total s": {
               "median": 65.36,
               "min": 59.88,
               "max": 66.79,
@@ -5053,7 +5370,7 @@
               "max": 321870.2,
               "n": 10
             },
-            "ingest s": {
+            "ingest total s": {
               "median": 63.455,
               "min": 62.14,
               "max": 64.29,
@@ -5140,7 +5457,7 @@
               "max": 344960.8,
               "n": 10
             },
-            "ingest s": {
+            "ingest total s": {
               "median": 59.93,
               "min": 57.98,
               "max": 60.23,
@@ -5194,7 +5511,8 @@
         "new-order p50 ms",
         "new-order p99 ms",
         "OLTP ops/s",
-        "load s",
+        "ingest records/s",
+        "ingest total s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -5256,7 +5574,13 @@
               "max": 2194.1,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 41107.4046,
+              "min": 39858.6901,
+              "max": 43353.0131,
+              "n": 10
+            },
+            "ingest total s": {
               "median": 150.855,
               "min": 143.04,
               "max": 155.58,
@@ -5331,7 +5655,13 @@
               "max": 857.5,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 32148.6112,
+              "min": 31363.6203,
+              "max": 33186.423,
+              "n": 10
+            },
+            "ingest total s": {
               "median": 192.935,
               "min": 186.86,
               "max": 197.72,
@@ -5406,7 +5736,13 @@
               "max": 109.1,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 2457555.3057,
+              "min": 2006865.6958,
+              "max": 2844594.0367,
+              "n": 10
+            },
+            "ingest total s": {
               "median": 2.525,
               "min": 2.18,
               "max": 3.09,
@@ -5481,7 +5817,13 @@
               "max": 393.6,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 363509.5442,
+              "min": 335019.7191,
+              "max": 371775.4796,
+              "n": 10
+            },
+            "ingest total s": {
               "median": 17.06,
               "min": 16.68,
               "max": 18.51,
@@ -5556,7 +5898,13 @@
               "max": 406.5,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 362125.8886,
+              "min": 343557.6177,
+              "max": 371998.5003,
+              "n": 10
+            },
+            "ingest total s": {
               "median": 17.125,
               "min": 16.67,
               "max": 18.05,
@@ -5601,7 +5949,8 @@
         "p50 ms",
         "p99 ms",
         "CPU s",
-        "load s",
+        "ingest records/s",
+        "ingest total s",
         "peak memory GiB",
         "disk GiB"
       ],
@@ -5639,7 +5988,13 @@
               "max": 69.2525,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 19212.1037,
+              "min": 18365.2893,
+              "max": 21299.0415,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 10.41,
               "min": 9.39,
               "max": 10.89,
@@ -5690,7 +6045,13 @@
               "max": 78.8561,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 14398.7041,
+              "min": 14034.9474,
+              "max": 14836.6469,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 13.89,
               "min": 13.48,
               "max": 14.25,
@@ -5741,7 +6102,13 @@
               "max": 38.9205,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 34541.9689,
+              "min": 33955.5178,
+              "max": 34964.6853,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 5.79,
               "min": 5.72,
               "max": 5.89,
@@ -5792,7 +6159,13 @@
               "max": 338.6213,
               "n": 5
             },
-            "load s": {
+            "ingest records/s": {
+              "median": 599.5144,
+              "min": 598.1696,
+              "max": 602.0953,
+              "n": 5
+            },
+            "ingest total s": {
               "median": 333.6,
               "min": 332.17,
               "max": 334.35,
@@ -6654,6 +7027,7 @@
       ],
       "columns": [
         "ingest pts/s",
+        "ingest total s",
         "newest reading p50 ms",
         "newest reading p99 ms",
         "12h aggregate p50 ms",
@@ -6679,6 +7053,12 @@
               "median": 1879320.6,
               "min": 1757652.4,
               "max": 1950431.2,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 1.38,
+              "min": 1.33,
+              "max": 1.47,
               "n": 5
             },
             "newest reading p50 ms": {
@@ -6736,6 +7116,12 @@
               "max": 41012.4,
               "n": 5
             },
+            "ingest total s": {
+              "median": 63.76,
+              "min": 63.2,
+              "max": 63.93,
+              "n": 5
+            },
             "newest reading p50 ms": {
               "median": 0.57,
               "min": 0.51,
@@ -6789,6 +7175,12 @@
               "median": 54767.2,
               "min": 54499.7,
               "max": 56487.4,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 47.33,
+              "min": 45.89,
+              "max": 47.56,
               "n": 5
             },
             "newest reading p50 ms": {
@@ -6846,6 +7238,12 @@
               "max": 598158.9,
               "n": 5
             },
+            "ingest total s": {
+              "median": 4.46,
+              "min": 4.33,
+              "max": 4.55,
+              "n": 5
+            },
             "newest reading p50 ms": {
               "median": 10.61,
               "min": 10.42,
@@ -6901,6 +7299,12 @@
               "max": 1886764.5,
               "n": 5
             },
+            "ingest total s": {
+              "median": 1.39,
+              "min": 1.37,
+              "max": 1.62,
+              "n": 5
+            },
             "newest reading p50 ms": {
               "median": 1.31,
               "min": 1.29,
@@ -6954,6 +7358,12 @@
               "median": 1295085.7,
               "min": 1282972.1,
               "max": 1309655.4,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 2.0,
+              "min": 1.98,
+              "max": 2.02,
               "n": 5
             },
             "newest reading p50 ms": {

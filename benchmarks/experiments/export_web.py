@@ -667,12 +667,17 @@ def _dense_overlay_entries(scale="deep10m"):
                                      ("warm p50 ms", warm, "p50"),
                                      ("warm p99 ms", warm, "p99"),
                                      ("recall@10", recall, "r"),
-                                     ("build s", build, "build_s")):
+                                     ("ingest total s", build, "build_s")):
             got = _agg(rows_, field)
             if got is not None:
                 metrics[label_] = got
         if not metrics:
             continue
+        if metrics.get("ingest total s") and metrics["ingest total s"]["median"]:
+            _b = metrics["ingest total s"]
+            _n = 9_990_000 if scale == "deep10m" else 1_000_000
+            metrics["ingest vectors/s"] = {"median": round(_n / _b["median"], 1), "min": round(_n / _b["max"], 1),
+                                           "max": round(_n / _b["min"], 1), "n": _b["n"]}
         # Peak memory is in the multipass files (pass 0 carries the build);
         # disk is not, and comes from the campaign cell of the same arm.
         # The campaign backend name carries the precision (arcadedb_dense_
@@ -763,8 +768,25 @@ def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
     return _agg(list(newest.values()), field)
 
 
+def _rate(count_fields, seconds_field):
+    """A per-row records-per-second callable for spec tables whose lanes
+    record counts and seconds but no rate (graph, TPC, cross-model)."""
+    def fn(r):
+        n = sum((_num(r.get(f)) or 0) for f in count_fields)
+        t = _num(r.get(seconds_field))
+        return (n / t) if (n and t) else None
+    fn.__name__ = f"rate({'+'.join(count_fields)})/{seconds_field}"
+    return fn
+
+
 def _agg(rows, field):
     """Median across repetitions, with the spread, matching the paper."""
+    if callable(field):
+        vals = [v for v in (field(r) for r in rows) if v is not None]
+        if not vals:
+            return None
+        return {"median": round(statistics.median(vals), 4), "min": round(min(vals), 4),
+                "max": round(max(vals), 4), "n": len(vals)}
     vals = [v for v in (_num(r.get(field)) for r in rows) if v is not None]
     if field == "gav_build_s":
         # A row without the view records 0.0 for the view it did not build;
@@ -791,11 +813,13 @@ LANES = {
         # and cost a column on a phone. It stays in the rows and the CSV.
         "metrics": [("query_p50_ms", "p50 ms"), ("query_p99_ms", "p99 ms"),
                     ("recall_at_10", "recall@10"),
-                    ("build_s", "build s"),
+                    ("build_docs_per_s", "ingest docs/s"),
+                    ("build_s", "ingest total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         "conditions": [
             "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
+            "ingest total s is the whole load, index build included; ingest docs/s divides the document count by it.",
             "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
             "Every number here is cold, the first timed pass after the index is built. Warm, the same engines run again over an index they have already read, shows almost nothing: the largest gain any of the six makes is 1.18x at a million and 1.13x at 8.84 million, and the order of the table is identical either way. The dense table below is not like this: there ArcadeDB alone gains about 9x on a second pass and the order depends on which pass you time.",
             "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
@@ -813,10 +837,12 @@ LANES = {
         # both sizes carry cold and warm from one protocol.
         "metrics": [("query_p50_ms", "cold p50 ms"), ("query_p99_ms", "cold p99 ms"),
                     ("recall_at_10", "recall@10"),
-                    ("build_s", "build s"),
+                    ("build_docs_per_s", "ingest vectors/s"),
+                    ("build_s", "ingest total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         "conditions": [
+            "ingest total s is the whole load, index build included; ingest vectors/s divides the vector count by it.",
             "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
             "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
             "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried 26 to 28 small segments and read 2.3x slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
@@ -837,7 +863,8 @@ LANES = {
                     ("hop1_p50_ms", "1-hop p50 ms"), ("hop1_p99_ms", "1-hop p99 ms"),
                     ("hop2_p50_ms", "2-hop p50 ms"), ("hop2_p99_ms", "2-hop p99 ms"),
                     ("write_p50_ms", "write p50 ms"), ("write_p99_ms", "write p99 ms"),
-                    ("build_s", "load s"),
+                    (_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest records/s"),
+                    ("build_s", "ingest total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         # OLTP only. The OLAP rows live in the l2olap table below, which is
@@ -942,7 +969,7 @@ LANES = {
                     ("insert_p50_ms", "insert p50 ms"), ("insert_p99_ms", "insert p99 ms"),
                     ("update_p50_ms", "update p50 ms"), ("update_p99_ms", "update p99 ms"),
                     ("oltp_ops_per_s", "OLTP ops/s"), ("ingest_rows_per_s", "ingest records/s"),
-                    ("ingest_s", "ingest s"),
+                    ("ingest_s", "ingest total s"),
                     ("olap_total_ms", "OLAP total ms"),
                     ("olap_total_p50_ms", "OLAP total p50 ms"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
@@ -961,7 +988,9 @@ LANES = {
         "metrics": [("q1_ms", "Q1 p50 ms"), ("q1_p99_ms", "Q1 p99 ms"),
                     ("q6_ms", "Q6 p50 ms"), ("q6_p99_ms", "Q6 p99 ms"),
                     ("neworder_p50_ms", "new-order p50 ms"), ("neworder_p99_ms", "new-order p99 ms"),
-                    ("oltp_ops_per_s", "OLTP ops/s"), ("build_s", "load s"),
+                    ("oltp_ops_per_s", "OLTP ops/s"),
+                    (_rate(("n_lineitem", "n_part"), "build_s"), "ingest records/s"),
+                    ("build_s", "ingest total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         "conditions": [
@@ -974,7 +1003,9 @@ LANES = {
         "title": "Cross-model transaction",
         "dataset": "Vector hit to graph traversal to document update, in one transaction",
         "metrics": [("hybrid_p50_ms", "p50 ms"), ("hybrid_p99_ms", "p99 ms"),
-                    ("cpu_usec_sum", "CPU s"), ("build_s", "load s"),
+                    ("cpu_usec_sum", "CPU s"),
+                    (_rate(("n_products", "n_edges"), "build_s"), "ingest records/s"),
+                    ("build_s", "ingest total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     ("disk_data_mb", "disk GiB")],
         # HYBRID ONLY. The atomicity workload has no latency to print, so
@@ -1149,6 +1180,7 @@ L4_SHAPE = {"scale": "2.59M points", "workload": "TSBS cpu-only"}
 # unbounded field everywhere keeps the column comparing like with like.
 L4_METRICS = [
     ("ingest_pts_per_s", "ingest pts/s"),
+    ("ingest_s", "ingest total s"),
     # "last-point" is TSBS's own name for this query and it reads as "the
     # final point" rather than "the newest one", which is what it means.
     # The page says what the query does; the papers keep the TSBS term.
@@ -2083,8 +2115,8 @@ def main() -> int:
                             # warm exists only where a second pass was run,
                             # so it sits beside cold rather than replacing it
                             ["cold p50 ms", "cold p99 ms", "warm p50 ms",
-                             "warm p99 ms", "recall@10", "build s",
-                             "peak memory GiB", "disk GiB"]),
+                             "warm p99 ms", "recall@10", "ingest vectors/s",
+                             "ingest total s", "peak memory GiB", "disk GiB"]),
                 "withheld_scales": withheld,
                 "withheld_reason": (
                     "Comparator rows exist at these sizes but ArcadeDB's were "
