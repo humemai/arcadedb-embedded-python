@@ -1339,7 +1339,10 @@ def _sparse_multipass_table():
     if not root.is_dir():
         return None
     entries = []
-    for tier in ("medium", "small"):
+    # 100k joined the second-pass run on 2026-09-11 (qDP); its files are
+    # optional so the table renders before they land, and the sparse
+    # condition says whether 100k has a second pass by looking, not by text.
+    for tier in ("medium", "small", "tiny"):
         for arm, backend, label in SPARSE_MP_ARMS + SPARSE_MP_OPTIONAL_ARMS:
             fp = root / f"sp_{arm}_{tier}.json"
             if not fp.is_file():
@@ -2042,7 +2045,8 @@ def _restructure_tables(tables, rows):
             "Warm and gain come from a separate run of the same arms: one build per engine, then "
             "five more passes over a different half of the query set, so a warm number cannot be "
             "explained by the engine having already answered that exact query; gain is that run's "
-            "cold over its warm. 100k has no second-pass run.",
+            "cold over its warm."
+            + ("" if any(e.get("scale") == "tiny" for e in by["l3smp"].get("entries", [])) else " 100k has no second-pass run yet."),
         ]
         t["source_paths"] = list(t.get("source_paths") or []) + list(by["l3smp"].get("source_paths") or [])
         t["source_urls"] = list(t.get("source_urls") or []) + list(by["l3smp"].get("source_urls") or [])
