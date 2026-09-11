@@ -450,7 +450,6 @@ BACKENDS = {
     # footnote.
     "arcadedb_ts_doc": {"topology": "embedded", "image": "dbbench:arcadedb"},
     "arcadedb_ts_native": {"topology": "embedded", "image": "dbbench:arcadedb"},
-    "arcadedb_ts_native_plain": {"topology": "embedded", "image": "dbbench:arcadedb"},
     "questdb": {
         "topology": "client_server",
         "image": "dbbench:client",
