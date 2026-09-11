@@ -83,7 +83,8 @@
     "Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it leaves out the file cache the kernel keeps on the engine's behalf. That is the right number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.",
     "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
     "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
-    "Comparators are pinned by sha256 image digest, not by a floating tag."
+    "Comparators are pinned by sha256 image digest, not by a floating tag.",
+    "Durability is at each engine's default, and the defaults differ: ArcadeDB does not flush its write-ahead log at commit (txWalFlush=0), PostgreSQL and Neo4j fsync at every commit. On a laptop, the same mixed read/insert/update workload on ArcadeDB embedded runs about 10x slower with fsync at commit (inserts 0.3 ms to 6.4 ms), so on the write rows (document OLTP, TPC-C new-order, graph writes, the cross-model transaction) ArcadeDB's lead is largely this default plus the absence of a network hop, not the engine. The next campaign runs ArcadeDB with fsync at commit on every timed write path."
   ],
   "provenance_note": "Host identity is recorded on the sparse and dense lanes only; the remaining lanes record the container but not the machine. Every lane ran on the same benchmark host, but this file reports only what the frozen rows can prove.",
   "hosts_recorded": [
