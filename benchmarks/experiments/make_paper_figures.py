@@ -149,7 +149,7 @@ def _check_no_orphan_figures():
 # have actually been at risk or that carry meaning a reader needs.
 EXPECT_IN_PDF = {
     "f4_one_vs_n.pdf": ["log scale", "best specialist at equal recall",
-                        "unitless ratio", "warm"],
+                        "unitless ratio", "first pass", "repeat pass"],
     "f6_memory_ceiling.pdf": ["(#3144)", "raw vectors"],
     "f8_deployment.pdf": ["server cost / embedded"],
     "f7_e2_hybrid.pdf": ["hybrid op p50 (ms)"],
@@ -282,7 +282,7 @@ def f7_e2(rows):
 
 
 
-def _dense_overlay_recall(arm="fp32"):
+def _dense_overlay_recall(arm="fp32", scale="deep10m"):
     """recall@10 for one overlay arm, pooled over every warm pass.
 
     Recall is a property of the index and the query set, not of the pass, so it
@@ -291,7 +291,7 @@ def _dense_overlay_recall(arm="fp32"):
     """
     import make_paper_tables as _T
 
-    root = _T.dense_mp_dir()
+    root = _T.dense_mp_dir() if scale == "deep10m" else _T.dense_mp_small_dir()
     vals = []
     for h in sorted(_glob_json(root, f"mp_{arm}_b*.json")):
         with open(h, encoding="utf-8") as fh:
@@ -307,7 +307,7 @@ def _glob_json(root, pattern):
     return _glob.glob(os.path.join(root, pattern))
 
 
-def _dense_overlay_p50(srv=False, arm="fp32", warm=True):
+def _dense_overlay_p50(srv=False, arm="fp32", warm=True, scale="deep10m"):
     """Dense p50 from the SAME artifacts the tables read, for ANY engine.
 
     The dense lane's published numbers do not live in runs.jsonl. They live in
@@ -347,7 +347,8 @@ def _dense_overlay_p50(srv=False, arm="fp32", warm=True):
     # build-then-five-passes protocol for exactly this reason, so a comparator
     # read from anywhere else is a different experiment wearing the same axis.
     name = f"mp_{'arcsrv' if srv else arm}_b*.json"
-    hits = sorted(_glob.glob(os.path.join(_T.dense_mp_dir(), name)))
+    root = _T.dense_mp_dir() if scale == "deep10m" else _T.dense_mp_small_dir()
+    hits = sorted(_glob.glob(os.path.join(root, name)))
     if not hits:
         return None
     vals = []
@@ -362,23 +363,15 @@ def _dense_overlay_p50(srv=False, arm="fp32", warm=True):
 # side is mapped: the comparator columns come from runs.jsonl in both the
 # figure and the tables, so they cannot drift apart the way the overlays did.
 F4_VS_TABLE = {
-    "OLTP ops/s":      ("t2_tabular.tex", "ArcadeDB (emb)", 0),
-    # col 0 of this row is the SCALE column ("SF10"), so p50 is col 1.
-    "Graph 1-hop p50": ("t3_graph.tex", "ArcadeDB (emb) & SF10", 1),
-    # T4 is three rows per system now, so a column index addresses whatever
-    # happens to sit there: these two read the literal tier label "100k" as
-    # 1e5, and the R@10 column as a latency. The check caught it, which is
-    # what it is for, but a second column-index map is a second thing to
-    # break. Both go through the tier-aware reader instead.
-    "Sparse 100k p50": ("sparse", "ArcadeDB (emb, int8)", "100k"),
-    "Sparse 1M p50":   ("sparse", "ArcadeDB (emb, int8)", "1M"),
-    # T5's dense half is System & Build & Cold p50 & Warm p50 & Cold p99 &
-    # Recall, so column 1 is COLD p50 and column 2 is warm. This pointed at
-    # warm while the bar's comparator was a cold single pass; the figure now
-    # plots cold on both sides, so it pins to the cold column. See the entry's
-    # comment for why cold is the defensible choice here.
-    "Dense 10M p50":   ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 1),
-    "TS 12h agg p50":  ("t5_dense_ts.tex", "ArcadeDB (native TS)", 3),
+    # label -> (table, row, col, pass): the figure's value at that pass must
+    # equal the table's cell. The TS aggregate cell is the 100-iteration
+    # median, a repeat-pass number; every other cell is a first pass.
+    "OLTP ops/s":      ("t2_tabular.tex", "ArcadeDB (emb)", 0, "cold"),
+    "Graph 1-hop p50": ("t3_graph.tex", "ArcadeDB (emb) & SF10", 1, "cold"),
+    "Sparse 100k p50": ("sparse", "ArcadeDB (emb, int8)", "100k", "cold"),
+    "Sparse 1M p50":   ("sparse", "ArcadeDB (emb, int8)", "1M", "cold"),
+    "Dense 10M p50":   ("t5_dense_ts.tex", "ArcadeDB (emb, fp32)", 1, "cold"),
+    "TS 12h agg p50":  ("t5_dense_ts.tex", "ArcadeDB (native TS)", 3, "warm"),
 }
 
 
@@ -403,8 +396,8 @@ def _check_f4_comparators(entries):
     ours_recall = _dense_overlay_recall()
     if ours_recall is None:
         raise SystemExit("f4: no recall for our dense arm; eligibility unknown")
-    got = dict((e[0], (e[1], e[2])) for e in entries)
-    arcade, spec = got["Dense 10M p50"]
+    got = {e["label"]: e for e in entries}
+    arcade, spec = got["Dense 10M p50"]["cold"]
     eligible = []
     for a in ("qdrant", "chroma", "lancedb", "duckvss", "milvus", "sqlitevec"):
         p50 = _dense_overlay_p50(warm=False, arm=a)
@@ -433,46 +426,31 @@ def _check_f4_comparators(entries):
 
 
 def _check_f4_protocol(entries):
-    """Assert f4's dense bar reads BOTH engines at the same pass.
+    """Assert f4's dense row reads BOTH engines at the same pass, per panel.
 
-    _check_f4_against_tables compares each bar to its table cell, which is a
-    real check and did not catch this one: the bar and T5's warm column agreed
-    perfectly, because both were ArcadeDB's warm number. The comparator was the
-    thing measured differently, and nothing looked at it.
-
-    What shipped: our warm p50 (0.956, passes 1-4 of the matched overlay) beside
-    Qdrant's runs.jsonl row (1.295, a single timed pass). 1.35x ahead. Matched
-    at either end it is 1.37x warm or 0.15x cold, so the mismatch was worth the
-    whole finding, and in the direction that flattered us.
-
-    Both values must therefore be reproducible from dense_mp5_2681 at ONE pass
-    selection. A comparator taken from anywhere else, or read at a different
-    pass, fails here rather than becoming a bar.
+    What once shipped: our warm p50 beside Qdrant's single timed pass, 1.35x
+    ahead; matched at either end it is 1.37x warm or 0.15x cold. With two
+    panels the rule is simpler and stricter: the first-pass pair must be the
+    overlay's cold medians for both arms, and the repeat-pass pair its warm
+    medians, or the row does not draw.
     """
-    got = dict((e[0], (e[1], e[2])) for e in entries)
+    got = {e["label"]: e for e in entries}
     if "Dense 10M p50" not in got:
         raise SystemExit("f4 lost its dense entry; the protocol check is blind")
-    arcade, spec = got["Dense 10M p50"]
-    for warm in (False, True):
+    e = got["Dense 10M p50"]
+    for key, warm in (("cold", False), ("warm", True)):
+        pair = e.get(key)
+        if not pair:
+            raise SystemExit(f"f4 dense: no {key} pair")
         ours = _dense_overlay_p50(warm=warm)
-        if ours is None or abs(arcade - ours) > 1e-9:
-            continue
-        arms = ["qdrant", "chroma", "lancedb", "duckvss", "milvus", "sqlitevec"]
-        for a in arms:
-            v = _dense_overlay_p50(warm=warm, arm=a)
-            if v is not None and abs(spec - v) <= 1e-9:
-                print(f"    dense protocol   both sides {'warm' if warm else 'cold'}"
-                      f", overlay arm '{a}' ({arcade:.3f} vs {spec:.3f})")
-                return
-        raise SystemExit(
-            f"f4 dense: ArcadeDB is the overlay's "
-            f"{'warm' if warm else 'cold'} p50 ({arcade:.3f}) but the "
-            f"comparator ({spec:.3f}) matches no overlay arm at that pass.\n"
-            "  That is our steady state against somebody else's first pass. "
-            "Read both from _dense_overlay_p50 with the same warm=.")
-    raise SystemExit(
-        f"f4 dense: ArcadeDB's value {arcade:.3f} is neither the overlay's "
-        "cold nor its warm median, so the pass it represents is unknown.")
+        theirs = _dense_overlay_p50(warm=warm, arm="qdrant")
+        if ours is None or theirs is None or abs(pair[0] - ours) > 1e-9 or abs(pair[1] - theirs) > 1e-9:
+            raise SystemExit(
+                f"f4 dense {key}: ({pair[0]}, {pair[1]}) is not the overlay's "
+                f"{key} pair ({ours}, {theirs}); both sides must come from "
+                "_dense_overlay_p50 at one pass.")
+        print(f"    dense protocol   {key}: both sides from the overlay "
+              f"({pair[0]:.3f} vs {pair[1]:.3f})")
 
 
 def _check_f4_against_tables(entries):
@@ -499,11 +477,13 @@ def _check_f4_against_tables(entries):
     import claims_check as _C
     bad = []
     print("  f4 vs tables:")
-    for label, arcade, _spec, _hb in entries:
+    for e in entries:
+        label = e["label"]
         if label not in F4_VS_TABLE:
             print(f"    {label:20} (no table cell to compare)")
             continue
-        tab, row, col = F4_VS_TABLE[label]
+        tab, row, col, which = F4_VS_TABLE[label]
+        arcade = (e.get(which) or (None, None))[0]
         cell = (_C.sparse_cell(row, col, "p50") if tab == "sparse"
                 else _C.cell(tab, row, col))
         if cell is None or arcade is None:
@@ -566,6 +546,24 @@ def _sparse_rows_identity():
         else:
             out.add(str(r.get("engine_version") or "?").split("(")[0].strip())
     return out
+
+
+def _sparse_overlay_pass(tier, arm, warm):
+    """p50 from the pinned sparse multipass overlay the second-pass table
+    reads: results/sparse_mp_<pin>/sp_<arm>_<tier>.json, rep 0 cold, reps
+    1.. warm (median). None when the file is absent (100k was not run)."""
+    import json as _json
+    import make_paper_tables as _T
+    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+    if not pin:
+        raise SystemExit("BENCH_ENGINE_COMMIT is unset: the sparse overlay is pinned only")
+    fp = os.path.join(_T.RESULTS, f"sparse_mp_{pin}", f"sp_{arm}_{tier}.json")
+    if not os.path.isfile(fp):
+        return None
+    passes = _json.load(open(fp, encoding="utf-8"))
+    sel = [r for r in passes if (r.get("rep", 0) >= 1) == warm]
+    v = [r["query_p50_ms"] for r in sel if isinstance(r.get("query_p50_ms"), (int, float))]
+    return st.median(v) if v else None
 
 
 def f8_deployment(rows):
@@ -726,236 +724,233 @@ def f8_deployment(rows):
     gs_crop(path)
 
 
+def _dense_best_comparator(warm, scale):
+    """The fastest overlay comparator whose recall is at least ours, at one
+    scale and pass: (backend token, p50). The rule the axis states."""
+    ours = _dense_overlay_recall(scale=scale)
+    if ours is None:
+        raise SystemExit(f"f4: no recall for our dense arm at {scale}")
+    elig = []
+    for a in ("qdrant", "chroma", "lancedb", "duckvss", "milvus", "sqlitevec"):
+        p50 = _dense_overlay_p50(warm=warm, arm=a, scale=scale)
+        rec = _dense_overlay_recall(arm=a, scale=scale)
+        if p50 is not None and rec is not None and rec >= ours - 1e-9:
+            elig.append((p50, a))
+    if not elig:
+        raise SystemExit(f"f4 dense {scale}: no comparator reaches our recall {ours:.4f}")
+    p50, a = min(elig)
+    return a, p50
+
+
 def f4_one_vs_n(rows):
-    """ArcadeDB embedded relative to the best specialist per workload,
-    log scale; >1 = ArcadeDB ahead. The honest summary figure."""
-    def med(lane, scale, wl, be, f):
-        g = [r[f] for r in rows if r["lane"] == lane and r["scale"] == scale
-             and r.get("workload") == wl and r["backend"] == be
-             and isinstance(r.get(f), (int, float))]
+    """ArcadeDB embedded relative to the best specialist on every published
+    metric family, log scale, >1 = ArcadeDB ahead, in two panels: the first
+    timed pass and the repeat pass. Rows follow the paper's evaluation order
+    (documents, graph, dense, sparse, time series, cross-model). A row with
+    one pass only draws in the first panel and says so in the second.
+
+    The comparator is chosen on the first pass (fastest, or highest
+    throughput; on vector rows the fastest whose recall is at least ours) and
+    the SAME engine is read at the repeat pass, so each row compares one pair
+    twice rather than two different winners."""
+    def sel(lane, scale, wl, be, gav_on=None):
+        out = []
+        for r in rows:
+            if r["lane"] != lane or r["scale"] != scale or r.get("workload") != wl or r["backend"] != be:
+                continue
+            if gav_on is not None and be.startswith("arcadedb"):
+                is_on = str(r.get("gav")) != "False"
+                if is_on != gav_on:
+                    continue
+            out.append(r)
+        return out
+
+    def med(lane, scale, wl, be, f, gav_on=None):
+        g = [r[f] for r in sel(lane, scale, wl, be, gav_on) if isinstance(r.get(f), (int, float))]
         return st.median(g) if g else None
 
-    # Canonical l4 rows at the pin (2026-09-08), the same rows T5 now prints;
-    # results/l4_tsbs.jsonl was the 2026-08-08 file at 26.8.1 with legacy names.
+    def recall(lane, scale, wl, be):
+        return med(lane, scale, wl, be, "recall_at_10")
+
     ts = [r for r in canonical() if r.get("lane") == "l4"]
-
-    def tsmed(be, f):
-        return st.median([r[f] for r in ts if r["backend"] == be])
-
-    import glob as _glob
-    # Same precedence as the table's native-TS row, and for the reason its
-    # comment gives: the batch1 rows went through the adapter's per-element
-    # conversion, so they price OUR adapter, not the engine. The table moved
-    # to the dev21 primitive-batch arm; this figure did not, and so plotted
-    # 411k pts/s against the table's 1.73M and a 12h aggregation of 14.9 ms
-    # against the table's 29.6. Both bars wrong, in opposite directions.
-    # IT HAPPENED AGAIN, twice more. The table moved to ts59 while this figure
-    # still read dev21_ts, and then the table moved to ts_2681 (the released
-    # re-measure) while the fallback chain below still listed the two
-    # pre-release rungs.
-    #
-    # THE FALLBACKS ARE GONE, not reordered. Every one of these desyncs had the
-    # same shape: a cascade whose job was to find SOMETHING to plot, which is
-    # exactly the behaviour that lets a figure disagree with its own table
-    # without failing. One released source, or nothing.
-    _native = [r for r in ts if r.get("backend") == "arcadedb_ts_native"]
-    if not _native:
+    if not any(r.get("backend") == "arcadedb_ts_native" for r in ts):
         raise SystemExit("no arcadedb_ts_native rows at the pin (ts_2681 fallback retired 2026-09-08)")
 
-    def _ts_native_med(f):
-        v = [r[f] for r in _native if isinstance(r.get(f), (int, float))]
+    def tsmed(be, f):
+        v = [r[f] for r in ts if r["backend"] == be and isinstance(r.get(f), (int, float))]
         return st.median(v) if v else None
 
-    entries = [  # (label, arcade value, best specialist value, higher_better)
-        # SurrealDB, NOT the composed Qdrant+Neo4j stack. The composed stack is
-        # 19.43 ms and SurrealDB 7.06, so plotting the stack claimed 10x where
-        # the strongest comparator gives 3.8x. Both engines are in the e2 table
-        # the page publishes, side by side, so the overstatement was one glance
-        # from being caught.
-        #
-        # The composed stack exists in that lane to show ATOMICITY, not to be a
-        # speed baseline: it has no transaction spanning both engines, which is
-        # the lane's own stated point. SurrealDB is the engine that does what we
-        # do, one transaction across models, and it is faster than the stack.
-        # Beating the non-transactional option by 10x is not the claim; beating
-        # the transactional rival by 3.8x is, and it is the stronger one.
-        ("Cross-model txn p50", med("e2", "e2", "hybrid", "arcadedb_e2", "hybrid_p50_ms"),
-         med("e2", "e2", "hybrid", "surrealdb_e2", "hybrid_p50_ms"), False),
-        ("OLTP ops/s", med("l1", "medium", "oltp", "arcadedb_embedded", "oltp_ops_per_s"),
-         med("l1", "medium", "oltp", "postgres", "oltp_ops_per_s"), True),
-        ("Graph 1-hop p50", med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "hop1_p50_ms"),
-         med("l2", "sf10", "oltp", "ladybug_graph", "hop1_p50_ms"), False),
-        ("TS 12h agg p50", _ts_native_med("q_global_ms"),
-         tsmed("questdb", "q_global_ms"), False),
-        ("Sparse 100k p50", _sparse_overlay_p50("tiny"),
-         med("l3s", "tiny", "search", "qdrant_sparse", "query_p50_ms"), False),
-        # BOTH SIDES COLD, BOTH FROM THE SAME OVERLAY. This bar used to plot
-        # our WARM p50 against Qdrant's runs.jsonl row, which is a single timed
-        # pass, i.e. cold. That is task #117's defect: it was fixed in T5, which
-        # grew separate Cold and Warm columns, and never fixed here.
-        #
-        # The comment this replaces said "Qdrant has no overlay". It does:
-        # dense_mp5_2681/mp_qdrant_b*.json, five builds, twenty passes, written
-        # by dense_multipass_driver.py, whose whole purpose was to give the
-        # comparators the multi-pass protocol our rows already had.
-        #
-        # COLD, not warm, and the reason is that the choice only moves OUR bar:
-        #
-        #     engine       cold    warm    gain
-        #     Qdrant       1.342   1.312   1.02x
-        #     Chroma       0.700   0.708   0.99x
-        #     LanceDB      3.199   3.154   1.01x
-        #     DuckDB-VSS   2.586   2.551   1.01x
-        #     ArcadeDB     8.869   0.956   9.27x
-        #
-        # Every comparator is within 3% of itself, so selecting warm costs them
-        # nothing and hands us the entire result: cold/cold is 0.15x, warm/warm
-        # is 1.37x. When a knob is free for everyone else and decisive for us,
-        # the only defensible setting is the one that does not flatter us.
-        # It also matches the rest of this figure, where every other bar is a
-        # first-timed-pass number, and T5, which sorts its dense half by cold.
-        #
-        # The 9.27x itself is a real and interesting property (ArcadeDB pages
-        # its index off disk and the comparators are resident from build), so
-        # it belongs in the prose, not inside a bar that reads as a like-for-
-        # like comparison.
-        ("Dense 10M p50", _dense_overlay_p50(warm=False),
-         _dense_overlay_p50(warm=False, arm="qdrant"), False),
-        ("Sparse 1M p50", _sparse_overlay_p50("small"),
-         med("l3s", "small", "search", "qdrant_sparse", "query_p50_ms"), False),
-        ("TS ingest pts/s", _ts_native_med("ingest_pts_per_s"),
-         tsmed("duckdb", "ingest_pts_per_s"), True),
-        ("TPC-H Q1", med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "q1_ms"),
-         med("l1tpc", "tpch1", "olap", "duckdb", "q1_ms"), False),
-    ]
-    # DISPLAY ORDER IS A DECISION, so it is written down rather than inherited
-    # from the order someone happened to append tuples in. That order had two
-    # faults:
-    #
-    #   Sparse 100k, Dense 10M, Sparse 1M   the two sparse tiers were split by
-    #                                       the dense row, and the two
-    #                                       time-series rows sat 4 apart
-    #   the three blue bars came first      wins at the top, losses below, which
-    #                                       is a flattering arrangement nobody
-    #                                       chose but everybody would notice
-    #
-    # Grouped by model instead: cross-model first because it is the claim the
-    # paper is about, then tabular, graph, time series, vector. Within a group,
-    # write before read and small before large. That interleaves the colours,
-    # which is the honest consequence: this engine wins some rows and loses
-    # others, and sorting so the wins arrive first is a thumb on the scale.
-    F4_ROW_ORDER = [
-        "Cross-model txn p50",
-        "OLTP ops/s", "TPC-H Q1",
-        "Graph 1-hop p50",
-        "TS ingest pts/s", "TS 12h agg p50",
-        "Sparse 100k p50", "Sparse 1M p50", "Dense 10M p50",
-    ]
-    unordered = [e[0] for e in entries if e[0] not in F4_ROW_ORDER]
-    if unordered:
-        raise SystemExit(
-            f"f4: {unordered} have no place in F4_ROW_ORDER. A new row has to "
-            "be given one, so that adding a bar is a decision about where it "
-            "belongs rather than an append to the end.")
-    entries.sort(key=lambda e: F4_ROW_ORDER.index(e[0]))
+    chosen = {}
 
+    def row(label, hb, ours_cold, ours_warm, comps, note=""):
+        """comps: {backend: (cold, warm, recall)}; ours: (value, recall)."""
+        a_c, a_rec = ours_cold
+        elig = {b: v for b, v in comps.items() if v[0] is not None
+                and (a_rec is None or v[2] is None or v[2] >= a_rec - 1e-9)}
+        if a_c is None or not elig:
+            raise SystemExit(f"f4 {label}: no first-pass value or no eligible comparator ({comps})")
+        best = (max if hb else min)(elig.items(), key=lambda kv: kv[1][0])
+        b, (s_c, s_w, _) = best
+        chosen[label] = b
+        warm = (ours_warm, s_w) if (ours_warm is not None and s_w is not None) else None
+        return {"label": label, "hb": hb, "note": note, "comparator": b,
+                "cold": (a_c, s_c), "warm": warm}
+
+    def comps_rows(lane, scale, wl, backends, cold_f, warm_f, with_recall=False):
+        return {b: (med(lane, scale, wl, b, cold_f),
+                    med(lane, scale, wl, b, warm_f) if warm_f else None,
+                    recall(lane, scale, wl, b) if with_recall else None)
+                for b in backends}
+
+    DOC = ("postgres", "postgres_tuned", "duckdb")
+    GRAPH = ("ladybug_graph", "neo4j_graph")
+    SPARSE = ("qdrant_sparse", "milvus_sparse", "elasticsearch_sparse")
+    TSC = ("questdb", "duckdb")
+
+    def dense_row(label, scale):
+        ours_c = _dense_overlay_p50(warm=False, scale=scale)
+        ours_w = _dense_overlay_p50(warm=True, scale=scale)
+        b, s_c = _dense_best_comparator(False, scale)
+        s_w = _dense_overlay_p50(warm=True, arm=b, scale=scale)
+        chosen[label] = b
+        return {"label": label, "hb": False, "note": "", "comparator": b,
+                "cold": (ours_c, s_c), "warm": (ours_w, s_w) if (ours_w and s_w) else None}
+
+    def sparse_row(label, tier, warm_tier):
+        ours_c = _sparse_overlay_p50(tier)
+        ours_rec = None
+        import make_paper_tables as _T
+        g = _T._sparse_2681_rows().get(tier) or []
+        rv = [r["recall_at_10"] for r in g if isinstance(r.get("recall_at_10"), (int, float))]
+        ours_rec = st.median(rv) if rv else None
+        ours_w = _sparse_overlay_pass(tier, "arc_int8", warm=True) if warm_tier else None
+        comps = {}
+        for b in SPARSE:
+            tok = {"qdrant_sparse": "qdrant", "milvus_sparse": "milvus", "elasticsearch_sparse": "elastic"}[b]
+            comps[b] = (med("l3s", tier, "search", b, "query_p50_ms"),
+                        _sparse_overlay_pass(tier, tok, warm=True) if warm_tier else None,
+                        recall("l3s", tier, "search", b))
+        return row(label, False, (ours_c, ours_rec), ours_w, comps, note="" if warm_tier else "one pass")
+
+    entries = [
+        # documents
+        row("OLTP ops/s", True,
+            (med("l1", "medium", "oltp", "arcadedb_embedded", "oltp_ops_per_s"), None), None,
+            comps_rows("l1", "medium", "oltp", DOC, "oltp_ops_per_s", None), note="one pass"),
+        row("OLAP total p50", False,
+            (med("l1", "medium", "olap", "arcadedb_embedded", "cold_olap_total_ms"), None),
+            med("l1", "medium", "olap", "arcadedb_embedded", "olap_total_p50_ms"),
+            comps_rows("l1", "medium", "olap", DOC, "cold_olap_total_ms", "olap_total_p50_ms"),
+            note="pending"),
+        row("TPC-H Q1", False,
+            (med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "cold_q1_ms"), None),
+            med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "warm_q1_ms"),
+            comps_rows("l1tpc", "tpch1", "olap", DOC, "cold_q1_ms", "warm_q1_ms")),
+        row("TPC-H Q6", False,
+            (med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "cold_q6_ms"), None),
+            med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "warm_q6_ms"),
+            comps_rows("l1tpc", "tpch1", "olap", DOC, "cold_q6_ms", "warm_q6_ms")),
+        row("TPC-C new-order p50", False,
+            (med("l1tpc", "tpch1", "oltp", "arcadedb_embedded", "neworder_p50_ms"), None), None,
+            comps_rows("l1tpc", "tpch1", "oltp", DOC, "neworder_p50_ms", None), note="one pass"),
+        # graph, SF10
+        row("Graph point p50", False,
+            (med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "point_p50_ms"), None),
+            med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "warm_point_p50_ms"),
+            comps_rows("l2", "sf10", "oltp", GRAPH, "point_p50_ms", "warm_point_p50_ms")),
+        row("Graph 1-hop p50", False,
+            (med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "hop1_p50_ms"), None),
+            med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "warm_hop1_p50_ms"),
+            comps_rows("l2", "sf10", "oltp", GRAPH, "hop1_p50_ms", "warm_hop1_p50_ms")),
+        row("Graph 2-hop p50", False,
+            (med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "hop2_p50_ms"), None),
+            med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "warm_hop2_p50_ms"),
+            comps_rows("l2", "sf10", "oltp", GRAPH, "hop2_p50_ms", "warm_hop2_p50_ms")),
+        row("Graph write p50", False,
+            (med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "write_p50_ms"), None), None,
+            comps_rows("l2", "sf10", "oltp", GRAPH, "write_p50_ms", None), note="one pass"),
+        # graph analytics with the view on (the engine's default arm)
+        row("Graph top-degree p50", False,
+            (med("l2", "sf10", "olap", "arcadedb_graph_embedded", "cold_top_degree_ms", gav_on=True), None),
+            med("l2", "sf10", "olap", "arcadedb_graph_embedded", "top_degree_p50_ms", gav_on=True),
+            comps_rows("l2", "sf10", "olap", GRAPH, "cold_top_degree_ms", "top_degree_p50_ms")),
+        # dense, both sizes, comparator by the recall rule
+        dense_row("Dense 1M p50", "small"),
+        dense_row("Dense 10M p50", "deep10m"),
+        # sparse, three sizes; 100k has no second-pass run
+        sparse_row("Sparse 100k p50", "tiny", warm_tier=False),
+        sparse_row("Sparse 1M p50", "small", warm_tier=True),
+        sparse_row("Sparse 8.84M p50", "medium", warm_tier=True),
+        # time series
+        row("TS ingest pts/s", True,
+            (tsmed("arcadedb_ts_native", "ingest_pts_per_s"), None), None,
+            {b: (tsmed(b, "ingest_pts_per_s"), None, None) for b in TSC}, note="one pass"),
+        row("TS newest reading p50", False,
+            (tsmed("arcadedb_ts_native", "q_last_cold_ms") or tsmed("arcadedb_ts_native", "q_last_ms"), None),
+            tsmed("arcadedb_ts_native", "q_last_ms"),
+            {b: (tsmed(b, "q_last_cold_ms") or tsmed(b, "q_last_ms"), tsmed(b, "q_last_ms"), None) for b in TSC}),
+        row("TS 12h agg p50", False,
+            (tsmed("arcadedb_ts_native", "q_global_cold_ms") or tsmed("arcadedb_ts_native", "q_global_ms"), None),
+            tsmed("arcadedb_ts_native", "q_global_ms"),
+            {b: (tsmed(b, "q_global_cold_ms") or tsmed(b, "q_global_ms"), tsmed(b, "q_global_ms"), None) for b in TSC}),
+        # cross-model: SurrealDB, the transactional rival, never the composed
+        # stack (which has no transaction spanning its engines and is slower)
+        row("Cross-model txn p50", False,
+            (med("e2", "e2", "hybrid", "arcadedb_e2", "hybrid_p50_ms"), None), None,
+            {"surrealdb_e2": (med("e2", "e2", "hybrid", "surrealdb_e2", "hybrid_p50_ms"), None, None)},
+            note="one pass"),
+    ]
+    # TS first-run fields exist only from qDH on; until then the first panel
+    # shows the repeat number for those two rows and says so.
+    for e in entries:
+        if e["label"].startswith("TS ") and "p50" in e["label"] and tsmed("arcadedb_ts_native", "q_global_cold_ms") is None:
+            e["note"] = "first run not recorded"
+            e["cold"] = None
+    print("  f4 comparators: " + ", ".join(f"{k}={v}" for k, v in chosen.items()))
     _check_f4_protocol(entries)
     _check_f4_comparators(entries)
     _check_f4_against_tables(entries)
 
-    labels, ratios = [], []
-    for label, a, s, hb in entries:
-        if a is None or s is None:
-            continue
-        labels.append(label)
-        ratios.append((a / s) if hb else (s / a))
-    fig, ax = plt.subplots(figsize=(3.45, 2.5))
-    ys = range(len(ratios))[::-1]
-    colors = ["C0" if r >= 1 else "C3" for r in ratios]
-    ax.barh(list(ys), ratios, color=colors, alpha=0.85, height=0.6)
-    ax.axvline(1.0, color="k", lw=0.8, ls="--")
-    dense_i = labels.index("Dense 10M p50") if "Dense 10M p50" in labels else -1
-    for i, (y, r) in enumerate(zip(ys, ratios)):
-        text = f"{r:.3g}x" if r < 1 else f"{r:.2g}x"
-        if i == dense_i:
-            # INSIDE the bar for this row only. Its warm marker sits at 1.37
-            # and the outside label runs right from 0.151, so on a log axis the
-            # two overlap and the figure reads "0.151x" with a diamond through
-            # it. The bar is wide enough to hold the number, and moving it left
-            # leaves the whole right side to the pass comparison, which is the
-            # thing this row exists to show.
-            ax.annotate(text, (r, y), textcoords="offset points",
-                        xytext=(-3, -2), fontsize=6.5, ha="right",
-                        color="white")
-        else:
+    def ratio(e, key):
+        pr = e.get(key)
+        if not pr:
+            return None
+        a, s_ = pr
+        return (a / s_) if e["hb"] else (s_ / a)
+
+    labels = [e["label"] for e in entries]
+    n = len(entries)
+    ys = list(range(n))[::-1]
+    fig, (axc, axw) = plt.subplots(1, 2, sharey=True, figsize=(6.0, 0.21 * n + 0.9),
+                                   gridspec_kw={"wspace": 0.06})
+    for ax, key, title in ((axc, "cold", "first pass"), (axw, "warm", "repeat pass")):
+        for e, y in zip(entries, ys):
+            r = ratio(e, key)
+            if r is None:
+                ax.annotate(e["note"] or "n/a", (1.0, y), fontsize=5.2,
+                            color="0.45", ha="center", va="center", style="italic")
+                continue
+            ax.barh(y, r, color="C0" if r >= 1 else "C3", alpha=0.85, height=0.62)
+            text = f"{r:.3g}x" if r < 1 else f"{r:.2g}x"
             ax.annotate(text, (max(r, 0.002), y), textcoords="offset points",
-                        xytext=(3, -2), fontsize=6.5)
-    # SHOW BOTH PASSES ON THE DENSE ROW instead of picking one and arguing for
-    # it in a caption. Choosing cold was defensible and still required a reader
-    # to take our word that warm would have flattered us; drawing both makes the
-    # claim self-evident and costs one marker. The bar stays cold, because that
-    # is the pass every other row is measured at and a bar is what gets compared
-    # across rows, and the diamond marks the same comparison in steady state.
-    #
-    # Only this row can have it. Every other lane times a single pass, so there
-    # is no warm number to mark and inventing one would be worse than the gap.
-    warm_a = _dense_overlay_p50(warm=True)
-    warm_s = _dense_overlay_p50(warm=True, arm="qdrant")
-    if warm_a and warm_s and "Dense 10M p50" in labels:
-        yw = list(ys)[labels.index("Dense 10M p50")]
-        r_cold = ratios[labels.index("Dense 10M p50")]
-        r_warm = warm_s / warm_a
-        ax.plot([r_cold, r_warm], [yw, yw], ls=":", lw=0.7, color="0.25",
-                zorder=4)
-        ax.plot([r_warm], [yw], marker="D", ms=3.2, color="C0", zorder=5)
-        ax.annotate(f"{r_warm:.2g}x warm", (r_warm, yw),
-                    textcoords="offset points", xytext=(4, 2), fontsize=6,
-                    color="C0")
-    ax.set_yticks(list(ys))
-    ax.set_yticklabels(labels, fontsize=6.5)
-    ax.set_xscale("log")
-    ax.set_xlim(5e-4, 50)
-    # fontsize=7 is load-bearing, not taste. At the default size this label is
-    # WIDER THAN THE 3.45in FIGURE, so matplotlib clipped it at the canvas edge
-    # and the saved PDF carried the truncated string "...log sca". tight_layout
-    # cannot rescue it: that shrinks the axes to fit decorations inside the
-    # figure, and nothing can fit a label longer than the figure itself. The
-    # gs crop then measured the ink it was given and reported success.
-    # "at equal recall" is load-bearing, not decoration. Chroma answers the
-    # dense 10M tier in 0.700 ms against our 8.869, which would be 0.0789x, but
-    # it returns 93.4% of the true neighbours to our 95.1%. A bare "best
-    # specialist" promises the fastest engine outright and this row does not
-    # use it, which a reader can now check for themselves because the page
-    # publishes the whole tier. Say the rule instead of hoping nobody looks.
-    # _check_f4_comparators enforces it; EXPECT_IN_PDF pins the wording.
-    # TWO LINES, not a smaller font. The honest label does not fit on one line
-    # in 3.45in: at 6.2pt it still clipped and _check_labels_intact caught it,
-    # which is the failure that guard exists for. Shrinking further would have
-    # made the axis unreadable in print to preserve a layout nobody needs.
-    # Each line here is shorter than the 48-character label that fitted at 7pt,
-    # so the size stays legible and the text stays whole.
-    # The axis named the COMPARISON and never the QUANTITY. A reader saw "16x"
-    # and "0.151x" with nothing saying these are ratios, nor which direction is
-    # good; the colours and the dashed line encode it and neither is explained
-    # inside the figure. Both lines are at or under the 48 characters known to
-    # fit at 7pt, which is what the two-line split bought.
-    # THE AXIS HAS NO UNIT AND HAD TO SAY SO. Each bar divides two measurements
-    # of one quantity, so ms and ops/s both cancel; the unit lives in the ROW
-    # label (p50 is milliseconds, ops/s is throughput) and the axis carries a
-    # bare ratio. Without that stated, "16x" reads as a number missing its unit.
-    #
-    # "better", not "faster": the rows mix directions. Latency rows divide
-    # theirs by ours and throughput rows divide ours by theirs, precisely so
-    # that >1 means ArcadeDB ahead on both, and "faster" is wrong for ops/s.
-    #
-    # Three lines because two could not hold it under the 48 characters that
-    # fit at 7pt, and shrinking the font to protect the layout is what produced
-    # the clipped "...log sca" this figure once shipped with.
-    ax.set_xlabel("ArcadeDB (embedded) vs best specialist\n"
-                  "at equal recall, log scale\n"
+                        xytext=(2.5, -2), fontsize=5.6)
+        ax.axvline(1.0, color="k", lw=0.8, ls="--")
+        ax.set_xscale("log")
+        ax.set_xlim(5e-4, 60)
+        ax.set_title(title, fontsize=7, pad=3)
+        ax.tick_params(axis="x", labelsize=6)
+    # thin separators between the model groups, in the paper's order
+    for k in (5, 10, 12, 15, 18):
+        for ax in (axc, axw):
+            ax.axhline(n - k - 0.5, color="0.85", lw=0.5, zorder=0)
+    axc.set_yticks(ys)
+    axc.set_yticklabels(labels, fontsize=6.2)
+    fig.supxlabel("ArcadeDB (embedded) vs best specialist at equal recall, log scale\n"
                   "unitless ratio of the row's metric; >1 = better",
-                  fontsize=7)
-    fig.tight_layout()
+                  fontsize=6.5)
+    # Explicit margins: tight_layout did not reserve room for the row labels
+    # beside two shared-y panels and the left column clipped (2026-09-11).
+    fig.subplots_adjust(left=0.20, right=0.985, top=0.95, bottom=0.13)
     path = os.path.join(FIGS, "f4_one_vs_n.pdf")
     fig.savefig(path)
     plt.close(fig)
