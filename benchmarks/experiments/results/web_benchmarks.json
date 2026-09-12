@@ -5396,7 +5396,6 @@
       ],
       "columns": [
         "trials",
-        "crashes raised",
         "torn results"
       ],
       "withheld_scales": [],
@@ -5416,12 +5415,6 @@
           "host": null,
           "metrics": {
             "trials": {
-              "median": 40.0,
-              "min": 40.0,
-              "max": 40.0,
-              "n": 5
-            },
-            "crashes raised": {
               "median": 40.0,
               "min": 40.0,
               "max": 40.0,
@@ -5454,12 +5447,6 @@
               "max": 40.0,
               "n": 5
             },
-            "crashes raised": {
-              "median": 40.0,
-              "min": 40.0,
-              "max": 40.0,
-              "n": 5
-            },
             "torn results": {
               "median": 0.0,
               "min": 0.0,
@@ -5482,12 +5469,6 @@
           "host": null,
           "metrics": {
             "trials": {
-              "median": 40.0,
-              "min": 40.0,
-              "max": 40.0,
-              "n": 5
-            },
-            "crashes raised": {
               "median": 40.0,
               "min": 40.0,
               "max": 40.0,
@@ -5520,12 +5501,6 @@
               "max": 40.0,
               "n": 5
             },
-            "crashes raised": {
-              "median": 40.0,
-              "min": 40.0,
-              "max": 40.0,
-              "n": 5
-            },
             "torn results": {
               "median": 0.0,
               "min": 0.0,
@@ -5552,7 +5527,6 @@
       "title": "Cross-model transaction",
       "dataset": "Vector hit to graph traversal to document update, in one transaction",
       "conditions": [
-        "CPU time is the processor time the engine's processes consumed over the whole run, in seconds, summed over every process and core; a latency says how long one operation took, CPU time says how much work it cost, and the two differ when an engine parallelises or idles.",
         "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
         "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
         "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
@@ -5563,7 +5537,6 @@
       "columns": [
         "p50 ms",
         "p99 ms",
-        "CPU time s",
         "ingest+index vertices+edges/s",
         "ingest+index total s",
         "peak memory GiB",
@@ -5595,12 +5568,6 @@
               "median": 5.774,
               "min": 5.199,
               "max": 6.631,
-              "n": 5
-            },
-            "CPU time s": {
-              "median": 65.7963,
-              "min": 53.5616,
-              "max": 69.2525,
               "n": 5
             },
             "ingest+index vertices+edges/s": {
@@ -5654,12 +5621,6 @@
               "max": 14.344,
               "n": 5
             },
-            "CPU time s": {
-              "median": 75.1001,
-              "min": 68.8474,
-              "max": 78.8561,
-              "n": 5
-            },
             "ingest+index vertices+edges/s": {
               "median": 14398.7041,
               "min": 14034.9474,
@@ -5709,12 +5670,6 @@
               "median": 33.927,
               "min": 30.286,
               "max": 34.988,
-              "n": 5
-            },
-            "CPU time s": {
-              "median": 38.7623,
-              "min": 38.3547,
-              "max": 38.9205,
               "n": 5
             },
             "ingest+index vertices+edges/s": {
@@ -5768,12 +5723,6 @@
               "max": 9.201,
               "n": 5
             },
-            "CPU time s": {
-              "median": 337.9146,
-              "min": 336.3943,
-              "max": 338.6213,
-              "n": 5
-            },
             "ingest+index vertices+edges/s": {
               "median": 599.5144,
               "min": 598.1696,
@@ -5798,7 +5747,6 @@
       "directions": {
         "p50 ms": "down",
         "p99 ms": "down",
-        "CPU time s": "down",
         "ingest+index vertices+edges/s": "up",
         "ingest+index total s": "down",
         "peak memory GiB": "down",
@@ -6305,7 +6253,6 @@
         "open and close ms",
         "one query ms",
         "one write ms",
-        "write into the structure ms",
         "write, then query ms",
         "peak memory GiB",
         "disk GiB"
@@ -6356,12 +6303,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 15.672,
-              "min": 15.314,
-              "max": 39.653,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 18.832,
               "min": 17.058,
               "max": 19.052,
@@ -6406,12 +6347,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 19.191,
-              "min": 19.077,
-              "max": 20.115,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 21.188,
               "min": 19.724,
               "max": 21.507,
@@ -6480,12 +6415,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 13.191,
-              "min": 12.14,
-              "max": 13.557,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 13.794,
               "min": 13.284,
               "max": 14.195,
@@ -6530,12 +6459,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 16.084,
-              "min": 15.498,
-              "max": 17.108,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 17.354,
               "min": 16.913,
               "max": 18.448,
@@ -6604,12 +6527,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 22.193,
-              "min": 18.812,
-              "max": 42.272,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 40.121,
               "min": 38.783,
               "max": 45.73,
@@ -6654,12 +6571,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 35.358,
-              "min": 22.669,
-              "max": 43.128,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 75.924,
               "min": 67.192,
               "max": 77.873,
@@ -6728,12 +6639,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 12.587,
-              "min": 12.486,
-              "max": 22.74,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 13.356,
               "min": 12.805,
               "max": 13.882,
@@ -6778,12 +6683,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 15.317,
-              "min": 14.396,
-              "max": 15.385,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 15.667,
               "min": 15.126,
               "max": 15.979,
@@ -6852,12 +6751,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 14.862,
-              "min": 13.943,
-              "max": 18.684,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 13.861,
               "min": 12.266,
               "max": 18.739,
@@ -6902,12 +6795,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 18.169,
-              "min": 17.414,
-              "max": 21.458,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 17.923,
               "min": 17.837,
               "max": 23.734,
@@ -6976,12 +6863,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 13.234,
-              "min": 12.58,
-              "max": 17.814,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 25.192,
               "min": 22.945,
               "max": 35.775,
@@ -7026,12 +6907,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 17.774,
-              "min": 16.384,
-              "max": 23.981,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 30.902,
               "min": 25.626,
               "max": 34.059,
@@ -7100,12 +6975,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 21.957,
-              "min": 19.148,
-              "max": 36.386,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 23.774,
               "min": 21.191,
               "max": 28.385,
@@ -7150,12 +7019,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 24.39,
-              "min": 24.139,
-              "max": 24.776,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 23.826,
               "min": 22.249,
               "max": 24.708,
@@ -7224,12 +7087,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 23.48,
-              "min": 22.955,
-              "max": 32.612,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 24.18,
               "min": 23.039,
               "max": 34.162,
@@ -7274,12 +7131,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 18.019,
-              "min": 17.559,
-              "max": 19.437,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 27.691,
               "min": 26.168,
               "max": 28.093,
@@ -7348,12 +7199,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 13.283,
-              "min": 12.78,
-              "max": 21.207,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 12.507,
               "min": 12.113,
               "max": 20.795,
@@ -7398,12 +7243,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 15.996,
-              "min": 15.8,
-              "max": 16.574,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 16.074,
               "min": 14.762,
               "max": 17.709,
@@ -7472,12 +7311,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 20.32,
-              "min": 16.426,
-              "max": 45.976,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 38.852,
               "min": 38.292,
               "max": 43.812,
@@ -7522,12 +7355,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 28.77,
-              "min": 23.033,
-              "max": 44.256,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 41.685,
               "min": 39.976,
               "max": 61.032,
@@ -7596,12 +7423,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 12.784,
-              "min": 11.559,
-              "max": 19.617,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 13.452,
               "min": 13.067,
               "max": 21.841,
@@ -7646,12 +7467,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 15.382,
-              "min": 15.186,
-              "max": 23.3,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 15.486,
               "min": 15.398,
               "max": 15.737,
@@ -7720,12 +7535,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 15.215,
-              "min": 13.711,
-              "max": 19.98,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 13.285,
               "min": 12.764,
               "max": 16.116,
@@ -7770,12 +7579,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 16.64,
-              "min": 15.79,
-              "max": 28.826,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 16.363,
               "min": 15.517,
               "max": 17.186,
@@ -7844,12 +7647,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 12.701,
-              "min": 12.243,
-              "max": 13.193,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 20.991,
               "min": 19.406,
               "max": 24.612,
@@ -7894,12 +7691,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 15.844,
-              "min": 15.84,
-              "max": 16.999,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 27.481,
               "min": 25.917,
               "max": 28.7,
@@ -7968,12 +7759,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 22.087,
-              "min": 20.214,
-              "max": 35.689,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 21.437,
               "min": 15.961,
               "max": 29.495,
@@ -8018,12 +7803,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 24.212,
-              "min": 21.973,
-              "max": 36.32,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 20.57,
               "min": 19.5,
               "max": 38.987,
@@ -8092,12 +7871,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 94.261,
-              "min": 92.891,
-              "max": 115.909,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 94.093,
               "min": 91.838,
               "max": 112.691,
@@ -8142,12 +7915,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 22.297,
-              "min": 20.352,
-              "max": 31.548,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 102.783,
               "min": 99.056,
               "max": 103.54,
@@ -8216,12 +7983,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 13.338,
-              "min": 12.06,
-              "max": 23.12,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 14.073,
               "min": 13.941,
               "max": 22.545,
@@ -8266,12 +8027,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 14.423,
-              "min": 12.848,
-              "max": 20.759,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 15.278,
               "min": 15.228,
               "max": 28.381,
@@ -8340,12 +8095,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 35.531,
-              "min": 34.937,
-              "max": 36.892,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 56.596,
               "min": 54.397,
               "max": 91.002,
@@ -8390,12 +8139,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 34.918,
-              "min": 30.399,
-              "max": 59.333,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 87.224,
               "min": 59.481,
               "max": 90.063,
@@ -8464,12 +8207,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 17.957,
-              "min": 12.785,
-              "max": 22.332,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 14.392,
               "min": 12.449,
               "max": 22.084,
@@ -8514,12 +8251,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 15.824,
-              "min": 14.995,
-              "max": 15.87,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 17.951,
               "min": 15.938,
               "max": 22.622,
@@ -8588,12 +8319,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 14.092,
-              "min": 13.521,
-              "max": 18.24,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 12.092,
               "min": 11.542,
               "max": 15.345,
@@ -8638,12 +8363,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 17.571,
-              "min": 15.117,
-              "max": 27.361,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 18.459,
               "min": 14.46,
               "max": 23.209,
@@ -8712,12 +8431,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 12.898,
-              "min": 12.299,
-              "max": 13.529,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 22.411,
               "min": 19.3,
               "max": 24.605,
@@ -8762,12 +8475,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 16.064,
-              "min": 14.721,
-              "max": 19.363,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 27.084,
               "min": 24.631,
               "max": 41.466,
@@ -8836,12 +8543,6 @@
               "n": 5
             },
             "one write ms": {
-              "median": 19.807,
-              "min": 16.764,
-              "max": 24.568,
-              "n": 5
-            },
-            "write into the structure ms": {
               "median": 20.749,
               "min": 16.584,
               "max": 22.991,
@@ -8886,12 +8587,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 24.592,
-              "min": 22.723,
-              "max": 34.309,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 21.25,
               "min": 20.608,
               "max": 31.83,
@@ -8960,12 +8655,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 1490.846,
-              "min": 1417.905,
-              "max": 1516.505,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 1488.131,
               "min": 1434.468,
               "max": 1488.306,
@@ -9010,12 +8699,6 @@
               "n": 1
             },
             "one write ms": {
-              "median": 15.869,
-              "min": 15.869,
-              "max": 15.869,
-              "n": 1
-            },
-            "write into the structure ms": {
               "median": 1490.804,
               "min": 1490.804,
               "max": 1490.804,
@@ -9084,12 +8767,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 12.428,
-              "min": 11.389,
-              "max": 13.263,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 14.009,
               "min": 13.734,
               "max": 14.554,
@@ -9134,12 +8811,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 14.833,
-              "min": 13.207,
-              "max": 15.282,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 13.914,
               "min": 12.862,
               "max": 24.571,
@@ -9208,12 +8879,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 21.389,
-              "min": 18.79,
-              "max": 40.651,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 22.298,
               "min": 18.637,
               "max": 41.186,
@@ -9258,12 +8923,6 @@
               "n": 3
             },
             "one write ms": {
-              "median": 28.657,
-              "min": 26.387,
-              "max": 41.498,
-              "n": 3
-            },
-            "write into the structure ms": {
               "median": 26.561,
               "min": 24.748,
               "max": 42.507,
@@ -9305,7 +8964,6 @@
         "open and close ms": "down",
         "one query ms": "down",
         "one write ms": "down",
-        "write into the structure ms": "down",
         "write, then query ms": "down",
         "peak memory GiB": "down",
         "disk GiB": "down"
@@ -9324,9 +8982,7 @@
       "columns": [
         "in-process ms",
         "in-process server, HTTP ms",
-        "separate container, HTTP ms",
-        "packing cost ms",
-        "separate process ms"
+        "separate container, HTTP ms"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -9359,18 +9015,6 @@
               "min": 2.8939,
               "max": 2.8939,
               "n": 5
-            },
-            "packing cost ms": {
-              "median": 1.3275,
-              "min": 1.3275,
-              "max": 1.3275,
-              "n": 5
-            },
-            "separate process ms": {
-              "median": 0.3091,
-              "min": 0.3091,
-              "max": 0.3091,
-              "n": 5
             }
           }
         },
@@ -9401,18 +9045,6 @@
               "median": 2.156,
               "min": 2.156,
               "max": 2.156,
-              "n": 5
-            },
-            "packing cost ms": {
-              "median": 1.0119,
-              "min": 1.0119,
-              "max": 1.0119,
-              "n": 5
-            },
-            "separate process ms": {
-              "median": 0.1851,
-              "min": 0.1851,
-              "max": 0.1851,
               "n": 5
             }
           }
@@ -9445,18 +9077,6 @@
               "min": 4.0354,
               "max": 4.0354,
               "n": 5
-            },
-            "packing cost ms": {
-              "median": 2.1089,
-              "min": 2.1089,
-              "max": 2.1089,
-              "n": 5
-            },
-            "separate process ms": {
-              "median": 0.4446,
-              "min": 0.4446,
-              "max": 0.4446,
-              "n": 5
             }
           }
         },
@@ -9487,18 +9107,6 @@
               "median": 4.5626,
               "min": 4.5626,
               "max": 4.5626,
-              "n": 5
-            },
-            "packing cost ms": {
-              "median": 1.9265,
-              "min": 1.9265,
-              "max": 1.9265,
-              "n": 5
-            },
-            "separate process ms": {
-              "median": -0.7108,
-              "min": -0.7108,
-              "max": -0.7108,
               "n": 5
             }
           }
@@ -9531,18 +9139,6 @@
               "min": 26.6103,
               "max": 26.6103,
               "n": 5
-            },
-            "packing cost ms": {
-              "median": 6.6216,
-              "min": 6.6216,
-              "max": 6.6216,
-              "n": 5
-            },
-            "separate process ms": {
-              "median": -1.2077,
-              "min": -1.2077,
-              "max": -1.2077,
-              "n": 5
             }
           }
         },
@@ -9574,18 +9170,6 @@
               "min": 252.161,
               "max": 252.161,
               "n": 5
-            },
-            "packing cost ms": {
-              "median": 34.257,
-              "min": 34.257,
-              "max": 34.257,
-              "n": 5
-            },
-            "separate process ms": {
-              "median": 10.6276,
-              "min": 10.6276,
-              "max": 10.6276,
-              "n": 5
             }
           }
         }
@@ -9593,9 +9177,7 @@
       "directions": {
         "in-process ms": "down",
         "in-process server, HTTP ms": "down",
-        "separate container, HTTP ms": "down",
-        "packing cost ms": "down",
-        "separate process ms": "down"
+        "separate container, HTTP ms": "down"
       },
       "source_paths": [
         "benchmarks/experiments/results/e4decomp_8d6af9475"

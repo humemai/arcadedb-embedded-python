@@ -986,8 +986,9 @@ LANES = {
         "dataset": "The same vector-graph-document operation, killed mid-way, then inspected",
         "lane_source": "e2",
         "only_workload": "atomicity",
-        "metrics": [("trials", "trials"), ("crash_raised_count", "crashes raised"),
-                    ("torn_count", "torn results")],
+        # crashes raised equalled trials on every row (2026-09-12, DECISIONS
+        # #73): the kill always lands, so the column said nothing.
+        "metrics": [("trials", "trials"), ("torn_count", "torn results")],
         "conditions": [
             "A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these.",
         ],
@@ -1033,7 +1034,6 @@ LANES = {
         "title": "Cross-model transaction",
         "dataset": "Vector hit to graph traversal to document update, in one transaction",
         "metrics": [("hybrid_p50_ms", "p50 ms"), ("hybrid_p99_ms", "p99 ms"),
-                    ("cpu_usec_sum", "CPU time s"),
                     (_rate(("n_products", "n_edges"), "build_s"), "ingest+index vertices+edges/s"),
                     ("build_s", "ingest+index total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
@@ -1053,7 +1053,6 @@ LANES = {
         # half at :memory:; neither has a disk footprint (2026-09-10, F27).
         "in_memory": ("surrealdb_e2",),
         "conditions": [
-            "CPU time is the processor time the engine's processes consumed over the whole run, in seconds, summed over every process and core; a latency says how long one operation took, CPU time says how much work it cost, and the two differ when an engine parallelises or idles.",
             "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
             "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
             "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
@@ -1137,12 +1136,10 @@ def _e4_table():
                               "min": round(per_arm[arm], 4),
                               "max": round(per_arm[arm], 4),
                               "n": len(loaded)}
-        protocol = per_arm["inproc_http"] - per_arm["embedded"]
-        boundary = per_arm["docker_http"] - per_arm["inproc_http"]
-        for label, value in (("packing cost ms", protocol),
-                             ("separate process ms", boundary)):
-            metrics[label] = {"median": round(value, 4), "min": round(value, 4),
-                              "max": round(value, 4), "n": len(loaded)}
+        # The two derived differences (packing cost, separate process) left
+        # the table on 2026-09-12 (DECISIONS #73): a negative "cost" cell
+        # confused more than the subtraction saved, and the prose beside the
+        # table names which two columns to subtract.
 
         entries.append({
             "backend": f"{int(size):,} documents",
@@ -1185,8 +1182,7 @@ def _e4_table():
             "costs nothing measurable. The packing cost, in the column beside "
             "it, stays firmly positive at every size.",
         ],
-        "columns": [label for _, label in E4_ARMS] + ["packing cost ms",
-                                                       "separate process ms"],
+        "columns": [label for _, label in E4_ARMS],
         "withheld_scales": [],
         "withheld_reason": None,
         "entries": entries,
@@ -1437,10 +1433,14 @@ LIFECYCLE_SCENARIOS = [
 LIFECYCLE_SCENARIO_LABELS = {
     "clean": "open and close ms",
     "read": "one query ms",
-    "write": "one write ms",
-    "write_own": "write into the structure ms",
+    "write_own": "one write ms",
     "write_own_read": "write, then query ms",
 }
+# The scratch-type write ("write": commit one row into a type no situation
+# owns) was the control for "what does committing anything cost"; on the
+# page it sat beside the real write and read as two writes. It stays in the
+# rows and the CSV, not in the columns (2026-09-12, DECISIONS #73).
+LIFECYCLE_PAGE_SCENARIOS = [k for k, _ in LIFECYCLE_SCENARIOS if k in LIFECYCLE_SCENARIO_LABELS]
 LIFECYCLE_SITUATION_LABELS = {
     "empty": "Empty database", "doc": "Documents", "doc_idx10": "Documents, ten indexes",
     "graph": "Graph", "graph_gav": "Graph with the analytical view", "vector": "Dense vectors",
@@ -1524,7 +1524,7 @@ def _lifecycle_table(all_rows):
             got = _agg(rs, field)
             if got is not None:
                 entry["metrics"][label] = got
-        for key, _desc in LIFECYCLE_SCENARIOS:
+        for key in LIFECYCLE_PAGE_SCENARIOS:
             got = _agg(rs, f"{key}_session_ms")
             if got is not None:
                 entry["metrics"][LIFECYCLE_SCENARIO_LABELS[key]] = got
@@ -1570,7 +1570,7 @@ def _lifecycle_table(all_rows):
             "same database's size.",
         ] + [f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}" for k, v in sorted(LIFECYCLE_WITHHELD.items())],
         "columns": ["JVM start ms", "first open ms", "cold process ms"]
-                   + [LIFECYCLE_SCENARIO_LABELS[k] for k, _ in LIFECYCLE_SCENARIOS],
+                   + [LIFECYCLE_SCENARIO_LABELS[k] for k in LIFECYCLE_PAGE_SCENARIOS],
         "withheld_scales": [],
         "withheld_reason": None,
         "entries": entries,
