@@ -2298,7 +2298,8 @@ def main() -> int:
                     # A served comparator whose image has no entry in the pin
                     # table's names (Milvus) still stamps its server version
                     # on the row; the page showed Milvus unversioned for it.
-                    else ((names.get(image) or rs[0].get("engine_version")) if (image and not _stale_pin)
+                    else ((names.get(image) or rs[0].get("engine_version"))
+                          if (image and not _stale_pin and not str(image).startswith("dbbench"))
                           else rs[0].get("engine_version")),
                     image, commit=rs[0].get("engine_commit")),
                 "host": rs[0].get("host") or None,

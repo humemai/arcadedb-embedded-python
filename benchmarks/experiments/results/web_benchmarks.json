@@ -5670,7 +5670,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "dbbench:pg-age",
-          "version_name": "17.11",
+          "version_name": "PostgreSQL 17.11 + pgvector 0.8.6 + age 1.7.0",
           "host": null,
           "metrics": {
             "trials": {
@@ -5967,7 +5967,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "dbbench:pg-age",
-          "version_name": "17.11",
+          "version_name": "PostgreSQL 17.11 + pgvector 0.8.6 + age 1.7.0",
           "host": null,
           "metrics": {
             "p50 ms": {
