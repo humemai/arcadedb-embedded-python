@@ -5552,6 +5552,7 @@
       "title": "Cross-model transaction",
       "dataset": "Vector hit to graph traversal to document update, in one transaction",
       "conditions": [
+        "CPU time is the processor time the engine's processes consumed over the whole run, in seconds, summed over every process and core; a latency says how long one operation took, CPU time says how much work it cost, and the two differ when an engine parallelises or idles.",
         "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
         "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
         "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
@@ -5562,7 +5563,7 @@
       "columns": [
         "p50 ms",
         "p99 ms",
-        "CPU s",
+        "CPU time s",
         "ingest+index vertices+edges/s",
         "ingest+index total s",
         "peak memory GiB",
@@ -5596,7 +5597,7 @@
               "max": 6.631,
               "n": 5
             },
-            "CPU s": {
+            "CPU time s": {
               "median": 65.7963,
               "min": 53.5616,
               "max": 69.2525,
@@ -5653,7 +5654,7 @@
               "max": 14.344,
               "n": 5
             },
-            "CPU s": {
+            "CPU time s": {
               "median": 75.1001,
               "min": 68.8474,
               "max": 78.8561,
@@ -5710,7 +5711,7 @@
               "max": 34.988,
               "n": 5
             },
-            "CPU s": {
+            "CPU time s": {
               "median": 38.7623,
               "min": 38.3547,
               "max": 38.9205,
@@ -5767,7 +5768,7 @@
               "max": 9.201,
               "n": 5
             },
-            "CPU s": {
+            "CPU time s": {
               "median": 337.9146,
               "min": 336.3943,
               "max": 338.6213,
@@ -5797,7 +5798,7 @@
       "directions": {
         "p50 ms": "down",
         "p99 ms": "down",
-        "CPU s": "down",
+        "CPU time s": "down",
         "ingest+index vertices+edges/s": "up",
         "ingest+index total s": "down",
         "peak memory GiB": "down",

@@ -1033,7 +1033,7 @@ LANES = {
         "title": "Cross-model transaction",
         "dataset": "Vector hit to graph traversal to document update, in one transaction",
         "metrics": [("hybrid_p50_ms", "p50 ms"), ("hybrid_p99_ms", "p99 ms"),
-                    ("cpu_usec_sum", "CPU s"),
+                    ("cpu_usec_sum", "CPU time s"),
                     (_rate(("n_products", "n_edges"), "build_s"), "ingest+index vertices+edges/s"),
                     ("build_s", "ingest+index total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
@@ -1053,6 +1053,7 @@ LANES = {
         # half at :memory:; neither has a disk footprint (2026-09-10, F27).
         "in_memory": ("surrealdb_e2",),
         "conditions": [
+            "CPU time is the processor time the engine's processes consumed over the whole run, in seconds, summed over every process and core; a latency says how long one operation took, CPU time says how much work it cost, and the two differ when an engine parallelises or idles.",
             "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
             "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
             "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
