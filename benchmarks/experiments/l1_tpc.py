@@ -179,6 +179,24 @@ class MongoTPC:
             except Exception:  # noqa: BLE001
                 pass
             time.sleep(0.5)
+        # Reconnect once the node is primary (2026-09-12, laptop runner smoke):
+        # the first client's topology snapshot was taken while the node was
+        # still starting and carried no logicalSessionTimeoutMinutes, so the
+        # first transaction raised "Sessions are not supported by this
+        # MongoDB deployment" before the next heartbeat refreshed it. A fresh
+        # client discovers the primary as such; wait until it reports session
+        # support before handing the connection to the workload.
+        self.cl.close()
+        self.cl = pymongo.MongoClient(f"mongodb://{host}:27017/?directConnection=true",
+                                      serverSelectionTimeoutMS=60000)
+        for _ in range(120):
+            try:
+                self.cl.admin.command("ping")
+                if self.cl.topology_description.logical_session_timeout_minutes is not None:
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.5)
         self.version = f"mongodb {self.cl.server_info()['version']}"
         self.db = self.cl["bench"]
 
