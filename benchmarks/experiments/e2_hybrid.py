@@ -264,11 +264,15 @@ class SurrealE2:
                      "embedding": vecs[i].tolist()}
                     for i in range(s, min(s + BATCH, len(vecs)))]
             self.db.insert("product", rows)
+        # Bulk relation insert, not RELATE statements: on the graph lane 5,000
+        # RELATEs over the wire took 34.6 s against 0.6 s for one
+        # insert_relation call (2026-09-11), and the served cross-model cell
+        # sat in this loop past its 15-minute laptop smoke budget (2026-09-12).
+        from surrealdb import RecordID
         for s in range(0, len(edges), BATCH):
-            stmts = ";".join(
-                f"RELATE product:{a}->related->product:{b}"
-                for a, b in edges[s:s + BATCH])
-            q(stmts)
+            self.db.insert_relation("related", [
+                {"in": RecordID("product", a), "out": RecordID("product", b)}
+                for a, b in edges[s:s + BATCH]])
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         q = self.db.query
@@ -365,9 +369,17 @@ class PgAgeE2:
         for s in range(0, len(vecs), BATCH):
             c.execute("SELECT * FROM cypher('e2graph', $$ UNWIND $rows AS r CREATE (:Product {pid: r}) $$, %s) AS (v agtype)",
                       (json.dumps({"rows": list(range(s, min(s + BATCH, len(vecs))))}),))
+        # Edges by VERTEX ID, not by property map (BUGS F35, 2026-09-12): AGE
+        # answers `MATCH (a:Product {pid: r.s})` inside UNWIND with a scan of
+        # the vertex table per row, which put 150k edges at about 6.4 hours
+        # on the laptop; `WHERE id(a) = r.s` builds them in 3.7 minutes. The
+        # pid->id map is one MATCH over the 50k vertices.
+        c.execute("SELECT * FROM cypher('e2graph', $$ MATCH (p:Product) RETURN p.pid, id(p) $$) AS (pid agtype, gid agtype)")
+        gid = {int(str(r[0])): int(str(r[1])) for r in c.fetchall()}
         for s in range(0, len(edges), BATCH):
-            c.execute("SELECT * FROM cypher('e2graph', $$ UNWIND $rows AS r MATCH (a:Product {pid: r.s}), (b:Product {pid: r.d}) CREATE (a)-[:RELATED]->(b) $$, %s) AS (v agtype)",
-                      (json.dumps({"rows": [{"s": a, "d": b} for a, b in edges[s:s + BATCH]]}),))
+            c.execute("SELECT * FROM cypher('e2graph', $$ UNWIND $rows AS r MATCH (a:Product), (b:Product) WHERE id(a) = r.s AND id(b) = r.d CREATE (a)-[:RELATED]->(b) $$, %s) AS (v agtype)",
+                      (json.dumps({"rows": [{"s": gid[a], "d": gid[b]} for a, b in edges[s:s + BATCH]]}),))
+        c.execute("ANALYZE")
         self.cx.commit()
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
@@ -376,7 +388,9 @@ class PgAgeE2:
         c.execute("SELECT pid FROM product ORDER BY embedding <-> %s::vector LIMIT %s",
                   ("[" + ",".join("%.9g" % float(x) for x in qvec) + "]", K))
         pids = [int(r[0]) for r in c.fetchall()]
-        c.execute(f"SELECT * FROM cypher('e2graph', $$ MATCH (a:Product {{pid: {pids[0]}}})-[:RELATED]->(b) RETURN b.pid $$) AS (pid agtype)")
+        # WHERE a.pid = x, not {pid: x}: the map form scanned (17 ms), the
+        # WHERE form uses the expression index on pid (1.0 ms), same probe.
+        c.execute(f"SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) WHERE a.pid = {pids[0]} RETURN b.pid $$) AS (pid agtype)")
         rel = [int(str(r[0])) for r in c.fetchall()]
         touched = pids[:3] + rel[:3]
         c.execute("UPDATE product SET views = views + 1 WHERE pid = ANY(%s)", (list(set(touched)),))
