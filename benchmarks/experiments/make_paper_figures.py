@@ -734,7 +734,12 @@ def _dense_best_comparator(warm, scale):
     if ours is None:
         raise SystemExit(f"f4: no recall for our dense arm at {scale}")
     elig = []
-    for a in ("qdrant", "chroma", "lancedb", "duckvss", "milvus", "sqlitevec"):
+    import make_paper_tables as _MPT
+    # The August comparators plus every optional September arm whose overlay
+    # files are complete (neo4jvec, pgvector, surreal, surrealsrv), so a
+    # landed comparator competes for the bar without an edit here.
+    optional = [a for a in _MPT.mp_arms_present(small=(scale != "deep10m")) if a in _MPT.MP_ARMS_OPTIONAL]
+    for a in ("qdrant", "chroma", "lancedb", "duckvss", "milvus", "sqlitevec", *optional):
         p50 = _dense_overlay_p50(warm=warm, arm=a, scale=scale)
         rec = _dense_overlay_recall(arm=a, scale=scale)
         if p50 is not None and rec is not None and rec >= ours - 1e-9:

@@ -704,6 +704,37 @@ MP_BUILDS = 5
 # arms, which exist only at 10M.
 MP_ARMS_SMALL = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus",
                  "qdrant", "chroma", "duckvss", "lancedb", "sqlitevec")
+# Arms that JOIN as their overlay files land (2026-09-12): the September
+# comparators. An optional arm with all MP_BUILDS files is published; with
+# none it is absent; with some it REFUSES, so a publish mid-run cannot show
+# an arm built from one rep. The required lists above are the August set.
+MP_ARMS_OPTIONAL = ("neo4jvec", "pgvector", "surreal", "surrealsrv")
+
+
+def _optional_arms_present(cand, label):
+    present = []
+    for a in MP_ARMS_OPTIONAL:
+        have = [b for b in range(1, MP_BUILDS + 1) if os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
+        if len(have) == MP_BUILDS:
+            present.append(a)
+        elif have:
+            raise SystemExit(f"{label}: optional arm {a} has {len(have)} of {MP_BUILDS} builds; "
+                             "a partial arm is a run in progress, not a row")
+    return tuple(present)
+
+
+def mp_arms_present(small=False):
+    """The arms the overlay at this pin holds: the required set for the size
+    plus every optional arm whose files are complete."""
+    if small:
+        cand = dense_mp_small_dir()
+        base = MP_ARMS_SMALL
+    else:
+        cand = dense_mp_dir()
+        base = MP_ARMS
+    if not os.path.isdir(cand):
+        return base
+    return base + _optional_arms_present(cand, os.path.basename(cand))
 
 
 def dense_mp_dir():

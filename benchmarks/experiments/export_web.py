@@ -661,12 +661,16 @@ def _dense_overlay_entries(scale="deep10m"):
     import make_paper_tables as _MPT
     # One protocol at both sizes since 2026-09-10 (BUGS F26): deep10m reads
     # dense_mp5_<pin>, small reads dense_mp5_small_<pin>, both pinned-only.
+    # Arms come from the overlay's own contents (required set plus every
+    # optional September arm whose files are complete; a partial arm
+    # refuses), so a landed comparator appears without an edit here.
     if scale == "deep10m":
-        root, arms, n_docs = Path(_MPT.dense_mp_dir()), DENSE_10M_ARMS, "9,990,000"
+        root, n_docs = Path(_MPT.dense_mp_dir()), "9,990,000"
+        present = _MPT.mp_arms_present(small=False)
     else:
-        root = Path(_MPT.dense_mp_small_dir())
-        arms = [a for a in DENSE_10M_ARMS if a[0] in _MPT.MP_ARMS_SMALL]
-        n_docs = "1,000,000"
+        root, n_docs = Path(_MPT.dense_mp_small_dir()), "1,000,000"
+        present = _MPT.mp_arms_present(small=True)
+    arms = [a for a in DENSE_10M_ARMS if a[0] in present]
     if not root.is_dir():
         return []
     out = []
