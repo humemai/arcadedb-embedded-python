@@ -86,6 +86,9 @@
     "surrealdb_e2_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
+    "surrealdb_tpc_server": [
+      "surrealdb-server:3.2.4+20260803.93ab219"
+    ],
     "timescaledb": [
       "(no version recorded)"
     ]
@@ -10319,6 +10322,63 @@
               "n": 10
             }
           }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch1",
+          "scale_label": "TPC-H SF1 (6.0M line items)",
+          "workload": "",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb v3.2.4",
+          "host": null,
+          "metrics": {
+            "new-order p50 ms": {
+              "median": 10.041,
+              "min": 9.912,
+              "max": 10.069,
+              "n": 5
+            },
+            "new-order p99 ms": {
+              "median": 19.347,
+              "min": 17.532,
+              "max": 19.591,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 95.2,
+              "min": 91.0,
+              "max": 96.0,
+              "n": 5
+            },
+            "ingest documents/s": {
+              "median": 7860.144,
+              "min": 7804.4917,
+              "max": 7919.3091,
+              "n": 10
+            },
+            "ingest total s": {
+              "median": 788.945,
+              "min": 783.05,
+              "max": 794.57,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 9.9951,
+              "min": 9.8324,
+              "max": 10.1263,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0011,
+              "min": 0.0011,
+              "max": 0.0011,
+              "n": 10
+            }
+          }
         }
       ],
       "withheld_scales": [],
@@ -10799,6 +10859,69 @@
               "median": 0.39,
               "min": 0.39,
               "max": 0.39,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch1",
+          "scale_label": "TPC-H SF1 (6.0M line items)",
+          "workload": "",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb v3.2.4",
+          "host": null,
+          "metrics": {
+            "Q1 p50 ms": {
+              "median": 41126.37,
+              "min": 40917.5,
+              "max": 41208.05,
+              "n": 5
+            },
+            "Q1 p99 ms": {
+              "median": 41708.64,
+              "min": 41486.54,
+              "max": 41846.81,
+              "n": 5
+            },
+            "Q6 p50 ms": {
+              "median": 3334.8,
+              "min": 3300.97,
+              "max": 3411.05,
+              "n": 5
+            },
+            "Q6 p99 ms": {
+              "median": 3500.44,
+              "min": 3440.64,
+              "max": 3533.63,
+              "n": 5
+            },
+            "ingest documents/s": {
+              "median": 7860.144,
+              "min": 7804.4917,
+              "max": 7919.3091,
+              "n": 10
+            },
+            "ingest total s": {
+              "median": 788.945,
+              "min": 783.05,
+              "max": 794.57,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 9.9951,
+              "min": 9.8324,
+              "max": 10.1263,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0011,
+              "min": 0.0011,
+              "max": 0.0011,
               "n": 10
             }
           }
