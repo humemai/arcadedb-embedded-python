@@ -780,8 +780,32 @@ def f4_one_vs_n(rows):
         raise SystemExit("no arcadedb_ts_native rows at the pin (ts_2681 fallback retired 2026-09-08)")
 
     def tsmed(be, f):
-        v = [r[f] for r in ts if r["backend"] == be and isinstance(r.get(f), (int, float))]
+        # A latency of exactly zero is below the lane's two-decimal resolution
+        # (SQLite's newest reading, about 4 us, 2026-09-12); it is not a value
+        # to divide by. The lane records four decimals from qDR on.
+        v = [r[f] for r in ts if r["backend"] == be and isinstance(r.get(f), (int, float)) and r[f] > 0]
         return st.median(v) if v else None
+
+    def rate(lane, scale, wl, be, counts, secs="build_s", **kw):
+        """Ingest rate the way the page's tables derive it: the sum of the
+        count fields over the build timer, median across reps."""
+        vals = []
+        for r in canonical():
+            if r.get("lane") != lane or str(r.get("scale")) != str(scale) or r.get("backend") != be:
+                continue
+            if wl and r.get("workload") != wl:
+                continue
+            if kw.get("gav_on") is not None and str(r.get("gav")) != str(kw["gav_on"]):
+                continue
+            n = sum(float(r.get(c) or 0) for c in counts)
+            b = r.get(secs)
+            if n > 0 and isinstance(b, (int, float)) and b > 0:
+                vals.append(n / b)
+        return st.median(vals) if vals else None
+
+    def rate_rows(lane, scale, wl, backends, counts, with_recall=False):
+        return {b: (rate(lane, scale, wl, b, counts), None,
+                    recall(lane, scale, wl, b) if with_recall else None) for b in backends}
 
     chosen = {}
 
@@ -806,6 +830,10 @@ def f4_one_vs_n(rows):
                 for b in backends}
 
     DOC = ("postgres", "postgres_tuned", "duckdb", "sqlite")
+    # Every dense comparator that builds an index; sqlite-vec is an exact scan,
+    # so its "ingest+index" is an insert and does not do what the row names.
+    DENSE_COMPS = ("qdrant_dense", "qdrant_dense_int8", "milvus_dense", "milvus_dense_int8",
+                   "chroma_dense", "lancedb_dense", "duckdb_vss_dense")
     GRAPH = ("ladybug_graph", "neo4j_graph")
     SPARSE = ("qdrant_sparse", "milvus_sparse", "elasticsearch_sparse")
     TSC = ("questdb", "duckdb", "sqlite")
@@ -836,9 +864,18 @@ def f4_one_vs_n(rows):
         return row(label, False, (ours_c, ours_rec), ours_w, comps, note="" if warm_tier else "first pass only")
 
     entries = [
-        # documents
-        # The synthetic 20M-order rows (OLTP ops/s, OLAP total) left the page
-        # on 2026-09-11; the figure shows what the page's tables show.
+        # Rows follow the PAGE: section order (documents, graph, vectors, time
+        # series, cross-model), each table in the order the page shows them,
+        # and within a table its column order (2026-09-12). Ingest rows joined
+        # the same day; every table's ingest pair is a page column and the
+        # figure had carried only the time-series one.
+        # documents: OLTP table (new-order, ingest), then OLAP table (Q1, Q6)
+        row("TPC-C new-order p50", False,
+            (med("l1tpc", "tpch1", "oltp", "arcadedb_embedded", "neworder_p50_ms"), None), None,
+            comps_rows("l1tpc", "tpch1", "oltp", DOC, "neworder_p50_ms", None), note="first pass only"),
+        row("Docs ingest", True,
+            (rate("l1tpc", "tpch1", "oltp", "arcadedb_embedded", ("n_lineitem", "n_part")), None), None,
+            rate_rows("l1tpc", "tpch1", "oltp", DOC, ("n_lineitem", "n_part")), note="first pass only"),
         row("TPC-H Q1", False,
             (med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "cold_q1_ms"), None),
             med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "warm_q1_ms"),
@@ -847,10 +884,7 @@ def f4_one_vs_n(rows):
             (med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "cold_q6_ms"), None),
             med("l1tpc", "tpch1", "olap", "arcadedb_embedded", "warm_q6_ms"),
             comps_rows("l1tpc", "tpch1", "olap", DOC, "cold_q6_ms", "warm_q6_ms")),
-        row("TPC-C new-order p50", False,
-            (med("l1tpc", "tpch1", "oltp", "arcadedb_embedded", "neworder_p50_ms"), None), None,
-            comps_rows("l1tpc", "tpch1", "oltp", DOC, "neworder_p50_ms", None), note="first pass only"),
-        # graph, SF10
+        # graph, SF10: OLTP table (point, 1-hop, 2-hop, write, ingest), then OLAP
         row("Graph point p50", False,
             (med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "point_p50_ms"), None),
             med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "warm_point_p50_ms"),
@@ -866,6 +900,9 @@ def f4_one_vs_n(rows):
         row("Graph write p50", False,
             (med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "write_p50_ms"), None), None,
             comps_rows("l2", "sf10", "oltp", GRAPH, "write_p50_ms", None), note="first pass only"),
+        row("Graph ingest", True,
+            (rate("l2", "sf10", "oltp", "arcadedb_graph_embedded", ("n_persons_ingested", "n_edges_ingested")), None), None,
+            rate_rows("l2", "sf10", "oltp", GRAPH, ("n_persons_ingested", "n_edges_ingested")), note="first pass only"),
         # graph analytics with the view on (the engine's default arm)
         row("Graph top-degree p50", False,
             (med("l2", "sf10", "olap", "arcadedb_graph_embedded", "cold_top_degree_ms", gav_on=True), None),
@@ -874,14 +911,20 @@ def f4_one_vs_n(rows):
         # dense, both sizes, comparator by the recall rule
         dense_row("Dense 1M p50", "small"),
         dense_row("Dense 10M p50", "deep10m"),
+        # ingest and index at 10M, comparator by the same recall rule
+        row("Dense 10M ingest+index", True,
+            (rate("l3d", "deep10m", "search", "arcadedb_dense_embedded", ("n_docs",)),
+             recall("l3d", "deep10m", "search", "arcadedb_dense_embedded")), None,
+            rate_rows("l3d", "deep10m", "search", DENSE_COMPS, ("n_docs",), with_recall=True), note="first pass only"),
         # sparse, three sizes; 100k has no second-pass run
         sparse_row("Sparse 100k p50", "tiny", warm_tier=False),
         sparse_row("Sparse 1M p50", "small", warm_tier=True),
         sparse_row("Sparse 8.84M p50", "medium", warm_tier=True),
-        # time series
-        row("TS ingest points/s", True,
-            (tsmed("arcadedb_ts_native", "ingest_pts_per_s"), None), None,
-            {b: (tsmed(b, "ingest_pts_per_s"), None, None) for b in TSC}, note="first pass only"),
+        row("Sparse 8.84M ingest+index", True,
+            (rate("l3s", "medium", "search", "arcadedb_sparse_embedded", ("n_docs",)),
+             recall("l3s", "medium", "search", "arcadedb_sparse_embedded")), None,
+            rate_rows("l3s", "medium", "search", SPARSE, ("n_docs",), with_recall=True), note="first pass only"),
+        # time series, in the page's column order
         row("TS newest reading p50", False,
             (tsmed("arcadedb_ts_native", "q_last_cold_ms") or tsmed("arcadedb_ts_native", "q_last_ms"), None),
             tsmed("arcadedb_ts_native", "q_last_ms"),
@@ -890,11 +933,18 @@ def f4_one_vs_n(rows):
             (tsmed("arcadedb_ts_native", "q_global_cold_ms") or tsmed("arcadedb_ts_native", "q_global_ms"), None),
             tsmed("arcadedb_ts_native", "q_global_ms"),
             {b: (tsmed(b, "q_global_cold_ms") or tsmed(b, "q_global_ms"), tsmed(b, "q_global_ms"), None) for b in TSC}),
+        row("TS ingest", True,
+            (tsmed("arcadedb_ts_native", "ingest_pts_per_s"), None), None,
+            {b: (tsmed(b, "ingest_pts_per_s"), None, None) for b in TSC}, note="first pass only"),
         # cross-model: SurrealDB, the transactional rival, never the composed
         # stack (which has no transaction spanning its engines and is slower)
         row("Cross-model txn p50", False,
             (med("e2", "e2", "hybrid", "arcadedb_e2", "hybrid_p50_ms"), None), None,
             {"surrealdb_e2": (med("e2", "e2", "hybrid", "surrealdb_e2", "hybrid_p50_ms"), None, None)},
+            note="first pass only"),
+        row("Cross-model ingest+index", True,
+            (rate("e2", "e2", "hybrid", "arcadedb_e2", ("n_products", "n_edges")), None), None,
+            {"surrealdb_e2": (rate("e2", "e2", "hybrid", "surrealdb_e2", ("n_products", "n_edges")), None, None)},
             note="first pass only"),
     ]
     # TS first-run fields exist only from qDH on; until then the first panel
@@ -937,7 +987,12 @@ def f4_one_vs_n(rows):
         ax.set_title(title, fontsize=7, pad=3)
         ax.tick_params(axis="x", labelsize=6)
     # thin separators between the model groups, in the paper's order
-    for k in (3, 8, 10, 13, 16):
+    # A row whose comparator's repeat pass is below the lane's resolution
+    # (SQLite's newest reading until qDR lands) says so instead of dividing.
+    for e in entries:
+        if e["warm"] is None and not e["note"]:
+            e["note"] = "comparator below resolution"
+    for k in (4, 10, 13, 17, 20):   # section ends: documents, graph, dense, sparse, time series
         for ax in (axc, axw):
             ax.axhline(n - k - 0.5, color="0.85", lw=0.5, zorder=0)
     axc.set_yticks(ys)
