@@ -35,7 +35,8 @@
       "milvus:pkg/v2.6.13"
     ],
     "mongodb": [
-      "(no version recorded)"
+      "(no version recorded)",
+      "mongodb 8.2.12"
     ],
     "neo4j_dense": [
       "neo4j:2026.07.1"
@@ -79,6 +80,7 @@
   },
   "comparator_version_split": [
     "duckdb",
+    "mongodb",
     "postgres",
     "postgres_tuned",
     "sqlite"
@@ -9779,6 +9781,63 @@
           }
         },
         {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch1",
+          "scale_label": "TPC-H SF1 (6.0M line items)",
+          "workload": "",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",
+          "version_name": "mongo 8.2.12",
+          "host": null,
+          "metrics": {
+            "new-order p50 ms": {
+              "median": 6.951,
+              "min": 6.711,
+              "max": 6.998,
+              "n": 5
+            },
+            "new-order p99 ms": {
+              "median": 17.056,
+              "min": 12.336,
+              "max": 17.543,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 137.3,
+              "min": 128.0,
+              "max": 138.1,
+              "n": 5
+            },
+            "ingest documents/s": {
+              "median": 123395.0161,
+              "min": 121807.4052,
+              "max": 125201.1912,
+              "n": 10
+            },
+            "ingest total s": {
+              "median": 50.255,
+              "min": 49.53,
+              "max": 50.91,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 7.1266,
+              "min": 7.071,
+              "max": 7.135,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.7716,
+              "min": 0.7675,
+              "max": 0.7768,
+              "n": 10
+            }
+          }
+        },
+        {
           "backend": "PostgreSQL",
           "is_arcadedb": false,
           "precision": null,
@@ -10176,6 +10235,69 @@
               "median": 0.0713,
               "min": 0.0707,
               "max": 0.0719,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch1",
+          "scale_label": "TPC-H SF1 (6.0M line items)",
+          "workload": "",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",
+          "version_name": "mongo 8.2.12",
+          "host": null,
+          "metrics": {
+            "Q1 p50 ms": {
+              "median": 9814.99,
+              "min": 9764.33,
+              "max": 10081.91,
+              "n": 5
+            },
+            "Q1 p99 ms": {
+              "median": 9938.06,
+              "min": 9884.65,
+              "max": 10240.45,
+              "n": 5
+            },
+            "Q6 p50 ms": {
+              "median": 1138.7,
+              "min": 1128.85,
+              "max": 1150.13,
+              "n": 5
+            },
+            "Q6 p99 ms": {
+              "median": 1269.56,
+              "min": 1248.08,
+              "max": 1277.86,
+              "n": 5
+            },
+            "ingest documents/s": {
+              "median": 123395.0161,
+              "min": 121807.4052,
+              "max": 125201.1912,
+              "n": 10
+            },
+            "ingest total s": {
+              "median": 50.255,
+              "min": 49.53,
+              "max": 50.91,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 7.1266,
+              "min": 7.071,
+              "max": 7.135,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.7716,
+              "min": 0.7675,
+              "max": 0.7768,
               "n": 10
             }
           }
