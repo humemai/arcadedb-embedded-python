@@ -1,0 +1,163 @@
+<title>ArcadeDB Bottlenecks</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,600&display=swap">
+<style>
+  :root { --ground: #f6f7f8; --paper: #ffffff; --ink: #1b1f26; --ink-2: #4a515c; --ink-3: #7b8290; --rule: #d9dde3; --accent: #1f5f8b; --ahead: #1a6e5a; --ahead-bg: #e3f2ec; --behind: #a8392b; --behind-bg: #f9e6e2; --note-bg: #eef2f6; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ground: #15181d; --paper: #1c2026; --ink: #e8eaee; --ink-2: #b4bac4; --ink-3: #848c99; --rule: #333a44; --accent: #7fb3d9; --ahead: #6fcfae; --ahead-bg: #163b31; --behind: #f08a78; --behind-bg: #44221d; --note-bg: #232931; } }
+  :root[data-theme="dark"] { --ground: #15181d; --paper: #1c2026; --ink: #e8eaee; --ink-2: #b4bac4; --ink-3: #848c99; --rule: #333a44; --accent: #7fb3d9; --ahead: #6fcfae; --ahead-bg: #163b31; --behind: #f08a78; --behind-bg: #44221d; --note-bg: #232931; }
+  body { background: var(--ground); color: var(--ink); font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif; font-size: 15px; line-height: 1.55; margin: 0; }
+  main { max-width: min(100ch, 94vw); margin: 0 auto; padding: 40px 0 72px; }
+  header { border-bottom: 1px solid var(--rule); padding-bottom: 20px; margin-bottom: 32px; }
+  h1 { font-family: "Source Serif 4", Georgia, serif; font-weight: 600; font-size: 2rem; line-height: 1.15; margin: 0 0 10px; text-wrap: balance; }
+  .lede { color: var(--ink-2); max-width: 70ch; margin: 0; }
+  .meta { color: var(--ink-3); font-size: 0.82rem; letter-spacing: 0.04em; text-transform: uppercase; margin: 0 0 8px; }
+  h2 { font-family: "Source Serif 4", Georgia, serif; font-weight: 600; font-size: 1.35rem; margin: 40px 0 6px; text-wrap: balance; }
+  h2 .tag { font-family: "IBM Plex Sans", sans-serif; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; vertical-align: middle; margin-left: 10px; padding: 2px 8px; border-radius: 3px; }
+  .tag.ahead { color: var(--ahead); background: var(--ahead-bg); }
+  .tag.behind { color: var(--behind); background: var(--behind-bg); }
+  p { max-width: 70ch; }
+  .tablewrap { overflow-x: auto; margin: 14px 0 6px; }
+  table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 0.9rem; background: var(--paper); table-layout: fixed; }
+  col.c-model { width: 11%; } col.c-op { width: 41%; } col.c-size { width: 11%; } col.c-a { width: 12%; } col.c-b { width: 15%; } col.c-r { width: 10%; }
+  table.wire col.c-op { width: 44%; } table.wire col.c-a, table.wire col.c-b { width: 14%; } table.wire col.c-r { width: 17%; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-size: 0.74rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; border-bottom: 2px solid var(--rule); }
+  td.num, th.num { font-family: "IBM Plex Mono", Menlo, monospace; font-variant-numeric: tabular-nums; font-size: 0.84rem; }
+  td.model { color: var(--ink-2); }
+  td.ratio { font-family: "IBM Plex Mono", Menlo, monospace; font-weight: 500; font-size: 0.84rem; }
+  tr.ahead td.ratio { color: var(--ahead); }
+  tr.behind td.ratio { color: var(--behind); }
+  h3 { font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin: 18px 0 4px; font-weight: 600; }
+  table.how col.c-row { width: 18%; } table.how col.c-arc { width: 41%; } table.how col.c-cmp { width: 41%; }
+  code { font-family: "IBM Plex Mono", Menlo, monospace; font-size: 0.8rem; background: var(--note-bg); padding: 1px 4px; border-radius: 3px; overflow-wrap: anywhere; }
+  td.how { font-size: 0.86rem; }
+  .note { background: var(--note-bg); border-left: 3px solid var(--accent); padding: 10px 14px; margin: 14px 0 0; max-width: 80ch; }
+  .note strong { color: var(--accent); }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--rule); color: var(--ink-3); font-size: 0.85rem; max-width: 80ch; }
+  @media (max-width: 900px) { main { max-width: 92vw; } body { font-size: 14px; } table { font-size: 0.84rem; } }
+  @media (max-width: 600px) { main { max-width: 94vw; padding-top: 24px; } h1 { font-size: 1.5rem; } table { font-size: 0.78rem; min-width: 560px; } th, td { padding: 6px 7px; } }
+</style>
+<main>
+  <header>
+    <p class="meta">ArcadeDB, engine build 8d6af9475, one machine, September 2026</p>
+    <h1>Where ArcadeDB wins and where it loses, by data model</h1>
+    <p class="lede">Every number below is read from the project page's published data: a median of five runs on the same host, every engine in the same container envelope, one job at a time. Ratios are ArcadeDB against the best other engine on that row; on vector rows the best engine is the fastest one whose recall is at least ArcadeDB's. Latencies are p50 over 1,000 queries per pass for search rows, 1,000 transactions or writes for the transactional rows, and 100 runs per rep for analytical queries. Causes are marked as our reading: we measured the engine, we did not profile it.</p>
+  </header>
+
+  <h2>One record, one path, one transaction <span class="tag behind">4 ahead, 1 behind</span></h2>
+  <div class="tablewrap"><table>
+    <colgroup><col class="c-model"><col class="c-op"><col class="c-size"><col class="c-a"><col class="c-b"><col class="c-r"></colgroup>
+    <thead><tr><th>Model</th><th>Operation</th><th>Size</th><th class="num">ArcadeDB</th><th class="num">Best other engine</th><th>Ratio</th></tr></thead>
+    <tbody>
+      <tr class="behind"><td class="model">Documents</td><td>TPC-C new-order transaction: read a part, insert an order line, update stock</td><td>TPC-H scale 1, 6.0M line items</td><td class="num">0.397 ms</td><td class="num">SQLite 0.011 ms, PostgreSQL (tuned) 2.33 ms</td><td class="ratio">36x behind</td></tr>
+      <tr class="ahead"><td class="model">Graph</td><td>Create one edge between two existing vertices, Cypher</td><td>SF10, 73k people</td><td class="num">0.659 ms</td><td class="num">Neo4j 7.81 ms</td><td class="ratio">12x ahead</td></tr>
+      <tr class="ahead"><td class="model">Graph</td><td>One-hop traversal from a person over KNOWS edges</td><td>SF10, 73k people</td><td class="num">0.614 ms</td><td class="num">LadybugDB 1.66 ms</td><td class="ratio">2.7x ahead</td></tr>
+      <tr class="ahead"><td class="model">Graph</td><td>Two-hop traversal from a person</td><td>SF10, 73k people</td><td class="num">1.67 ms</td><td class="num">Neo4j 4.79 ms</td><td class="ratio">2.9x ahead</td></tr>
+      <tr class="ahead"><td class="model">Cross-model</td><td>Vector search hit, expand over graph edges, update a document, one transaction</td><td>50k products</td><td class="num">2.03 ms</td><td class="num">SurrealDB (embedded) 7.67 ms</td><td class="ratio">3.8x ahead</td></tr>
+      <tr class="even"><td class="model">Time series</td><td>Ingest through the native time-series type, embedded</td><td>2.59M points</td><td class="num">1.86M points/s</td><td class="num">DuckDB 1.88M points/s</td><td class="ratio">parity</td></tr>
+    </tbody>
+  </table></div>
+  <h3>How it was run</h3>
+  <div class="tablewrap"><table class="how">
+    <colgroup><col class="c-row"><col class="c-arc"><col class="c-cmp"></colgroup>
+    <thead><tr><th>Row</th><th>ArcadeDB</th><th>Comparators</th></tr></thead>
+    <tbody>
+      <tr><td class="model">TPC-C new-order</td><td class="how">One transaction: <code>SELECT p_retailprice, stock FROM Part WHERE p_partkey = :k</code> (unique index), <code>INSERT INTO OrderNew SET okey=:o, pkey=:p, qty=1</code>, <code>UPDATE Part SET stock = stock - 1 WHERE p_partkey = :k</code>, <code>commit()</code>. 1,000 transactions.</td><td class="how">Same three statements inside BEGIN/COMMIT on PostgreSQL (image defaults, and a tuned row with buffers fitted to the container), DuckDB, and SQLite (WAL, synchronous=NORMAL), primary key on <code>p_partkey</code>.</td></tr>
+      <tr><td class="model">Graph write, traversals</td><td class="how">openCypher via <code>db.command("opencypher", ...)</code> and <code>db.query("opencypher", ...)</code>. Write: <code>MATCH (p:Person) WHERE p.id = $id CREATE (q:Person {...}) CREATE (p)-[:KNOWS {since: 2026}]-&gt;(q)</code>, 1,000 timed writes. Point: <code>MATCH (p:Person) WHERE p.id = $id RETURN p.name, p.age</code>. 1-hop: <code>MATCH (p:Person)-[:KNOWS]-&gt;(f:Person) WHERE p.id = $id RETURN count(f), avg(f.age)</code>. 2-hop: <code>MATCH (p)-[:KNOWS]-&gt;()-[:KNOWS]-&gt;(fof) WHERE p.id = $id RETURN count(DISTINCT fof)</code>. Reads run twice, first pass and repeat pass. Unique index on <code>Person.id</code>; graph loaded through the Java API (<code>newVertex</code>, <code>newEdge</code>) in 5,000-record transactions.</td><td class="how">The identical Cypher text on Neo4j (bolt driver, UNWIND batches to load) and LadybugDB (its Python API, COPY to load). Neo4j runs with heap and page cache set to the same envelope.</td></tr>
+      <tr><td class="model">Cross-model transaction</td><td class="how">One SQL transaction: <code>SELECT pid FROM (SELECT expand(vectorNeighbors('Product[embedding]', :q, 10, 100)))</code> on an <code>LSM_VECTOR</code> index, then <code>SELECT expand(out('RELATED')) FROM Product WHERE pid = ...</code>, then <code>UPDATE Product SET views = views + 1 WHERE pid = ...</code> for the six touched products, <code>commit()</code>. For the atomicity test an exception is raised before commit and the transaction rolls back.</td><td class="how">SurrealDB: the same three steps in one SurrealQL transaction through its Python SDK (the published row is still the in-memory store; the on-disk and served re-runs are queued). Composed stack: Qdrant search (gRPC) then Neo4j UNWIND update, two engines, no shared transaction.</td></tr>
+      <tr><td class="model">Native time-series ingest</td><td class="how"><code>CREATE TIMESERIES TYPE Point TIMESTAMP ts TAGS (host STRING) FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) SHARDS n</code>, then the async executor's <code>append_samples("Point", ts[], host[], uu[], us[], ui[])</code> with primitive NumPy columns in chunks, <code>wait_completion()</code>.</td><td class="how">DuckDB: an Arrow table registered and <code>INSERT INTO p SELECT * FROM src</code>. QuestDB: InfluxDB line protocol over TCP port 9009. SQLite: executemany in 50,000-point transactions.</td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="note"><strong>Read the write rows with one caveat.</strong> Durability is at each engine's default, and the defaults differ: ArcadeDB does not flush its write-ahead log at commit (<code>txWalFlush=0</code>), PostgreSQL and Neo4j fsync at every commit, SQLite runs in WAL mode with <code>synchronous=NORMAL</code>. On a laptop the same mixed workload on ArcadeDB embedded runs about 10x slower with fsync at commit (insert p50 0.3 ms to 6.4 ms). So the new-order and graph-write leads over the servers are largely this default plus the absence of a network hop, not the engine: the lead over PostgreSQL on new-order is 6.0x today, and in-process SQLite, which pays no network hop either, does 9.6x the transactions per second on the same workload. The reads, traversals, and the cross-model transaction do not depend on it. The next campaign runs every timed write with fsync at commit.</p>
+
+  <h2>Weakness 1: any query that reads most of a table <span class="tag behind">behind</span></h2>
+  <div class="tablewrap"><table>
+    <colgroup><col class="c-model"><col class="c-op"><col class="c-size"><col class="c-a"><col class="c-b"><col class="c-r"></colgroup>
+    <thead><tr><th>Model</th><th>Operation</th><th>Size</th><th class="num">ArcadeDB</th><th class="num">Best other engine</th><th>Ratio</th></tr></thead>
+    <tbody>
+      <tr class="behind"><td class="model">Documents</td><td>TPC-H Q1: scan every line item, group, and sum</td><td>6.0M line items</td><td class="num">10.2 s</td><td class="num">DuckDB 15.5 ms, PostgreSQL 331 ms</td><td class="ratio">660x behind</td></tr>
+      <tr class="behind"><td class="model">Documents</td><td>TPC-H Q6: filter a date range, sum one column</td><td>6.0M line items</td><td class="num">767 ms</td><td class="num">DuckDB 7.23 ms, PostgreSQL (tuned) 101 ms</td><td class="ratio">106x behind</td></tr>
+      <tr class="behind"><td class="model">Graph</td><td>Whole-graph analytics, most friends: every person's degree, top ten</td><td>SF10, 73k people</td><td class="num">362 ms</td><td class="num">LadybugDB 2.69 ms</td><td class="ratio">135x behind</td></tr>
+      <tr class="behind"><td class="model">Graph</td><td>The same query with the graph analytical view built beforehand</td><td>SF10, 73k people</td><td class="num">52.4 ms</td><td class="num">LadybugDB 2.69 ms</td><td class="ratio">19x behind</td></tr>
+      <tr class="behind"><td class="model">Time series</td><td>Twelve-hour aggregate over all series, native type</td><td>2.59M points</td><td class="num">30.5 ms</td><td class="num">QuestDB 1.81 ms</td><td class="ratio">17x behind</td></tr>
+    </tbody>
+  </table></div>
+  <h3>How it was run</h3>
+  <div class="tablewrap"><table class="how">
+    <colgroup><col class="c-row"><col class="c-arc"><col class="c-cmp"></colgroup>
+    <thead><tr><th>Row</th><th>ArcadeDB</th><th>Comparators</th></tr></thead>
+    <tbody>
+      <tr><td class="model">TPC-H Q1, Q6</td><td class="how">Standard query text over a DOCUMENT TYPE <code>LineItem</code> with a NOTUNIQUE index on <code>l_shipdate</code>: <code>db.query("sql", q).to_list()</code>. 100 runs per rep, first run recorded as cold, median of the rest as warm.</td><td class="how">Same query text. DuckDB: native tables created from the same frames. PostgreSQL: tables loaded with COPY. SQLite: the same index on <code>l_shipdate</code>.</td></tr>
+      <tr><td class="model">Graph analytics</td><td class="how">openCypher: <code>MATCH (p:Person)-[:KNOWS]-&gt;(:Person) RETURN p.id, count(*) AS d ORDER BY d DESC LIMIT 10</code>; <code>MATCH (a)-[:KNOWS]-&gt;(b) WHERE a.city = b.city RETURN a.city, count(*)</code>; <code>MATCH (p)-[:KNOWS]-&gt;(f) RETURN p.city, avg(f.age), count(*)</code>. Run once with <code>CREATE GRAPH ANALYTICAL VIEW ... VERTEX TYPES (Person) EDGE TYPES (KNOWS) ... UPDATE MODE OFF</code> built beforehand (its build time is on the page) and once without it. 100 runs per rep.</td><td class="how">The identical Cypher on Neo4j and LadybugDB, no view or projection on either.</td></tr>
+      <tr><td class="model">Time-series 12h aggregate</td><td class="how"><code>SELECT ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point WHERE ts &gt;= a AND ts &lt; b GROUP BY h ORDER BY h</code> on the native TIMESERIES type. 100 runs per rep. (Until 2026-09-12 the embedded arm wrote <code>BETWEEN a AND b-1</code>, which the engine answers about 3x slower; the row is re-run with the half-open form.)</td><td class="how">QuestDB: the same window with <code>SAMPLE BY 1h</code>. DuckDB and SQLite: an hourly bucket over the same rows.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note"><strong>Our reading.</strong> One thread walks the records, materialises each document, and evaluates the expression per record: no column pruning, no batching, no parallel scan. PostgreSQL is also a row store on page-at-a-time storage and is 7.2x to 31x faster on the same two scans, so this is the executor, not the page layout.</p>
+
+  <h2>Weakness 2: bulk ingest <span class="tag behind">behind</span></h2>
+  <div class="tablewrap"><table>
+    <colgroup><col class="c-model"><col class="c-op"><col class="c-size"><col class="c-a"><col class="c-b"><col class="c-r"></colgroup>
+    <thead><tr><th>Model</th><th>Operation</th><th>Size</th><th class="num">ArcadeDB</th><th class="num">Best other engine</th><th>Ratio</th></tr></thead>
+    <tbody>
+      <tr class="behind"><td class="model">Documents</td><td>Load the line items, batched inserts, embedded</td><td>6.0M line items</td><td class="num">41k documents/s</td><td class="num">DuckDB 2.46M documents/s, PostgreSQL 364k documents/s</td><td class="ratio">60x behind</td></tr>
+      <tr class="behind"><td class="model">Time series</td><td>The same points stored as ordinary documents</td><td>2.59M points</td><td class="num">41k points/s</td><td class="num">DuckDB 1.88M points/s</td><td class="ratio">46x behind</td></tr>
+      <tr class="even"><td class="model">Time series</td><td>The same points through the native time-series type</td><td>2.59M points</td><td class="num">1.86M points/s</td><td class="num">DuckDB 1.88M points/s</td><td class="ratio">parity</td></tr>
+      <tr class="behind"><td class="model">Dense vectors</td><td>Ingest and build the index, 96 dimensions, fp32</td><td>9.99M vectors</td><td class="num">2,321 s</td><td class="num">LanceDB (int8) 226 s, Qdrant (int8) 461 s</td><td class="ratio">10x behind</td></tr>
+    </tbody>
+  </table></div>
+  <h3>How it was run</h3>
+  <div class="tablewrap"><table class="how">
+    <colgroup><col class="c-row"><col class="c-arc"><col class="c-cmp"></colgroup>
+    <thead><tr><th>Row</th><th>ArcadeDB</th><th>Comparators</th></tr></thead>
+    <tbody>
+      <tr><td class="model">Document ingest</td><td class="how">Batches of <code>INSERT INTO LineItem (...) VALUES (...)</code> statements joined into one <code>sqlscript</code> command, each batch inside <code>with db.transaction():</code>. Indexes exist before the load.</td><td class="how">PostgreSQL: <code>COPY FROM STDIN</code>, indexes created after. DuckDB: frames of rows, <code>INSERT INTO ... SELECT * FROM df</code>, indexes after. SQLite: executemany in one transaction per batch.</td></tr>
+      <tr><td class="model">Time series as documents</td><td class="how"><code>INSERT INTO Point SET host=:h, ts=:t, uu=:a, us=:b, ui=:c</code> per point through <code>db.command</code>, committed in batches, UNIQUE index on <code>(host, ts)</code>.</td><td class="how">Same engines and paths as the native-type row above.</td></tr>
+      <tr><td class="model">Dense index build</td><td class="how"><code>INSERT INTO Article SET vid = :v, embedding = :e</code> in 10,000-row transactions, then <code>CREATE INDEX ON Article (embedding) LSM_VECTOR METADATA {dimensions: 96, similarity: EUCLIDEAN, maxConnections: 32, beamWidth: 100, quantization: ..., storeVectorsInGraph: false, addHierarchy: true}</code>; ingest and build are one timer on every engine. maxConnections 32 is the per-layer bound equal to the comparators' M = 16.</td><td class="how">Qdrant: upsert in batches, HNSW m = 16, ef_construct = 100. LanceDB: IVF_HNSW_SQ (int8). Chroma, DuckDB VSS, Milvus: HNSW at the same M and ef_construction.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note"><strong>Our reading.</strong> Single writes are fast (the graph edge row above), so this is throughput under a stream, not per-record cost. The native time-series type shows the engine can fill pages in batches, 45x the rate of the document path on the same points; the document path does not. A bulk document loader that batched page fills the same way would close most of the gap.</p>
+
+  <h2>Weakness 3: the server wire on ingest <span class="tag behind">costs on every lane</span></h2>
+  <div class="tablewrap"><table class="wire">
+    <colgroup><col class="c-model"><col class="c-op"><col class="c-a"><col class="c-b"><col class="c-r"></colgroup>
+    <thead><tr><th>Model</th><th>Operation</th><th class="num">Embedded</th><th class="num">Served</th><th>Cost</th></tr></thead>
+    <tbody>
+      <tr class="behind"><td class="model">Sparse vectors</td><td>Ingest and build the index over 8.84M documents</td><td class="num">920 s</td><td class="num">2,311 s</td><td class="ratio">2.5x</td></tr>
+      <tr class="behind"><td class="model">Time series</td><td>Native-type ingest</td><td class="num">1.86M points/s</td><td class="num">582k points/s</td><td class="ratio">3.2x</td></tr>
+      <tr class="behind"><td class="model">Documents</td><td>Batched inserts of the line items</td><td class="num">41k documents/s</td><td class="num">32k documents/s</td><td class="ratio">1.3x</td></tr>
+    </tbody>
+  </table></div>
+  <h3>How it was run</h3>
+  <div class="tablewrap"><table class="how">
+    <colgroup><col class="c-row"><col class="c-arc"><col class="c-cmp"></colgroup>
+    <thead><tr><th>Row</th><th>ArcadeDB</th><th>Comparators</th></tr></thead>
+    <tbody>
+      <tr><td class="model">Served ingest, every lane</td><td class="how"><code>POST /api/v1/command/{db}</code> with <code>language: sqlscript</code> and a batch of INSERT or CREATE VERTEX statements as text, values spelled out (a sparse document is about 254 numbers as text). The native time-series server arm is the exception: <code>POST /api/v1/ts/{db}/write?precision=s</code> with InfluxDB line protocol in chunks.</td><td class="how">Embedded arm: the same statements through the in-process Python package, or the Java API where the lane uses it, with no serialisation.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note"><strong>Our reading.</strong> Every value goes in as text inside an INSERT statement and is parsed back. A binary bulk endpoint would fix this without touching the engine.</p>
+
+  <h2>Vectors, the part already in progress <span class="tag behind">1 ahead, 3 behind</span></h2>
+  <div class="tablewrap"><table>
+    <colgroup><col class="c-model"><col class="c-op"><col class="c-size"><col class="c-a"><col class="c-b"><col class="c-r"></colgroup>
+    <thead><tr><th>Model</th><th>Operation</th><th>Size</th><th class="num">ArcadeDB</th><th class="num">Best at equal recall</th><th>Ratio</th></tr></thead>
+    <tbody>
+      <tr class="behind"><td class="model">Dense</td><td>Top-10 nearest neighbours, first pass after the build</td><td>9.99M</td><td class="num">8.74 ms</td><td class="num">Qdrant (int8) 1.13 ms</td><td class="ratio">7.7x behind</td></tr>
+      <tr class="ahead"><td class="model">Dense</td><td>The same query set again, index resident</td><td>9.99M</td><td class="num">1.04 ms</td><td class="num">Qdrant (int8) 1.13 ms</td><td class="ratio">1.1x ahead</td></tr>
+      <tr class="behind"><td class="model">Dense</td><td>Top-10, first pass</td><td>1M</td><td class="num">1.95 ms</td><td class="num">Qdrant (fp32) 1.08 ms</td><td class="ratio">1.8x behind, 1.4x ahead warm</td></tr>
+      <tr class="behind"><td class="model">Sparse</td><td>Top-10 over 30k-dimensional weighted-term vectors, first pass</td><td>8.84M</td><td class="num">86.1 ms</td><td class="num">Qdrant 15.8 ms</td><td class="ratio">5.4x behind, 5.2x behind warm</td></tr>
+    </tbody>
+  </table></div>
+  <h3>How it was run</h3>
+  <div class="tablewrap"><table class="how">
+    <colgroup><col class="c-row"><col class="c-arc"><col class="c-cmp"></colgroup>
+    <thead><tr><th>Row</th><th>ArcadeDB</th><th>Comparators</th></tr></thead>
+    <tbody>
+      <tr><td class="model">Dense search</td><td class="how"><code>SELECT vid FROM (SELECT expand(vectorNeighbors('Article[embedding]', ?, 10, 100))) ORDER BY distance</code>: top 10, ef_search 100, query vector passed as a Java float array. 1,000 queries per pass; one build then five passes, pass 1 cold, passes 2 to 5 warm. Recall@10 against the published exact neighbours.</td><td class="how">Qdrant: HNSW search with hnsw_ef = 100, top 10, gRPC. Chroma, LanceDB, DuckDB VSS, Milvus, sqlite-vec: their own top-10 call at the same ef where the engine has one; sqlite-vec is an exact scan.</td></tr>
+      <tr><td class="model">Sparse search</td><td class="how"><code>CREATE INDEX ON Doc (tokens, weights) LSM_SPARSE_VECTOR METADATA {...}</code> over <code>ARRAY_OF_INTEGERS</code> and <code>ARRAY_OF_FLOATS</code> properties, int8 posting weights by default (fp32 is the ablation row), <code>COMPACT INDEX</code> before timing. Query: <code>SELECT expand(vector.sparseNeighbors('Doc[tokens,weights]', ?, ?, 10))</code> with the query's token ids and weights as Java arrays.</td><td class="how">Qdrant: sparse vectors, upsert then search, top 10. Milvus: <code>SPARSE_INVERTED_INDEX</code>. Elasticsearch: <code>sparse_vector</code> field, refresh and force-merge to one segment before timing, index-time pruning disabled.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note"><strong>Our reading.</strong> The dense gap is disk paging on the first pass, not the search itself: ArcadeDB pages the index in from disk while the others hold it in memory from the build. The sparse gap is real and stays after warm-up.</p>
+
+  <footer>Each of the two core items reduces to a Java repro against the engine API: a single-threaded group-by over a few million records for the scan path, and a timed loop of document inserts for the bulk path. Full tables, per-engine versions, and image digests are on the project page; this memo is generated from the same data by <code>benchmarks/experiments/memo_bottlenecks.py</code>.</footer>
+</main>
