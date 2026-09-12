@@ -32,7 +32,7 @@ publishes is what the engine reports at connect time, never the tag.
 
 | Engine | Pin | Replaced by | Rows still on the page |
 |---|---|---|---|
-| Neo4j 5-community (5.26.28) | `neo4j@sha256:4bae36af…` | 2026.07.1 on every arm (qDL graph re-run, qDK vector index, qDN cross-model) | graph and composed cross-model rows until qDL and qDN land; each row carries the digest it ran on (BUGS F32) |
+| Neo4j 5-community (5.26.28) | `neo4j@sha256:4bae36af…` | 2026.07.1 on every arm (qDK vector index and qDL graph landed 2026-09-12; qDN cross-model and the composed Qdrant + Neo4j arm in qDT still to run) | the composed cross-model row until qDT lands; each row carries the digest it ran on (BUGS F32) |
 | SurrealDB in memory (`mem://`) | `surrealdb==2.0.0` | the SDK's SurrealKV disk store (qDN) | the cross-model row until qDN lands |
 
 ## Mode: server or embedded (Python)
