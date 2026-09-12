@@ -947,6 +947,11 @@ def f4_one_vs_n(rows):
             {"surrealdb_e2": (rate("e2", "e2", "hybrid", "surrealdb_e2", ("n_products", "n_edges")), None, None)},
             note="first pass only"),
     ]
+    # A row whose comparator's repeat pass is below the lane's resolution
+    # (SQLite's newest reading until qDR lands) says so instead of dividing.
+    for e in entries:
+        if e["warm"] is None and not e["note"]:
+            e["note"] = "comparator below resolution"
     # TS first-run fields exist only from qDH on; until then the first panel
     # shows the repeat number for those two rows and says so.
     for e in entries:
@@ -987,11 +992,6 @@ def f4_one_vs_n(rows):
         ax.set_title(title, fontsize=7, pad=3)
         ax.tick_params(axis="x", labelsize=6)
     # thin separators between the model groups, in the paper's order
-    # A row whose comparator's repeat pass is below the lane's resolution
-    # (SQLite's newest reading until qDR lands) says so instead of dividing.
-    for e in entries:
-        if e["warm"] is None and not e["note"]:
-            e["note"] = "comparator below resolution"
     for k in (4, 10, 13, 17, 20):   # section ends: documents, graph, dense, sparse, time series
         for ax in (axc, axw):
             ax.axhline(n - k - 0.5, color="0.85", lw=0.5, zorder=0)
