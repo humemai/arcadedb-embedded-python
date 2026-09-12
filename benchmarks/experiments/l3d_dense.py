@@ -149,8 +149,14 @@ def degree_stamp(backend):
     One function, called from both, is the only version of this that stays
     true.
     """
+    # The September arms (2026-09-12, BUGS F36): Neo4j (vector.hnsw.m),
+    # pgvector (m), SurrealDB (M) all build HNSW at COMPARATOR_M; missing
+    # from this set they were stamped exact_scan_no_ann, a false provenance
+    # claim that F7 then refused, correctly.
     hnswlib_style = {"chroma_dense", "lancedb_dense", "qdrant_dense",
-                     "milvus_dense", "duckdb_vss_dense"}
+                     "milvus_dense", "duckdb_vss_dense",
+                     "neo4j_dense", "pgvector_dense",
+                     "surrealdb_dense", "surrealdb_dense_server"}
     # A PRECISION ARM IS THE SAME INDEX AT A DIFFERENT PRECISION, so it keeps
     # its parent's degree and unit. Without this strip, qdrant_dense_int8 and
     # milvus_dense_int8 missed the set and were stamped "exact_scan_no_ann" --

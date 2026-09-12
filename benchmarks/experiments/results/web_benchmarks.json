@@ -34,6 +34,12 @@
     "milvus_sparse": [
       "milvus:pkg/v2.6.13"
     ],
+    "mongodb": [
+      "(no version recorded)"
+    ],
+    "neo4j_dense": [
+      "neo4j:2026.07.1"
+    ],
     "neo4j_graph": [
       "neo4j:5.26.28"
     ],
@@ -112,6 +118,8 @@
     "container:0bab68860ad2 (host unknown)",
     "container:0bb4ca782e34 (host unknown)",
     "container:0cdebe976601 (host unknown)",
+    "container:0d5b96d27d83 (host unknown)",
+    "container:0d9e21825e60 (host unknown)",
     "container:0f4673a1dc82 (host unknown)",
     "container:0ff5a6f02422 (host unknown)",
     "container:1014a3225250 (host unknown)",
@@ -133,6 +141,7 @@
     "container:198402ae144e (host unknown)",
     "container:19d00af4a2de (host unknown)",
     "container:1abb4fe15d50 (host unknown)",
+    "container:1bd248257e69 (host unknown)",
     "container:1bdf52ac9a13 (host unknown)",
     "container:1c760263f74e (host unknown)",
     "container:1cb88b5f0687 (host unknown)",
@@ -210,6 +219,7 @@
     "container:4b8a1ed70179 (host unknown)",
     "container:4cd42e79f492 (host unknown)",
     "container:4ceff83630d9 (host unknown)",
+    "container:4d271c536130 (host unknown)",
     "container:4d31ed15af17 (host unknown)",
     "container:4eaeeb3f8a9c (host unknown)",
     "container:4f6c5ba2f382 (host unknown)",
@@ -238,6 +248,7 @@
     "container:5e906eb64b47 (host unknown)",
     "container:5eb42d466fd2 (host unknown)",
     "container:5fb8048b7b2f (host unknown)",
+    "container:60e01057275a (host unknown)",
     "container:62c4cc638f62 (host unknown)",
     "container:63e3e1a15f4c (host unknown)",
     "container:63ec69b9e5db (host unknown)",
@@ -247,6 +258,7 @@
     "container:6508e0c00dd3 (host unknown)",
     "container:668ea8fdac4f (host unknown)",
     "container:673e277df47d (host unknown)",
+    "container:675df2d4e59b (host unknown)",
     "container:67603bb27186 (host unknown)",
     "container:677f85a846d9 (host unknown)",
     "container:6803ddfce4ec (host unknown)",
@@ -262,6 +274,7 @@
     "container:6df539b1b2f1 (host unknown)",
     "container:6e5c33eefc14 (host unknown)",
     "container:6e9b51476402 (host unknown)",
+    "container:6ea107d11fbb (host unknown)",
     "container:70464994fb15 (host unknown)",
     "container:7093719d106f (host unknown)",
     "container:71d3c58c7880 (host unknown)",
@@ -285,6 +298,8 @@
     "container:7e7ae744896c (host unknown)",
     "container:7e915b3d4241 (host unknown)",
     "container:7f5ec55fc56d (host unknown)",
+    "container:7ffad5fd113b (host unknown)",
+    "container:8080d0c22142 (host unknown)",
     "container:80aacaeec322 (host unknown)",
     "container:80d8a46d42da (host unknown)",
     "container:81fd3427ba4c (host unknown)",
@@ -349,6 +364,7 @@
     "container:ab4af7ab2bf6 (host unknown)",
     "container:ab63b2b5a998 (host unknown)",
     "container:ace5216c38b5 (host unknown)",
+    "container:ae5376c17460 (host unknown)",
     "container:ae82b7da5949 (host unknown)",
     "container:aefa8e29018e (host unknown)",
     "container:afc5ef3b5655 (host unknown)",
@@ -356,6 +372,7 @@
     "container:b0491db13ec2 (host unknown)",
     "container:b0aadec24409 (host unknown)",
     "container:b17fb9ccc77b (host unknown)",
+    "container:b1d6190c72b5 (host unknown)",
     "container:b2b5ef96301c (host unknown)",
     "container:b2cef56934fe (host unknown)",
     "container:b32f50b9a5a9 (host unknown)",
@@ -367,6 +384,7 @@
     "container:b52209f56c26 (host unknown)",
     "container:b54a4d212e73 (host unknown)",
     "container:b56fc1153adb (host unknown)",
+    "container:b57ffc29cd52 (host unknown)",
     "container:b59cec414272 (host unknown)",
     "container:b5e2dfab48fe (host unknown)",
     "container:b7978b92403c (host unknown)",
@@ -399,6 +417,7 @@
     "container:c45476600d0e (host unknown)",
     "container:c4d814e24a9e (host unknown)",
     "container:c614c27f1711 (host unknown)",
+    "container:c650ecda550a (host unknown)",
     "container:c6dd3fd12b35 (host unknown)",
     "container:c6fc870eb7eb (host unknown)",
     "container:c81926749c63 (host unknown)",
@@ -445,6 +464,7 @@
     "container:e4953966cde4 (host unknown)",
     "container:e4a1fa8a7fed (host unknown)",
     "container:e522f00743e6 (host unknown)",
+    "container:e6dad8ea5d52 (host unknown)",
     "container:e918d2c0e031 (host unknown)",
     "container:e94a0a1b0781 (host unknown)",
     "container:e9731325da9f (host unknown)",
@@ -461,6 +481,7 @@
     "container:f0057886a455 (host unknown)",
     "container:f06b6a355d7f (host unknown)",
     "container:f1b05e64fca8 (host unknown)",
+    "container:f1dc4891f5a1 (host unknown)",
     "container:f1e870385350 (host unknown)",
     "container:f531e124ab98 (host unknown)",
     "container:f5a0c9ec6ce5 (host unknown)",
@@ -2609,6 +2630,75 @@
           }
         },
         {
+          "backend": "Neo4j (fp32)",
+          "is_arcadedb": false,
+          "precision": "fp32",
+          "scale": "small",
+          "scale_label": "1M vectors",
+          "workload": "search",
+          "n_docs": "1,000,000",
+          "deployment": "server",
+          "image": null,
+          "version_name": "neo4j 2026.07.1",
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 11.754,
+              "min": 11.688,
+              "max": 11.883,
+              "n": 5
+            },
+            "cold p99 ms": {
+              "median": 16.319,
+              "min": 16.052,
+              "max": 18.219,
+              "n": 5
+            },
+            "warm p50 ms": {
+              "median": 10.7265,
+              "min": 10.274,
+              "max": 11.227,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 12.4165,
+              "min": 11.935,
+              "max": 12.918,
+              "n": 20
+            },
+            "recall@10": {
+              "median": 0.9934,
+              "min": 0.9933,
+              "max": 0.9939,
+              "n": 20
+            },
+            "ingest+index total s": {
+              "median": 174.53,
+              "min": 173.82,
+              "max": 175.8,
+              "n": 5
+            },
+            "ingest+index vectors/s": {
+              "median": 5729.7,
+              "min": 5688.3,
+              "max": 5753.1,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 10.03,
+              "min": 10.0253,
+              "max": 10.0499,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 3.1017,
+              "min": 3.1016,
+              "max": 3.1017,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "Qdrant (fp32)",
           "is_arcadedb": false,
           "precision": "fp32",
@@ -3363,6 +3453,75 @@
               "median": 29.4868,
               "min": 29.483,
               "max": 29.5605,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Neo4j (fp32)",
+          "is_arcadedb": false,
+          "precision": "fp32",
+          "scale": "deep10m",
+          "scale_label": "9.99M vectors",
+          "workload": "search",
+          "n_docs": "9,990,000",
+          "deployment": "server",
+          "image": null,
+          "version_name": "neo4j 2026.07.1",
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 85.025,
+              "min": 84.077,
+              "max": 85.601,
+              "n": 5
+            },
+            "cold p99 ms": {
+              "median": 147.78,
+              "min": 135.132,
+              "max": 159.782,
+              "n": 5
+            },
+            "warm p50 ms": {
+              "median": 83.542,
+              "min": 82.328,
+              "max": 84.63,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 142.0705,
+              "min": 124.603,
+              "max": 159.27,
+              "n": 20
+            },
+            "recall@10": {
+              "median": 0.9688,
+              "min": 0.9688,
+              "max": 0.9688,
+              "n": 20
+            },
+            "ingest+index total s": {
+              "median": 1807.54,
+              "min": 1802.53,
+              "max": 1810.61,
+              "n": 5
+            },
+            "ingest+index vectors/s": {
+              "median": 5526.8,
+              "min": 5517.5,
+              "max": 5542.2,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 37.7006,
+              "min": 37.6916,
+              "max": 37.7192,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 16.2335,
+              "min": 16.2335,
+              "max": 16.2335,
               "n": 5
             }
           }
@@ -6086,6 +6245,67 @@
               "median": 0.0113,
               "min": 0.0113,
               "max": 0.0113,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "scale": "2.59M points",
+          "workload": "TSBS cpu-only",
+          "n_docs": "2592000",
+          "deployment": "server",
+          "image": null,
+          "version_name": "mongodb 8.2.12",
+          "host": "container:675df2d4e59b (host unknown)",
+          "metrics": {
+            "ingest points/s": {
+              "median": 187646.6,
+              "min": 184474.8,
+              "max": 190261.3,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 13.81,
+              "min": 13.62,
+              "max": 14.05,
+              "n": 5
+            },
+            "newest reading p50 ms": {
+              "median": 0.3951,
+              "min": 0.3391,
+              "max": 0.5219,
+              "n": 5
+            },
+            "newest reading p99 ms": {
+              "median": 0.8338,
+              "min": 0.668,
+              "max": 1.0969,
+              "n": 5
+            },
+            "12h aggregate p50 ms": {
+              "median": 11.0019,
+              "min": 10.993,
+              "max": 11.0419,
+              "n": 5
+            },
+            "12h aggregate p99 ms": {
+              "median": 11.3375,
+              "min": 11.2722,
+              "max": 14.3231,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.965,
+              "min": 0.9618,
+              "max": 0.9671,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0013,
+              "min": 0.0013,
+              "max": 0.0013,
               "n": 5
             }
           }

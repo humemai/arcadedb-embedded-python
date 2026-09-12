@@ -684,8 +684,12 @@ def _dense_overlay_entries(scale="deep10m"):
             if not passes:
                 continue
             _ev = passes[0].get("engine_version")
-            if str(_ev or "").startswith("unknown") and str(passes[0].get("lib_version") or "").startswith("server:"):
-                _ev = passes[0]["lib_version"]      # the served arm's engine, learned on connect()
+            # engine_version on an overlay pass names the harness's ArcadeDB
+            # wheel ("unknown (PackageNotFoundError)" in the client image);
+            # a comparator's own version is lib_version ("neo4j:2026.07.1"),
+            # and our served arm's is lib_version too ("server:26.9.1...").
+            if str(_ev or "").startswith("unknown") and passes[0].get("lib_version"):
+                _ev = passes[0]["lib_version"]
             ver.add(_ev)
             build.append({"build_s": passes[0].get("build_s")})
             peak.append({"peak_anon_mib_sum": passes[0].get("peak_anon_mib_sum")})
