@@ -120,6 +120,12 @@ def check_paths_and_python(name, body):
         s = line.strip()
         if not s or s.startswith("#"):
             continue
+        # build_images.sh refuses a pre-release wheel unless BENCH_ALLOW_DEV=1,
+        # which every commit-pinned campaign needs; qDJ aborted on its first
+        # line without it (2026-09-12) and the next script in the chain
+        # started at once because its wait target had vanished.
+        if "build_images.sh" in line and "BENCH_ALLOW_DEV=1" not in line:
+            problems.append((i, "build_images.sh without BENCH_ALLOW_DEV=1 refuses the commit-pinned wheel"))
         in_cell = any(r in line for r in CELL_RUNNERS)
         if not in_cell:
             for cp in CONTAINER_PATHS:
