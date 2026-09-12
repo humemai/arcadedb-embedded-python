@@ -261,6 +261,11 @@ class SurrealTPC:
         self.db.query("REMOVE TABLE IF EXISTS lineitem; REMOVE TABLE IF EXISTS part; REMOVE TABLE IF EXISTS orders_new")
 
     def build(self, li, part):
+        # Index BEFORE the load (2026-09-13): on the SDK's SurrealKV store a
+        # DEFINE INDEX over the 6.0M loaded rows is one transaction record and
+        # failed with "Record is too large to fit in a segment" on mini (qDO);
+        # defined first, each 5,000-row batch maintains it in its own record.
+        self.db.query("DEFINE INDEX li_shipdate ON lineitem FIELDS l_shipdate")
         buf = []
         for t in li[LI_COLS].itertuples(index=False, name=None):
             buf.append(dict(zip(LI_COLS, t)))
@@ -273,7 +278,6 @@ class SurrealTPC:
               for k, v in part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)]
         for s0 in range(0, len(pr), BATCH):
             self.db.insert("part", pr[s0:s0 + BATCH])
-        self.db.query("DEFINE INDEX li_shipdate ON lineitem FIELDS l_shipdate")
 
     Q1 = ("SELECT l_returnflag, l_linestatus, math::sum(l_quantity) AS sum_qty, math::sum(l_extendedprice) AS sum_base, "
           "math::sum(l_extendedprice * (1 - l_discount)) AS sum_disc, math::mean(l_quantity) AS avg_qty, count() AS n "

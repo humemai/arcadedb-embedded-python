@@ -283,6 +283,11 @@ def _engine_version(label: str, raw: str | None,
     if image:
         repo = image.split("@")[0].split(":")[0]
         engine = repo.rsplit("/", 1)[-1].lower()
+        # An image WE built (dbbench:pg-age) names no engine; the row's own
+        # string does ("PostgreSQL 17.11 + pgvector:0.8.6 + age:1.7.0"), so
+        # that string is the identity, spelled as the engines spell it.
+        if engine == "dbbench" and raw:
+            return re.sub(r"\s*\+\s*", " + ", str(raw).replace(":", " ")).strip()
     else:
         engine = label.split(" (")[0].strip().lower()
     # A composed row stamps every part ("qdrant-local:1.19.0+neo4j:5.26.28");
