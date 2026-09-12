@@ -833,7 +833,7 @@ def f4_one_vs_n(rows):
             comps[b] = (med("l3s", tier, "search", b, "query_p50_ms"),
                         _sparse_overlay_pass(tier, tok, warm=True) if warm_tier else None,
                         recall("l3s", tier, "search", b))
-        return row(label, False, (ours_c, ours_rec), ours_w, comps, note="" if warm_tier else "one pass")
+        return row(label, False, (ours_c, ours_rec), ours_w, comps, note="" if warm_tier else "first pass only")
 
     entries = [
         # documents
@@ -849,7 +849,7 @@ def f4_one_vs_n(rows):
             comps_rows("l1tpc", "tpch1", "olap", DOC, "cold_q6_ms", "warm_q6_ms")),
         row("TPC-C new-order p50", False,
             (med("l1tpc", "tpch1", "oltp", "arcadedb_embedded", "neworder_p50_ms"), None), None,
-            comps_rows("l1tpc", "tpch1", "oltp", DOC, "neworder_p50_ms", None), note="one pass"),
+            comps_rows("l1tpc", "tpch1", "oltp", DOC, "neworder_p50_ms", None), note="first pass only"),
         # graph, SF10
         row("Graph point p50", False,
             (med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "point_p50_ms"), None),
@@ -865,7 +865,7 @@ def f4_one_vs_n(rows):
             comps_rows("l2", "sf10", "oltp", GRAPH, "hop2_p50_ms", "warm_hop2_p50_ms")),
         row("Graph write p50", False,
             (med("l2", "sf10", "oltp", "arcadedb_graph_embedded", "write_p50_ms"), None), None,
-            comps_rows("l2", "sf10", "oltp", GRAPH, "write_p50_ms", None), note="one pass"),
+            comps_rows("l2", "sf10", "oltp", GRAPH, "write_p50_ms", None), note="first pass only"),
         # graph analytics with the view on (the engine's default arm)
         row("Graph top-degree p50", False,
             (med("l2", "sf10", "olap", "arcadedb_graph_embedded", "cold_top_degree_ms", gav_on=True), None),
@@ -881,7 +881,7 @@ def f4_one_vs_n(rows):
         # time series
         row("TS ingest points/s", True,
             (tsmed("arcadedb_ts_native", "ingest_pts_per_s"), None), None,
-            {b: (tsmed(b, "ingest_pts_per_s"), None, None) for b in TSC}, note="one pass"),
+            {b: (tsmed(b, "ingest_pts_per_s"), None, None) for b in TSC}, note="first pass only"),
         row("TS newest reading p50", False,
             (tsmed("arcadedb_ts_native", "q_last_cold_ms") or tsmed("arcadedb_ts_native", "q_last_ms"), None),
             tsmed("arcadedb_ts_native", "q_last_ms"),
@@ -895,7 +895,7 @@ def f4_one_vs_n(rows):
         row("Cross-model txn p50", False,
             (med("e2", "e2", "hybrid", "arcadedb_e2", "hybrid_p50_ms"), None), None,
             {"surrealdb_e2": (med("e2", "e2", "hybrid", "surrealdb_e2", "hybrid_p50_ms"), None, None)},
-            note="one pass"),
+            note="first pass only"),
     ]
     # TS first-run fields exist only from qDH on; until then the first panel
     # shows the repeat number for those two rows and says so.
