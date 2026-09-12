@@ -5670,7 +5670,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "dbbench:pg-age",
-          "version_name": "dbbench 17.11",
+          "version_name": "17.11",
           "host": null,
           "metrics": {
             "trials": {
@@ -5967,7 +5967,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "dbbench:pg-age",
-          "version_name": "dbbench 17.11",
+          "version_name": "17.11",
           "host": null,
           "metrics": {
             "p50 ms": {
