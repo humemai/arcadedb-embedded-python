@@ -182,6 +182,9 @@ tracked artifact, and its conditions.
 
 ### Vector
 
+
+> **Column lists in the plan tables of this section are the August plan, not the page.** The page's tables, rows, and columns are the generated block "Published tables" at the end of this file, rewritten by refresh_web_page.py on every publish (DECISIONS #73 dropped CPU time, crashes raised, the two derived deployment costs, and the scratch write on 2026-09-12).
+
 | id | title | rows | columns |
 |---|---|---|---|
 | `l3s` | Sparse vector search | ArcadeDB emb int8 / emb fp32 / srv int8 / srv fp32, Elasticsearch, Milvus, Qdrant (pgvector queued, qDK) | cold p50, cold p99, warm p50, warm p99, gain, recall@10, ingest+index vectors/s, ingest+index total s, peak memory GiB, disk GiB |
