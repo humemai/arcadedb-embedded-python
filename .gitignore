@@ -626,3 +626,4 @@ benchmarks/python-bindings/jpype_overhead/dbs_*/
 benchmarks/python-bindings/jpype_overhead/data_*/
 benchmarks/python-bindings/jpype_overhead/results/*.log
 benchmarks/python-bindings/jpype_overhead/*.class
+benchmarks/experiments/results/generated/figures/*.pdf
