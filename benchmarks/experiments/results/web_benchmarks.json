@@ -41,8 +41,14 @@
     "neo4j_dense": [
       "neo4j:2026.07.1"
     ],
+    "neo4j_e2": [
+      "neo4j:2026.07.1"
+    ],
     "neo4j_graph": [
       "neo4j:2026.07.1"
+    ],
+    "pg_age_e2": [
+      "PostgreSQL 17.11 + pgvector:0.8.6 + age:1.7.0"
     ],
     "postgres": [
       "17.10 (Debian 17.10-1.pgdg13+1)",
@@ -75,7 +81,10 @@
       "0.1.9"
     ],
     "surrealdb_e2": [
-      "surrealdb-py:2.0.0"
+      "surrealdb-embedded:2.0.0"
+    ],
+    "surrealdb_e2_server": [
+      "surrealdb-server:3.2.4+20260803.93ab219"
     ],
     "timescaledb": [
       "(no version recorded)"
@@ -5625,6 +5634,60 @@
           }
         },
         {
+          "backend": "Neo4j (vector index)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",
+          "version_name": "neo4j 2026.07.1",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "PostgreSQL + pgvector + AGE",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:pg-age",
+          "version_name": "dbbench 17.11",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "Qdrant + Neo4j (no shared transaction)",
           "is_arcadedb": false,
           "precision": null,
@@ -5662,6 +5725,33 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "surrealdb 2.0.0",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb v3.2.4",
           "host": null,
           "metrics": {
             "trials": {
@@ -5817,6 +5907,108 @@
           }
         },
         {
+          "backend": "Neo4j (vector index)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",
+          "version_name": "neo4j 2026.07.1",
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 17.888,
+              "min": 16.505,
+              "max": 19.988,
+              "n": 5
+            },
+            "p99 ms": {
+              "median": 28.0,
+              "min": 19.03,
+              "max": 30.357,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 13745.567,
+              "min": 13577.5967,
+              "max": 13831.1203,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 14.55,
+              "min": 14.46,
+              "max": 14.73,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 6.8221,
+              "min": 6.7891,
+              "max": 6.8397,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0197,
+              "min": 0.0197,
+              "max": 0.0197,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "PostgreSQL + pgvector + AGE",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:pg-age",
+          "version_name": "dbbench 17.11",
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 9.055,
+              "min": 8.321,
+              "max": 11.165,
+              "n": 5
+            },
+            "p99 ms": {
+              "median": 15.185,
+              "min": 11.693,
+              "max": 16.414,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 2319.8933,
+              "min": 2305.4524,
+              "max": 2327.9944,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 86.21,
+              "min": 85.91,
+              "max": 86.75,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.1056,
+              "min": 0.1016,
+              "max": 0.1064,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1604,
+              "min": 0.1603,
+              "max": 0.1604,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "Qdrant + Neo4j (no shared transaction)",
           "is_arcadedb": false,
           "precision": null,
@@ -5881,33 +6073,84 @@
           "host": null,
           "metrics": {
             "p50 ms": {
-              "median": 7.665,
-              "min": 7.52,
-              "max": 7.708,
+              "median": 8.291,
+              "min": 8.204,
+              "max": 8.397,
               "n": 5
             },
             "p99 ms": {
-              "median": 8.523,
-              "min": 8.48,
-              "max": 9.201,
+              "median": 9.626,
+              "min": 9.296,
+              "max": 9.92,
               "n": 5
             },
             "ingest+index vertices+edges/s": {
-              "median": 599.5144,
-              "min": 598.1696,
-              "max": 602.0953,
+              "median": 628.6082,
+              "min": 599.2449,
+              "max": 635.1361,
               "n": 5
             },
             "ingest+index total s": {
-              "median": 333.6,
-              "min": 332.17,
-              "max": 334.35,
+              "median": 318.16,
+              "min": 314.89,
+              "max": 333.75,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 0.8043,
-              "min": 0.7977,
-              "max": 0.8063,
+              "median": 0.823,
+              "min": 0.8127,
+              "max": 0.8272,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb v3.2.4",
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 14.998,
+              "min": 14.394,
+              "max": 16.18,
+              "n": 5
+            },
+            "p99 ms": {
+              "median": 29.33,
+              "min": 20.608,
+              "max": 62.958,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 16778.3557,
+              "min": 16433.6894,
+              "max": 16906.0017,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 11.92,
+              "min": 11.83,
+              "max": 12.17,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.872,
+              "min": 0.8568,
+              "max": 0.9524,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0009,
+              "min": 0.0009,
+              "max": 0.0009,
               "n": 5
             }
           }
