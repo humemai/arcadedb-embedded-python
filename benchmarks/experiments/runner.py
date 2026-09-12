@@ -1748,11 +1748,20 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # not have to re-derive it from the scale.
             if server_cmd:
                 row["server_cmd"] = " ".join(server_cmd)
+            # /dev/shm sized to the cap (2026-09-12, BUGS F34): Docker's default
+            # is 64 MB, and PostgreSQL's parallel HNSW build puts its dynamic
+            # shared memory there, so every pgvector cell died with "could not
+            # resize shared memory segment ... No space left on device" at
+            # maintenance_work_mem=8G. Shared memory is charged to the same
+            # cgroup limit, so the envelope is unchanged; only the mount's
+            # ceiling moves. Applied to every server, recorded on the row.
+            row["server_shm_size"] = str(server_mem)
             server_cid = sh(["docker", "run", "-d", "--network", net_name,
                              "--label", "dbbench=1",
                              "--name", f"srv-{run_id}",
                              "--cpuset-cpus", cpuset,
-                             "--memory", str(server_mem), "--memory-swap", str(server_mem)]
+                             "--memory", str(server_mem), "--memory-swap", str(server_mem),
+                             "--shm-size", str(server_mem)]
                             + [s.format(heap=heap, pagecache=_pagecache_for(server_mem, heap))
                                for s in be.get("server_env", [])]
                             + be.get("server_volumes", [])
