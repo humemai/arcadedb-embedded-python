@@ -2,7 +2,7 @@
 """Every RESULT number a PUBLICATION states must trace to a pinned claim.
 
 The same results feed three consumers -- the humem.ai project page, the arXiv
-paper, and the ICDE 2027 submission -- and each restates numbers in prose that no
+paper, and each restates numbers in prose that no
 generator produces. This file checks all of them through one scanner, because the
 alternative is one checker per consumer that slowly disagree about what "covered"
 means. claims_check.sweep() already does a paper-only version of this for ratios;
