@@ -1956,7 +1956,69 @@ INGEST_NOTES["l2olap"] = INGEST_NOTES["l2"]
 INGEST_NOTES["l3smp"] = INGEST_NOTES["l3s"]
 
 
+# Which lane and workload each page table shows, for the censored-cell note.
+_TABLE_LANE = {
+    "docs_oltp": ("l1tpc", "oltp"), "docs_olap": ("l1tpc", "olap"),
+    "l2": ("l2", "oltp"), "l2olap": ("l2", "olap"),
+    "l3d": ("l3d", None), "l3s": ("l3s", None), "l4": ("l4", None),
+    "e2": ("e2", "hybrid"), "e2atom": ("e2", "atomicity"),
+}
+_CENSORED_CACHE = None
+
+
+def _censored_cells():
+    """Cells at the pin whose every attempt ended in a timeout: (lane, scale,
+    backend, workload) -> budget seconds. A timeout is a censored observation
+    (the engine needed more than the budget every arm got), recorded once by
+    the probe rule and never retried bigger; the table says so instead of
+    leaving a gap a reader cannot tell from an unmeasured cell (2026-09-13)."""
+    global _CENSORED_CACHE
+    if _CENSORED_CACHE is not None:
+        return _CENSORED_CACHE
+    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+    timeouts, clean = {}, set()
+    path = HERE / "results" / "runs.jsonl"
+    if path.exists():
+        with open(path) as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                if str(r.get("ts_utc", "")) < "2026-09-01":
+                    continue
+                key = (r.get("lane"), str(r.get("scale")), r.get("backend"), r.get("workload"))
+                err = str(r.get("error") or "")
+                if not err:
+                    clean.add(key)
+                elif err.startswith("timeout_after_"):
+                    try:
+                        timeouts[key] = int(err.split("_")[-1].rstrip("s"))
+                    except ValueError:
+                        timeouts[key] = None
+    _CENSORED_CACHE = {k: v for k, v in timeouts.items() if k not in clean}
+    return _CENSORED_CACHE
+
+
+def _censored_notes(table_id):
+    lane_wl = _TABLE_LANE.get(table_id)
+    if not lane_wl:
+        return []
+    lane, wl = lane_wl
+    notes = []
+    for (l, scale, backend, w), secs in sorted(_censored_cells().items(), key=str):
+        if l != lane or (wl and w != wl):
+            continue
+        budget = f"{secs / 3600:g} hour" if secs else "its"
+        what = {"oltp": "transaction", "olap": "analytics", "hybrid": "transaction",
+                "atomicity": "atomicity", "search": "search", "ingest": "ingest"}.get(w, w or "the")
+        notes.append(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell exceeded "
+                     f"its {budget} budget, the same budget every engine on this table had, on its first "
+                     f"attempt and was not retried; there is no row.")
+    return notes
+
+
 def _finish_table(table: dict) -> dict:
+    table["conditions"] = list(table.get("conditions") or []) + _censored_notes(table.get("id"))
     entries = table["entries"]
     seen = []
     for e in entries:
