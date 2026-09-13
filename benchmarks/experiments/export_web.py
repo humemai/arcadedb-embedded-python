@@ -2028,8 +2028,43 @@ def _censored_notes(table_id):
     return notes
 
 
+def _counts_note(table_id, entries):
+    """How many operations stand behind one cell, read from the lane's own
+    constants and the rows (user, 2026-09-13: the page said n=5 but not what
+    each repetition ran). Never typed here: the numbers come from the lane
+    modules the runner executes, so a change there changes the sentence."""
+    try:
+        import importlib
+        L = {n: importlib.import_module(n) for n in ("l1_tpc", "graph_common", "l3d_dense", "l4_tsbs", "e2_hybrid")}
+    except Exception:  # noqa: BLE001
+        return []
+    scales = sorted({str(e.get("scale")) for e in entries})
+    if table_id == "docs_oltp":
+        return [f"Each repetition runs {L['l1_tpc'].OLTP_OPS:,} new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate."]
+    if table_id == "docs_olap":
+        return [f"Each repetition runs every query {L['l1_tpc'].OLAP_ITER} times; the p50 and p99 are over those runs."]
+    if table_id == "l2":
+        q = {sc: L["graph_common"].SCALE_OLTP_QUERIES.get(sc) for sc in scales}
+        try:
+            import ldbc_snb
+            q = {sc: (q[sc] or getattr(ldbc_snb, "SCALE_OLTP_QUERIES", {}).get(sc)) for sc in scales}
+        except Exception:  # noqa: BLE001
+            pass
+        parts = ", ".join(f"{scale_label('l2', sc)}: {n:,}" for sc, n in q.items() if n)
+        return [f"Each repetition runs every read against a fresh set of start persons ({parts}) and commits up to 1,000 writes; the p50 and p99 are over those."] if parts else []
+    if table_id == "l2olap":
+        return [f"Each repetition runs every query {L['graph_common'].OLAP_ITERATIONS} times; the p50 and p99 are over those runs."]
+    if table_id in ("l3d", "l3s"):
+        return [f"Each pass answers {L['l3d_dense'].N_QUERIES:,} queries; cold is the first pass after the build and warm pools the four passes after it, over five builds."]
+    if table_id == "l4":
+        return [f"Each repetition runs every query {L['l4_tsbs'].QITER} times; the p50 and p99 are over those runs."]
+    if table_id == "e2":
+        return [f"Each repetition runs the transaction {L['e2_hybrid'].OPS} times; the p50 and p99 are over those."]
+    return []
+
+
 def _finish_table(table: dict) -> dict:
-    table["conditions"] = list(table.get("conditions") or []) + _censored_notes(table.get("id"))
+    table["conditions"] = list(table.get("conditions") or []) + _counts_note(table.get("id"), table.get("entries", [])) + _censored_notes(table.get("id"))
     entries = table["entries"]
     seen = []
     for e in entries:
