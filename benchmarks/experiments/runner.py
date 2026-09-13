@@ -1566,6 +1566,12 @@ def container_disk(cid, settle_s=3.0, tries=3):
         if rc == 0:
             vol_dests = [d for d in so.splitlines() if d.strip()]
 
+    def volume_name(dest):
+        so, _, rc = _docker(["inspect", "-f",
+                             '{{range .Mounts}}{{if eq .Type "volume"}}{{if eq .Destination "'
+                             + dest + '"}}{{.Name}}{{end}}{{end}}{{end}}', cid])
+        return so.strip() if rc == 0 and so.strip() else None
+
     def volumes_mb():
         if not vol_dests:
             return 0.0, None
@@ -1573,7 +1579,19 @@ def container_disk(cid, settle_s=3.0, tries=3):
         for d in vol_dests:
             so, se, rc = _docker(["exec", cid, "du", "-sb", d])
             if rc != 0:
-                return None, f"du {d}: {se[:80]}"
+                # BUGS F38 (2026-09-14): the SurrealDB image is distroless, it
+                # has no du (and no sync), so every served SurrealDB row of the
+                # September campaign recorded no disk: "sample failed: du
+                # /data:" with an empty stderr, and the failure voided the
+                # writable-layer reading too. Size the volume from a helper
+                # container instead of assuming the vendor image has tools.
+                name = volume_name(d)
+                if not name:
+                    return None, f"du {d}: {se[:80]} (no volume name)"
+                so, se, rc = _docker(["run", "--rm", "-v", f"{name}:/v:ro",
+                                      "dbbench:client", "du", "-sb", "/v"])
+                if rc != 0:
+                    return None, f"du {d} via helper: {se[:80]}"
             try:
                 total += int(so.split()[0]) / 1048576.0
             except (ValueError, IndexError):
@@ -1589,7 +1607,9 @@ def container_disk(cid, settle_s=3.0, tries=3):
 
     # Flush before the first reading, or it under-counts whatever is dirty.
     if running == "true":
-        _docker(["exec", cid, "sync"])
+        _, _, _rc = _docker(["exec", cid, "sync"])
+        if _rc != 0:
+            subprocess.run(["sync"], capture_output=True)   # distroless image: flush from the host
 
     prev, note = None, None
     for i in range(tries):
