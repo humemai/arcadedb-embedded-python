@@ -13,7 +13,7 @@ BENCH_ENGINE_COMMIT=<pin> python refresh_web_page.py   # page-only is the only m
 
 That is the whole routine. It regenerates the tables and figures, exports the
 page data, runs the three gates, syncs the JSON and the figures the page
-references, builds the site, and prints the diff for you to read.It does not
+references, builds the site, and prints the diff for you to read. It does not
 commit: reading the diff before publishing is the point, not an afterthought.
 
 Run it after **any** re-measure, after any change to the tables or figures,
