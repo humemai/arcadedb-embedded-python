@@ -14,13 +14,14 @@ FAISS's own guideline for 1M to 10M vectors, "between 4*sqrt(n) and
 16*sqrt(n)" (faiss wiki, "Guidelines to choose an index"), at the low end:
 round(4*sqrt(n)). nProbe is not typed: after the index is built and before
 any timed pass, calibrate_nprobe() binary-searches the smallest nProbe whose
-recall@10 on the first 200 queries reaches the target, and the target is the
+recall@10 on a held-out slice of 200 queries (fixture queries 1000:1200, never
+the timed 1,000; l3d_dense.calibration_slice) reaches the target, and the target is the
 frozen recall@10 of ArcadeDB's own embedded fp32 arm at the same scale
 (results/runs_paper.csv, the tracked file the container sees at /work).
 Matching our own arm is the neutral choice: a higher target slows them and
 flatters us, a lower one speeds them and flatters them. Everything chosen is
 recorded on the row: ivf_nlists, ivf_nprobe, ivf_recall_target,
-ivf_calibration_recall, ivf_calibration_queries.
+ivf_calibration_recall, ivf_calibration_queries, ivf_calibration_slice.
 
 trainingIterations stays at 25, FAISS's k-means default (niter=25); at
 4*sqrt(n) lists the training set is the whole collection, and the

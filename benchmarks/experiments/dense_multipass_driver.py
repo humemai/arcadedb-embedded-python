@@ -29,8 +29,7 @@ import statistics
 import time
 
 from l3d_dense import (BACKENDS, load_dataset, K, canonical_quant_label,
-                        degree_stamp, IVF_FIELDS)
-from arango_common import CALIBRATION_QUERIES as _CAL
+                        degree_stamp, IVF_FIELDS, calibration_slice)
 from bench_common import run_conditions, SelfMemorySampler
 
 # Read with .get, not [], so the module can be IMPORTED without the run
@@ -67,9 +66,11 @@ def main():
     t0 = time.perf_counter()
     b.build(train)
     b.post_build()          # the vendor settle step, same as the campaign
-    # An IVF arm picks its probe count by effect before any pass (same 200
-    # queries and the same target as the lane; arango_common).
-    b.calibrate(test[:_CAL], gt[:_CAL], SCALE)
+    # An IVF arm picks its probe count by effect before any pass, on the same
+    # held-out slice and against the same target as the lane (arango_common).
+    if getattr(b, "calibrates", False):
+        _cq, _cg = calibration_slice(SCALE, train)
+        b.calibrate(_cq, _cg, SCALE)
     build_s = round(time.perf_counter() - t0, 2)
     print(f"BUILD-DONE {build_s}s", flush=True)
 

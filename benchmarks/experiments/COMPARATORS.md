@@ -100,8 +100,10 @@ is calibrated, not typed (FAIRNESS F7 paragraph): nLists = round(4*sqrt(n)) =
 4,000 at 1M, and nProbe is the smallest value whose recall@10 on the first 200
 queries reaches the frozen ArcadeDB embedded fp32 median at the scale (0.9886 at
 1M). The SIFT1M corpus (the same ann-benchmarks file mini's fixture was cut from)
-in a separate laptop fixture dir; one build, then the calibration, then the full
-1,000-query pass at half, at, and at twice the picked value. Not page material.
+in a separate laptop fixture dir; one build, then a calibration on the first 200
+timed queries (the method before the held-out slice, kept for the curve), then
+the full 1,000-query pass at half, at, and at twice the picked value. Not page
+material.
 
 | nProbe | recall@10 (1,000 queries) | p50 ms | p99 ms |
 |---|---|---|---|
@@ -117,12 +119,16 @@ sits 0.006 above the full pass (0.9827), inside the 0.01 tolerance
 `fairness_check.py` allows.
 
 The same corpus through the runner (`BENCH_ALLOW_DEV=1`, sweep tier, one rep,
-`BENCH_DENSE_DATA=/data/dense1m`): rc 0; the row carries `ivf_nlists` 4000,
-`ivf_nprobe` 87, `ivf_recall_target` 0.9886 from
+`BENCH_DENSE_DATA=/data/dense1m`), calibrating on the held-out slice (fixture
+queries 1000:1200, never the timed 1,000): rc 0; the row carries `ivf_nlists`
+4000, `ivf_nprobe` 107, `ivf_recall_target` 0.9886 from
 `runs_paper.csv arcadedb_dense_embedded fp32 small median of 5`,
-`ivf_calibration_recall` 0.989, `ivf_calibration_queries` 200; full-pass
-recall@10 0.9846, p50 13.57 ms, p99 21.9 ms, build 120.9 s (8,273 vectors/s),
-server disk 1,133.5 MB, `degree_family` ivf_flat_no_degree. The picked nProbe
-differs by two between the two builds (85 and 87) because k-means training is
-not deterministic across builds; the calibration absorbs that, which is the
-point of calibrating in the cell.
+`ivf_calibration_recall` 0.989, `ivf_calibration_queries` 200,
+`ivf_calibration_slice` 1000:1200; full-pass recall@10 0.9886 (the target
+itself), p50 18.02 ms, p99 24.4 ms, build 119.5 s, server disk 1,190.7 MB,
+`degree_family` ivf_flat_no_degree. The sweep above calibrated on the first 200
+timed queries and picked 85; the held-out slice picks a higher probe count and
+lands the full pass on the target instead of 0.006 under it, which is the
+difference between tuning on the exam and tuning beside it. Picked values also
+move a little between builds because k-means training is not deterministic;
+calibrating in the cell absorbs that.

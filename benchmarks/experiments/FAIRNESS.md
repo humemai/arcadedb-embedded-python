@@ -165,14 +165,17 @@ counterpart there and a nominal match is impossible. Its operating point is
 chosen to land on the same recall instead (2026-09-13, `arango_common.py`):
 nLists is FAISS's own guideline for 1M to 10M vectors, round(4*sqrt(n)); nProbe
 is calibrated inside the cell, after the index is built and before any timed
-pass, by binary search on the first 200 queries for the smallest value whose
-recall@10 reaches the target; and the target is not typed but read from the
+pass, by binary search on a held-out slice of 200 queries (fixture queries
+1000:1200 with their ground truth; both fixtures ship 10,000 and the lane times
+the first 1,000, so the timed pass never sees them and the cold pass stays
+cold) for the smallest value whose recall@10 reaches the target; and the target
+is not typed but read from the
 frozen CSV: the median recall@10 of ArcadeDB's own embedded fp32 arm at the same
 scale (0.9886 at 1M, 0.9534 at DEEP-10M at the September pin). Matching our own
 arm is the neutral choice: a higher target slows them and flatters us, a lower
 one speeds them and flatters them. The row records `ivf_nlists`, `ivf_nprobe`,
-`ivf_recall_target`, `ivf_recall_target_source`, `ivf_calibration_recall`, and
-`ivf_calibration_queries`; `degree_family` says `ivf_flat_no_degree`, and
+`ivf_recall_target`, `ivf_recall_target_source`, `ivf_calibration_recall`,
+`ivf_calibration_queries`, and `ivf_calibration_slice`; `degree_family` says `ivf_flat_no_degree`, and
 `fairness_check.py` accepts that family only when the target is present and the
 calibration recall is within 0.01 of it. The lane and the multipass driver call
 the same hook, so the two cannot drift. The cross-model lane measures no recall

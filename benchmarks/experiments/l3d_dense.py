@@ -80,7 +80,7 @@ BATCH = 10_000
 # What an IVF arm records instead of a degree (arango_common); the lane and
 # the multipass driver read the same tuple so they cannot disagree.
 IVF_FIELDS = ("ivf_nlists", "ivf_nprobe", "ivf_recall_target", "ivf_recall_target_source",
-              "ivf_calibration_recall", "ivf_calibration_queries")
+              "ivf_calibration_recall", "ivf_calibration_queries", "ivf_calibration_slice")
 
 # The DDL's vocabulary and the results' vocabulary disagreed, and a recorded
 # label could not be fed back in as an input.
@@ -249,6 +249,13 @@ def load_dataset(scale):
     if n == full:  # full corpus: use the shipped exact GT
         gt = np.load(os.path.join(DATA, "sift_neighbors.npy"))[:N_QUERIES, :K]
     else:  # subset scale: exact GT by chunked brute force (L2)
+        gt = _exact_gt(test, train, n)
+    return train, test, gt
+
+
+def _exact_gt(test, train, n):
+    """Exact top-K by chunked brute force (L2) over train[:n]."""
+    if True:
         qn = (test ** 2).sum(1)
         best_d = np.full((len(test), K), np.inf, dtype=np.float64)
         best_i = np.full((len(test), K), -1, dtype=np.int64)
@@ -266,7 +273,29 @@ def load_dataset(scale):
             best_d = md[rows, top][rows, order]
             best_i = mi[rows, top][rows, order]
         gt = best_i
-    return train, test, gt
+    return gt
+
+
+CALIBRATION_SLICE = (N_QUERIES, N_QUERIES + 200)
+
+
+def calibration_slice(scale, train):
+    """Queries [N_QUERIES : N_QUERIES+200] with their ground truth: a held-out
+    slice the timed pass never asks, for an arm that chooses its operating
+    point by effect (ArangoDB's IVF). Both fixtures ship 10,000 queries with
+    ground truth and the lane times only the first 1,000. Loaded only when an
+    arm asks, so nothing else changes."""
+    lo, hi = CALIBRATION_SLICE
+    if scale == "deep10m":
+        q = np.load(os.path.join(DATA, "..", "deep10m", "deep_query.npy"))[lo:hi]
+        q = (q / np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-12)).astype(np.float32)
+        return q, np.load(os.path.join(DATA, "..", "deep10m", "deep_gt.npy"))[lo:hi, :K]
+    q = np.load(os.path.join(DATA, "sift_test.npy"))[lo:hi]
+    n = SCALE_DOCS[scale]
+    full = np.load(os.path.join(DATA, "sift_train.npy"), mmap_mode="r").shape[0]
+    if n == full:
+        return q, np.load(os.path.join(DATA, "sift_neighbors.npy"))[lo:hi, :K]
+    return q, _exact_gt(q, train, n)
 
 
 class Base:
@@ -308,9 +337,12 @@ class Base:
     def search(self, qvec, k):
         raise NotImplementedError
 
+    # An arm that chooses its operating point by effect sets this, and the
+    # lane then loads the held-out calibration slice for it (ArangoDB's IVF).
+    calibrates = False
+
     def calibrate(self, queries, gt, scale):
-        """Choose an operating point matched by effect, before any timed pass.
-        Only an arm with no degree to match (ArangoDB's IVF) does anything."""
+        """Choose an operating point matched by effect, before any timed pass."""
 
     def close(self):
         """Release the engine handle. Overridden where there is one to release.
@@ -1003,6 +1035,7 @@ class ArangoDense(Base):
     server runs with --vector-index true, the feature's opt-in in 3.12."""
     quantization = "fp32"
     name = "arangodb_dense"
+    calibrates = True
 
     def connect(self):
         self.cl, self.db, self.version = arango_common.connect()
@@ -1030,6 +1063,7 @@ class ArangoDense(Base):
         self.ivf_recall_target_source = src
         self.ivf_calibration_recall = round(rec, 4)
         self.ivf_calibration_queries = len(queries)
+        self.ivf_calibration_slice = f"{CALIBRATION_SLICE[0]}:{CALIBRATION_SLICE[1]}"
 
     def close(self):
         arango_common.close(self.cl)
@@ -1485,12 +1519,13 @@ def main():
     build = time.perf_counter() - t0
     out["build_s"] = round(build, 2)
     out["build_docs_per_s"] = round(len(train) / build, 1)
-    # An IVF arm chooses its probe count by effect, on the first 200 queries,
-    # before the warmup and the timed passes (arango_common). Those 200 are
-    # inside the timed set, so the arm's cold pass has seen a fifth of its
-    # questions once; the calibration is the arm's own settle step, and the
-    # row says how many queries it used.
-    b.calibrate(test[:arango_common.CALIBRATION_QUERIES], gt[:arango_common.CALIBRATION_QUERIES], args.scale)
+    # An IVF arm chooses its probe count by effect before the warmup and the
+    # timed passes (arango_common), on a HELD-OUT slice of 200 queries the
+    # timed pass never asks (queries 1000:1200 of the fixture's 10,000), so
+    # the cold pass stays cold; the row says which slice it used.
+    if getattr(b, "calibrates", False):
+        _cq, _cg = calibration_slice(args.scale, train)
+        b.calibrate(_cq, _cg, args.scale)
     # An IVF arm's operating point, beside the degree the HNSW arms record.
     for _k in IVF_FIELDS:
         if getattr(b, _k, None) is not None:
