@@ -58,7 +58,10 @@ class ResultSet:
         """
         Convert all results to list of dictionaries.
 
-        More efficient than iterating manually as it processes in bulk.
+        More efficient than iterating manually as it processes in bulk, but it
+        still builds one Python dict per row. For large results use
+        ``to_columns()``, ``to_dataframe()``, or ``to_arrow()``, which move the
+        data as columns; see the performance guide.
 
         Args:
             convert_types: Convert Java types to Python (default: True)
