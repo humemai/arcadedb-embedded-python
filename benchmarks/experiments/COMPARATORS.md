@@ -120,6 +120,8 @@ sits 0.006 above the full pass (0.9827), inside the 0.01 tolerance
 
 The same corpus through the runner (`BENCH_ALLOW_DEV=1`, sweep tier, one rep,
 `BENCH_DENSE_DATA=/data/dense1m`), calibrating on the held-out slice (fixture
+
+The laptop 1M fixture is `~/bench-data/dense1m` (SIFT1M from the ann-benchmarks HDF5, converted with `gen_dense_npy.py`, 10,000 queries with ground truth; fetched 2026-09-13). The default laptop fixture `~/bench-data/dense` is a 20k cut of the same file; a run that needs the full million exports `BENCH_DENSE_DATA=/data/dense1m`. Neither is page material: mini holds its own copies.
 queries 1000:1200, never the timed 1,000): rc 0; the row carries `ivf_nlists`
 4000, `ivf_nprobe` 107, `ivf_recall_target` 0.9886 from
 `runs_paper.csv arcadedb_dense_embedded fp32 small median of 5`,

@@ -178,4 +178,5 @@ dense table, F4 in `fairness_check` and `provenance_check`'s FEEDS all call it,
 so they cannot disagree. qCJ writes the pinned directory through
 `runner.py --driver dense_multipass_driver.py --driver-out-dir dense_mp5_8d6af9475`;
 its per-cell rows go to `mp_rows_8d6af9475.jsonl` (never merged; the files are
+- `results/mp_rows_small_<pin>.jsonl`: the same per-cell multipass rows for the 1M tier, written by the queue scripts' small-tier multipass probes (qDO onward); never merged, read by nothing on the page; kept beside `mp_rows_<pin>.jsonl` as the per-cell record.
 the result). Cache policy for that directory: DECISIONS #56.
