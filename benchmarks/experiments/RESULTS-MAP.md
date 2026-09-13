@@ -22,7 +22,7 @@ as "dead overlay, or an unaudited input"** and eleven of them turned out to be
 live inputs to the published page. A warning that fires on live data teaches
 people to ignore the warning, so the classification lives here.
 
-**Rule: nothing in `results/` is deleted. Superseded material moves to
+**Rule (amended 2026-09-13): an output nothing reads may be deleted; superseded material that a decision still cites moves to
 `archive-<date>/` and keeps its name.** Quarantine markers
 (`QUARANTINE_`, `REFUSED_`, `SUPERSEDED_`, `NONCOMPARABLE_`) are evidence of a
 decision and are never tidied away.
@@ -65,8 +65,8 @@ Until step 1 runs, treat every `runs_*.jsonl` as irreplaceable.
 | `runs_lifecycle_gav_<pin>.jsonl` | lifecycle `graph_gav` situation, run separately | as above |
 | `runs_remeasure_1b04483bf.jsonl` | the #5467 re-measure posted upstream | evidence; do not merge |
 | `raw/` | one JSON per cell, 788 files | `provenance_check`, `claims_check`, `page_check`, `make_paper_figures` |
-| `manifest-*.json` | per-invocation image digests, cpuset, heap, reps | `provenance_check`, `runner`, `backfill*` |
-| `runs-*.csv` | per-invocation summary written by `runner.py` | `runner` only |
+| `manifest-*.json` | per-invocation image digests, cpuset, heap, reps; every row names its manifest by timestamp (`runner.py`, row["manifest"]) | nothing opens them; kept as provenance by reference |
+| `runs-*.csv` | per-invocation summary written by `runner.py`, read by nothing | deleted on both hosts 2026-09-13; the writer stays, delete the files when they pile up |
 
 ## Overlays: directories a table reads directly
 
@@ -79,9 +79,9 @@ These are NOT dead. They feed published cells and are the reason the
 | `sparse_mp_<pin>/` | same table when COMPLETE; see the all-or-nothing rule below. `sparse_mp_b7c6c800d` (1 of 12 files) was removed 2026-09-04; `sparse_mp_8d6af9475` is written by qCL via `runner.py --driver sparse_multipass_driver.py` | current pin, qCL |
 | `e4_decomp/` | `claims_check` only | 2026-08 |
 | `e4decomp/`, `e4decomp_2681/`, `dense_mp_2681/` | archived 2026-09-07 (DECISIONS #62) | 2026-08, archived |
-| `lifecycle/` | `export_web`, `make_paper_tables` | 2026-08 |
+| `lifecycle/` | nothing (the page's lifecycle table reads `runs_paper.csv` rows) | deleted 2026-09-13 |
 | `probe/` | `export_web`, `make_paper_tables`, `claims_check` | 2026-08 |
-| `summary/` | `make_paper_figures`, `make_paper_tables`, `page_check`, `claims_check` | 2026-08 |
+| `summary/` | nothing (DECISIONS #62 listed it as a claims_check input; grep shows no reader) | deleted 2026-09-13 |
 | `e3_q17/`, `ingest_ab/`, `tentag/` | `claims_check` | 2026-08 |
 
 **All-or-nothing.** `_pinned_dir(name, expected=...)` uses
