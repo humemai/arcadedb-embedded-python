@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Every RESULT number a PUBLICATION states must trace to a pinned claim.
 
-The same results feed three consumers -- the humem.ai project page, the arXiv
+The same results feed two consumers, the humem.ai project page and the arXiv
 paper, and each restates numbers in prose that no
 generator produces. This file checks all of them through one scanner, because the
 alternative is one checker per consumer that slowly disagree about what "covered"
