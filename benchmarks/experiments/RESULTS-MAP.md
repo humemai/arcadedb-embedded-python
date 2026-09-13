@@ -152,8 +152,8 @@ merge. **Do not hand-edit the frozen CSV**; re-freeze after the campaign.
 `queue-archive-20260830/` on the bench host holds the 15 retired `qB*` scripts.
 They pin `b7c6c800d` and verify the pair with `build_engine_pair.sh`, which
 checks a locally COMPILED pair -- the wrong claim for a pair assembled from
-upstream's published jars. Live scripts (2026-09-11): `qDE` -> `qDH` -> `qDI` -> `qDJ` -> `qDK` -> `qDL` ->
-`qDM` -> `qDN` -> `qDO`, each gated on `verify_pair_c25.sh`; finished scripts
+upstream's published jars. Live scripts (2026-09-13): `qDO` (running) -> `qDP` -> `qDQ` -> `qDR` -> `qDS` -> `qDT` ->
+`qDU` -> `qDV`, each gated on `verify_pair_c25.sh`; finished scripts
 live in `~/queue_archive` on mini.
 
 ## `evidence/`: tracked copies of what an upstream report cites
@@ -169,10 +169,14 @@ move; `results/` stays the working store.
 ## `dense_mp5_<pin>/`: the multipass overlay, pin-aware (2026-09-04)
 
 `make_paper_tables.dense_mp_dir()` is the ONE resolver: it returns
-`results/dense_mp5_<BENCH_ENGINE_COMMIT>` only when every one of the 13 arms
+`results/dense_mp5_<BENCH_ENGINE_COMMIT>` only when every one of the 13 mandatory arms
 (`fp32 int8 arcsrv arcsrv_int8 milvus milvus_int8 qdrant qdrant_int8 chroma
 duckvss lancedb sqlitevec sqlitevec_int8`) has all five `mp_<arm>_b<n>.json`
-files, else refuses. `dense_mp5_small_<pin>` feeds the 1M tier with
+files, else refuses. The all-or-nothing rule covers those 13; `neo4jvec`,
+`pgvector`, `surreal`, `surrealsrv`, and `arango` are optional overlay arms
+(`make_paper_tables.MP_ARMS_OPTIONAL`, written by `dense_multipass_driver`)
+that join the table when all five of their files exist, are absent with none,
+and refuse the publish with some, so a partial arm never prints as a row. `dense_mp5_small_<pin>` feeds the 1M tier with
 `MP_ARMS_SMALL`. T5, f4/f8's dense bars, the page's 10M
 dense table, F4 in `fairness_check` and `provenance_check`'s FEEDS all call it,
 so they cannot disagree. qCJ writes the pinned directory through

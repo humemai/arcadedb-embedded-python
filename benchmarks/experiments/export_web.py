@@ -1105,14 +1105,19 @@ LANES = {
         # injections per system, composed half-updated in all 200, both single
         # engines in none.
         "only_workload": "hybrid",
-        # SurrealDB runs in-process at mem://, and the composed arm's Qdrant
-        # half at :memory:; neither has a disk footprint (2026-09-10, F27).
-        "in_memory": ("surrealdb_e2",),
+        # Nothing on this table is blanked for running in memory any more:
+        # SurrealDB embedded re-ran on the SDK's SurrealKV disk store (qDN,
+        # 2026-09-12) and carries a disk cell. The composed arm's Qdrant half
+        # is still :memory: until qDT, but its disk value is Neo4j's and is
+        # printed as such (the condition below says so). The key stays for
+        # the mechanism at the disk_data_mb skip; it was surrealdb_e2 until
+        # 2026-09-13.
+        "in_memory": (),
         "conditions": [
             "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
             "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
-            "Read the times with one caveat, which cuts against ArcadeDB. ArcadeDB here writes to disk, while SurrealDB runs entirely in memory and the composed stack's vector half does too. Part of why they answer faster is that they never touch a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
-            "SurrealDB runs in memory (mem://), so its disk cell is blank: it leaves nothing on disk. The composed stack's Qdrant half also runs in memory (:memory:), so its disk value is Neo4j's alone.",
+            "Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:) until its own re-run, so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
+            "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
         ],
     },
 }

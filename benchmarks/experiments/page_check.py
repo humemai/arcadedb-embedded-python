@@ -168,8 +168,14 @@ PROSE = [
      lambda P: P("e2atom", "ArcadeDB (one transaction)", "e2", "trials")),
     ("e2atom.composed.torn", r"left torn in (\d+) of 40 trials",
      lambda P: P("e2atom", "Qdrant + Neo4j (no shared transaction)", "e2", "torn results")),
-    ("e2atom.arcadedb.torn", r"ArcadeDB and SurrealDB in (\d+) of 40",
-     lambda P: max(P("e2atom", "ArcadeDB (one transaction)", "e2", "torn results"), P("e2atom", "SurrealDB (embedded)", "e2", "torn results"))),
+    # Every single-engine label the caption names is under this max, so naming
+    # one more engine without adding it here is a page_check failure by design
+    # (the regex anchors on the last name in the list).
+    ("e2atom.single_engines.torn", r"PostgreSQL \+ pgvector \+ AGE, in (\d+) of 40",
+     lambda P: max(P("e2atom", lbl, "e2", "torn results") for lbl in (
+         "ArcadeDB (one transaction)", "ArcadeDB (server, one transaction)",
+         "SurrealDB (embedded)", "SurrealDB (server)", "Neo4j (vector index)",
+         "PostgreSQL + pgvector + AGE"))),
     ("lifecycle.cold_process", r"reaches its first database call in about (\d+(?:\.\d+)?) s",
      lambda P: round(P("lifecycle", "Empty database (embedded)", "lc10k", "cold process ms") / 1000, 2)),
     ("lifecycle.clean_session", r"opening and closing an empty database costs about (\d+(?:\.\d+)?) ms",
@@ -389,6 +395,15 @@ def _resolve(key, cells):
     return key
 
 
+# Every backend the e2atom table can carry (export_web DISPLAY_NAMES): the
+# torn-count check enumerates these rather than the three it began with, so a
+# comparator that joins (ArangoDB, qDV) is checked the day it lands.
+E2_SINGLE_ENGINE = ("arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2",
+                    "surrealdb_e2_server", "neo4j_e2", "pg_age_e2", "arangodb_e2")
+E2_OPTIONAL = ("arangodb_e2",)
+E2_BACKENDS = E2_SINGLE_ENGINE + ("composed_qdrant_neo4j",)
+
+
 def _check_page_atomicity(page_path):
     """The page's atomicity counts, against the artifact rather than the paper.
 
@@ -406,7 +421,7 @@ def _check_page_atomicity(page_path):
     import re as _re
     text = open(page_path, encoding="utf-8").read()
     totals = {}
-    for backend in ("arcadedb_e2", "surrealdb_e2", "composed_qdrant_neo4j"):
+    for backend in E2_BACKENDS:
         n_trials = n_torn = 0
         seen = False
         # NEWEST ROW PER CANONICAL KEY, the same rule every table applies.
@@ -469,9 +484,13 @@ def _check_page_atomicity(page_path):
             bad += 1
     # The single-engine arms must be ZERO torn, and zero is the one value a
     # broken read also produces, so assert the trial count alongside it.
-    for be in ("arcadedb_e2", "surrealdb_e2"):
+    # An optional arm (ArangoDB until qDV lands) skips while it has no rows;
+    # the required ones fail.
+    for be in E2_SINGLE_ENGINE:
         t = totals[be]
-        if t is None:
+        if t is None and be in E2_OPTIONAL:
+            print(f"  skip    page.e2.{be}: not yet on the table")
+        elif t is None:
             print(f"  NODATA  page.e2.{be}: no fixed-harness rows"); bad += 1
         elif t[1] != 0:
             print(f"  DISAGREE page.e2.{be}: {t[1]} torn, page says none"); bad += 1

@@ -113,7 +113,7 @@ tier, so it is applied rather than merely disclosed.
 
 **Measured 2026-08-01. Audit complete across all seven comparator runtimes: DuckDB is the only offender.**
 
-> **2026-09-11 currency note:** the September comparators (MongoDB, TimescaleDB, pgvector, PG+AGE, SurrealDB, and SQLite) are not yet in this table.
+> **2026-09-11 currency note (extended 2026-09-13):** the September comparators (MongoDB, TimescaleDB, pgvector, PG+AGE, SurrealDB, SQLite, and ArangoDB) are not yet in this table.
 
 Two corrections worth keeping, because the wrong answers were nearly recorded:
 

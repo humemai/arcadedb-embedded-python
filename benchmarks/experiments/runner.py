@@ -635,7 +635,7 @@ BACKENDS = {
         "ready_regex": r"Started\.",
     },
     # SurrealDB on the single-model tables (2026-09-11): embedded through the
-    # Python SDK (engine 2.0.0 on its SurrealKV disk store, in the client
+    # Python SDK (core 2.3.10 through SDK 2.0.0, on its SurrealKV disk store, in the client
     # container) and served (3.2.4 on RocksDB). One engine, both modes, like
     # ArcadeDB.
     # ArangoDB 3.12.11 (2026-09-13, DECISIONS #78), served only: python-arango

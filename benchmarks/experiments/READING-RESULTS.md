@@ -67,6 +67,12 @@ never claims". Assert the flags rather than globbing the directory.
 **A comparator row's version and digest are read from the row** (`server_image`,
 `engine_version`); `runner.BACKENDS` describes future rows only (BUGS F32).
 
+**An ArangoDB dense row's `recall_at_10` is a calibrated operating point, not a knob.** The IVF `nProbe` is chosen in the cell (`ivf_nprobe`, with `ivf_nlists` = round(4*sqrt(n))) as the smallest value whose held-out recall reaches the frozen ArcadeDB fp32 median: `ivf_calibration_recall` is that held-out estimate (on `ivf_calibration_queries` queries from `ivf_calibration_slice`, never the timed set), and `ivf_recall_target` with `ivf_recall_target_source` say what it was matched to. Read the timed `recall_at_10` as the outcome of that match, and the four calibration fields as the reason it is where it is.
+
+**Legacy embedded SurrealDB rows say `surrealdb-embedded:2.0.0`; the page says core 2.3.10.** Both are right (BUGS F39): 2.0.0 is the Python SDK, which stamped itself as the engine, and the core it compiles in is surrealdb-core 2.3.10. Rows frozen before the fix keep the SDK string in `runs.jsonl` and the CSV, and the exporter resolves that stamp to the core version at load through the pinned wheel, so the file string and the page differ by design. Newer rows carry `surrealdb-embedded:2.3.10 (sdk 2.0.0)`.
+
+**`disk_data_mb` and `server_disk_mb` are megabytes on the row and gibibytes on the page.** The exporter divides at load (`_UNIT_DIVISOR`, through `unit_field` when the metric is a callable, BUGS F40); a value that looks a thousand times too large under a "disk GiB" header is the divisor being skipped, not a real footprint. `page_check` bounds every disk median at 200 GiB for that reason.
+
 **`host` is recorded on two lanes of seven.** Sparse and dense have it; the
 rest record the container but not the machine. Do not imply a uniform
 environment from rows that cannot prove one.
