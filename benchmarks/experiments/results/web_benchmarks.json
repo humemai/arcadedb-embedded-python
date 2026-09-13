@@ -6202,7 +6202,7 @@
       "entries": [
         {
           "backend": "ArcadeDB (embedded, native time series)",
-          "is_arcadedb": false,
+          "is_arcadedb": true,
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",
           "n_docs": "2592000",
@@ -6263,7 +6263,7 @@
         },
         {
           "backend": "ArcadeDB (embedded, document path)",
-          "is_arcadedb": false,
+          "is_arcadedb": true,
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",
           "n_docs": "2592000",
@@ -6324,7 +6324,7 @@
         },
         {
           "backend": "ArcadeDB (server, document path)",
-          "is_arcadedb": false,
+          "is_arcadedb": true,
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",
           "n_docs": "2592000",
@@ -6385,7 +6385,7 @@
         },
         {
           "backend": "ArcadeDB (server, native time series)",
-          "is_arcadedb": false,
+          "is_arcadedb": true,
           "scale": "2.59M points",
           "workload": "TSBS cpu-only",
           "n_docs": "2592000",

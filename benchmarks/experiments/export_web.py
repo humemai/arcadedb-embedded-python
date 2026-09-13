@@ -1617,7 +1617,9 @@ def _l4_table(all_rows):
         rs = grouped[label]
         entry = {
             "backend": display_name(label) if label in DISPLAY_NAMES else label,
-            "is_arcadedb": "arcadedb" in label,
+            # case-insensitive: the labels read "ArcadeDB (...)" since
+            # 2026-09-11 and the lowercase test unshaded all four rows for a day
+            "is_arcadedb": "arcadedb" in label.lower(),
             "scale": L4_SHAPE["scale"],
             "workload": L4_SHAPE["workload"],
             "n_docs": str(rs[0].get("n_points")),

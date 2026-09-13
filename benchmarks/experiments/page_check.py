@@ -514,6 +514,15 @@ def _check_no_arcadedb_row_lost(payload):
     live_has = {t["id"] for t in live.get("tables", []) if any(_is_arc(e) for e in t.get("entries", []))}
     fresh = {t["id"]: t for t in payload.get("tables", [])}
     checked = bad = 0
+    # The FLAG is what the page shades and sorts by. A row whose label says
+    # ArcadeDB but whose flag is false renders unshaded among the comparators
+    # (the time-series table, 2026-09-12 to 13, after the labels were
+    # capitalised and a lowercase test stopped matching). Fail on the mismatch.
+    for tid, t in sorted(fresh.items()):
+        for e in t.get("entries", []):
+            if str(e.get("backend", "")).startswith("ArcadeDB") and not e.get("is_arcadedb"):
+                print(f"  UNFLAGGED {tid}: {e.get('backend')!r} reads ArcadeDB but is_arcadedb is false")
+                bad += 1
     for tid in sorted(live_has):
         if tid in RETIRED_TABLES:
             print(f"  retired table {tid}: {RETIRED_TABLES[tid]}")
