@@ -809,6 +809,15 @@ def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
     return _agg(list(newest.values()), field)
 
 
+
+def _disk_data(r):
+    """disk_data_mb, unless this is a served row whose server reading is
+    missing: then the field is the client's scratch alone (1.1 MB for a
+    SurrealDB server holding 6.0M line items, 2026-09-13) and says nothing."""
+    if r.get("server_image") and not r.get("server_disk_mb"):
+        return None
+    return r.get("disk_data_mb")
+
 def _rate(count_fields, seconds_field):
     """A per-row records-per-second callable for spec tables whose lanes
     record counts and seconds but no rate (graph, TPC, cross-model)."""
@@ -857,7 +866,7 @@ LANES = {
                     ("build_docs_per_s", "ingest+index vectors/s"),
                     ("build_s", "ingest+index total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
-                    ("disk_data_mb", "disk GiB")],
+                    (_disk_data, "disk GiB")],
         "conditions": [
             "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
             "ingest+index total s is one timer around inserting the documents and building the index; the two are not timed separately (Qdrant builds its index while ingesting, so the split is not defined there). ingest+index vectors/s divides the document count by it.",
@@ -881,7 +890,7 @@ LANES = {
                     ("build_docs_per_s", "ingest+index vectors/s"),
                     ("build_s", "ingest+index total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
-                    ("disk_data_mb", "disk GiB")],
+                    (_disk_data, "disk GiB")],
         "conditions": [
             "ingest+index total s is one timer around inserting the vectors and building the index; the two are not timed separately (Qdrant and Chroma build the index while ingesting, so the split is not defined there). ingest+index vectors/s divides the vector count by it.",
             "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
@@ -907,7 +916,7 @@ LANES = {
                     (_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest vertices+edges/s"),
                     ("build_s", "ingest total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
-                    ("disk_data_mb", "disk GiB")],
+                    (_disk_data, "disk GiB")],
         # OLTP only. The OLAP rows live in the l2olap table below, which is
         # also where the GAV ablation belongs: at SF10 the OLAP cell splits
         # into view-on and view-off, and this table does not group on gav, so
@@ -942,7 +951,7 @@ LANES = {
     # with an ablation row that is dashed at one scale invites the reader to
     # read the dash as a failure.
     "l2olap": {
-        "title": "Graph OLAP, with and without the Graph Analytical View",
+        "title": "Graph OLAP",
         "dataset": "LDBC-SNB, SF10",
         "lane_source": "l2",
         "only_scales": {"sf1", "sf10"},
@@ -960,7 +969,7 @@ LANES = {
                     ("top_degree_p99_ms", "most friends p99 ms"),
                     ("gav_build_s", "view build s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
-                    ("disk_data_mb", "disk GiB")],
+                    (_disk_data, "disk GiB")],
         "conditions": [
             "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
             "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
@@ -1017,7 +1026,7 @@ LANES = {
                     ("olap_total_ms", "OLAP total ms"),
                     ("olap_total_p50_ms", "OLAP total p50 ms"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
-                    ("disk_data_mb", "disk GiB")],
+                    (_disk_data, "disk GiB")],
         # The memory column is the one cell on this page a reader can most
         # easily misread, because the gap looks like two orders of magnitude
         # and is mostly an accounting boundary. Stated here rather than left
@@ -1036,7 +1045,7 @@ LANES = {
                     (_rate(("n_lineitem", "n_part"), "build_s"), "ingest documents/s"),
                     ("build_s", "ingest total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
-                    ("disk_data_mb", "disk GiB")],
+                    (_disk_data, "disk GiB")],
         "conditions": [
             "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
             "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
@@ -1050,7 +1059,7 @@ LANES = {
                     (_rate(("n_products", "n_edges"), "build_s"), "ingest+index vertices+edges/s"),
                     ("build_s", "ingest+index total s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
-                    ("disk_data_mb", "disk GiB")],
+                    (_disk_data, "disk GiB")],
         # HYBRID ONLY. The atomicity workload has no latency to print, so
         # while every metric here was a latency its rows came out empty and
         # collapsed invisibly onto the hybrid ones. Adding peak memory, which
@@ -1084,10 +1093,8 @@ GLOBAL_CONDITIONS = [
     "not flush its write-ahead log at commit (txWalFlush=0), PostgreSQL and Neo4j "
     "fsync at every commit, and SQLite is the one comparator not at its default: it runs "
     "in WAL mode with synchronous=NORMAL, the common production setting, because its "
-    "default rollback journal fsyncs twice per commit. On a laptop, the same mixed read/insert/update workload "
-    "on ArcadeDB embedded runs about 10x slower with fsync at commit (inserts 0.3 ms "
-    "to 6.4 ms), so on the write rows (document OLTP, TPC-C new-order, graph writes, "
-    "the cross-model transaction) ArcadeDB's lead is largely this default plus the "
+    "default rollback journal fsyncs twice per commit. On the write rows (document OLTP, TPC-C new-order, "
+    "graph writes, the cross-model transaction) ArcadeDB's lead over the fsyncing servers is largely this default plus the "
     "absence of a network hop, not the engine. The next campaign runs ArcadeDB "
     "with fsync at commit on every timed write path.",
 ]
@@ -1231,7 +1238,7 @@ L4_METRICS = [
     ("q_global_ms", "12h aggregate p50 ms"),
     ("q_global_p99_ms", "12h aggregate p99 ms"),
     ("peak_anon_mib_sum", "peak memory GiB"),
-    ("disk_data_mb", "disk GiB"),
+    (_disk_data, "disk GiB"),
 ]
 
 
@@ -2168,6 +2175,11 @@ def _restructure_tables(tables, rows):
         OLAP_KEEP = {"Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms",
                      "ingest documents/s", "ingest total s", "peak memory GiB", "disk GiB"}
         src = by["l1tpc"]
+        # The tuned PostgreSQL arm answered its question (image defaults do
+        # not distort the comparison: 2.33 vs 2.39 ms new-order, 337 vs 331 ms
+        # Q1) and stays in the rows; on the page it read as a second engine
+        # (user, 2026-09-13, DECISIONS #76).
+        src = dict(src, entries=[e for e in src["entries"] if e["backend"] != "PostgreSQL (tuned)"])
         base = {"withheld_scales": [], "withheld_reason": None,
                 "source_paths": src.get("source_paths"), "source_urls": src.get("source_urls")}
         tables.append({"id": "docs_oltp", "title": "Document OLTP",
