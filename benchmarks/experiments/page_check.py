@@ -538,6 +538,26 @@ def _check_no_arcadedb_row_lost(payload):
     return checked, bad
 
 
+def _check_disk_units(payload):
+    """Every 'disk GiB' cell must be gibibytes: mini's largest data set is
+    DEEP-10M at a few dozen GiB, so a median above 200 is a megabyte value that
+    skipped the divisor (2026-09-13: seven tables printed MB for a day)."""
+    bad = []
+    for t in payload.get("tables", []):
+        cols = t.get("columns") or []
+        for e in t.get("entries", []):
+            m = e.get("metrics") or {}
+            for c in cols:
+                if "disk" in c.lower() and "GiB" in c:
+                    v = m.get(c) if isinstance(m, dict) else None
+                    med = v.get("median") if isinstance(v, dict) else v
+                    if isinstance(med, (int, float)) and med > 200:
+                        bad.append((t.get("id"), e.get("backend"), e.get("scale"), c, med))
+    for b in bad:
+        print(f"  DISK-UNITS FAIL {b}")
+    return not bad
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", default=str(DEFAULT_JSON))
@@ -609,7 +629,11 @@ def main() -> int:
     l_checked, l_bad = _check_no_arcadedb_row_lost(payload)
     print(f"\n{l_checked} table(s) checked against the live page, {l_bad} lost ArcadeDB")
     h_bad = _check_setup_prose(payload)
-    return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad) else 0
+    print("\nevery disk column is in gibibytes")
+    u_ok = _check_disk_units(payload)
+    if u_ok:
+        print("  no disk cell above 200 GiB")
+    return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or not u_ok) else 0
 
 
 def _check_setup_prose(payload):

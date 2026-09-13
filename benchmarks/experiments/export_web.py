@@ -839,6 +839,9 @@ def _disk_data(r):
     except (TypeError, ValueError):
         return None
 
+
+_disk_data.unit_field = "disk_data_mb"
+
 def _rate(count_fields, seconds_field):
     """A per-row records-per-second callable for spec tables whose lanes
     record counts and seconds but no rate (graph, TPC, cross-model)."""
@@ -856,6 +859,14 @@ def _agg(rows, field):
         vals = [v for v in (field(r) for r in rows) if v is not None]
         if not vals:
             return None
+        # A callable stands in for a row field; it says which one through
+        # unit_field so the divisor still applies. 2026-09-13: _disk_data
+        # replaced "disk_data_mb" on seven tables and, without this, the page
+        # printed megabytes under a "disk GiB" header for a day (gates green:
+        # no pin covered a disk cell; page_check now bounds every disk column).
+        div = _UNIT_DIVISOR.get(getattr(field, "unit_field", None))
+        if div:
+            vals = [v / div for v in vals]
         return {"median": round(statistics.median(vals), 4), "min": round(min(vals), 4),
                 "max": round(max(vals), 4), "n": len(vals)}
     vals = [v for v in (_num(r.get(field)) for r in rows) if v is not None]
