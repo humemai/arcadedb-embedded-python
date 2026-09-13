@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Check every numeric claim in the paper's prose against the data behind it.
+"""HELPER LIBRARY since 2026-09-11: the paper is gone, so nothing runs this as a gate; page_check and make_paper_figures import its row-selection, torn-count, and arm helpers. The docstring below is the original.
+
+Check every numeric claim in the paper's prose against the data behind it.
 
 The plan's own verification criterion is "every number in prose traces to a
 results file". Running that by hand on 2026-07-30 found two real defects, and

@@ -57,7 +57,7 @@ PAGE_DATA = "src/data/arcadedb-benchmarks.json"
 PAGE_IMAGES = "public/images/projects/arcadedb"
 IMAGE_URL_RE = re.compile(r"/images/projects/arcadedb/([A-Za-z0-9_]+)\.svg")
 
-GATES = ["provenance_check", "fairness_check", "claims_check", "page_check"]
+GATES = ["provenance_check", "fairness_check", "page_check"]
 
 
 def run(cmd, **kw):
@@ -152,13 +152,8 @@ def main() -> int:
     _rewrite_page_spec_inventory(exported)
 
     step(3, "Gates: nothing is published until all four agree")
-    gates = [g for g in GATES if not (args.page_only and g == "claims_check")]
-    if args.page_only:
-        print("  --page-only: claims_check (paper prose) skipped and page_check's "
-              "paper-prose section advisory, DECISIONS #58")
-    for gate in gates:
-        extra = ["--page-only"] if (args.page_only and gate == "page_check") else []
-        proc = subprocess.run(py + [str(HERE / f"{gate}.py")] + extra,
+    for gate in GATES:
+        proc = subprocess.run(py + [str(HERE / f"{gate}.py")],
                               cwd=HERE.parents[1], capture_output=True,
                               text=True)
         tail = (proc.stdout or proc.stderr).strip().splitlines()[-1:]

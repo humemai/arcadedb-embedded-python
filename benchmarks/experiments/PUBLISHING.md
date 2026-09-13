@@ -67,7 +67,7 @@ warn:
 |---|---|
 | `provenance_check` | does every cell trace to a run |
 | `fairness_check` | F1–F9 comparison invariants |
-| `claims_check` | does the paper's hand-typed prose match the data (skipped under `--page-only`) |
+| `claims_check` | not a gate since 2026-09-11 (no paper); a helper library the gates import for torn counts and arm selection |
 | `page_check.MAPPING` | do the page's table cells agree with the generated tables |
 | `page_check.PROSE` | do the page's hand-typed prose numbers agree with the tables and the page-derived pins |
 | `_check_no_orphan_figures` | is every generated figure cited by a `.tex` |
