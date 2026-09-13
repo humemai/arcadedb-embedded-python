@@ -81,13 +81,13 @@
       "0.1.9"
     ],
     "surrealdb_e2": [
-      "surrealdb-embedded:2.0.0"
+      "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
     ],
     "surrealdb_e2_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
     "surrealdb_graph": [
-      "surrealdb-embedded:2.0.0"
+      "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
     ],
     "surrealdb_graph_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
@@ -4240,7 +4240,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.0.0",
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -4756,7 +4756,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.0.0",
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -5440,7 +5440,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.0.0",
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "ingest vertices+edges/s": {
@@ -6287,7 +6287,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.0.0",
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "trials": {
@@ -6633,7 +6633,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.0.0",
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "p50 ms": {

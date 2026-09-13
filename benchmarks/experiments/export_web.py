@@ -2245,6 +2245,12 @@ def main() -> int:
         return 2
 
     rows = list(csv.DictReader(FROZEN.open()))
+    # F39: rows frozen before 2026-09-13 stamp the SurrealDB SDK version as the
+    # embedded engine; the core is a function of the pinned wheel, resolved once.
+    import surreal_common
+    for _r in rows:
+        if str(_r.get("engine_version") or "").startswith("surrealdb-embedded:"):
+            _r["engine_version"] = surreal_common.legacy_stamp_fixup(_r["engine_version"])
 
     # WITHHELD: ArcadeDB rows whose engine_version identifies no build.
     #
