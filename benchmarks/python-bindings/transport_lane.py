@@ -21,8 +21,9 @@ integers stay integers. For a scientific user that is a correctness property,
 not a performance one, and it is the reason to_arrow exists at all rather than
 being a thin alias. The second half of this script measures exactly that.
 
-Deliberately mirrors the ICDE-side transport_probe.py loop so the two agree on
-everything except the added to_arrow arm and the nulls section.
+The loop follows the experiments lane's transport measurement (retired
+2026-09-13) so the two agreed on everything except the added to_arrow arm and
+the nulls section.
 
     PROBE_ROWS=200000 REPS=7 python3 transport_lane.py
 """

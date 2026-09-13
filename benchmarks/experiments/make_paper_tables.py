@@ -210,7 +210,7 @@ def load_canonical(apply_corpus=True):
         # record of what was run. They are excluded from what gets published.
         if not isinstance(r.get("rep"), int) or not 1 <= r["rep"] <= MAX_REP:
             continue
-        # NO PRE-RELEASE ENGINE REACHES A TABLE. DECISIONS #42: every ICDE
+        # NO PRE-RELEASE ENGINE REACHES A TABLE. DECISIONS #42: every published
         # number comes from a monthly stable release. That was policy enforced
         # by remembering, and remembering failed: 20 canonical rows were still
         # on 26.8.1.dev0 and .dev3 after the whole re-measure campaign.

@@ -34,9 +34,8 @@ the paper" and the f5 class of mistake cannot be reintroduced by hand.
 WHAT THIS DOES NOT DO. It will not invent a table. The page may only show what
 the papers show: adapting a presentation is fine, publishing a result in a
 form no reviewer saw is not, or the papers stop being the reviewed artifact.
-Adding a table to the page means adding it to `arcadedb.ts`, and it should
-correspond to an ICDE table (t2_tabular, t3_graph, t4_sparse, t5_dense_ts) or
-a SciPy one (tbl-tabular, tbl-graph, tbl-vector, tbl-latency, tbl-transport).
+Adding a table to the page means adding it to `arcadedb.ts` and to the
+exporter, generated from frozen rows and pinned by page_check (PAGE-SPEC 6).
 """
 
 from __future__ import annotations

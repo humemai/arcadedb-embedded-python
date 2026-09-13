@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The environment every ICDE campaign run needs. Source this; do not retype it.
+# The environment every campaign run needs. Source this; do not retype it.
 #
 # WHY THIS FILE EXISTS. It was scattered across ~113 ad-hoc launcher scripts in
 # mini's home directory, and on 2026-08-15 a new campaign script omitted all of

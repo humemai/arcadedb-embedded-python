@@ -57,8 +57,6 @@ TARGETS = [
      "default": "~/repos/humemai/humem.ai/src/lib/projects/items/arcadedb.ts"},
     {"name": "arxiv", "env": "BENCH_ARXIV_TEX",  "kind": "tex", "gates": False,
      "default": "~/repos/humemai/arcadedb-paper/paper.tex"},
-    {"name": "icde",  "env": "BENCH_ICDE_TEX",   "kind": "tex", "gates": False,
-     "default": "~/repos/humemai/arcadedb-icde2027/paper.tex"},
 ]
 
 
