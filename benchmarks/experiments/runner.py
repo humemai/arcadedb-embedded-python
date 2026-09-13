@@ -638,6 +638,49 @@ BACKENDS = {
     # Python SDK (engine 2.0.0 on its SurrealKV disk store, in the client
     # container) and served (3.2.4 on RocksDB). One engine, both modes, like
     # ArcadeDB.
+    # ArangoDB 3.12.11 (2026-09-13, DECISIONS #78), served only: python-arango
+    # is an HTTP client and the engine has no in-process mode, so one row per
+    # table, like MongoDB. Root password through the image's own env;
+    # --vector-index true is the 3.12 opt-in for the vector (FAISS IVF) index
+    # the dense and cross-model lanes use. Data lands on the image's declared
+    # volume (/var/lib/arangodb3), which container_disk sizes with du inside
+    # the container (F38 is the open SurrealDB case; verified on the laptop).
+    "arangodb_tpc": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
+        "server_cmd": ["arangod", "--vector-index", "true"],
+        "server_port": 8529,
+        "ready_regex": r"is ready for business",
+    },
+    "arangodb_graph": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
+        "server_cmd": ["arangod", "--vector-index", "true"],
+        "server_port": 8529,
+        "ready_regex": r"is ready for business",
+    },
+    "arangodb_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
+        "server_cmd": ["arangod", "--vector-index", "true"],
+        "server_port": 8529,
+        "ready_regex": r"is ready for business",
+    },
+    "arangodb_e2": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
+        "server_cmd": ["arangod", "--vector-index", "true"],
+        "server_port": 8529,
+        "ready_regex": r"is ready for business",
+    },
     "surrealdb_graph": {"topology": "embedded", "image": "dbbench:client"},
     "surrealdb_graph_server": {
         "topology": "client_server",
@@ -1165,15 +1208,15 @@ LANES = {
            ["oltp", "olap"]),
     "l2": ("l2_graph.py",
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
-            "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server"],
+            "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server", "arangodb_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
               ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "surrealdb_tpc",
-               "surrealdb_tpc_server", "postgres", "postgres_tuned"],
+               "surrealdb_tpc_server", "arangodb_tpc", "postgres", "postgres_tuned"],
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
-            "pg_age_e2", "neo4j_e2", "composed_qdrant_neo4j"],
+            "arangodb_e2", "pg_age_e2", "neo4j_e2", "composed_qdrant_neo4j"],
            ["hybrid", "atomicity"]),
     # L5 measures OPEN and CLOSE, which every embedded deployment does and no
     # benchmark measures. Situations ride the WORKLOAD axis, so each is its own
@@ -1194,6 +1237,7 @@ LANES = {
             ["arcadedb_dense_embedded", "arcadedb_dense_server", "chroma_dense", "lancedb_dense",
              "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
              "milvus_dense", "pgvector_dense", "neo4j_dense", "surrealdb_dense", "surrealdb_dense_server",
+             "arangodb_dense",
              # int8 arms for every dense engine that ships a quantized index.
              # Chroma, DuckDB-VSS and sqlite-vec have none; LanceDB is int8
              # already (IVF_HNSW_SQ is its only HNSW offering).
@@ -1648,6 +1692,7 @@ MP_LABELS = {
     "lancedb_dense": "lancedb",
     "pgvector_dense": "pgvector", "neo4j_dense": "neo4jvec",
     "surrealdb_dense": "surreal", "surrealdb_dense_server": "surrealsrv",
+    "arangodb_dense": "arango",
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
 }
 

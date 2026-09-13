@@ -32,7 +32,7 @@ declare -A PKGS=(
   # checks. qdrant-client, pymilvus, elasticsearch and ladybug were all behind.
   [arcadedb]="$ARCADE_PKGS"
   [duckdb]="duckdb==1.5.5 pandas pyarrow"
-  [client]="requests psycopg[binary] pandas pyarrow numpy surrealdb==2.0.0 qdrant-client==1.19.0 pymilvus==3.0.1 elasticsearch==9.5.0 neo4j==6.2.0 ladybug==0.19.1 pymongo==4.18.1"
+  [client]="requests psycopg[binary] pandas pyarrow numpy surrealdb==2.0.0 qdrant-client==1.19.0 pymilvus==3.0.1 elasticsearch==9.5.0 neo4j==6.2.0 ladybug==0.19.1 pymongo==4.18.1 python-arango==8.3.5"
   [dense]="chromadb==1.5.9 lancedb==0.37.1 sqlite-vec==0.1.9 duckdb==1.5.5 numpy pandas pyarrow"
 )
 # A GUARD, not a comment. The dev pin above survived because nothing checked

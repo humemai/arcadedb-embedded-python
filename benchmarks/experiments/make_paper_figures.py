@@ -838,7 +838,7 @@ def f4_one_vs_n(rows):
     # Every dense comparator that builds an index; sqlite-vec is an exact scan,
     # so its "ingest+index" is an insert and does not do what the row names.
     DENSE_COMPS = ("qdrant_dense", "qdrant_dense_int8", "milvus_dense", "milvus_dense_int8",
-                   "chroma_dense", "lancedb_dense", "duckdb_vss_dense")
+                   "chroma_dense", "lancedb_dense", "duckdb_vss_dense", "arangodb_dense")
     GRAPH = ("ladybug_graph", "neo4j_graph")
     SPARSE = ("qdrant_sparse", "milvus_sparse", "elasticsearch_sparse")
     TSC = ("questdb", "duckdb", "sqlite")

@@ -21,6 +21,7 @@ import random
 import statistics
 import time
 import surreal_common
+import arango_common
 
 DATA = os.environ.get("BENCH_TPC_DATA", "/data/tpch")
 SF = os.environ.get("BENCH_TPC_SF", "1")
@@ -560,7 +561,61 @@ class PostgresTunedTPC(PostgresTPC):
     name = "postgres_tuned"
 
 
-BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, MongoTPC, SurrealTPC, SurrealServedTPC, PostgresTPC, PostgresTunedTPC,
+class ArangoTPC:
+    """ArangoDB 3.12.11 served through python-arango (2026-09-13): lineitem
+    and part as collections through the bulk import API, ISO-text dates like
+    the MongoDB arm, Q1/Q6 in AQL, new-order as one stream transaction (read
+    the part, insert the order, decrement the stock). Server only: the
+    driver is an HTTP client and the engine has no in-process mode."""
+    name = "arangodb_tpc"
+
+    def connect(self):
+        self.cl, self.db, self.version = arango_common.connect()
+
+    def build(self, li, part):
+        lc = self.db.create_collection("lineitem")
+        pc = self.db.create_collection("part")
+        self.db.create_collection("orders_new")
+        buf = []
+        for t in li[LI_COLS].itertuples(index=False, name=None):
+            buf.append(dict(zip(LI_COLS, t)))
+            if len(buf) >= 50_000:
+                lc.import_bulk(buf); buf = []
+        if buf:
+            lc.import_bulk(buf)
+        pc.import_bulk([{"_key": str(int(k)), "p_partkey": int(k), "p_retailprice": float(v), "stock": 100}
+                        for k, v in part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)])
+        lc.add_index({"type": "persistent", "fields": ["l_shipdate"]})
+
+    Q1 = ("FOR l IN lineitem FILTER l.l_shipdate <= '1998-09-02' "
+          "COLLECT f = l.l_returnflag, s = l.l_linestatus "
+          "AGGREGATE sum_qty = SUM(l.l_quantity), sum_base = SUM(l.l_extendedprice), "
+          "sum_disc = SUM(l.l_extendedprice * (1 - l.l_discount)), avg_qty = AVG(l.l_quantity), n = COUNT(1) "
+          "SORT f, s RETURN {f, s, sum_qty, sum_base, sum_disc, avg_qty, n}")
+    Q6 = ("FOR l IN lineitem FILTER l.l_shipdate >= '1994-01-01' AND l.l_shipdate < '1995-01-01' "
+          "AND l.l_discount >= 0.05 AND l.l_discount <= 0.07 AND l.l_quantity < 24 "
+          "COLLECT AGGREGATE revenue = SUM(l.l_extendedprice * l.l_discount) RETURN {revenue}")
+
+    def olap(self, which):
+        return list(self.db.aql.execute(self.Q1 if which == "q1" else self.Q6, batch_size=10_000))
+
+    def new_order(self, i, pkey):
+        txn = self.db.begin_transaction(write=["part", "orders_new"])
+        try:
+            txn.collection("part").get(str(pkey))
+            txn.collection("orders_new").insert({"okey": i, "pkey": pkey, "qty": 1})
+            txn.aql.execute("LET p = DOCUMENT('part', @k) UPDATE p WITH {stock: p.stock - 1} IN part",
+                            bind_vars={"k": str(pkey)})
+            txn.commit_transaction()
+        except Exception:
+            txn.abort_transaction()
+            raise
+
+    def close(self):
+        arango_common.close(self.cl)
+
+
+BACKENDS = {c.name: c for c in (DuckTPC, SQLiteTPC, MongoTPC, SurrealTPC, SurrealServedTPC, ArangoTPC, PostgresTPC, PostgresTunedTPC,
                                 ArcadeTPC, ArcadeServerTPC)}
 
 

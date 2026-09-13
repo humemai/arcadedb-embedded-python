@@ -161,6 +161,7 @@ NAMES = {
     "sqlite_vec_dense": "sqlite-vec (fp32)",
     "duckdb_vss_dense": "DuckDB-VSS (fp32)",
     "arcadedb_e2": "ArcadeDB (one txn)", "surrealdb_e2": "SurrealDB (one txn)",
+    "arangodb_dense": "ArangoDB (fp32)", "arangodb_e2": "ArangoDB (one txn)",
     "composed_qdrant_neo4j": "Qdrant+Neo4j (composed)",
     "questdb": "QuestDB", "arcadedb": "ArcadeDB (emb)",
 }
@@ -708,7 +709,7 @@ MP_ARMS_SMALL = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus",
 # comparators. An optional arm with all MP_BUILDS files is published; with
 # none it is absent; with some it REFUSES, so a publish mid-run cannot show
 # an arm built from one rep. The required lists above are the August set.
-MP_ARMS_OPTIONAL = ("neo4jvec", "pgvector", "surreal", "surrealsrv")
+MP_ARMS_OPTIONAL = ("neo4jvec", "pgvector", "surreal", "surrealsrv", "arango")
 
 
 def _optional_arms_present(cand, label):

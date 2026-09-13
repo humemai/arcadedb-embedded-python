@@ -29,6 +29,7 @@ import time
 
 import numpy as np
 import surreal_common
+import arango_common
 
 PRODUCTS = int(os.environ.get("E2_PRODUCTS", "50000"))
 DIM = 64
@@ -322,6 +323,56 @@ class SurrealServedE2(SurrealE2):
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
+class ArangoE2:
+    """ArangoDB 3.12.11 served (2026-09-13): product documents with an
+    embedding under the engine's vector index (FAISS IVF), related as an
+    edge collection, the vector hit in AQL, the hop as a traversal, and the
+    document updates inside one stream transaction that the crash trial
+    aborts before commit."""
+    name = "arangodb_e2"
+
+    def __init__(self):
+        self.cl, self.db, self.version = arango_common.connect()
+
+    def build(self, vecs, edges):
+        prod = self.db.create_collection("product")
+        rel = self.db.create_collection("related", edge=True)
+        for s in range(0, len(vecs), BATCH):
+            prod.import_bulk([{"_key": str(i), "pid": i, "views": 0, "embedding": vecs[i].tolist()}
+                              for i in range(s, min(s + BATCH, len(vecs)))])
+        for s in range(0, len(edges), BATCH):
+            rel.import_bulk([{"_from": f"product/{a}", "_to": f"product/{b}"} for a, b in edges[s:s + BATCH]])
+        self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(prod, "embedding", DIM, len(vecs))
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        aql = self.db.aql
+        pids = list(aql.execute(
+            "FOR d IN product LET s = APPROX_NEAR_L2(d.embedding, @q, {nProbe: @np}) SORT s LIMIT @k RETURN d.pid",
+            bind_vars={"q": [float(x) for x in qvec], "np": self.ivf_nprobe, "k": K}))
+        best = pids[0]
+        rel = list(aql.execute("FOR r IN 1..1 OUTBOUND CONCAT('product/', @b) related RETURN r.pid",
+                               bind_vars={"b": str(best)}))
+        touched = list(pids[:3]) + list(rel[:3])
+        txn = self.db.begin_transaction(write=["product"])
+        txn.aql.execute("FOR k IN @keys LET p = DOCUMENT('product', k) UPDATE p WITH {views: p.views + 1} IN product",
+                        bind_vars={"keys": [str(p) for p in set(touched)]})
+        if crash:
+            # injected failure inside the transaction -> abort (rollback)
+            txn.abort_transaction()
+            raise RuntimeError("injected-crash")
+        txn.commit_transaction()
+        return len(touched)
+
+    def total_views(self):
+        rows = list(self.db.aql.execute("FOR p IN product COLLECT AGGREGATE s = SUM(p.views) RETURN s"))
+        if not rows or rows[0] is None:
+            raise RuntimeError("arangodb: total_views read returned no rows")
+        return int(rows[0])
+
+    def close(self):
+        arango_common.close(self.cl)
+
+
 class PgAgeE2:
     """PostgreSQL 17 with pgvector and Apache AGE in one database: the vector
     hit is an HNSW query on a vector column, the hop is Cypher through AGE
@@ -590,7 +641,7 @@ class ComposedE2:
         self.neo.close()
 
 
-BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, PgAgeE2, Neo4jE2, ComposedE2)}
+BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, ArangoE2, PgAgeE2, Neo4jE2, ComposedE2)}
 
 
 def main():

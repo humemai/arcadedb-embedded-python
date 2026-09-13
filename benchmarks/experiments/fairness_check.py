@@ -419,6 +419,12 @@ def check_degree(rows):
             # not a recording gap. It is the recall=1.0 baseline precisely
             # because it builds no approximate structure at all.
             pass
+        elif r.get("degree_family") == "ivf_flat_no_degree" and r.get("ivf_nlists"):
+            # ArangoDB's vector index is FAISS IVF: inverted lists over trained
+            # centroids, no graph, no degree. Its operating point is nLists and
+            # nProbe, recorded on the row, and the arm says so in its own
+            # family string rather than being inferred (2026-09-13).
+            pass
         else:
             unstamped[r["scale"]].add(r["backend"])
     if not g and not unstamped:

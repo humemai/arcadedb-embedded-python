@@ -30,6 +30,7 @@ import traceback
 
 import numpy as np
 import surreal_common
+import arango_common
 
 DATA = os.environ.get("BENCH_DENSE_DATA", "/data/dense")
 DIM = 128
@@ -169,6 +170,11 @@ def degree_stamp(backend):
         base = base[:-len("_int8")]
     if base.startswith("arcadedb"):
         return M, "arcadedb_maxconnections_per_layer"
+    # ArangoDB's vector index is FAISS IVF: inverted lists over trained
+    # centroids, no graph and so no degree. Its operating point is nLists and
+    # nProbe, which the row records as ivf_nlists/ivf_nprobe (2026-09-13).
+    if base == "arangodb_dense":
+        return None, "ivf_flat_no_degree"
     if base in hnswlib_style:
         return COMPARATOR_M, "hnswlib_m_doubled_at_base"
     return None, "exact_scan_no_ann"
@@ -980,6 +986,38 @@ class SurrealDenseServer(SurrealDense):
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
+class ArangoDense(Base):
+    """ArangoDB 3.12.11 served (2026-09-13): article documents with an
+    embedding array through the bulk import API, then the engine's vector
+    index, which is FAISS IVF (trained centroids, inverted lists), not HNSW:
+    no degree to match, so the row records nLists and nProbe instead
+    (arango_common.ivf_params). Queries through APPROX_NEAR_L2 in AQL. The
+    server runs with --vector-index true, the feature's opt-in in 3.12."""
+    quantization = "fp32"
+    name = "arangodb_dense"
+
+    def connect(self):
+        self.cl, self.db, self.version = arango_common.connect()
+
+    def build(self, vecs):
+        col = self.db.create_collection("article")
+        for i in range(0, len(vecs), BATCH):
+            chunk = vecs[i:i + BATCH]
+            col.import_bulk([{"_key": str(i + j), "vid": i + j, "embedding": chunk[j].tolist()}
+                             for j in range(len(chunk))])
+        self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(col, "embedding", DIM, len(vecs))
+
+    def search(self, qvec, k):
+        cur = self.db.aql.execute(
+            "FOR d IN article LET s = APPROX_NEAR_L2(d.embedding, @q, {nProbe: @np}) "
+            "SORT s LIMIT @k RETURN d.vid",
+            bind_vars={"q": qvec.tolist(), "np": self.ivf_nprobe, "k": k})
+        return [int(v) for v in cur]
+
+    def close(self):
+        arango_common.close(self.cl)
+
+
 class Milvus(Base):
     # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
     # quantized says so on the class, so the row never has to consult an
@@ -1305,7 +1343,7 @@ class MilvusInt8(Milvus):
 
 BACKENDS = {b.name: b for b in
             (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus,
-             PgVector, Neo4jVector, SurrealDense, SurrealDenseServer,
+             PgVector, Neo4jVector, SurrealDense, SurrealDenseServer, ArangoDense,
              ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8,
              ArcadeServerInt8, SqliteVecInt8)}
 
@@ -1430,6 +1468,10 @@ def main():
     build = time.perf_counter() - t0
     out["build_s"] = round(build, 2)
     out["build_docs_per_s"] = round(len(train) / build, 1)
+    # An IVF arm's operating point, beside the degree the HNSW arms record.
+    for _k in ("ivf_nlists", "ivf_nprobe"):
+        if getattr(b, _k, None) is not None:
+            out[_k] = getattr(b, _k)
     # Captured AFTER the build and again after the timed passes below, because
     # #6858's trigger fires from the QUERY path: a build-time snapshot alone
     # cannot show a rebuild that the searches provoked.

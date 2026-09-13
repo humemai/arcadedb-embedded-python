@@ -304,6 +304,15 @@ def _engine_version(label: str, raw: str | None,
     return f"{engine} {ver}"
 
 
+def _dense_rows_for_note():
+    """Frozen l3d rows, for notes that apply only when an engine is present."""
+    try:
+        with open(FROZEN, newline="") as fh:
+            return [r for r in csv.DictReader(fh) if r.get("lane") == "l3d"]
+    except OSError:
+        return []
+
+
 def _image_version_names() -> dict[str, str]:
     src = (HERE / "runner.py").read_text(encoding="utf-8")
     out = {}
@@ -369,6 +378,9 @@ DISPLAY_NAMES = {
     "surrealdb_tpc": "SurrealDB (embedded)", "surrealdb_tpc_server": "SurrealDB (server)",
     "surrealdb_graph": "SurrealDB (embedded)", "surrealdb_graph_server": "SurrealDB (server)",
     "surrealdb_dense": "SurrealDB (embedded)", "surrealdb_dense_server": "SurrealDB (server)",
+    # Served only, so bare, like MongoDB and Neo4j; "(server)" marks an engine
+    # that also has an embedded row.
+    "arangodb_tpc": "ArangoDB", "arangodb_graph": "ArangoDB", "arangodb_dense": "ArangoDB", "arangodb_e2": "ArangoDB",
     "arcadedb": "ArcadeDB",
     "sqlite": "SQLite", "chroma": "Chroma", "ladybug": "LadybugDB",
 }
@@ -468,6 +480,7 @@ DENSE_PRECISION = {
     "chroma_dense": "fp32",
     "pgvector_dense": "fp32",   # vector(96/128), no quantization used
     "surrealdb_dense": "fp32", "surrealdb_dense_server": "fp32",   # HNSW TYPE F32
+    "arangodb_dense": "fp32",   # FAISS IVF over the raw float array
     "neo4j_dense": "fp32",      # float property list, no quantization option
     "qdrant_dense": "fp32",
     "milvus_dense": "fp32",
@@ -642,6 +655,7 @@ DENSE_10M_ARMS = [
     ("neo4jvec", "neo4j_dense", "Neo4j (fp32)", False),
     ("surreal", "surrealdb_dense", "SurrealDB (embedded, fp32)", False),
     ("surrealsrv", "surrealdb_dense_server", "SurrealDB (server, fp32)", False),
+    ("arango", "arangodb_dense", "ArangoDB (fp32)", False),
 ]
 
 
@@ -901,6 +915,8 @@ LANES = {
         "conditions": [
             "ingest+index total s is one timer around inserting the vectors and building the index; the two are not timed separately (Qdrant and Chroma build the index while ingesting, so the split is not defined there). ingest+index vectors/s divides the vector count by it.",
             "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
+*(["ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not HNSW, so the degree match above does not apply to it; its rows record nLists (about the square root of the corpus) and nProbe (an eighth of the lists) instead."]
+              if any(str(r.get("backend")) == "arangodb_dense" for r in _dense_rows_for_note()) else []),
             "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
             "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried 26 to 28 small segments and read 2.3x slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
             *([("ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.")]

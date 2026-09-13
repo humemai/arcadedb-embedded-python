@@ -115,6 +115,9 @@ def main():
                # drift apart again.
                "degree_param": degree_stamp(BACKEND)[0],
                "degree_family": degree_stamp(BACKEND)[1],
+               # An IVF arm (ArangoDB) has no degree; its point is these two.
+               **{_k: getattr(b, _k) for _k in ("ivf_nlists", "ivf_nprobe")
+                  if getattr(b, _k, None) is not None},
                # The BACKEND's own version. run_conditions() reports the
                # arcadedb wheel, which is absent from dbbench:dense, so a
                # comparator row otherwise records "unknown" and nothing at all

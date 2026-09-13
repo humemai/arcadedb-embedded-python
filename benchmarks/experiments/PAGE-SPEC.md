@@ -190,7 +190,7 @@ tracked artifact, and its conditions.
 | `l3s` | Sparse vector search | ArcadeDB emb int8 / emb fp32 / srv int8 / srv fp32, Elasticsearch, Milvus, Qdrant (pgvector queued, qDK) | cold p50, cold p99, warm p50, warm p99, gain, recall@10, ingest+index vectors/s, ingest+index total s, peak memory GiB, disk GiB |
 | `l3smp` (retired 2026-09-11, folded into `l3s` as warm columns) | Sparse: what a second pass buys | same six | cold p50, warm p50, gain, **recall@10** |
 | `l3s_nocompact` | **NEW** — what the settle step buys | ArcadeDB emb int8 with/without COMPACT | p50 at 100k / 1M / 8.84M, ratio |
-| `l3d` | Dense vector search | ArcadeDB emb fp32 / srv fp32 / emb int8 / srv int8, Chroma, DuckDB-VSS, LanceDB, Milvus (fp32, int8), Qdrant (fp32, int8), sqlite-vec (fp32, int8) (pgvector, Neo4j, SurrealDB embedded and server queued, qDK and qDO) | cold p50, cold p99, warm p50, warm p99, recall@10, ingest+index vectors/s, ingest+index total s, peak memory GiB, disk GiB |
+| `l3d` | Dense vector search | ArcadeDB emb fp32 / srv fp32 / emb int8 / srv int8, Chroma, DuckDB-VSS, LanceDB, Milvus (fp32, int8), Qdrant (fp32, int8), sqlite-vec (fp32, int8) (pgvector, Neo4j, SurrealDB embedded and server queued, qDK and qDO; ArangoDB queued, qDV) | cold p50, cold p99, warm p50, warm p99, recall@10, ingest+index vectors/s, ingest+index total s, peak memory GiB, disk GiB |
 | `l3d_params` | **NEW** — matched operating points | every dense arm | ef_construction, ef_search, degree_param, degree_family, quantization, index kind |
 
 Scales: `l3s` 100k / 1M / 8.84M; `l3d` 1M / 9.99M.
@@ -246,7 +246,7 @@ is on the page; the single-pass campaign rows feed the paper checks only.
 
 | id | title | rows | columns |
 |---|---|---|---|
-| `l2` | Graph OLTP | ArcadeDB emb / srv, LadybugDB, Neo4j (SurrealDB embedded and server queued, qDO) | point, 1-hop, 2-hop, and write, each p50 and p99, ingest vertices+edges/s, ingest total s, peak memory GiB, disk GiB |
+| `l2` | Graph OLTP | ArcadeDB emb / srv, LadybugDB, Neo4j (SurrealDB embedded and server queued, qDO; ArangoDB queued, qDV) | point, 1-hop, 2-hop, and write, each p50 and p99, ingest vertices+edges/s, ingest total s, peak memory GiB, disk GiB |
 | `l2olap` | Graph analytics ± the view | ArcadeDB embedded, embedded GAV, server, server GAV, LadybugDB, Neo4j | the three queries, each p50 and p99, ingest vertices+edges/s, ingest total s, peak memory GiB, disk GiB |
 
 Scales: `l2` SF1 + SF10; `l2olap` **SF1 + SF10** (SF10-only cannot show whether
@@ -255,7 +255,7 @@ the view's benefit scales; 20 SF1 rows are already frozen).
 `l2` carries p99 on every latency (DECISIONS #63); the 2-hop SF10 reversal that
 motivated it (20.28 vs 10.10 at b7c6c800d) is gone at 8d6af9475 (1.67 vs 4.79).
 
-### Documents and time series (the synthetic `l1`, `l1olap`, `l1tpc` blocks are retired from the page since 2026-09-11, DECISIONS #67; the paper keeps them. TPC now renders as `docs_oltp` and `docs_olap` with PostgreSQL (tuned) beside the default arm; SQLite, MongoDB, and SurrealDB are queued)
+### Documents and time series (the synthetic `l1`, `l1olap`, `l1tpc` blocks are retired from the page since 2026-09-11, DECISIONS #67; the paper keeps them. TPC now renders as `docs_oltp` and `docs_olap` with PostgreSQL (tuned) beside the default arm; SQLite, MongoDB, and SurrealDB are queued; ArangoDB queued, qDV)
 
 | id | title | rows | columns |
 |---|---|---|---|
@@ -273,7 +273,7 @@ structural row-store-vs-column-store story.
 
 | id | title | rows | columns |
 |---|---|---|---|
-| `e2` | Cross-model transaction | ArcadeDB embedded and server, Qdrant + Neo4j, SurrealDB embedded (PG+pgvector+AGE, Neo4j vector index, and SurrealDB server queued, qDN) | p50 ms, p99 ms, CPU s, ingest+index vertices+edges/s, ingest+index total s, peak memory GiB, disk GiB |
+| `e2` | Cross-model transaction | ArcadeDB embedded and server, Qdrant + Neo4j, SurrealDB embedded (PG+pgvector+AGE, Neo4j vector index, and SurrealDB server queued, qDN; ArangoDB queued, qDV) | p50 ms, p99 ms, CPU s, ingest+index vertices+edges/s, ingest+index total s, peak memory GiB, disk GiB |
 | `e2atom` | what survives a crash | same as `e2` | trials, crashes raised, torn results |
 | `e4` | What the client/server split costs | 1 … 100,000 rows | in-process, in-process HTTP, separate container, packing cost, separate process |
 | `pycost` | What Python costs | Java, Python, to_columns, to_json_list, to_list | **p50** (not mean), vs Java |

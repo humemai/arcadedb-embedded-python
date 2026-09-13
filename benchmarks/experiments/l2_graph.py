@@ -14,6 +14,7 @@ import statistics
 import sys
 import time
 import surreal_common
+import arango_common
 
 from graph_common import (OLAP_ITERATIONS, OLAP_QUERIES, OLTP_READS,
                           OLTP_WRITE, SCALE_OLTP_QUERIES, SCALE_PERSONS,
@@ -541,9 +542,78 @@ class SurrealGraphServer(SurrealGraph):
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
+class ArangoGraph(Base):
+    """ArangoDB 3.12.11 served (2026-09-13): person as a document collection
+    keyed by the LDBC id, KNOWS as an edge collection, both loaded through
+    the bulk import API; the same LDBC questions in AQL traversals through
+    the name-based hooks. The write is one AQL query (two INSERTs), which
+    ArangoDB runs as one transaction."""
+    name = "arangodb_graph"
+
+    def connect(self):
+        self.cl, self.db, self.version = arango_common.connect()
+        self.person = self.db.create_collection("person")
+        self.knows = self.db.create_collection("knows", edge=True)
+
+    def build(self, n_persons):
+        buf = []
+        for i, name, age, city in gen_persons(n_persons):
+            buf.append({"_key": str(i), "id": i, "name": name, "age": age, "city": city})
+            if len(buf) >= INGEST_BATCH:
+                self.person.import_bulk(buf); buf = []
+        if buf:
+            self.person.import_bulk(buf)
+        buf = []
+        for src, dst, since in gen_edges(n_persons):
+            buf.append({"_from": f"person/{src}", "_to": f"person/{dst}", "since": since})
+            if len(buf) >= INGEST_BATCH:
+                self.knows.import_bulk(buf); buf = []
+        if buf:
+            self.knows.import_bulk(buf)
+
+    READS = {
+        "point": "FOR p IN person FILTER p._key == @k RETURN {name: p.name, age: p.age}",
+        "hop1": ("FOR f IN 1..1 OUTBOUND CONCAT('person/', @k) knows "
+                 "COLLECT AGGREGATE n = COUNT(1), a = AVG(f.age) RETURN {n, a}"),
+        # DISTINCT at depth two, like count(DISTINCT fof): the default path
+        # uniqueness matches Cypher's relationship isomorphism.
+        "hop2": ("LET s = (FOR v IN 2..2 OUTBOUND CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
+                 "RETURN LENGTH(s)"),
+    }
+    OLAP = {
+        "top_degree": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
+                       "COLLECT id = p.id WITH COUNT INTO d SORT d DESC LIMIT 10 RETURN {id, d}"),
+        "same_city_edges": ("FOR a IN person FOR b IN 1..1 OUTBOUND a knows FILTER a.city == b.city "
+                            "COLLECT c = a.city WITH COUNT INTO n SORT n DESC LIMIT 10 RETURN {c, n}"),
+        "friend_age_by_city": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
+                               "COLLECT c = p.city AGGREGATE a = AVG(f.age), n = COUNT(1) "
+                               "SORT n DESC LIMIT 10 RETURN {c, a, n}"),
+    }
+
+    def _n(self, q, **bv):
+        return len(list(self.db.aql.execute(q, bind_vars=bv)))
+
+    def run_read(self, op, pid):
+        return self._n(self.READS[op], k=str(pid))
+
+    def run_write(self, pid, new_id):
+        self._n("INSERT {_key: @nk, id: @n, name: CONCAT('w', @nk), age: 33, city: 'city_0'} INTO person "
+                "INSERT {_from: CONCAT('person/', @k), _to: CONCAT('person/', @nk), since: 2026} INTO knows",
+                k=str(pid), nk=str(new_id), n=new_id)
+
+    def run_olap(self, qname):
+        return self._n(self.OLAP[qname])
+
+    def run_cypher(self, text):
+        raise NotImplementedError("ArangoDB runs AQL through the name-based hooks")
+
+    def close(self):
+        arango_common.close(self.cl)
+
+
 ADAPTERS = {a.name: a for a in
             [ArcadeGraphEmbedded, ArcadeGraphServer, Neo4jGraph, LadybugGraph,
-             SurrealGraph, SurrealGraphServer]}
+             SurrealGraph, SurrealGraphServer, ArangoGraph]}
 
 
 def pct(sorted_ms, q):
