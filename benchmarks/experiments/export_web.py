@@ -1548,10 +1548,10 @@ def _lifecycle_table(all_rows):
         # (writable layer plus volumes) does not see a bind mount. Every
         # embedded row read 0.0 GiB beside a 5.6 GiB server twin at 10M
         # (2026-09-11); a blind spot is a blank, not a zero.
-        for field, label in (("peak_anon_mib_sum", "peak memory GiB"),
-                             ("disk_data_mb", "disk GiB")):
-            if label == "disk GiB" and not _srv:
-                continue
+        # No disk column on this table (2026-09-13, user): a session-cost
+        # table is not about footprint, and the embedded rows could not carry
+        # it anyway (bind mount, see the comment above).
+        for field, label in (("peak_anon_mib_sum", "peak memory GiB"),):
             got = _agg(rs, field)
             if got is not None:
                 entry["metrics"][label] = got
@@ -1577,10 +1577,6 @@ def _lifecycle_table(all_rows):
             "Server rows have no JVM start, first open, or cold process: the server is "
             "already running when the probe connects, so those three columns describe "
             "the embedded process only. The session columns are measured for both.",
-            "Disk is shown for server rows only. The embedded database sits on a host "
-            "bind mount so its page cache can be evicted before the cold columns, and "
-            "the disk reading does not see a bind mount; the server twin's disk is the "
-            "same database's size.",
         ] + [f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}" for k, v in sorted(LIFECYCLE_WITHHELD.items())],
         "columns": ["JVM start ms", "first open ms", "cold process ms"]
                    + [LIFECYCLE_SCENARIO_LABELS[k] for k in LIFECYCLE_PAGE_SCENARIOS],

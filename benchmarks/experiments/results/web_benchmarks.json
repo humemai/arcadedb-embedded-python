@@ -6779,9 +6779,7 @@
         "Known at this engine build: a vector database's no-op session close grows with the index (8 ms at 10k, 98 ms at 1M, 1.4 s at 10M), and a session with one search in it at 10M is 17.6 s, because the first search after a write started a full asynchronous graph rebuild and close() waited on it. Filed as #7183, fixed upstream in #7191 for 26.10.1; the October re-pin re-measures it.",
         "A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k documents and 10M.",
         "Server rows have no JVM start, first open, or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.",
-        "Disk is shown for server rows only. The embedded database sits on a host bind mount so its page cache can be evicted before the cold columns, and the disk reading does not see a bind mount; the server twin's disk is the same database's size.",
-        "Graph with the analytical view is withheld: probe scope under revision; see PAGE-SPEC 4c",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on."
+        "Graph with the analytical view is withheld: probe scope under revision; see PAGE-SPEC 4c"
       ],
       "columns": [
         "JVM start ms",
@@ -6791,8 +6789,7 @@
         "one query ms",
         "one write ms",
         "write, then query ms",
-        "peak memory GiB",
-        "disk GiB"
+        "peak memory GiB"
       ],
       "withheld_scales": [],
       "withheld_reason": null,
@@ -6900,12 +6897,6 @@
               "min": 1.871,
               "max": 2.0844,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0058,
-              "min": 0.0058,
-              "max": 0.0058,
-              "n": 3
             }
           }
         },
@@ -7011,12 +7002,6 @@
               "median": 0.3662,
               "min": 0.3632,
               "max": 0.3714,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0005,
-              "min": 0.0005,
-              "max": 0.0005,
               "n": 3
             }
           }
@@ -7124,12 +7109,6 @@
               "min": 0.7741,
               "max": 0.7899,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0033,
-              "min": 0.0033,
-              "max": 0.0033,
-              "n": 3
             }
           }
         },
@@ -7235,12 +7214,6 @@
               "median": 0.2988,
               "min": 0.2927,
               "max": 0.3045,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0002,
-              "min": 0.0002,
-              "max": 0.0002,
               "n": 3
             }
           }
@@ -7348,12 +7321,6 @@
               "min": 1.9858,
               "max": 2.1453,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0033,
-              "min": 0.0033,
-              "max": 0.0033,
-              "n": 3
             }
           }
         },
@@ -7459,12 +7426,6 @@
               "median": 1.1594,
               "min": 1.1163,
               "max": 1.1768,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0044,
-              "min": 0.0044,
-              "max": 0.0044,
               "n": 3
             }
           }
@@ -7572,12 +7533,6 @@
               "min": 1.9097,
               "max": 2.0648,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0017,
-              "min": 0.0017,
-              "max": 0.0017,
-              "n": 3
             }
           }
         },
@@ -7683,12 +7638,6 @@
               "median": 4.2233,
               "min": 4.2159,
               "max": 4.2376,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0557,
-              "min": 0.0557,
-              "max": 0.0557,
               "n": 3
             }
           }
@@ -7796,12 +7745,6 @@
               "min": 0.891,
               "max": 0.9161,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0031,
-              "min": 0.0031,
-              "max": 0.0031,
-              "n": 3
             }
           }
         },
@@ -7907,12 +7850,6 @@
               "median": 2.0866,
               "min": 2.0131,
               "max": 2.2044,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0196,
-              "min": 0.0196,
-              "max": 0.0196,
               "n": 3
             }
           }
@@ -8020,12 +7957,6 @@
               "min": 0.2854,
               "max": 0.3078,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0002,
-              "min": 0.0002,
-              "max": 0.0002,
-              "n": 3
             }
           }
         },
@@ -8131,12 +8062,6 @@
               "median": 2.7451,
               "min": 2.7296,
               "max": 2.7463,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0303,
-              "min": 0.0303,
-              "max": 0.0303,
               "n": 3
             }
           }
@@ -8244,12 +8169,6 @@
               "min": 4.0746,
               "max": 4.1164,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0384,
-              "min": 0.0384,
-              "max": 0.0384,
-              "n": 3
             }
           }
         },
@@ -8355,12 +8274,6 @@
               "median": 2.6747,
               "min": 2.6734,
               "max": 2.6781,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.003,
-              "min": 0.003,
-              "max": 0.003,
               "n": 3
             }
           }
@@ -8468,12 +8381,6 @@
               "min": 12.5479,
               "max": 12.8205,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.5612,
-              "min": 0.5612,
-              "max": 0.5612,
-              "n": 3
             }
           }
         },
@@ -8579,12 +8486,6 @@
               "median": 4.4365,
               "min": 4.262,
               "max": 4.4605,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.03,
-              "min": 0.03,
-              "max": 0.03,
               "n": 3
             }
           }
@@ -8692,12 +8593,6 @@
               "min": 10.3349,
               "max": 10.3575,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.2244,
-              "min": 0.2244,
-              "max": 0.2244,
-              "n": 3
             }
           }
         },
@@ -8803,12 +8698,6 @@
               "median": 0.5187,
               "min": 0.5056,
               "max": 0.5276,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0002,
-              "min": 0.0002,
-              "max": 0.0002,
               "n": 3
             }
           }
@@ -8916,12 +8805,6 @@
               "min": 10.49,
               "max": 10.519,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.2996,
-              "min": 0.2996,
-              "max": 0.2996,
-              "n": 3
             }
           }
         },
@@ -9027,12 +8910,6 @@
               "median": 10.5089,
               "min": 10.5058,
               "max": 10.5192,
-              "n": 3
-            },
-            "disk GiB": {
-              "median": 0.3839,
-              "min": 0.3839,
-              "max": 0.3839,
               "n": 3
             }
           }
@@ -9140,12 +9017,6 @@
               "min": 10.1416,
               "max": 10.1429,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0187,
-              "min": 0.0187,
-              "max": 0.0187,
-              "n": 3
             }
           }
         },
@@ -9251,12 +9122,6 @@
               "median": 24.7143,
               "min": 24.7143,
               "max": 24.7143,
-              "n": 1
-            },
-            "disk GiB": {
-              "median": 5.6357,
-              "min": 5.6357,
-              "max": 5.6357,
               "n": 1
             }
           }
@@ -9364,12 +9229,6 @@
               "min": 15.277,
               "max": 15.2964,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.2982,
-              "min": 0.2982,
-              "max": 0.2982,
-              "n": 3
             }
           }
         },
@@ -9476,12 +9335,6 @@
               "min": 15.2597,
               "max": 15.2731,
               "n": 3
-            },
-            "disk GiB": {
-              "median": 0.0586,
-              "min": 0.0586,
-              "max": 0.0587,
-              "n": 3
             }
           }
         }
@@ -9502,8 +9355,7 @@
         "one query ms": "down",
         "one write ms": "down",
         "write, then query ms": "down",
-        "peak memory GiB": "down",
-        "disk GiB": "down"
+        "peak memory GiB": "down"
       }
     },
     {
