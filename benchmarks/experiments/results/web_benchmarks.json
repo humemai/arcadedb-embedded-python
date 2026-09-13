@@ -86,6 +86,12 @@
     "surrealdb_e2_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
+    "surrealdb_graph": [
+      "surrealdb-embedded:2.0.0"
+    ],
+    "surrealdb_graph_server": [
+      "surrealdb-server:3.2.4+20260803.93ab219"
+    ],
     "surrealdb_tpc_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
@@ -4222,6 +4228,174 @@
           }
         },
         {
+          "backend": "SurrealDB (embedded)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.0.0",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.044,
+              "min": 0.044,
+              "max": 0.045,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.05,
+              "min": 0.049,
+              "max": 0.058,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.699,
+              "min": 0.688,
+              "max": 0.781,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 9.461,
+              "min": 9.017,
+              "max": 13.279,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 14.934,
+              "min": 14.006,
+              "max": 15.177,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 185.619,
+              "min": 171.718,
+              "max": 189.573,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 0.164,
+              "min": 0.163,
+              "max": 0.197,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 0.189,
+              "min": 0.177,
+              "max": 0.245,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 14029.0869,
+              "min": 13998.1631,
+              "max": 14060.1476,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 13.58,
+              "min": 13.55,
+              "max": 13.61,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.5604,
+              "min": 0.56,
+              "max": 0.5619,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 105.45,
+              "min": 105.3,
+              "max": 105.5,
+              "n": 4
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb v3.2.4",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.094,
+              "min": 0.093,
+              "max": 0.103,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.264,
+              "min": 0.247,
+              "max": 0.622,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.171,
+              "min": 0.156,
+              "max": 0.171,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 0.64,
+              "min": 0.557,
+              "max": 0.692,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.567,
+              "min": 0.469,
+              "max": 0.677,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 2.951,
+              "min": 2.776,
+              "max": 3.028,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 17.517,
+              "min": 17.484,
+              "max": 17.664,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 29.218,
+              "min": 26.695,
+              "max": 44.449,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 19886.7432,
+              "min": 19302.4316,
+              "max": 20033.123,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 9.58,
+              "min": 9.51,
+              "max": 9.87,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.3041,
+              "min": 0.2999,
+              "max": 0.3327,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "precision": null,
@@ -4568,6 +4742,174 @@
               "n": 5
             }
           }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.0.0",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.046,
+              "min": 0.046,
+              "max": 0.047,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.054,
+              "min": 0.053,
+              "max": 0.061,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.202,
+              "min": 1.111,
+              "max": 1.429,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 23.998,
+              "min": 21.676,
+              "max": 28.632,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 59.442,
+              "min": 59.078,
+              "max": 61.185,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 800.436,
+              "min": 774.169,
+              "max": 823.729,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 0.183,
+              "min": 0.182,
+              "max": 0.23,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 0.199,
+              "min": 0.197,
+              "max": 0.279,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 11432.7496,
+              "min": 11354.3765,
+              "max": 11469.3888,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 175.3,
+              "min": 174.74,
+              "max": 176.51,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 5.0643,
+              "min": 5.0619,
+              "max": 5.0646,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1117.2,
+              "min": 1117.2,
+              "max": 1117.2,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb v3.2.4",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.176,
+              "min": 0.173,
+              "max": 0.208,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.604,
+              "min": 0.563,
+              "max": 0.699,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.432,
+              "min": 0.384,
+              "max": 0.472,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 1.474,
+              "min": 1.429,
+              "max": 1.795,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 1.242,
+              "min": 1.23,
+              "max": 1.292,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 13.941,
+              "min": 13.458,
+              "max": 14.527,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 17.673,
+              "min": 17.628,
+              "max": 18.052,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 25.912,
+              "min": 22.51,
+              "max": 35.469,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 17929.5133,
+              "min": 17829.0277,
+              "max": 18133.9215,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 111.78,
+              "min": 110.52,
+              "max": 112.41,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.9937,
+              "min": 1.9277,
+              "max": 2.0265,
+              "n": 5
+            }
+          }
         }
       ],
       "directions": {
@@ -4603,6 +4945,7 @@
         "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
         "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "SurrealDB (embedded) at SF10 (73k people): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
       ],
       "columns": [
@@ -5084,6 +5427,150 @@
           }
         },
         {
+          "backend": "SurrealDB (embedded)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.0.0",
+          "host": null,
+          "metrics": {
+            "ingest vertices+edges/s": {
+              "median": 13855.6364,
+              "min": 13715.9827,
+              "max": 14070.5318,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 13.75,
+              "min": 13.54,
+              "max": 13.89,
+              "n": 5
+            },
+            "average friend age p50 ms": {
+              "median": 2578.38,
+              "min": 2568.72,
+              "max": 2589.31,
+              "n": 5
+            },
+            "average friend age p99 ms": {
+              "median": 2598.95,
+              "min": 2593.34,
+              "max": 2660.65,
+              "n": 5
+            },
+            "friends in same city p50 ms": {
+              "median": 2244.67,
+              "min": 2235.89,
+              "max": 2249.66,
+              "n": 5
+            },
+            "friends in same city p99 ms": {
+              "median": 2265.74,
+              "min": 2260.84,
+              "max": 2281.36,
+              "n": 5
+            },
+            "most friends p50 ms": {
+              "median": 1336.98,
+              "min": 1325.82,
+              "max": 1369.75,
+              "n": 5
+            },
+            "most friends p99 ms": {
+              "median": 1539.75,
+              "min": 1508.55,
+              "max": 1587.41,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.5688,
+              "min": 0.5686,
+              "max": 0.5689,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 105.1,
+              "min": 105.0,
+              "max": 105.1,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb v3.2.4",
+          "host": null,
+          "metrics": {
+            "ingest vertices+edges/s": {
+              "median": 19460.1634,
+              "min": 19070.5706,
+              "max": 19970.1258,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 9.79,
+              "min": 9.54,
+              "max": 9.99,
+              "n": 5
+            },
+            "average friend age p50 ms": {
+              "median": 691.04,
+              "min": 688.07,
+              "max": 693.87,
+              "n": 5
+            },
+            "average friend age p99 ms": {
+              "median": 706.54,
+              "min": 698.26,
+              "max": 708.21,
+              "n": 5
+            },
+            "friends in same city p50 ms": {
+              "median": 690.05,
+              "min": 678.72,
+              "max": 692.3,
+              "n": 5
+            },
+            "friends in same city p99 ms": {
+              "median": 700.54,
+              "min": 694.67,
+              "max": 706.05,
+              "n": 5
+            },
+            "most friends p50 ms": {
+              "median": 103.53,
+              "min": 102.71,
+              "max": 103.92,
+              "n": 5
+            },
+            "most friends p99 ms": {
+              "median": 105.23,
+              "min": 104.8,
+              "max": 105.94,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.3022,
+              "min": 0.2937,
+              "max": 0.3184,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "ArcadeDB (embedded)",
           "is_arcadedb": true,
           "precision": null,
@@ -5541,6 +6028,75 @@
               "median": 681.7,
               "min": 681.7,
               "max": 681.8,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb v3.2.4",
+          "host": null,
+          "metrics": {
+            "ingest vertices+edges/s": {
+              "median": 17822.6856,
+              "min": 17721.8233,
+              "max": 18031.1381,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 112.45,
+              "min": 111.15,
+              "max": 113.09,
+              "n": 5
+            },
+            "average friend age p50 ms": {
+              "median": 7829.1,
+              "min": 7791.98,
+              "max": 7838.8,
+              "n": 5
+            },
+            "average friend age p99 ms": {
+              "median": 7883.88,
+              "min": 7878.38,
+              "max": 8030.7,
+              "n": 5
+            },
+            "friends in same city p50 ms": {
+              "median": 7919.26,
+              "min": 7889.01,
+              "max": 7920.91,
+              "n": 5
+            },
+            "friends in same city p99 ms": {
+              "median": 7991.73,
+              "min": 7978.87,
+              "max": 8018.08,
+              "n": 5
+            },
+            "most friends p50 ms": {
+              "median": 939.77,
+              "min": 937.68,
+              "max": 943.2,
+              "n": 5
+            },
+            "most friends p99 ms": {
+              "median": 952.96,
+              "min": 950.39,
+              "max": 954.86,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 2.1187,
+              "min": 2.0961,
+              "max": 2.1629,
               "n": 5
             }
           }
