@@ -816,7 +816,11 @@ def _disk_data(r):
     SurrealDB server holding 6.0M line items, 2026-09-13) and says nothing."""
     if r.get("server_image") and not r.get("server_disk_mb"):
         return None
-    return r.get("disk_data_mb")
+    v = r.get("disk_data_mb")
+    try:
+        return float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
 
 def _rate(count_fields, seconds_field):
     """A per-row records-per-second callable for spec tables whose lanes
@@ -1238,7 +1242,7 @@ L4_METRICS = [
     ("q_global_ms", "12h aggregate p50 ms"),
     ("q_global_p99_ms", "12h aggregate p99 ms"),
     ("peak_anon_mib_sum", "peak memory GiB"),
-    (_disk_data, "disk GiB"),
+    ("disk_data_mb", "disk GiB"),
 ]
 
 

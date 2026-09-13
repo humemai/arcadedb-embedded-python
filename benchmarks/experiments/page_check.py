@@ -628,7 +628,7 @@ def _check_setup_prose(payload):
         if token not in prose:
             print(f"  SETUP  host {host}: CPU {token} not named in the page prose"); bad += 1
     cpuset = setup.get("cpuset")
-    if cpuset and f"cpuset {cpuset}" not in prose and f"CPUs {cpuset}" not in prose:
+    if cpuset and f"cpuset {cpuset}" not in prose and f"`cpuset` {cpuset}" not in prose and f"CPUs {cpuset}" not in prose:
         print(f"  SETUP  cpuset {cpuset} not named in the page prose"); bad += 1
     if not bad:
         print(f"  setup prose names the host CPU and cpuset {cpuset}")
