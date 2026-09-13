@@ -85,4 +85,6 @@ This repo is a fork of ArcadeDB Java. For the server, Java API, and core databas
 ## 📄 License
 
 Both upstream ArcadeDB (Java) and this ArcadeDB Embedded Python project are licensed
+
+Arcade Data, the company behind ArcadeDB, has [committed in writing](https://arcadedb.com/blog/open-source-forever-why-arcadedb-will-never-change-its-license/) to keeping the engine Apache 2.0, and HumemAI, the company behind this package, makes the same commitment for the Python bindings. No source-available relicensing, no enterprise edition holding features back.
 under Apache 2.0, fully open and free for everyone, including commercial use.
