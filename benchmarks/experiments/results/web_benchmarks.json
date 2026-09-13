@@ -80,6 +80,9 @@
     "sqlite_vec_dense_int8": [
       "0.1.9"
     ],
+    "surrealdb_dense_server": [
+      "surrealdb-server:3.2.4+20260803.93ab219"
+    ],
     "surrealdb_e2": [
       "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
     ],
@@ -254,6 +257,7 @@
     "container:505ec3b6a081 (host unknown)",
     "container:50ca4c00c4d4 (host unknown)",
     "container:540e6dc1d521 (host unknown)",
+    "container:542b48ee6d8c (host unknown)",
     "container:5440e5d98766 (host unknown)",
     "container:54d0943b3f23 (host unknown)",
     "container:5700f1096187 (host unknown)",
@@ -318,6 +322,7 @@
     "container:7b2de57e8af2 (host unknown)",
     "container:7b47b18f14ac (host unknown)",
     "container:7b830271fdbd (host unknown)",
+    "container:7c06dc7b1fad (host unknown)",
     "container:7c0cc10aaa98 (host unknown)",
     "container:7cda220d6b9b (host unknown)",
     "container:7e7ae744896c (host unknown)",
@@ -444,6 +449,7 @@
     "container:c4d814e24a9e (host unknown)",
     "container:c614c27f1711 (host unknown)",
     "container:c650ecda550a (host unknown)",
+    "container:c659e4f25cc3 (host unknown)",
     "container:c6dd3fd12b35 (host unknown)",
     "container:c6fc870eb7eb (host unknown)",
     "container:c81926749c63 (host unknown)",
@@ -452,6 +458,7 @@
     "container:cbb92a326aed (host unknown)",
     "container:cc1f2b2b6e22 (host unknown)",
     "container:cdf80a395ddf (host unknown)",
+    "container:ceda8119abc2 (host unknown)",
     "container:cf22f75007e0 (host unknown)",
     "container:cf8f271444a5 (host unknown)",
     "container:cfc7312c5a11 (host unknown)",
@@ -487,6 +494,7 @@
     "container:e252c422db5f (host unknown)",
     "container:e2daa6c96d75 (host unknown)",
     "container:e3616efaf613 (host unknown)",
+    "container:e3e9b72b53fb (host unknown)",
     "container:e4123a3ef89a (host unknown)",
     "container:e4371072a603 (host unknown)",
     "container:e4953966cde4 (host unknown)",
@@ -2091,6 +2099,7 @@
         "ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
+        "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
       ],
       "columns": [
@@ -2862,6 +2871,75 @@
               "median": 0.4993,
               "min": 0.4993,
               "max": 0.4994,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server, fp32)",
+          "is_arcadedb": false,
+          "precision": "fp32",
+          "scale": "small",
+          "scale_label": "1M vectors",
+          "workload": "search",
+          "n_docs": "1,000,000",
+          "deployment": "server",
+          "image": null,
+          "version_name": "surrealdb 26.9.1",
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 1503.138,
+              "min": 1460.664,
+              "max": 1527.293,
+              "n": 5
+            },
+            "cold p99 ms": {
+              "median": 4107.564,
+              "min": 3721.853,
+              "max": 4724.67,
+              "n": 5
+            },
+            "warm p50 ms": {
+              "median": 3.975,
+              "min": 3.506,
+              "max": 6.213,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 5.3795,
+              "min": 4.75,
+              "max": 14.726,
+              "n": 20
+            },
+            "recall@10": {
+              "median": 0.9788,
+              "min": 0.9779,
+              "max": 0.9792,
+              "n": 20
+            },
+            "ingest+index total s": {
+              "median": 157.77,
+              "min": 157.32,
+              "max": 160.06,
+              "n": 5
+            },
+            "ingest+index vectors/s": {
+              "median": 6338.3,
+              "min": 6247.7,
+              "max": 6356.5,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 13.2252,
+              "min": 13.0452,
+              "max": 14.1463,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0006,
+              "min": 0.0005,
+              "max": 0.0009,
               "n": 5
             }
           }
