@@ -12,4 +12,4 @@ Versions pinned (all on PyPI):
 - DuckDB 1.5.4, SQLite 3.46.1, Chroma 1.5.9 (unchanged).
 
 The paper and poster were re-measured on the benchmark host and updated to these versions and
-numbers (2026-07-11). Prior campaigns archived under results/archive_*.
+numbers. Prior campaigns are not kept in the repository.

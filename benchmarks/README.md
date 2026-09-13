@@ -13,7 +13,6 @@ computed from.
   against SQLite, DuckDB, LadybugDB and Chroma, plus `jpype_overhead/`, which
   times the binding against Java-native execution on identical JARs to show
   what crossing the CPython-JVM boundary costs.
-- `design-docs/` — reference copies of engine design docs restored from git
   history (`40bc98c843`), kept verbatim as source material.
 
 **What is tracked.** Append logs and regenerable inputs (corpora, databases,

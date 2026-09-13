@@ -271,7 +271,7 @@ What is worth knowing structurally:
 | First-call cost | JVM start (once) | Server warmup, ~5.6 s measured (once) |
 
 For a measured, reproducible comparison of Python-side call overhead in the
-embedded path, see `benchmarks/jpype_overhead/REPORT.md` in the repository.
+embedded path, see `benchmarks/python-bindings/jpype_overhead/REPORT.md` in the repository.
 
 ## When to Use Each
 
