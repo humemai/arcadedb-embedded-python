@@ -20,6 +20,7 @@ import os
 import random
 import statistics
 import time
+import surreal_common
 
 DATA = os.environ.get("BENCH_TPC_DATA", "/data/tpch")
 SF = os.environ.get("BENCH_TPC_SF", "1")
@@ -241,7 +242,7 @@ class MongoTPC:
 
 
 class SurrealTPC:
-    """SurrealDB embedded through its Python SDK on SurrealKV (engine 2.0.0):
+    """SurrealDB embedded through its Python SDK on SurrealKV (SDK 2.0.0, which carries core 2.3.10):
     lineitem and part as tables, part keyed by record id, dates as ISO text,
     Q1/Q6 in SurrealQL, new-order as one BEGIN/COMMIT transaction
     (2026-09-11). The served twin runs the 3.2.4 server on RocksDB."""
@@ -254,7 +255,7 @@ class SurrealTPC:
         shutil.rmtree("/tmp/tpc_surrealkv", ignore_errors=True)
         self.db = Surreal(self.URL)
         self.db.use("bench", "bench")
-        self.version = "surrealdb-embedded:" + str(self.db.version()).replace("surrealdb-", "")
+        self.version = surreal_common.engine_stamp(self.db)   # core version, not the SDK's (F39)
 
     def connect(self):
         self._open()

@@ -13,6 +13,7 @@ import os
 import statistics
 import sys
 import time
+import surreal_common
 
 from graph_common import (OLAP_ITERATIONS, OLAP_QUERIES, OLTP_READS,
                           OLTP_WRITE, SCALE_OLTP_QUERIES, SCALE_PERSONS,
@@ -447,7 +448,7 @@ class LadybugGraph(Base):
 
 class SurrealGraph(Base):
     """SurrealDB through its Python SDK on the SDK's SurrealKV disk store
-    (engine 2.0.0), the same LDBC questions in SurrealQL: person records with
+    (SDK 2.0.0, which carries core 2.3.10), the same LDBC questions in SurrealQL: person records with
     record ids, KNOWS as a RELATE edge table (2026-09-11). The served twin
     below runs the 3.2.4 server on RocksDB."""
     name = "surrealdb_graph"
@@ -459,7 +460,7 @@ class SurrealGraph(Base):
         shutil.rmtree("/tmp/l2_surrealkv", ignore_errors=True)
         self.db = Surreal(self.URL)
         self.db.use("bench", "bench")
-        self.version = "surrealdb-embedded:" + str(self.db.version()).replace("surrealdb-", "")
+        self.version = surreal_common.engine_stamp(self.db)   # core version, not the SDK's (F39)
 
     def connect(self):
         self._open()
@@ -509,7 +510,7 @@ class SurrealGraph(Base):
 
     OLAP = {
         "top_degree": "SELECT pid, count(->knows) AS d FROM person ORDER BY d DESC LIMIT 10",
-        # subquery form: on 2.0.0 ORDER BY after GROUP BY sorted by the group
+        # subquery form: on core 2.3.10 ORDER BY after GROUP BY sorted by the group
         # key, not n (laptop smoke, 2026-09-11); 3.2.4 accepts both forms
         "same_city_edges": "SELECT * FROM (SELECT in.city AS c, count() AS n FROM knows WHERE in.city = out.city GROUP BY c) ORDER BY n DESC LIMIT 10",
         "friend_age_by_city": "SELECT * FROM (SELECT in.city AS c, math::mean(out.age) AS a, count() AS n FROM knows GROUP BY c) ORDER BY n DESC LIMIT 10",

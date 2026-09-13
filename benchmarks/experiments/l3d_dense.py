@@ -29,6 +29,7 @@ import time
 import traceback
 
 import numpy as np
+import surreal_common
 
 DATA = os.environ.get("BENCH_DENSE_DATA", "/data/dense")
 DIM = 128
@@ -919,7 +920,7 @@ class Neo4jVector(Base):
 
 
 class SurrealDense(Base):
-    """SurrealDB embedded through its Python SDK on SurrealKV (engine 2.0.0):
+    """SurrealDB embedded through its Python SDK on SurrealKV (SDK 2.0.0, which carries core 2.3.10):
     article records with an embedding array under a SurrealQL HNSW index at
     the matched operating point (M=COMPARATOR_M, EFC=EF_CONSTRUCTION), the
     <|k,ef|> nearest-neighbour operator at EF_SEARCH (2026-09-11). The served
@@ -934,7 +935,7 @@ class SurrealDense(Base):
         shutil.rmtree("/tmp/l3d_surrealkv", ignore_errors=True)
         self.db = Surreal(self.URL)
         self.db.use("bench", "bench")
-        self.version = "surrealdb-embedded:" + str(self.db.version()).replace("surrealdb-", "")
+        self.version = surreal_common.engine_stamp(self.db)   # core version, not the SDK's (F39)
 
     def connect(self):
         self._open()

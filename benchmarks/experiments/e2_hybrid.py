@@ -28,6 +28,7 @@ import statistics
 import time
 
 import numpy as np
+import surreal_common
 
 PRODUCTS = int(os.environ.get("E2_PRODUCTS", "50000"))
 DIM = 64
@@ -228,7 +229,7 @@ def _srows(res):
 class SurrealE2:
     """SurrealDB embedded through its Python SDK, on the SDK's SurrealKV disk
     store (2026-09-11; it ran at mem:// before, which no other engine on the
-    table was allowed). The SDK bundles engine 2.0.0; the served twin below
+    table was allowed). The SDK bundles core 2.3.10 behind an SDK version of 2.0.0; the served twin below
     runs the 3.2.4 server on RocksDB."""
     name = "surrealdb_e2"
     URL = "surrealkv:///tmp/e2_surrealkv"
@@ -240,7 +241,7 @@ class SurrealE2:
         self.db = Surreal(self.URL)
         self.db.use("bench", "bench")
         try:
-            self.version = "surrealdb-embedded:" + str(self.db.version()).replace("surrealdb-", "")
+            self.version = surreal_common.engine_stamp(self.db)   # core version, not the SDK's (F39)
         except Exception:  # noqa: BLE001
             from importlib.metadata import version as _v
             self.version = "surrealdb-py:" + _v("surrealdb")

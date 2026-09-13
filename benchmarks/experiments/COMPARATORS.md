@@ -20,7 +20,7 @@ publishes is what the engine reports at connect time, never the tag.
 | Elasticsearch | pinned in runner | 9.4.1 | sparse | served | bulk index, refresh, force-merge |
 | Chroma, LanceDB, sqlite-vec | `dbbench:dense` (chromadb==1.5.9, lancedb==0.37.1, sqlite-vec==0.1.9) | as pinned | dense | embedded | add() / Arrow / executemany |
 | QuestDB | `questdb/questdb@sha256:e62916bd…` | 9.1.1 | time series | served | InfluxDB line protocol over TCP |
-| SurrealDB | `surrealdb==2.0.0` (Python SDK, in-process; the SDK embeds engine 2.0.0) | 2.0.0 | cross-model, documents (TPC), graph, dense | embedded, SurrealKV on disk (`mem://` until 2026-09-11) | SDK `insert()` batches, `RELATE` statements for edges |
+| SurrealDB | `surrealdb==2.0.0` (Python SDK, in-process; the SDK compiles in surrealdb-core 2.3.10, read from the extension by `surreal_common.core_version()`) | core 2.3.10 (SDK 2.0.0) | cross-model, documents (TPC), graph, dense | embedded, SurrealKV on disk (`mem://` until 2026-09-11) | SDK `insert()` batches, `RELATE` statements for edges |
 | MongoDB | `mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17` (`mongo:8.2.12`) | 8.2.12 | documents (TPC-C/TPC-H, synthetic), time series (native time-series collection) | served | insert_many batches; single-node replica set. 8.0 refuses to start on Linux >= 6.19 (SERVER-121912); 8.2 runs. Single-node replica set, because multi-document transactions (TPC-C new-order) need one. Vector search in Community 8.2 needs the separate `mongot` process (`mongodb/mongodb-community-search`), a second container per cell: deferred until the runner can start a two-container server. Graph via `$graphLookup` is not a model MongoDB claims; not measured. Client: `pymongo==4.18.1`. |
 | pgvector | `pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317` (`0.8.6-pg17`) | PostgreSQL 17 + pgvector 0.8.6 | dense (`vector`, HNSW m=16, ef_construction=100, ef_search=100), sparse (`sparsevec`, HNSW, inner product; indexing needs <= 1,000 non-zeros per vector, SPLADE has ~127) | served | COPY, then HNSW build. Same PostgreSQL major as the document comparator. `maintenance_work_mem` sized to the cell's cap for the build (resource fitting, disclosed). |
 | TimescaleDB | `timescale/timescaledb@sha256:189fd4822991918322c1f0d17e5adcf42853bf022a3d0dbdb56da61c5f811286` (`2.28.3-pg17`) | 2.28.3 on PostgreSQL 17 | time series (hypertable, `time_bucket`) | served | COPY into a hypertable. One of TSBS's home engines. COPY ingest, index on (host, ts). Smoke on the laptop: 206k points/s, 12h aggregate 118 ms. |
@@ -63,7 +63,7 @@ SQLite (documents tiny, time series full corpus), pgvector dense (micro, recall
 (full corpus). The TPC adapters have no laptop corpus and are exercised by their
 queue script's first cell.
 
-SurrealDB single-model adapters (2026-09-11, engine 2.0.0 embedded through the
+SurrealDB single-model adapters (2026-09-11, core 2.3.10 embedded through the 2.0.0
 SDK and 3.2.4 served, a 0.01-scale TPC-H corpus generated with DuckDB, LDBC
 micro, SIFT 5k): documents new-order 2,598 ops/s embedded and 112 ops/s served
 (one round trip per statement), Q1 3.1 s embedded and 0.54 s served at 1/100
@@ -71,5 +71,5 @@ of SF1; graph builds 7.7 s embedded and 5.9 s served, point/hop1/hop2 0.15 /
 8.1 / 128 ms embedded and 1.1 / 1.5 / 3.1 ms served, OLAP 1.8 s embedded and
 0.1 to 0.43 s served; dense recall@10 0.9996 embedded and 0.9979 served.
 Found and fixed on the way: string ids become string keys (F31), ORDER BY
-after GROUP BY on 2.0.0, and RELATE statements 60x slower than the SDK's
+after GROUP BY on core 2.3.10, and RELATE statements 60x slower than the SDK's
 bulk relation insert.

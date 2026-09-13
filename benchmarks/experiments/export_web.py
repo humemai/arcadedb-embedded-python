@@ -217,6 +217,9 @@ def _row_engine_string(r) -> str | None:
     """engine_version unless it is the driver's "unknown (...)" placeholder, in
     which case lib_version (the served arm's banner, learned on connect())."""
     ev = str(r.get("engine_version") or "")
+    if ev.startswith("surrealdb-embedded:"):
+        import surreal_common
+        ev = surreal_common.legacy_stamp_fixup(ev)   # F39: SDK version was stamped as the engine
     if ev and not ev.startswith("unknown"):
         return ev
     # The served banner lands in backend_version on the L4 lane (its
