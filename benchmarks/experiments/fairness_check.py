@@ -407,6 +407,7 @@ def check_degree(rows):
     rows = rows + _dense_rows()
     g = collections.defaultdict(dict)
     unstamped = collections.defaultdict(set)
+    ivf_bad = []
     for r in rows:
         if r.get("lane") != "l3d":
             continue
@@ -421,16 +422,27 @@ def check_degree(rows):
             pass
         elif r.get("degree_family") == "ivf_flat_no_degree" and r.get("ivf_nlists"):
             # ArangoDB's vector index is FAISS IVF: inverted lists over trained
-            # centroids, no graph, no degree. Its operating point is nLists and
-            # nProbe, recorded on the row, and the arm says so in its own
-            # family string rather than being inferred (2026-09-13).
-            pass
+            # centroids, no graph, no degree. Its operating point is matched by
+            # EFFECT instead: nProbe calibrated in the cell to the frozen recall
+            # of ArcadeDB's fp32 arm at the same scale (arango_common). A row
+            # that carries no target, or missed it by more than 0.01, is not a
+            # matched row (2026-09-13).
+            try:
+                _t, _c = float(r.get("ivf_recall_target")), float(r.get("ivf_calibration_recall"))
+            except (TypeError, ValueError):
+                ivf_bad.append((r["scale"], r["backend"], "no ivf_recall_target/ivf_calibration_recall"))
+            else:
+                if _c < _t - 0.01:
+                    ivf_bad.append((r["scale"], r["backend"], f"calibrated {_c} against target {_t}"))
         else:
             unstamped[r["scale"]].add(r["backend"])
     if not g and not unstamped:
         print("  (no dense rows)")
         return 0
     bad = 0
+    for _sc, _be, _why in sorted(set(ivf_bad), key=str):
+        bad += 1
+        print(f"  FAIL l3d    {_sc:8} {_be}: IVF row not matched by effect ({_why})")
     for scale in sorted(set(g) | set(unstamped), key=str):
         per_be = g.get(scale, {})
         if scale in unstamped:

@@ -77,6 +77,10 @@ SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000,
               "deep10m": 9_990_000}
 N_QUERIES = 1_000
 BATCH = 10_000
+# What an IVF arm records instead of a degree (arango_common); the lane and
+# the multipass driver read the same tuple so they cannot disagree.
+IVF_FIELDS = ("ivf_nlists", "ivf_nprobe", "ivf_recall_target", "ivf_recall_target_source",
+              "ivf_calibration_recall", "ivf_calibration_queries")
 
 # The DDL's vocabulary and the results' vocabulary disagreed, and a recorded
 # label could not be fed back in as an input.
@@ -303,6 +307,10 @@ class Base:
 
     def search(self, qvec, k):
         raise NotImplementedError
+
+    def calibrate(self, queries, gt, scale):
+        """Choose an operating point matched by effect, before any timed pass.
+        Only an arm with no degree to match (ArangoDB's IVF) does anything."""
 
     def close(self):
         """Release the engine handle. Overridden where there is one to release.
@@ -1007,12 +1015,21 @@ class ArangoDense(Base):
                              for j in range(len(chunk))])
         self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(col, "embedding", DIM, len(vecs))
 
-    def search(self, qvec, k):
+    def search(self, qvec, k, nprobe=None):
         cur = self.db.aql.execute(
             "FOR d IN article LET s = APPROX_NEAR_L2(d.embedding, @q, {nProbe: @np}) "
             "SORT s LIMIT @k RETURN d.vid",
-            bind_vars={"q": qvec.tolist(), "np": self.ivf_nprobe, "k": k})
+            bind_vars={"q": qvec.tolist(), "np": nprobe or self.ivf_nprobe, "k": k})
         return [int(v) for v in cur]
+
+    def calibrate(self, queries, gt, scale):
+        target, src = arango_common.recall_target(scale)
+        np_, rec = arango_common.calibrate_nprobe(self.search, queries, gt, target, self.ivf_nlists, k=K)
+        self.ivf_nprobe = np_
+        self.ivf_recall_target = target
+        self.ivf_recall_target_source = src
+        self.ivf_calibration_recall = round(rec, 4)
+        self.ivf_calibration_queries = len(queries)
 
     def close(self):
         arango_common.close(self.cl)
@@ -1468,8 +1485,14 @@ def main():
     build = time.perf_counter() - t0
     out["build_s"] = round(build, 2)
     out["build_docs_per_s"] = round(len(train) / build, 1)
+    # An IVF arm chooses its probe count by effect, on the first 200 queries,
+    # before the warmup and the timed passes (arango_common). Those 200 are
+    # inside the timed set, so the arm's cold pass has seen a fifth of its
+    # questions once; the calibration is the arm's own settle step, and the
+    # row says how many queries it used.
+    b.calibrate(test[:arango_common.CALIBRATION_QUERIES], gt[:arango_common.CALIBRATION_QUERIES], args.scale)
     # An IVF arm's operating point, beside the degree the HNSW arms record.
-    for _k in ("ivf_nlists", "ivf_nprobe"):
+    for _k in IVF_FIELDS:
         if getattr(b, _k, None) is not None:
             out[_k] = getattr(b, _k)
     # Captured AFTER the build and again after the timed passes below, because

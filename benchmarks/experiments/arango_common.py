@@ -7,11 +7,24 @@ the server's own, and the vector index gets the same operating point.
 
 The vector index is FAISS IVF (inverted lists over trained centroids), not
 HNSW: it has no graph degree to match, so l3d_dense.degree_stamp names it
-ivf_flat_no_degree and the row records nLists and nProbe instead. The
-choice follows the FAISS guideline: about sqrt(n) lists, and a probe count
-that is a fixed fraction of them, so the point moves with the corpus the
-same way for every scale. The fraction is one knob, read once, recorded on
-the row.
+ivf_flat_no_degree and the row records its operating point instead.
+
+MATCHED BY EFFECT, not by parameter (FAIRNESS F7, 2026-09-13). nLists follows
+FAISS's own guideline for 1M to 10M vectors, "between 4*sqrt(n) and
+16*sqrt(n)" (faiss wiki, "Guidelines to choose an index"), at the low end:
+round(4*sqrt(n)). nProbe is not typed: after the index is built and before
+any timed pass, calibrate_nprobe() binary-searches the smallest nProbe whose
+recall@10 on the first 200 queries reaches the target, and the target is the
+frozen recall@10 of ArcadeDB's own embedded fp32 arm at the same scale
+(results/runs_paper.csv, the tracked file the container sees at /work).
+Matching our own arm is the neutral choice: a higher target slows them and
+flatters us, a lower one speeds them and flatters them. Everything chosen is
+recorded on the row: ivf_nlists, ivf_nprobe, ivf_recall_target,
+ivf_calibration_recall, ivf_calibration_queries.
+
+trainingIterations stays at 25, FAISS's k-means default (niter=25); at
+4*sqrt(n) lists the training set is the whole collection, and the
+calibration recall is the check that the centroids converged well enough.
 """
 from __future__ import annotations
 
@@ -21,8 +34,15 @@ import time
 
 PASSWORD = "dbbenchpass"
 DB = "bench"
+# The starting probe fraction, used only where nothing calibrates (the
+# cross-model lane, which measures no recall) and as the search's first guess.
 NPROBE_FRAC = float(os.environ.get("BENCH_ARANGO_NPROBE_FRAC", "0.125"))
 TRAINING_ITERATIONS = 25
+CALIBRATION_QUERIES = 200
+# Only when the frozen CSV has no ArcadeDB fp32 row at the scale: the DEEP-10M
+# reading at the September pin, the lower of the two published scales.
+FALLBACK_RECALL_TARGET = 0.95
+FROZEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results", "runs_paper.csv")
 
 
 def connect(fresh: bool = True, wait_s: int = 120):
@@ -52,9 +72,56 @@ def connect(fresh: bool = True, wait_s: int = 120):
 
 
 def ivf_params(n: int) -> tuple[int, int]:
-    nlists = max(4, int(round(math.sqrt(n))))
+    nlists = max(4, int(round(4 * math.sqrt(n))))
     nprobe = max(1, int(math.ceil(nlists * NPROBE_FRAC)))
     return nlists, nprobe
+
+
+def recall_target(scale: str) -> tuple[float, str]:
+    """(target, where it came from): the median frozen recall@10 of
+    arcadedb_dense_embedded fp32 at this scale, else the fallback."""
+    import csv
+    import statistics
+    env = os.environ.get("BENCH_ARANGO_RECALL_TARGET")
+    if env:
+        return float(env), "env BENCH_ARANGO_RECALL_TARGET"
+    try:
+        with open(FROZEN, newline="") as fh:
+            vals = [float(r["recall_at_10"]) for r in csv.DictReader(fh)
+                    if r.get("lane") == "l3d" and r.get("backend") == "arcadedb_dense_embedded"
+                    and r.get("scale") == scale and r.get("recall_at_10")
+                    and str(r.get("quantization", "fp32")).lower() in ("fp32", "none", "")]
+    except OSError:
+        vals = []
+    if vals:
+        return round(statistics.median(vals), 4), f"runs_paper.csv arcadedb_dense_embedded fp32 {scale} median of {len(vals)}"
+    return FALLBACK_RECALL_TARGET, "fallback constant (no frozen row at this scale)"
+
+
+def calibrate_nprobe(search_fn, queries, gt, target: float, nlists: int, k: int = 10):
+    """Smallest nProbe in [1, nlists] whose recall@k on `queries` reaches
+    `target`, by binary search (recall is monotone in nProbe for IVF). Returns
+    (nprobe, recall at it). If even nlists misses the target, returns nlists
+    and its recall, and the row shows the shortfall."""
+    def recall(np_):
+        hit = 0
+        for q, g in zip(queries, gt):
+            ids = search_fn(q, k, np_)
+            hit += len(set(ids[:k]) & set(int(x) for x in g[:k]))
+        return hit / (k * len(queries))
+    lo, hi = 1, nlists
+    best = (nlists, None)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        r = recall(mid)
+        if r >= target:
+            best = (mid, r)
+            hi = mid - 1
+        else:
+            lo = mid + 1
+    if best[1] is None:
+        best = (nlists, recall(nlists))
+    return best
 
 
 def vector_index(col, field: str, dim: int, n: int, metric: str = "l2") -> tuple[int, int]:

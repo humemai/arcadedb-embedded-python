@@ -159,6 +159,26 @@ DECISIONS.md #45; the orphans themselves are a jvector property, so if 1.2 is
 too low it is ArcadeData's default to raise and we inherit it at the next
 stable re-pin.
 
+*An index with no degree is matched by effect.* ArangoDB's vector index is
+FAISS IVF (inverted lists over trained centroids), so F7's degree has no
+counterpart there and a nominal match is impossible. Its operating point is
+chosen to land on the same recall instead (2026-09-13, `arango_common.py`):
+nLists is FAISS's own guideline for 1M to 10M vectors, round(4*sqrt(n)); nProbe
+is calibrated inside the cell, after the index is built and before any timed
+pass, by binary search on the first 200 queries for the smallest value whose
+recall@10 reaches the target; and the target is not typed but read from the
+frozen CSV: the median recall@10 of ArcadeDB's own embedded fp32 arm at the same
+scale (0.9886 at 1M, 0.9534 at DEEP-10M at the September pin). Matching our own
+arm is the neutral choice: a higher target slows them and flatters us, a lower
+one speeds them and flatters them. The row records `ivf_nlists`, `ivf_nprobe`,
+`ivf_recall_target`, `ivf_recall_target_source`, `ivf_calibration_recall`, and
+`ivf_calibration_queries`; `degree_family` says `ivf_flat_no_degree`, and
+`fairness_check.py` accepts that family only when the target is present and the
+calibration recall is within 0.01 of it. The lane and the multipass driver call
+the same hook, so the two cannot drift. The cross-model lane measures no recall
+and keeps the uncalibrated starting fraction (an eighth of the lists), recorded
+on its row as well.
+
 **F8. The cpuset must equalise USE, not only the resource.** F1 gives every
 engine the same 12 threads. That is not the same as every engine *taking* the
 same amount: one that spreads a single query over 12 threads and one that

@@ -94,3 +94,35 @@ the F38 gap does not repeat here).
 | l3d search | micro (5k) | 0 | p50 2.8 ms, nLists 71, nProbe 9 | 0.953 | 9.3 |
 | e2 hybrid | e2 | 0 | p50 16.2 ms | | 143.0 |
 | e2 atomicity | e2 | 0 | 0 torn of 40, 40 raised | | 142.6 |
+
+**Dense at 1M, matched by effect (laptop, 2026-09-13).** The IVF operating point
+is calibrated, not typed (FAIRNESS F7 paragraph): nLists = round(4*sqrt(n)) =
+4,000 at 1M, and nProbe is the smallest value whose recall@10 on the first 200
+queries reaches the frozen ArcadeDB embedded fp32 median at the scale (0.9886 at
+1M). The SIFT1M corpus (the same ann-benchmarks file mini's fixture was cut from)
+in a separate laptop fixture dir; one build, then the calibration, then the full
+1,000-query pass at half, at, and at twice the picked value. Not page material.
+
+| nProbe | recall@10 (1,000 queries) | p50 ms | p99 ms |
+|---|---|---|---|
+| 42 (picked / 2) | 0.9416 | 9.6 | 14.5 |
+| 85 (picked) | 0.9827 | 13.9 | 23.3 |
+| 170 (picked x 2) | 0.9950 | 25.4 | 36.6 |
+
+Build (import + IVF training) 118.7 s on the laptop; the calibration itself took
+104.8 s (12 binary-search steps of 200 queries). The curve is not flat: recall
+and latency both move with nProbe, so the calibrated value is the answer and not
+the cheapest one, unlike LanceDB's flat nprobes. The 200-query estimate (0.989)
+sits 0.006 above the full pass (0.9827), inside the 0.01 tolerance
+`fairness_check.py` allows.
+
+The same corpus through the runner (`BENCH_ALLOW_DEV=1`, sweep tier, one rep,
+`BENCH_DENSE_DATA=/data/dense1m`): rc 0; the row carries `ivf_nlists` 4000,
+`ivf_nprobe` 87, `ivf_recall_target` 0.9886 from
+`runs_paper.csv arcadedb_dense_embedded fp32 small median of 5`,
+`ivf_calibration_recall` 0.989, `ivf_calibration_queries` 200; full-pass
+recall@10 0.9846, p50 13.57 ms, p99 21.9 ms, build 120.9 s (8,273 vectors/s),
+server disk 1,133.5 MB, `degree_family` ivf_flat_no_degree. The picked nProbe
+differs by two between the two builds (85 and 87) because k-means training is
+not deterministic across builds; the calibration absorbs that, which is the
+point of calibrating in the cell.
