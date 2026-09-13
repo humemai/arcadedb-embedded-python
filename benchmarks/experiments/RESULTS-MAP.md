@@ -153,7 +153,7 @@ merge. **Do not hand-edit the frozen CSV**; re-freeze after the campaign.
 They pin `b7c6c800d` and verify the pair with `build_engine_pair.sh`, which
 checks a locally COMPILED pair -- the wrong claim for a pair assembled from
 upstream's published jars. Live scripts (2026-09-13): `qDO` (running) -> `qDP` -> `qDQ` -> `qDR` -> `qDS` -> `qDT` ->
-`qDU` -> `qDV`, each gated on `verify_pair_c25.sh`; finished scripts
+`qDU` -> `qDV` -> `qDW` (SurrealDB served re-run for the disk reading, F38; 2026-09-14), each gated on `verify_pair_c25.sh`; finished scripts
 live in `~/queue_archive` on mini.
 
 ## `evidence/`: tracked copies of what an upstream report cites
