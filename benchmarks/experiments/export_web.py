@@ -792,7 +792,8 @@ def _dense_overlay_entries(scale="deep10m"):
 _UNIT_DIVISOR = {"peak_anon_mib_sum": 1024.0, "end_anon_mib_sum": 1024.0, "disk_data_mb": 1024.0,
                  "cpu_usec_sum": 1e6}
 DISK_NOTE = ("Disk is what the workload left on disk, in GiB: the engine's writable layer "
-             "plus its volumes after the cell, minus the same engine's empty footprint. It is "
+             "plus its volumes after the cell, minus the same engine's empty footprint; for a "
+             "served row that is the server container alone, the client is only the driver. It is "
              "read after the queries, so it includes anything querying wrote; a server "
              "reading is taken once two samples agree within 1%, an embedded reading once on "
              "the stopped container. A blank cell is a row measured before the disk "
@@ -831,8 +832,18 @@ def _disk_data(r):
     """disk_data_mb, unless this is a served row whose server reading is
     missing: then the field is the client's scratch alone (1.1 MB for a
     SurrealDB server holding 6.0M line items, 2026-09-13) and says nothing."""
-    if r.get("server_image") and not r.get("server_disk_mb"):
-        return None
+    if r.get("server_image"):
+        # A served row: the engine's bytes are the server container's growth
+        # over its empty footprint. The client container is only the driver
+        # (its growth is at most 1.1 MB across every served row frozen by
+        # 2026-09-14), and adding it made the column mean two different things
+        # in the two modes (user, 2026-09-14: "do you combine server and
+        # client"). disk_data_mb on the row keeps the sum for the record.
+        try:
+            sv, sb = float(r.get("server_disk_mb") or ""), float(r.get("server_disk_baseline_mb") or 0.0)
+        except (TypeError, ValueError):
+            return None
+        return round(sv - sb, 1)
     v = r.get("disk_data_mb")
     try:
         return float(v) if v not in (None, "") else None
