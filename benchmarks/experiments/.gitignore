@@ -3,3 +3,9 @@ __pycache__/
 
 # runner lock (host-local, never committed)
 results/.runner.lock
+# untracked campaign artifacts the page or the issue trail reads in place (RESULTS-MAP.md); never tracked, a tracked copy breaks mini's pull
+results/e4decomp_*/
+results/delta_scan_*/
+results/verify_*/
+results/ablation_cache_*.jsonl
+results/mp_rows_*.jsonl
