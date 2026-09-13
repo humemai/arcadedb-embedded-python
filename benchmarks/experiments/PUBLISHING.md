@@ -12,10 +12,10 @@ BENCH_ENGINE_COMMIT=<pin> python refresh_web_page.py   # page-only is the only m
 ```
 
 That is the whole routine. It regenerates the tables and figures, exports the
-page data, runs all four gates, syncs the JSON and the figures the page
+page data, runs the three gates, syncs the JSON and the figures the page
 references, builds the site, and prints the diff for you to read. `--page-only`
-drops `claims_check` and makes `page_check`'s paper section advisory (DECISIONS
-#58). It does not
+is accepted and ignored: the page is the only mode, and `page_check` lost its
+paper section on 2026-09-13. It does not
 commit: reading the diff before publishing is the point, not an afterthought.
 
 Run it after **any** re-measure, after any change to the tables or figures,
@@ -60,14 +60,13 @@ were where the mistakes were:
 
 ## What blocks a bad publish
 
-Four gates, then two structural checks. All of them fail the run rather than
-warn:
+Three gate scripts (`page_check` has two sections), then two structural
+checks. All of them fail the run rather than warn:
 
 | Check | Asks |
 |---|---|
 | `provenance_check` | does every cell trace to a run |
 | `fairness_check` | F1–F9 comparison invariants |
-| `claims_check` | not a gate since 2026-09-11 (no paper); a helper library the gates import for torn counts and arm selection |
 | `page_check.MAPPING` | do the page's table cells agree with the generated tables |
 | `page_check.PROSE` | do the page's hand-typed prose numbers agree with the tables and the page-derived pins |
 | `_check_no_orphan_figures` | is every generated figure cited by a `.tex` |
@@ -95,8 +94,8 @@ the last surface with no equivalent.
    a builder; add its cells to `page_check` pins.
 2. Add it to `export_web.py` if the data is not already exported.
 3. Reference it from `arcadedb.ts`.
-4. Add its headline cells to `page_check.MAPPING`, so the page and the paper
-   are pinned to each other. A table nothing pins can drift silently, which is
+4. Add its headline cells to `page_check.MAPPING`, so the page and the generated
+   tables are pinned to each other. A table nothing pins can drift silently, which is
    exactly what happened to f5.
 5. If the prose around it quotes any number, add each one to `page_check.PROSE`
    with a regex that captures the digits as printed. Quoting a number in a

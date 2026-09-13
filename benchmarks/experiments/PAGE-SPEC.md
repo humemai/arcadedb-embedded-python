@@ -192,7 +192,7 @@ ones.
 | `l3s` | Sparse vector search | ArcadeDB emb int8 / emb fp32 / srv int8 / srv fp32, Elasticsearch, Milvus, Qdrant (pgvector queued, qDK) | cold p50, cold p99, warm p50, warm p99, gain, recall@10, ingest+index vectors/s, ingest+index total s, peak memory GiB, disk GiB |
 | `l3smp` (retired 2026-09-11, folded into `l3s` as warm columns) | Sparse: what a second pass buys | same six | cold p50, warm p50, gain, **recall@10** |
 | `l3s_nocompact` | **NEW** — what the settle step buys | ArcadeDB emb int8 with/without COMPACT | p50 at 100k / 1M / 8.84M, ratio |
-| `l3d` | Dense vector search | ArcadeDB emb fp32 / srv fp32 / emb int8 / srv int8, Chroma, DuckDB-VSS, LanceDB, Milvus (fp32, int8), Qdrant (fp32, int8), sqlite-vec (fp32, int8), Neo4j (fp32, published) (pgvector and SurrealDB embedded and server still to land, qDK overlay and qDO; ArangoDB queued, qDV) | cold p50, cold p99, warm p50, warm p99, recall@10, ingest+index vectors/s, ingest+index total s, peak memory GiB, disk GiB |
+| `l3d` | Dense vector search | ArcadeDB emb fp32 / srv fp32 / emb int8 / srv int8, Chroma, DuckDB-VSS, LanceDB, Milvus (fp32, int8), Qdrant (fp32, int8), sqlite-vec (fp32, int8), Neo4j (fp32, published), SurrealDB (server, fp32, published at 1M, qDO; the embedded 1M cell exceeded its budget and is named on the table) (pgvector still to land, qDK overlay; ArangoDB queued, qDV) | cold p50, cold p99, warm p50, warm p99, recall@10, ingest+index vectors/s, ingest+index total s, peak memory GiB, disk GiB |
 | `l3d_params` | **NEW** — matched operating points | every dense arm | ef_construction, ef_search, degree_param, degree_family, quantization, index kind |
 
 Scales: `l3s` 100k / 1M / 8.84M; `l3d` 1M / 9.99M.
@@ -242,7 +242,7 @@ cache **pinned to the corpus** (`graphBuildCacheSize=9,990,000` on
 and the page's condition line must say: "ArcadeDB fp32 build cache pinned to
 the corpus size (9,990,000); INT8 at the engine default; comparators have no
 equivalent setting; see #7146 for the default's cost." No single-pass dense row
-is on the page; the single-pass campaign rows feed the paper checks only.
+is on the page; the single-pass campaign rows stay frozen and feed no page table.
 
 ### Graph
 
@@ -257,7 +257,7 @@ the view's benefit scales; 20 SF1 rows are already frozen).
 `l2` carries p99 on every latency (DECISIONS #63); the 2-hop SF10 reversal that
 motivated it (20.28 vs 10.10 at b7c6c800d) is gone at 8d6af9475 (1.67 vs 4.79).
 
-### Documents and time series (the synthetic `l1`, `l1olap`, `l1tpc` blocks are retired from the page since 2026-09-11, DECISIONS #67; the paper keeps them. TPC now renders as `docs_oltp` and `docs_olap` with PostgreSQL (tuned) beside the default arm; SQLite, MongoDB, and SurrealDB server are published; SurrealDB embedded re-runs as qDU after F37; ArangoDB queued, qDV)
+### Documents and time series (the synthetic `l1`, `l1olap`, `l1tpc` blocks are retired from the page since 2026-09-11, DECISIONS #67; the rows stay frozen. TPC now renders as `docs_oltp` and `docs_olap` with PostgreSQL (tuned) beside the default arm; SQLite, MongoDB, and SurrealDB server are published; SurrealDB embedded re-runs as qDU after F37; ArangoDB queued, qDV)
 
 | id | title | rows | columns |
 |---|---|---|---|

@@ -141,8 +141,8 @@ is green. The reason is arithmetic: a defect found at stage 3 costs a full pass.
    to `runs.jsonl`.
 2. **Small.** One tier up, N=5, real corpora, every metric recorded. This is
    where the gates run for the first time: `fairness_check`,
-   `provenance_check`, `claims_check`, `page_check` (`claims_check` only when the
-   paper is being refreshed; page publishes use `--page-only`).
+   `provenance_check`, `page_check` (`claims_check` is a helper library, not a
+   gate, since the paper was dropped on 2026-09-11).
 3. **Big.** The published tiers.
 
 Between stages, run the gates and read the monitor's SUSPECT section. A stage

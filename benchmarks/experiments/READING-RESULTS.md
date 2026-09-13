@@ -98,17 +98,17 @@ tidied away.
 
 ## Gates
 
-Four, and they answer different questions. Run all of them after touching
+Three, and they answer different questions. Run all of them after touching
 results, tables or the page:
 
     BENCH_ENGINE_COMMIT=<pin> python provenance_check.py   # does a cell trace to a run
     BENCH_ENGINE_COMMIT=<pin> python fairness_check.py     # F1-F9
-    # claims_check.py is not a page gate (no paper since 2026-09-11)
     BENCH_ENGINE_COMMIT=<pin> python page_check.py         # page cells vs generated tables, prose vs pins
 
 `page_check.py` pins page cells to the generated tables and page prose through
-lambda pins over the exported JSON; `--page-only` reports the paper section
-(DECISIONS #58). It catches the `q_range_ms` mistake mechanically.
+lambda pins over the exported JSON (`claims_check` is a helper library it
+imports, not a gate, since the paper was dropped on 2026-09-11). It catches the
+`q_range_ms` mistake mechanically.
 
 Publishing any of this to humem.ai is one command, and PUBLISHING.md says
 which one and why it is a command rather than a checklist. The short version:

@@ -1520,7 +1520,10 @@ def container_disk(cid, settle_s=3.0, tries=3):
         for exactly the engines that matter. Verified directly: a PostgreSQL
         container loaded with 2M rows reported SizeRw = 20480 bytes, unchanged
         from empty, while the data sat in its volume at 1017.5 MiB. ArcadeDB,
-        Neo4j and PostgreSQL all declare volumes.
+        Neo4j and PostgreSQL all declare volumes. A volume is sized with du
+        inside the container, or from a helper container (dbbench:client)
+        when the image has no du: SurrealDB's is distroless, and until
+        2026-09-14 every served SurrealDB row recorded no disk (BUGS F38).
 
     Volume destinations are read FROM THE DAEMON, not from a per-backend path
     table. A table of guessed paths is eight assertions that fail silently;
@@ -1531,7 +1534,8 @@ def container_disk(cid, settle_s=3.0, tries=3):
     SETTLING, which is the part that makes this hard. On-disk size is not
     fixed at the moment a database closes. It drifts:
       - writeback: du counts ALLOCATED blocks and ext4 delays allocation, so
-        an immediate reading under-counts whatever is still dirty. Hence sync.
+        an immediate reading under-counts whatever is still dirty. Hence sync,
+        from the host when the image has none.
       - background compaction: every LSM engine here does it, ours included,
         and obsolete segments live until a merge retires them. Drifts DOWN,
         sometimes minutes later.
