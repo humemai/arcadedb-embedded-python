@@ -109,3 +109,27 @@ the last surface with no equivalent.
    page.
 2. Reference it from `arcadedb.ts` as `/images/projects/arcadedb/<stem>.svg`.
 3. Run the command above; it converts and syncs it.
+
+## Landing a finished queue stage (2026-09-13)
+
+One command, the same order every time, refuses by default:
+
+```
+.venv/bin/python benchmarks/experiments/land_stage.py \
+    --exclude-backends <backends still running on mini, comma list> \
+    [--overlay neo4jvec] [--exclude-since 2026-09-12T12:00] \
+    --message "<one line: what joined>" [--apply]
+```
+
+It pulls `runs_page_<pin>.jsonl` (and, with `--overlay`, an arm's dense
+multipass files at both sizes), drops the rows of the backends named as still
+running so a stage in progress never reaches the freeze, merges, publishes
+through the gates, and prints which page tables changed. Without `--apply` it
+stops there and restores the site's payload; with `--apply` it builds the
+site, commits both repositories, and pushes. The merge into `runs.jsonl` is
+idempotent, so a dry run followed by `--apply` is the normal sequence.
+
+Never `git add` a raw directory (`results/runs.jsonl`, `dense_mp5_*`,
+`sparse_mp_*`): the bench host writes them, and a tracked copy makes its
+`git pull --ff-only` refuse, which aborted every queued script on
+2026-09-12. They are ignored by `.gitignore`; keep it that way.
