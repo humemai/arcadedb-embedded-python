@@ -1257,11 +1257,11 @@ class SurrealDenseServer(SurrealDense):
     name = "surrealdb_dense_server"
 
     def _open(self):
-        from surrealdb import Surreal
-        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
-        self.db = Surreal(f"ws://{host}:8000/rpc")
-        self.db.signin({"username": "root", "password": "root"})
-        self.db.use("bench", "bench")
+        # One shared client for every served arm (DECISIONS #91): it sets the
+        # WebSocket options the SDK leaves at the library's defaults, and it
+        # reconnects, re-authenticates and re-selects the namespace once when
+        # the socket dies mid-query.
+        self.db = surreal_common.served_client()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
@@ -1885,7 +1885,11 @@ def main():
     for qi in range(timed_n):
         t1 = time.perf_counter()
         ids = b.search(test[qi], K)
-        lats.append((time.perf_counter() - t1) * 1e3)
+        # The dropped-connection case this guard exists for happened HERE, on
+        # the served arm at ten million vectors (DECISIONS #91): the recall
+        # below is still counted, because a reconnect changes what the query
+        # cost and not what it answered.
+        surreal_common.keep(b, lats, (time.perf_counter() - t1) * 1e3)
         recalls.append(len(set(ids[:K]) & set(gt[qi].tolist())) / K)
     span = time.perf_counter() - t0
     _beat.mark("queries-done", n=timed_n, t=f"{round(span, 2)}s")
@@ -1928,7 +1932,7 @@ def main():
             for qi in range(_mq):
                 t1 = time.perf_counter()
                 ids = b.search(test[qi], K)
-                lat.append((time.perf_counter() - t1) * 1e3)
+                surreal_common.keep(b, lat, (time.perf_counter() - t1) * 1e3)
                 want = want_fn(qi)
                 got = set(int(x) for x in ids[:K])
                 hits += len(got & vset)
@@ -2002,6 +2006,10 @@ def main():
         _t = time.perf_counter()
         b.close()
         out["close_s"] = round(time.perf_counter() - _t, 3)
+    # `reconnects` on every SurrealDB row, zero when nothing happened
+    # (DECISIONS #91): a dropped connection has to be visible as a number on
+    # the row, not as a traceback in a log nobody reads until a cell dies.
+    surreal_common.stamp_reconnects(out, b)
     # 0.0 MUST MEAN "nothing to release", NEVER "we did not ask". Without this
     # the dense table would read ArcadeDB 157.5 s against six flat zeros, four
     # of which were simply unmeasured.

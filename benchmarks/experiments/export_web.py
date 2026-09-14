@@ -48,7 +48,15 @@ from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path se
 FROZEN_NAME = ("runs_skeleton_laptop.csv"
                if os.environ.get("BENCH_SKELETON") == "1" else "runs_paper.csv")
 FROZEN = HERE / "results" / FROZEN_NAME
-OUT = HERE / "results" / "web_benchmarks.json"
+# A SKELETON WRITES ITS OWN PAYLOAD, for the same reason it writes its own
+# freeze. web_benchmarks.json is the tracked record of what the LIVE page
+# serves, and a skeleton export overwrote it: the repository then held a
+# laptop placeholder payload as the published one, with the live page still
+# serving the campaign's. Same name, two meanings, and nothing to tell them
+# apart after the fact.
+OUT_NAME = ("web_benchmarks_skeleton.json"
+            if os.environ.get("BENCH_SKELETON") == "1" else "web_benchmarks.json")
+OUT = HERE / "results" / OUT_NAME
 
 # Version names live as trailing comments beside each pin in runner.py; the
 # digest is authoritative and the name is a convenience, so a missing name is
@@ -564,9 +572,14 @@ SCALE_LABELS = {
 # measured, each marked so it cannot be mistaken for a campaign tier.
 SKELETON_SCALE_LABELS = {
     ("l1tpc", "micro"): "TPC-H SF0.01 (60k line items, skeleton)",
-    ("l2", "micro"): "2k people (skeleton)",
+    # NAMED AS SYNTHETIC. These two lanes read a real corpus in the campaign,
+    # LDBC-SNB and the Big-ANN sparse track, and neither is staged on a laptop,
+    # so the skeleton runs the lane's own generator. A size column that said
+    # only "2k people" under prose about LDBC would be naming a corpus the cell
+    # never read, which is the whole reason this table exists.
+    ("l2", "micro"): "2k people (synthetic, skeleton)",
     ("l3d", "micro"): "5k vectors (skeleton)",
-    ("l3s", "micro"): "5k vectors (skeleton)",
+    ("l3s", "micro"): "5k vectors (synthetic, skeleton)",
     ("l4", "ts100"): "432k points, 12 h (skeleton)",
     ("e2", "e2"): "50k products (skeleton)",
     ("lifecycle", "lc10k"): "10k (skeleton)",
@@ -967,6 +980,272 @@ OCT_DOCS_OLAP = {"top parts p50 ms", "top parts p99 ms", "ship mode p50 ms", "sh
 _FROZEN_ROWS = []   # set by main() once the CSV is read; the switch reads it
 
 
+# THE OCTOBER COLUMN SET, PER TABLE (DECISIONS #89 as amended). The dict above
+# ADDS to the September columns, which is how the new queries first reached the
+# page; applied to the whole October set that arithmetic gives twenty-one
+# columns on the widest table, which is what #89 was written to stop. So a lane
+# named here REPLACES its September list: one warm median per query, a
+# ninety-ninth percentile for that table's headline query only, one cold column
+# for the first query after the database opens (where the lane has one --
+# a transactional cell declares in `cold_warm_na` that it does not), throughput
+# where the operation has a rate, recall where the index is approximate, peak
+# memory, on-disk size, and for the vector tables ingest and index build as
+# separate timers.
+#
+# The headline query is the FIRST one in each list, so the p99 belongs to the
+# query the section leads with rather than to whichever one happened to have
+# the column already.
+#
+# A September payload is untouched: _metrics_for reaches this only for a lane
+# whose rows all carry instrument 2026-10.
+OCT_TABLE_METRICS = {
+    # Both document tables come from this one lane spec and are split by
+    # _restructure_tables; the union of their columns lives here.
+    "l1tpc": [
+        ("neworder_p50_ms", "new-order p50 ms"), ("neworder_p99_ms", "new-order p99 ms"),
+        ("payment_p50_ms", "payment p50 ms"),
+        # #82a: the four single-record operations, the ones every engine
+        # expresses without dialect argument and the first thing a reader
+        # looks for.
+        ("crud_insert_p50_ms", "insert p50 ms"),
+        ("crud_read_p50_ms", "read p50 ms"),
+        ("crud_update_p50_ms", "update p50 ms"),
+        ("crud_delete_p50_ms", "delete p50 ms"),
+        ("oltp_ops_per_s", "OLTP ops/s"),
+        ("q1_ms", "Q1 p50 ms"), ("q1_p99_ms", "Q1 p99 ms"),
+        ("q6_ms", "Q6 p50 ms"),
+        ("top_parts_ms", "top parts p50 ms"),
+        ("ship_mode_ms", "ship mode p50 ms"),
+        ("by_month_ms", "by month p50 ms"),
+        ("cold_first_query_ms", "cold first query ms"),
+        (_rate(("n_lineitem", "n_part"), "build_s"), "ingest documents/s"),
+        ("build_s", "ingest total s"),
+        ("peak_anon_mib_sum", "peak memory GiB"),
+        (_disk_data, "disk GiB"),
+    ],
+    "l2": [
+        ("point_p50_ms", "point p50 ms"), ("point_p99_ms", "point p99 ms"),
+        ("hop1_p50_ms", "1-hop p50 ms"),
+        ("hop2_p50_ms", "2-hop p50 ms"),
+        ("hop3f_p50_ms", "3-hop filtered p50 ms"),
+        ("write_p50_ms", "insert p50 ms"),
+        ("update_p50_ms", "update p50 ms"),
+        ("delete_p50_ms", "delete p50 ms"),
+        (_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest vertices+edges/s"),
+        ("build_s", "ingest total s"),
+        ("peak_anon_mib_sum", "peak memory GiB"),
+        (_disk_data, "disk GiB"),
+    ],
+    "l2olap": [
+        ("friend_age_by_city_p50_ms", "average friend age p50 ms"),
+        ("friend_age_by_city_p99_ms", "average friend age p99 ms"),
+        ("same_city_edges_p50_ms", "friends in same city p50 ms"),
+        ("top_degree_p50_ms", "most friends p50 ms"),
+        # #82b: the two queries that make this table as thorough as the
+        # document one. The triangle count is the cell most likely to hit its
+        # budget at the larger size, and a censored cell is a result.
+        ("degree_dist_p50_ms", "degree distribution p50 ms"),
+        ("triangles_p50_ms", "triangle count p50 ms"),
+        ("cold_first_query_ms", "cold first query ms"),
+        (_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest vertices+edges/s"),
+        ("build_s", "ingest total s"),
+        ("gav_build_s", "view build s"),
+        ("peak_anon_mib_sum", "peak memory GiB"),
+        (_disk_data, "disk GiB"),
+    ],
+    "e2": [
+        ("hybrid_p50_ms", "transaction p50 ms"), ("hybrid_p99_ms", "transaction p99 ms"),
+        # #82c: the table was one write path and said nothing about the shape
+        # most people run, which is retrieval.
+        ("retrieval_p50_ms", "retrieval p50 ms"),
+        ("filtered_p50_ms", "graph-filtered search p50 ms"),
+        ("recall_retrieval", "retrieval recall@10"),
+        ("recall_filtered", "filtered recall@10"),
+        (_rate(("n_products", "n_edges"), "build_s"), "ingest+index vertices+edges/s"),
+        ("build_s", "ingest+index total s"),
+        ("peak_anon_mib_sum", "peak memory GiB"),
+        (_disk_data, "disk GiB"),
+    ],
+    "l3d": [
+        ("query_p50_ms", "cold p50 ms"), ("query_p99_ms", "cold p99 ms"),
+        # #82d: search, insert into a built index then search, delete from a
+        # built index then search.
+        ("mutate_insert_query_p50_ms", "after insert p50 ms"),
+        ("mutate_delete_query_p50_ms", "after delete p50 ms"),
+        ("recall_at_10", "recall@10"),
+        # #66/#74: two timers where the engine has the boundary, not one.
+        ("ingest_s", "ingest s"), ("index_s", "index s"),
+        ("build_docs_per_s", "ingest+index vectors/s"),
+        ("build_s", "ingest+index total s"),
+        ("peak_anon_mib_sum", "peak memory GiB"),
+        (_disk_data, "disk GiB"),
+    ],
+    "l3s": [
+        ("query_p50_ms", "p50 ms"), ("query_p99_ms", "p99 ms"),
+        ("recall_at_10", "recall@10"),
+        # No ingest/index split here: the sparse lane builds the index as it
+        # ingests on every engine it runs, so the boundary #74 asks to split
+        # does not exist and the row records one timer. Stated in the
+        # conditions rather than left as a missing column.
+        ("build_docs_per_s", "ingest+index vectors/s"),
+        ("build_s", "ingest+index total s"),
+        ("peak_anon_mib_sum", "peak memory GiB"),
+        (_disk_data, "disk GiB"),
+    ],
+    "l4": [
+        (("q_last_unbounded_ms", "q_last_ms"), "newest reading p50 ms"),
+        ("q_last_p99_ms", "newest reading p99 ms"),
+        ("q_global_ms", "12h aggregate p50 ms"),
+        ("q_groupby_ms", "per-host hourly p50 ms"),
+        ("q_high_ms", "high-usage p50 ms"),
+        ("q_orderlimit_ms", "grouped, ordered, limited p50 ms"),
+        ("cold_first_query_ms", "cold first query ms"),
+        ("ingest_pts_per_s", "ingest points/s"),
+        ("ingest_s", "ingest total s"),
+        ("peak_anon_mib_sum", "peak memory GiB"),
+        ("disk_data_mb", "disk GiB"),
+    ],
+}
+
+# Which rows carry each October table's cold column, so a table can say what
+# its cold number is -- or, where the lane declares there is no cold and warm
+# split, say that instead of leaving a reader to wonder why the column is
+# missing (DECISIONS #89: "Where a measurement genuinely does not apply, the
+# table says so in one clause instead of leaving a blank").
+OCT_COLD_SOURCE = {
+    "docs_oltp": ("l1tpc", "oltp"), "docs_olap": ("l1tpc", "olap"),
+    "l2": ("l2", "oltp"), "l2olap": ("l2", "olap"),
+    "e2": ("e2", "hybrid"), "l4": ("l4", "ingest"),
+    "l3d": ("l3d", "search"), "l3s": ("l3s", "search"),
+}
+COLD_QUERY_NAMES = {
+    "q1": "TPC-H Q1", "top_degree": "most friends", "q_last": "the newest reading",
+    "point": "the point lookup", "new_order": "new-order", "retrieval": "the retrieval path",
+}
+
+
+# WHAT THE ANSWER CHECK COULD NOT COMPARE, ON THE TABLE IT APPLIES TO
+# (DECISIONS #88). The gate refuses a publish whose engines disagree, so a
+# published table's engines agree -- but "agree" has two holes the gate itself
+# prints and the page never did: a query an engine CANNOT EXPRESS, declared in
+# its adapter with a reason, and a group declared not like for like. Both are
+# the thing #88 says must never be silent, and a reader looking at a column
+# with one engine missing from the comparison deserves the reason next to it
+# rather than in a gate's log.
+EQUIVALENCE_TABLE_OF = {
+    ("l1tpc", "oltp"): "docs_oltp", ("l1tpc", "olap"): "docs_olap",
+    ("l2", "oltp"): "l2", ("l2", "olap"): "l2olap",
+    ("e2", "hybrid"): "e2", ("e2", "atomicity"): "e2atom",
+    ("l4", "ingest"): "l4", ("l3d", "search"): "l3d", ("l3s", "search"): "l3s",
+    ("lifecycle", None): "lifecycle",
+}
+
+
+# CELLS WITHHELD BECAUSE THE ANSWER IS WRONG (DECISIONS #88).
+#
+# The answer check found one engine returning a different answer from every
+# other engine to the same question, the disagreement was reproduced and
+# understood, and equivalence_check carries it as a KNOWN disagreement so the
+# publish is not blocked on an upstream fix. What must NOT follow from that is
+# the page printing the latency anyway: a time for a query that answered
+# something else is not a measurement of that query. The cell comes out and the
+# table says why, which is the same treatment a censored cell gets.
+#
+# Keyed (table id, backend label, column) -> the sentence the table prints.
+WITHHELD_CELLS = {
+    ("l4", "ArcadeDB (server, native time series)", "per-host hourly p50 ms"):
+        "ArcadeDB's served arm is not shown for the per-host hourly query: on "
+        "the server's SQL path that query returns one bucket per host instead "
+        "of one per host and hour, which the answer check caught by comparing "
+        "its result against the other engines'. Its embedded twin, on the same "
+        "build, returns the same answer as everyone else, and the single-key "
+        "form of the same query agrees on both. A latency for an answer that "
+        "differs from every other engine's is not a measurement of this query, "
+        "so the cell is withheld rather than printed.",
+}
+
+
+def _withhold_cells(tables):
+    """Take out the cells whose answer was wrong, and say so on the table."""
+    notes = collections.defaultdict(list)
+    for (tid, backend, column), why in WITHHELD_CELLS.items():
+        for t in tables:
+            if t.get("id") != tid:
+                continue
+            for e in t.get("entries", []):
+                if str(e.get("backend")) == backend and column in (e.get("metrics") or {}):
+                    e["metrics"].pop(column)
+                    notes[tid].append(why)
+    for t in tables:
+        for why in dict.fromkeys(notes.get(t.get("id"), [])):
+            t.setdefault("conditions", [])
+            if why not in t["conditions"]:
+                t["conditions"].append(why)
+    return tables
+
+
+def _equivalence_notes(rows):
+    """table id -> one sentence about what its answer check could not compare."""
+    import bench_common
+    try:
+        import equivalence_check as EQ
+    except Exception:  # noqa: BLE001 - the page must not depend on the gate importing
+        return {}
+    groups, _skipped, _seen, _silent = EQ.collect(rows)
+    per_table = collections.defaultdict(list)
+    for (lane, _scale, workload, query), by_backend in groups.items():
+        tid = (EQUIVALENCE_TABLE_OF.get((lane, workload))
+               or EQUIVALENCE_TABLE_OF.get((lane, None)))
+        if not tid:
+            continue
+        why = EQ.NOT_COMPARABLE.get((lane, query))
+        if why:
+            per_table[tid].append(f"{query}: not compared across arms, because {why}")
+        for be, digests in by_backend.items():
+            for d in digests:
+                if bench_common.is_unexpressible(d):
+                    per_table[tid].append(
+                        f"{display_name(str(be))} cannot express {query}: "
+                        f"{str(d)[len(bench_common.UNEXPRESSIBLE_PREFIX):]}")
+    out = {}
+    for tid, items in per_table.items():
+        uniq = sorted(set(items))
+        out[tid] = ("Every deterministic answer on this table is hashed and "
+                    "compared across the engines before anything is published, "
+                    "and a publish is refused when two of them disagree. What "
+                    "that comparison could not cover, declared rather than "
+                    "skipped: " + "; ".join(uniq) + ".")
+    return out
+
+
+def _cold_note(table_id, rows):
+    """The one clause this table owes about its cold column."""
+    src = OCT_COLD_SOURCE.get(table_id)
+    if not src:
+        return None
+    lane, workload = src
+    rs = [r for r in rows if r.get("lane") == lane and r.get("workload") == workload
+          and str(r.get("instrument") or "") == "2026-10"]
+    if not rs:
+        return None
+    na = sorted({str(r["cold_warm_na"]) for r in rs if r.get("cold_warm_na")})
+    if na:
+        return ("There is no cold column on this table, and the reason is "
+                "recorded on the rows themselves: " + na[0])
+    names = sorted({COLD_QUERY_NAMES.get(str(r.get("cold_first_query_name")),
+                                         str(r.get("cold_first_query_name")))
+                    for r in rs if r.get("cold_first_query_name")})
+    if not names:
+        return None
+    return (f"The cold column is the very first query of a session, "
+            f"{' / '.join(names)}, timed once on a database that has just been "
+            f"opened; every other latency column is the warm median of the "
+            f"iterations that follow it. It answers what the first query of a "
+            f"session costs against the hundredth, which is a different "
+            f"question from the steady-state one and is the one an application "
+            f"that opens a database per request actually asks.")
+
+
 def _instrument_of(lane):
     """'2026-10', '2026-09', or a refusal when the lane's rows mix the two."""
     seen = {str(r.get("instrument") or "2026-09") for r in _FROZEN_ROWS if r.get("lane") == lane}
@@ -976,8 +1255,20 @@ def _instrument_of(lane):
     return next(iter(seen), "2026-09")
 
 
-def _metrics_for(lane, spec):
-    return list(spec["metrics"]) + (OCT_METRICS.get(lane, []) if _instrument_of(lane) == "2026-10" else [])
+def _metrics_for(table_id, spec, src_lane=None):
+    """The columns this TABLE prints, under the instrument its ROWS were run on.
+
+    Two identifiers, deliberately: l2olap is a second view of the graph lane's
+    rows, so the instrument comes from the lane that produced them (src_lane)
+    while the column set belongs to the table (table_id). Keyed on the lane
+    alone, the graph analytics table would have been handed the graph
+    transactional table's October columns.
+    """
+    src_lane = src_lane or table_id
+    oct_ = _instrument_of(src_lane) == "2026-10"
+    if oct_ and table_id in OCT_TABLE_METRICS:
+        return list(OCT_TABLE_METRICS[table_id])
+    return list(spec["metrics"]) + (OCT_METRICS.get(src_lane, []) if oct_ else [])
 
 
 # ---------------------------------------------------------------------------
@@ -987,16 +1278,32 @@ def _metrics_for(lane, spec):
 # changes nothing about how a cell is aggregated; it stamps the payload so
 # that neither a reader nor the live publish can mistake a placeholder for a
 # measurement.
+# SAID IN THE WORDS A READER WOULD USE (user, 2026-09-14: "laptop runs other
+# processes in parallel, so the time measurement like latency should be taken
+# with a grain of salt"). "Placeholder at micro scale" is benchmark jargon for
+# a reader who has just landed on a table of millisecond figures; what they
+# need to be told is that the machine was busy with other things while these
+# were timed, so the numbers cannot be compared with each other or with the
+# live page.
 SKELETON_BANNER = (
-    "PLACEHOLDER NUMBERS. Every cell on this page comes from a single "
-    "repetition at micro scale on the laptop, run to fill in the October "
-    "page's shape (DECISIONS #86). The columns, conditions, and prose are the "
-    "October instrument; the numbers are not measurements and must not be "
-    "quoted, compared, or carried anywhere. mini has measured nothing yet.")
+    "These numbers were timed on a laptop that was running other work at the "
+    "same time: a browser, an editor, and whatever else happened to be open. "
+    "Nothing here had the machine to itself, no cell was given cores of its "
+    "own, and each one ran once instead of five times, on the smallest data "
+    "set each benchmark has. A time on this page can therefore be out by a "
+    "large factor in either direction, and two engines in the same table "
+    "cannot be compared with each other, or with anything on the live page. "
+    "They are here so the shape of the October page can be read and edited "
+    "early: its tables, its columns, its conditions, and its prose. The "
+    "machine the real numbers will be measured on has measured nothing yet.")
 SKELETON_TABLE_NOTE = (
-    "Placeholder: this table's numbers are one repetition at micro scale on "
-    "the laptop, not a measurement (DECISIONS #86). The columns and conditions "
-    "are October's; the values are filler until mini runs the campaign.")
+    "Take every number in this table with a grain of salt. It was timed on a "
+    "laptop that was running other work at the same time, with no cores set "
+    "aside for the benchmark and one run per cell, so these times can be out "
+    "by a large factor and the engines here cannot be compared with each "
+    "other, or with the same table on the live page. The columns, the "
+    "conditions, and the sizes are October's; the values are filler until the "
+    "campaign measures them on the bench machine.")
 # The two invariants that describe the BENCH HOST rather than the comparison.
 # A laptop skeleton cannot satisfy either (no cpuset pinning, no per-scale
 # memory envelope), and every other gate must pass exactly as it will in
@@ -1012,6 +1319,10 @@ SKELETON_ABSENT = {
           "the bench host.",
     "pycost": "the Python-cost table is the binding suite's own frozen file, "
               "not a lane the skeleton runs.",
+    "the summary figure": "it is a ratio of every table against its best "
+                          "comparator, and a ratio between two one-repetition "
+                          "placeholder cells would look like a result while "
+                          "being noise; it is drawn from the campaign's rows.",
 }
 SKELETON_WAIVERS = [
     "FAIRNESS F1 (cpuset pinning): the skeleton runs on the laptop's shared "
@@ -1122,7 +1433,12 @@ LANES = {
         "title": "Graph OLAP",
         "dataset": "LDBC-SNB, SF10",
         "lane_source": "l2",
-        "only_scales": {"sf1", "sf10"},
+        # The campaign's published graph tiers. A laptop skeleton runs the
+        # lane's micro generator instead, and with this set to the campaign's
+        # two tiers the graph analytics table was the one section of the
+        # October page the skeleton silently did not draw: the rows were
+        # frozen, the table was never built, and nothing said so.
+        "only_scales": {"micro"} if SKELETON else {"sf1", "sf10"},
         "only_workload": "olap",
         # p50, not the mean the page printed until 2026-09-10 (the lane's own
         # comment says p50 first, and it recorded one); p99 arrives with the
@@ -1273,6 +1589,32 @@ GLOBAL_CONDITIONS = [
     "setting above already means, and Neo4j is named on its tables as the one engine with no way "
     "to turn that off.",
 ]
+
+# WHAT A SKELETON CAN AND CANNOT SAY ABOUT ITS OWN CONDITIONS (DECISIONS #86).
+# Two of the sentences above describe the bench machine's protocol and are
+# false on this page: the cells did not have the machine to themselves, and
+# each printed cell is one run rather than the median of five. A page that
+# repeats them under a placeholder banner is still telling a reader the numbers
+# were measured carefully. They are replaced, in the reader's own words, rather
+# than dropped, so the page says what actually happened.
+SKELETON_CONDITION_SWAPS = {
+    "Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.":
+        "Every engine ran in Docker under the same memory cap, one cell at a "
+        "time, on one laptop. The laptop was not doing only this: a browser, "
+        "an editor, and the rest of a working machine kept running beside every "
+        "cell, so no cell had cores of its own and the times below are not "
+        "comparable between engines.",
+    "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.":
+        "Each printed cell here is ONE run, not the median of five, and the "
+        "min and max beside it are that same single sample. The campaign runs "
+        "five and prints the median; this page does not.",
+}
+
+
+def _global_conditions():
+    if not SKELETON:
+        return list(GLOBAL_CONDITIONS)
+    return [SKELETON_CONDITION_SWAPS.get(c, c) for c in GLOBAL_CONDITIONS]
 
 # THE 2026-10 DURABILITY CONDITION (DECISIONS #81). It replaces the paragraph
 # above, which describes the September rows: from October every engine that
@@ -1820,6 +2162,159 @@ def _lifecycle_table(all_rows):
     }
 
 
+# THE DURABILITY TABLE (DECISIONS #90). Every timed write runs twice, once at
+# each setting, and the main tables print the relaxed number because that is
+# the matched class and the common deployment. This is the table where the
+# size of the effect is settled, so a reader who wants to know what a commit
+# that waits for the disk costs on each engine reads it here instead of
+# inferring it from a sentence.
+#
+# ONE OPERATION PER LANE, not one for the whole table. The three lanes that
+# run a write run different writes -- a single record, a person with an edge,
+# one transaction across three models -- and the engines on them barely
+# overlap: Neo4j and LadybugDB never appear on the document lane, and #90 names
+# both as rows this table owes a number. So the operation rides the Size axis,
+# which is also what makes the renderer's per-size bolding correct: the fastest
+# engine is picked within one operation and never across two.
+DURABILITY_WRITES = [
+    # (lane, workload, p50 field, operation key, operation label)
+    ("l1tpc", "oltp", "crud_insert_p50_ms", "doc_insert",
+     "one record inserted (documents)"),
+    ("l2", "oltp", "write_p50_ms", "graph_insert",
+     "one person and one edge inserted (graph)"),
+    ("e2", "hybrid", "hybrid_p50_ms", "crossmodel_txn",
+     "one transaction across three models (cross-model)"),
+]
+
+
+def _durability_table(all_rows):
+    """The same write per engine at both durability settings, with the ratio.
+
+    An engine with no setting (Neo4j, DuckDB, LadybugDB, the SurrealDB 3.2.4
+    server) runs the same way in both cells, so printing its two numbers as a
+    relaxed/strict pair would invent a comparison the engine cannot make. It
+    gets ONE number, and the conditions name it, which is also what puts it on
+    an equal footing rather than reading as fast-or-slow against everyone
+    else's relaxed column. Two of those cases, kept apart in the conditions:
+    an engine traced to a sync at every commit, whose one number belongs in the
+    waiting column, and one whose behaviour at commit could not be established
+    at all, whose number is in neither class and says so.
+    """
+    import bench_common
+    entries = []
+    for lane, workload, field, op_key, op_label in DURABILITY_WRITES:
+        rows = [r for r in all_rows
+                if r.get("lane") == lane and r.get("workload") == workload
+                and str(r.get("instrument") or "") == "2026-10"]
+        by = {}
+        for r in rows:
+            # The tuned PostgreSQL arm is an ablation of one engine's image
+            # defaults, and it reads as a second engine on a table (DECISIONS
+            # #76). It is kept out of the document tables for that reason and
+            # out of this one for the same reason.
+            if str(r.get("backend")) == "postgres_tuned":
+                continue
+            by.setdefault(str(r.get("backend")), []).append(r)
+        for backend, rs in sorted(by.items()):
+            # The CELL's class, not the engine string: the string is what the
+            # engine answered, and on a no-knob engine both cells answer the
+            # same thing, which is precisely the case this table has to keep
+            # apart from a knob that did not take (F10b fails that one).
+            relaxed = [r for r in rs if str(r.get("durability_class")) == "relaxed"]
+            strict = [r for r in rs if str(r.get("durability_class")) == "strict"]
+            no_setting = any(str(r.get("durability_no_setting")).lower() in ("true", "1")
+                             for r in rs)
+            entry = {
+                "backend": display_name(backend),
+                "is_arcadedb": "arcadedb" in backend,
+                "scale": op_key,
+                "scale_label": op_label,
+                "workload": "write",
+                "n_docs": None,
+                "deployment": deployment_of(backend),
+                "image": rs[0].get("image"),
+                "version_name": _engine_identity(rs[0].get("engine_version"),
+                                                 rs[0].get("engine_commit")),
+                "host": rs[0].get("host"),
+                "metrics": {},
+            }
+            # An engine with no knob answers the same string in both cells,
+            # and that string is also how we know WHICH no-knob case it is: one
+            # that was traced to a sync at every commit, or one whose behaviour
+            # at commit could not be established at all. Both print once; only
+            # the first can be called a commit that waits.
+            entry["_durability_note_class"] = (
+                bench_common.durability_class(rs[0].get("durability"))
+                if no_setting else None)
+            if no_setting:
+                got = _agg(rs, field)
+                if got is not None:
+                    entry["metrics"]["waits for the disk ms"] = got
+            else:
+                rel, strc = _agg(relaxed, field), _agg(strict, field)
+                if rel is not None:
+                    entry["metrics"]["no wait ms"] = rel
+                if strc is not None:
+                    entry["metrics"]["waits for the disk ms"] = strc
+                if rel and strc and rel["median"]:
+                    ratio = strc["median"] / rel["median"]
+                    entry["metrics"]["cost of waiting"] = {
+                        "median": round(ratio, 2), "min": round(ratio, 2),
+                        "max": round(ratio, 2), "n": min(rel["n"], strc["n"])}
+            if entry["metrics"]:
+                entries.append(entry)
+    if not entries:
+        return None
+    _no_knob = sorted({e["backend"] for e in entries
+                       if e.get("_durability_note_class") == "strict"})
+    _unverified = sorted({e["backend"] for e in entries
+                          if e.get("_durability_note_class") == "unverified"})
+    for e in entries:
+        e.pop("_durability_note_class", None)
+
+    def _verb(names):
+        return "have" if len(names) > 1 else "has"
+    return {
+        "id": "durability",
+        "title": "What waiting for the disk costs",
+        "dataset": "The same write, run twice, once at each durability setting",
+        "conditions": [
+            "Each row is one engine running ONE write twice: once where a commit "
+            "returns without waiting for the disk, which is the setting every "
+            "other table on this page reports, and once where the commit waits "
+            "for the log to be flushed and synced. Nothing else about the cell "
+            "changes.",
+            "The Size column names the operation rather than a corpus size: the "
+            "three lanes that time a write do not write the same thing, so each "
+            "engine is compared only against the engines running its own "
+            "operation.",
+            "The setting is a property of the cell, not a second measurement "
+            "inside one: it lives on the database or on the server for most of "
+            "these engines, so each pair of numbers is two runs.",
+            *([f"{', '.join(_no_knob)} {_verb(_no_knob)} no setting to relax, "
+               f"established by tracing the commits rather than assumed, so "
+               f"each prints one number, in the column for a commit that "
+               f"waits. Reading it against the other column would be reading a "
+               f"choice the engine does not offer."] if _no_knob else []),
+            *([f"{', '.join(_unverified)} {_verb(_unverified)} no durability "
+               f"setting to read and what {'they do' if len(_unverified) > 1 else 'it does'} "
+               f"at commit could not be established from the engine, so the one "
+               f"number printed is in neither class. It is placed in the "
+               f"waiting column because that is the safer reading of an "
+               f"unknown, and this line is why it is there."] if _unverified else []),
+            "The ratio is what the strict setting costs on that engine, at this "
+            "corpus size and this operation count. It is not a claim about any "
+            "other write.",
+        ],
+        "columns": ["no wait ms", "waits for the disk ms", "cost of waiting"],
+        "withheld_scales": [],
+        "withheld_reason": None,
+        "entries": entries,
+        "source_paths": [f"benchmarks/experiments/results/{FROZEN_NAME}"],
+        "source_path": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    }
+
+
 def _l4_table(all_rows):
     # Canonical first; the 2026-08 files are the fallback, not the source.
     grouped = _l4_canonical(all_rows)
@@ -1838,6 +2333,12 @@ def _l4_table(all_rows):
                      "ArcadeDB (server, native time series)": "server",
                      "ArcadeDB (embedded, document path)": "embedded",
                      "questdb": "server", "duckdb": "embedded", "sqlite": "embedded", "mongodb": "server", "timescaledb": "server"}
+    # The October set REPLACES L4_METRICS (see OCT_TABLE_METRICS): five
+    # queries, one p99, one cold column, in the order the section reads.
+    # Resolved once, before the loop, so the table's column list cannot come
+    # from a different instrument than its cells.
+    _l4_cols = (OCT_TABLE_METRICS["l4"] if _instrument_of("l4") == "2026-10"
+                else list(L4_METRICS))
     entries = []
     for label in sorted(grouped, key=lambda k: (order.index(k) if k in order else 99, k)):
         rs = grouped[label]
@@ -1847,6 +2348,14 @@ def _l4_table(all_rows):
             # 2026-09-11 and the lowercase test unshaded all four rows for a day
             "is_arcadedb": "arcadedb" in label.lower(),
             "scale": L4_SHAPE["scale"],
+            # THE SIZE COLUMN NAMES THE CORPUS THAT RAN. This lane has one
+            # tier, so its size was a typed constant, and under a skeleton the
+            # table then printed the campaign's corpus over a laptop slice of
+            # it -- the one thing SKELETON_SCALE_LABELS exists to stop. The
+            # scale key stays as it is because page_check and the figures
+            # address cells by it.
+            "scale_label": (scale_label("l4", "ts100") if SKELETON
+                            else L4_SHAPE["scale"]),
             "workload": L4_SHAPE["workload"],
             "n_docs": str(rs[0].get("n_points")),
             "deployment": L4_DEPLOYMENT[label],
@@ -1861,7 +2370,7 @@ def _l4_table(all_rows):
             "host": rs[0].get("host"),
             "metrics": {},
         }
-        for field, lab in list(L4_METRICS) + (OCT_METRICS["l4"] if _instrument_of("l4") == "2026-10" else []):
+        for field, lab in _l4_cols:
             for candidate in ((field,) if isinstance(field, str) else field):
                 got = _agg(rs, candidate)
                 if got is not None:
@@ -1898,7 +2407,7 @@ def _l4_table(all_rows):
             "0.720, because evaluating the time filter costs more than the "
             "scan it saves.",
         ],
-        "columns": [lab for _, lab in list(L4_METRICS) + (OCT_METRICS["l4"] if _instrument_of("l4") == "2026-10" else [])],
+        "columns": [lab for _, lab in _l4_cols],
         "withheld_scales": [],
         "withheld_reason": None,
         "entries": entries,
@@ -2207,7 +2716,12 @@ def _censored_cells():
         return _CENSORED_CACHE
     pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
     timeouts, clean = {}, set()
-    path = HERE / "results" / "runs.jsonl"
+    # THE LOG THIS PUBLISH IS BUILT FROM, not always the campaign's. A skeleton
+    # reads its own results file (DECISIONS #86), and with this pinned to
+    # runs.jsonl a laptop timeout left the engine off the table with no note at
+    # all, which is exactly the gap-versus-censored confusion this function
+    # exists to remove.
+    path = HERE / "results" / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
     if path.exists():
         with open(path) as fh:
             for line in fh:
@@ -2395,6 +2909,27 @@ def _host_hardware(hosts, rows=()):
     return {h: HOST_HARDWARE[h] for h in named}
 
 
+def _dense_columns(spec, src_lane):
+    """The dense table's column list, with the warm pair kept beside the cold.
+
+    Warm and gain come from the multipass overlay rather than from the lane,
+    so they are not in any metrics list and have always been spliced in here.
+    Under the October instrument the rest of the list is OCT_TABLE_METRICS,
+    which adds the ingest and index timers as two columns (DECISIONS #74) and
+    the search-after-insert and search-after-delete passes (#82d); a skeleton
+    has no overlay, so the warm columns render empty and the banner names them
+    as a table the skeleton cannot draw.
+    """
+    cols = [label for _, label in _metrics_for("l3d", spec, src_lane)]
+    warm = ["warm p50 ms", "warm p99 ms"]
+    if "cold p99 ms" in cols:
+        at = cols.index("cold p99 ms") + 1
+        cols[at:at] = warm
+    else:
+        cols = warm + cols
+    return cols
+
+
 def _restructure_tables(tables, rows):
     """Page-level reshaping that no single lane can do (2026-09-11):
 
@@ -2432,7 +2967,15 @@ def _restructure_tables(tables, rows):
         t["source_paths"] = list(t.get("source_paths") or []) + list(by["l3smp"].get("source_paths") or [])
         t["source_urls"] = list(t.get("source_urls") or []) + list(by["l3smp"].get("source_urls") or [])
         tables.remove(by["l3smp"])
-    if all(k in by for k in ("l1", "l1olap", "l1tpc")):
+    # KEYED ON l1tpc ALONE, because that is the only table this split reads.
+    # It used to require l1 and l1olap to be present too, which was true in
+    # September and stops being true in October: DECISIONS #72 withdrew the
+    # synthetic document set, so those two lanes are not run, `all(...)` is
+    # false, and the page would quietly go back to one raw l1tpc table with
+    # every transactional and analytical column in it. The two retired tables
+    # are still removed when they exist, which is what the condition was
+    # actually for.
+    if "l1tpc" in by:
         # THE PAGE SHOWS THE STANDARD DOCUMENT BENCHMARKS ONLY (2026-09-11).
         # The synthetic 20M-order workload and TPC measure different things
         # (reads/inserts/updates against a new-order transaction; five bespoke
@@ -2449,9 +2992,21 @@ def _restructure_tables(tables, rows):
         OLAP_KEEP = {"Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms",
                      "ingest documents/s", "ingest total s", "peak memory GiB", "disk GiB"}
         _oct = _instrument_of("l1tpc") == "2026-10"
+        # The October set is a REPLACEMENT, matching OCT_TABLE_METRICS: six
+        # transactional operations (#82a) and five analytical queries (#82),
+        # each a warm median, with a ninety-ninth percentile on the headline
+        # query only and the cold column on the analytical table, where the
+        # split applies (#89).
+        OCT_OLTP_COLS = ["new-order p50 ms", "new-order p99 ms", "payment p50 ms",
+                         "insert p50 ms", "read p50 ms", "update p50 ms",
+                         "delete p50 ms", "OLTP ops/s"]
+        OCT_OLAP_COLS = ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "top parts p50 ms",
+                         "ship mode p50 ms", "by month p50 ms", "cold first query ms"]
+        SHARED_COLS = {"ingest documents/s", "ingest total s",
+                       "peak memory GiB", "disk GiB"}
         if _oct:
-            OLTP_KEEP |= OCT_DOCS_OLTP
-            OLAP_KEEP |= OCT_DOCS_OLAP
+            OLTP_KEEP = set(OCT_OLTP_COLS) | SHARED_COLS
+            OLAP_KEEP = set(OCT_OLAP_COLS) | SHARED_COLS
         src = by["l1tpc"]
         # The tuned PostgreSQL arm answered its question (image defaults do
         # not distort the comparison: 2.33 vs 2.39 ms new-order, 337 vs 331 ms
@@ -2463,17 +3018,18 @@ def _restructure_tables(tables, rows):
         tables.append({"id": "docs_oltp", "title": "Document OLTP",
                        "dataset": "TPC-C new-order on the TPC-H SF1 tables",
                        "conditions": list(src["conditions"]),
-                       "columns": ["new-order p50 ms", "new-order p99 ms"]
-                                  + (["payment p50 ms", "payment p99 ms"] if _oct else []) + ["OLTP ops/s"],
+                       "columns": (OCT_OLTP_COLS if _oct else
+                                   ["new-order p50 ms", "new-order p99 ms", "OLTP ops/s"]),
                        "entries": [clone(e, OLTP_KEEP) for e in src["entries"]], **base})
         tables.append({"id": "docs_olap", "title": "Document OLAP",
                        "dataset": "TPC-H Q1 and Q6 at SF1",
                        "conditions": list(src["conditions"]),
-                       "columns": ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"]
-                                  + (sorted(OCT_DOCS_OLAP, key=lambda c: [m[1] for m in OCT_METRICS["l1tpc"]].index(c)) if _oct else []),
+                       "columns": (OCT_OLAP_COLS if _oct else
+                                   ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"]),
                        "entries": [clone(e, OLAP_KEEP) for e in src["entries"]], **base})
         for i in ("l1", "l1olap", "l1tpc"):
-            tables.remove(by[i])
+            if i in by:
+                tables.remove(by[i])
     return tables
 
 
@@ -2665,7 +3221,7 @@ def main() -> int:
                 "host": rs[0].get("host") or None,
                 "metrics": {},
             }
-            for field, label in _metrics_for(src_lane, spec):
+            for field, label in _metrics_for(lane, spec, src_lane):
                 if field == "disk_data_mb" and backend in spec.get("in_memory", ()):
                     # An engine with no disk at all reads as a blank with the
                     # note below, not as 0.00 (SurrealDB at mem://).
@@ -2751,15 +3307,8 @@ def main() -> int:
                 "title": spec["title"],
                 "dataset": spec["dataset"],
                 "conditions": spec["conditions"],
-                "columns": ([label for _, label in _metrics_for(src_lane, spec)]
-                            if lane != "l3d" else
-                            # warm exists only where a second pass was run,
-                            # so it sits beside cold rather than replacing it
-                            ["cold p50 ms", "cold p99 ms", "warm p50 ms",
-                             "warm p99 ms", "recall@10", "ingest+index vectors/s",
-                             "ingest+index total s"]
-                            + [lab for _, lab in OCT_METRICS["l3d"] if _instrument_of("l3d") == "2026-10"]
-                            + ["peak memory GiB", "disk GiB"]),
+                "columns": ([label for _, label in _metrics_for(lane, spec, src_lane)]
+                            if lane != "l3d" else _dense_columns(spec, src_lane)),
                 "withheld_scales": withheld,
                 "withheld_reason": (
                     "Comparator rows exist at these sizes but ArcadeDB's were "
@@ -2802,12 +3351,23 @@ def main() -> int:
     # over a mini measurement is the same lie in the other direction. They are
     # withheld and NAMED in the payload, so the reader can see which of the
     # October page's tables the skeleton could not draw and why.
-    _extras = [_l4_table(rows), _lifecycle_table(rows)]
+    # The durability table sits beside the session-cost table (DECISIONS #90)
+    # and is built from the same 2026-10 rows the write tables are; a September
+    # payload has no cell that ran twice, so it returns None and the page does
+    # not carry it.
+    _extras = [_l4_table(rows), _lifecycle_table(rows), _durability_table(rows)]
     if not SKELETON:
         _extras = [_sparse_multipass_table()] + _extras + [_e4_table(), _python_cost_table()]
     for extra in _extras:
         if extra and extra["entries"]:
             tables.append(extra)
+
+    # RESHAPE FIRST, THEN ANNOTATE. The document lane becomes two page tables
+    # here, and the per-table notes below are keyed by the PAGE table's id: run
+    # in the other order, the cold-column clause and the equivalence
+    # declarations looked up "l1tpc", found nothing, and both document tables
+    # published without them.
+    tables = _restructure_tables(tables, rows)
 
     hosts = sorted({r["host"] for r in rows if r.get("host")})
     # ON-DISK SIZE, said once per table that prints it (PAGE-SPEC 4a). The
@@ -2825,7 +3385,33 @@ def main() -> int:
     # reader who lands on one table, or who screenshots one, must see it.
     # THE DURABILITY CLASS, ON THE TABLE THAT PAYS FOR IT (DECISIONS #81).
     # Before the skeleton note, so the placeholder warning stays first.
+    # WHAT THE COLD COLUMN IS, OR WHY THERE IS NONE (DECISIONS #89). One
+    # clause per table, from the rows: the lane either records a first-query
+    # timing or records the reason a cold and warm split does not apply to it,
+    # and a blank column with no sentence beside it is the thing #89 forbids.
+    _withhold_cells(tables)
+    _eq_notes = _equivalence_notes(rows)
     for _t in tables:
+        _eq = _eq_notes.get(_t.get("id"))
+        if _eq:
+            _t.setdefault("conditions", [])
+            if _eq not in _t["conditions"]:
+                _t["conditions"].append(_eq)
+    for _t in tables:
+        _cold = _cold_note(_t.get("id"), rows)
+        if _cold:
+            _t.setdefault("conditions", [])
+            if _cold not in _t["conditions"]:
+                _t["conditions"].append(_cold)
+    for _t in tables:
+        # NOT on the durability table itself. That note reads the engine's own
+        # durability string to decide which engines are stuck at the strict end,
+        # and on this one table every engine with a knob has a strict cell by
+        # construction -- so the note would name all of them as engines with no
+        # setting to relax, which is the opposite of what the table shows. Its
+        # own conditions say all of this, per column.
+        if _t.get("id") == "durability":
+            continue
         _note = _durability_note(_t.get("entries", []), rows)
         if _note:
             _t.setdefault("conditions", [])
@@ -2887,7 +3473,7 @@ def main() -> int:
         "arcadedb_commits": sorted({
             c for c in (r.get("engine_commit") for r in rows
                         if str(r.get("backend", "")).startswith("arcadedb")) if c}),
-        "conditions": GLOBAL_CONDITIONS,
+        "conditions": _global_conditions(),
         "provenance_note": (
             "Host identity is recorded on the sparse and dense lanes only; the "
             "remaining lanes record the container but not the machine. Every "
@@ -2904,7 +3490,7 @@ def main() -> int:
             "memory_cap_by_size": MEM_BY_SCALE,
             "jvm_heap_by_size": HEAP_BY_SCALE,
         },
-        "tables": [_finish_table(t) for t in _restructure_tables(tables, rows)],
+        "tables": [_finish_table(t) for t in tables],
     }
 
     # A table can draw on more than one artifact, so this is a LIST. It was a

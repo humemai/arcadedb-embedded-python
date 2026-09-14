@@ -32,7 +32,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-DEFAULT_JSON = HERE / "results" / "web_benchmarks.json"
+# The skeleton publish exports to its own file (export_web.OUT_NAME), so this
+# gate reads the payload that was just written rather than the live one.
+DEFAULT_JSON = HERE / "results" / (
+    "web_benchmarks_skeleton.json" if os.environ.get("BENCH_SKELETON") == "1"
+    else "web_benchmarks.json")
 
 # SKELETON (DECISIONS #86). The laptop placeholder publish. Two sections of
 # this gate compare a TYPED NUMBER against a measured cell, and against
@@ -194,7 +198,13 @@ class _PageCells:
 # swaps both the prose file and the "live" payload for the preview's own
 # (/projects/arcadedb/next, DECISIONS #83), so the preview is checked against
 # itself and never against the live page.
-_SITE = Path(__file__).resolve().parents[2].parent / "humem.ai"
+# BENCH_SITE_DIR wins, because the repos are only siblings in the layout this
+# line assumes and a worktree is not in it: checked out at /home/tk/wt-october,
+# this resolved to /home/tk/humem.ai, the prose file was "not found", and the
+# atomicity check then died on the same missing path with a traceback instead
+# of a finding. refresh_web_page exports the checkout it is publishing to.
+_SITE = Path(os.environ.get("BENCH_SITE_DIR")
+             or Path(__file__).resolve().parents[2].parent / "humem.ai")
 PAGE_TS = _SITE / "src" / "lib" / "projects" / "items" / "arcadedb.ts"
 PREVIEW_TS = _SITE / "src" / "lib" / "projects" / "items" / "arcadedb-next.ts"
 PREVIEW_JSON = _SITE / "src" / "data" / "arcadedb-benchmarks-next.json"
@@ -403,7 +413,18 @@ def _check_page_atomicity(page_path):
     """
     import json as _json
     import re as _re
+    if not Path(page_path).exists():
+        # A FINDING, not a crash. The prose check above already reports the
+        # missing file; dying here hid it behind a traceback.
+        print(f"  no page prose at {page_path}; atomicity counts unchecked")
+        return 0, 1
     text = open(page_path, encoding="utf-8").read()
+    if not Path(RUNS_JSONL).exists():
+        # Same rule as the missing prose file above: report it. This path ran
+        # into a traceback whenever the results log was named something other
+        # than runs.jsonl and BENCH_RUNS_JSONL was not exported with it.
+        print(f"  no results log at {RUNS_JSONL}; atomicity counts unchecked")
+        return 0, 1
     totals = {}
     for backend in E2_BACKENDS:
         n_trials = n_torn = 0

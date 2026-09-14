@@ -709,11 +709,11 @@ class SurrealGraphServer(SurrealGraph):
                            "FROM knows WHERE in < out) GROUP ALL"))
 
     def _open(self):
-        from surrealdb import Surreal
-        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
-        self.db = Surreal(f"ws://{host}:8000/rpc")
-        self.db.signin({"username": "root", "password": "root"})
-        self.db.use("bench", "bench")
+        # One shared client for every served arm (DECISIONS #91): it sets the
+        # WebSocket options the SDK leaves at the library's defaults, and it
+        # reconnects, re-authenticates and re-selects the namespace once when
+        # the socket dies mid-query.
+        self.db = surreal_common.served_client()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
@@ -894,6 +894,14 @@ def main():
         pick_query_ids = lambda _n, k: _ldbc.pick_query_ids(args.scale, k)
         # LDBC person ids are sparse longs; harness-invented ids must not collide
         write_id_base = _ldbc.write_id_base(args.scale)
+        # The row names the corpus it read, WITH the tier, because "ldbc" alone
+        # does not say which projection. Written here, in the branch that
+        # selects LDBC, and nowhere else: it used to sit at the end of the
+        # gen_edges wrapper below, one indent level inside the function, so
+        # every synthetic run stamped itself "ldbc-<scale>" as soon as the
+        # first edge stream was drained. The laptop has no LDBC corpus at all
+        # and its micro rows still claimed one.
+        out["graph_source"] = f"ldbc-{args.scale}"
 
     # Wrap AFTER the rebind above, so both the synthetic and the LDBC streams are
     # counted. Adapters resolve these names from module globals at call time, so
@@ -915,7 +923,6 @@ def main():
         for item in _edges_src(n, *a, **kw):
             _ingested["edges"] += 1
             yield item
-        out["graph_source"] = f"ldbc-{args.scale}"
 
     # PHASE MARKERS (2026-09-14, same pattern as l3d_dense): a cell that dies
     # names the phase it was in. Entered and left AROUND the timed work, never
@@ -985,7 +992,9 @@ def main():
                     if rows:
                         answers.extend(rows)
                     if w >= 5:  # warmups discarded
-                        lat.append(dt)
+                        # ...and so is a sample whose connection dropped
+                        # while it was being taken (DECISIONS #91).
+                        surreal_common.keep(ad, lat, dt)
                 lat.sort()
                 res[f"{prefix}{op}_p50_ms"] = round(pct(lat, 0.50), 3)
                 res[f"{prefix}{op}_p95_ms"] = round(pct(lat, 0.95), 3)
@@ -1051,7 +1060,7 @@ def main():
             t = time.perf_counter()
             ad.run_write(pid, new_id)
             if w >= 5:
-                lat.append((time.perf_counter() - t) * 1000)
+                surreal_common.keep(ad, lat, (time.perf_counter() - t) * 1000)
         lat.sort()
         out["write_p50_ms"] = round(pct(lat, 0.50), 3)
         out["write_p95_ms"] = round(pct(lat, 0.95), 3)
@@ -1073,7 +1082,7 @@ def main():
             t = time.perf_counter()
             ad.run_update(new_id)
             if w >= 5:
-                ulat.append((time.perf_counter() - t) * 1000)
+                surreal_common.keep(ad, ulat, (time.perf_counter() - t) * 1000)
         ulat.sort()
         out["update_p50_ms"] = round(pct(ulat, 0.50), 3)
         out["update_p95_ms"] = round(pct(ulat, 0.95), 3)
@@ -1092,7 +1101,7 @@ def main():
             t = time.perf_counter()
             ad.run_delete(new_id)
             if w >= 5:
-                dlat.append((time.perf_counter() - t) * 1000)
+                surreal_common.keep(ad, dlat, (time.perf_counter() - t) * 1000)
         dlat.sort()
         out["delete_p50_ms"] = round(pct(dlat, 0.50), 3)
         out["delete_p95_ms"] = round(pct(dlat, 0.95), 3)
@@ -1144,7 +1153,7 @@ def main():
                     break
                 t = time.perf_counter()
                 ad.run_olap(qname)
-                lat.append((time.perf_counter() - t) * 1000)
+                surreal_common.keep(ad, lat, (time.perf_counter() - t) * 1000)
             out[f"{qname}_budget_s"] = OLAP_BUDGET_S
             out[f"{qname}_censored"] = len(lat) < OLAP_ITERATIONS
             if out[f"{qname}_censored"]:
@@ -1223,6 +1232,10 @@ def main():
     with _beat.phase("close"):
         ad.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
+    # `reconnects` on every SurrealDB row, zero when nothing happened
+    # (DECISIONS #91): a dropped connection has to be visible as a number on
+    # the row, not as a traceback in a log nobody reads until a cell dies.
+    surreal_common.stamp_reconnects(out, ad)
     # Recorded at the END, when the generators have actually run. A shortfall is a
     # refusal: a row claiming the full corpus while a fraction was ingested is
     # exactly what rule 4's fingerprint cannot catch on its own.

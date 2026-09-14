@@ -30,6 +30,7 @@ import statistics
 import glob
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -547,10 +548,44 @@ def check_protocol_overlays():
 # measured on. Disclosed on the page's lifecycle table by export_web. Remove
 # the entry at the re-pin that carries the fix, so the gate is armed again.
 KNOWN_REGRESSIONS = {
-    "vector": ("8d6af9475",
-               "the first search after a write started a full async rebuild and close() waited on it; "
-               "filed as #7183, fixed in #7191 for 26.10.1"),
+    "vector": {
+        "commit": "8d6af9475",
+        # THE RELEASES THE REGRESSION IS IN, for rows that carry no commit.
+        # engine_commit is stamped by a campaign that built a matched pair;
+        # the laptop skeleton (DECISIONS #86) runs the published wheel and the
+        # published image and stamps none, so a commit-only match turned a
+        # documented, filed, upstream-fixed cost into a gate failure on the one
+        # publish that can do nothing about it. engine_version is what the
+        # running engine reported, which is evidence rather than a claim, so an
+        # unstamped row is matched on the releases the regression was measured
+        # in. #7191 ships in 26.10.1; a row from that release matches neither
+        # key and the gate is armed again, which is the point of the entry
+        # naming its releases instead of "not 26.10.1".
+        "versions": ("26.8", "26.9"),
+        "why": "the first search after a write started a full async rebuild and close() waited on it; "
+               "filed as #7183, fixed in #7191 for 26.10.1",
+    },
 }
+
+
+def _known_applies(known, rows):
+    """Do these rows come from the engine the known regression describes?"""
+    if not known:
+        return False
+    for r in rows:
+        commit = str(r.get("engine_commit") or "").strip()
+        if commit:
+            if commit.startswith(known["commit"]):
+                return True
+            continue
+        ver = str(r.get("engine_version") or "")
+        # Anchored so 26.8 does not match 126.8 or 26.80; the served arm spells
+        # itself "server:26.8.1 (build ...)", so this is a search, not a prefix.
+        if any(re.search(r"(?<![\d.])" + re.escape(v) + r"(?![\d])", ver)
+               for v in known["versions"]):
+            return True
+    return False
+
 
 def check_close_cost(rows):
     """F11: close must be O(what was written), not O(what is stored).
@@ -609,9 +644,12 @@ def check_close_cost(rows):
     # ignore it, which is worse than not having it.
     cells = collections.defaultdict(list)
     for r in lc:
-        cells[(r["workload"], r.get("scale"))].append(r["_session_ms"])
+        cells[(r["workload"], r.get("scale"))].append(r)
     by_sit = collections.defaultdict(dict)
-    for (sit, scale), vals in sorted(cells.items()):
+    by_sit_rows = collections.defaultdict(list)
+    for (sit, scale), cell_rows in sorted(cells.items()):
+        vals = [r["_session_ms"] for r in cell_rows]
+        by_sit_rows[sit].extend(cell_rows)
         med = statistics.median(vals)
         by_sit[sit][scale] = med
         if med > 100.0:
@@ -620,10 +658,13 @@ def check_close_cost(rows):
             # O(stored) by #7183 (1.4 s at 10M, 2026-09-08), and printing BAD
             # for a documented, fixed-upstream cost trains the reader to skip
             # the line. KNOWN is printed, disclosed on the page, not counted.
+            # Scoped to THIS cell's rows, not to every lifecycle row in the
+            # set: one arm carrying the regressed build was licensing the
+            # exception for arms that did not.
             known = KNOWN_REGRESSIONS.get(sit)
-            if known and any(str(r.get("engine_commit") or "").startswith(known[0]) for r in lc):
+            if _known_applies(known, cell_rows):
                 print(f"  KNOWN: {sit}/{scale} clean session (open+close) {med:.1f} ms "
-                      f"median of {len(vals)} exceeds the 100 ms budget: {known[1]}")
+                      f"median of {len(vals)} exceeds the 100 ms budget: {known['why']}")
             else:
                 print(f"  BAD: {sit}/{scale} clean session (open+close) {med:.1f} ms "
                       f"median of {len(vals)} exceeds the 100 ms budget "
@@ -639,16 +680,20 @@ def check_close_cost(rows):
             small, big = sizes["lc10k"], sizes["lc100k"]
             if small > 0 and big / small > 1.5:
                 known = KNOWN_REGRESSIONS.get(sit)
-                if known and any(str(r.get("engine_commit") or "").startswith(known[0]) for r in lc):
+                if _known_applies(known, by_sit_rows[sit]):
                     print(f"  KNOWN: {sit} clean session grows {big / small:.1f}x "
-                          f"({small:.1f} -> {big:.1f} ms medians) over 10x the rows: {known[1]}")
+                          f"({small:.1f} -> {big:.1f} ms medians) over 10x the rows: {known['why']}")
                 else:
                     print(f"  BAD: {sit} clean session grows {big / small:.1f}x "
                           f"({small:.1f} -> {big:.1f} ms medians) over 10x the "
                           f"rows, with nothing written. That is O(stored).")
                     bad += 1
     if not bad:
-        print(f"  ok {len(lc)} lifecycle row(s), none over budget, none scaling")
+        # "none over budget" read as a contradiction directly under a KNOWN
+        # line that says a cell is over budget. The known ones are disclosed on
+        # the page's own lifecycle table, which is what makes them not failures.
+        print(f"  ok {len(lc)} lifecycle row(s), none over budget or scaling "
+              f"except the known regressions printed above")
     return bad
 
 

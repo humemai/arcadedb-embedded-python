@@ -558,11 +558,11 @@ class SurrealServedE2(SurrealE2):
     name = "surrealdb_e2_server"
 
     def __init__(self):
-        from surrealdb import Surreal
-        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
-        self.db = Surreal(f"ws://{host}:8000/rpc")
-        self.db.signin({"username": "root", "password": "root"})
-        self.db.use("bench", "bench")
+        # One shared client for every served arm (DECISIONS #91): it sets the
+        # WebSocket options the SDK leaves at the library's defaults, and it
+        # reconnects, re-authenticates and re-selects the namespace once when
+        # the socket dies mid-query.
+        self.db = surreal_common.served_client()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
@@ -1112,9 +1112,13 @@ def main():
             q, sp = queries[i % len(queries)], starts[i]
             t = time.perf_counter()
             pids, docs = do_retrieval(b, q, sp)
-            rlat.append((time.perf_counter() - t) * 1000)
+            _dt = (time.perf_counter() - t) * 1000
+            surreal_common.keep(b, rlat, _dt)
             if i == 0:
-                bench_common.record_first_query(out, "retrieval", rlat[0])
+                # _dt, not rlat[0]: the sample above is dropped when the
+                # connection broke during it (DECISIONS #91), and the cold
+                # number is still what that first query cost.
+                bench_common.record_first_query(out, "retrieval", _dt)
             # Recall of the VECTOR half against an exact answer, computed
             # outside the clock. The graph and document halves are digested.
             rrec.append(recall_at_k(pids, brute_topk(vecs, q, K)))
@@ -1138,7 +1142,7 @@ def main():
             q, sp = queries[i % len(queries)], starts[i]
             t = time.perf_counter()
             got, cands = do_filtered(b, q, sp)
-            flat.append((time.perf_counter() - t) * 1000)
+            surreal_common.keep(b, flat, (time.perf_counter() - t) * 1000)
             # RECALL AGAINST BRUTE FORCE OVER THE SAME FILTERED CANDIDATE SET
             # (#82c): an engine that filters after the search instead of
             # before shows it here rather than in latency alone.
@@ -1169,7 +1173,7 @@ def main():
             t = time.perf_counter()
             b.hybrid_op(q)
             if i >= WARMUP:
-                lat.append((time.perf_counter() - t) * 1000)
+                surreal_common.keep(b, lat, (time.perf_counter() - t) * 1000)
         lat.sort()
         out["ops"] = len(lat)
         out["hybrid_p50_ms"] = round(statistics.median(lat), 3)
@@ -1268,6 +1272,10 @@ def main():
     with _beat.phase("close"):
         b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
+    # `reconnects` on every SurrealDB row, zero when nothing happened
+    # (DECISIONS #91): a dropped connection has to be visible as a number on
+    # the row, not as a traceback in a log nobody reads until a cell dies.
+    surreal_common.stamp_reconnects(out, b)
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out))

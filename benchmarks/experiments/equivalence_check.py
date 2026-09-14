@@ -87,6 +87,35 @@ LANES_CHECKED_OTHERWISE = {
 # different questions. The digest is still worth recording per arm (it catches
 # an arm disagreeing with itself across repetitions, which E2 reports), but
 # comparing the two arms to each other would be comparing two workloads.
+# AN ANSWER THAT IS WRONG, NAMED RATHER THAN EXCUSED.
+#
+# NOT_COMPARABLE below is for groups that ask different questions. This is the
+# other case: one engine answers the SAME question differently from every other
+# engine, the disagreement has been reproduced and understood, and the cell it
+# affects is WITHHELD FROM THE PAGE (export_web.WITHHELD_CELLS) instead of
+# being published beside answers it does not match. The gate keeps printing it,
+# as KNOWN rather than FAIL, because a publish that cannot proceed until an
+# upstream fix lands is a publish that will be forced through by deleting the
+# check.
+#
+# Each entry names the engine, what it returns instead, and what is being done
+# about it. Remove the entry when the engine is re-pinned with the fix, which
+# re-arms the gate for that query.
+KNOWN_DISAGREEMENTS = {
+    ("l4", "q_groupby"): {
+        "arcadedb_ts_native_server": (
+            "the served SQL path returns a CONSTANT bucket for the "
+            "function-derived grouping key when a second grouping key is "
+            "present: 100 hosts x 1 bucket where the embedded arm on the same "
+            "build, and DuckDB, SQLite, MongoDB, QuestDB and TimescaleDB, all "
+            "return 100 x 12. The single-key form of the same expression "
+            "(q_global, GROUP BY the bucket alone) agrees exactly between the "
+            "two ArcadeDB arms, so it is the two-key group-by that is wrong "
+            "and not the bucket function. The cell is withheld from the page "
+            "rather than published as a latency for a different answer"),
+    },
+}
+
 NOT_COMPARABLE = {
     ("lifecycle", "lifecycle_read"):
         "the embedded and served lifecycle arms run different mode sets, so "
@@ -215,6 +244,7 @@ def report(groups, seen_backends, out=print):
     unstable = []          # (key, backend, digests)
     silent = []            # (key, backend) -- ran the cell, recorded no digest
     not_comparable = []    # (key, reason, backends) -- declared not like for like
+    known_disagreements = []  # (key, backends, reasons) -- wrong, named, withheld
 
     for key in sorted(groups, key=lambda k: tuple(str(x) for x in k)):
         lane, scale, workload, query = key
@@ -262,6 +292,18 @@ def report(groups, seen_backends, out=print):
         if why:
             not_comparable.append((key, why, sorted(real)))
             continue
+        # A DISAGREEMENT THAT IS ALREADY UNDERSTOOD, and whose cell the page
+        # withholds. Counted as known only when the engines that disagree with
+        # the rest are EXACTLY the ones the entry names: a new engine drifting
+        # onto the wrong side must still fail.
+        _known = KNOWN_DISAGREEMENTS.get((lane, query))
+        if _known:
+            _majority = max(by_digest.values(), key=len)
+            _odd = sorted(b for bes in by_digest.values() if bes is not _majority
+                          for b in bes)
+            if _odd and set(_odd) <= set(_known):
+                known_disagreements.append((key, _odd, _known))
+                continue
         disagreed += 1
         # WHICH SIDE IS ARCADEDB ON, and is it alone there? The first version
         # printed "ArcadeDB disagrees with the other engines" whenever any
@@ -330,6 +372,16 @@ def report(groups, seen_backends, out=print):
                 continue
             seen.add(tag)
             out(f"  {key[0]:8} {key[2]:10} {key[3]:24} {be:32} {reason}")
+
+    if known_disagreements:
+        out("\n=== E8: KNOWN disagreements: one engine is wrong, and its cell is "
+            "withheld from the page ===")
+        for key, odd, reasons in known_disagreements:
+            for be in odd:
+                out(f"  KNOWN {key[0]} {key[1]} {key[2]} :: {key[3]} -- {be}: "
+                    f"{reasons[be]}.")
+        out("  Printed on every run, and counted as a failure again the moment "
+            "any OTHER engine joins that side.")
 
     if not_comparable:
         out("\n=== E7: groups declared NOT COMPARABLE, with the reason ===")

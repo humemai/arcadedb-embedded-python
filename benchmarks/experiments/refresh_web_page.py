@@ -237,6 +237,11 @@ def main() -> int:
     figs = Path(paper_dir) / "figures"
 
     site = Path(args.site).resolve()
+    # The gates read the page's prose out of this checkout too, and they used
+    # to find it by assuming the two repositories are siblings. That is true of
+    # a clone and false of a worktree, so page_check looked at a path that does
+    # not exist and reported the prose as unchecked.
+    os.environ["BENCH_SITE_DIR"] = str(site)
     page_source = site / PAGE_SOURCE
     if not page_source.exists():
         print(f"no page source at {page_source}; pass --site", file=sys.stderr)
@@ -248,11 +253,24 @@ def main() -> int:
     # make_paper_figures refuses to emit a figure no .tex includes, so this
     # step is also what fails if a retired figure is still being drawn.
     run(py + [str(HERE / "make_paper_tables.py")], cwd=HERE.parents[1])
-    run(py + [str(HERE / "make_paper_figures.py")], cwd=HERE.parents[1])
+    if args.skeleton:
+        # NOT RUN, rather than run and discarded (DECISIONS #86). Every figure
+        # is a ratio against the best comparator or reads a pinned bench-host
+        # artifact, so at one repetition on micro corpora there is nothing
+        # honest to draw; the skeleton page references no figure and names the
+        # summary figure as absent in its own banner. Skipped HERE and not
+        # only inside the generator, because the generator imports matplotlib
+        # at module scope and a guard underneath that import cannot run on a
+        # machine that has no matplotlib, which is every machine that is not
+        # the bench host.
+        print("  figures: skipped for a skeleton publish; the page references none")
+    else:
+        run(py + [str(HERE / "make_paper_figures.py")], cwd=HERE.parents[1])
 
     step(2, "Export the page data")
     run(py + [str(HERE / "export_web.py")], cwd=HERE.parents[1])
-    exported = HERE / "results" / "web_benchmarks.json"
+    exported = HERE / "results" / (
+        "web_benchmarks_skeleton.json" if args.skeleton else "web_benchmarks.json")
     if not args.preview:
         _refuse_skeleton_payload_on_live(exported)
     _rewrite_page_spec_inventory(exported, PREVIEW_INVENTORY if args.preview else None)

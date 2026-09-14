@@ -641,11 +641,11 @@ class SurrealServedTPC(SurrealTPC):
     durability = bench_common.DURABILITY_SURREAL_SERVER
 
     def _open(self):
-        from surrealdb import Surreal
-        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
-        self.db = Surreal(f"ws://{host}:8000/rpc")
-        self.db.signin({"username": "root", "password": "root"})
-        self.db.use("bench", "bench")
+        # One shared client for every served arm (DECISIONS #91): it sets the
+        # WebSocket options the SDK leaves at the library's defaults, and it
+        # reconnects, re-authenticates and re-selects the namespace once when
+        # the socket dies mid-query.
+        self.db = surreal_common.served_client()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
@@ -1203,7 +1203,9 @@ def main():
             for _ in range(OLAP_ITER):
                 t = time.perf_counter()
                 r = b.olap(which)
-                times.append((time.perf_counter() - t) * 1000)
+                # The sample is dropped when the connection broke while it was
+                # being taken (DECISIONS #91); every other engine keeps it.
+                surreal_common.keep(b, times, (time.perf_counter() - t) * 1000)
                 ref = r
             out[f"{which}_ms"] = round(statistics.median(times), 2)
             _s = sorted(times)
@@ -1253,7 +1255,7 @@ def main():
                 # warmups below are still discarded from the percentiles.
                 bench_common.record_first_query(out, "new_order", _dt)
             if i >= 20:
-                lat.append(_dt)
+                surreal_common.keep(b, lat, _dt)
         lat.sort()
         out["neworder_p50_ms"] = round(statistics.median(lat), 3)
         out["neworder_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)
@@ -1275,7 +1277,7 @@ def main():
             t = time.perf_counter()
             b.payment(okey)
             if j >= 20:
-                plat.append((time.perf_counter() - t) * 1000)
+                surreal_common.keep(b, plat, (time.perf_counter() - t) * 1000)
         plat.sort()
         out["payment_p50_ms"] = round(statistics.median(plat), 3)
         out["payment_p99_ms"] = round(plat[int(len(plat) * 0.99)], 3)
@@ -1308,7 +1310,7 @@ def main():
                 r = fn(i)
                 dt = (time.perf_counter() - t) * 1000
                 if i >= CRUD_WARMUP:
-                    lat.append(dt)
+                    surreal_common.keep(b, lat, dt)
                 if collect and r:
                     crud_read_rows.extend(r)
             lat.sort()
@@ -1342,6 +1344,10 @@ def main():
     with _beat.phase("close"):
         b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
+    # `reconnects` on every SurrealDB row, zero when nothing happened
+    # (DECISIONS #91): a dropped connection has to be visible as a number on
+    # the row, not as a traceback in a log nobody reads until a cell dies.
+    surreal_common.stamp_reconnects(out, b)
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out), flush=True)

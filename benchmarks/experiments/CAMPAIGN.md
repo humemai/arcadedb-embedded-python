@@ -101,6 +101,35 @@ Rules that have each cost a run:
 - Never edit a queue script that is running. Bash reads by byte offset, so a mid-run edit resumes mid-token.
 - Monitoring is the session's own watch on `STATUS.txt` and `docker ps` on the bench host. There are no monitoring scripts.
 
+## 5a. The laptop skeleton (DECISIONS #86)
+
+The whole instrument, on the development laptop, at the smallest size each lane runs, one repetition, both durability classes on the writes, into its own results file, published to the preview route as placeholders so the October page's shape can be read and edited before mini measures anything. It is not a campaign: every row it produces is refused by a live publish, and nothing it produces is merged into `runs.jsonl`.
+
+```sh
+export BENCH_ALLOW_DEV=1 BENCH_DATA="$HOME/bench-data" BENCH_HOST=laptop BENCH_CPUSET=0-11
+export BENCH_TPC_SF=0.01                      # the laptop corpus is SF0.01, not the campaign's SF1
+export BENCH_ARCADEDB_NO_COMPACT_HEADERS=1    # see below
+# no BENCH_GRAPH_SOURCE and no BENCH_SPARSE_SOURCE: neither LDBC-SNB nor the
+# Big-ANN corpus is staged here, so both lanes run their own micro generators
+python3 -u runner.py --lanes <lane> --workloads <wl> --scale <micro|e2|ts100|lc10k> \
+    --reps 1 --tier sweep --workers 1 --results-file runs_skeleton_laptop.jsonl
+```
+
+One stage per (lane, workload), and the write workloads twice, once with `--durability strict`, exactly as the campaign does: `l1tpc` oltp x2 and olap, `l2` oltp x2 and olap, `e2` hybrid x2 and atomicity, `l3d`, `l3s`, `l4`, `lifecycle`. Then:
+
+```sh
+BENCH_RUNS_JSONL=runs_skeleton_laptop.jsonl \
+    python3 refresh_web_page.py --skeleton --site <humem.ai checkout>
+```
+
+Four things the first two attempts got wrong, each of which cost a stage:
+
+- **`--workers 1`, not the sweep tier's default of 2.** At two workers every row records the shard it ran on (`0-5` or `6-11`) instead of the cpuset, so the page's setup paragraph has two cpusets to choose between, and the lifecycle lane times an open and a close beside a neighbour cell.
+- **`BENCH_ARCADEDB_NO_COMPACT_HEADERS=1`.** The served arms here run the stock published image, whose JDK 21 answers `Unrecognized VM option 'UseCompactObjectHeaders'` and refuses to boot. Every ArcadeDB server cell died on it. The flag is settable only on the matched pair, which the laptop does not build.
+- **Ground truth for the sparse lane.** `l3_sparse.py` on the synthetic generator ships none, `recall_at_10` is then null, and `load_canonical` drops every such row before the page sees it, so the sparse table silently does not exist. Generate it once with `gen_sparse_gt.py --scale micro` and copy the `gt.npy` to `$BENCH_DATA/sparse/micro/`.
+- **`BENCH_RUNS_JSONL` on the publish.** The freeze, the exporter and the atomicity check all read it; without it they read `runs.jsonl`, which on a laptop is either absent or somebody else's rows.
+
+
 ## 6. The live chain
 
 The September chain on mini, each script waiting on its predecessor and gated on `verify_pair_c25.sh`, at pin `8d6af9475`:

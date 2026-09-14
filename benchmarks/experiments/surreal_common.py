@@ -85,3 +85,234 @@ def legacy_stamp_fixup(engine_version: str) -> str:
     if m and core_version() and m.group(1) == sdk_version():
         return engine_stamp()
     return engine_version
+
+
+# ---------------------------------------------------------------------------
+# SURVIVING A DROPPED WEBSOCKET (DECISIONS #91).
+#
+# Both served dense cells at the ten-million tier on mini built their index and
+# then died inside the timed queries with "ConnectionClosedError: no close frame
+# received or sent", at 5,007 s and about 4,700 s of a 28,800 s budget. Not a
+# timeout, not an OOM kill, and the server container was up and healthy
+# afterwards with nothing in its log after startup: the server survived and the
+# client's socket went away.
+#
+# WHY IT GOES AWAY, read out of the SDK rather than guessed. The blocking
+# WebSocket connection opens its socket lazily inside _send:
+#
+#     self.socket = ws_sync.connect(self.raw_url, max_size=None,
+#                                   subprotocols=[websockets.Subprotocol("cbor")])
+#
+# Every other option is the websockets library's default, and two of those
+# defaults decide this: ping_interval=20 and ping_timeout=20. The sync client
+# runs a keepalive thread that pings every twenty seconds and CLOSES THE
+# CONNECTION when no pong arrives within twenty more. A query that keeps the
+# server busy for minutes is exactly the case where a pong does not come back
+# in time, so the client hangs up on a server that is still working. That is a
+# client-side default, not an engine limit, and it is set explicitly here
+# instead of being inherited.
+#
+# The treatment is MongoDB's after a primary election, one file over in
+# l1_tpc.py: when the connection is gone, build a new one, re-authenticate,
+# re-select the namespace and database, and let the call through again once.
+# The difference is that a reconnect must not be free: the retried call ran on
+# a new socket after an unknown pause, so its LATENCY IS DISCARDED (see
+# sample_kept below) and the row records how many reconnects happened.
+WS_OPTIONS = {"ping_interval": None, "open_timeout": 60}
+WS_OPTIONS_NOTE = ("websockets client keepalive disabled (ping_interval=None, "
+                   "open_timeout=60): its 20 s ping and 20 s pong deadline "
+                   "close the socket on a server that is busy answering "
+                   "(DECISIONS #91)")
+
+
+def _apply_ws_options():
+    """Set the socket options the SDK leaves at the library's defaults.
+
+    The SDK takes no keyword for them and reaches the library through a module
+    attribute, so the patch goes on that attribute. It is process-wide, which
+    is safe here for one reason worth stating: the only WebSocket client in a
+    cell IS this SDK.
+    """
+    try:
+        import surrealdb.connections.blocking_ws as bws
+    except Exception:  # noqa: BLE001 - embedded-only images have no ws module
+        return False
+    if getattr(bws.ws_sync.connect, "_bench_patched", False):
+        return True
+    _orig = bws.ws_sync.connect
+
+    def connect(*a, **kw):
+        for k, v in WS_OPTIONS.items():
+            kw.setdefault(k, v)
+        return _orig(*a, **kw)
+
+    connect._bench_patched = True
+    bws.ws_sync.connect = connect
+    return True
+
+
+# The exception the SDK raises when the socket is gone comes from the
+# websockets library and from the standard library underneath it, and the SDK
+# wraps some of them in its own types, so this matches on the NAME and the
+# TEXT rather than on a class. Matching a class we import would miss exactly
+# the case that produced this: a wrapped ConnectionClosedError.
+_DROPPED_MARKS = (
+    "connectionclosed", "no close frame", "connection closed",
+    "websocketexception", "connectionreset", "broken pipe", "not connected",
+    "socket is closed", "eof occurred",
+)
+
+
+def is_dropped_connection(exc) -> bool:
+    text = f"{exc.__class__.__name__}: {exc}".lower()
+    return any(m in text for m in _DROPPED_MARKS)
+
+
+class ReconnectingClient:
+    """A SurrealDB server connection that rebuilds itself when the socket dies.
+
+    Wraps the SDK client rather than subclassing it: the SDK returns one of
+    three connection classes from Surreal(url) depending on the scheme, so
+    there is no single base to inherit from.
+    """
+
+    def __init__(self, open_fn):
+        self._open_fn = open_fn
+        self._c = open_fn()
+        self.reconnects = 0
+        # Bumped on every reconnect. sample_kept() reads it to decide whether
+        # the sample just timed ran on an unbroken connection.
+        self.reconnect_epoch = 0
+
+    # Reconnecting to close is a reconnect that exists only to be thrown away,
+    # and it would count itself on the row. A close that fails because the
+    # socket is already gone has done its job.
+    NO_RETRY = {"close"}
+
+    def __getattr__(self, name):
+        attr = getattr(self._c, name)
+        if not callable(attr):
+            return attr
+        if name in self.NO_RETRY:
+            return attr
+
+        def call(*a, **kw):
+            try:
+                return attr(*a, **kw)
+            except Exception as e:  # noqa: BLE001
+                if not is_dropped_connection(e):
+                    raise
+                self.reconnect()
+                # ONCE. A second drop on a fresh connection is not a dropped
+                # socket any more, it is a server that cannot answer, and the
+                # cell should fail with that rather than retry forever.
+                return getattr(self._c, name)(*a, **kw)
+
+        return call
+
+    # How long to keep trying to get the connection back. A socket that dropped
+    # because the server bounced cannot be reopened in the same millisecond,
+    # and a reconnect that gives up instantly would turn every recoverable
+    # drop into a dead cell -- which is the outcome this whole path exists to
+    # avoid. Bounded, because a server that is gone for a minute is a failure
+    # and the cell should say so rather than sit there.
+    RECONNECT_WINDOW_S = 60
+    RECONNECT_SLEEP_S = 1.0
+
+    def reconnect(self):
+        import time as _time
+        try:
+            self._c.close()
+        except Exception:  # noqa: BLE001
+            pass
+        deadline = _time.monotonic() + self.RECONNECT_WINDOW_S
+        last = None
+        while True:
+            try:
+                self._c = self._open_fn()
+                break
+            except Exception as e:  # noqa: BLE001
+                last = e
+                if _time.monotonic() >= deadline:
+                    raise
+                _time.sleep(self.RECONNECT_SLEEP_S)
+        self.reconnects += 1
+        self.reconnect_epoch += 1
+        self.last_reconnect_error = None if last is None else f"{last.__class__.__name__}: {last}"
+        return self.reconnects
+
+
+def served_client(url=None, ns="bench", db="bench", user="root", password="root"):
+    """The served SurrealDB connection every lane opens, with #91's treatment.
+
+    One function rather than four copies of the same four lines, so a lane
+    cannot end up with the reconnect path and another without it.
+    """
+    import os
+    _apply_ws_options()
+
+    def _open():
+        from surrealdb import Surreal
+        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        c = Surreal(url or f"ws://{host}:8000/rpc")
+        c.signin({"username": user, "password": password})
+        c.use(ns, db)
+        return c
+
+    return ReconnectingClient(_open)
+
+
+_SAMPLE_EPOCHS = {}
+
+
+def sample_kept(adapter) -> bool:
+    """Did the sample just timed run on a connection that never dropped?
+
+    False exactly once per reconnect, for the call that hit the dead socket:
+    that call paid for a fresh connection and a re-authentication, so its
+    latency is the reconnect's, not the query's, and #91 says it is not
+    counted. Every other call, and every adapter that is not a reconnecting
+    SurrealDB client, returns True and nothing changes.
+
+    Conservative in one direction on purpose: if a connection drops during
+    UNTIMED work (a build, a schema statement), the next timed sample is the
+    one discarded. One sample out of a thousand is the cheaper error.
+    """
+    client = getattr(adapter, "db", None)
+    epoch = getattr(client, "reconnect_epoch", None)
+    if epoch is None:
+        return True
+    key = id(client)
+    was = _SAMPLE_EPOCHS.get(key, epoch)
+    _SAMPLE_EPOCHS[key] = epoch
+    return epoch == was
+
+
+def keep(adapter, samples, value):
+    """Append a timed sample unless the connection broke while it was taken."""
+    if sample_kept(adapter):
+        samples.append(value)
+
+
+def stamp_reconnects(out, adapter):
+    """`reconnects` on every SurrealDB row, zero when nothing happened.
+
+    A number on the row rather than an exception in a log: the ten-million
+    failures were only ever visible as a traceback, so nothing downstream could
+    see them and no gate could refuse a cell that had silently lost its server
+    and come back.
+    """
+    client = getattr(adapter, "db", None)
+    n = getattr(client, "reconnects", None)
+    if n is not None:
+        out["reconnects"] = n
+        out["surreal_ws_options"] = WS_OPTIONS_NOTE
+        return n
+    # The embedded arm has no socket to lose, and it still records the field,
+    # at zero: a column that exists only on the rows that failed is a column
+    # nobody reads until it is too late.
+    if "surreal" in str(getattr(adapter, "name", "")).lower():
+        out["reconnects"] = 0
+        out["surreal_ws_options"] = "in-process: no connection to drop"
+        return 0
+    return None
