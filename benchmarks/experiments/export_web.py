@@ -1145,8 +1145,10 @@ GLOBAL_CONDITIONS = [
     "in WAL mode with synchronous=NORMAL, the common production setting, because its "
     "default rollback journal fsyncs twice per commit. On the write rows (document OLTP, TPC-C new-order, "
     "graph writes, the cross-model transaction) ArcadeDB's lead over the fsyncing servers is largely this default plus the "
-    "absence of a network hop, not the engine. The next campaign runs ArcadeDB "
-    "with fsync at commit on every timed write path.",
+    "absence of a network hop, not the engine. The next campaign matches every engine at the "
+    "relaxed end instead: each one commits without waiting for the disk, which is what SQLite\'s "
+    "setting above already means, and Neo4j is named on its tables as the one engine with no way "
+    "to turn that off.",
 ]
 
 
