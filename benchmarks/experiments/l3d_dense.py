@@ -29,6 +29,7 @@ import time
 import traceback
 
 import numpy as np
+import bench_common
 import surreal_common
 import arango_common
 
@@ -1432,7 +1433,10 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    _beat = bench_common.PhaseBeat(data_dir=os.environ.get("BENCH_DENSE_DATADIR"))
+    _beat.mark("dataset-load-start", scale=args.scale, backend=args.backend)
     train, test, gt = load_dataset(args.scale)
+    _beat.mark("dataset-loaded", n=len(train), nq=len(test))
     out = {"lane": "l3d", "n_docs": len(train), "dims": DIM, "k": K,
            "n_queries": len(test), "m": M, "ef_construction": EF_CONSTRUCTION,
            "ef_search": EF_SEARCH}
@@ -1509,13 +1513,16 @@ def main():
             f"labelling the row from a knob that changed nothing.")
     out["quantization"] = canonical_quant_label(_declared)
     t0 = time.perf_counter()
-    b.connect()
+    with _beat.phase("connect", backend=args.backend):
+        b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = b.version
 
     t0 = time.perf_counter()
-    b.build(train)
-    b.post_build()
+    with _beat.phase("build", n=len(train)):
+        b.build(train)
+    with _beat.phase("post-build"):
+        b.post_build()
     build = time.perf_counter() - t0
     out["build_s"] = round(build, 2)
     out["build_docs_per_s"] = round(len(train) / build, 1)
@@ -1543,9 +1550,11 @@ def main():
     # and answered. A cold pass must answer only questions the engine has
     # never seen. sparse_multipass_driver.py already draws from a held-out
     # slice; this is the same fix.
-    for q in test[timed_n:]:  # warmup, untimed, held out of the timed set
-        b.search(q, K)
+    with _beat.phase("warmup", n=len(test[timed_n:])):
+        for q in test[timed_n:]:  # warmup, untimed, held out of the timed set
+            b.search(q, K)
     lats, recalls = [], []
+    _beat.mark("queries-start", n=timed_n)
     t0 = time.perf_counter()
     for qi in range(timed_n):
         t1 = time.perf_counter()
@@ -1553,6 +1562,7 @@ def main():
         lats.append((time.perf_counter() - t1) * 1e3)
         recalls.append(len(set(ids[:K]) & set(gt[qi].tolist())) / K)
     span = time.perf_counter() - t0
+    _beat.mark("queries-done", n=timed_n, t=f"{round(span, 2)}s")
     p = pct(lats)
     out.update({f"query_{k}_ms": round(v, 3) for k, v in p.items()})
     out["qps"] = round(timed_n / span, 1)
@@ -1617,7 +1627,9 @@ def main():
     # means a standalone row is as auditable as a campaign row instead of
     # being a second class of artifact nobody thought to check.
     try:
-        import bench_common
+        # bench_common is imported at module scope (a local import here made the
+        # name local to main() and the PhaseBeat call above an UnboundLocalError,
+        # caught on the laptop 2026-09-14).
         # The adapter already recorded the version of the engine actually under
         # test (chromadb.__version__, duckdb.__version__, ...). run_conditions
         # stamps engine_version from the arcadedb wheel, which is the right

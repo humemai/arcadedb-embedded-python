@@ -1988,6 +1988,24 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             last = [l.strip() for l in (tail.stdout + tail.stderr).splitlines()
                     if l.strip()][-3:]
             row["timeout_phase_hint"] = " | ".join(last)[-400:]
+            # A SILENT CELL LEAVES NOTHING, and a hint that is the empty string
+            # reads like a cell that said nothing interesting rather than one
+            # that said nothing at all. SurrealDB's embedded dense cells burned
+            # a 4 hour and an 8 hour budget printing not one line (2026-09-14):
+            # empty hint, no client log written, and the phase only visible by
+            # catching the container alive. The lanes print PHASE markers now;
+            # these two fields are the fallback when an engine dies before the
+            # first marker, and the disk reading says how far a build had got.
+            if not row["timeout_phase_hint"]:
+                row["timeout_phase_hint"] = "(the container produced no output)"
+            _td = container_disk(cli_cid, tries=1)
+            row["timeout_client_disk_mb"] = _td["disk_mb"]
+            _ts = subprocess.run(
+                ["docker", "stats", "--no-stream", "--format",
+                 "{{.CPUPerc}} {{.MemUsage}}", cli_cid],
+                capture_output=True, text=True)
+            if _ts.returncode == 0 and _ts.stdout.strip():
+                row["timeout_cpu_mem"] = _ts.stdout.strip()[:80]
         logs = subprocess.run(["docker", "logs", cli_cid], capture_output=True, text=True)
         # Interrogate the container BEFORE removing it. A cgroup OOM kill leaves
         # NO stdout and NO stderr, so the log is empty and docker's own State is
@@ -2177,6 +2195,14 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 if _m:
                     row["graph_build_cache_chosen"] = int(_m.group(1))
                 _cl = "\n".join(_full.splitlines()[-4000:])
+                if not _cl.strip() and row.get("error"):
+                    # An artifact that exists and says "nothing was printed" is
+                    # readable six weeks later; a missing file is indistinguishable
+                    # from a capture bug (2026-09-14).
+                    _cl = (f"(no output from the client container; error="
+                           f"{row.get('error')}, "
+                           f"disk={row.get('timeout_client_disk_mb')} MB, "
+                           f"{row.get('timeout_cpu_mem') or 'no stats'})")
                 if _cl.strip():
                     _cp = os.path.join(RAW, f"{run_id}.clientlog")
                     with open(_cp, "w") as _fh:

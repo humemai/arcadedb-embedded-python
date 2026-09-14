@@ -27,6 +27,7 @@ import json
 import os
 import statistics
 import time
+import bench_common
 
 from l3d_dense import (BACKENDS, load_dataset, K, canonical_quant_label,
                         degree_stamp, IVF_FIELDS, calibration_slice)
@@ -50,11 +51,15 @@ NQ = int(os.environ.get("BENCH_MP_NQUERIES", "0"))  # 0 = all
 def main():
     if not BACKEND:
         raise SystemExit("BENCH_MP_BACKEND is required (e.g. qdrant_dense)")
+    beat = bench_common.PhaseBeat()
+    beat.mark("dataset-load-start", scale=SCALE, backend=BACKEND)
     train, test, gt = load_dataset(SCALE)
     if NQ:
         test, gt = test[:NQ], gt[:NQ]
+    beat.mark("dataset-loaded", n=len(train), nq=len(test))
     b = BACKENDS[BACKEND]()
-    b.connect()
+    with beat.phase("connect", backend=BACKEND):
+        b.connect()
 
     # Peak memory for the WHOLE cell, build included, matching what the
     # lane rows mean by peak_anon_mib_sum. Started here rather than
@@ -64,8 +69,10 @@ def main():
     mem = SelfMemorySampler().start()
 
     t0 = time.perf_counter()
-    b.build(train)
-    b.post_build()          # the vendor settle step, same as the campaign
+    with beat.phase("build", n=len(train)):
+        b.build(train)
+    with beat.phase("post-build"):
+        b.post_build()      # the vendor settle step, same as the campaign
     # An IVF arm picks its probe count by effect before any pass, on the same
     # held-out slice and against the same target as the lane (arango_common).
     if getattr(b, "calibrates", False):
@@ -84,8 +91,10 @@ def main():
         # and answered. A cold pass must answer only questions the engine has
         # never seen. sparse_multipass_driver.py already draws from a held-out
         # slice; this is the same fix.
-        for q in test[timed_n:]:     # untimed warmup, held out of the timed set
-            b.search(q, K)
+        with beat.phase(f"pass{rep}-warmup", n=len(test[timed_n:])):
+            for q in test[timed_n:]:     # untimed warmup, held out of the timed set
+                b.search(q, K)
+        beat.mark(f"pass{rep}-queries-start", n=timed_n)
         lats, recalls = [], []
         for qi in range(timed_n):
             t1 = time.perf_counter()

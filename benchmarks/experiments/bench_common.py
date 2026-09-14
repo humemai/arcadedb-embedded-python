@@ -4,6 +4,7 @@
 Stdlib-only (so every backend image can import it): latency summary stats,
 on-disk size, a raw-latency sidecar dump, and a small timing context manager.
 """
+import contextlib
 import json
 import os
 import socket
@@ -236,6 +237,79 @@ class timed:
     def __exit__(self, *exc):
         self.s = time.time() - self._t0
         return False
+
+class PhaseBeat:
+    """Say which phase a cell is in, and keep saying it while it lasts.
+
+    A cell that dies used to leave nothing behind unless its engine happened
+    to be chatty. SurrealDB's embedded dense cells burned a 4 hour and an
+    8 hour budget at 1M and DEEP-10M and printed not one line, so the runner's
+    timeout hint came back empty, no client log was written at all, and the
+    phase the budget expired in could only be guessed at from a live container
+    (2026-09-14, user: "just fix that now"). Markers plus a heartbeat mean any
+    cell that dies, for any reason, names the phase it was in and how long it
+    had been there.
+
+    Stdlib only, stderr, one line per marker and one per heartbeat interval, so
+    a timed loop is never touched: phases are entered and left around the timed
+    work, never inside it.
+    """
+
+    def __init__(self, every_s=120.0, data_dir=None, out=None):
+        self.every_s = float(every_s)
+        self.data_dir = data_dir
+        self.out = out or sys.stderr
+        self._stop = None
+        self._thread = None
+
+    def _rss_mib(self):
+        try:
+            with open("/proc/self/status") as fh:
+                for line in fh:
+                    if line.startswith("VmRSS:"):
+                        return round(int(line.split()[1]) / 1024.0, 1)
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    def _extra(self):
+        bits = []
+        rss = self._rss_mib()
+        if rss is not None:
+            bits.append(f"rss={rss}MiB")
+        if self.data_dir:
+            try:
+                bits.append(f"data={dir_size_mb(self.data_dir)}MB")
+            except Exception:  # noqa: BLE001
+                pass
+        return (" " + " ".join(bits)) if bits else ""
+
+    def mark(self, name, **fields):
+        kv = "".join(f" {k}={v}" for k, v in fields.items())
+        print(f"PHASE {name}{kv}{self._extra()}", file=self.out, flush=True)
+
+    @contextlib.contextmanager
+    def phase(self, name, **fields):
+        self.mark(f"{name}-start", **fields)
+        t0 = time.perf_counter()
+        import threading
+        self._stop = threading.Event()
+
+        def beat():
+            while not self._stop.wait(self.every_s):
+                el = round(time.perf_counter() - t0, 1)
+                print(f"PHASE {name}-running t={el}s{self._extra()}",
+                      file=self.out, flush=True)
+
+        self._thread = threading.Thread(target=beat, daemon=True)
+        self._thread.start()
+        try:
+            yield self
+        finally:
+            self._stop.set()
+            self._thread.join(timeout=1.0)
+            self.mark(f"{name}-done", t=f"{round(time.perf_counter() - t0, 2)}s")
+
 
 class SelfMemorySampler:
     """Peak anonymous working set of the process's OWN cgroup, sampled.
