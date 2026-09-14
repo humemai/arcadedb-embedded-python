@@ -40,6 +40,16 @@ SITE = REPO.parent / "humem.ai"
 RESULTS = HERE / "results"
 PAYLOAD = RESULTS / "web_benchmarks.json"
 SITE_PAYLOAD = SITE / "src" / "data" / "arcadedb-benchmarks.json"
+# --preview (DECISIONS #83): land on /projects/arcadedb/next instead; only the
+# preview's payload, images, and prose are committed on the site, and the
+# bindings commit carries results/generated/preview-tables.md instead of PAGE-SPEC.
+PREVIEW_PAYLOAD = SITE / "src" / "data" / "arcadedb-benchmarks-next.json"
+SITE_FILES = {
+    "live": ["src/data/arcadedb-benchmarks.json", "public/images/projects/arcadedb",
+             "src/lib/projects/items/arcadedb.ts"],
+    "preview": ["src/data/arcadedb-benchmarks-next.json", "public/images/projects/arcadedb-next",
+                "src/lib/projects/items/arcadedb-next.ts"],
+}
 HOST = os.environ.get("BENCH_LAND_HOST", "mini")
 REMOTE = os.environ.get("BENCH_LAND_REMOTE",
                         "~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments/results")
@@ -71,7 +81,14 @@ def main():
                     help="dense multipass arm token to pull at both sizes (e.g. neo4jvec, pgvector)")
     ap.add_argument("--message", required=True, help="one-line commit subject for both repos")
     ap.add_argument("--apply", action="store_true", help="build, commit and push; default stops after the diff")
+    ap.add_argument("--preview", action="store_true",
+                    help="land on the preview page (/projects/arcadedb/next); the live page is not touched")
     args = ap.parse_args()
+    global SITE_PAYLOAD
+    if args.preview:
+        SITE_PAYLOAD = PREVIEW_PAYLOAD
+    site_files = SITE_FILES["preview" if args.preview else "live"]
+    refresh_flags = ["--no-build"] + (["--preview"] if args.preview else [])
 
     SCRATCH.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, BENCH_ENGINE_COMMIT=args.pin)
@@ -113,7 +130,7 @@ def main():
     step(4, "publish through the gates (page-only, no site build)")
     log = SCRATCH / "refresh.log"
     with open(log, "w") as fh:
-        rc = subprocess.run([PY, str(HERE / "refresh_web_page.py"), "--no-build"],
+        rc = subprocess.run([PY, str(HERE / "refresh_web_page.py")] + refresh_flags,
                             cwd=REPO, env=env, stdout=fh, stderr=subprocess.STDOUT).returncode
     text = log.read_text()
     for line in text.splitlines():
@@ -146,19 +163,20 @@ def main():
         # Put the site's payload back so the working tree is what the last
         # publish left; the merge into runs.jsonl stands (it is idempotent).
         SITE_PAYLOAD.write_text(before)
-        sh(["git", "checkout", "--", "src/data", "public/images/projects/arcadedb"], cwd=SITE, check=False)
+        sh(["git", "checkout", "--"] + site_files[:2], cwd=SITE, check=False)
         print("\nDRY RUN: stopping before build and commit; site payload restored. Re-run with --apply to publish.")
         return 0
 
     step(6, "build the site, commit both repos, push")
     sh(["npm", "run", "build"], cwd=SITE)
-    sh(["git", "add", "-A", "src", "public"], cwd=SITE)
-    sh(["git", "commit", "-q", "-m", f"arcadedb: {args.message}{TRAILER}"], cwd=SITE, check=False)
+    sh(["git", "add"] + site_files, cwd=SITE)
+    sh(["git", "commit", "-q", "-m", f"arcadedb{' preview' if args.preview else ''}: {args.message}{TRAILER}"], cwd=SITE, check=False)
     sh(["git", "push", "-q", "origin", "main"], cwd=SITE)
     tracked = ["benchmarks/experiments/results/runs_paper.csv",
                "benchmarks/experiments/results/web_benchmarks.json",
                "benchmarks/experiments/results/generated",
-               "benchmarks/experiments/PAGE-SPEC.md"]
+               "benchmarks/experiments/results/generated/preview-tables.md" if args.preview
+               else "benchmarks/experiments/PAGE-SPEC.md"]
     sh(["git", "add"] + tracked, cwd=REPO)
     sh(["git", "commit", "-q", "-m", f"results: {args.message}{TRAILER}"], cwd=REPO, check=False)
     sh(["git", "push", "-q", "origin", "main"], cwd=REPO)

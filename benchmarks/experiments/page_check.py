@@ -157,9 +157,14 @@ class _PageCells:
                 if str(e.get("scale")) == str(scale) and column in e["metrics"]]
         return max(vals)
 
-# repos are siblings, same assumption refresh_web_page.py makes
-PAGE_TS = Path(__file__).resolve().parents[2].parent / "humem.ai" / \
-    "src" / "lib" / "projects" / "items" / "arcadedb.ts"
+# repos are siblings, same assumption refresh_web_page.py makes. --preview
+# swaps both the prose file and the "live" payload for the preview's own
+# (/projects/arcadedb/next, DECISIONS #83), so the preview is checked against
+# itself and never against the live page.
+_SITE = Path(__file__).resolve().parents[2].parent / "humem.ai"
+PAGE_TS = _SITE / "src" / "lib" / "projects" / "items" / "arcadedb.ts"
+PREVIEW_TS = _SITE / "src" / "lib" / "projects" / "items" / "arcadedb-next.ts"
+PREVIEW_JSON = _SITE / "src" / "data" / "arcadedb-benchmarks-next.json"
 
 
 # The page's DEEP-10M rows against T5's, cell for cell.
@@ -514,7 +519,13 @@ def _check_disk_units(payload):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", default=str(DEFAULT_JSON))
+    ap.add_argument("--preview", action="store_true",
+                    help="check the preview page's prose and payload instead of the live page's")
     args = ap.parse_args()
+    global PAGE_TS, LIVE_JSON
+    if args.preview:
+        PAGE_TS, LIVE_JSON = PREVIEW_TS, PREVIEW_JSON
+        print("target: PREVIEW (arcadedb-next.ts, arcadedb-benchmarks-next.json)")
 
     path = Path(args.json)
     if not path.exists():

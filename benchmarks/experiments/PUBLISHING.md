@@ -23,6 +23,10 @@ Flags: `--site <path>` if humem.ai is not a sibling checkout, `--no-build` to
 skip the Next.js build (don't, normally: the build is what catches the page
 referencing an asset that was never written).
 
+## The preview target (DECISIONS #83)
+
+`refresh_web_page.py --preview` and `land_stage.py --preview` publish to `/projects/arcadedb/next`, the campaign page watched while it fills in: the same exporter, gates, and figures, written to `src/data/arcadedb-benchmarks-next.json`, `public/images/projects/arcadedb-next/`, and checked against the prose in `src/lib/projects/items/arcadedb-next.ts`; the table inventory goes to `results/generated/preview-tables.md` and PAGE-SPEC.md is not rewritten. The route is noindex and not in the project index, and its banner names the pin from the payload. A preview publish never writes the live payload, the live images, or `arcadedb.ts`. The switch, when the campaign freeze is complete and every gate is green, is one commit that copies the preview payload, images, and prose over the live ones and deletes the route.
+
 ## The one rule
 
 > **Every page table is generated from frozen rows, listed in the manifest,
