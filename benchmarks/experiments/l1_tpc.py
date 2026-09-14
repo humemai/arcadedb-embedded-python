@@ -689,9 +689,12 @@ class ArcadeServerTPC(ArcadeTPC):
                   language="sqlscript")
 
     def payment(self, okey):
+        # The UPDATE goes last: the server appends "limit 20001" to a script
+        # that opens with SELECT, and an INSERT ... SET as the final statement
+        # cannot parse it (laptop, 2026-09-14); new-order ends with UPDATE too.
         self._cmd(f"SELECT pkey, qty FROM OrderNew WHERE okey={okey};"
-                  f"UPDATE OrderNew SET paid = 1 WHERE okey={okey};"
-                  f"INSERT INTO Payment SET okey={okey}, amount=1.0",
+                  f"INSERT INTO Payment SET okey={okey}, amount=1.0;"
+                  f"UPDATE OrderNew SET paid = 1 WHERE okey={okey}",
                   language="sqlscript")
 
     def close(self):
