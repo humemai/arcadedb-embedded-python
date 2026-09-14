@@ -120,10 +120,10 @@ def load_frames():
 
 class DuckTPC:
     name = "duckdb"
-    # DuckDB flushes its write-ahead log to disk at every commit and has no
-    # setting that relaxes it (its durability page: a commit returns after the
-    # WAL is written and flushed). Named as the exception it is (#81).
-    durability = "fsync at commit, not configurable (DuckDB WAL)"
+    # DECISIONS #81. Every string, and the evidence for the default it
+    # names, is in bench_common (one per engine, so two lanes cannot
+    # describe the same engine differently).
+    durability = bench_common.DURABILITY_DUCKDB
 
     def connect(self):
         import duckdb
@@ -173,7 +173,10 @@ class SQLiteTPC:
     dates as ISO text like the ArcadeDB arm, so the comparisons are
     lexicographic and equal to chronological (2026-09-11)."""
     name = "sqlite"
-    durability = "WAL, synchronous=NORMAL: synced at checkpoint, not at commit"
+    # DECISIONS #81. Every string, and the evidence for the default it
+    # names, is in bench_common (one per engine, so two lanes cannot
+    # describe the same engine differently).
+    durability = bench_common.DURABILITY_SQLITE
 
     def connect(self):
         import sqlite3
@@ -231,11 +234,10 @@ class MongoTPC:
     one multi-document transaction (which is why the server runs as a
     single-node replica set) (2026-09-11)."""
     name = "mongodb"
-    # w=1, j=false on every timed write (#81): the write returns once the
-    # primary has applied it in memory; the journal is flushed by the
-    # storage engine's own commit interval (100 ms). A replica set's default
-    # is w:majority with journaling, which waits for the disk.
-    durability = "write concern w=1, j=false (journal flushed every 100 ms)"
+    # DECISIONS #81. Every string, and the evidence for the default it
+    # names, is in bench_common (one per engine, so two lanes cannot
+    # describe the same engine differently).
+    durability = bench_common.DURABILITY_MONGODB
 
     def connect(self):
         import pymongo
@@ -337,9 +339,10 @@ class SurrealTPC:
     (2026-09-11). The served twin runs the 3.2.4 server on RocksDB."""
     name = "surrealdb_tpc"   # not "surrealdb": that is the cross-model lane's old row name
     URL = "surrealkv:///tmp/tpc_surrealkv"
-    # core 2.3.10: SURREAL_SYNC_DATA defaults to false (crates/core/src/kvs/
-    # surrealkv/cnf.rs at v2.3.10), so a commit does not wait for the disk.
-    durability = "SurrealKV, SURREAL_SYNC_DATA=false (2.x default): no sync at commit"
+    # DECISIONS #81. Every string, and the evidence for the default it
+    # names, is in bench_common (one per engine, so two lanes cannot
+    # describe the same engine differently).
+    durability = bench_common.DURABILITY_SURREAL_EMBEDDED
 
     def _open(self):
         import shutil
@@ -417,9 +420,10 @@ class SurrealTPC:
 
 class SurrealServedTPC(SurrealTPC):
     name = "surrealdb_tpc_server"
-    # 3.2.4 defaults to SyncMode::Every; the runner starts the server with
-    # SURREAL_DATASTORE_SYNC_DATA=never (#81), the class ArcadeDB runs in.
-    durability = "RocksDB, SURREAL_DATASTORE_SYNC_DATA=never (3.x default is every commit)"
+    # DECISIONS #81. Every string, and the evidence for the default it
+    # names, is in bench_common (one per engine, so two lanes cannot
+    # describe the same engine differently).
+    durability = bench_common.DURABILITY_SURREAL_SERVER
 
     def _open(self):
         from surrealdb import Surreal
@@ -503,10 +507,10 @@ class PostgresTPC:
 
 class ArcadeTPC:
     name = "arcadedb_embedded"
-    # The engine default (GlobalConfiguration TX_WAL_FLUSH = 0): the WAL is
-    # written, not flushed, at commit. DECISIONS #81 keeps it; the comparators
-    # are set to the same class.
-    durability = "txWalFlush=0 (engine default): no flush at commit"
+    # DECISIONS #81. Every string, and the evidence for the default it
+    # names, is in bench_common (one per engine, so two lanes cannot
+    # describe the same engine differently).
+    durability = bench_common.DURABILITY_ARCADEDB
 
     def connect(self):
         import arcadedb_embedded as arcadedb

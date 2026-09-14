@@ -651,14 +651,17 @@ BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServ
 # DECISIONS #81, recorded on every row. PG+AGE reads the server's
 # synchronous_commit on connect (see PgAgeE2); the composed stack's document
 # and graph half is Neo4j, which cannot be relaxed.
+# Every string, and the evidence for the default it names, is in bench_common.
 DURABILITY = {
-    "arcadedb_e2": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_e2_server": "txWalFlush=0 (engine default): no flush at commit",
-    "surrealdb_e2": "SurrealKV, SURREAL_SYNC_DATA=false (2.x default): no sync at commit",
-    "surrealdb_e2_server": "RocksDB, SURREAL_DATASTORE_SYNC_DATA=never (3.x default is every commit)",
+    "arcadedb_e2": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_e2_server": bench_common.DURABILITY_ARCADEDB,
+    "surrealdb_e2": bench_common.DURABILITY_SURREAL_EMBEDDED,
+    "surrealdb_e2_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_e2": arango_common.DURABILITY,
-    "neo4j_e2": "fsync at commit, not configurable (Neo4j transaction log)",
-    "composed_qdrant_neo4j": "fsync at commit, not configurable (Neo4j transaction log; Qdrant WAL at its default)",
+    "neo4j_e2": bench_common.DURABILITY_NEO4J,
+    # The composed stack's document and graph half is Neo4j, so the whole
+    # operation waits for Neo4j's log; Qdrant's WAL runs at its own default.
+    "composed_qdrant_neo4j": bench_common.DURABILITY_NEO4J + "; Qdrant WAL at its default",
 }
 
 

@@ -713,7 +713,14 @@ def _dense_overlay_entries(scale="deep10m"):
             if str(_ev or "").startswith("unknown") and passes[0].get("lib_version"):
                 _ev = passes[0]["lib_version"]
             ver.add(_ev)
-            build.append({"build_s": passes[0].get("build_s")})
+            # build_s, and the two timers beside it where the engine has the
+            # boundary (DECISIONS #74 item 2). The overlay is what the dense
+            # table prints, so the split has to be read HERE as well as from
+            # the campaign rows: a September file carries neither and _agg
+            # returns None, which drops the column rather than printing blanks.
+            build.append({"build_s": passes[0].get("build_s"),
+                          "ingest_s": passes[0].get("ingest_s"),
+                          "index_s": passes[0].get("index_s")})
             peak.append({"peak_anon_mib_sum": passes[0].get("peak_anon_mib_sum")})
             cold.append({"p50": passes[0].get("p50"), "p99": passes[0].get("p99")})
             for p in passes[1:]:
@@ -725,7 +732,9 @@ def _dense_overlay_entries(scale="deep10m"):
                                      ("warm p50 ms", warm, "p50"),
                                      ("warm p99 ms", warm, "p99"),
                                      ("recall@10", recall, "r"),
-                                     ("ingest+index total s", build, "build_s")):
+                                     ("ingest+index total s", build, "build_s"),
+                                     ("ingest s", build, "ingest_s"),
+                                     ("index s", build, "index_s")):
             got = _agg(rows_, field)
             if got is not None:
                 metrics[label_] = got
@@ -932,6 +941,36 @@ def _instrument_of(lane):
 
 def _metrics_for(lane, spec):
     return list(spec["metrics"]) + (OCT_METRICS.get(lane, []) if _instrument_of(lane) == "2026-10" else [])
+
+
+# ---------------------------------------------------------------------------
+# SKELETON MODE (DECISIONS #86). BENCH_SKELETON=1 says the frozen rows are the
+# laptop's micro-scale placeholder run, published to the preview route so the
+# October page's SHAPE can be read weeks before mini measures anything. It
+# changes nothing about how a cell is aggregated; it stamps the payload so
+# that neither a reader nor the live publish can mistake a placeholder for a
+# measurement.
+SKELETON = os.environ.get("BENCH_SKELETON") == "1"
+SKELETON_BANNER = (
+    "PLACEHOLDER NUMBERS. Every cell on this page comes from a single "
+    "repetition at micro scale on the laptop, run to fill in the October "
+    "page's shape (DECISIONS #86). The columns, conditions, and prose are the "
+    "October instrument; the numbers are not measurements and must not be "
+    "quoted, compared, or carried anywhere. mini has measured nothing yet.")
+SKELETON_TABLE_NOTE = (
+    "Placeholder: this table's numbers are one repetition at micro scale on "
+    "the laptop, not a measurement (DECISIONS #86). The columns and conditions "
+    "are October's; the values are filler until mini runs the campaign.")
+# The two invariants that describe the BENCH HOST rather than the comparison.
+# A laptop skeleton cannot satisfy either (no cpuset pinning, no per-scale
+# memory envelope), and every other gate must pass exactly as it will in
+# October. Named in the payload so the waiver is published, not assumed.
+SKELETON_WAIVERS = [
+    "FAIRNESS F1 (cpuset pinning): the skeleton runs on the laptop's shared "
+    "cpuset, not a pinned one.",
+    "FAIRNESS F3 (memory envelope): the skeleton runs at the laptop's micro "
+    "caps, not the campaign's per-size envelope.",
+]
 
 
 LANES = {
@@ -2225,19 +2264,35 @@ HOST_HARDWARE = {
         "storage": "Samsung 980 PRO 2 TB NVMe",
         "os": "Ubuntu 26.04 LTS, Linux 7.0, Docker 29",
     },
+    # The development machine. It publishes nothing but the skeleton
+    # (DECISIONS #86), and the skeleton's own banner says so on every table.
+    "laptop": {
+        "cpu": "Intel Core Ultra X9 388H, 16 cores, 16 threads, 18 MiB L3",
+        "memory": "30 GiB",
+        "storage": "NVMe",
+        "os": "Ubuntu 26.04 LTS, Linux 7.0, Docker 29",
+    },
 }
 
 
-# The machine every published row ran on. Typed once, like the "mini" the
-# overlay entries carry, because no lane stamps the host into its rows yet
-# (they stamp the container id; BENCH_HOST is exported by every queue script
-# and never recorded). October: record BENCH_HOST in every row and derive
-# this from the rows instead.
+# The machine the published rows ran on, READ FROM THE ROWS since 2026-10
+# (DECISIONS #74 item 3): every row records bench_host. It was typed as "mini"
+# while no lane stamped the host, which is also why the skeleton could not
+# have been published honestly before. A payload whose rows disagree about the
+# host names them all; one with no bench_host at all (a September freeze)
+# falls back to the machine every September row ran on.
 PAGE_HOST = "mini"
 
 
-def _host_hardware(hosts):
-    named = sorted({h for h in hosts if h and not str(h).startswith("container:")} | {PAGE_HOST})
+def _page_hosts(rows):
+    named = sorted({str(r.get("bench_host")).strip() for r in rows
+                    if str(r.get("bench_host") or "").strip()})
+    return named or [PAGE_HOST]
+
+
+def _host_hardware(hosts, rows=()):
+    named = sorted({h for h in hosts if h and not str(h).startswith("container:")}
+                   | set(_page_hosts(rows)))
     missing = [h for h in named if h not in HOST_HARDWARE]
     if missing:
         raise SystemExit(f"rows name a host with no HOST_HARDWARE entry: {missing}")
@@ -2661,9 +2716,22 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if DISK_NOTE not in _t["conditions"]:
                 _t["conditions"].append(DISK_NOTE)
+    # EVERY TABLE SAYS IT, not only the banner at the top (DECISIONS #86). A
+    # reader who lands on one table, or who screenshots one, must see it.
+    if SKELETON:
+        for _t in tables:
+            _t.setdefault("conditions", [])
+            if SKELETON_TABLE_NOTE not in _t["conditions"]:
+                _t["conditions"].insert(0, SKELETON_TABLE_NOTE)
     payload = {
         "source": "benchmarks/experiments/results/runs_paper.csv",
         "generator": "benchmarks/experiments/export_web.py",
+        # DECISIONS #86. Present and false on a real payload, so a reader (and
+        # refresh_web_page's live publish) tests a field that always exists
+        # rather than an absence that could mean "old file".
+        "skeleton": SKELETON,
+        "skeleton_banner": SKELETON_BANNER if SKELETON else None,
+        "gates_waived": SKELETON_WAIVERS if SKELETON else [],
         # Read from the rows, not asserted here. The literal "26.8.1" survived a
         # re-pin and two campaigns because nothing recomputed it (DECISIONS #49).
         "arcadedb_version": _arcadedb_identity(rows),
@@ -2717,7 +2785,7 @@ def main() -> int:
             # Lanes that record the container rather than the machine stamp
             # "container:<id> (host unknown)"; the named hosts are the ones
             # that must have hardware on record.
-            "hosts": _host_hardware(hosts),
+            "hosts": _host_hardware(hosts, rows),
             "cpuset": collections.Counter(str(r.get("cpuset")) for r in rows if r.get("cpuset")).most_common(1)[0][0],
             "memory_cap_by_size": MEM_BY_SCALE,
             "jvm_heap_by_size": HEAP_BY_SCALE,

@@ -227,7 +227,7 @@ def main(args):
     t = time.perf_counter()
     build(db, args.workload, n)
     out["build_s"] = round(time.perf_counter() - t, 2)
-    out["durability"] = "txWalFlush=0 (engine default): no flush at commit"   # DECISIONS #81
+    out["durability"] = bench_common.DURABILITY_ARCADEDB   # DECISIONS #81
     out["instrument"] = bench_common.INSTRUMENT
     _bt = time.perf_counter()
     server_cmd(rq, root, f"close database {DB}").raise_for_status()

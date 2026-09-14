@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -32,6 +33,22 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 DEFAULT_JSON = HERE / "results" / "web_benchmarks.json"
+
+# SKELETON (DECISIONS #86). The laptop placeholder publish. Two sections of
+# this gate compare a TYPED NUMBER against a measured cell, and against
+# placeholder cells that comparison means nothing in either direction: a match
+# would be luck and a mismatch would be the placeholder doing its job. So on a
+# skeleton they keep their STRUCTURAL half -- every pinned sentence must still
+# be present, exactly once -- and report the value as a placeholder instead of
+# comparing it. The DEEP-10M cross-generator section has no tier to read at
+# micro scale and says so rather than failing. Both waivers are published in
+# the payload (export_web.SKELETON_WAIVERS); nothing here is silent, and
+# BENCH_SKELETON is set by the skeleton publish alone.
+SKELETON = os.environ.get("BENCH_SKELETON") == "1"
+
+# The rows the atomicity counts are read from. A skeleton publishes from its
+# own results file, so those counts are checked for real rather than waived.
+RUNS_JSONL = HERE / "results" / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
 
 
 
@@ -206,6 +223,10 @@ def _check_dense_10m(payload):
             if e.get("scale") == "deep10m":
                 rows[e["backend"]] = e["metrics"]
     if not rows:
+        if SKELETON:
+            print("  skeleton: no ten-million tier at micro scale, so the "
+                  "cross-generator DEEP-10M comparison does not apply")
+            return 0, 0
         print("  no deep10m rows on the page; the tier is withheld again")
         return 0, 1
     checked = bad = 0
@@ -280,6 +301,11 @@ def _check_prose(page_ts):
             print(f"  SPLIT  {pid:24s} prose says {sorted(set(hits))} in "
                   f"{len(hits)} places")
             bad += 1
+            continue
+        if SKELETON:
+            # Structure checked (the sentence is here, once); the number is a
+            # placeholder and is not compared. See SKELETON above.
+            print(f"  placeholder {pid:24s} page={hits[0]} (skeleton: not compared)")
             continue
         if callable(ref):
             try:
@@ -367,7 +393,7 @@ def _check_page_atomicity(page_path):
         # runs.jsonl is append-only and a campaign file can be merged more than
         # once (2026-09-06: three merges of one file tripled these counts to 600).
         _newest = {}
-        with open(HERE / "results" / "runs.jsonl") as fh:
+        with open(RUNS_JSONL) as fh:
             for line in fh:
                 try:
                     _r = _json.loads(line)
@@ -521,8 +547,16 @@ def main() -> int:
     ap.add_argument("--json", default=str(DEFAULT_JSON))
     ap.add_argument("--preview", action="store_true",
                     help="check the preview page's prose and payload instead of the live page's")
+    ap.add_argument("--skeleton", action="store_true",
+                    help="the payload is the laptop placeholder run (DECISIONS #86): pinned "
+                         "prose sentences must still be present, their values are not compared, "
+                         "and the DEEP-10M cross-generator section does not apply")
     args = ap.parse_args()
-    global PAGE_TS, LIVE_JSON
+    global PAGE_TS, LIVE_JSON, SKELETON
+    SKELETON = SKELETON or args.skeleton
+    if SKELETON:
+        print("target: SKELETON (DECISIONS #86); prose values are placeholders "
+              "and are checked for presence only")
     if args.preview:
         PAGE_TS, LIVE_JSON = PREVIEW_TS, PREVIEW_JSON
         print("target: PREVIEW (arcadedb-next.ts, arcadedb-benchmarks-next.json)")

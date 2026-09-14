@@ -656,6 +656,17 @@ def check_close_cost(rows):
 STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo4j",
                   "ladybug_graph", "duckdb", "duckdb_vss_dense"}
 
+# THE THIRD CLASS, and the only backends allowed to be in it. SurrealDB 3.2.4
+# served has no sync setting at all -- no SYNC_DATA and no SURREAL_DATASTORE
+# token in its binary, and none of its 110 SURREAL_* variables names sync, WAL,
+# fsync, or durability -- so its behaviour at commit could not be established
+# (evidence in bench_common). Its string says "not verified" rather than
+# claiming a class, and these four arms are the only ones permitted to carry
+# such a string. Any other backend that starts saying "not verified" is an
+# engine whose default nobody checked, which is exactly what #81 forbids.
+UNVERIFIED_ALLOWED = {"surrealdb_tpc_server", "surrealdb_graph_server",
+                      "surrealdb_dense_server", "surrealdb_e2_server"}
+
 
 def check_durability(rows):
     import bench_common
@@ -665,6 +676,7 @@ def check_durability(rows):
         print("  no 2026-10 rows in the canonical set; nothing to check yet")
         return 0
     bad = 0
+    unverified = set()
     for r in oct_rows:
         d = str(r.get("durability") or "")
         cls = bench_common.durability_class(d)
@@ -673,6 +685,11 @@ def check_durability(rows):
             print(f"  FAIL {where}: 2026-10 row records no durability"); bad += 1
         elif cls == "strict" and r.get("backend") not in STRICT_ALLOWED:
             print(f"  FAIL {where}: '{d}' on an engine that has the knob"); bad += 1
+        elif cls == "unverified" and r.get("backend") not in UNVERIFIED_ALLOWED:
+            print(f"  FAIL {where}: '{d}' -- an unchecked default on an engine "
+                  f"that is not one of the named exceptions"); bad += 1
+        elif cls == "unverified":
+            unverified.add(r.get("backend"))
         elif "NOT the #81 setting" in d:
             print(f"  FAIL {where}: the server answered '{d}'"); bad += 1
     # The two data-dependent time-series shapes must agree across engines
@@ -693,9 +710,23 @@ def check_durability(rows):
             for sc, d in per_scale.items():
                 if len(d) > 1:
                     print(f"  FAIL {lane} {sc} {qn} disagrees across engines: {d}"); bad += 1
+    if unverified:
+        print(f"  NAMED EXCEPTION: {sorted(unverified)} run at an engine default "
+              f"this project could not establish; their rows and tables say so "
+              f"(FAIRNESS F10)")
     if not bad:
         print(f"  ok: {len(oct_rows)} 2026-10 rows, every durability recorded and in class")
     return bad
+
+
+# DECISIONS #86: the laptop skeleton waives the two invariants that are about
+# the BENCH HOST and nothing else -- F1's cpuset pinning and F3's per-size
+# memory envelope -- because a laptop has neither. Every other invariant,
+# including the degree match, the close cost, the durability class, and the
+# instrument, runs exactly as it will in October. The waiver is printed here
+# and published in the payload (export_web.SKELETON_WAIVERS); it is never
+# silent, and BENCH_SKELETON is set by the skeleton publish alone.
+SKELETON = os.environ.get("BENCH_SKELETON") == "1"
 
 
 def main():
@@ -704,7 +735,15 @@ def main():
     except Exception as e:
         print(f"cannot load canonical rows: {e}")
         return 2
-    bad = check_cpuset(rows) + check_envelope(rows) + check_degree(rows)
+    if SKELETON:
+        print("=== SKELETON publish (DECISIONS #86): F1 (cpuset) and F3 "
+              "(memory envelope) are WAIVED ===")
+        print("  Both describe the bench host, which for a skeleton is the "
+              "laptop. Every other invariant below runs unchanged.")
+        bad = 0
+    else:
+        bad = check_cpuset(rows) + check_envelope(rows)
+    bad += check_degree(rows)
     bad += check_close_cost(rows)
     bad += check_durability(rows)
     check_protocol_overlays()

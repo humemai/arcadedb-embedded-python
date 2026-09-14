@@ -400,7 +400,7 @@ class LadybugGraph(Base):
             "CREATE REL TABLE KNOWS(FROM Person TO Person, since INT64)")
 
     def build(self, n_persons):
-        # CSV COPY — LadybugDB's native bulk path (Kuzu lineage)
+        # CSV COPY — LadybugDB's native bulk path
         import csv as _csv
         pcsv, kcsv = "/tmp/l2_persons.csv", "/tmp/l2_knows.csv"
         with open(pcsv, "w", newline="") as f:
@@ -638,15 +638,16 @@ ADAPTERS = {a.name: a for a in
              SurrealGraph, SurrealGraphServer, ArangoGraph]}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. Neo4j and
-# LadybugDB cannot be relaxed (Neo4j has no setting; Kùzu's WAL fsyncs on
-# every logged commit, src/storage/wal/wal.cpp) and are the named exceptions.
+# LadybugDB cannot be relaxed and are the named exceptions on this table; the
+# SurrealDB server's behaviour could not be established and its string says so.
+# Every string, and the evidence behind it, is in bench_common.
 DURABILITY = {
-    "arcadedb_graph_embedded": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_graph_server": "txWalFlush=0 (engine default): no flush at commit",
-    "neo4j_graph": "fsync at commit, not configurable (Neo4j transaction log)",
-    "ladybug_graph": "fsync at commit, not configurable (Kùzu WAL)",
-    "surrealdb_graph": "SurrealKV, SURREAL_SYNC_DATA=false (2.x default): no sync at commit",
-    "surrealdb_graph_server": "RocksDB, SURREAL_DATASTORE_SYNC_DATA=never (3.x default is every commit)",
+    "arcadedb_graph_embedded": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_graph_server": bench_common.DURABILITY_ARCADEDB,
+    "neo4j_graph": bench_common.DURABILITY_NEO4J,
+    "ladybug_graph": bench_common.DURABILITY_LADYBUG,
+    "surrealdb_graph": bench_common.DURABILITY_SURREAL_EMBEDDED,
+    "surrealdb_graph_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_graph": arango_common.DURABILITY,
 }
 

@@ -83,24 +83,54 @@ waits for the disk and one that does not are different operations, and a write
 latency compares them only if every engine in the table waited the same way.
 Since the 2026-10 instrument (DECISIONS #81) the matched class is *relaxed*: a
 commit returns without waiting for the disk and the log is flushed by the
-engine's own background policy. ArcadeDB's engine default (`txWalFlush=0`),
-SQLite and sqlite-vec under WAL with `synchronous=NORMAL`, PostgreSQL, pgvector,
-PG+AGE, and TimescaleDB with `synchronous_commit=off` on the server, MongoDB's
-timed writes at `w=1, j=false`, ArangoDB's default (`waitForSync=false`, WAL
-synced every 100 ms), QuestDB's default (`cairo.commit.mode=nosync`), SurrealDB
-embedded at its 2.x default (`SURREAL_SYNC_DATA=false`), and the SurrealDB
-server with `SURREAL_DATASTORE_SYNC_DATA=never` (its 3.x default syncs every
-commit) all sit in that class. Three engines cannot be relaxed and are the named
-exceptions on their tables: Neo4j (no setting), LadybugDB (Kùzu's WAL fsyncs on
-every logged commit), and DuckDB (its WAL is flushed at every commit). Every row
-records what it ran as `durability`; `fairness_check.check_durability` refuses a
-2026-10 row with none, a strict string on an engine that has the knob, or a
-PostgreSQL row whose server answered anything but `off`. The same check refuses
-two `instrument` values in one table (rows before 2026-10 carry none and are
-the September instrument), and it refuses a time-series table whose engines
-disagree on the row counts of the two data-dependent queries (`q_groupby_rows`,
-`q_high_rows`), because a query that returned a different number of rows
-measured a different question.
+engine's own background policy.
+
+**Every default below was read out of the engine, not assumed** (laptop,
+2026-09-14; the evidence for each is in `bench_common.py` above the
+`DURABILITY_*` strings, which are defined once there so two lanes cannot
+describe one engine differently). In the relaxed class: ArcadeDB at
+`txWalFlush=0`, which `GlobalConfiguration.TX_WAL_FLUSH` reports as its default
+and current value; SQLite and sqlite-vec under WAL with `synchronous=NORMAL`,
+read back by `PRAGMA` and confirmed by `strace` (50 commits, 8 `fsync`);
+PostgreSQL, pgvector, PG+AGE, and TimescaleDB, whose adapters run
+`SHOW synchronous_commit` on connect and record the server's own answer;
+MongoDB's timed writes at `w=1, j=false` against a server reporting
+`journalCommitInterval` 100 ms; ArangoDB's default, with the 3.12.11 server
+answering `database.wait-for-sync` false, `rocksdb.use-fsync` false, and
+`rocksdb.sync-interval` 100 ms; QuestDB's default, with the 9.1.1 server
+answering `cairo.commit.mode` `nosync` from `SHOW PARAMETERS`; and SurrealDB
+embedded, where an A/B under `strace` shows 6 `fsync` calls at both 50 and 250
+commits with `SURREAL_SYNC_DATA` unset against 56 and 256 with it set.
+
+Three engines cannot be relaxed and are the named exceptions on their tables.
+Neo4j: `SHOW SETTINGS` at 2026.07.1 offers no durability or sync setting at all
+(its `tx_log` settings cover buffer, preallocation, and rotation), and forcing
+the log at commit is its documented behaviour. LadybugDB: `strace` counts 56
+`fdatasync` calls for 50 auto-commit writes, and `ladybug` 0.20.4's `Database()`
+takes no sync option. DuckDB: `strace` counts 55 `fsync` calls for 50 commits,
+and `duckdb_settings()` at 1.5.5 exposes only checkpoint thresholds.
+
+**One engine is in neither class, and says so.** SurrealDB 3.2.4 served has no
+durability setting to match: its binary contains no `SYNC_DATA` and no
+`SURREAL_DATASTORE` token, and none of the 110 `SURREAL_*` variables it does
+expose names sync, WAL, fsync, or durability. This harness used to start it with
+`SURREAL_DATASTORE_SYNC_DATA=never`, which the server never read, so the flag
+labelled those rows as relaxed while changing nothing; it is gone. What 3.2.4
+does at commit was not established, and the row says
+"behaviour at commit is not verified" rather than claiming a class.
+`bench_common.durability_class` returns `unverified` for it, and
+`fairness_check` refuses that on any backend not listed as an exception, so it
+cannot spread silently to another engine.
+
+Every row records what it ran as `durability`; `fairness_check.check_durability`
+refuses a 2026-10 row with none, a strict string on an engine that has the knob,
+an unverified string on an engine not named above, or a PostgreSQL row whose
+server answered anything but `off`. The same check refuses two `instrument`
+values in one table (rows before 2026-10 carry none and are the September
+instrument), and it refuses a time-series table whose engines disagree on the
+row counts of the two data-dependent queries (`q_groupby_rows`, `q_high_rows`),
+because a query that returned a different number of rows measured a different
+question.
 
 ## Parallelism policy: maximise it, but never inside a published absolute
 

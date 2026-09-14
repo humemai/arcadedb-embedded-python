@@ -610,14 +610,15 @@ BACKENDS = {c.name: c for c in
 # DECISIONS #81, recorded on every row. The sparse lane times an ingest and
 # searches, no transactional write; pgvector's server runs
 # synchronous_commit=off like every PostgreSQL arm.
+# Every string, and the evidence for the default it names, is in bench_common.
 DURABILITY_INGEST_ONLY = "engine default; no transactional write timed on this lane"
 DURABILITY = {
-    "arcadedb_sparse_embedded": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_sparse_embedded_fp32": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_sparse_embedded_nocompact": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_sparse_server": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_sparse_server_fp32": "txWalFlush=0 (engine default): no flush at commit",
-    "pgvector_sparse": "synchronous_commit=off",
+    "arcadedb_sparse_embedded": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_sparse_embedded_fp32": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_sparse_embedded_nocompact": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_sparse_server": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_sparse_server_fp32": bench_common.DURABILITY_ARCADEDB,
+    "pgvector_sparse": bench_common.DURABILITY_PG_OFF,
 }
 
 

@@ -46,9 +46,11 @@ FALLBACK_RECALL_TARGET = 0.95
 FROZEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results", "runs_paper.csv")
 
 
-# DECISIONS #81: ArangoDB's collections default to waitForSync=false and the
-# RocksDB WAL is synced by --rocksdb.sync-interval (100 ms), so a commit does
-# not wait for the disk; nothing is set, and the row records the default.
+# DECISIONS #81. Read from the pinned 3.12.11 server on 2026-09-14, not
+# assumed: /_admin/options answers database.wait-for-sync false,
+# rocksdb.use-fsync false, rocksdb.sync-interval 100, and a freshly created
+# collection reads back waitForSync false. Nothing is set by us; the row
+# records the default. Full evidence block in bench_common.
 DURABILITY = "waitForSync=false (default); RocksDB WAL synced every 100 ms"
 
 

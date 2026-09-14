@@ -696,10 +696,16 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
-        # SurrealDB 3.x syncs RocksDB on EVERY commit by default
-        # (SyncMode::Every, core/src/kvs/rocksdb/cnf.rs at v3.2.4); "never"
-        # leaves flushing to the OS, the relaxed class of DECISIONS #81.
-        "server_env": ["-e", "SURREAL_DATASTORE_SYNC_DATA=never"],
+        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
+        # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
+        # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
+        # does expose, not one names sync, WAL, fsync, or durability (checked
+        # 2026-09-14 against the image's own /surreal, and against
+        # `surreal start --help`). Setting it would have labelled these rows
+        # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
+        # embedded twin's SURREAL_SYNC_DATA is real and its default is
+        # verified; see the DURABILITY maps in the lanes.
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
@@ -709,10 +715,16 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
-        # SurrealDB 3.x syncs RocksDB on EVERY commit by default
-        # (SyncMode::Every, core/src/kvs/rocksdb/cnf.rs at v3.2.4); "never"
-        # leaves flushing to the OS, the relaxed class of DECISIONS #81.
-        "server_env": ["-e", "SURREAL_DATASTORE_SYNC_DATA=never"],
+        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
+        # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
+        # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
+        # does expose, not one names sync, WAL, fsync, or durability (checked
+        # 2026-09-14 against the image's own /surreal, and against
+        # `surreal start --help`). Setting it would have labelled these rows
+        # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
+        # embedded twin's SURREAL_SYNC_DATA is real and its default is
+        # verified; see the DURABILITY maps in the lanes.
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
@@ -722,10 +734,16 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
-        # SurrealDB 3.x syncs RocksDB on EVERY commit by default
-        # (SyncMode::Every, core/src/kvs/rocksdb/cnf.rs at v3.2.4); "never"
-        # leaves flushing to the OS, the relaxed class of DECISIONS #81.
-        "server_env": ["-e", "SURREAL_DATASTORE_SYNC_DATA=never"],
+        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
+        # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
+        # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
+        # does expose, not one names sync, WAL, fsync, or durability (checked
+        # 2026-09-14 against the image's own /surreal, and against
+        # `surreal start --help`). Setting it would have labelled these rows
+        # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
+        # embedded twin's SURREAL_SYNC_DATA is real and its default is
+        # verified; see the DURABILITY maps in the lanes.
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
@@ -734,10 +752,16 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
-        # SurrealDB 3.x syncs RocksDB on EVERY commit by default
-        # (SyncMode::Every, core/src/kvs/rocksdb/cnf.rs at v3.2.4); "never"
-        # leaves flushing to the OS, the relaxed class of DECISIONS #81.
-        "server_env": ["-e", "SURREAL_DATASTORE_SYNC_DATA=never"],
+        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
+        # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
+        # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
+        # does expose, not one names sync, WAL, fsync, or durability (checked
+        # 2026-09-14 against the image's own /surreal, and against
+        # `surreal start --help`). Setting it would have labelled these rows
+        # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
+        # embedded twin's SURREAL_SYNC_DATA is real and its default is
+        # verified; see the DURABILITY maps in the lanes.
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",

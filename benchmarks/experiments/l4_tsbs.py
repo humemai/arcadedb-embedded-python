@@ -810,19 +810,19 @@ _CLIENT_SERVER = {"questdb"}
 
 BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS)}
 
-# DECISIONS #81: what each arm runs at commit, recorded on the row. DuckDB
-# flushes its WAL at every commit and cannot be relaxed (the named exception
-# here); QuestDB's cairo.commit.mode defaults to nosync; TimescaleDB reads the
-# server's synchronous_commit on connect.
+# DECISIONS #81: what each arm runs at commit, recorded on the row. DuckDB is
+# the named exception here; TimescaleDB reads the server's own
+# synchronous_commit on connect and overrides this map. Every string, and the
+# evidence for the default it names, is in bench_common.
 DURABILITY = {
-    "arcadedb_ts_doc": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_ts_doc_server": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_ts_native": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_ts_native_server": "txWalFlush=0 (engine default): no flush at commit",
-    "duckdb": "fsync at commit, not configurable (DuckDB WAL)",
-    "sqlite": "WAL, synchronous=NORMAL: synced at checkpoint, not at commit",
-    "mongodb": "write concern w=1, j=false (journal flushed every 100 ms)",
-    "questdb": "cairo.commit.mode=nosync (default): no fsync at commit",
+    "arcadedb_ts_doc": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_ts_doc_server": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_ts_native": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_ts_native_server": bench_common.DURABILITY_ARCADEDB,
+    "duckdb": bench_common.DURABILITY_DUCKDB,
+    "sqlite": bench_common.DURABILITY_SQLITE,
+    "mongodb": bench_common.DURABILITY_MONGODB,
+    "questdb": bench_common.DURABILITY_QUESTDB,
 }
 
 

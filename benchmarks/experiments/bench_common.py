@@ -26,12 +26,79 @@ INSTRUMENT = "2026-10"
 # its tables; fairness_check F8 refuses anything else.
 STRICT_PREFIX = "fsync at commit"
 
+# A THIRD ANSWER, because two were not enough. SurrealDB 3.2.4 has no sync
+# setting and its behaviour at commit could not be established (see the
+# evidence block below), and calling that "relaxed" would be the assertion
+# #81 exists to forbid. A string carrying this mark is its own class, and
+# fairness_check refuses it on any backend not named as an exception.
+UNVERIFIED_MARK = "not verified"
+
 
 def durability_class(text):
-    """'relaxed', 'strict', or None when the row recorded nothing."""
+    """'relaxed', 'strict', 'unverified', or None when the row recorded nothing."""
     if not text:
         return None
-    return "strict" if str(text).startswith(STRICT_PREFIX) else "relaxed"
+    t = str(text)
+    if UNVERIFIED_MARK in t:
+        return "unverified"
+    return "strict" if t.startswith(STRICT_PREFIX) else "relaxed"
+
+
+# HOW EVERY DEFAULT IN THE LANES' DURABILITY MAPS WAS CHECKED.
+#
+# DECISIONS #81 asks for the engine's own answer, not its reputation, and the
+# string a lane writes onto a row is a published claim. Measured on the laptop
+# on 2026-09-14 against the pinned images and wheels; a claim that could not be
+# established says so in the string itself instead of asserting a class.
+#
+#   ArcadeDB    GlobalConfiguration.TX_WAL_FLUSH read out of the running
+#               engine: default 0, current 0, "0 = no flush" (wheel 26.8.1).
+#   SQLite      PRAGMA journal_mode and synchronous read back (wal, 1), and
+#               strace: 50 commits -> 8 fsync, so a commit does not sync.
+#   DuckDB      strace: 50 commits -> 55 fsync, one per commit; and
+#               duckdb_settings() at 1.5.5 offers no commit-sync knob at all,
+#               only checkpoint thresholds. Hence "not configurable".
+#   LadybugDB   strace: 50 auto-commit writes -> 56 fdatasync, one per
+#               commit; ladybug 0.20.4's Database() takes no sync option.
+#   PostgreSQL  read per row, not asserted: each adapter runs
+#   family      SHOW synchronous_commit on connect and records the answer.
+#   MongoDB     server 8.2.12: getParameter journalCommitInterval = 100 ms;
+#               the implicit default write concern is w:majority with
+#               writeConcernMajorityJournalDefault true, which the timed
+#               writes override with w=1, j=false.
+#   ArangoDB    server 3.12.11 /_admin/options: database.wait-for-sync false,
+#               rocksdb.use-fsync false, rocksdb.sync-interval 100 ms; a
+#               freshly created collection reads back waitForSync false.
+#   QuestDB     server 9.1.1 SHOW PARAMETERS: cairo.commit.mode = nosync,
+#               value_source = default.
+#   SurrealDB   embedded (SDK 2.0.0, core 2.3.10) strace A/B: with
+#   embedded    SURREAL_SYNC_DATA unset, 6 fsync at both 50 and 250 commits;
+#               with it true, 56 and 256. The default is no sync at commit.
+#   SurrealDB   3.2.4 has NO sync setting: its binary holds no "SYNC_DATA"
+#   served      and no "SURREAL_DATASTORE" token, and none of its 110
+#               SURREAL_* variables names sync, WAL, fsync, or durability.
+#               The env var this harness used to set was inert and is gone
+#               (runner.py). What it does at commit is NOT verified, and
+#               DURABILITY_SURREAL_SERVER says exactly that.
+#   Neo4j       2026.07.1 SHOW SETTINGS: no durability or sync setting exists
+#               (the tx_log settings are buffer, preallocation, and rotation
+#               only), so it cannot be relaxed; that it forces the log at
+#               commit is Neo4j's documented behaviour, not measured here.
+#
+# One string per engine, defined here, so two lanes cannot describe the same
+# engine differently and a re-check lands in one place.
+DURABILITY_ARCADEDB = "txWalFlush=0 (engine default): no flush at commit"
+DURABILITY_SQLITE = "WAL, synchronous=NORMAL: synced at checkpoint, not at commit"
+DURABILITY_DUCKDB = "fsync at commit, not configurable (DuckDB WAL)"
+DURABILITY_LADYBUG = "fsync at commit, not configurable (LadybugDB WAL)"
+DURABILITY_MONGODB = "write concern w=1, j=false (journal flushed every 100 ms)"
+DURABILITY_QUESTDB = "cairo.commit.mode=nosync (default): no fsync at commit"
+DURABILITY_SURREAL_EMBEDDED = "SurrealKV, SURREAL_SYNC_DATA unset (the default): no sync at commit"
+DURABILITY_SURREAL_SERVER = ("RocksDB at the engine default; SurrealDB 3.2.4 exposes no sync "
+                             "setting and the behaviour at commit is not verified")
+DURABILITY_NEO4J = ("fsync at commit, not configurable (no durability setting in "
+                    "SHOW SETTINGS at 2026.07.1)")
+DURABILITY_PG_OFF = "synchronous_commit=off"
 
 
 def _host_identity():

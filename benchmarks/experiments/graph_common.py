@@ -61,7 +61,7 @@ def pick_query_ids(n_persons, n_queries, seed=PICK_SEED):
 # Cypher text templates; {id} formatted in by adapters (literal params keep
 # every engine on the same query plan surface).
 #   (WHERE form, not inline property maps — portable across ArcadeDB
-#   opencypher, Neo4j, and Kuzu-lineage LadybugDB)
+#   opencypher, Neo4j, and LadybugDB)
 OLTP_READS = {
     "point": ("MATCH (p:Person) WHERE p.id = {id} "
               "RETURN p.name, p.age"),

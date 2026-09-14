@@ -1473,19 +1473,20 @@ def pct(vals):
 # DECISIONS #81, recorded on every row. This lane times no transactional
 # write, only an ingest, so most arms carry the ingest-only note; the engines
 # that also serve a transactional table carry the same string they carry there.
+# Every string, and the evidence for the default it names, is in bench_common.
 DURABILITY_INGEST_ONLY = "engine default; no transactional write timed on this lane"
 DURABILITY = {
-    "arcadedb_dense_embedded": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_dense_embedded_int8": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_dense_server": "txWalFlush=0 (engine default): no flush at commit",
-    "arcadedb_dense_server_int8": "txWalFlush=0 (engine default): no flush at commit",
-    "pgvector_dense": "synchronous_commit=off",
-    "neo4j_dense": "fsync at commit, not configurable (Neo4j transaction log)",
-    "duckdb_vss_dense": "fsync at commit, not configurable (DuckDB WAL)",
-    "sqlite_vec_dense": "WAL, synchronous=NORMAL: synced at checkpoint, not at commit",
-    "sqlite_vec_dense_int8": "WAL, synchronous=NORMAL: synced at checkpoint, not at commit",
-    "surrealdb_dense": "SurrealKV, SURREAL_SYNC_DATA=false (2.x default): no sync at commit",
-    "surrealdb_dense_server": "RocksDB, SURREAL_DATASTORE_SYNC_DATA=never (3.x default is every commit)",
+    "arcadedb_dense_embedded": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_dense_embedded_int8": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_dense_server": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_dense_server_int8": bench_common.DURABILITY_ARCADEDB,
+    "pgvector_dense": bench_common.DURABILITY_PG_OFF,
+    "neo4j_dense": bench_common.DURABILITY_NEO4J,
+    "duckdb_vss_dense": bench_common.DURABILITY_DUCKDB,
+    "sqlite_vec_dense": bench_common.DURABILITY_SQLITE,
+    "sqlite_vec_dense_int8": bench_common.DURABILITY_SQLITE,
+    "surrealdb_dense": bench_common.DURABILITY_SURREAL_EMBEDDED,
+    "surrealdb_dense_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_dense": arango_common.DURABILITY,
 }
 
