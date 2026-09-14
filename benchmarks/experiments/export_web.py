@@ -1522,7 +1522,7 @@ LIFECYCLE_SITUATION_LABELS = {
 # all) but the same edit changed its SCOPE from 100 seeds to an unbounded
 # whole-graph 2-hop, so its numbers describe the query written rather than the
 # view. Withheld rather than published with a caveat nobody reads.
-LIFECYCLE_WITHHELD = {"graph_gav": "probe scope under revision; see PAGE-SPEC 4c"}
+LIFECYCLE_WITHHELD = {"graph_gav": "probe scope under revision; see PAGE-SPEC rule 7"}
 
 
 def _lc_vector_note(rows):
