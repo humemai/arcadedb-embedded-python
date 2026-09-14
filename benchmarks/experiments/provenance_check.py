@@ -137,10 +137,20 @@ FEEDS = {
     "T5": [None],   # time-series rows come from load_canonical() since 2026-09-08   # None -> make_paper_tables.dense_mp_dir() at import
 }
 import make_paper_tables as _MPT
-FEEDS["T5"][0] = os.path.basename(_MPT.dense_mp_dir())
-if _MPT._pinned_sparse_rows() is None:
-    raise SystemExit("pinned sparse rows incomplete; T4 has no fallback since 2026-09-08")
-FEEDS["T4"] = ["runs.jsonl"]
+# A SKELETON HAS NO OVERLAY (DECISIONS #86). dense_mp_dir() and the pinned
+# sparse selection are both bench-host artifacts of a campaign the skeleton is
+# not part of; asking for them here would refuse the skeleton before a single
+# check ran. The skeleton's own rows feed every table it draws, and
+# BENCH_RUNS_JSONL names the log they came from.
+SKELETON = os.environ.get("BENCH_SKELETON") == "1"
+if SKELETON:
+    FEEDS["T5"] = []
+    FEEDS["T4"] = [os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")]
+else:
+    FEEDS["T5"][0] = os.path.basename(_MPT.dense_mp_dir())
+    if _MPT._pinned_sparse_rows() is None:
+        raise SystemExit("pinned sparse rows incomplete; T4 has no fallback since 2026-09-08")
+    FEEDS["T4"] = ["runs.jsonl"]
 
 # Top-level result FILES that feed published tables, as opposed to the overlay
 # DIRECTORIES above. This map exists because the audit had a blind spot exactly
@@ -170,7 +180,9 @@ FEEDS["T4"] = ["runs.jsonl"]
 FEEDS_FILES = {
     # T5's time-series block reads load_canonical() (runs.jsonl) since
     # 2026-09-08; results/l4_tsbs.jsonl (2026-08-08, 26.8.1) feeds nothing.
-    "T2/T3/T5": ["runs.jsonl"],
+    # A skeleton reads its own log instead (DECISIONS #86).
+    "T2/T3/T5": [os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
+                 if SKELETON else "runs.jsonl"],
 }
 
 # Engine changes big enough that measuring on the wrong side of one produces a
@@ -515,6 +527,13 @@ def caption_n():
         M.mmm, M.mmm_rec = _tag(_mmm), _tag(_rec)
         M.write = lambda name, body: captured.__setitem__(name, body)
         rows = M.load_canonical()
+        # T4 and T5 are the campaign's tables and a skeleton does not generate
+        # them (see make_paper_tables.main); asking for them here would raise
+        # the same refusal one function deeper.
+        if SKELETON:
+            print("  skeleton: no paper tables are generated, so there are no "
+                  "captions to check against\n")
+            return 0
         for fn in (M.tabular_table, M.graph_table, M.sparse_table,
                    M.dense_ts_table):
             try:
@@ -975,7 +994,8 @@ def main():
         # provenance check that only inspects what survived cannot report on
         # what did not.
         _raw = [json.loads(l) for l in
-                open(os.path.join(RESULTS, "runs.jsonl")) if l.strip()]
+                open(os.path.join(RESULTS, os.environ.get(
+                    "BENCH_RUNS_JSONL", "runs.jsonl"))) if l.strip()]
         for _extra in sorted(glob.glob(os.path.join(RESULTS, "runs_engine_*.jsonl"))):
             _raw += [json.loads(l) for l in open(_extra) if l.strip()]
         bad_schema += check_engine_commit_matches_build(_raw)

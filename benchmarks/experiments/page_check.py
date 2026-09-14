@@ -155,6 +155,22 @@ PROSE = [
 ]
 
 
+# THE PREVIEW PAGE HAS ITS OWN PINS, and starts with none.
+#
+# Every entry in PROSE exists because the LIVE page typed that number into a
+# sentence; "absent is a failure" is right for that page and wrong for a page
+# built from nothing (DECISIONS #83, #86: the October page starts empty and
+# fills in). Checking the live page's sentences against the preview would fail
+# twenty pins for claims the preview has never made, which is noise, not a
+# gate.
+#
+# So the preview is pinned to its OWN prose. It is empty while the October
+# page keeps its numbers in table cells and out of sentences; the moment a
+# preview sentence types a number, its pin goes here, in the same commit, and
+# this gate covers it exactly as it covers the live page.
+PREVIEW_PROSE = []
+
+
 _PAGE = None
 
 
@@ -289,7 +305,10 @@ def _check_prose(page_ts):
         return 0, 1
     body = page_ts.read_text(encoding="utf-8")
     checked = bad = 0
-    for entry in PROSE:
+    pins = PREVIEW_PROSE if page_ts == PREVIEW_TS else PROSE
+    if not pins:
+        print("  no pins for this page yet (it types no numbers into prose)")
+    for entry in pins:
         pid, pattern, ref = entry[0], entry[1], entry[2]
         scale = entry[3] if len(entry) > 3 else 1.0
         hits = re.findall(pattern, body)
@@ -428,10 +447,17 @@ def _check_page_atomicity(page_path):
          lambda: totals["composed_qdrant_neo4j"] and totals["composed_qdrant_neo4j"][1]),
     ]
     checked = bad = 0
+    preview = page_path == PREVIEW_TS
     for name, rx, get in checks:
         m = _re.search(rx, text)
         want = get()
         if m is None:
+            if preview:
+                # A page built from nothing has not made this claim yet. When
+                # it does, the branch below checks it against the artifact
+                # exactly as it does for the live page.
+                print(f"  n/a     {name}: the preview page does not state this count")
+                continue
             print(f"  MISSING {name}: the page no longer states this count")
             bad += 1
             continue
@@ -453,6 +479,9 @@ def _check_page_atomicity(page_path):
     # the required ones fail.
     for be in E2_SINGLE_ENGINE:
         t = totals[be]
+        if preview and not _re.search(r"half-updated in none|in 0 of", text):
+            # The preview page has not claimed anything about torn state yet.
+            continue
         if t is None and be in E2_OPTIONAL:
             print(f"  skip    page.e2.{be}: not yet on the table")
         elif t is None:

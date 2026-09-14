@@ -1170,6 +1170,17 @@ def main(freeze=True):
     print(f"{len(rows)} canonical rows")
     if freeze:
         freeze_paper_rows(rows)
+    # THE .tex TABLES ARE THE CAMPAIGN'S, NOT THE SKELETON'S (DECISIONS #86).
+    # T4 and T5 read pinned bench-host artifacts and refuse rather than fall
+    # back, correctly; T2 and T3 read lanes and tiers a laptop skeleton does
+    # not run, so they would render rows with N=0 and every caption's N would
+    # be wrong. The skeleton page reads the frozen CSV directly and none of
+    # these files, so the freeze above is the whole job here.
+    if SKELETON:
+        print("skeleton: the paper tables read campaign tiers and pinned "
+              "artifacts; not generated. The frozen rows above are the "
+              "skeleton page's only input.")
+        return 0
     tabular_table(rows)
     graph_table(rows)
     sparse_table(rows)

@@ -55,6 +55,11 @@ SERVER_MEM_FRACTION_DEFAULT = 0.75
 DISCLOSED = {}
 
 
+# DECISIONS #86. Declared here because _dense_rows() below reads it: a laptop
+# skeleton has no bench-host overlay to open.
+SKELETON = os.environ.get("BENCH_SKELETON") == "1"
+
+
 def _canonical():
     sys.path.insert(0, HERE)
     import make_paper_tables as M
@@ -69,6 +74,11 @@ def _dense_rows():
     build are one cell's worth of envelope, not five.
     """
     out = []
+    # A SKELETON HAS NO OVERLAY. The multipass artifacts are the bench host's
+    # (DECISIONS #86); a laptop skeleton measures the dense lane once and its
+    # own rows are what the checks below read.
+    if SKELETON:
+        return out
     # dense_mp5_2681: five INDEPENDENT builds per arm, so pass 0 of each file
     # is one cell's conditions and there are five cells per arm, not one. The
     # old directory held a single build per arm and needed a "_build" filter to
@@ -719,6 +729,7 @@ def check_durability(rows):
     return bad
 
 
+# (moved above _dense_rows: it is read there too)
 # DECISIONS #86: the laptop skeleton waives the two invariants that are about
 # the BENCH HOST and nothing else -- F1's cpuset pinning and F3's per-size
 # memory envelope -- because a laptop has neither. Every other invariant,
@@ -726,7 +737,6 @@ def check_durability(rows):
 # instrument, runs exactly as it will in October. The waiver is printed here
 # and published in the payload (export_web.SKELETON_WAIVERS); it is never
 # silent, and BENCH_SKELETON is set by the skeleton publish alone.
-SKELETON = os.environ.get("BENCH_SKELETON") == "1"
 
 
 def main():
