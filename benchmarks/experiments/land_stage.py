@@ -55,7 +55,7 @@ REMOTE = os.environ.get("BENCH_LAND_REMOTE",
                         "~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments/results")
 PY = str(REPO / ".venv" / "bin" / "python")
 SCRATCH = Path(os.environ.get("BENCH_LAND_SCRATCH", "/tmp/claude-1000/land_stage"))
-TRAILER = ("\n\nCo-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>\n"
+TRAILER = ("\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n"
            "Claude-Session: https://claude.ai/code/session_01JB6Hg77dQVqABoTJmiUnV2")
 
 

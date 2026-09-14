@@ -2054,6 +2054,14 @@ def _censored_cells():
                         timeouts[key] = int(err.split("_")[-1].rstrip("s"))
                     except ValueError:
                         timeouts[key] = None
+                else:
+                    # A CELL THAT FAILED FOR ANOTHER REASON IS STILL A CENSORED
+                    # OBSERVATION. 2026-09-14: the served SurrealDB cells at
+                    # 9.99M built their index and then lost the connection
+                    # mid-query, twice; a timeout-only rule left the page with
+                    # no row and no note, which reads as a cell nobody ran.
+                    # The reason is carried as a string so the note can say it.
+                    timeouts[key] = err.strip().splitlines()[-1][:90] or "an error"
     _CENSORED_CACHE = {k: v for k, v in timeouts.items() if k not in clean}
     return _CENSORED_CACHE
 
@@ -2067,12 +2075,17 @@ def _censored_notes(table_id):
     for (l, scale, backend, w), secs in sorted(_censored_cells().items(), key=str):
         if l != lane or (wl and w != wl):
             continue
-        budget = f"{secs / 3600:g} hour" if secs else "its"
         what = {"oltp": "transaction", "olap": "analytics", "hybrid": "transaction",
                 "atomicity": "atomicity", "search": "search", "ingest": "ingest"}.get(w, w or "the")
-        notes.append(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell exceeded "
-                     f"its {budget} budget, the same budget every engine on this table had, on its first "
-                     f"attempt and was not retried; there is no row.")
+        if isinstance(secs, int) or secs is None:
+            budget = f"{secs / 3600:g} hour" if secs else "its"
+            notes.append(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell exceeded "
+                         f"its {budget} budget, the same budget every engine on this table had, on its first "
+                         f"attempt and was not retried; there is no row.")
+        else:
+            notes.append(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell failed "
+                         f"inside its budget and was not retried, so there is no row. What it reported: "
+                         f"{secs}")
     return notes
 
 
