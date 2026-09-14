@@ -1147,8 +1147,8 @@ GLOBAL_CONDITIONS = [
     "graph writes, the cross-model transaction) ArcadeDB's lead over the fsyncing servers is largely this default plus the "
     "absence of a network hop, not the engine. The next campaign matches every engine at the "
     "relaxed end instead: each one commits without waiting for the disk, which is what SQLite\'s "
-    "setting above already means, and Neo4j is named on its tables as the one engine with no way "
-    "to turn that off.",
+    "setting above already means. Three engines have no setting for it, Neo4j, DuckDB, and "
+    "LadybugDB, each measured rather than assumed, and each is named on the tables it appears on.",
 ]
 
 
