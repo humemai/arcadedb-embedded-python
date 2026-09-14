@@ -79,7 +79,13 @@ PAGE_IMAGES = TARGETS["live"]["images"]
 IMAGE_URL_RE = TARGETS["live"]["image_re"]
 PREVIEW_INVENTORY = HERE / "results" / "generated" / "preview-tables.md"
 
-GATES = ["provenance_check", "fairness_check", "page_check"]
+# EQUIVALENCE RUNS BEFORE THE OTHERS (DECISIONS #88). provenance_check asks
+# which engine produced a number, fairness_check asks whether the row beside it
+# was given the same treatment, page_check asks whether the page says what the
+# rows say. None of them asks whether the two engines answered the same
+# question, which is the check that decides whether a fast number is also a
+# right one, so it is the first gate a publish has to pass.
+GATES = ["equivalence_check", "provenance_check", "fairness_check", "page_check"]
 
 # THE SKELETON GUARDS (DECISIONS #86). A skeleton publish fills the preview
 # route with placeholder cells from a one-repetition laptop run so the October
