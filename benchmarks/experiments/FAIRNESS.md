@@ -2,7 +2,7 @@
 
 Every number on the page compares systems. A comparison is only worth printing if both sides were given the same thing. This file says what "the same thing" means, what is allowed to differ, and what is checked mechanically rather than remembered.
 
-`fairness_check.py` is one of the three gates `refresh_web_page.py` runs. It fails loudly rather than warning quietly.
+`fairness_check.py` is one of the four gates `refresh_web_page.py` runs. It fails loudly rather than warning quietly.
 
 The failure mode this contract exists to close is **a correct number measured under conditions the row beside it did not get**. `claims_check` and `provenance_check` cannot see it: both verify a number against its own artifact, and such a number is correct about its own run.
 
@@ -74,9 +74,19 @@ The DuckDB bias runs **against** DuckDB, which wins that lane regardless, so not
 
 Scope, and it is narrow. One tier, k=10, one query in flight at a time, embedded backends only. It says nothing about concurrent query load, and nothing about Qdrant or Milvus, which run as servers and are the ones most likely to hold per-query pools. Re-measure before extending the claim.
 
-**F9. A kept row needs a control, because the host is not an invariant.** F1 to F8 constrain a cell's *configuration*; none constrains *when* it ran. A row printed tonight beside one measured five weeks ago is fully compliant and still potentially wrong, because the kernel, the docker version and the machine's thermal history all moved and none of that is recorded as a run condition.
+**F9. A kept row needs a control, because the host is not an invariant.** F1 to F8 and F10 to F12 constrain a cell's *configuration*; none constrains *when* it ran. A row printed tonight beside one measured five weeks ago is fully compliant and still potentially wrong, because the kernel, the docker version and the machine's thermal history all moved and none of that is recorded as a run condition.
 
 So when a campaign re-measures one engine and carries the others forward, **re-run one untouched comparator as a control and show it reproduces its kept numbers within run-to-run spread.** One extra cell buys evidence for every row that was not re-run. If the control does not reproduce, the carried-forward rows are not usable and the whole tier is re-measured. Record the control's old-against-new delta next to the table it licenses, so a reader can see the carry-forward was checked rather than assumed.
+
+**F10. Same durability class per table, and one instrument.** A commit that waits for the disk and one that does not are different operations, so a write latency is a comparison only if every engine in the table committed the same way. From the 2026-10 instrument (DECISIONS #81) the matched class is **relaxed**: a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which loses the last committed transactions on a power cut but does not corrupt the store. That is ArcadeDB's own default at `txWalFlush=0`, so the comparators are matched to it rather than it to them: SQLite and sqlite-vec run WAL with `synchronous=NORMAL`, the PostgreSQL family runs `synchronous_commit=off`, MongoDB's timed writes run at `w=1, j=false`, and ArangoDB, QuestDB, and SurrealDB embedded run their own defaults, which are already in this class. Every one of those settings is read out of the engine rather than assumed, and each row records what it ran as `durability`.
+
+**Neo4j is the exception the decision names**: it flushes its log at every commit, has no setting to relax it, so it runs as it is and its graph and cross-model tables say it is the one engine waiting for the disk, rather than leaving it silently advantaged or disadvantaged. The same read-out-of-the-engine check put LadybugDB and DuckDB in the strict class too, and each table's durability condition is generated from the engines that table shows. SurrealDB served 3.2.4 exposes no durability setting at all, so it is in neither class and its row says so instead of claiming one.
+
+`fairness_check.check_durability` refuses a 2026-10 row carrying no `durability`, a strict string on an engine that has the knob, an unverified string on an engine not named above, and two `instrument` values in one table. The relaxed setting is a real deployment mode every one of these engines documents, it is matched on every engine that has the knob, and the one that cannot match is named: that is the whole fairness argument, and it is not re-litigated per table.
+
+**F11. Close cost is an invariant, not a column.** Close should be O(what was written), not O(what is stored), and on the order of 100 ms; the reasoning, the situations, and the numbers are PAGE-SPEC.md section 4 (DECISIONS #50). Checked by `fairness_check.check_close_cost`, which prints under this number.
+
+**F12. Equivalent queries must return equivalent answers.** A benchmark that never checks the answer measures how fast an engine can be wrong, and an adapter that silently drops a filter, a join condition, or a group reads as a lead rather than as a bug. So every timed query with a deterministic answer records a canonical digest of it (order-insensitive unless the query defines an order, floats rounded before hashing, a readable sample kept beside the digest), and `equivalence_check` refuses a table whose engines disagree at one scale. A query an engine cannot express is declared absent in its adapter and named by the gate, never skipped. The vector lanes keep recall against ground truth, which is the stronger check for an approximate index, and the cross-model lane keeps its torn-state comparison; its two read paths are checked by recall against a brute-force answer over the same filtered candidate set, with the graph and document halves digest-compared exactly (DECISIONS #82c, #88).
 
 ## Parallelism policy: maximise it, but never inside a published absolute
 

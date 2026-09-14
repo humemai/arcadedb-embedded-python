@@ -29,6 +29,20 @@ Which arms are on the page and which are still queued is PAGE-SPEC.md section 2;
 
 The composed cross-model stack (Qdrant + Neo4j) is not a pinned engine of its own: it is two of the rows above wired together, and it still carries the retired Neo4j 5-community pin until qDT re-runs it.
 
+From 2026-10 every engine above that has a durability setting runs the relaxed commit class, read out of the engine and recorded on the row; FAIRNESS.md F10 holds the mapping and names the engines that cannot be relaxed.
+
+## October re-pins (DECISIONS #87, surveyed 2026-09-14)
+
+Every comparator was checked against its own release feed, stable only, amd64, digests taken with `docker manifest inspect` and no pulls. The rule is latest stable, so the default is to take all of them, including the two major jumps, rather than choosing the versions that suit us.
+
+**Moved, and re-pinned in October.** PostgreSQL 17.10 to 18.6 (or 17.11 if the line is held), Qdrant v1.18.2 to v1.19.1, Milvus v2.6.13 to v3.0.1, Elasticsearch 9.4.1 to 9.5.3 with the client to 9.5.1, LadybugDB 0.19.1 to 0.20.4, LanceDB 0.37.1 to 0.38.0, QuestDB 9.1.1 to 10.0.1, MongoDB 8.2.12 to 8.3.9, TimescaleDB 2.28.3 to 2.30.0, and Neo4j 2026.07.1 to 2026.08.1 with the driver to 6.3.0.
+
+**Unmoved.** DuckDB 1.5.5, Chroma 1.5.9, sqlite-vec 0.1.9, SurrealDB SDK 2.0.0 and server v3.2.4, pgvector 0.8.6, Apache AGE 1.7.0 on PostgreSQL 17, and ArangoDB 3.12.11.
+
+**Five need their own smoke before the chain starts**, each for a stated reason. QuestDB 10 makes the ILP ingest we use a legacy path beside its new binary protocol, and the smoke measures both so the arm is not left on the slower one out of habit. Milvus 3.0 must still boot as a single standalone container with embedded etcd, keep the segment-seal override as the same knob, and leave the sparse index at its pre-SINDI default unless we opt in, with v2.6.23 as a recorded fallback only if it cannot. PostgreSQL 18 carries pgvector, TimescaleDB, and the AGE image with it, turns data checksums on by default, and takes AGE from 1.7.0 to 1.8.0, so it is smoked as a set of four or the line is held at 17.11 and that is recorded. Neo4j's dense recall is a hand-built operating point and is re-measured rather than assumed. LadybugDB crosses five pre-1.0 releases that touched the COPY and projection paths the graph lane times. TimescaleDB 2.30 changes last-point query scaling, which is a TSBS query we run, so that row is expected to move on its merit and the page says why.
+
+**Two pinning defects, fixed at the re-pin and not before**, because the client image is rebuilt by the queue scripts still running. The SQLite arm has no version pin at all: it uses the standard library of an unpinned `python:3.12-slim`, so a rebuild silently takes whatever Debian ships, and the frozen rows record 3.46.1 against upstream's 3.53.4. And `Dockerfile.pgage` installs `postgresql-17-age` unpinned while its header claims AGE 1.6.0 when the build produces 1.7.0.
+
 ## Retired pins
 
 | Engine | Pin | Replaced by |

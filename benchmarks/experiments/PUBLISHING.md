@@ -8,17 +8,19 @@ PROTOCOL.md says how a run is produced. FAIRNESS.md says what makes a comparison
 BENCH_ENGINE_COMMIT=<pin> python refresh_web_page.py
 ```
 
-That is the whole routine. It regenerates the tables and figures into `results/generated`, exports the page data, runs the three gates, syncs the JSON and the figures the page references, rewrites PAGE-SPEC.md's generated table inventory, builds the site, and prints the diff. It does not commit: reading the diff before publishing is the point, not an afterthought.
+That is the whole routine. It regenerates the tables and figures into `results/generated`, exports the page data, runs the gates, syncs the JSON and the figures the page references, rewrites PAGE-SPEC.md's generated table inventory, builds the site, and prints the diff. It does not commit: reading the diff before publishing is the point, not an afterthought.
 
 Run it after **any** re-measure, after any change to the tables or figures, and after any change to the page's own table list.
 
-Flags: `--site <path>` if humem.ai is not a sibling checkout; `--no-build` to skip the Next.js build (do not, normally: the build is what catches the page referencing an asset that was never written); `--preview` for the preview target below.
+Flags: `--site <path>` if humem.ai is not a sibling checkout; `--no-build` to skip the Next.js build (do not, normally: the build is what catches the page referencing an asset that was never written); `--preview` for the preview target below; `--skeleton` for the laptop placeholder publish.
 
 ## The preview target (DECISIONS #83)
 
 `refresh_web_page.py --preview` and `land_stage.py --preview` publish to `/projects/arcadedb/next`, the campaign page watched while it fills in: the same exporter, gates, and figures, written to `src/data/arcadedb-benchmarks-next.json` and `public/images/projects/arcadedb-next/`, and checked against the prose in `src/lib/projects/items/arcadedb-next.ts`. The table inventory goes to `results/generated/preview-tables.md` and PAGE-SPEC.md is not rewritten. The route is noindex and not in the project index, and its banner names the pin from the payload.
 
 A preview publish never writes the live payload, the live images, or `arcadedb.ts`. The switch, when the campaign freeze is complete and every gate is green, is one commit that copies the preview payload, images, and prose over the live ones and deletes the route.
+
+`--skeleton` (DECISIONS #86) publishes the laptop micro-scale placeholder run to that route so the October page's shape can be read before mini measures anything. It implies `--preview`, reads the skeleton freeze rather than the campaign one, and refuses any row that carries no `bench_host`, names the bench host, or is not at sweep tier. It stamps the payload and every table's conditions as placeholders, waives F1 and F3 by name because both describe the bench host, and runs every other gate exactly as October will. A live publish refuses a payload stamped skeleton.
 
 ## The one rule
 
@@ -34,12 +36,13 @@ Every step was once done by hand, and the hand-done ones were where the mistakes
 
 ## What blocks a bad publish
 
-Three gate scripts (`page_check` has two sections), then two structural checks. All of them fail the run rather than warn:
+Four gate scripts (`page_check` has two sections), then two structural checks. All of them fail the run rather than warn:
 
 | Check | Asks |
 |---|---|
 | `provenance_check` | does every cell trace to a run |
-| `fairness_check` | F1 to F9 comparison invariants |
+| `fairness_check` | F1 to F12 comparison invariants, durability class and instrument included |
+| `equivalence_check` | do the engines of a table agree on the answer, and is every operation an engine cannot express declared (DECISIONS #88) |
 | `page_check.MAPPING` | do the page's table cells agree with the generated tables |
 | `page_check.PROSE` | do the page's hand-typed prose numbers agree with the tables and the page-derived pins |
 | `_check_no_orphan_figures` | is every generated figure cited |
@@ -56,7 +59,8 @@ Three gate scripts (`page_check` has two sections), then two structural checks. 
 3. Reference it from `arcadedb.ts`.
 4. Add its headline cells to `page_check.MAPPING`, so the page and the generated tables are pinned to each other. A table nothing pins can drift silently.
 5. If the prose around it quotes any number, add each one to `page_check.PROSE` with a regex that captures the digits as printed. Quoting a number in a sentence is making a claim; a claim nothing pins is one nothing checks.
-6. Run the command above.
+6. State in the table's conditions any measurement from the standard set it does not carry (PROTOCOL.md section 2, DECISIONS #89). `page_check` fails an omission that carries no reason.
+7. Run the command above.
 
 ## Adding a figure to the page
 

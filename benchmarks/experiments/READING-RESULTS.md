@@ -40,7 +40,15 @@ The single rule, from which most of the rest follows:
 
 **A timed-out row records where it died.** `timeout_client_disk_mb` and `timeout_cpu_mem` are written on the timeout path, and the cell log carries the lane's `PHASE` markers (BUGS.md F41). Read them before recording a DNF.
 
-**`host` is recorded on two lanes of seven.** Sparse and dense have it; the rest record the container but not the machine. Do not imply a uniform environment from rows that cannot prove one. Recording `BENCH_HOST` on every row is on the October checklist (DECISIONS #74).
+**`host` is recorded on two lanes of seven; `bench_host` on every row since 2026-10.** Sparse and dense have `host`; the rest record the container but not the machine. Rows measured under the 2026-10 instrument carry `bench_host`, written by the runner and refused at paper tier when unset (DECISIONS #74). Do not imply a uniform environment from rows that cannot prove one.
+
+**`instrument` names the query set, the timers, and the durability rule a row ran under.** Rows before 2026-10 carry none and are the September instrument; `load_canonical` and `export_web` refuse two values in one table. Read a 2026-10 document OLTP row's `oltp_ops_per_s` as new-order and payment together, where a September row's is new-order alone.
+
+**`durability` is what the engine ran at commit, read from the engine where it can be read.** PostgreSQL-family rows carry the server's own `SHOW synchronous_commit` answer; a value ending "(NOT the #81 setting)" means the server was not started with the flag and the row fails F10. Strings starting "fsync at commit" are the named exceptions (Neo4j, LadybugDB, DuckDB), and "unverified" is SurrealDB served, which has no setting to read.
+
+**A digest is of the canonical answer, not of the raw rows.** The digest is taken after the answer is put in canonical form: sorted unless the query defines an order, floats rounded to a fixed precision, engine-specific row wrappers and column ordering gone. Two engines whose digests match did not return identical result objects, and hashing what a driver handed back instead will disagree on every engine pair for reasons that are not about the answer.
+
+**"Unexpressible" is a declaration, not a failure.** An engine whose adapter declares an operation absent has said so deliberately (DECISIONS #88); `equivalence_check` names it and the table prints a dash with the reason in its condition. It is not a crashed cell, a timeout, or a gap to be filled, and it is not evidence that the engine is slow. A silently missing answer is the failure, and that is what the gate exists to tell apart from this.
 
 ## Publishing traps
 
@@ -52,11 +60,14 @@ The single rule, from which most of the rest follows:
 
 ## Gates
 
-Three, and they answer different questions. `refresh_web_page.py` runs all of them; run them by hand after touching results or tables:
+Four, and they answer different questions. `refresh_web_page.py` runs all of them; run them by hand after touching results or tables:
 
-    BENCH_ENGINE_COMMIT=<pin> python provenance_check.py   # does a cell trace to a run
-    BENCH_ENGINE_COMMIT=<pin> python fairness_check.py     # F1 to F9
-    BENCH_ENGINE_COMMIT=<pin> python page_check.py         # page cells vs generated tables, prose vs pins
+    BENCH_ENGINE_COMMIT=<pin> python provenance_check.py    # does a cell trace to a run
+    BENCH_ENGINE_COMMIT=<pin> python fairness_check.py      # F1 to F12
+    BENCH_ENGINE_COMMIT=<pin> python page_check.py          # page cells vs generated tables, prose vs pins
+    BENCH_ENGINE_COMMIT=<pin> python equivalence_check.py   # do the engines of a table agree on the answer
+
+`equivalence_check.py` lands with the 2026-10 instrument, and the October campaign does not start until it exists and every lane records its digests (DECISIONS #88); it has nothing to say about a September row, which carries none.
 
 `claims_check.py` is a helper library `page_check` imports, not a gate. Running it by hand is still the only thing that checks the claims in PROTOCOL.md section 4. `prose_check.py` and `comparator_pins_check.py` are hand-run too.
 

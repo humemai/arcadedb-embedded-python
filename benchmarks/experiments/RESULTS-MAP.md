@@ -36,6 +36,7 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `manifest-*.json` | per-invocation image digests, cpuset, heap, reps; every row names its manifest by timestamp | nothing opens them; kept as provenance by reference |
 | `runs-*.csv` | per-invocation summary written by `runner.py` | nothing. Delete them when they pile up; the writer stays |
 | `mp_rows_<pin>.jsonl`, `mp_rows_small_<pin>.jsonl`, `mp_rows_sparse_<pin>.jsonl` | the per-cell multipass rows behind the overlay directories below | nothing on the page; the per-cell record |
+| `runs_skeleton_laptop.csv` | the laptop micro-scale placeholder freeze behind a skeleton publish, one repetition, sweep tier, `bench_host` of the laptop (DECISIONS #86) | `refresh_web_page.py --skeleton`, which refuses a row from the bench host or at paper tier. Never merged into `runs.jsonl` |
 
 ## Overlays: directories a table reads directly
 
@@ -82,3 +83,5 @@ The live chain, what each script runs, and where finished scripts go: CAMPAIGN.m
 The engine is pinned to upstream's published snapshot `8d6af9475`, and the served arm runs Corretto 25 / glibc / G1 with compact object headers, matched to the embedded arm (DECISIONS #54).
 
 Every ArcadeDB row measured before that re-pin is superseded, embedded as well as served: the jars moved 84 commits. The campaign started by carrying clean COMPARATOR rows forward from the previous pin's file, each stamped `carried_forward_from` and `carried_forward_reason`; no ArcadeDB row was carried.
+
+The live page stays on this pin for the whole October campaign (DECISIONS #83). October rows accumulate in their own `runs_*_<pin>.jsonl` under the new pin, are frozen and exported separately, and reach the site only through the preview target, whose payload is `arcadedb-benchmarks-next.json` and whose table inventory is `results/generated/preview-tables.md`. A row of one instrument is never merged into the freeze of the other: `instrument` on the row says which it is, and the freeze and the exporter refuse a lane that holds both.

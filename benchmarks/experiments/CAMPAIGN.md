@@ -37,7 +37,7 @@ Two findings from the same measurement stand on their own:
 Every campaign runs in three stages and does not advance until the previous one is green. A defect found at stage 3 costs a full pass.
 
 1. **Smoke.** Cheapest tier of each lane, N=1. Proves the images, the corpora, the adapters and the recorded schema. Rows go to a scratch results file, not to `runs.jsonl`.
-2. **Small.** One tier up, N=5, real corpora, every metric recorded. This is where the gates run for the first time: `provenance_check`, `fairness_check`, and `page_check`.
+2. **Small.** One tier up, N=5, real corpora, every metric recorded. This is where the gates run for the first time: `provenance_check`, `fairness_check`, `page_check`, and `equivalence_check`.
 3. **Big.** The published tiers.
 
 A stage that produces rows no gate admits has failed even if every cell exited 0.
@@ -50,8 +50,9 @@ Beyond the lane's own metrics:
 - **Disk.** `SizeRw` plus `du` over the daemon-reported volume mounts, with a settle loop requiring two readings within 1%. A volume in an image with no `du` is sized from a helper container (BUGS.md F38).
 - **IO.** Cumulative `rbytes`/`wbytes` from `io.stat`.
 - **Phases.** `build_s`, settle, query generation, ground-truth load, search wall, recall computation, and `phases_accounted_s` so unexplained time is visible rather than absorbed. The dense and sparse lanes also split `ingest_s` from `index_s` where the engine has the boundary. Every lane prints `PHASE` markers as it goes, so a cell killed by its timeout still says which phase it was in.
-- **Cold and warm**, separately, in every lane that has a repeat pass.
+- **Cold and warm**, separately: the first iteration after the database is opened is the cold number and the remaining iterations are the warm one, on every timed query from the 2026-10 instrument (DECISIONS #89). A lane where the split does not apply says so instead of leaving a blank.
 - **Envelope.** cpuset, memory cap, heap, observed server heap and page cache, `mem_split`, image digest, engine version, engine commit.
+- **Instrument.** `instrument`, `bench_host`, the per-engine `durability` string read out of the engine, and the canonical answer digest with its readable sample for every deterministic query (PROTOCOL.md section 2).
 
 ## 4. Heap and memory caps
 
@@ -102,4 +103,14 @@ The September chain on mini, each script waiting on its predecessor and gated on
 | qDW | SurrealDB served again on the cells whose disk reading was blank (BUGS.md F38) |
 | qDX | one phase-marked re-run of the embedded SurrealDB 1M dense cell, expected to time out again, for the phase it dies in (BUGS.md F41) |
 
-Finished scripts move to `~/queue_archive` on mini. The chain holds its pin start to finish; an upstream fix landing mid-run becomes a candidate for the next re-pin, never a restart. October's campaign is DECISIONS #74 as amended by #81 to #86, and starts with the comparators.
+Finished scripts move to `~/queue_archive` on mini. The chain holds its pin start to finish; an upstream fix landing mid-run becomes a candidate for the next re-pin, never a restart.
+
+## 7. October: the skeleton, then the comparators, then one switch
+
+The instrument is final before the first October cell: the forty-operation query set (PROTOCOL.md section 2), the matched durability class (FAIRNESS.md F10), the answer digests (F12), the ingest and index timers, and `bench_host` on every row. Rows measured under two instruments cannot share a table, so the preparation happens while the September chain is still running and the user's go turns into cells the same day (DECISIONS #84).
+
+**Skeleton first, on the laptop.** Once the instrument branch is verified arm by arm, the whole of it runs on the laptop at micro and sweep scales, one repetition, every lane and every backend, into its own results file, and publishes to the preview route as the October page's shape: every table, every column, every condition, and every prose slot, with placeholder numbers, weeks before mini measures anything (DECISIONS #86). `refresh_web_page.py --skeleton` implies `--preview`, refuses any row from the bench host or at paper tier, stamps the payload and every table's conditions as placeholders, waives F1 and F3 by name in the payload because both describe the bench host, and runs every other gate exactly as October will. A live publish refuses a payload stamped skeleton. Nothing from the skeleton is merged into the campaign's results, and the first real stage overwrites the preview payload.
+
+**Comparators next, before 26.10.1 ships.** On the user's go, every comparator is checked against its own release feed, re-pinned where it moved, and smoked where the jump needs it (COMPARATORS.md, October re-pins), and the comparator stages run first. When the user reports 26.10.1, the pair is built and verified and every ArcadeDB arm is queued behind the running comparator stages (DECISIONS #84).
+
+**One switch at the end.** The live page stays on the September freeze at pin `8d6af9475`, untouched, for the whole campaign; October rows accumulate in their own per-pin file and land table by table on the preview route through `land_stage.py --preview`; when the freeze is complete and every gate is green, one commit copies the preview payload, images, and prose over the live ones and deletes the route (DECISIONS #83). The new columns have no September counterpart, so a partial landing on the live page would seat them beside old rows and the gates would refuse it. The route and the flag are exercised on real October stages, not written on switch day.
