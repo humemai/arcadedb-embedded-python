@@ -23,6 +23,7 @@ Sweep (parallel): python3 runner.py --parallel 3 --tier sweep ...
 import argparse
 import csv
 import fcntl
+import glob
 import json
 import os
 import random
@@ -1642,6 +1643,35 @@ def container_disk(cid, settle_s=3.0, tries=3):
     return out
 
 
+def _thermal():
+    """Package temperature and the kernel's throttle counters, read from the
+    host this runner orchestrates on.
+
+    Recorded per cell because mini throttles: measured 2026-09-14 during the
+    sparse stage, the package sat at 89 to 90 C and the kernel counted 23.7 s
+    of throttling in a 90 s window, a quarter of the time, with 9 per cent of
+    the machine's five-day uptime spent throttled. A throttled cell is a cell
+    measured at a lower clock, so a row that does not say whether it ran hot
+    cannot be compared with one that ran cool. Absent values rather than
+    guesses on a host that exposes none of this.
+    """
+    out = {}
+    try:
+        for hw in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+            try:
+                if open(os.path.join(hw, "name")).read().strip() == "coretemp":
+                    out["host_temp_c"] = int(open(os.path.join(hw, "temp1_input")).read()) / 1000.0
+                    break
+            except OSError:
+                continue
+        t = "/sys/devices/system/cpu/cpu0/thermal_throttle"
+        out["host_throttle_count"] = int(open(os.path.join(t, "package_throttle_count")).read())
+        out["host_throttle_total_ms"] = int(open(os.path.join(t, "package_throttle_total_time_ms")).read())
+    except (OSError, ValueError):
+        pass
+    return out
+
+
 def observe_server(cid):
     """The server container's real cpuset, cap, heap and image, from docker.
 
@@ -1972,6 +2002,7 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         s_cli.start()
         samplers.append(("client", s_cli))
 
+        _therm0 = _thermal()
         timeout_s = TIMEOUT_BY_SCALE[scale]
         try:
             wait = subprocess.run(["docker", "wait", cli_cid], capture_output=True,
@@ -2250,6 +2281,13 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                                              for _, s in samplers))
             row["end_anon_mib_sum"] = mib(sum((s.end_anon or 0) for _, s in samplers))
             row["cpu_usec_sum"] = sum((s.cpu.get("usage_usec") or 0) for _, s in samplers)
+            _therm1 = _thermal()
+            for _k, _v in _therm0.items():
+                row[f"{_k}_start"] = _v
+            for _k, _v in _therm1.items():
+                row[f"{_k}_end"] = _v
+            if "host_throttle_total_ms" in _therm0 and "host_throttle_total_ms" in _therm1:
+                row["host_throttled_ms"] = _therm1["host_throttle_total_ms"] - _therm0["host_throttle_total_ms"]
         elif samplers:
             row["peak_mib_sum"] = row.get("client_peak_mib")
             row["peak_anon_mib_sum"] = row.get("client_peak_anon_mib")
