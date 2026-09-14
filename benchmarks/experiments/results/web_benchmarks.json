@@ -143,6 +143,7 @@
     "container:0aa56c6a8e2f (host unknown)",
     "container:0bab68860ad2 (host unknown)",
     "container:0bb4ca782e34 (host unknown)",
+    "container:0bd933c06cac (host unknown)",
     "container:0cdebe976601 (host unknown)",
     "container:0d5b96d27d83 (host unknown)",
     "container:0d9e21825e60 (host unknown)",
@@ -185,7 +186,6 @@
     "container:25ece5b76009 (host unknown)",
     "container:2925b9b26111 (host unknown)",
     "container:295b760908a6 (host unknown)",
-    "container:2aa337b54181 (host unknown)",
     "container:2be385c774d1 (host unknown)",
     "container:2c03db4f2460 (host unknown)",
     "container:2dc9388d73cc (host unknown)",
@@ -253,7 +253,6 @@
     "container:4f6c5ba2f382 (host unknown)",
     "container:4fde7e147ff7 (host unknown)",
     "container:502f9ba282e5 (host unknown)",
-    "container:5052cdfa5a10 (host unknown)",
     "container:505ec3b6a081 (host unknown)",
     "container:50ca4c00c4d4 (host unknown)",
     "container:540e6dc1d521 (host unknown)",
@@ -324,6 +323,7 @@
     "container:7b830271fdbd (host unknown)",
     "container:7c06dc7b1fad (host unknown)",
     "container:7c0cc10aaa98 (host unknown)",
+    "container:7c8b3a3a8ce4 (host unknown)",
     "container:7cda220d6b9b (host unknown)",
     "container:7e7ae744896c (host unknown)",
     "container:7e915b3d4241 (host unknown)",
@@ -339,7 +339,6 @@
     "container:85deb37be0ef (host unknown)",
     "container:8677db61bd70 (host unknown)",
     "container:86a99d9e9c43 (host unknown)",
-    "container:871e7ee15c38 (host unknown)",
     "container:885cf3283205 (host unknown)",
     "container:894d6dbf295e (host unknown)",
     "container:8a02a7b3b96b (host unknown)",
@@ -348,6 +347,7 @@
     "container:8b60b7498aa1 (host unknown)",
     "container:8b7296de5613 (host unknown)",
     "container:8bab7bccb305 (host unknown)",
+    "container:8bc457cda0cf (host unknown)",
     "container:8c039a0c6c97 (host unknown)",
     "container:8c22637cf563 (host unknown)",
     "container:8c39559e28a9 (host unknown)",
@@ -356,6 +356,7 @@
     "container:8dbbbf45df36 (host unknown)",
     "container:8ddead54ad9e (host unknown)",
     "container:9013cbd81dc0 (host unknown)",
+    "container:912560b6ca76 (host unknown)",
     "container:927dbd968242 (host unknown)",
     "container:937495f67303 (host unknown)",
     "container:93b3e34780b3 (host unknown)",
@@ -400,14 +401,12 @@
     "container:aefa8e29018e (host unknown)",
     "container:afc5ef3b5655 (host unknown)",
     "container:b0287b1862a0 (host unknown)",
-    "container:b0491db13ec2 (host unknown)",
     "container:b0aadec24409 (host unknown)",
     "container:b17fb9ccc77b (host unknown)",
     "container:b1d6190c72b5 (host unknown)",
     "container:b2b5ef96301c (host unknown)",
     "container:b2cef56934fe (host unknown)",
     "container:b32f50b9a5a9 (host unknown)",
-    "container:b3992ba27b39 (host unknown)",
     "container:b39b7a4abbe4 (host unknown)",
     "container:b3cfae7e31dc (host unknown)",
     "container:b3d66733f144 (host unknown)",
@@ -476,6 +475,7 @@
     "container:d2fb615cdf1d (host unknown)",
     "container:d5d0129da647 (host unknown)",
     "container:d654eb18400d (host unknown)",
+    "container:d65d46c5fbfb (host unknown)",
     "container:d67ecc71b1ca (host unknown)",
     "container:d79362bb599f (host unknown)",
     "container:d7e9f41bc9b8 (host unknown)",
@@ -597,7 +597,7 @@
         "Cold is the first timed pass after the index is built; warm is the same engine run again over an index it has already read, and gain is cold over warm. Here a second pass changes little and the order of the table is the same either way. The dense table below is not like this: there ArcadeDB gains the most on a second pass and the order depends on which pass you time.",
         "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
-        "Cold p50 and p99 are the first timed pass after the build, median of five builds. Warm and gain come from a separate run of the same arms: one build per engine, then five more passes over a different half of the query set, so a warm number cannot be explained by the engine having already answered that exact query; gain is that run's cold over its warm. 100k has no second-pass run yet.",
+        "Cold p50 and p99 are the first timed pass after the build, median of five builds. Warm and gain come from a separate run of the same arms: one build per engine, then five more passes over a different half of the query set, so a warm number cannot be explained by the engine having already answered that exact query; gain is that run's cold over its warm.",
         "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load)."
       ],
@@ -670,6 +670,24 @@
               "min": 9.357,
               "max": 11.704,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 3.669,
+              "min": 3.669,
+              "max": 3.669,
+              "n": 5
+            },
+            "warm p99 ms": {
+              "median": 8.213,
+              "min": 8.213,
+              "max": 8.213,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.11,
+              "min": 1.11,
+              "max": 1.11,
+              "n": 1
             }
           }
         },
@@ -727,6 +745,24 @@
               "min": 9.593,
               "max": 10.932,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 3.698,
+              "min": 3.698,
+              "max": 3.698,
+              "n": 5
+            },
+            "warm p99 ms": {
+              "median": 7.965,
+              "min": 7.965,
+              "max": 7.965,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.2,
+              "min": 1.2,
+              "max": 1.2,
+              "n": 1
             }
           }
         },
@@ -784,6 +820,24 @@
               "min": 9.683,
               "max": 16.096,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 4.494,
+              "min": 4.494,
+              "max": 4.494,
+              "n": 5
+            },
+            "warm p99 ms": {
+              "median": 8.836,
+              "min": 8.836,
+              "max": 8.836,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.17,
+              "min": 1.17,
+              "max": 1.17,
+              "n": 1
             }
           }
         },
@@ -841,6 +895,24 @@
               "min": 10.404,
               "max": 13.293,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 4.322,
+              "min": 4.322,
+              "max": 4.322,
+              "n": 5
+            },
+            "warm p99 ms": {
+              "median": 8.347,
+              "min": 8.347,
+              "max": 8.347,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.21,
+              "min": 1.21,
+              "max": 1.21,
+              "n": 1
             }
           }
         },
@@ -898,6 +970,24 @@
               "min": 6.835,
               "max": 7.562,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 2.816,
+              "min": 2.816,
+              "max": 2.816,
+              "n": 5
+            },
+            "warm p99 ms": {
+              "median": 4.595,
+              "min": 4.595,
+              "max": 4.595,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.31,
+              "min": 1.31,
+              "max": 1.31,
+              "n": 1
             }
           }
         },
@@ -955,6 +1045,24 @@
               "min": 7.617,
               "max": 7.796,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 2.953,
+              "min": 2.953,
+              "max": 2.953,
+              "n": 5
+            },
+            "warm p99 ms": {
+              "median": 7.661,
+              "min": 7.661,
+              "max": 7.661,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.03,
+              "min": 1.03,
+              "max": 1.03,
+              "n": 1
             }
           }
         },
@@ -1012,6 +1120,24 @@
               "min": 1.127,
               "max": 1.376,
               "n": 5
+            },
+            "warm p50 ms": {
+              "median": 0.894,
+              "min": 0.894,
+              "max": 0.894,
+              "n": 5
+            },
+            "warm p99 ms": {
+              "median": 1.117,
+              "min": 1.117,
+              "max": 1.117,
+              "n": 5
+            },
+            "gain": {
+              "median": 0.98,
+              "min": 0.98,
+              "max": 0.98,
+              "n": 1
             }
           }
         },
@@ -2099,6 +2225,7 @@
         "ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
+        "SurrealDB (embedded) at 9.99M vectors: the search cell exceeded its 8 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
       ],
@@ -6849,48 +6976,48 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "container:5052cdfa5a10 (host unknown)",
+          "host": "container:d65d46c5fbfb (host unknown)",
           "metrics": {
             "ingest points/s": {
-              "median": 1863898.3,
-              "min": 1748039.2,
-              "max": 1961430.7,
+              "median": 1958625.8,
+              "min": 1828322.4,
+              "max": 1962142.2,
               "n": 5
             },
             "ingest total s": {
-              "median": 1.39,
+              "median": 1.32,
               "min": 1.32,
-              "max": 1.48,
+              "max": 1.42,
               "n": 5
             },
             "newest reading p50 ms": {
-              "median": 0.41,
-              "min": 0.4,
-              "max": 0.47,
+              "median": 0.4261,
+              "min": 0.4036,
+              "max": 0.4829,
               "n": 5
             },
             "newest reading p99 ms": {
-              "median": 2.09,
-              "min": 1.62,
-              "max": 68.1,
+              "median": 1.6525,
+              "min": 1.3461,
+              "max": 56.062,
               "n": 5
             },
             "12h aggregate p50 ms": {
-              "median": 30.51,
-              "min": 19.62,
-              "max": 31.95,
+              "median": 30.3802,
+              "min": 18.2317,
+              "max": 31.1688,
               "n": 5
             },
             "12h aggregate p99 ms": {
-              "median": 53.77,
-              "min": 44.49,
-              "max": 59.5,
+              "median": 45.2594,
+              "min": 40.9008,
+              "max": 52.8954,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 5.1876,
-              "min": 3.4935,
-              "max": 5.2855,
+              "median": 5.2938,
+              "min": 3.8036,
+              "max": 5.9146,
               "n": 5
             },
             "disk GiB": {
