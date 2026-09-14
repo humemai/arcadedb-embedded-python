@@ -37,11 +37,34 @@ LIMIT = int(os.environ.get("BENCH_TS_LIMIT") or os.environ.get("TSBS_LIMIT", "0"
 # registered lane has one, PAPER_SCALES keys on it, and load_canonical drops a
 # row whose scale is not listed for its lane.
 SCALE_POINTS = {"ts100": 2_592_000}
-QITER = 100   # was 10; a p99 needs the samples (2026-09-10, BUGS F29)
+# 100 runs per query per repetition: was 10, and a p99 needs the samples
+# (2026-09-10, BUGS F29). BENCH_QITER lowers it for a laptop smoke; the count
+# lands on the row as `query_iters`.
+QITER = int(os.environ.get("BENCH_QITER") or 100)
 HOST = "host_42"
 T0 = 1767225600  # 2026-01-01T00:00:00Z epoch seconds
 HIGH = 90.0      # the high-cpu threshold, TSBS's own
-QUERIES = ("q_last", "q_range", "q_global", "q_groupby", "q_high")
+QUERIES = ("q_last", "q_range", "q_global", "q_groupby", "q_high", "q_orderlimit")
+ORDERLIMIT_N = 5   # TSBS groupby-orderby-limit takes the last five buckets
+
+# ---------------------------------------------------------------------------
+# WHAT EACH ANSWER LOOKS LIKE (DECISIONS #88). Declared once per query, and the
+# instants are declared as instants: this lane keeps the bucket key as epoch
+# SECONDS on the ArcadeDB document, DuckDB and SQLite arms, epoch MILLISECONDS
+# on the ArcadeDB native arms (timeBucket takes ms), a datetime on MongoDB and
+# TimescaleDB, and a timestamp on QuestDB. Those are one instant in six
+# spellings, and without the coercion the gate would report six disagreements
+# per query and hide any real one among them.
+Q_DIGEST = {
+    "q_last": dict(columns=(("ts", "timestamp"), "uu"), coerce={"ts": "epoch_s"}),
+    "q_range": dict(columns=(("m", "_id"), "v"), coerce={"m": "epoch_s"}),
+    "q_global": dict(columns=(("h", "_id"), "v"), coerce={"h": "epoch_s"}),
+    "q_groupby": dict(columns=(("host", "_id.host"), ("h", "_id.h"), "v"),
+                      coerce={"h": "epoch_s"}),
+    "q_high": dict(columns=("host", ("ts", "timestamp"), "uu"), coerce={"ts": "epoch_s"}),
+    "q_orderlimit": dict(columns=(("h", "_id"), "v"), coerce={"h": "epoch_s"},
+                         order_matters=True, order_key="h"),
+}
 
 
 def parse_lp():
@@ -122,6 +145,11 @@ class ArcadeTS:
         return self.db.query("sql",
             f"SELECT host, ts, uu FROM Point WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").to_list()
 
+    def q_orderlimit(self):
+        return self.db.query("sql",
+            f"SELECT (ts - ts % 3600) AS h, max(uu) AS v FROM Point "
+            f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}").to_list()
+
     def close(self):
         self.db.close()
 
@@ -187,6 +215,11 @@ class ArcadeTSServer(ArcadeTS):
 
     def q_high(self):
         return self._post("query", f"SELECT host, ts, uu FROM Point WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}")
+
+    def q_orderlimit(self):
+        return self._post("query", f"SELECT (ts - ts % 3600) AS h, max(uu) AS v FROM Point "
+                                   f"WHERE ts >= {T0} AND ts < {T0+43200} "
+                                   f"GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}")
 
     def close(self):
         self.rq.close()
@@ -326,6 +359,12 @@ class ArcadeNativeTS(ArcadeTS):
         return self.db.query("sql",
             f"SELECT host, ts, uu FROM Point WHERE ts >= {a} AND ts < {b} AND uu > {HIGH}").to_list()
 
+    def q_orderlimit(self):
+        a, b = T0 * 1000, (T0 + 43200) * 1000
+        return self.db.query("sql",
+            f"SELECT ts.timeBucket('1h', ts) AS h, max(uu) AS v FROM Point "
+            f"WHERE ts >= {a} AND ts < {b} GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}").to_list()
+
     def settle(self):
         """OUTSIDE the ingest timer, like every other arm's settle.
 
@@ -424,6 +463,11 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
         return self._post("query", f"SELECT host, ts, uu FROM Point WHERE ts >= {T0 * 1000} "
                                    f"AND ts < {(T0 + 43200) * 1000} AND uu > {HIGH}")
 
+    def q_orderlimit(self):
+        return self._post("query", f"SELECT ts.timeBucket('1h', ts) AS h, max(uu) AS v FROM Point "
+                                   f"WHERE ts >= {T0 * 1000} AND ts < {(T0 + 43200) * 1000} "
+                                   f"GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}")
+
     def settle(self):
         self._settled_s = 0.0
 
@@ -477,6 +521,11 @@ class DuckTS:
         return self.cx.execute(
             f"SELECT host, ts, uu FROM p WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").fetchall()
 
+    def q_orderlimit(self):
+        return self.cx.execute(
+            f"SELECT (ts - ts % 3600) AS h, max(uu) FROM p WHERE ts >= {T0} "
+            f"AND ts < {T0+43200} GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}").fetchall()
+
     def close(self):
         self.cx.close()
 
@@ -529,6 +578,11 @@ class SQLiteTS:
     def q_high(self):
         return self.cx.execute(
             f"SELECT host, ts, uu FROM p WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").fetchall()
+
+    def q_orderlimit(self):
+        return self.cx.execute(
+            f"SELECT (ts - ts % 3600) AS h, max(uu) FROM p WHERE ts >= {T0} "
+            f"AND ts < {T0+43200} GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}").fetchall()
 
     def close(self):
         self.cx.close()
@@ -620,6 +674,12 @@ class MongoTS:
         return list(self.db["p"].find({"ts": {"$gte": self._t(T0), "$lt": self._t(T0 + 43200)}, "uu": {"$gt": HIGH}},
                                       {"host": 1, "ts": 1, "uu": 1}))
 
+    def q_orderlimit(self):
+        return list(self.db["p"].aggregate([
+            {"$match": {"ts": {"$gte": self._t(T0), "$lt": self._t(T0 + 43200)}}},
+            {"$group": {"_id": {"$dateTrunc": {"date": "$ts", "unit": "hour"}}, "v": {"$max": "$uu"}}},
+            {"$sort": {"_id": -1}}, {"$limit": ORDERLIMIT_N}]))
+
     def close(self):
         self.cl.close()
 
@@ -686,6 +746,13 @@ class TimescaleTS:
         with self.cx.cursor() as c:
             c.execute("SELECT host, ts, uu FROM p WHERE ts >= %s AND ts < %s AND uu > %s",
                       (self._t(T0), self._t(T0 + 43200), HIGH))
+            return c.fetchall()
+
+    def q_orderlimit(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT time_bucket('1 hour', ts) AS h, max(uu) FROM p WHERE ts >= %s AND ts < %s "
+                      "GROUP BY h ORDER BY h DESC LIMIT %s",
+                      (self._t(T0), self._t(T0 + 43200), ORDERLIMIT_N))
             return c.fetchall()
 
     def close(self):
@@ -799,6 +866,15 @@ class QuestTS:
             f"SELECT host, timestamp, uu FROM p WHERE timestamp >= '2026-01-01T00:00:00Z' "
             f"AND timestamp < '2026-01-01T12:00:00Z' AND uu > {HIGH}").fetchall()
 
+    def q_orderlimit(self):
+        # SAMPLE BY in a subquery: QuestDB does not accept ORDER BY ... LIMIT
+        # directly after SAMPLE BY, and the ordering is the point of the query.
+        return self.cx.execute(
+            f"SELECT * FROM (SELECT timestamp, max(uu) AS v FROM p "
+            f"WHERE timestamp >= '2026-01-01T00:00:00Z' "
+            f"AND timestamp < '2026-01-01T12:00:00Z' SAMPLE BY 1h) "
+            f"ORDER BY timestamp DESC LIMIT {ORDERLIMIT_N}").fetchall()
+
     def close(self):
         self.cx.close()
 
@@ -899,6 +975,7 @@ def main():
     if settle > 0:
         time.sleep(settle)
 
+    out["query_iters"] = QITER
     for qn in QUERIES:
         times = []
         ref = None
@@ -916,7 +993,15 @@ def main():
         # summary figure's first-pass panel needs it (2026-09-11).
         out[f"{qn}_cold_ms"] = round(times[0], 4)
         out[f"{qn}_rows"] = len(ref) if ref is not None else 0
-        _beat.mark(f"query-{qn}-done", p50=out[f"{qn}_ms"], rows=out[f"{qn}_rows"])
+        # COLD AND WARM UNDER THE SHARED NAMING (DECISIONS #89): the pooled
+        # {qn}_ms and {qn}_p99_ms above blend the first touch with the repeats;
+        # these say what that blend is made of.
+        bench_common.record_cold_warm(out, qn, times, digits=4)
+        # THE ANSWER (DECISIONS #88), from the object the last timed call
+        # returned, outside the timed loop.
+        bench_common.record_result(out, qn, ref, **Q_DIGEST[qn])
+        _beat.mark(f"query-{qn}-done", p50=out[f"{qn}_ms"], rows=out[f"{qn}_rows"],
+                   digest=out[f"res_{qn}_digest"])
 
     # ASSERT THE SHAPES, do not merely record them. The lane already knew the
     # right answers -- 60 minute buckets over an hour, 12 two-hour buckets over a
@@ -939,7 +1024,8 @@ def main():
         out["q_last_windowed_rows"] = len(_ref) if _ref is not None else 0
         out["last_window_s"] = 86400 * 40
 
-    _expect = {"q_range": 60, "q_global": 12, "q_last": 1}
+    _expect = {"q_range": 60, "q_global": 12, "q_last": 1,
+               "q_orderlimit": ORDERLIMIT_N}
     # The two 2026-10 queries have data-dependent shapes (one row per host
     # per hour; one row per reading above the threshold), so they are
     # asserted across engines instead: the row records the count and
@@ -965,6 +1051,9 @@ def main():
         out["backend_version"] = f"unknown ({e.__class__.__name__})"
     out["durability"] = getattr(b, "durability", None) or DURABILITY.get(args.backend)
     out["instrument"] = bench_common.INSTRUMENT
+    # DECISIONS #89: the queries carry a cold/warm split; the ingest does not,
+    # and the row says why rather than leaving the pair blank.
+    out["ingest_cold_warm_na"] = bench_common.NA_COLD_WARM_INGEST
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
     # settles a roughly fixed 30-87 MB, against nothing at all for an
