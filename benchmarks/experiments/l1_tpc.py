@@ -77,7 +77,7 @@ FROM lineitem WHERE l_shipdate <= DATE '1998-09-02'
 GROUP BY l_returnflag, l_linestatus ORDER BY l_returnflag, l_linestatus
 """
 Q6_DUCK = """
-SELECT sum(l_extendedprice * l_discount) AS revenue FROM lineitem
+SELECT sum(l_extendedprice * l_discount) AS revenue, count(*) AS n FROM lineitem
 WHERE l_shipdate >= DATE '1994-01-01' AND l_shipdate < DATE '1995-01-01'
   AND l_discount BETWEEN 0.05 AND 0.07 AND l_quantity < 24
 """
@@ -90,10 +90,10 @@ WHERE l_shipdate >= DATE '1994-01-01' AND l_shipdate < DATE '1995-01-01'
 TOP_PARTS_SQL = ("SELECT l_partkey, sum(l_extendedprice * (1 - l_discount)) AS rev "
                  "FROM lineitem GROUP BY l_partkey ORDER BY rev DESC, l_partkey ASC LIMIT 10")
 SHIP_MODE_SQL = "SELECT l_shipmode, count(*) AS n FROM lineitem GROUP BY l_shipmode ORDER BY l_shipmode"
-BY_MONTH_DUCK = ("SELECT date_trunc('month', l_shipdate) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev "
-                 "FROM lineitem GROUP BY m ORDER BY m")
-BY_MONTH_TEXT = ("SELECT substr(l_shipdate, 1, 7) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev "
-                 "FROM lineitem GROUP BY m ORDER BY m")
+BY_MONTH_DUCK = ("SELECT date_trunc('month', l_shipdate) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev, "
+                 "count(*) AS n FROM lineitem GROUP BY m ORDER BY m")
+BY_MONTH_TEXT = ("SELECT substr(l_shipdate, 1, 7) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev, "
+                 "count(*) AS n FROM lineitem GROUP BY m ORDER BY m")
 # ArcadeDB SQL: same semantics on the LineItem document type; dates stored
 # as ISO strings (lexicographic order == chronological for ISO-8601).
 # sum_disc WAS MISSING HERE, AND ONLY HERE (found 2026-09-14 while declaring
@@ -133,7 +133,7 @@ Q1_ARCADE = ("SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty, "
 # texts now say the same thing in the same shape. The defect itself is an
 # upstream matter (a Java repro against the engine's SQL parser), not a harness
 # one, and the published September Q6 cell for ArcadeDB is wrong.
-Q6_ARCADE = ("SELECT sum(l_extendedprice * l_discount) AS revenue FROM LineItem "
+Q6_ARCADE = ("SELECT sum(l_extendedprice * l_discount) AS revenue, count(*) AS n FROM LineItem "
              "WHERE l_shipdate >= '1994-01-01' AND l_shipdate < '1995-01-01' "
              "AND l_discount BETWEEN 0.05 AND 0.07 AND l_quantity < 24")
 ARCADE_OLAP = {
@@ -141,8 +141,8 @@ ARCADE_OLAP = {
     "top_parts": ("SELECT l_partkey, sum(l_extendedprice * (1 - l_discount)) AS rev FROM LineItem "
                   "GROUP BY l_partkey ORDER BY rev DESC, l_partkey ASC LIMIT 10"),
     "ship_mode": "SELECT l_shipmode, count(*) AS n FROM LineItem GROUP BY l_shipmode ORDER BY l_shipmode",
-    "by_month": ("SELECT l_shipdate.substring(0, 7) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev "
-                 "FROM LineItem GROUP BY m ORDER BY m"),
+    "by_month": ("SELECT l_shipdate.substring(0, 7) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev, "
+                 "count(*) AS n FROM LineItem GROUP BY m ORDER BY m"),
 }
 DUCK_OLAP = {"q1": Q1_DUCK, "q6": Q6_DUCK, "top_parts": TOP_PARTS_SQL, "ship_mode": SHIP_MODE_SQL, "by_month": BY_MONTH_DUCK}
 
@@ -205,7 +205,17 @@ OLAP_DIGEST = {
                         "sum_qty", "sum_base", "sum_disc", "avg_qty", "n"),
                coerce={"sum_qty": "num", "sum_base": "num",
                        "sum_disc": "num", "avg_qty": "num"}),
-    "q6": dict(columns=("revenue",), coerce={"revenue": "num"}),
+    # THE COUNT IS PART OF THE ANSWER (DECISIONS #94). `revenue` is one large
+    # float, so at SF1 and above a single lost row falls inside six significant
+    # digits and the digest does not move: measured, the revenue total detected
+    # a missing row 10.8 per cent of the time and the monthly revenue 36.5. The
+    # rows each of them aggregates are now counted in the query itself and
+    # compared EXACTLY, so one lost row fails the gate whatever the sum does.
+    # The count rides the same scan the sum already makes, and the published
+    # latency columns still time exactly one call of exactly this query, so
+    # what they MEAN is unchanged -- which is why #94 required the change
+    # before the campaign rather than during it.
+    "q6": dict(columns=("revenue", "n"), coerce={"revenue": "num"}),
     # ORDER BY rev DESC LIMIT 10: the membership of the top ten is the answer,
     # and two engines may break a revenue tie differently, so the canonical
     # form sorts on rev with the part key as tie-break.
@@ -214,7 +224,7 @@ OLAP_DIGEST = {
                       coerce={"rev": "num"}),
     # No measure here: the only value column is a count.
     "ship_mode": dict(columns=(("l_shipmode", "_id", "m"), "n")),
-    "by_month": dict(columns=(("m", "_id"), "rev"),
+    "by_month": dict(columns=(("m", "_id"), "rev", "n"),
                      coerce={"m": "month", "rev": "num"}),
 }
 
@@ -494,7 +504,8 @@ class MongoTPC:
     TOP_PARTS = [{"$group": {"_id": "$l_partkey", "rev": _REV}},
                  {"$sort": {"rev": -1, "_id": 1}}, {"$limit": 10}]
     SHIP_MODE = [{"$group": {"_id": "$l_shipmode", "n": {"$sum": 1}}}, {"$sort": {"_id": 1}}]
-    BY_MONTH = [{"$group": {"_id": {"$substr": ["$l_shipdate", 0, 7]}, "rev": _REV}}, {"$sort": {"_id": 1}}]
+    BY_MONTH = [{"$group": {"_id": {"$substr": ["$l_shipdate", 0, 7]}, "rev": _REV, "n": {"$sum": 1}}},
+                {"$sort": {"_id": 1}}]
     Q1 = [{"$match": {"l_shipdate": {"$lte": "1998-09-02"}}},
           {"$group": {"_id": {"f": "$l_returnflag", "s": "$l_linestatus"},
                       "sum_qty": {"$sum": "$l_quantity"}, "sum_base": {"$sum": "$l_extendedprice"},
@@ -503,7 +514,8 @@ class MongoTPC:
           {"$sort": {"_id.f": 1, "_id.s": 1}}]
     Q6 = [{"$match": {"l_shipdate": {"$gte": "1994-01-01", "$lt": "1995-01-01"},
                       "l_discount": {"$gte": 0.05, "$lte": 0.07}, "l_quantity": {"$lt": 24}}},
-          {"$group": {"_id": None, "revenue": {"$sum": {"$multiply": ["$l_extendedprice", "$l_discount"]}}}}]
+          {"$group": {"_id": None, "revenue": {"$sum": {"$multiply": ["$l_extendedprice", "$l_discount"]}},
+                      "n": {"$sum": 1}}}]
 
     def olap(self, which):
         q = {"q1": self.Q1, "q6": self.Q6, "top_parts": self.TOP_PARTS,
@@ -604,7 +616,8 @@ class SurrealTPC:
     Q1 = ("SELECT l_returnflag, l_linestatus, math::sum(l_quantity) AS sum_qty, math::sum(l_extendedprice) AS sum_base, "
           "math::sum(l_extendedprice * (1 - l_discount)) AS sum_disc, math::mean(l_quantity) AS avg_qty, count() AS n "
           "FROM lineitem WHERE l_shipdate <= '1998-09-02' GROUP BY l_returnflag, l_linestatus ORDER BY l_returnflag, l_linestatus")
-    Q6 = ("SELECT math::sum(l_extendedprice * l_discount) AS revenue FROM lineitem WHERE l_shipdate >= '1994-01-01' "
+    Q6 = ("SELECT math::sum(l_extendedprice * l_discount) AS revenue, count() AS n FROM lineitem "
+          "WHERE l_shipdate >= '1994-01-01' "
           "AND l_shipdate < '1995-01-01' AND l_discount >= 0.05 AND l_discount <= 0.07 AND l_quantity < 24 GROUP ALL")
     # Subquery form for the ordered group-bys: core 2.3.10 sorts by the group
     # key after GROUP BY (the l2 finding of 2026-09-11); 3.2.4 accepts both.
@@ -613,7 +626,8 @@ class SurrealTPC:
                       "FROM lineitem GROUP BY l_partkey) ORDER BY rev DESC, l_partkey ASC LIMIT 10"),
         "ship_mode": "SELECT l_shipmode, count() AS n FROM lineitem GROUP BY l_shipmode ORDER BY l_shipmode",
         "by_month": ("SELECT * FROM (SELECT string::slice(l_shipdate, 0, 7) AS m, "
-                     "math::sum(l_extendedprice * (1 - l_discount)) AS rev FROM lineitem GROUP BY m) ORDER BY m"),
+                     "math::sum(l_extendedprice * (1 - l_discount)) AS rev, count() AS n "
+                     "FROM lineitem GROUP BY m) ORDER BY m"),
     }
 
     @staticmethod
@@ -1121,7 +1135,8 @@ class ArangoTPC:
           "SORT f, s RETURN {f, s, sum_qty, sum_base, sum_disc, avg_qty, n}")
     Q6 = ("FOR l IN lineitem FILTER l.l_shipdate >= '1994-01-01' AND l.l_shipdate < '1995-01-01' "
           "AND l.l_discount >= 0.05 AND l.l_discount <= 0.07 AND l.l_quantity < 24 "
-          "COLLECT AGGREGATE revenue = SUM(l.l_extendedprice * l.l_discount) RETURN {revenue}")
+          "COLLECT AGGREGATE revenue = SUM(l.l_extendedprice * l.l_discount), n = COUNT(1) "
+          "RETURN {revenue, n}")
 
     OLAP = {
         "top_parts": ("FOR l IN lineitem COLLECT k = l.l_partkey "
@@ -1129,7 +1144,8 @@ class ArangoTPC:
                       "SORT rev DESC, k ASC LIMIT 10 RETURN {k, rev}"),
         "ship_mode": "FOR l IN lineitem COLLECT m = l.l_shipmode WITH COUNT INTO n SORT m RETURN {m, n}",
         "by_month": ("FOR l IN lineitem COLLECT m = SUBSTRING(l.l_shipdate, 0, 7) "
-                     "AGGREGATE rev = SUM(l.l_extendedprice * (1 - l.l_discount)) SORT m RETURN {m, rev}"),
+                     "AGGREGATE rev = SUM(l.l_extendedprice * (1 - l.l_discount)), n = COUNT(1) "
+                     "SORT m RETURN {m, rev, n}"),
     }
 
     def olap(self, which):
