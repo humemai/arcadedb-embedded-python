@@ -76,11 +76,46 @@ ARCADE = "arcadedb"
 LANES_CHECKED_OTHERWISE = {
     "l3d": "approximate index: recall against exact ground truth, per row",
     "l3s": "approximate index: recall against exact ground truth, per row",
+    ("e2", "atomicity"): "checked by the torn-state comparison, not by a digest",
+}
+
+# TWO ARMS THAT ARE NOT LIKE FOR LIKE, named with the reason rather than left
+# to fail every publish. The lifecycle lane's embedded and served halves are
+# two different scripts running two different mode sets -- the embedded one
+# also runs the drop and stale-reopen cycles -- so their databases hold
+# different numbers of records by construction and their reads answer
+# different questions. The digest is still worth recording per arm (it catches
+# an arm disagreeing with itself across repetitions, which E2 reports), but
+# comparing the two arms to each other would be comparing two workloads.
+NOT_COMPARABLE = {
+    ("lifecycle", "lifecycle_read"):
+        "the embedded and served lifecycle arms run different mode sets, so "
+        "their post-state record counts differ by construction",
 }
 
 
 def _is_arcade(backend):
     return ARCADE in str(backend)
+
+
+def newest_per_cell(rows):
+    """One row per run_id, the newest by ts_utc.
+
+    A results file is append-only, so a re-run of a fixed cell leaves the old
+    row in place beside the new one. Without this the gate reads the two as one
+    backend giving two answers and fails E2 on a defect that has been fixed --
+    which is exactly what it did the first time a cell was re-run here. The
+    canonical set applies the same rule; this is it for a raw file.
+    """
+    best = {}
+    for r in rows:
+        rid = r.get("run_id")
+        if not rid:
+            best[id(r)] = r
+            continue
+        if rid not in best or str(r.get("ts_utc")) > str(best[rid].get("ts_utc")):
+            best[rid] = r
+    return list(best.values())
 
 
 def load_rows(path=None):
@@ -97,6 +132,7 @@ def load_rows(path=None):
         for line in fh:
             if line.strip():
                 rows.append(json.loads(line))
+    rows = newest_per_cell(rows)
     return rows, os.path.relpath(p, HERE)
 
 
@@ -134,7 +170,7 @@ def collect(rows):
                 (r.get("rep"), str(r.get(f"res_{q}_sample") or ""), r.get(f"res_{q}_n"),
                  r.get("durability_class") or "relaxed"))
         if not got:
-            silent_lanes[r.get("lane")].add(r.get("backend"))
+            silent_lanes[(r.get("lane"), r.get("workload"))].add(r.get("backend"))
     return groups, skipped, seen_backends, silent_lanes
 
 
@@ -146,15 +182,20 @@ def report_silent_lanes(silent_lanes, out=print):
     that checked nothing.
     """
     bad = 0
-    declared = {ln: bes for ln, bes in silent_lanes.items() if ln in LANES_CHECKED_OTHERWISE}
-    missing = {ln: bes for ln, bes in silent_lanes.items() if ln not in LANES_CHECKED_OTHERWISE}
+
+    def _decl(key):
+        lane, workload = key
+        return LANES_CHECKED_OTHERWISE.get((lane, workload)) or LANES_CHECKED_OTHERWISE.get(lane)
+
+    declared = {k: bes for k, bes in silent_lanes.items() if _decl(k)}
+    missing = {k: bes for k, bes in silent_lanes.items() if not _decl(k)}
     out("\n=== E6: every lane records a digest, or is declared checked otherwise ===")
-    for ln, bes in sorted(declared.items()):
-        out(f"  declared {ln:8} {LANES_CHECKED_OTHERWISE[ln]} ({len(bes)} backend(s))")
-    for ln, bes in sorted(missing.items()):
+    for k, bes in sorted(declared.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
+        out(f"  declared {k[0]:8} {str(k[1]):10} {_decl(k)} ({len(bes)} backend(s))")
+    for k, bes in sorted(missing.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
         bad += 1
-        out(f"  FAIL {ln}: {len(bes)} backend(s) recorded no result digest on any "
-            f"query: {', '.join(sorted(str(b) for b in bes))}")
+        out(f"  FAIL {k[0]} {k[1]}: {len(bes)} backend(s) recorded no result digest "
+            f"on any query: {', '.join(sorted(str(b) for b in bes))}")
     if not missing and not declared:
         out("  ok: every 2026-10 row carries at least one digest")
     elif not missing:
@@ -173,6 +214,7 @@ def report(groups, seen_backends, out=print):
     absences = []          # (key, backend, reason)
     unstable = []          # (key, backend, digests)
     silent = []            # (key, backend) -- ran the cell, recorded no digest
+    not_comparable = []    # (key, reason, backends) -- declared not like for like
 
     for key in sorted(groups, key=lambda k: tuple(str(x) for x in k)):
         lane, scale, workload, query = key
@@ -215,6 +257,10 @@ def report(groups, seen_backends, out=print):
             by_digest[d].append(be)
         if len(by_digest) == 1:
             agreed += 1
+            continue
+        why = NOT_COMPARABLE.get((lane, query))
+        if why:
+            not_comparable.append((key, why, sorted(real)))
             continue
         disagreed += 1
         # WHICH SIDE IS ARCADEDB ON, and is it alone there? The first version
@@ -284,6 +330,13 @@ def report(groups, seen_backends, out=print):
                 continue
             seen.add(tag)
             out(f"  {key[0]:8} {key[2]:10} {key[3]:24} {be:32} {reason}")
+
+    if not_comparable:
+        out("\n=== E7: groups declared NOT COMPARABLE, with the reason ===")
+        for key, why, bes in not_comparable:
+            out(f"  {key[0]} {key[1]} {key[2]} :: {key[3]} -- {why}")
+            out(f"         ({', '.join(bes)}; each arm's own digest is still checked "
+                f"across its repetitions by E2)")
 
     if unchecked:
         out(f"\n=== E5: {unchecked} group(s) UNCHECKED: only one engine answered ===")
