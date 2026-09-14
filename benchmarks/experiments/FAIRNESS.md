@@ -1,194 +1,64 @@
 # The fairness contract
 
-Every number on the page compares systems. A comparison is only worth
-printing if both sides were given the same thing. This file says what "the
-same thing" means, what is allowed to differ, and what is checked
-mechanically rather than remembered.
+Every number on the page compares systems. A comparison is only worth printing if both sides were given the same thing. This file says what "the same thing" means, what is allowed to differ, and what is checked mechanically rather than remembered.
 
-Run `python3 fairness_check.py` before regenerating tables and at the freeze.
-It fails loudly rather than warning quietly.
+`fairness_check.py` is one of the three gates `refresh_web_page.py` runs. It fails loudly rather than warning quietly.
 
-## Why this file exists
-
-Three violations were found on 2026-07-31, in one afternoon, by asking a
-question no check asked: not "is this number right" but "was the row next to
-it given the same resources and the same treatment". All three favoured
-ArcadeDB. None was caught by claims_check or provenance_check, because both
-of those verify a number against its own artifact, and every number here was
-correct about its own run.
-
-That is the failure mode this contract exists to close: **a correct number
-measured under conditions the row beside it did not get.**
+The failure mode this contract exists to close is **a correct number measured under conditions the row beside it did not get**. `claims_check` and `provenance_check` cannot see it: both verify a number against its own artifact, and such a number is correct about its own run.
 
 ## Invariants (must hold; checked)
 
-**F1. Same cpuset.** Every container in a published cell gets the full
-`0-11` (the 12 P-threads). Client and server topologies share that cpuset
-deliberately, so CPU competition stays inside the deployment under test
-rather than being hidden by giving the server its own cores.
+**F1. Same cpuset.** Every container in a published cell gets the full `0-11` (the 12 P-threads on 6 physical P-cores). Client and server topologies share that cpuset deliberately, so CPU competition stays inside the deployment under test rather than being hidden by giving the server its own cores.
 
-**F2. Serial only.** Published cells run one at a time. `runner.py` forces
-`workers=1` on the paper tier and errors otherwise; queue scripts enforce it
-again with `guard()`. The parallel sweep tier (disjoint cpuset shards,
-shuffled order) exists for exploration and must never reach a table. Sweeps
-did run, at `l2 sf1`, `l2 sf10` and `l3s micro` — a published row from one is
-detectable as a partial cpuset such as `0-5`.
+**F2. Serial only.** Published cells run one at a time. `runner.py` forces `workers=1` on the paper tier and errors otherwise; queue scripts enforce it again with `guard()`. The parallel sweep tier (disjoint cpuset shards, shuffled order) exists for exploration and must never reach a table. A published row from a sweep is detectable after the fact as a partial cpuset such as `0-5`, and `load_canonical` drops it.
 
-**F3. Same memory envelope per (lane, scale).** Every backend at a tier gets
-the same `--memory`/`--memory-swap` cap and, for JVM engines, the same heap.
-A client/server backend used to get the envelope **split**, not doubled
-(`server = 0.75 * total`, `client = total - server`), and every split-bearing
-row now in `results/` was measured that way. Since `c1cbf44721` (2026-08-14)
-the server gets the **full tier cap** and the client its own `BENCH_CLIENT_MEM`
-budget on top, stamped `mem_split="full+client"`: the embedded arm never paid
-the split, and the headline ArcadeDB number in every table is the embedded arm,
-so the old rule charged the deployment axis for a memory difference as well.
-`BENCH_SERVER_MEM_FRACTION` restores the old behaviour for a reproduction. See
-PROTOCOL.md section 7, which also records that the paper and the T5 caption
-still assert 0.75.
+**F3. Same memory envelope per (lane, scale).** Every backend at a tier gets the same `--memory`/`--memory-swap` cap and, for JVM engines, the same heap.
 
-"Same heap" means the heap the engine RAN, not the heap the cell asked for,
-and those were different for a year. `runner.py` templated `{heap}` into every
-served backend's environment except one: Elasticsearch was hardcoded to
-`ES_JAVA_OPTS=-Xms2g -Xmx4g`, so it ran 4g at tiny, small AND medium while its
-comparators scaled 4g → 8g → 16g. At medium that is a quarter of the memory,
-against the engine we compare ourselves to, in the direction that flatters us.
-It also broke the `-Xms=-Xmx` pinning the rest of the lane relies on, so
-Elasticsearch alone grew its heap under load.
+A served backend gets the **full tier cap** and the client its own `BENCH_CLIENT_MEM` budget on top, stamped `mem_split="full+client"`, so a served engine sees exactly the cap an embedded engine of the same tier sees. Every frozen served row carries that stamp. `BENCH_SERVER_MEM_FRACTION` restores the older `server = 0.75 * total` split for a reproduction. Compare a served topology by `srv_cap / mem_split`, never by adding client and server: addition reads 1.75x the envelope.
 
-Nothing in the artifact could reveal this, because a row stamps `heap` from
-the REQUEST: those rows say `heap=16g`. `observe_server()` closed it by
-reading the container's real `-Xmx` back out of `docker inspect` into
-`server_heap`, and failing any cell where the two disagree. Rows without that
-witness are dropped from published tables (`load_canonical`), so a tier shows
-a gap rather than an unfair number.
+**"Same heap" means the heap the engine RAN, not the heap the cell asked for.** A row stamps `heap` from the request, so a hardcoded server heap is invisible in the artifact; Elasticsearch ran 4g at three tiers while its comparators scaled 4g, 8g, 16g, stamped `heap=16g` throughout. `observe_server()` closes it by reading the container's real `-Xmx` back out of `docker inspect` into `server_heap` and failing any cell where the two disagree. Rows without that witness are dropped from published tables by `load_canonical`, so a tier shows a gap rather than an unfair number.
 
-The check is honest about its own limit: it reads the container's ENV, which
-is what we passed in, not the JVM's live heap. It proves the plumbing, not the
-obedience. The stronger form is to ask the engine — Elasticsearch reports
-`jvm.mem.heap_max_in_bytes` from `/_nodes/jvm` — and that is still owed.
+The check is honest about its own limit: it reads the container's ENV, which is what we passed in, not the JVM's live heap. It proves the plumbing, not the obedience. The stronger form is to ask the engine (Elasticsearch reports `jvm.mem.heap_max_in_bytes` from `/_nodes/jvm`) and is still owed.
 
-**F4. Same protocol.** Reps per build, warmup count, settle step and query
-set are properties of the LANE, not of whoever wrote the driver. If ArcadeDB
-gets five passes over one build, so does every comparator. If one engine gets
-a post-ingest settle, all of them do.
+**A resource raised for one engine obliges a re-measure of every engine at that tier.** This is the sharpest rule here, and the one that has been broken: the dense envelope went 28g/16g to 36g/24g for a legitimate reason and only ArcadeDB was re-measured, which turned a fix into a 29% memory advantage.
 
-**F5. Same engine line within a table.** A row measured on a different
-release than the row beside it compares versions while appearing to compare
-configurations. This is what made T5's server build cell wrong.
+Note the scope. The rule is about *resources*. Upgrading one engine's version is not a resource change: the comparators keep the same cpuset, envelope, protocol and degree, so F1 to F8 still hold and their rows may be carried forward under F9.
 
-**F6. Thread pools are fitted to the cpuset, not to the host.** F1 pins the
-cpuset, which bounds which CPUs a process may run on. It does not bound how
-many threads the process decides to start, and several runtimes size their
-pools from the host core count regardless of the mask they were given. That
-is not equal treatment: an engine running 20 threads on 12 CPUs pays context
-switching its 12-thread neighbour does not.
+**F4. Same protocol.** Reps per build, warmup count, settle step and query set are properties of the LANE, not of whoever wrote the driver. If ArcadeDB gets five passes over one build, so does every comparator. If one engine gets a post-ingest settle, all of them do.
 
-The call that sees the restriction is `sched_getaffinity`. **`os.cpu_count()`,
-`nproc --all` and `/proc/cpuinfo` report the host and ignore the mask**, so any
-of them appearing in an adapter is this bug.
+**F5. Same engine line within a table.** A row measured on a different release than the row beside it compares versions while appearing to compare configurations.
 
-Plain `nproc` is the exception and **does** respect affinity — verified, not
-assumed: under `taskset -c 0-11` on a 16-CPU box, `nproc`=12 while
-`nproc --all`=16 and `/proc/cpuinfo`=16. An earlier version of this section
-said `nproc` ignored cpuset, copied from queue64's own interpretation line,
-which is wrong. Corrected here because a fairness document asserting a false
-fact about the measuring tool is worse than saying nothing.
+**F6. Thread pools are fitted to the cpuset, not to the host.** F1 pins the cpuset, which bounds which CPUs a process may run on. It does not bound how many threads the process starts, and several runtimes size their pools from the host core count regardless of the mask. An engine running 20 threads on 12 CPUs pays context switching its 12-thread neighbour does not.
 
-Fitting the pool is the first of the four enumerated fairness overrides
-(resource fitting) in the config policy, the same one that sets JVM heap per
-tier, so it is applied rather than merely disclosed.
+The call that sees the restriction is `sched_getaffinity`. **`os.cpu_count()`, `nproc --all` and `/proc/cpuinfo` report the host and ignore the mask**, so any of them in an adapter is this bug. Plain `nproc` does respect affinity, verified rather than assumed: under `taskset -c 0-11` on a 16-CPU box, `nproc`=12 while `nproc --all`=16 and `/proc/cpuinfo`=16.
 
-*Measured 2026-08-01 (queue64 on mini, and confirmed locally under `taskset`):*
+Fitting the pool is resource fitting, the first of the four sanctioned override categories, so it is applied rather than merely disclosed.
+
+*Audit, 2026-08-01, seven comparator runtimes:*
 
 | runtime | evidence | verdict |
 |---|---|---|
-| **DuckDB** | default `threads`=20 under a 12-CPU cpuset, in the real bench image; `taskset -c 0-11` on a 16-CPU box still yields 16 | **HOST-DERIVED.** Fixed: `l1_tabular.py` sets `PRAGMA threads` from `sched_getaffinity` |
+| **DuckDB** | default `threads`=20 under a 12-CPU cpuset in the real bench image | **HOST-DERIVED.** Fixed in `l1_tabular.py` only; l1_tpc, l3d and l4 still run oversubscribed |
 | Qdrant | `actix-rt` runtime 11 threads, update pool ~11, from `/proc/<pid>/task` | cpuset |
 | Elasticsearch | `_nodes/os` reports `available_processors: 12`, `allocated_processors: 12` | cpuset |
-| Neo4j | 10 `GC Thread#N`; G1 derives `8 + (N-8)*5/8` above 8, so 12 CPUs gives 10 and 20 would give 15 | cpuset |
+| Neo4j | 10 `GC Thread#N`; G1 derives `8 + (N-8)*5/8` above 8, so 12 CPUs gives 10 | cpuset |
 | ArcadeDB (JVM) | `availableProcessors()` reads the cgroup on Java 11+ | cpuset |
 | Chroma, LanceDB, sqlite-vec | embedded in the driver, no separate server pool | n/a |
-| Milvus | its own metrics report `go_sched_gomaxprocs_threads 12`; Go sizes from `sched_getaffinity` | cpuset |
+| Milvus | `go_sched_gomaxprocs_threads 12`; Go sizes from `sched_getaffinity` | cpuset |
 
-**Measured 2026-08-01. Audit complete across all seven comparator runtimes: DuckDB is the only offender.**
+Not yet audited: every comparator added since (MongoDB, TimescaleDB, pgvector, PG+AGE, SurrealDB, SQLite, and ArangoDB).
 
-> **2026-09-11 currency note (extended 2026-09-13):** the September comparators (MongoDB, TimescaleDB, pgvector, PG+AGE, SurrealDB, SQLite, and ArangoDB) are not yet in this table.
+Two ways to get this audit wrong, both nearly recorded. Total OS thread count is not pool sizing: a JVM server runs dozens of threads irrespective of cpuset, so the question for a JVM is `availableProcessors()` and the named pool settings. And running `nproc` inside a container answers about the container, not about the engine: ask the engine's own metrics.
 
-Two corrections worth keeping, because the wrong answers were nearly recorded:
+The DuckDB bias runs **against** DuckDB, which wins that lane regardless, so nothing self-serving rests on it; the tabular rows are re-measured at each freeze rather than carried over.
 
-*Total OS threads is not pool sizing.* A first sweep counted threads per server
-and flagged anything above `cpuset+4`. Elasticsearch came back 88 and Neo4j 83,
-both reported as host-derived. Both are wrong: a JVM server runs dozens of
-threads (GC, JIT, JMX, acceptors, per-index pools) irrespective of cpuset. The
-question for a JVM is `availableProcessors()` and the named pool settings, and
-by that measure both fit the cpuset exactly.
+**F7. Same effective base-layer degree across dense backends per scale.** Engines spell graph degree differently: one takes the per-layer `maxConnections`, another the base-layer degree, and the same integer therefore builds two different graphs. Recorded per row as `degree_param` plus `degree_family` so the check reads the number in the unit its own engine meant. A row recording no degree FAILS.
 
-*"What qdrant sees" saw the container.* The original queue64 line ran `nproc`
-and `/proc/cpuinfo` inside the container and labelled both `qdrant sees:`. They
-disagree because `nproc` respects affinity and `/proc/cpuinfo` does not, and
-neither asks Qdrant anything. Its real pools are cpuset-shaped.
+*The other construction knob, and why it is NOT matched.* ArcadeDB builds through jvector, which also exposes `neighborOverflowFactor` (engine default 1.2): how far above `maxConnections` a neighbour list may grow during construction before pruning. Raising it to 2.0 cuts graph-unreachable nodes 3.5x at no measurable cost (50k x 128, `maxConnections=32`: 299 orphans at 1.2, 85 at 2.0, build time, peak RSS and recall flat). It stays at the default anyway. Cheap is not the test; "is there a matched value on the other side" is, and there is none, because no hnswlib-family comparator has this knob. Setting it would move our graph alone, in our favour, which is what separates it from the `maxConnections` 32-against-16 correction: that one converts units between two engines that mean different things by the same integer. Recorded as DECISIONS.md #45.
 
-Consequence for published numbers: every DuckDB cell measured before this fix
-ran oversubscribed. The bias runs **against** DuckDB, which wins that lane
-regardless, so nothing self-serving rests on it — but the tabular rows must be
-re-measured at the freeze rather than carried over (done at the 8d6af9475
-campaign).
+*An index with no degree is matched by effect.* ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), so F7's degree has no counterpart and a nominal match is impossible. Its operating point is chosen to land on the same recall instead: `nLists` is FAISS's own guideline for 1M to 10M vectors, `round(4*sqrt(n))`; `nProbe` is calibrated inside the cell, after the index is built and before any timed pass, by binary search on a held-out slice (fixture queries 1000:1200 with their ground truth; both fixtures ship 10,000 and the lane times the first 1,000, so the timed pass never sees them and the cold pass stays cold) for the smallest value whose recall@10 reaches the target; and the target is read from the frozen CSV, the median recall@10 of ArcadeDB's own embedded fp32 arm at the same scale. Matching our own arm is the neutral choice: a higher target slows them and flatters us, a lower one speeds them and flatters them. The row records `ivf_nlists`, `ivf_nprobe`, `ivf_recall_target`, `ivf_recall_target_source`, `ivf_calibration_recall`, `ivf_calibration_queries`, and `ivf_calibration_slice`; `degree_family` says `ivf_flat_no_degree`, and `fairness_check.py` accepts that family only when the target is present and the calibration recall is within 0.01 of it. The lane and the multipass driver call the same hook in `arango_common.py`, so the two cannot drift. The cross-model lane measures no recall and keeps the uncalibrated starting fraction, recorded on its row as well.
 
-**F7. Same effective base-layer degree across dense backends per scale.**
-Enforced by `fairness_check.py`. Engines spell graph degree differently: one
-takes the per-layer `maxConnections`, another takes the base-layer degree,
-and the same integer therefore builds two different graphs. Comparing them at
-one nominal `M` compares an accident of naming. Recorded per row as
-`degree_param` plus `degree_family` so the check reads the number in the unit
-its own engine meant.
-
-*The other construction knob, and why it is NOT matched.* ArcadeDB builds
-through jvector, which also exposes `neighborOverflowFactor` (engine default
-1.2): how far above `maxConnections` a neighbour list may grow during
-construction before pruning. Raising it to 2.0 cuts graph-unreachable nodes
-3.5x at no measurable cost (50k x 128, `maxConnections=32`: 299 orphans at 1.2,
-85 at 2.0, build time and peak RSS flat, recall unchanged). It stays at the
-default anyway. Cheap is not the test; "is there a matched value on the other
-side" is, and there is none, because no hnswlib-family comparator has this
-knob. Setting it would move our graph alone, in our favour, which is exactly
-what separates it from the `maxConnections` 32-vs-16 correction: that one
-converts units between two engines that mean different things by the same
-integer. `l3d_dense.py` never set it, so nothing changed. Recorded as
-DECISIONS.md #45; the orphans themselves are a jvector property, so if 1.2 is
-too low it is ArcadeData's default to raise and we inherit it at the next
-stable re-pin.
-
-*An index with no degree is matched by effect.* ArangoDB's vector index is
-FAISS IVF (inverted lists over trained centroids), so F7's degree has no
-counterpart there and a nominal match is impossible. Its operating point is
-chosen to land on the same recall instead (2026-09-13, `arango_common.py`):
-nLists is FAISS's own guideline for 1M to 10M vectors, round(4*sqrt(n)); nProbe
-is calibrated inside the cell, after the index is built and before any timed
-pass, by binary search on a held-out slice of 200 queries (fixture queries
-1000:1200 with their ground truth; both fixtures ship 10,000 and the lane times
-the first 1,000, so the timed pass never sees them and the cold pass stays
-cold) for the smallest value whose recall@10 reaches the target; and the target
-is not typed but read from the
-frozen CSV: the median recall@10 of ArcadeDB's own embedded fp32 arm at the same
-scale (0.9886 at 1M, 0.9534 at DEEP-10M at the September pin). Matching our own
-arm is the neutral choice: a higher target slows them and flatters us, a lower
-one speeds them and flatters them. The row records `ivf_nlists`, `ivf_nprobe`,
-`ivf_recall_target`, `ivf_recall_target_source`, `ivf_calibration_recall`,
-`ivf_calibration_queries`, and `ivf_calibration_slice`; `degree_family` says `ivf_flat_no_degree`, and
-`fairness_check.py` accepts that family only when the target is present and the
-calibration recall is within 0.01 of it. The lane and the multipass driver call
-the same hook, so the two cannot drift. The cross-model lane measures no recall
-and keeps the uncalibrated starting fraction (an eighth of the lists), recorded
-on its row as well.
-
-**F8. The cpuset must equalise USE, not only the resource.** F1 gives every
-engine the same 12 threads. That is not the same as every engine *taking* the
-same amount: one that spreads a single query over 12 threads and one that
-answers on a single thread are both "given 12 CPUs", and comparing their p50s
-compares scheduling policy as much as engine speed. Measured 2026-08-03 on
-mini, dense `tiny` (100k vectors), the same cell run at cpuset `0` and at
-`0-11`, three reps each, median [min-max]:
+**F8. The cpuset must equalise USE, not only the resource.** F1 gives every engine the same 12 threads. That is not the same as every engine *taking* the same amount: one that spreads a single query over 12 threads and one that answers on a single thread are both "given 12 CPUs", and comparing their p50s compares scheduling policy as much as engine speed. Measured 2026-08-03 on mini, dense `tiny` (100k vectors), the same cell at cpuset `0` and at `0-11`, three reps each, median [min-max]:
 
 | backend | p50 @ 1 CPU | p50 @ 12 CPU | speedup |
 |---|---|---|---|
@@ -198,48 +68,21 @@ mini, dense `tiny` (100k vectors), the same cell run at cpuset `0` and at
 | lancedb_dense | 1.166 [1.17-1.17] | 1.396 [1.39-1.44] | **0.84x** |
 | sqlite_vec_dense | 13.061 [12.81-13.23] | 13.266 [13.07-13.30] | 0.98x |
 
-**No embedded engine parallelises a single query.** Four of five sit within
-2% of 1.0, so the twelve threads are idle during a k=10 search and the p50
-comparison in T5 is a comparison of engines, not of thread counts. That is
-what F1 needed to be true and had never been checked.
+**No embedded engine parallelises a single query.** Four of five sit within 2% of 1.0, so the twelve threads are idle during a k=10 search and the p50 comparison is a comparison of engines, not of thread counts.
 
-**LanceDB is reproducibly slower with more CPUs.** 0.84x is not noise: the
-three-rep ranges are disjoint (1.17-1.17 against 1.39-1.44). Giving it the
-full cpuset costs it roughly 20% on this workload, most likely pool
-coordination it cannot amortise over a query this small. The bias therefore
-runs **against a comparator, not for us**, and it is disclosed rather than
-quietly enjoyed: LanceDB's published dense latency is a slight overstatement
-of what the engine can do on one core.
+**LanceDB is reproducibly slower with more CPUs.** 0.84x is not noise: the three-rep ranges are disjoint. Giving it the full cpuset costs it roughly 20% on this workload. The bias runs against a comparator rather than for us, and it is disclosed rather than quietly enjoyed: LanceDB's published dense latency is a slight overstatement of what the engine can do on one core.
 
-Scope, and it is narrow. One tier, k=10, one query in flight at a time,
-embedded backends only. It says nothing about concurrent query load, where
-an engine that idles 11 threads per query may well use them across queries,
-and nothing about qdrant or milvus, which run as servers and are the ones
-most likely to hold per-query pools. Re-measure before extending the claim.
+Scope, and it is narrow. One tier, k=10, one query in flight at a time, embedded backends only. It says nothing about concurrent query load, and nothing about Qdrant or Milvus, which run as servers and are the ones most likely to hold per-query pools. Re-measure before extending the claim.
 
-**F9. A kept row needs a control, because the host is not an invariant.**
-F1-F8 constrain a cell's *configuration* and none of them constrains *when* it
-ran, so a fresh row printed beside one carried forward from weeks earlier is
-fully compliant and can still be wrong. When a campaign re-measures one engine
-and keeps the others, re-run one untouched comparator as a control and show it
-reproduces. Stated in full under "Known violations" below, with the rule it
-does not extend (a version bump is not a resource change).
+**F9. A kept row needs a control, because the host is not an invariant.** F1 to F8 constrain a cell's *configuration*; none constrains *when* it ran. A row printed tonight beside one measured five weeks ago is fully compliant and still potentially wrong, because the kernel, the docker version and the machine's thermal history all moved and none of that is recorded as a run condition.
+
+So when a campaign re-measures one engine and carries the others forward, **re-run one untouched comparator as a control and show it reproduces its kept numbers within run-to-run spread.** One extra cell buys evidence for every row that was not re-run. If the control does not reproduce, the carried-forward rows are not usable and the whole tier is re-measured. Record the control's old-against-new delta next to the table it licenses, so a reader can see the carry-forward was checked rather than assumed.
 
 ## Parallelism policy: maximise it, but never inside a published absolute
 
-The standing direction is to use the machine, and it is the right one: mini
-sits idle far more than it runs, and serialising work that does not need to be
-serial buys nothing. But "run more at once" and "report this latency" are not
-compatible everywhere, so the rule has to say exactly where the line falls.
+The standing direction is to use the machine. But "run more at once" and "report this latency" are not compatible everywhere, so the rule has to say where the line falls.
 
-**What parallelism does and does not fix.** Randomly permuting run order is
-worth doing and we do it, but it buys one specific thing: it stops co-run noise
-from landing preferentially on one configuration, so an A-vs-B **ratio** stays
-honest. It does not remove the noise. Two jobs sharing an L3 and a memory
-controller both run slower and both show fatter tails, and permutation cannot
-restore an absolute level or a p95 that never happened. Our headline claims are
-single-node absolutes and percentiles, which is exactly the quantity permutation
-cannot repair.
+Randomly permuting run order is worth doing and we do it, but it buys one thing: it stops co-run noise from landing preferentially on one configuration, so an A-against-B **ratio** stays honest. It does not remove the noise. Two jobs sharing an L3 and a memory controller both run slower and both show fatter tails, and permutation cannot restore an absolute level or a p95 that never happened. Our headline claims are single-node absolutes and percentiles, which is exactly the quantity permutation cannot repair.
 
 So the split is by **what the number is**, not by how long the job takes:
 
@@ -251,189 +94,45 @@ So the split is by **what the number is**, not by how long the job takes:
 | A/B probes whose answer is a **ratio** measured in the same run | memory working-set cells |
 | any run whose output is a decision, not a table cell | scale-ceiling and RAM-bound cells (serial anyway) |
 
-Two consequences worth stating plainly, because both have bitten:
+Two consequences:
 
-1. **A parallel run cannot be promoted later.** If a cell was measured
-   two-at-once, it is exploration forever; wanting the number afterwards does
-   not make it eligible. `runner.py` forces `workers=1` on the paper tier and a
-   sweep row is detectable after the fact by its partial cpuset (`0-5` rather
-   than `0-11`), which is the audit trail that makes this enforceable rather
-   than aspirational.
-2. **Disclose the shape, not a co-run penalty per engine.** The paper says
-   which classes of work were parallel and that every reported number was
-   re-measured serially. It does not owe a per-engine perturbation table; that
-   is detail nobody can check and it invites the reader to treat the
-   exploration tier as if it were data.
+1. **A parallel run cannot be promoted later.** If a cell was measured two-at-once, it is exploration forever; wanting the number afterwards does not make it eligible. F2 makes that enforceable rather than aspirational.
+2. **Disclose the shape, not a co-run penalty per engine.** Say which classes of work were parallel and that every reported number was re-measured serially. A per-engine perturbation table is detail nobody can check, and it invites the reader to treat the exploration tier as if it were data.
 
-**Sharding, when parallel is allowed.** Disjoint cpuset shards, never
-overlapping, never crossing an SMT sibling pair, and the same shard width for
-every arm of a comparison. Three 4-thread shards over `0-11`, not "whatever is
-free". An arm given a wider shard than its neighbour is F1 violated with extra
-steps.
+**Sharding, when parallel is allowed.** Disjoint cpuset shards, never overlapping, never crossing an SMT sibling pair, and the same shard width for every arm of a comparison. Three 4-thread shards over `0-11`, not "whatever is free". An arm given a wider shard than its neighbour is F1 violated with extra steps.
 
-**The axis that was open is now F8.** Whether the cpuset equalises *use* and
-not just the resource has been measured: no embedded engine parallelises a
-single query, so the shared cpuset is not silently advantaging anyone at query
-time. LanceDB is the one asymmetry, and it runs against a comparator rather
-than for us. See F8 above for the numbers and the scope.
+## Allowed to differ (must be DISCLOSED, per PROTOCOL.md section 7)
 
-## Allowed to differ (must be DISCLOSED, per the config policy)
-
-- **Vendor settle steps** that have no equivalent elsewhere (Elasticsearch
-  forcemerge, Milvus flush+load, Qdrant green-wait, ArcadeDB `COMPACT INDEX`).
-  Each engine gets *its own*; none goes unmatched by the others having theirs.
-- **Operating points deliberately not matched**, e.g. the fp32 arms at 9.99M
-  with the build cache pinned to the corpus against INT8 at 100,000 (DECISIONS
-  #56), stated in the l3d condition.
-- **Quality/precision differences** (int8 vs fp32 postings, ES pruning).
-  Report recall next to latency, always.
+- **Vendor settle steps** that have no equivalent elsewhere (Elasticsearch forcemerge, Milvus flush+load, Qdrant green-wait, ArcadeDB `COMPACT INDEX`). Each engine gets *its own*; none goes unmatched by the others having theirs.
+- **Operating points deliberately not matched**, such as the dense fp32 arms with the build cache pinned to the corpus against INT8 at the engine default (DECISIONS #56), stated in the l3d condition.
+- **Quality and precision differences** (int8 against fp32 postings, ES pruning). Report recall next to latency, always.
 
 Anything else that differs is a defect, not an override.
 
-## Known violations and their status
+## Bespoke drivers investigate, lane scripts publish
 
-| # | where | what differed | worth | status |
-|---|---|---|---|---|
-| 1 | T5 dense (F4) | ArcadeDB 1 build + 5 passes, table uses 2--5; comparators 5 builds + 1 pass each | 4.0--6.1x | resolved 2026-09-03 |
-| 2 | T5 dense (F3) | envelope raised 28g/16g -> 36g/24g on 2026-07-20 and only ArcadeDB re-measured | 29% more memory | resolved 2026-09-03 |
-| 3 | T5 time series (F4) | ArcadeDB probe has a 30 s settle; `l4_tsbs` comparators have none | 2.23x one way, 2.5x the other | resolved: table prints the unsettled arm |
+Both fairness violations ever found in a published table were rows a bespoke driver produced rather than the lane script: a driver is written to answer a narrow question and carries whatever protocol its author needed at the time, and is then promoted to a cell. Every clean lane puts each backend through one script, so warmup and settle are decided once and apply to everyone. L3d is the last lane that still publishes an overlay-driver row (`dense_multipass_driver.py`, run through the runner). If a driver's output must become a cell, diff its protocol against the lane's first.
 
-Violation 2 is the sharpest lesson. The envelope was raised for a good reason
-(the fp32 build needed it) and the change was applied to the engine being
-fixed. Nobody re-ran the six comparators, so a legitimate fix became an
-advantage. **Raising a resource for one engine creates an obligation to
-re-measure every engine at that tier.**
+## A CPU percentage is a fact about a container, not about an engine
 
-Note what that rule does NOT say. It is scoped to *resources*. Upgrading one
-engine's version is not a resource change: the comparators keep the same
-cpuset, envelope, protocol and degree, so F1-F8 still hold and their rows may
-be carried forward. Re-measuring every engine on every version bump would mean
-no table could ever mix a fresh row with a kept one, which is not the standard
-and would make the October freeze unaffordable.
+ArcadeDB's sparse build runs at roughly 2 of the 12 allocated cores, and that is a harness property rather than an engine property: `ArcadeEmbedded.build` in `l3_sparse.py` is a serial Python loop calling `newDocument`/`save` per document, so about one core is a single producer thread and the rest is engine background work. The engine was never asked for more.
 
-**F9. A kept row needs a control, because the host is not an invariant.**
-F1-F8 all describe the *configuration* of a cell. None of them constrains
-*when* it ran. So a table that prints a row measured tonight beside one
-measured five weeks ago is fully F1-F8 compliant and still potentially wrong,
-because the kernel, the docker version and the machine's thermal history all
-moved in between and none of that is recorded as a run condition.
+Nor is it an unfairness. Qdrant, Milvus and Elasticsearch drive ingest from the *same* serial `gen_docs` loop, batching into `upsert`, `insert` and `bulk`. The producer is symmetric; what differs after the handover is architectural (in-process per-document JNI against one client call per batch to a server that parallelises internally), which is the deployment axis the page already reports. What survives is narrow and ours: embedded pays N JNI crossings per batch where a client pays one, and upstream #5577 bounds the dense cost at roughly 7% of insertion.
 
-This is not hypothetical in the way the other axes were: it is the one
-remaining way a comparison can drift without any invariant noticing.
-
-So when a campaign re-measures one engine and carries the others forward,
-**re-run one untouched comparator as a control and show it reproduces its kept
-numbers within run-to-run spread.** One extra cell buys evidence for every row
-that was not re-run. If the control does not reproduce, the carried-forward
-rows are not usable and the whole tier is re-measured. Record the control's
-old-vs-new delta next to the table it licenses, so a reader can see the
-carry-forward was checked rather than assumed.
-
-First applied 2026-08-04: the stable-26.8.1 SciPy re-run moves only the
-ArcadeDB rows (dev20 and earlier -> 26.8.1) and keeps chroma, duckdb, sqlite
-and ladybug, with chroma re-run across all three tiers as the control.
-
-## The structural cause
-
-Violations 1 and 3 are both rows produced by a *bespoke driver* rather than
-the lane script. Protocol audit of every lane, completed 2026-07-31:
-
-| lane | where timing lives | verdict |
-|---|---|---|
-| L1 tabular | shared loop, `WARMUP_OLTP=200` / `WARMUP_OLAP=1` for all | clean |
-| L1 TPC | shared loop in `main()`, backend is a parameter | clean |
-| L2 graph | shared loop, each backend implements its own `post_build` settle | clean |
-| L3s sparse | one lane script for all seven backends | clean |
-| E2 hybrid | shared loop in `main()`, `WARMUP=20` for all three | clean |
-| L3d dense | comparators via the lane script, **ArcadeDB via overlay drivers** | violation 1 |
-| L4 time series | comparators via `l4_tsbs`, **ArcadeDB via `l4_native_probe`** | violation 3 |
-
-> **2026-09-11 currency note:** L3s has nine backends and E2 seven; L4's native arm is in `l4_tsbs.py`; only L3d still publishes an overlay-driver row (`dense_multipass_driver.py`, run through the runner).
-
-Every clean lane puts each backend through one script, so warmup and settle
-are decided once and apply to everyone. Both violations are the two lanes
-where an ArcadeDB row comes from somewhere else. Every bespoke driver was written to answer a narrow question (close
-out an issue, verify a fix) and was later promoted to a published cell,
-carrying whatever protocol its author needed at the time.
-
-**Rule: bespoke drivers investigate, lane scripts publish.** If a driver's
-output must become a cell, diff its protocol against the lane's first.
-
-## Not yet verified
-
-Equal *allocation* is not equal *honouring*. **Ran 2026-08-01 as queue64; see
-F6 for the results and the fix.** The suspicion was half right and pointed at
-the wrong engine: Milvus and Qdrant's clients read the cpuset correctly, and
-the runtime that ignored it was **DuckDB**, which we had not suspected because
-it is embedded rather than a Go/Rust server.
-
-Qdrant and Elasticsearch are now answered in F6 (both cpuset). Still open:
-
-- whether any engine's *disk* IO scheduling differs under the same cap.
-
-## Corrected here, because this file asserted it wrongly for an hour
-
-An earlier version of this section said ArcadeDB's sparse build "runs at
-roughly 2 of the 12 allocated cores. That is a real engine property, not a
-harness defect." **It is a harness property.** `ArcadeEmbedded.build` in
-`l3_sparse.py` is a serial Python loop calling `newDocument`/`save` per
-document, so about one core is a single producer thread and the rest is
-engine background work. The engine was never asked for more, and the
-measurement (214% against DuckDB-VSS's 1203% on the same cpuset) says nothing
-about its parallelism.
-
-Nor is it an unfairness: Qdrant, Milvus and Elasticsearch drive ingest from
-the *same* serial `gen_docs` loop, batching into `upsert`, `insert` and
-`bulk`. The producer is symmetric across all four; what differs after the
-handover is architectural (in-process per-document JNI against one client
-call per batch to a server that parallelises internally), which is the
-deployment axis the paper already reports.
-
-What survives is narrow and ours: embedded pays N JNI crossings per batch
-where a client pays one. Sparse ingest+index time is a published column since
-2026-09-11 and the producer asymmetry above applies to it, and #5577 bounds the dense one at roughly 7% insertion, so no paper number moves.
-
-The general rule this yields: **a CPU percentage is a fact about a container,
-not about an engine.** Attributing one requires knowing who was asking for
-the work.
+Attributing a CPU percentage requires knowing who was asking for the work.
 
 ## An exit code is not evidence
 
-Two defects found on 2026-08-08 have the same shape, and it is the shape worth
-guarding against: the harness reported success while measuring something other
-than what was specified.
+`rc == 0` means a process finished, not that it measured what you asked for. Two defects of exactly that shape: a queue script that set only `BENCH_DATA` left `l3_sparse.py` on its synthetic fallback generator and produced 94 rows across three tiers, every one `rc=0`, under stages that logged OK, distinguishable from the real corpus only by the absent ground truth; and the F3 heap, where cells produced rows, stages reported OK, and the artifact asserted a heap the engine never had.
 
-**The corpus.** `l3_sparse.py` falls back to a synthetic generator unless
-`BENCH_SPARSE_SOURCE=bigann` is exported. A queue script that set only
-`BENCH_DATA` produced 94 sparse rows across three tiers, every one `rc=0`,
-under stages that logged OK. They were not Big-ANN SPLADE at all. At `medium`
-the doc count gave it away (10,000,000 against Big-ANN's 8,841,823) but at
-`tiny` and `small` BOTH corpora hold 100k and 1M documents, so nothing in the
-row distinguished them except the absent ground truth: `gt_missing`, and
-`recall_at_10=None`. Being newer, they outranked the real rows on `ts_utc` and
-would have walked into T4 carrying no recall at all.
+Acceptance has to compare the DATA against the specification, because every one of these produced output that looked exactly like success:
 
-The same script crashed the graph lane outright — without
-`BENCH_GRAPH_SOURCE=ldbc`, `SCALE_PERSONS` is the synthetic table and argparse
-rejects `--scale sf1`. That failure cost 80 cells and was worth far less than
-it looked: it was LOUD. The sparse one was quiet, and quiet is what costs a
-paper.
+- A **container-side preflight** asserts, from inside the container, that the lane sees the corpus it was told to use and accepts the scales it will be passed. Checking the host path is a different check: a run once lost 20 cells to a directory that existed on the host and not at the mount point.
+- Every sparse stage is **verified against the data it produced**, recall present and `n_docs == 8_841_823` at medium, not against its return code.
+- `load_canonical` drops any sparse row without a recall number, before the dedupe, so an unpublishable row cannot shadow a publishable one.
 
-**The heap.** See F3. Same shape: cells produced rows, stages reported OK, and
-the artifact asserted a heap the engine never had.
+Prefer the loud failure. The same script that wrote those 94 quiet rows also crashed the graph lane outright, and that failure cost 80 cells and was worth far less than it looked, because it was loud.
 
-What changed:
+## Still open
 
-- A **container-side preflight** asserts, from inside the container, that the
-  lane sees the corpus it was told to use and accepts the scales it will be
-  passed. Checking the host path is a different check: q21 lost 20 cells to a
-  directory that existed on the host and not at the mount point.
-- Every sparse stage is **verified against the data it produced** — recall
-  present, and `n_docs == 8_841_823` at medium — not against its return code.
-- `load_canonical` drops any sparse row without a recall number, before the
-  dedupe, so an unpublishable row cannot shadow a publishable one.
-
-**The rule: `rc == 0` means a process finished, not that it measured what you
-asked for.** Acceptance has to compare the DATA against the specification —
-corpus identity, observed heap, row counts — because every one of these
-defects produced output that looked exactly like success.
+Whether any engine's disk IO scheduling differs under the same cap.

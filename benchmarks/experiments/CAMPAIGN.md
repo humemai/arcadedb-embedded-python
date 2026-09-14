@@ -1,281 +1,69 @@
 # Running a campaign
 
-How a full re-measure is executed on mini. `PROTOCOL.md` holds the rules a row
-must satisfy; this file holds the procedure that produces the rows. If the two
-disagree, PROTOCOL wins and this file is wrong.
-
-The July 2026 campaign record that used to live here was deleted rather than
-kept: every number in it came from `26.8.1.dev0`-`dev3` wheels, several have
-since been corrected, and a stale summary in the working tree is a number
-somebody quotes. It is in git history if it is ever needed.
+How a full re-measure is executed on mini. `PROTOCOL.md` holds the rules a row must satisfy; this file holds the procedure that produces the rows. If the two disagree, PROTOCOL wins and this file is wrong.
 
 ## 1. The shape: parallel where nothing is measured, serial where it is
 
-**Phase A, parallel.** Image builds, corpus generation and conversion,
-ground-truth computation, checksums, dataset staging. None of it produces a
-published number, none of it is timed, and it is the only place concurrency is
-free. Run it as wide as the box allows.
+**Phase A, parallel.** Image builds, corpus generation and conversion, ground-truth computation, checksums, dataset staging. None of it produces a published number, none of it is timed, and it is the only place concurrency is free. Run it as wide as the box allows.
 
-**Phase B, serial.** The measured cell, whole and undivided: build, settle,
-query, close. One at a time, full cpuset `0-11`, nothing else on the machine.
-This is `PROTOCOL.md` §2 and it did not change.
+**Phase B, serial.** The measured cell, whole and undivided: build, settle, query, close. One at a time, full cpuset `0-11`, nothing else on the machine. This is `PROTOCOL.md` section 2.
 
-### Why Phase B is not parallel, with the numbers
+### Why Phase B is not parallel
 
-The question is fair and the idle is real: a running cell burns **1.37 CPU-
-seconds per wall second** on a 12-thread cpuset, 11.4% of the cpuset and 6.9%
-of the machine. Every lane is a closed-loop single-client Python for-loop, so
-one core is genuinely the whole critical path. Four things stop that idle from
-being usable:
+The idle is real: a running cell burns 1.37 CPU-seconds per wall second on a 12-thread cpuset. Four things stop it from being usable.
 
-1. **Memory binds before CPU does.** mini has 61.3 GiB. Measured `peak_mib_sum`
-   at l3s medium is 30475 MiB per cell, so two of them is 59.5 GiB with nothing
-   left for page cache, on a host with `swappiness=10` and 1.6 GiB of swap
-   already in use. `runner.py` already refuses this. The tiers where the time
-   actually goes — l3s medium, l1 medium, l3d deep10m — admit a concurrency of
-   exactly **1**. 16g tiers admit 3, 8g tiers 5-7.
+1. **Memory binds before CPU does.** mini has 61.3 GiB. Peak memory at l3s medium is about 30 GiB per cell, so two of them leave nothing for page cache. `runner.py` already refuses it. The tiers where the time actually goes (l3s medium, l1 medium, l3d deep10m) admit a concurrency of exactly 1.
+2. **Residency is worth 9-18x to us and 0-7% to every comparator.** ArcadeDB is lazy; the others are resident from load. There is one page cache on the host, so a neighbour cell touching a different corpus evicts yours, and it moves one column of the table and not the other. Permutation protects a ratio; this is not a level shift applied evenly.
+3. **One 24 MiB L3 for the whole package**, shared with the 8 E-cores outside the cpuset, against working sets of 0.2-1.3 GiB. Magnitude unmeasured.
+4. **Turbo.** At 1.37 busy cores a cell sits near single-core turbo on a mobile i9-12900HK. A second cell lowers the clock for both rows.
 
-2. **Residency is worth 9-18x to us and 0-7% to every comparator.** Cold vs
-   warm p50 at deep10m: `arcadedb_dense_server` 18.26x, `arcadedb_dense_embedded`
-   8.97x, and then milvus 1.07x, chroma 1.02x, duckdb-vss 1.01x, sqlite-vec
-   1.00x, lancedb 0.99x, qdrant 0.97x. ArcadeDB is lazy; the others are resident
-   from load. There is one page cache on the host, so a neighbour cell touching
-   a different corpus evicts yours — and it moves one column of the table and
-   not the other. This is why permutation does not rescue it: permutation
-   protects a ratio, and this is not a level shift applied evenly.
+And the prize is small: perfect intra-lane parallelism at current caps saves 10-16% of a pass. Two things save more and cost nothing. Parallelise Phase A, which is free. Then attack the build rather than the concurrency: 86-99% of every expensive cell is `build_s` (deep10m 99%, l3s medium 98%, tpch10 91%) and none of it produces a published latency. Dropping a tier from N=5 to N=3 is larger, auditable, reversible, and disclosed the way PROTOCOL already requires.
 
-3. **One 24 MiB L3 for the whole package**, shared with the 8 E-cores outside
-   the cpuset, against working sets of 0.2-1.3 GiB. Magnitude unmeasured.
+### Why the build/query phase split is not adopted
 
-4. **Turbo.** At 1.37 busy cores a cell sits near single-core turbo on a mobile
-   i9-12900HK. A second cell lowers the clock for both rows.
+The proposal was to build every cell in parallel, stop the engine, then reopen it for an exclusive serial query pass. Measured on mini at four tiers, N=1: reopening is cheap and flat (8-27 ms against builds of 0.4 s to 93 s) and closing is 28-171 ms, so neither is an obstacle. The split is still **not licensed**, for two reasons.
 
-**And the prize is small.** Perfect intra-lane parallelism at current caps
-saves **15-24 hours out of ~153, so 10-16%** — and the 153 h figure is itself
-roughly 2.5x too high: it rests on the mean of four logged l3s medium cells,
-while the 70 logged cells at that tier and corpus put the full N=5 build at
-~15 h rather than 92. A corrected pass is **50-60 hours**, which makes the
-saving smaller still and every saved hour a published cell measured under a
-condition its neighbours in the table did not get.
+Every number behind it is N=1, and no tier measured comes close to the ones that dominate the cost (l3s medium is 8.84M docs and about 30 GiB). At the small tiers the reopened pass is 19-29% *faster* than the post-build pass on ArcadeDB against 1-6% on LadybugDB, which is what a lazy engine looks like when the whole corpus sits in a page cache a close does not flush; by l3s small the drift is +2.9% and essentially neutral. A single measurement at a tier whose working set exceeds the page cache decides it. Until then the split stays unadopted, because the failure mode is silent: it would move our own rows and not the comparators', in the direction that flatters us.
 
-**Two things save more and cost nothing.** Parallelise Phase A, which is free.
-Then attack the build rather than the concurrency: **86-99% of every expensive
-cell is `build_s`** (deep10m 99%, l3s medium 98%, tpch10 91%) and none of it
-produces a published latency. Dropping l3s medium from N=5 to N=3 saves ~6 h
-against a 29% wider interval, disclosed the way PROTOCOL already requires.
-That is larger, auditable and reversible.
+The second reason is arithmetic and engine-version dependent. The split closes each cell inside the parallel phase, and before upstream #6490 a dense close was a full second graph build (#6489: a build that leaves any node graph-unreachable merges those orphans into the pending-mutation list, so `graphState` stays MUTABLE and `flush()`, which `close()` calls, rebuilds). At deep10m that is a 24g heap and hours of CPU running beside a neighbour cell. A release carrying #6490 removes that objection but not the N=1 one. `l3d_dense.py` records the mechanism beside its `BENCH_SKIP_CLOSE` switch.
 
-### Why the build/query phase split is not adopted either
+Two findings from the same measurement stand on their own:
 
-The proposal was to build every cell in parallel, stop the engine, then reopen
-it for an exclusive serial query pass. `lifecycle_probe.py` measured what that
-would cost before anything was built around it. Measured on mini, 26.8.1,
-embedded arms, N=1 per cell, at four tiers:
-
-| backend | scale | `build_s` | `close_s` | disk pre → post | released | `reopen_s` | cold after build → reopen | drift |
-|---|---|---|---|---|---|---|---|---|
-| arcadedb l2 | sf1 | 2.67 | 0.028 | 102.8 → 16.1 MB | -84.3% | 0.010 | 0.645 → 0.520 ms | -19.4% |
-| arcadedb l2 | sf10 | 19.44 | 0.055 | 146.5 → 109.1 MB | -25.5% | 0.011 | 0.647 → 0.516 ms | -20.2% |
-| ladybug l2 | sf1 | 0.44 | 0.030 | 5.0 → 5.0 MB | 0.0% | 0.026 | 0.193 → 0.181 ms | -6.2% |
-| ladybug l2 | sf10 | 2.23 | 0.034 | 27.5 → 27.5 MB | 0.0% | 0.027 | 0.192 → 0.194 ms | +1.0% |
-| arcadedb l3s | tiny | 8.93 | 0.098 | 191.5 → 156.0 MB | -18.5% | 0.009 | 6.660 → 4.724 ms | -29.1% |
-| arcadedb l3s | small | 93.36 | 0.171 | 1540.4 → 1510.3 MB | **-2.0%** | 0.008 | 10.623 → 10.930 ms | **+2.9%** |
-
-**Reopening is cheap and flat: 8-27 ms at every tier, against builds of 0.4 s
-to 93 s.** Closing is 28-171 ms. Neither is an obstacle, and both are now
-measured rather than assumed (#154, #155).
-
-**That close bound covers the graph and sparse lanes only.** Every row above is
-L2 or L3s; no dense cell is in the table, and on 26.8.1 a dense close is not a
-flush. Upstream #6489 (our PR #6490): a build that leaves ANY node
-graph-unreachable merges those orphans into the pending-mutation list, so
-`graphState` stays MUTABLE after a build that succeeded and persisted, and
-`flush()`, which `close()` calls, tests `graphState` alone. The close therefore
-re-runs the whole graph build. At deep10m the redundant rebuild fires even
-without a close: the run that settled this had `BENCH_SKIP_CLOSE=1` and still
-OOM'd inside a second full build. With #6490 the same deep10m cell closes in
-0.158 s. `l3d_dense.py` records the mechanism beside its `BENCH_SKIP_CLOSE`
-switch. Read "closing is cheap" as a statement about the lanes in the table,
-not about a vector index.
-
-**The cold-drift hazard is a small-tier artifact, and the last row is the one
-that matters.** At sf1/sf10/tiny the reopened pass is 19-29% *faster* than the
-post-build pass on ArcadeDB against 1-6% on LadybugDB, which is what a lazy
-engine looks like when the whole corpus sits in a page cache that a close does
-not flush. At l3s small — 1.5 GB on disk, the first tier where that stops being
-free — the drift is **+2.9%**, essentially neutral. The apparent asymmetry
-shrinks as the data grows.
-
-So the split is not disqualified, but it is **not yet licensed either**: every
-number above is N=1, and no tier here comes close to the ones that dominate the
-cost (l3s medium is 8.84M docs and ~30 GiB). A single measurement at a tier
-whose working set exceeds the page cache decides it. Until then the split stays
-unadopted, because the failure mode is silent: it would move our own rows and
-not the comparators', in the direction that flatters us.
-
-On 26.8.1 there is a second reason, and it is arithmetic rather than judgement:
-the split closes each cell inside the parallel phase, and #6489 makes a dense
-close a full second graph build. At deep10m that is a 24g heap and hours of CPU
-running beside a neighbour cell, which is the memory bind of point 1 and not an
-exception to it. A release carrying #6490 removes that objection but not the
-N=1 one.
-
-Two findings fall out of the same table and stand on their own:
-
-- **What a clean close releases is roughly fixed, not proportional**: 30-87 MB
-  at every tier measured, which is 84% of a toy database and 2.0% of a 1.5 GB
-  one. LadybugDB releases nothing at either scale because it is already
-  settled. A disk column measured pre-close therefore compares our
-  WAL-inflated state against a comparator's settled one — real, and bounded at
-  tens of MB rather than the fraction the smallest tier suggested. #149/#155.
-- `connect_empty_s` is 0.515-0.575 s against an 8-11 ms reopen: creating a
-  database and issuing DDL costs ~50x what opening a built one does.
+- **What a clean close releases is roughly fixed, not proportional**: 30-87 MB at every tier measured, which is 84% of a toy database and 2.0% of a 1.5 GB one. A disk column measured pre-close compares our WAL-inflated state against a comparator's settled one, real and bounded at tens of MB.
+- `connect_empty_s` is 0.515-0.575 s against an 8-11 ms reopen: creating a database and issuing DDL costs about 50x what opening a built one does.
 
 ## 2. Staging: smoke, then small, then big
 
-Every campaign runs in three stages and does not advance until the previous one
-is green. The reason is arithmetic: a defect found at stage 3 costs a full pass.
+Every campaign runs in three stages and does not advance until the previous one is green. A defect found at stage 3 costs a full pass.
 
-1. **Smoke.** Cheapest tier of each lane, N=1. Proves the images, the corpora,
-   the adapters and the recorded schema. Rows go to a scratch results file, not
-   to `runs.jsonl`.
-2. **Small.** One tier up, N=5, real corpora, every metric recorded. This is
-   where the gates run for the first time: `fairness_check`,
-   `provenance_check`, `page_check` (`claims_check` is a helper library, not a
-   gate, since the paper was dropped on 2026-09-11).
+1. **Smoke.** Cheapest tier of each lane, N=1. Proves the images, the corpora, the adapters and the recorded schema. Rows go to a scratch results file, not to `runs.jsonl`.
+2. **Small.** One tier up, N=5, real corpora, every metric recorded. This is where the gates run for the first time: `provenance_check`, `fairness_check`, and `page_check`.
 3. **Big.** The published tiers.
 
-Between stages, run the gates and read the monitor's SUSPECT section. A stage
-that produces rows no gate admits has failed even if every cell exited 0.
+A stage that produces rows no gate admits has failed even if every cell exited 0.
 
 ## 3. What every cell records
 
 Beyond the lane's own metrics:
 
-- **Memory.** `peak_anon_mib_sum`, `peak_shmem_mib_sum`, `peak_owned_mib_sum`
-  (= anon + shmem), summed across every container in the cell. Anon alone
-  misses a POSIX-shmem buffer pool entirely, which is how a PostgreSQL
-  comparison came to be 88% our own Python driver.
-- **Disk.** `SizeRw` plus `du` over the daemon-reported volume mounts, with a
-  settle loop requiring two readings within 1%. `SizeRw` alone reads 20 KB for
-  an engine with 1 GiB in a VOLUME.
-- **IO.** cumulative `rbytes`/`wbytes` from `io.stat`.
-- **Phases.** `build_s`, settle, query generation, ground-truth load, search
-  wall, recall computation, and `phases_accounted_s` so unexplained time is
-  visible rather than absorbed.
-- **Cold and warm**, separately, in every lane that has a repeat pass. Reporting
-  one number and not saying which hid a 9.4x second-pass gain on a comparator
-  we claim to beat.
-- **Envelope.** cpuset, memory cap, heap, observed server heap and page cache,
-  `mem_split`, image digest, engine version.
+- **Memory.** `peak_anon_mib_sum`, `peak_shmem_mib_sum`, `peak_owned_mib_sum` (anon + shmem), summed across every container in the cell. Anon alone misses a POSIX-shmem buffer pool entirely.
+- **Disk.** `SizeRw` plus `du` over the daemon-reported volume mounts, with a settle loop requiring two readings within 1%. A volume in an image with no `du` is sized from a helper container (BUGS.md F38).
+- **IO.** Cumulative `rbytes`/`wbytes` from `io.stat`.
+- **Phases.** `build_s`, settle, query generation, ground-truth load, search wall, recall computation, and `phases_accounted_s` so unexplained time is visible rather than absorbed. The dense and sparse lanes also split `ingest_s` from `index_s` where the engine has the boundary. Every lane prints `PHASE` markers as it goes, so a cell killed by its timeout still says which phase it was in.
+- **Cold and warm**, separately, in every lane that has a repeat pass.
+- **Envelope.** cpuset, memory cap, heap, observed server heap and page cache, `mem_split`, image digest, engine version, engine commit.
 
-## 3b. Heap and memory caps
+## 4. Heap and memory caps
 
-**One cap per tier, identical for every engine.** A cap is a ceiling rather
-than a reservation, so an engine that needs less is unaffected by a tier whose
-cap is generous. A per-backend cap would be the unfairness the caps exist to
-prevent.
+**One cap per tier, identical for every engine.** A cap is a ceiling rather than a reservation, so an engine that needs less is unaffected by a tier whose cap is generous. A per-backend cap would be the unfairness the caps exist to prevent.
 
-**One heap per tier, identical for every JVM engine.** ArcadeDB embedded,
-ArcadeDB server, Neo4j and Elasticsearch all receive the same `{heap}` from one
-table (`-Xmx`, `NEO4J_server_memory_heap_max__size`, `ES_JAVA_OPTS`
-respectively). Non-JVM comparators have no equivalent knob, which is why heap
-sizing is a documented resource-fitting override rather than a per-engine
-advantage.
+**One heap per tier, identical for every JVM engine.** ArcadeDB embedded, ArcadeDB server, Neo4j and Elasticsearch all receive the same `{heap}` from one table (`-Xmx`, `NEO4J_server_memory_heap_max__size`, `ES_JAVA_OPTS` respectively). Non-JVM comparators have no equivalent knob, which is why heap sizing is a documented resource-fitting override rather than a per-engine advantage.
 
-**heap = 0.50 x cap, and deep10m is the one exception at 0.67** (24g in 36g). The runner
-prints this table at startup and marks any deviation, because the ratio was an
-unwritten rule until it was broken and nothing said so.
+**heap = 0.50 x cap, and deep10m is the one exception at 0.67** (24g in 36g). The runner prints this table at startup and marks any deviation.
 
-WHY 0.50 RATHER THAN SOMETHING HIGHER. The obvious objection is that a JVM
-database should get most of the container, since the heap is where its data
-lives. Two measurements say otherwise here:
+0.50 is a deliberate split between heap and page cache, not a default nobody revisited. At every tier except deep10m, `peak_anon` sits BELOW the committed heap (4g heap against 2.7 GiB touched at tiny; 8g against 6.1-6.5 GiB at small), so the JVM never needed the heap it already had and raising the ratio would change nothing measurable. The other half of the cap is not idle: it holds the OS page cache for the engine's own files, which the cold/warm split prices at 9-18x for ArcadeDB against 1.0x for engines resident from load.
 
-  - At every tier except deep10m, `peak_anon` is BELOW the committed heap:
-    4g heap against 2.7 GiB touched at tiny, 8g against 6.1-6.5 GiB at small.
-    `-Xms` commits address space without pre-touching it, so the JVM never
-    needed the heap it already had. Raising the ratio would have changed
-    nothing measurable at ten of the eleven tiers.
-  - The other half of the cap is not idle. It holds the OS page cache for the
-    engine's own files, and this lane's cold/warm split prices that at 9-18x
-    for ArcadeDB (lazy loading) against 1.0x for engines resident from load.
-    Taking the cap to 0.70 would buy heap the engine does not touch by
-    shrinking the cache it demonstrably depends on.
-
-So 0.50 is a deliberate split between heap and page cache, not a conservative
-default nobody revisited.
-
-WHY deep10m SITS AT 0.67, and why the answer was NOT to raise the envelope.
-Since ArcadeDB #3144 the fp32 dense build auto-sizes an HNSW build cache to
-hold the whole corpus when it fits `graphBuildCacheMaxHeapPercent` (default
-25). At 9.99M x 128 that cache is 5.36 GiB, against a flat 55 MiB bound before
-the fix -- a 100x increase, and only on the path where vectors live in the
-documents, because a miss there costs a record read.
-
-The first response was to grow the tier's envelope until the default fitted:
-cap 36g -> 44g -> 52g, heap 24g -> 36g. That was wrong, and the reason is the
-config policy rather than the arithmetic. NO COMPARATOR CACHES ITS CORPUS
-DURING AN INDEX BUILD. Accepting the default means ArcadeDB takes 5.36 GiB
-that Qdrant, Milvus, Chroma and LanceDB do not, and then the envelope grows so
-that it fits -- room only one engine gets, in a lane whose whole claim is a
-matched operating point. That is the apples-to-oranges default the policy
-exists to equalize.
-
-So the cache was bounded, for that campaign, to `graphBuildCacheSize=100000`,
-which is the engine's OWN pre-#3144 default rather than a number we invented,
-and the tier kept the 36g/24g envelope it has always had. The bound is
-recorded on every row as `graph_build_cache_size` and
-`graph_build_cache_policy`: an override that only lives in a comment is not
-disclosed to anyone reading the artifact. `BENCH_DENSE_BUILD_CACHE` selects the
-policy on the row, so the cost of the default stays measurable rather than
-asserted.
-
-> **2026-09-11 currency note:** SUPERSEDED 2026-08-30 (DECISIONS #52): the campaign runs the engine default; #56 pins the fp32 multipass arms to the corpus.
-
-What the default costs, measured while finding this: at 24g heap the auto-sized
-build stalls at 93.8% with -Xmx full at 98.2% and ~7 cores on GC; given a 36g
-heap it completes in 2640 s at 40.5 GiB of anon. The pre-fix engine completed
-the same build at 24g in 2771 s and 28.3 GiB. So the default buys about 5% of
-build time for roughly 12 GiB, on a comparison that is not even controlled --
-which is the observation owed upstream, since #3144 was closed on INT8
-evidence with "fp32 preload noted as follow-up" and the fp32 half was never
-measured.
-
-The INT8 arm is unaffected and builds fine: an inline-quantized index reads a
-miss straight from an index page and keeps a small bound. That asymmetry is
-also why #3144 was closed on INT8 evidence with "fp32 preload noted as
-follow-up" -- the fp32 half was never measured until it measured itself as a
-six-hour timeout.
-
-AND THE TIER WAS BUILDING THE GRAPH TWICE. Separate defect, found 2026-08-20,
-and not the build cache above. Upstream #6489 (our PR #6490): a build that
-leaves ANY node graph-unreachable merges those orphans into the
-pending-mutation list, so `graphState` is left MUTABLE even though the build
-succeeded, persisted and has zero pending writes. `flush()` tests `graphState`
-alone and `close()` calls `flush()`, so the graph is built again -- and the
-rebuild cannot repair the cause: three consecutive runs orphaned MORE on the
-second pass (323 -> 338, 289 -> 333, 302 -> 346).
-
-Measured on 26.8.1 at this tier's standard 36g/24g envelope: build #1 peaks at
-21,851 of 24,576 MB and COMPLETES, then the redundant build dies with
-OutOfMemoryError at 24,554 MB. With #6490: one build, peak 22,664 MB, `close_s`
-0.158, recall@10 0.9506, rc=0, same envelope.
-
-So the cost of the auto-sizing default priced above has never been isolated:
-the stall it is priced against is the second build, and the 36g-heap arm that
-"completes in 2640 s at 40.5 GiB of anon" was almost certainly completing two.
-Re-measure on a release carrying #6490 before quoting that cost again.
-
-What this does NOT change: 0.50 is not restored, because a single build still
-peaks well above the 18g that ratio would give, so 24g in 36g is what the tier
-needs. Every published deep10m number was measured on 26.8.1, which has the
-defect, so the envelope was genuinely required for those runs and no measured
-value moves. What it does mean is that a deep10m failure attributed to "the
-build" has to say WHICH build, because 26.8.1 runs two.
-
-## 4. Monitoring
-
-Monitoring during a campaign is the session's own watch on STATUS.txt and docker on the bench host; the monitoring/ scripts of August were deleted on 2026-09-14, unused since 2026-08-15.
+deep10m sits at 0.67 because a single fp32 dense build peaks well above the 18g that 0.50 would give. The answer was deliberately NOT to grow the envelope until the engine's own build-cache default fitted: no comparator caches its corpus during an index build, so accepting that default means ArcadeDB takes GiB that Qdrant, Milvus, Chroma and LanceDB do not, and then the envelope grows so that it fits, room only one engine gets. The campaign runs the engine's default cache and the tier keeps the 36g/24g envelope it has always had (DECISIONS #52; #56 pins the fp32 multipass arms to the corpus and is disclosed as an override in PROTOCOL.md section 7). The cache policy is recorded on every row as `graph_build_cache_size` and `graph_build_cache_policy`.
 
 ## 5. Launching
 
@@ -288,11 +76,30 @@ python3 -u runner.py --lanes ... --scale ... --reps 5
 
 Rules that have each cost a run:
 
-- Never sync the repo mid-campaign. A `git checkout` reverted a tracked
-  `runs.jsonl` and lost rows; a mid-campaign merge split one lane's rows across
-  two schemas. Sync between stages, never inside one.
+- Never sync the repo mid-campaign. A `git checkout` reverted a tracked `runs.jsonl` and lost rows; a mid-campaign merge split one lane's rows across two schemas. Sync between stages, never inside one.
 - Archive `runs.jsonl` before anything that could touch it.
-- Wait loops read the **last** marker line. `STATUS.txt` is append-only, so a
-  bare grep finds this morning's ABORT and acts on it.
-- Kill the process group, not the script: `kill -- -PGID`, then verify with
-  `docker ps` and `pgrep`.
+- Wait loops read the **last** marker line. `STATUS.txt` is append-only, so a bare grep finds this morning's ABORT and acts on it.
+- Kill the process group, not the script: `kill -- -PGID`, then verify with `docker ps` and `pgrep`.
+- Never edit a queue script that is running. Bash reads by byte offset, so a mid-run edit resumes mid-token.
+- Monitoring is the session's own watch on `STATUS.txt` and `docker ps` on the bench host. There are no monitoring scripts.
+
+## 6. The live chain
+
+The September chain on mini, each script waiting on its predecessor and gated on `verify_pair_c25.sh`, at pin `8d6af9475`:
+
+`qDO` (running, its dense stage) -> `qDP` -> `qDQ` -> `qDR` -> `qDS` -> `qDT` -> `qDU` -> `qDV` -> `qDW` -> `qDX`, ending about 19 September.
+
+| script | what it runs |
+|---|---|
+| qDO | SurrealDB on the single-model tables: documents (TPC), graph, and dense, embedded and served |
+| qDP | the sparse second pass at 100k, the one tier whose warm columns were blank |
+| qDQ | the embedded native time-series arm again, after BUGS.md F33 |
+| qDR | SQLite on the time-series lane again, at four-decimal latencies |
+| qDS | pgvector again, after BUGS.md F34: dense and sparse, lane and multipass |
+| qDT | the composed Qdrant + Neo4j cross-model arm |
+| qDU | SurrealDB embedded on the TPC tables again, after BUGS.md F37 |
+| qDV | ArangoDB 3.12.11, served only, on documents, graph, dense, and cross-model (DECISIONS #78) |
+| qDW | SurrealDB served again on the cells whose disk reading was blank (BUGS.md F38) |
+| qDX | one phase-marked re-run of the embedded SurrealDB 1M dense cell, expected to time out again, for the phase it dies in (BUGS.md F41) |
+
+Finished scripts move to `~/queue_archive` on mini. The chain holds its pin start to finish; an upstream fix landing mid-run becomes a candidate for the next re-pin, never a restart. October's campaign is DECISIONS #74 as amended by #81 to #86, and starts with the comparators.
