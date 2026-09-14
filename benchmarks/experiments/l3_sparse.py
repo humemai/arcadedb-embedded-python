@@ -697,6 +697,8 @@ def main():
     out["engine_version"] = getattr(b, "version", "?")
     out["durability"] = DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY)
     out["instrument"] = bench_common.INSTRUMENT
+    # DECISIONS #89: where the split does not apply, the reason, not a blank.
+    out["cold_warm_na"] = bench_common.NA_COLD_WARM_SPARSE_LANE
     # Only Elasticsearch sets this. A row must say which operating point it
     # measured; the 9.0.0-vs-9.4.1 recall gap was only diagnosable because the
     # engine version happened to be recorded, and pruning is not visible from

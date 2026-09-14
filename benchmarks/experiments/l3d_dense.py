@@ -299,6 +299,60 @@ def calibration_slice(scale, train):
     return q, _exact_gt(q, train, n)
 
 
+# ---------------------------------------------------------------------------
+# MUTATION OF A BUILT INDEX (DECISIONS #82d). "Dense vector insert-into-a-built-
+# index-then-search and delete-from-a-built-index-then-search, at the one
+# million tier only, reporting latency and the recall after each."
+#
+# `small` IS the one-million tier (SCALE_DOCS above), which is the tier
+# make_paper_tables publishes as 1M. BENCH_DENSE_MUTATE=1 forces the phase on
+# at any scale, which is how the laptop smoke exercises it at micro; =0 forces
+# it off. The row always records which of the three applied, because a phase
+# that silently did not run is indistinguishable from one that ran and found
+# nothing.
+MUTATE_SCALES = ("small",)
+MUTATE_N = int(os.environ.get("BENCH_DENSE_MUTATE_N", "1000"))
+MUTATE_QUERIES = int(os.environ.get("BENCH_DENSE_MUTATE_QUERIES", "1000"))
+
+
+def mutation_enabled(scale):
+    flag = os.environ.get("BENCH_DENSE_MUTATE", "").strip()
+    if flag in ("0", "off", "no"):
+        return False, "disabled by BENCH_DENSE_MUTATE=0"
+    if flag in ("1", "on", "yes"):
+        return True, "forced on by BENCH_DENSE_MUTATE=1"
+    if scale in MUTATE_SCALES:
+        return True, f"scale {scale} is the one-million tier (DECISIONS #82d)"
+    return False, (f"scale {scale} is not the one-million tier; #82d runs the two "
+                   f"mutation operations at {'/'.join(MUTATE_SCALES)} only")
+
+
+def mutation_victims(gt, n_docs, n):
+    """Which ids to delete: ground-truth members first, so the delete bites.
+
+    Deleting ids no query ever asks for measures the write path and nothing
+    else; deleting the answers is what makes the post-delete recall a real
+    question. Deterministic, so every engine deletes the same set.
+    """
+    victims, seen = [], set()
+    for row in gt:
+        for g in row.tolist():
+            g = int(g)
+            if g not in seen and 0 <= g < n_docs:
+                seen.add(g)
+                victims.append(g)
+                if len(victims) >= n:
+                    return victims
+    step = max(1, n_docs // max(1, n))
+    i = 0
+    while len(victims) < n and i < n_docs:
+        if i not in seen:
+            seen.add(i)
+            victims.append(i)
+        i += step
+    return victims
+
+
 class Base:
     # Same default as l3_sparse.Base. Every adapter in this lane already sets a
     # version, which is why the dense table's identities are clean; this exists
@@ -346,6 +400,35 @@ class Base:
 
     def search(self, qvec, k):
         raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # MUTATING A BUILT INDEX (DECISIONS #82d): "insert into a built index
+    # then search, delete from a built index then search, at the one million
+    # tier only, reporting latency and the recall after each".
+    #
+    # The lane runs them in the order DELETE, then INSERT THE SAME IDS BACK,
+    # and that order is the whole reason the recall numbers are exact rather
+    # than approximate. Deleting a set D from a corpus whose ground truth is
+    # known leaves a ground truth that is still known: it is the original one
+    # with D removed. Re-inserting exactly D restores the original ground
+    # truth. Inserting NEW vectors instead would need a brute-force recompute
+    # of the top-k over a million vectors for a thousand queries after every
+    # mutation, on every arm, which is both slow and a second implementation
+    # of the thing being checked.
+    #
+    # The victims are chosen from the ground truth itself, so the deletions
+    # bite: an index that quietly ignores a delete keeps returning them and
+    # the row says how many (mutate_deleted_hits, which must be zero).
+    #
+    # An engine whose index cannot take a mutation declares
+    # MUTATE_UNEXPRESSIBLE and the row records the reason (#88), never silence.
+    MUTATE_UNEXPRESSIBLE = None
+
+    def insert_vectors(self, ids, vecs):
+        raise NotImplementedError(f"{self.name} declares no insert path")
+
+    def delete_vectors(self, ids):
+        raise NotImplementedError(f"{self.name} declares no delete path")
 
     # An arm that chooses its operating point by effect sets this, and the
     # lane then loads the held-out calibration slice for it (ArangoDB's IVF).
@@ -511,6 +594,22 @@ class ArcadeEmbedded(Base):
         ).to_list()
         return [int(r["vid"]) for r in rows]
 
+    def insert_vectors(self, ids, vecs):
+        db = self.db
+        db.begin()
+        for j, vid in enumerate(ids):
+            db.command("sql", "INSERT INTO Article SET vid = :v, embedding = :e",
+                       {"v": int(vid), "e": self._a.to_java_float_array(vecs[j])})
+        db.commit()
+
+    def delete_vectors(self, ids):
+        db = self.db
+        for lo in range(0, len(ids), 200):
+            lst = ",".join(str(int(v)) for v in ids[lo:lo + 200])
+            db.begin()
+            db.command("sql", f"DELETE FROM Article WHERE vid IN [{lst}]")
+            db.commit()
+
     def close(self):
         self.db.close()
 
@@ -605,6 +704,22 @@ class ArcadeServer(Base):
         r.raise_for_status()
         return [int(x["vid"]) for x in r.json().get("result", [])]
 
+    def insert_vectors(self, ids, vecs):
+        buf = []
+        for j, vid in enumerate(ids):
+            w = ", ".join("%.9g" % x for x in vecs[j])
+            buf.append(f"INSERT INTO Article SET vid = {int(vid)}, embedding = [{w}]")
+            if len(buf) >= 200:
+                self._cmd("sqlscript", ";".join(buf))
+                buf = []
+        if buf:
+            self._cmd("sqlscript", ";".join(buf))
+
+    def delete_vectors(self, ids):
+        for lo in range(0, len(ids), 200):
+            lst = ",".join(str(int(v)) for v in ids[lo:lo + 200])
+            self._cmd("sql", f"DELETE FROM Article WHERE vid IN [{lst}]")
+
 
 class Chroma(Base):
     # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
@@ -637,6 +752,12 @@ class Chroma(Base):
     def search(self, qvec, k):
         res = self.col.query(query_embeddings=[qvec.tolist()], n_results=k)
         return [int(x) for x in res["ids"][0]]
+
+    def insert_vectors(self, ids, vecs):
+        self.col.add(ids=[str(int(v)) for v in ids], embeddings=[list(map(float, v)) for v in vecs])
+
+    def delete_vectors(self, ids):
+        self.col.delete(ids=[str(int(v)) for v in ids])
 
 
 class LanceDB(Base):
@@ -697,6 +818,20 @@ class LanceDB(Base):
               .to_list())
         return [int(r["id"]) for r in rs]
 
+    def insert_vectors(self, ids, vecs):
+        import pyarrow as pa
+        import numpy as _np
+        arr = _np.asarray(vecs, dtype="float32")
+        self.tbl.add(pa.table({
+            "id": pa.array([int(v) for v in ids], type=pa.int64()),
+            "vector": pa.FixedSizeListArray.from_arrays(
+                pa.array(arr.ravel(), type=pa.float32()), DIM)}))
+
+    def delete_vectors(self, ids):
+        for lo in range(0, len(ids), 500):
+            lst = ",".join(str(int(v)) for v in ids[lo:lo + 500])
+            self.tbl.delete(f"id IN ({lst})")
+
 
 class SqliteVec(Base):
     # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
@@ -740,6 +875,15 @@ class SqliteVec(Base):
             "SELECT rowid FROM v WHERE embedding MATCH ? AND k = ? "
             "ORDER BY distance", (qvec.tobytes(), k)).fetchall()
         return [int(r[0]) for r in rows]
+
+    def insert_vectors(self, ids, vecs):
+        self.cx.executemany("INSERT INTO v (rowid, embedding) VALUES (?, ?)",
+                            [(int(v), vecs[j].tobytes()) for j, v in enumerate(ids)])
+        self.cx.commit()
+
+    def delete_vectors(self, ids):
+        self.cx.executemany("DELETE FROM v WHERE rowid = ?", [(int(v),) for v in ids])
+        self.cx.commit()
 
 
 
@@ -793,6 +937,12 @@ class SqliteVecInt8(SqliteVec):
             "ORDER BY distance", (qvec.tobytes(), k)).fetchall()
         return [int(r[0]) for r in rows]
 
+    def insert_vectors(self, ids, vecs):
+        self.cx.executemany(
+            "INSERT INTO v (rowid, embedding) VALUES (?, vec_quantize_int8(?, 'unit'))",
+            [(int(v), vecs[j].tobytes()) for j, v in enumerate(ids)])
+        self.cx.commit()
+
 
 class DuckVSS(Base):
     # DECLARED, not inferred from BENCH_DENSE_QUANT. Every arm that is genuinely
@@ -839,6 +989,15 @@ class DuckVSS(Base):
             f"SELECT id FROM t ORDER BY array_distance(vec, ?::FLOAT[{DIM}]) "
             f"LIMIT {k}", [qvec.tolist()]).fetchall()
         return [int(r[0]) for r in rows]
+
+    def insert_vectors(self, ids, vecs):
+        self.cx.executemany(f"INSERT INTO t VALUES (?, ?::FLOAT[{DIM}])",
+                            [(int(v), vecs[j].tolist()) for j, v in enumerate(ids)])
+
+    def delete_vectors(self, ids):
+        for lo in range(0, len(ids), 500):
+            lst = ",".join(str(int(v)) for v in ids[lo:lo + 500])
+            self.cx.execute(f"DELETE FROM t WHERE id IN ({lst})")
 
 
 class Qdrant(Base):
@@ -898,6 +1057,17 @@ class Qdrant(Base):
             search_params=qm.SearchParams(hnsw_ef=EF_SEARCH))
         return [int(p.id) for p in res.points]
 
+    def insert_vectors(self, ids, vecs):
+        from qdrant_client import models as qm
+        self.cl.upsert("articles", points=qm.Batch(
+            ids=[int(v) for v in ids], vectors=[list(map(float, v)) for v in vecs]), wait=True)
+
+    def delete_vectors(self, ids):
+        from qdrant_client import models as qm
+        self.cl.delete("articles",
+                       points_selector=qm.PointIdsList(points=[int(v) for v in ids]),
+                       wait=True)
+
 
 class PgVector(Base):
     """pgvector 0.8 on PostgreSQL 17 (2026-09-11): a vector(DIM) column, COPY
@@ -944,6 +1114,18 @@ class PgVector(Base):
             c.execute("SELECT vid FROM articles ORDER BY embedding <-> %s::vector LIMIT %s",
                       ("[" + ",".join("%.9g" % x for x in qvec) + "]", k))
             return [int(r[0]) for r in c.fetchall()]
+
+    def insert_vectors(self, ids, vecs):
+        with self.cx.cursor() as c:
+            c.executemany("INSERT INTO articles (vid, embedding) VALUES (%s, %s::vector)",
+                          [(int(v), "[" + ",".join("%.9g" % x for x in vecs[j]) + "]")
+                           for j, v in enumerate(ids)])
+        self.cx.commit()
+
+    def delete_vectors(self, ids):
+        with self.cx.cursor() as c:
+            c.execute("DELETE FROM articles WHERE vid = ANY(%s)", ([int(v) for v in ids],))
+        self.cx.commit()
 
     def close(self):
         self.cx.close()
@@ -995,6 +1177,19 @@ class Neo4jVector(Base):
                       k=k, ef=max(k, EF_SEARCH), q=qvec.tolist()).data()
         return [int(x["vid"]) for x in r]
 
+    def insert_vectors(self, ids, vecs):
+        rows = [{"vid": int(v), "e": [float(x) for x in vecs[j]]} for j, v in enumerate(ids)]
+        with self.drv.session() as s:
+            s.run("UNWIND $rows AS r CREATE (:Article {vid: r.vid, embedding: r.e})",
+                  rows=rows).consume()
+            s.run("CALL db.awaitIndexes(3600)").consume()
+
+    def delete_vectors(self, ids):
+        with self.drv.session() as s:
+            s.run("UNWIND $ids AS i MATCH (a:Article {vid: i}) DELETE a",
+                  ids=[int(v) for v in ids]).consume()
+            s.run("CALL db.awaitIndexes(3600)").consume()
+
     def close(self):
         self.drv.close()
 
@@ -1040,6 +1235,16 @@ class SurrealDense(Base):
         q = "[" + ",".join("%.9g" % float(x) for x in qvec) + "]"
         rows = self._rows(self.db.query(f"SELECT vid FROM article WHERE embedding <|{k},{EF_SEARCH}|> {q}"))
         return [int(r["vid"]) for r in rows]
+
+    def insert_vectors(self, ids, vecs):
+        from surrealdb import RecordID
+        self.db.insert("article", [
+            {"id": RecordID("article", int(v)), "vid": int(v),
+             "embedding": [float(x) for x in vecs[j]]} for j, v in enumerate(ids)])
+
+    def delete_vectors(self, ids):
+        for lo in range(0, len(ids), 200):
+            self.db.query(";".join(f"DELETE article:{int(v)}" for v in ids[lo:lo + 200]))
 
     def close(self):
         try:
@@ -1088,6 +1293,14 @@ class ArangoDense(Base):
             "SORT s LIMIT @k RETURN d.vid",
             bind_vars={"q": qvec.tolist(), "np": nprobe or self.ivf_nprobe, "k": k})
         return [int(v) for v in cur]
+
+    def insert_vectors(self, ids, vecs):
+        self.db.collection("article").import_bulk(
+            [{"_key": str(int(v)), "vid": int(v), "embedding": [float(x) for x in vecs[j]]}
+             for j, v in enumerate(ids)])
+
+    def delete_vectors(self, ids):
+        self.db.collection("article").delete_many([{"_key": str(int(v))} for v in ids])
 
     def calibrate(self, queries, gt, scale):
         target, src = arango_common.recall_target(scale)
@@ -1281,6 +1494,23 @@ class Milvus(Base):
         res = self.cl.search("articles", data=[qvec.tolist()], limit=k,
                              search_params={"params": {"ef": EF_SEARCH}})
         return [int(h["id"]) for h in res[0]]
+
+    def insert_vectors(self, ids, vecs):
+        self.cl.insert("articles", [{"id": int(v), "vec": [float(x) for x in vecs[j]]}
+                                    for j, v in enumerate(ids)])
+        # Milvus accepts a write into a growing segment and serves it by brute
+        # force until the segment seals; flush() + load makes the mutation
+        # visible to the INDEX, which is what "insert into a built index then
+        # search" means. Inside the timed section on purpose: it is the cost.
+        self.cl.flush("articles")
+        self.cl.load_collection("articles")
+
+    def delete_vectors(self, ids):
+        for lo in range(0, len(ids), 500):
+            lst = ",".join(str(int(v)) for v in ids[lo:lo + 500])
+            self.cl.delete("articles", filter=f"id in [{lst}]")
+        self.cl.flush("articles")
+        self.cl.load_collection("articles")
 
 
 # ---------------------------------------------------------------- int8 arms
@@ -1606,6 +1836,8 @@ def main():
             out[_k] = _v
     out["durability"] = DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY)
     out["instrument"] = bench_common.INSTRUMENT
+    # DECISIONS #89: where the split does not apply, the reason, not a blank.
+    out["cold_warm_na"] = bench_common.NA_COLD_WARM_DENSE_LANE
     # An IVF arm chooses its probe count by effect before the warmup and the
     # timed passes (arango_common), on a HELD-OUT slice of 200 queries the
     # timed pass never asks (queries 1000:1200 of the fixture's 10,000), so
@@ -1653,6 +1885,70 @@ def main():
     # rebuild it provoked exists only in the AFTER-SEARCH counters. Comparing
     # the two is what tells a reader whether the timings above include one.
     out["engine_stats_after_search"] = b.engine_stats()
+
+    # ----------------------------------------------------------------------
+    # THE TWO MUTATION OPERATIONS (DECISIONS #82d), in the order DELETE then
+    # INSERT-THE-SAME-IDS-BACK, which is what keeps the recall exact: the
+    # ground truth after deleting a set D is the original ground truth with D
+    # removed, and re-inserting exactly D restores it. Nothing is
+    # brute-force recomputed, on any arm.
+    _mut_on, _mut_why = mutation_enabled(args.scale)
+    out["mutate_ran"] = _mut_on
+    out["mutate_reason"] = _mut_why
+    _mut_reason = getattr(b, "MUTATE_UNEXPRESSIBLE", None)
+    if _mut_on and _mut_reason:
+        # DECISIONS #88: an engine that cannot do this says so, never silence.
+        out["mutate_ran"] = False
+        out["mutate_reason"] = _mut_reason
+        bench_common.record_unexpressible(out, "mutate_delete", _mut_reason)
+        bench_common.record_unexpressible(out, "mutate_insert", _mut_reason)
+    elif _mut_on:
+        _mq = min(MUTATE_QUERIES, timed_n)
+        victims = mutation_victims(gt[:timed_n], len(train), MUTATE_N)
+        vset = set(victims)
+        out["mutate_n"] = len(victims)
+        out["mutate_queries"] = _mq
+
+        def _pass(want_fn):
+            lat, rec, hits = [], [], 0
+            for qi in range(_mq):
+                t1 = time.perf_counter()
+                ids = b.search(test[qi], K)
+                lat.append((time.perf_counter() - t1) * 1e3)
+                want = want_fn(qi)
+                got = set(int(x) for x in ids[:K])
+                hits += len(got & vset)
+                rec.append(len(got & set(want)) / float(len(want)) if want else 1.0)
+            return lat, round(statistics.mean(rec), 4), hits
+
+        # DELETE from the built index, then search.
+        _beat.mark("mutate-delete-start", n=len(victims))
+        _t = time.perf_counter()
+        b.delete_vectors(victims)
+        out["mutate_delete_s"] = round(time.perf_counter() - _t, 3)
+        out["mutate_delete_per_op_ms"] = round(out["mutate_delete_s"] * 1000.0 / len(victims), 4)
+        _lat, _rec, _hits = _pass(lambda qi: [int(g) for g in gt[qi].tolist() if int(g) not in vset])
+        _p = pct(_lat)
+        out.update({f"mutate_delete_query_{k2}_ms": round(v, 3) for k2, v in _p.items()})
+        out["mutate_delete_recall_at_10"] = _rec
+        # MUST BE ZERO. A non-zero count is an index still returning records
+        # the engine says it deleted, which is a correctness failure and not a
+        # latency one; it is on the row rather than in a log.
+        out["mutate_deleted_hits"] = _hits
+        _beat.mark("mutate-delete-done", recall=_rec, still_returned=_hits)
+
+        # INSERT the same ids back into the built index, then search.
+        _beat.mark("mutate-insert-start", n=len(victims))
+        _t = time.perf_counter()
+        b.insert_vectors(victims, train[victims])
+        out["mutate_insert_s"] = round(time.perf_counter() - _t, 3)
+        out["mutate_insert_per_op_ms"] = round(out["mutate_insert_s"] * 1000.0 / len(victims), 4)
+        _lat, _rec, _hits = _pass(lambda qi: [int(g) for g in gt[qi].tolist()])
+        _p = pct(_lat)
+        out.update({f"mutate_insert_query_{k2}_ms": round(v, 3) for k2, v in _p.items()})
+        out["mutate_insert_recall_at_10"] = _rec
+        out["mutate_reinserted_hits"] = _hits
+        _beat.mark("mutate-insert-done", recall=_rec, returned=_hits)
 
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
