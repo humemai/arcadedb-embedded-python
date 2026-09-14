@@ -40,6 +40,14 @@ OPS = int(os.environ.get("E2_OPS", "300"))
 WARMUP = 20
 SEED = 20260721
 BATCH = 5_000
+# NO ROW CAP ON THE SERVED ARM (2026-09-14). The ArcadeDB HTTP API truncates a
+# result at 20,000 rows unless the request says otherwise, and the #88 digests
+# caught both served time-series arms returning exactly 20,000 where every
+# other engine returned 32,944. Nothing on this lane returns that many rows
+# today, which is precisely why it would have gone unnoticed the day one did.
+# -1 means no cap.
+HTTP_LIMIT = -1
+
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +325,8 @@ class ArcadeE2Server(ArcadeE2):
 
     def _post(self, kind, command, params=None, language="sql", sid=None, timeout=600):
         payload = {"language": language, "command": command}
+        if kind == "query":
+            payload["limit"] = HTTP_LIMIT   # only the query endpoint takes a row cap
         if params:
             payload["params"] = params
         headers = {"arcadedb-session-id": sid} if sid else None
@@ -726,7 +736,9 @@ class PgAgeE2:
 
     def _vec_topk(self, qvec, k, ef=100):
         c = self._cur()
-        c.execute("SET LOCAL hnsw.ef_search = %s", (max(ef, k),))
+        # SET LOCAL takes no bound parameter ("syntax error at or near $1",
+        # laptop 2026-09-14); the value is a literal, as it is in hybrid_op.
+        c.execute(f"SET LOCAL hnsw.ef_search = {int(max(ef, k))}")
         c.execute("SELECT pid FROM product ORDER BY embedding <-> %s::vector LIMIT %s", (self._v(qvec), k))
         r = [int(x[0]) for x in c.fetchall()]
         self.cx.commit()
@@ -1067,14 +1079,18 @@ def main():
     with _beat.phase("connect", backend=args.backend):
         b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
-    # `durability`, `durability_class`, `durability_no_setting` (DECISIONS #90).
-    bench_common.stamp_durability(out, getattr(b, "durability", None)
-                                  or DURABILITY.get(args.backend))
     out["instrument"] = bench_common.INSTRUMENT
     t0 = time.perf_counter()
     with _beat.phase("build", n=PRODUCTS, n_edges=len(edges)):
         b.build(vecs, edges)
     out["build_s"] = round(time.perf_counter() - t0, 2)
+    # AFTER THE BUILD, not before it. ArangoDB's waitForSync lives on the
+    # collection, so the adapter can only read it back once build() has created
+    # one; stamping before the build took the map's relaxed constant and a
+    # strict cell recorded the relaxed string. fairness_check F10b caught it,
+    # which is what it is for (laptop, 2026-09-14).
+    bench_common.stamp_durability(out, getattr(b, "durability", None)
+                                  or DURABILITY.get(args.backend))
 
     if args.workload == "hybrid":
         # ------------------------------------------------------------------

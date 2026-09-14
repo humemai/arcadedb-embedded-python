@@ -36,6 +36,14 @@ if _GRAPH_SOURCE == "ldbc":
 INGEST_BATCH = 5_000
 GAV_NAME = "l2gav"
 GAV_TIMEOUT_S = 3600
+# NO ROW CAP ON THE SERVED ARM (2026-09-14). The ArcadeDB HTTP API truncates a
+# result at 20,000 rows unless the request says otherwise, and the #88 digests
+# caught both served time-series arms returning exactly 20,000 where every
+# other engine returned 32,944. Nothing on this lane returns that many rows
+# today, which is precisely why it would have gone unnoticed the day one did.
+# -1 means no cap.
+HTTP_LIMIT = -1
+
 
 
 class Base:
@@ -268,8 +276,10 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
             self._http("command", "sql", ddl)
 
     def _http(self, endpoint, language, command):
-        r = self.rq.post(f"{self.base}/{endpoint}/bench",
-                         json={"language": language, "command": command},
+        body = {"language": language, "command": command}
+        if endpoint == "query":
+            body["limit"] = HTTP_LIMIT   # only the query endpoint takes a row cap
+        r = self.rq.post(f"{self.base}/{endpoint}/bench", json=body,
                          timeout=3600)
         r.raise_for_status()
         return r.json().get("result", [])
@@ -844,10 +854,6 @@ def main():
         ad.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = ad.version
-    # `durability`, `durability_class`, `durability_no_setting` (DECISIONS #90).
-    # An adapter that read the value out of its own engine wins over the map.
-    bench_common.stamp_durability(out, getattr(ad, "durability", None)
-                                  or DURABILITY.get(args.backend))
     out["instrument"] = bench_common.INSTRUMENT
 
     t0 = time.perf_counter()
@@ -856,6 +862,11 @@ def main():
     with _beat.phase("post-build", workload=args.workload):
         ad.post_build(args.workload)
     out["build_s"] = round(time.perf_counter() - t0, 2)
+    # AFTER THE BUILD (DECISIONS #90). ArangoDB's waitForSync is a collection
+    # property, so it can only be read back once build() has created one; an
+    # adapter that read its value out of its own engine wins over the map.
+    bench_common.stamp_durability(out, getattr(ad, "durability", None)
+                                  or DURABILITY.get(args.backend))
 
     if args.workload == "oltp":
         ids = pick_query_ids(n_persons, n_q)

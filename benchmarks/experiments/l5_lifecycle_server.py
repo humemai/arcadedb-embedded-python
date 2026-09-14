@@ -134,6 +134,14 @@ def build_ts(db, n):
 _SEQ = [0]
 
 
+# The read's answer, for the #88 digest. One engine, two deployments: this
+# arm and the embedded one must return the same rows for the same situation,
+# and the gate compares them. Filled on every read cycle; the rows come back
+# from the HTTP API as plain dicts already, so nothing is converted inside the
+# timed window.
+_LAST_READ = {"rows": None, "situation": None}
+
+
 def _read(db, situation):
     if situation == "empty":
         return
@@ -143,7 +151,9 @@ def _read(db, situation):
         return
     q = L.READS.get(situation)
     if q:
-        db.query(*q)
+        rows = db.query(*q)
+        _LAST_READ["rows"] = rows
+        _LAST_READ["situation"] = situation
 
 
 def _write(db, situation):
@@ -227,8 +237,17 @@ def main(args):
     t = time.perf_counter()
     build(db, args.workload, n)
     out["build_s"] = round(time.perf_counter() - t, 2)
-    out["durability"] = bench_common.DURABILITY_ARCADEDB   # DECISIONS #81
+    # Asserted, not read back: this is the HTTP client, and the server exposes
+    # no read-back for txWalFlush. runner.py records what it set on the server
+    # as durability_server_flags (DECISIONS #81, #90).
+    bench_common.stamp_durability(
+        out, bench_common.at_class(bench_common.DURABILITY_ARCADEDB)
+        + bench_common.ARCADE_SERVER_DURABILITY_NOTE)
     out["instrument"] = bench_common.INSTRUMENT
+    # DECISIONS #89: this lane IS the cold measurement, and says so rather than
+    # leaving a cold/warm pair blank.
+    out["cold_warm_na"] = bench_common.NA_COLD_WARM_LIFECYCLE
+    out["cold_first_query_na"] = bench_common.NA_COLD_WARM_LIFECYCLE
     _bt = time.perf_counter()
     server_cmd(rq, root, f"close database {DB}").raise_for_status()
     out["build_close_ms"] = round((time.perf_counter() - _bt) * 1000, 3)
@@ -241,6 +260,20 @@ def main(args):
         o, c, w = measure(rq, root, db, args.workload, mode)
         out[f"{mode}_open_ms"], out[f"{mode}_close_ms"], out[f"{mode}_action_ms"] = round(o, 3), round(c, 3), round(w, 3)
         out[f"{mode}_session_ms"] = round(o + w + c, 3)
+    # THE READ'S ANSWER (#88), after the cycles have run: the embedded and
+    # served arms of this lane must agree on it.
+    if args.workload == "vector":
+        bench_common.record_unexpressible(
+            out, "lifecycle_read",
+            "the vector situation's read goes through an approximate index; "
+            "it is checked by recall on the dense lane, not by an exact digest")
+    elif _LAST_READ["rows"] is not None:
+        bench_common.record_result(out, "lifecycle_read", _LAST_READ["rows"])
+        out["lifecycle_read_situation"] = _LAST_READ["situation"]
+    else:
+        bench_common.record_unexpressible(
+            out, "lifecycle_read",
+            f"situation {args.workload!r} issues no read in the modes this cell ran")
     out["close_over_budget"] = out.get("clean_close_ms", 0) > 100.0
     server_cmd(rq, root, f"open database {DB}")
     with open(args.out, "w") as f:

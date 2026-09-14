@@ -150,6 +150,15 @@ LI_COLS = ["l_orderkey", "l_partkey", "l_quantity", "l_extendedprice",
            "l_discount", "l_returnflag", "l_linestatus", "l_shipdate",
            "l_shipmode"]   # l_shipmode joined for the 2026-10 ship-mode query
 OLAP_QUERIES = ("q1", "q6", "top_parts", "ship_mode", "by_month")
+# THE SERVED ARM'S ROW CAP, written down because it is invisible until it
+# bites. The ArcadeDB HTTP API truncates a result at 20,000 rows unless the
+# request says otherwise, and the #88 digests caught both served time-series
+# arms returning exactly 20,000 where every other engine returned 32,944. This
+# lane sends everything through /command, which takes no `limit` field, so its
+# scans carry an explicit LIMIT in the SQL instead; the largest answer here is
+# CRUD_OPS rows, three orders of magnitude under the cap. A query on this lane
+# that starts returning more than 20,000 rows needs the cap raised in the SQL.
+
 
 # ---------------------------------------------------------------------------
 # WHAT THE ANSWER LOOKS LIKE (DECISIONS #88). One declaration per query, not

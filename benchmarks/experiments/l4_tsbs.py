@@ -44,6 +44,16 @@ QITER = int(os.environ.get("BENCH_QITER") or 100)
 HOST = "host_42"
 T0 = 1767225600  # 2026-01-01T00:00:00Z epoch seconds
 HIGH = 90.0      # the high-cpu threshold, TSBS's own
+# THE SERVER TRUNCATES AT 20,000 ROWS UNLESS TOLD OTHERWISE, and until the #88
+# digests compared the two deployments nothing here knew that. Both served
+# ArcadeDB arms returned exactly 20,000 rows for the high-usage filter where
+# the two embedded arms, DuckDB, SQLite, MongoDB, QuestDB and TimescaleDB all
+# returned 32,944 (laptop, 12 h of the corpus, 2026-09-14), so the served arms
+# were timing a query over 61% of the qualifying rows and calling it the same
+# query. The HTTP API takes a `limit`; -1 means no cap, and every query this
+# lane sends now says so. A harness defect, not an engine one: the server did
+# exactly what its documented default says.
+HTTP_LIMIT = -1
 QUERIES = ("q_last", "q_range", "q_global", "q_groupby", "q_high", "q_orderlimit")
 ORDERLIMIT_N = 5   # TSBS groupby-orderby-limit takes the last five buckets
 
@@ -179,8 +189,12 @@ class ArcadeTSServer(ArcadeTS):
         return self._ver
 
     def _post(self, kind, command, language="sql", timeout=600):
-        r = self.rq.post(f"{self.base}/{kind}/bench",
-                         json={"language": language, "command": command}, timeout=timeout)
+        body = {"language": language, "command": command}
+        if kind == "query":
+            # Only the query endpoint takes a row cap; sending it to /command
+            # would be an unknown field on a write.
+            body["limit"] = HTTP_LIMIT
+        r = self.rq.post(f"{self.base}/{kind}/bench", json=body, timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])
 
@@ -421,8 +435,12 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
                 "ts_shards": self.SHARDS, "ts_path": "native_timeseries_http_line_protocol"}
 
     def _post(self, kind, command, language="sql", timeout=600):
-        r = self.rq.post(f"{self.base}/{kind}/bench",
-                         json={"language": language, "command": command}, timeout=timeout)
+        body = {"language": language, "command": command}
+        if kind == "query":
+            # Only the query endpoint takes a row cap; sending it to /command
+            # would be an unknown field on a write.
+            body["limit"] = HTTP_LIMIT
+        r = self.rq.post(f"{self.base}/{kind}/bench", json=body, timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])
 
@@ -1024,6 +1042,22 @@ def main():
         out["q_last_windowed_ms"] = round(statistics.median(_t), 4)
         out["q_last_windowed_rows"] = len(_ref) if _ref is not None else 0
         out["last_window_s"] = 86400 * 40
+
+    # THE SHAPE OF THE DOUBLE GROUP-BY, not just its row count. The #88 digest
+    # found arcadedb_ts_native_server returning 1,200 rows for q_groupby like
+    # everyone else while disagreeing on their contents, so the count alone
+    # could not say what was wrong. These two say whether the answer really is
+    # one row per host per hour: at the 12 h window they must be the host count
+    # and 12, and a served arm that repeats a bucket shows it here.
+    try:
+        _gb = bench_common.canonical_rows(
+            getattr(b, "q_groupby")(), **{k: v for k, v in Q_DIGEST["q_groupby"].items()
+                                          if k in ("columns", "coerce")})
+        out["q_groupby_distinct_hosts"] = len({r[0] for r in _gb if len(r) > 1})
+        out["q_groupby_distinct_buckets"] = len({r[1] for r in _gb if len(r) > 1})
+        out["q_groupby_distinct_pairs"] = len({(r[0], r[1]) for r in _gb if len(r) > 1})
+    except Exception as e:  # noqa: BLE001
+        out["q_groupby_shape_error"] = f"{e.__class__.__name__}: {e}"
 
     _expect = {"q_range": 60, "q_global": 12, "q_last": 1,
                "q_orderlimit": ORDERLIMIT_N}
