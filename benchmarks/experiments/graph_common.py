@@ -19,7 +19,27 @@ SCALE_OLTP_QUERIES = {"micro": 50, "tiny": 200, "small": 500, "medium": 200,
                       "large": 100}
 # 100, not 5 (2026-09-10, BUGS F29): a p99 needs a hundred samples to be a
 # percentile rather than the slowest run. ~2.7 s per pass for ArcadeDB at SF10.
-OLAP_ITERATIONS = 100
+# BENCH_GRAPH_OLAP_ITER lowers it for a laptop smoke; the row records
+# `<query>_iters`, so a cell that ran fewer says so.
+import os as _os
+OLAP_ITERATIONS = int(_os.environ.get("BENCH_GRAPH_OLAP_ITER") or 100)
+
+# A PER-QUERY WALL BUDGET, because one of the five is not like the others.
+# DECISIONS #82b: "The triangle count is the most likely cell on the page to
+# exceed its budget at the larger scale factor, and that is a result rather
+# than a problem: it is recorded as a named censored cell with its budget."
+# Measured on the laptop at micro (2,000 persons, about 40,000 edges): Neo4j
+# spent over twelve minutes inside the triangle count's warm loop and had not
+# finished, because the query enumerates roughly n*d^3 path expansions per
+# iteration -- 16 million here, and three orders of magnitude more at SF10.
+#
+# So the warm loop stops when its cumulative wall clock passes the budget. The
+# cold pass always runs, so a censored cell still carries a measurement and a
+# count; the row records `<query>_censored`, `<query>_budget_s` and
+# `<query>_iters`, and a reader can see it ran nine iterations rather than a
+# hundred instead of reading a p99 over nine samples as though it were one over
+# a hundred.
+OLAP_BUDGET_S = float(_os.environ.get("BENCH_GRAPH_OLAP_BUDGET_S") or 300.0)
 
 GRAPH_SEED = 20260708
 PICK_SEED = 777
@@ -63,8 +83,14 @@ def pick_query_ids(n_persons, n_queries, seed=PICK_SEED):
 #   (WHERE form, not inline property maps — portable across ArcadeDB
 #   opencypher, Neo4j, and LadybugDB)
 OLTP_READS = {
+    # ALIASED RETURN COLUMNS (2026-10). `RETURN p.name, p.age` gives the column
+    # the driver's own spelling -- "p.name" through the Neo4j driver, a
+    # positional value through LadybugDB, "name" through the SurrealDB and
+    # ArangoDB hooks -- and a digest cannot compare three spellings of one
+    # column (DECISIONS #88). The alias costs nothing and makes the answer
+    # comparable.
     "point": ("MATCH (p:Person) WHERE p.id = {id} "
-              "RETURN p.name, p.age"),
+              "RETURN p.name AS name, p.age AS age"),
     "hop1": ("MATCH (p:Person)-[:KNOWS]->(f:Person) WHERE p.id = {id} "
              "RETURN count(f) AS n, avg(f.age) AS a"),
     "hop2": ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(fof:Person) "
@@ -86,6 +112,23 @@ OLTP_WRITE = ("MATCH (p:Person) WHERE p.id = {id} "
 # carries a delete per engine, which no table did.
 OLTP_DELETE = "MATCH (q:Person) WHERE q.id = {new_id} DETACH DELETE q"
 
+# 2026-10 (DECISIONS #82a): the fourth single-record operation. One property
+# of one record, set to a fixed value so the post-state is deterministic and
+# every engine must agree on it.
+OLTP_UPDATE = "MATCH (q:Person) WHERE q.id = {new_id} SET q.age = 44"
+UPDATE_AGE = 44
+
+# HOW LOCAL IS THE THREE-HOP READ? The page will say the filtered three-hop
+# read stays local; that is a claim about the data, not about the engine, and
+# until now nothing recorded the number it rests on. This is hop3f without the
+# age filter: the distinct persons at exactly three hops, which is the set the
+# filter is applied to. Run UNTIMED, once per cell, over a small sample of the
+# same ids the timed loop uses, so a reader can check "stays local" against a
+# number instead of a word.
+HOP3_VISITED = ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(x:Person) "
+                "WHERE p.id = {id} RETURN count(DISTINCT x) AS n")
+VISITED_SAMPLE = 20
+
 OLAP_QUERIES = {
     "top_degree": ("MATCH (p:Person)-[:KNOWS]->(:Person) "
                    "RETURN p.id AS id, count(*) AS d ORDER BY d DESC LIMIT 10"),
@@ -96,4 +139,50 @@ OLAP_QUERIES = {
     "friend_age_by_city": ("MATCH (p:Person)-[:KNOWS]->(f:Person) "
                            "RETURN p.city AS c, avg(f.age) AS a, count(*) AS n "
                            "ORDER BY n DESC LIMIT 10"),
+    # 2026-10 (DECISIONS #82b), so the graph table is as thorough as the
+    # document one: five analytics queries on each.
+    #
+    # The degree distribution: how many people have how many friends. A
+    # whole-graph aggregation over every edge, and the cheapest honest way to
+    # make the planner touch everything. Persons with no outgoing KNOWS are
+    # outside the MATCH and therefore outside the histogram, on every engine,
+    # which is stated here because it is the one modelling choice in it.
+    "degree_dist": ("MATCH (p:Person)-[:KNOWS]->(f:Person) "
+                    "WITH p, count(f) AS d "
+                    "RETURN d AS deg, count(*) AS n ORDER BY deg"),
+    # The triangle count: mutual-friend triples, each counted once. The
+    # canonical graph analytic, and the one query on the page that punishes a
+    # bad join or traversal plan rather than a slow scan. A directed 3-cycle
+    # has three rotations; requiring the start to be the smallest id selects
+    # exactly one of them, so each triangle is counted once on every engine.
+    # Expected to exceed its budget at the larger scale factor, which is a
+    # named censored cell and not a bug (#82b).
+    "triangles": ("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person)-[:KNOWS]->(a) "
+                  "WHERE a.id < b.id AND a.id < c.id RETURN count(*) AS n"),
 }
+
+# ---------------------------------------------------------------------------
+# WHAT EACH ANSWER LOOKS LIKE (DECISIONS #88). Declared once per query, never
+# per engine; the alternatives inside a tuple are the names the four dialects
+# give the same column.
+OLAP_DIGEST = {
+    "top_degree": dict(columns=(("id", "pid"), "d"),
+                       order_matters=True, order_key="d", id_key="id"),
+    "same_city_edges": dict(columns=("c", "n"),
+                            order_matters=True, order_key="n", id_key="c"),
+    "friend_age_by_city": dict(columns=("c", "a", "n"),
+                               order_matters=True, order_key="n", id_key="c"),
+    "degree_dist": dict(columns=("deg", "n")),
+    "triangles": dict(columns=("n",)),
+}
+READ_DIGEST = {
+    "point": dict(columns=("name", "age")),
+    "hop1": dict(columns=("n", "a")),
+    "hop2": dict(columns=("n",)),
+    "hop3f": dict(columns=("n",)),
+}
+# The person rows the CRUD phases leave behind, read back untimed.
+# ("id", "pid") because SurrealDB records carry their own `id` and aliasing
+# the person key onto that name would collide with the record id.
+PERSON_STATE_DIGEST = dict(columns=(("id", "pid"), "name", "age", "city"))
+VISITED_DIGEST = dict(columns=("id", "n"))

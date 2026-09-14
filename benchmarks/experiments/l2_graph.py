@@ -16,8 +16,10 @@ import time
 import surreal_common
 import arango_common
 
-from graph_common import (OLAP_ITERATIONS, OLAP_QUERIES, OLTP_READS,
-                          OLTP_WRITE, OLTP_DELETE, SCALE_OLTP_QUERIES, SCALE_PERSONS,
+from graph_common import (HOP3_VISITED, OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
+                          OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
+                          PERSON_STATE_DIGEST, READ_DIGEST, SCALE_OLTP_QUERIES,
+                          SCALE_PERSONS, UPDATE_AGE, VISITED_DIGEST, VISITED_SAMPLE,
                           gen_edges, gen_persons, pick_query_ids)
 import bench_common
 
@@ -62,7 +64,14 @@ class Base:
         raise NotImplementedError(f"{self.name} has no reopen path")
 
     def run_cypher(self, text):
-        """Execute one cypher statement, return row count (results consumed)."""
+        """Execute one cypher statement and RETURN ITS ROWS.
+
+        Returned the row COUNT until 2026-09-14, which is why this lane could
+        not record a result digest: the answer was thrown away inside the
+        adapter and only its length survived. The loops take len() themselves
+        now, so the timed work is unchanged and the rows exist to be digested
+        outside the timed section (DECISIONS #88).
+        """
         raise NotImplementedError
 
     def run_cypher_write(self, text):
@@ -80,6 +89,20 @@ class Base:
 
     def run_delete(self, new_id):
         self.run_cypher_write(OLTP_DELETE.format(new_id=new_id))
+
+    def run_update(self, new_id):
+        """One property of one record (DECISIONS #82a)."""
+        self.run_cypher_write(OLTP_UPDATE.format(new_id=new_id))
+
+    def run_visited(self, pid):
+        """Untimed: the distinct persons at three hops, before the age filter."""
+        return self.run_cypher(HOP3_VISITED.format(id=pid))
+
+    def person_scan(self, id_from):
+        """Untimed read-back of the persons the CRUD phases wrote."""
+        return self.run_cypher(
+            f"MATCH (q:Person) WHERE q.id >= {id_from} "
+            f"RETURN q.id AS id, q.name AS name, q.age AS age, q.city AS city")
 
     def run_olap(self, qname):
         return self.run_cypher(OLAP_QUERIES[qname])
@@ -196,7 +219,7 @@ class ArcadeGraphEmbedded(Base):
         raise RuntimeError("GAV not READY within timeout")
 
     def run_cypher(self, text):
-        return len(self.db.query("opencypher", text).to_json_list())
+        return self.db.query("opencypher", text).to_json_list()
 
     def run_cypher_write(self, text):
         with self.db.transaction():
@@ -299,7 +322,7 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
         raise RuntimeError("GAV not READY within timeout")
 
     def run_cypher(self, text):
-        return len(self._http("query", "cypher", text))
+        return self._http("query", "cypher", text)
 
     def run_cypher_write(self, text):
         self._http("command", "cypher", text)
@@ -373,7 +396,7 @@ class Neo4jGraph(Base):
 
     def run_cypher(self, text):
         with self.driver.session() as s:
-            return len(list(s.run(text)))
+            return [dict(r) for r in s.run(text)]
 
     def run_cypher_write(self, text):
         with self.driver.session() as s:
@@ -448,7 +471,9 @@ class LadybugGraph(Base):
         self.conn = ladybug.Connection(self.db)
 
     def run_cypher(self, text):
-        return len(list(self.conn.execute(text)))
+        # Rows come back positional, in the RETURN clause's order, which is the
+        # declared column order the digest compares against.
+        return [list(r) for r in self.conn.execute(text)]
 
 
 class SurrealGraph(Base):
@@ -509,7 +534,19 @@ class SurrealGraph(Base):
             r = self.db.query(f"SELECT array::len(array::distinct(->knows->person->knows->person->knows->(person WHERE age > 30))) AS n FROM ONLY person:{pid}")
         else:
             r = self.db.query(f"SELECT array::len(array::distinct(->knows->person->knows->person)) AS n FROM ONLY person:{pid}")
-        return len(self._rows(r))
+        return self._rows(r)
+
+    def run_visited(self, pid):
+        return self._rows(self.db.query(
+            f"SELECT array::len(array::distinct(->knows->person->knows->person->knows->person)) AS n "
+            f"FROM ONLY person:{pid}"))
+
+    def run_update(self, new_id):
+        self.db.query(f"UPDATE person:{new_id} SET age = {UPDATE_AGE}")
+
+    def person_scan(self, id_from):
+        return self._rows(self.db.query(
+            f"SELECT pid, name, age, city FROM person WHERE pid >= {id_from}"))
 
     def run_write(self, pid, new_id):
         self.db.query(f"CREATE person:{new_id} SET pid = {new_id}, name = 'w{new_id}', age = 33, city = 'city_0'; "
@@ -528,10 +565,27 @@ class SurrealGraph(Base):
         # key, not n (laptop smoke, 2026-09-11); 3.2.4 accepts both forms
         "same_city_edges": "SELECT * FROM (SELECT in.city AS c, count() AS n FROM knows WHERE in.city = out.city GROUP BY c) ORDER BY n DESC LIMIT 10",
         "friend_age_by_city": "SELECT * FROM (SELECT in.city AS c, math::mean(out.age) AS a, count() AS n FROM knows GROUP BY c) ORDER BY n DESC LIMIT 10",
+        # 2026-10 (#82b). The degree distribution is a group-by over a computed
+        # out-degree; degree zero is excluded to match the Cypher MATCH, which
+        # does not reach a person with no outgoing KNOWS.
+        "degree_dist": ("SELECT * FROM (SELECT count(->knows) AS deg, count() AS n FROM person GROUP BY deg) "
+                        "WHERE deg > 0 ORDER BY deg"),
+    }
+    # NOT IN THE MAP, AND THAT IS THE ANSWER (DECISIONS #88: an engine that
+    # cannot express a query declares it, never skips it silently). A triangle
+    # count needs a path pattern that binds all three vertices at once so the
+    # id ordering that counts each triangle once can be written; SurrealQL's
+    # arrow traversal returns the endpoint SET of a path, with no name for the
+    # intermediate vertex, so the predicate has nowhere to attach. Recorded on
+    # the row as unexpressible with this reason.
+    UNEXPRESSIBLE = {
+        "triangles": ("SurrealQL arrow traversal returns a path's endpoint set and "
+                      "names no intermediate vertex, so the per-path id ordering "
+                      "that counts each triangle once cannot be written"),
     }
 
     def run_olap(self, qname):
-        return len(self._rows(self.db.query(self.OLAP[qname])))
+        return self._rows(self.db.query(self.OLAP[qname]))
 
     def run_cypher(self, text):
         raise NotImplementedError("SurrealDB runs SurrealQL through the name-based hooks")
@@ -595,6 +649,8 @@ class ArangoGraph(Base):
         "hop3f": ("LET s = (FOR v IN 3..3 OUTBOUND CONCAT('person/', @k) knows FILTER v.age > 30 RETURN DISTINCT v._key) "
                   "RETURN LENGTH(s)"),
     }
+    VISITED = ("LET s = (FOR v IN 3..3 OUTBOUND CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
+               "RETURN LENGTH(s)")
     OLAP = {
         "top_degree": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
                        "COLLECT id = p.id WITH COUNT INTO d SORT d DESC LIMIT 10 RETURN {id, d}"),
@@ -603,13 +659,33 @@ class ArangoGraph(Base):
         "friend_age_by_city": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
                                "COLLECT c = p.city AGGREGATE a = AVG(f.age), n = COUNT(1) "
                                "SORT n DESC LIMIT 10 RETURN {c, a, n}"),
+        # 2026-10 (#82b), the same two questions in AQL. degree zero is filtered
+        # out to match the Cypher MATCH.
+        "degree_dist": ("FOR p IN person LET d = LENGTH(FOR f IN 1..1 OUTBOUND p knows RETURN 1) "
+                        "FILTER d > 0 COLLECT deg = d WITH COUNT INTO n SORT deg RETURN {deg, n}"),
+        "triangles": ("RETURN {n: LENGTH("
+                      "FOR a IN person "
+                      "FOR b IN 1..1 OUTBOUND a knows FILTER b.id > a.id "
+                      "FOR c IN 1..1 OUTBOUND b knows FILTER c.id > a.id "
+                      "FOR d IN 1..1 OUTBOUND c knows FILTER d._key == a._key "
+                      "RETURN 1)}"),
     }
 
     def _n(self, q, **bv):
-        return len(list(self.db.aql.execute(q, bind_vars=bv)))
+        return list(self.db.aql.execute(q, bind_vars=bv))
 
     def run_read(self, op, pid):
         return self._n(self.READS[op], k=str(pid))
+
+    def run_visited(self, pid):
+        return self._n(self.VISITED, k=str(pid))
+
+    def run_update(self, new_id):
+        self._n("UPDATE {_key: @nk} WITH {age: @a} IN person", nk=str(new_id), a=UPDATE_AGE)
+
+    def person_scan(self, id_from):
+        return self._n("FOR p IN person FILTER p.id >= @f "
+                       "RETURN {id: p.id, name: p.name, age: p.age, city: p.city}", f=id_from)
 
     def run_write(self, pid, new_id):
         self._n("INSERT {_key: @nk, id: @n, name: CONCAT('w', @nk), age: 33, city: 'city_0'} INTO person "
@@ -650,6 +726,26 @@ DURABILITY = {
     "surrealdb_graph_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_graph": arango_common.DURABILITY,
 }
+
+
+# 1,000 single-record operations per repetition (DECISIONS #82a), not the
+# read set's size. The write, the update and the delete are the three of the
+# four CRUD operations this lane owns; the fourth, read by key, is the point
+# lookup already in OLTP_READS, which is why the graph table carries seven
+# operations and not ten (#82d).
+CRUD_OPS = int(os.environ.get("BENCH_CRUD_OPS", "1000"))
+
+
+def first_value(rows):
+    """The single number a count query returned, whatever shape it came in."""
+    if not rows:
+        return None
+    r = rows[0]
+    if isinstance(r, dict):
+        return next(iter(r.values()), None)
+    if isinstance(r, (list, tuple)):
+        return r[0] if r else None
+    return r
 
 
 def pct(sorted_ms, q):
@@ -737,6 +833,8 @@ def main():
         ids = pick_query_ids(n_persons, n_q)
         total_t0 = time.perf_counter()
 
+        collected = {}
+
         def _read_pass(prefix=""):
             """One full pass over the read set, identical on both calls.
 
@@ -757,15 +855,22 @@ def main():
             res = {}
             for op, tmpl in OLTP_READS.items():
                 lat = []
+                answers = []
                 for w, pid in enumerate(ids):
                     t = time.perf_counter()
-                    ad.run_read(op, pid)
+                    rows = ad.run_read(op, pid)
+                    dt = (time.perf_counter() - t) * 1000
+                    # Collected AFTER the clock stops, from the object the
+                    # timed call returned (DECISIONS #88).
+                    if rows:
+                        answers.extend(rows)
                     if w >= 5:  # warmups discarded
-                        lat.append((time.perf_counter() - t) * 1000)
+                        lat.append(dt)
                 lat.sort()
                 res[f"{prefix}{op}_p50_ms"] = round(pct(lat, 0.50), 3)
                 res[f"{prefix}{op}_p95_ms"] = round(pct(lat, 0.95), 3)
                 res[f"{prefix}{op}_p99_ms"] = round(pct(lat, 0.99), 3)
+                collected[op] = answers
             return res
 
         _beat.mark("reads-cold-start", n=len(ids), ops=len(OLTP_READS))
@@ -773,14 +878,55 @@ def main():
         _beat.mark("reads-warm-start", n=len(ids), ops=len(OLTP_READS))
         out.update(_read_pass("warm_"))     # same queries, index now resident
         _beat.mark("reads-done")
+        # ONE NAMING CONVENTION ACROSS THE LANES (DECISIONS #89). This lane's
+        # FIRST pass is the cold one and has always been recorded unprefixed,
+        # while the second wears "warm_"; the page reads the unprefixed names,
+        # so they stay, and these aliases let a table ask every lane the same
+        # question without knowing which lane it is asking.
+        for _op in OLTP_READS:
+            out[f"cold_{_op}_p50_ms"] = out[f"{_op}_p50_ms"]
+            out[f"cold_{_op}_p99_ms"] = out[f"{_op}_p99_ms"]
+        # THE ANSWERS THE WARM PASS RETURNED (DECISIONS #88): every row of
+        # every read, over the same seeded id list on every engine, hashed
+        # here rather than in the loop. The two passes ask the same questions,
+        # so digesting the second is digesting both.
+        for op in OLTP_READS:
+            bench_common.record_result(out, op, collected.get(op), **READ_DIGEST[op])
+        # HOW LOCAL IS THE THREE-HOP READ? Untimed, over the first
+        # VISITED_SAMPLE ids: the distinct persons at three hops before the
+        # age filter, which is the set hop3f filters. The page can now say
+        # "stays local" against a number.
+        _beat.mark("visited-probe-start", n=min(VISITED_SAMPLE, len(ids)))
+        visited = []
+        for pid in ids[:VISITED_SAMPLE]:
+            try:
+                visited.append((pid, first_value(ad.run_visited(pid))))
+            except Exception as e:  # noqa: BLE001
+                out["hop3_visited_error"] = f"{e.__class__.__name__}: {e}"
+                break
+        vals = sorted(v for _p, v in visited if isinstance(v, (int, float)))
+        if vals:
+            out["hop3_visited_p50"] = vals[len(vals) // 2]
+            out["hop3_visited_max"] = vals[-1]
+            out["hop3_visited_n_ids"] = len(vals)
+            out["hop3_visited_share"] = round(vals[len(vals) // 2] / float(n_persons), 6)
+            bench_common.record_result(out, "hop3_visited", visited, **VISITED_DIGEST)
+        _beat.mark("visited-probe-done", p50=out.get("hop3_visited_p50"))
         # Writes stay single-pass on purpose. A second write pass is not a
         # warm repeat, it is a different workload against a larger graph.
         # 1000 writes, not 100: a p99 over 95 timed samples is the second
         # slowest write, not a tail. Ten samples deep at 1000 (2026-09-10).
-        n_writes = min(1000, n_q)
+        #
+        # CRUD_OPS, not min(1000, n_q), since 2026-10: DECISIONS #82a asks for
+        # 1,000 of each single-record operation per repetition, and n_q is the
+        # read set's size, which is 500 at small and 100 at large. The start
+        # ids cycle through the read set so a write still attaches to a real
+        # person.
+        n_writes = CRUD_OPS
         lat = []
         _beat.mark("writes-start", n=n_writes)
-        for w, pid in enumerate(ids[:n_writes]):
+        for w in range(n_writes):
+            pid = ids[w % len(ids)]
             new_id = write_id_base + w
             t = time.perf_counter()
             ad.run_write(pid, new_id)
@@ -792,7 +938,30 @@ def main():
         # The reads recorded p99 and the writes stopped at p95, so the page
         # had a p99 beside every latency except this one (2026-09-10).
         out["write_p99_ms"] = round(pct(lat, 0.99), 3)
+        out["write_ops"] = n_writes
         _beat.mark("writes-done", n=n_writes, p50=out["write_p50_ms"])
+        # WHAT THE WRITES LEFT BEHIND (#88): the persons they created, read
+        # back untimed. A create that silently wrote nothing fails the gate.
+        bench_common.record_result(out, "graph_insert", ad.person_scan(write_id_base),
+                                   **PERSON_STATE_DIGEST)
+        # UPDATE, the third of the four (DECISIONS #82a): one property of one
+        # record, set to a fixed value, over the same ids the writes created.
+        ulat = []
+        _beat.mark("updates-start", n=n_writes)
+        for w in range(n_writes):
+            new_id = write_id_base + w
+            t = time.perf_counter()
+            ad.run_update(new_id)
+            if w >= 5:
+                ulat.append((time.perf_counter() - t) * 1000)
+        ulat.sort()
+        out["update_p50_ms"] = round(pct(ulat, 0.50), 3)
+        out["update_p95_ms"] = round(pct(ulat, 0.95), 3)
+        out["update_p99_ms"] = round(pct(ulat, 0.99), 3)
+        out["update_ops"] = n_writes
+        _beat.mark("updates-done", n=n_writes, p50=out["update_p50_ms"])
+        bench_common.record_result(out, "graph_update", ad.person_scan(write_id_base),
+                                   **PERSON_STATE_DIGEST)
         # DELETE (2026-10, DECISIONS #82): the write's partner, over the same
         # ids the write pass created, in the same order. Single pass, like the
         # write, and for the same reason: a delete is not repeatable.
@@ -808,10 +977,25 @@ def main():
         out["delete_p50_ms"] = round(pct(dlat, 0.50), 3)
         out["delete_p95_ms"] = round(pct(dlat, 0.95), 3)
         out["delete_p99_ms"] = round(pct(dlat, 0.99), 3)
+        out["delete_ops"] = n_writes
         _beat.mark("deletes-done", n=n_writes, p50=out["delete_p50_ms"])
+        # Nothing must be left: a delete that deleted nothing is a fast number
+        # over a graph that still holds the rows (#82a).
+        bench_common.record_result(out, "graph_delete", ad.person_scan(write_id_base),
+                                   **PERSON_STATE_DIGEST)
+        # DECISIONS #89: where a split does not apply the row says why.
+        out["cold_warm_na"] = bench_common.NA_COLD_WARM_TXN
         out["oltp_total_s"] = round(time.perf_counter() - total_t0, 2)
     else:
         for qname, text in OLAP_QUERIES.items():
+            # DECISIONS #88: an engine that cannot ask the question says so on
+            # the row, with its reason, and is not silently skipped.
+            reason = getattr(ad, "UNEXPRESSIBLE", {}).get(qname)
+            if reason:
+                bench_common.record_unexpressible(out, qname, reason)
+                out[f"{qname}_unexpressible"] = reason
+                _beat.mark(f"olap-{qname}-unexpressible")
+                continue
             _beat.mark(f"olap-{qname}-start", iters=OLAP_ITERATIONS)
             # The warmup WAS the cold pass, and it was not even timed. Timing
             # it costs nothing (the query ran either way) and gives this lane
@@ -820,14 +1004,39 @@ def main():
             # its index off disk while resident comparators do not, so a lane
             # that reports one number without saying which side it is on is
             # reporting an arbitrary point on that curve.
+            # THE BUDGET STARTS HERE, BEFORE THE COLD PASS, and that is the
+            # part the first version got wrong. Measured on the laptop at micro
+            # (2,000 persons, 40,833 edges, 16,949,800 three-paths to walk,
+            # 2,776 triangles), one Neo4j triangle count runs for MINUTES: a
+            # budget that only bounds the warm loop lets the cold pass run
+            # unbounded and then pays for one more full iteration before
+            # noticing, which is how a five-minute cell becomes a ten-minute
+            # one. With the cold pass inside the budget, a query that blows it
+            # on the first touch runs zero warm iterations and the row says so.
+            _budget_t0 = time.perf_counter()
             _c0 = time.perf_counter()
             rows0 = ad.run_olap(qname)  # first touch, now measured
             out[f"cold_{qname}_ms"] = round((time.perf_counter() - _c0) * 1000, 2)
             lat = []
             for _ in range(OLAP_ITERATIONS):
+                if time.perf_counter() - _budget_t0 > OLAP_BUDGET_S:
+                    break
                 t = time.perf_counter()
                 ad.run_olap(qname)
                 lat.append((time.perf_counter() - t) * 1000)
+            out[f"{qname}_budget_s"] = OLAP_BUDGET_S
+            out[f"{qname}_censored"] = len(lat) < OLAP_ITERATIONS
+            if out[f"{qname}_censored"]:
+                _beat.mark(f"olap-{qname}-censored", iters=len(lat),
+                           budget_s=OLAP_BUDGET_S)
+            if not lat:
+                # THE COLD PASS ALONE EXCEEDED THE BUDGET. A censored cell with
+                # one measurement is a result (DECISIONS #82b); a cell with none
+                # is a gap. The percentiles are the cold number and the row says
+                # they came from one sample, so nobody reads a p99 over a single
+                # observation as a tail.
+                lat = [out[f"cold_{qname}_ms"]]
+                out[f"{qname}_warm_missing"] = True
             # p50 FIRST, because the page prints these as times and asserts
             # elsewhere that pycost is its only non-p50 ms column. Three of these
             # were means, where one GC pause inside five iterations moves the
@@ -840,9 +1049,23 @@ def main():
                 lat_sorted[max(0, int(0.99 * (len(lat_sorted) - 1)))], 2)
             out[f"{qname}_mean_ms"] = round(statistics.mean(lat), 2)
             out[f"{qname}_min_ms"] = round(min(lat), 2)
-            out[f"{qname}_iters"] = len(lat)
-            out[f"{qname}_rows"] = rows0
-            _beat.mark(f"olap-{qname}-done", p50=out[f"{qname}_p50_ms"])
+            out[f"{qname}_iters"] = 0 if out.get(f"{qname}_warm_missing") else len(lat)
+            out[f"{qname}_rows"] = len(rows0)
+            # COLD AND WARM UNDER ONE NAMING CONVENTION (DECISIONS #89). The
+            # cold pass above is separate already, so the warm percentiles come
+            # from the loop that follows it.
+            if not out.get(f"{qname}_warm_missing"):
+                bench_common.record_cold_warm(out, qname, lat,
+                                              cold_ms=out[f"cold_{qname}_ms"], digits=2)
+            else:
+                out[f"cold_warm_{qname}_na"] = (
+                    f"no warm pass: the cold one alone exceeded the "
+                    f"{OLAP_BUDGET_S:.0f}s budget (DECISIONS #82b)")
+            # THE ANSWER (DECISIONS #88), from the first touch's rows, outside
+            # every timed section.
+            bench_common.record_result(out, qname, rows0, **OLAP_DIGEST[qname])
+            _beat.mark(f"olap-{qname}-done", p50=out[f"{qname}_p50_ms"],
+                       digest=out[f"res_{qname}_digest"])
         # STAMP THE ARM. BENCH_GAV=0 changes what was measured and, until this
         # line, changed nothing that was recorded: an ablation run wrote the
         # same lane/scale/n_persons/workload/backend/rep as the published cell
