@@ -27,7 +27,6 @@ import random
 import statistics
 import time
 import bench_common
-import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 import numpy as np
 import surreal_common
@@ -671,19 +670,31 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    # PHASE MARKERS (2026-09-14, same pattern as l3d_dense): a cell that dies
+    # names the phase it was in. Entered and left AROUND the timed work, never
+    # inside a timed loop.
+    _beat = bench_common.PhaseBeat()
+    _beat.mark("data-gen-start", backend=args.backend, workload=args.workload)
     vecs, edges, queries = gen_data()
+    _beat.mark("data-generated", n_products=PRODUCTS, n_edges=len(edges),
+               n_queries=len(queries))
     out = {"n_products": PRODUCTS, "n_edges": len(edges), "dim": DIM, "k": K}
 
-    b = BACKENDS[args.backend]()
+    # A cross-model adapter connects in its constructor (every class here
+    # does), so the connect phase wraps the construction, not a connect call.
+    with _beat.phase("connect", backend=args.backend):
+        b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
     out["durability"] = getattr(b, "durability", None) or DURABILITY.get(args.backend)
-    out["instrument"] = _bench_common_mod.INSTRUMENT
+    out["instrument"] = bench_common.INSTRUMENT
     t0 = time.perf_counter()
-    b.build(vecs, edges)
+    with _beat.phase("build", n=PRODUCTS, n_edges=len(edges)):
+        b.build(vecs, edges)
     out["build_s"] = round(time.perf_counter() - t0, 2)
 
     if args.workload == "hybrid":
         lat = []
+        _beat.mark("hybrid-start", n=len(queries), warmup=WARMUP)
         for i, q in enumerate(queries):
             t = time.perf_counter()
             b.hybrid_op(q)
@@ -695,6 +706,7 @@ def main():
         out["hybrid_p95_ms"] = round(lat[int(len(lat) * 0.95)], 3)
         out["hybrid_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)
         out["hybrid_mean_ms"] = round(statistics.mean(lat), 3)
+        _beat.mark("hybrid-done", n=len(lat), p50=out["hybrid_p50_ms"])
     else:
         # atomicity: run clean ops, then ONE op with an injected failure
         # between the doc/graph write and the vector-side write, then verify.
@@ -708,8 +720,10 @@ def main():
         warm_clean = 50            # establishes a non-zero baseline once
         per_trial_clean = 5        # fresh clean work before each injection
 
+        _beat.mark("atomicity-warmup-start", n=warm_clean, trials=trials)
         for q in queries[:warm_clean]:
             b.hybrid_op(q, mirror=True)
+        _beat.mark("atomicity-trials-start", trials=trials)
 
         # VALIDITY GUARD, and it is not optional. The previous version of this
         # block decided the result from `isinstance(state, dict)` -- i.e. from
@@ -755,6 +769,7 @@ def main():
             if t_torn and len(evidence) < 3:
                 evidence.append({"trial": t, "pre": pre, "post": post})
 
+        _beat.mark("atomicity-trials-done", trials=trials, torn=torn, raised=raised)
         out["trials"] = trials
         out["torn_count"] = torn
         out["crash_raised_count"] = raised
@@ -770,7 +785,8 @@ def main():
     # on 26.8.1 it settles a roughly fixed 30-87 MB, against nothing at all for
     # an already-settled comparator. An unrecorded close is an unpriced one.
     _t = time.perf_counter()
-    b.close()
+    with _beat.phase("close"):
+        b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
     with open(args.out, "w") as f:
         json.dump(out, f)

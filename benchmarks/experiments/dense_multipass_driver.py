@@ -20,8 +20,8 @@ per backend, so cold and warm exist for every engine on the same protocol.
     BENCH_MP_BACKEND=qdrant_dense PROBE_OUT=/pout/mp_qdrant.json \
         python -u dense_multipass_driver.py
 
-Deliberately mirrors drivers/int8_dev20_driver.py's loop rather than
-paraphrasing it, so the two sides differ in the engine and nothing else.
+Deliberately mirrors the lane's own query loop rather than paraphrasing it,
+so the two sides differ in the engine and nothing else.
 """
 import json
 import os

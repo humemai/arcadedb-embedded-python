@@ -34,7 +34,6 @@ import time
 import surreal_common
 import arango_common
 import bench_common
-import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 
 def pg_durability(cx):
@@ -803,22 +802,31 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    # PHASE MARKERS (2026-09-14, same pattern as l3d_dense): a cell that dies
+    # names the phase it was in. Entered and left AROUND the timed work, never
+    # inside a timed loop.
+    _beat = bench_common.PhaseBeat()
+    _beat.mark("corpus-load-start", sf=SF, backend=args.backend)
     li, part = load_frames()
+    _beat.mark("corpus-loaded", n_lineitem=len(li), n_part=len(part))
     out = {"n_lineitem": len(li), "n_part": len(part), "tpch_sf": SF}
 
     b = BACKENDS[args.backend]()
-    b.connect()
+    with _beat.phase("connect", backend=args.backend):
+        b.connect()
     out["engine_version"] = b.version
     t0 = time.perf_counter()
-    b.build(li, part)
+    with _beat.phase("build", n=len(li)):
+        b.build(li, part)
     out["build_s"] = round(time.perf_counter() - t0, 2)
 
     out["durability"] = getattr(b, "durability", None)
-    out["instrument"] = _bench_common_mod.INSTRUMENT
+    out["instrument"] = bench_common.INSTRUMENT
     if args.workload == "olap":
         for which in OLAP_QUERIES:
             times = []
             ref = None
+            _beat.mark(f"query-{which}-start", iters=OLAP_ITER)
             for _ in range(OLAP_ITER):
                 t = time.perf_counter()
                 r = b.olap(which)
@@ -841,10 +849,13 @@ def main():
             if len(times) > 1:
                 out[f"warm_{which}_ms"] = round(statistics.median(times[1:]), 2)
             out[f"{which}_rows"] = len(ref) if ref is not None else 0
+            _beat.mark(f"query-{which}-done", p50=out[f"{which}_ms"],
+                       rows=out[f"{which}_rows"])
     else:
         rng = random.Random(SEED)
         keys = part["p_partkey"].tolist()
         lat = []
+        _beat.mark("new-order-start", n=OLTP_OPS)
         for i in range(OLTP_OPS):
             k = keys[rng.randrange(len(keys))]
             t = time.perf_counter()
@@ -854,11 +865,13 @@ def main():
         lat.sort()
         out["neworder_p50_ms"] = round(statistics.median(lat), 3)
         out["neworder_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)
+        _beat.mark("new-order-done", n=OLTP_OPS, p50=out["neworder_p50_ms"])
         # PAYMENT (2026-10, DECISIONS #82): the same count, against the orders
         # new-order just placed, each chosen at random so the read is not a
         # scan of the newest page. Read the order, mark it paid, insert the
         # payment, one transaction.
         plat = []
+        _beat.mark("payment-start", n=OLTP_OPS)
         for j in range(OLTP_OPS):
             okey = rng.randrange(OLTP_OPS)
             t = time.perf_counter()
@@ -868,6 +881,7 @@ def main():
         plat.sort()
         out["payment_p50_ms"] = round(statistics.median(plat), 3)
         out["payment_p99_ms"] = round(plat[int(len(plat) * 0.99)], 3)
+        _beat.mark("payment-done", n=OLTP_OPS, p50=out["payment_p50_ms"])
         # ops/s over BOTH transaction types since 2026-10; the September rows
         # (new-order alone) carry the same field under the old instrument, and
         # make_paper_tables keeps the two instruments out of one table.
@@ -880,7 +894,8 @@ def main():
     # already-settled comparator. An unrecorded close is an unpriced one, and
     # the row cannot be told apart from a lane that never settles.
     _t = time.perf_counter()
-    b.close()
+    with _beat.phase("close"):
+        b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
     with open(args.out, "w") as f:
         json.dump(out, f)

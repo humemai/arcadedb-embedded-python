@@ -46,7 +46,6 @@ import sys
 import time
 
 import bench_common
-import bench_common as _bench_common_mod  # a name no function-local import can shadow
 import pagecache
 
 DB = "/lcdb/lc"          # a HOST directory bind-mounted here; see _assert_fs
@@ -636,7 +635,7 @@ def main():
     # database that several cycles had just re-warmed, which is the same
     # number by construction but a weaker claim.
     out["durability"] = "txWalFlush=0 (engine default): no flush at commit"   # DECISIONS #81
-    out["instrument"] = _bench_common_mod.INSTRUMENT
+    out["instrument"] = bench_common.INSTRUMENT
     o, c, w = measure(args.workload, "clean", cold=True)
     out["cold_open_ms"], out["cold_close_ms"] = round(o, 3), round(c, 3)
     out["build_close_ms"] = round(build_close_ms, 3)

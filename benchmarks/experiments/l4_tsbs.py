@@ -24,7 +24,6 @@ import os
 import statistics
 import time
 import bench_common
-import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 # THE CORPUS. BENCH_-prefixed because runner.py's env allowlist is a CLOSED
 # tuple: a variable not in it is dropped at the container boundary and the
@@ -841,7 +840,13 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    # PHASE MARKERS (2026-09-14, same pattern as l3d_dense): a cell that dies
+    # names the phase it was in. Entered and left AROUND the timed work, never
+    # inside a timed loop. The corpus parse alone is minutes at ts100.
+    _beat = bench_common.PhaseBeat()
+    _beat.mark("corpus-parse-start", lp=LP, limit=LIMIT, backend=args.backend)
     pts = parse_lp()
+    _beat.mark("corpus-parsed", n_points=len(pts))
     # n_docs, not just n_points: BOTH canonical keys include n_docs
     # (make_paper_tables and merge_campaign), and PAPER_CORPUS fingerprints a
     # tier on it. Without it two TSBS corpora of different sizes would collide
@@ -855,9 +860,11 @@ def main():
             f"holds {len(pts):,}. A tier that silently measures a different "
             f"corpus than its name claims is the sparse-pooling defect again.")
     b = BACKENDS[args.backend]()
-    b.connect()
+    with _beat.phase("connect", backend=args.backend):
+        b.connect()
     t0 = time.perf_counter()
-    b.ingest(pts)
+    with _beat.phase("ingest", n=len(pts)):
+        b.ingest(pts)
     dt = time.perf_counter() - t0
     out["ingest_s"] = round(dt, 2)
     out["ingest_pts_per_s"] = round(len(pts) / dt, 1)
@@ -867,7 +874,8 @@ def main():
     # never be read as "settled" merely because the field is absent.
     _t = time.perf_counter()
     if hasattr(b, "settle"):
-        b.settle()
+        with _beat.phase("engine-settle"):
+            b.settle()
     out["engine_settle_s"] = round(time.perf_counter() - _t, 3)
 
     # Optional settle between ingest and query, OUTSIDE the ingest timer.
@@ -894,6 +902,7 @@ def main():
     for qn in QUERIES:
         times = []
         ref = None
+        _beat.mark(f"query-{qn}-start", iters=QITER)
         for _ in range(QITER):
             t = time.perf_counter()
             ref = getattr(b, qn)()
@@ -907,6 +916,7 @@ def main():
         # summary figure's first-pass panel needs it (2026-09-11).
         out[f"{qn}_cold_ms"] = round(times[0], 4)
         out[f"{qn}_rows"] = len(ref) if ref is not None else 0
+        _beat.mark(f"query-{qn}-done", p50=out[f"{qn}_ms"], rows=out[f"{qn}_rows"])
 
     # ASSERT THE SHAPES, do not merely record them. The lane already knew the
     # right answers -- 60 minute buckets over an hour, 12 two-hour buckets over a
@@ -954,14 +964,15 @@ def main():
     except Exception as e:
         out["backend_version"] = f"unknown ({e.__class__.__name__})"
     out["durability"] = getattr(b, "durability", None) or DURABILITY.get(args.backend)
-    out["instrument"] = _bench_common_mod.INSTRUMENT
+    out["instrument"] = bench_common.INSTRUMENT
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
     # settles a roughly fixed 30-87 MB, against nothing at all for an
     # already-settled comparator. An unrecorded close is an unpriced one, and
     # the row cannot be told apart from a lane that never settles.
     _t = time.perf_counter()
-    b.close()
+    with _beat.phase("close"):
+        b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
 
     # Stamp what this actually ran under. Until now every row this lane wrote
@@ -977,7 +988,10 @@ def main():
     # describe THIS driver process and not the questdb container. Recorded
     # under a role that says so rather than silently implying otherwise.
     try:
-        import bench_common
+        # bench_common is imported at module scope: a local import here would
+        # make the name local to main() and every earlier bench_common use in
+        # this function an UnboundLocalError (the same trap l3d_dense hit on
+        # 2026-09-14).
         # ROLE IS DERIVED FROM TOPOLOGY, not from a backend literal. The old
         # `== "questdb"` test broke the moment backends were renamed, and a
         # wrong role is invisible: it just mislabels whose cgroup was read.

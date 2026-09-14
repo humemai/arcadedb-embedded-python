@@ -20,7 +20,6 @@ from graph_common import (OLAP_ITERATIONS, OLAP_QUERIES, OLTP_READS,
                           OLTP_WRITE, OLTP_DELETE, SCALE_OLTP_QUERIES, SCALE_PERSONS,
                           gen_edges, gen_persons, pick_query_ids)
 import bench_common
-import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 # Data-source switch (same pattern as l3_sparse/bigann): BENCH_GRAPH_SOURCE=ldbc
 # swaps the synthetic generator for the LDBC-SNB persons+KNOWS projection.
@@ -710,17 +709,27 @@ def main():
             yield item
         out["graph_source"] = f"ldbc-{args.scale}"
 
+    # PHASE MARKERS (2026-09-14, same pattern as l3d_dense): a cell that dies
+    # names the phase it was in. Entered and left AROUND the timed work, never
+    # inside a timed loop.
+    _beat = bench_common.PhaseBeat()
+    _beat.mark("cell-start", backend=args.backend, workload=args.workload,
+               scale=args.scale, n_persons=n_persons)
+
     ad = ADAPTERS[args.backend]()
     t0 = time.perf_counter()
-    ad.connect()
+    with _beat.phase("connect", backend=args.backend):
+        ad.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = ad.version
     out["durability"] = DURABILITY.get(args.backend)
-    out["instrument"] = _bench_common_mod.INSTRUMENT
+    out["instrument"] = bench_common.INSTRUMENT
 
     t0 = time.perf_counter()
-    ad.build(n_persons)
-    ad.post_build(args.workload)
+    with _beat.phase("build", n=n_persons):
+        ad.build(n_persons)
+    with _beat.phase("post-build", workload=args.workload):
+        ad.post_build(args.workload)
     out["build_s"] = round(time.perf_counter() - t0, 2)
 
     if args.workload == "oltp":
@@ -758,14 +767,18 @@ def main():
                 res[f"{prefix}{op}_p99_ms"] = round(pct(lat, 0.99), 3)
             return res
 
+        _beat.mark("reads-cold-start", n=len(ids), ops=len(OLTP_READS))
         out.update(_read_pass())            # first touch
+        _beat.mark("reads-warm-start", n=len(ids), ops=len(OLTP_READS))
         out.update(_read_pass("warm_"))     # same queries, index now resident
+        _beat.mark("reads-done")
         # Writes stay single-pass on purpose. A second write pass is not a
         # warm repeat, it is a different workload against a larger graph.
         # 1000 writes, not 100: a p99 over 95 timed samples is the second
         # slowest write, not a tail. Ten samples deep at 1000 (2026-09-10).
         n_writes = min(1000, n_q)
         lat = []
+        _beat.mark("writes-start", n=n_writes)
         for w, pid in enumerate(ids[:n_writes]):
             new_id = write_id_base + w
             t = time.perf_counter()
@@ -778,10 +791,12 @@ def main():
         # The reads recorded p99 and the writes stopped at p95, so the page
         # had a p99 beside every latency except this one (2026-09-10).
         out["write_p99_ms"] = round(pct(lat, 0.99), 3)
+        _beat.mark("writes-done", n=n_writes, p50=out["write_p50_ms"])
         # DELETE (2026-10, DECISIONS #82): the write's partner, over the same
         # ids the write pass created, in the same order. Single pass, like the
         # write, and for the same reason: a delete is not repeatable.
         dlat = []
+        _beat.mark("deletes-start", n=n_writes)
         for w in range(n_writes):
             new_id = write_id_base + w
             t = time.perf_counter()
@@ -792,9 +807,11 @@ def main():
         out["delete_p50_ms"] = round(pct(dlat, 0.50), 3)
         out["delete_p95_ms"] = round(pct(dlat, 0.95), 3)
         out["delete_p99_ms"] = round(pct(dlat, 0.99), 3)
+        _beat.mark("deletes-done", n=n_writes, p50=out["delete_p50_ms"])
         out["oltp_total_s"] = round(time.perf_counter() - total_t0, 2)
     else:
         for qname, text in OLAP_QUERIES.items():
+            _beat.mark(f"olap-{qname}-start", iters=OLAP_ITERATIONS)
             # The warmup WAS the cold pass, and it was not even timed. Timing
             # it costs nothing (the query ran either way) and gives this lane
             # the cold/warm split every non-vector lane was missing. The dense
@@ -824,6 +841,7 @@ def main():
             out[f"{qname}_min_ms"] = round(min(lat), 2)
             out[f"{qname}_iters"] = len(lat)
             out[f"{qname}_rows"] = rows0
+            _beat.mark(f"olap-{qname}-done", p50=out[f"{qname}_p50_ms"])
         # STAMP THE ARM. BENCH_GAV=0 changes what was measured and, until this
         # line, changed nothing that was recorded: an ablation run wrote the
         # same lane/scale/n_persons/workload/backend/rep as the published cell
@@ -857,7 +875,8 @@ def main():
         out["gav_build_s"] = _gav
 
     _t = time.perf_counter()
-    ad.close()
+    with _beat.phase("close"):
+        ad.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
     # Recorded at the END, when the generators have actually run. A shortfall is a
     # refusal: a row claiming the full corpus while a fraction was ingested is

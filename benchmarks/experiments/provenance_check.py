@@ -731,7 +731,7 @@ def check_schema_homogeneity(rows):
 def _stamp_for(commit):
     """The sha buildnumber-maven-plugin writes for a commit-ish.
 
-    Identical to build_matched_pair.sh (the pair recipe, in the repository since 2026-09-14)'s stamp_sha_for(): the last NON-MERGE
+    Identical to the pair recipe's own stamp_sha_for(): the last NON-MERGE
     commit reachable from it. Falls back to the input when git cannot answer,
     so an unresolvable sha compares as itself rather than silently passing.
     """

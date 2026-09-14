@@ -17,7 +17,6 @@ import statistics
 import sys
 import time
 import bench_common
-import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 # Data source: synthetic SPLADE-shaped (default) or real Big-ANN SPLADE/MS MARCO
 # (BENCH_SPARSE_SOURCE=bigann). Both expose the same surface.
@@ -635,6 +634,12 @@ def main():
     # against cell wall-clocks of 130-190 min, so 85% of the most expensive
     # measurement on the machine was unaccounted for. Not knowing where it
     # goes is also why the campaign could not be honestly costed or shortened.
+    # PHASE MARKERS (2026-09-14, same pattern as l3d_dense) beside the phase
+    # TIMERS this lane already keeps: a cell that dies names the phase it was
+    # in and how long it had been there. Entered and left AROUND the timed
+    # work, never inside a timed loop.
+    _beat = bench_common.PhaseBeat()
+    _beat.mark("cell-start", backend=args.backend, scale=args.scale)
     _p0 = time.perf_counter()
     # COUNTED, not asserted. n_docs was SCALE_DOCS[scale], a module constant, so
     # PAGE-SPEC rule 4's corpus fingerprint was fingerprinting a constant: point a
@@ -661,7 +666,8 @@ def main():
 
     gen_docs = _counted_gen_docs
 
-    queries = gen_queries(SCALE_QUERIES[args.scale])
+    with _beat.phase("query-gen", n=SCALE_QUERIES[args.scale]):
+        queries = gen_queries(SCALE_QUERIES[args.scale])
     _query_gen_s = time.perf_counter() - _p0
 
     _p0 = time.perf_counter()
@@ -674,6 +680,8 @@ def main():
             import numpy as np
             gt = np.load(gt_path)
     _gt_load_s = time.perf_counter() - _p0
+    _beat.mark("ground-truth-loaded", present=gt is not None,
+               t=f"{round(_gt_load_s, 2)}s")
 
     b = BACKENDS[args.backend]()
     out = {"lane": "l3s", "n_docs": n_docs, "dims": DIMENSIONS, "k": K,
@@ -682,11 +690,12 @@ def main():
            "gt_load_s": round(_gt_load_s, 2)}
 
     t0 = time.perf_counter()
-    b.connect()
+    with _beat.phase("connect", backend=args.backend):
+        b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = getattr(b, "version", "?")
     out["durability"] = DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY)
-    out["instrument"] = _bench_common_mod.INSTRUMENT
+    out["instrument"] = bench_common.INSTRUMENT
     # Only Elasticsearch sets this. A row must say which operating point it
     # measured; the 9.0.0-vs-9.4.1 recall gap was only diagnosable because the
     # engine version happened to be recorded, and pruning is not visible from
@@ -695,8 +704,10 @@ def main():
         out["es_prune"] = b.prune
 
     t0 = time.perf_counter()
-    b.build(n_docs)
-    b.post_build()
+    with _beat.phase("build", n=n_docs):
+        b.build(n_docs)
+    with _beat.phase("post-build"):
+        b.post_build()
     build = time.perf_counter() - t0
     out["build_s"] = round(build, 2)
     out["build_docs_per_s"] = round(n_docs / build, 1)
@@ -704,6 +715,7 @@ def main():
     # timed warm search
     _search_t0 = time.perf_counter()
     lats, raw_results = [], []
+    _beat.mark("search-start", n=len(queries), warmup=WARMUP)
     for qi, (idx, vals) in enumerate(queries):
         t0 = time.perf_counter()
         ids = b.search(idx, vals, K)
@@ -714,11 +726,13 @@ def main():
     out.update({f"query_{k2}": v for k2, v in pct(lats).items()})
     out["qps"] = round(len(lats) / sum(lats), 1)
     out["search_wall_s"] = round(time.perf_counter() - _search_t0, 2)
+    _beat.mark("search-done", n=len(lats), t=f"{out['search_wall_s']}s")
 
     # recall: was untimed and is NOT free at scale, since it resolves every
     # returned hit back to a doc ordinal. Untimed does not mean zero, and an
     # unaccounted phase is exactly what made this lane's cost unexplainable.
     _recall_t0 = time.perf_counter()
+    _beat.mark("recall-start", n=len(raw_results))
     if gt is not None:
         recalls = []
         for qi, ids in enumerate(raw_results):
@@ -729,6 +743,7 @@ def main():
         out["recall_at_10"] = None
         out["gt_missing"] = True
     out["recall_calc_s"] = round(time.perf_counter() - _recall_t0, 2)
+    _beat.mark("recall-done", recall=out.get("recall_at_10"))
     # WHAT THIS CELL COULD NOT ACCOUNT FOR. Sum of the phases we now time,
     # against the wall clock the runner sees. A large residual means there is
     # still a phase nobody is measuring, and it says so in the row rather than
@@ -756,7 +771,8 @@ def main():
     # settles a roughly fixed 30-87 MB, against nothing at all for an
     # already-settled comparator. After all measurement, so nothing above moves.
     _t = time.perf_counter()
-    b.close()
+    with _beat.phase("close"):
+        b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
 
     # comparator row with ArcadeDB's version. Keep the system-under-test's

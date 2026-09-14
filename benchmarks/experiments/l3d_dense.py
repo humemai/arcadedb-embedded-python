@@ -21,7 +21,6 @@ Scales: small = full 1M (the canonical unit). Smaller scales cap the corpus and
 keep only queries whose true top-k lies inside the cap (subset-exact recall).
 """
 import argparse
-import bench_common as _bench_common_mod  # a name no function-local import can shadow
 import json
 import os
 import statistics
@@ -1605,7 +1604,7 @@ def main():
         if _v is not None:
             out[_k] = _v
     out["durability"] = DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY)
-    out["instrument"] = _bench_common_mod.INSTRUMENT
+    out["instrument"] = bench_common.INSTRUMENT
     # An IVF arm chooses its probe count by effect before the warmup and the
     # timed passes (arango_common), on a HELD-OUT slice of 200 queries the
     # timed pass never asks (queries 1000:1200 of the fixture's 10,000), so

@@ -19,7 +19,6 @@ import os
 import statistics as st
 import time
 import bench_common
-import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 import l5_lifecycle as L
 
@@ -229,7 +228,7 @@ def main(args):
     build(db, args.workload, n)
     out["build_s"] = round(time.perf_counter() - t, 2)
     out["durability"] = "txWalFlush=0 (engine default): no flush at commit"   # DECISIONS #81
-    out["instrument"] = _bench_common_mod.INSTRUMENT
+    out["instrument"] = bench_common.INSTRUMENT
     _bt = time.perf_counter()
     server_cmd(rq, root, f"close database {DB}").raise_for_status()
     out["build_close_ms"] = round((time.perf_counter() - _bt) * 1000, 3)
