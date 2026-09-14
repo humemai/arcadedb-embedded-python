@@ -602,19 +602,71 @@ class SurrealGraph(Base):
         "degree_dist": ("SELECT * FROM (SELECT deg, count() AS n FROM "
                         "(SELECT count(->knows) AS deg FROM person) WHERE deg > 0 "
                         "GROUP BY deg) ORDER BY deg"),
+        # THE TRIANGLE COUNT, WHICH THIS ADAPTER DECLARED UNEXPRESSIBLE UNTIL
+        # 2026-09-14. The old reason -- "arrow traversal returns a path's
+        # endpoint set and names no intermediate vertex, so the per-path id
+        # ordering cannot be written" -- was true about the construct we tried
+        # and false about the language. It is written here without naming an
+        # intermediate vertex at all, by turning the path pattern into a set
+        # intersection over the edge table, which is the shape SurrealQL does
+        # have. Same reading as the degree distribution (#82b): a first failure
+        # is evidence about our fluency, not about the engine.
+        #
+        # WHY IT COUNTS EACH TRIANGLE ONCE, which is the whole of the question.
+        # The Cypher is MATCH (a)->(b)->(c)->(a) WHERE a.id < b.id AND
+        # a.id < c.id, so `a` is the smallest id of the three and exactly one
+        # of a directed 3-cycle's three rotations survives. Here one row of
+        # `knows` IS the (a -> b) leg: `in` is a, `out` is b, `WHERE in < out`
+        # is a.id < b.id, and the third vertex c is any record that b points at
+        # and that points at a -- that is N+(b) INTERSECT N-(a), spelled
+        # `out->knows.out` and `in<-knows.in`. `|$c| $c > in` is a.id < c.id.
+        # So each row contributes the triangles whose smallest-id vertex is its
+        # own `in`, and summing over the rows counts every triangle once.
+        # Verified against the harness's own Python triangle enumeration on the
+        # shared generator at 200/300/600/1000/2000 persons, on core 2.3.10 and
+        # on the 3.2.4 server: 1836 / 2452 / 2999 / 2469 / 2776, exact on every
+        # one, which is what DECISIONS #88's digest then checks against Neo4j,
+        # ArcadeDB, LadybugDB and ArangoDB.
+        #
+        # THREE CONSTRUCTS, EACH FROM THE DOCUMENTATION, each of which the
+        # first attempt got wrong:
+        #  - record ids are ordered and compare directly, so `in < out` needs
+        #    no .id projection and sorts person:4 after person:30 numerically
+        #    (surrealdb.com/docs/surrealql/datamodel/ids).
+        #  - array::intersect(a, b) keeps a's duplicates and needs no closure
+        #    (surrealdb.com/docs/surrealql/functions/database/array).
+        #  - array::filter's closure CAPTURES the fields of the row being
+        #    projected, which is how `$c > in` reaches the edge's own `in`.
+        #    `$parent` does NOT: inside an idiom filter or a closure it
+        #    resolves to nothing and the comparison silently passes, which is
+        #    the bug that made the first ordered attempt return 3,656 for a
+        #    graph with 2,452 triangles. Documented for subqueries only
+        #    (surrealdb.com/docs/surrealql/parameters).
+        #
+        # AND WHY `.out`/`.in` RATHER THAN `->person`/`<-person`: both spell
+        # the same set and both return the same count, but `->knows->person`
+        # fetches every neighbour's whole record while `->knows.out` reads the
+        # destination id off the edge. On core 2.3.10 that is 16.4 s against
+        # 85.9 s at 1,000 persons (laptop, 2026-09-14). This form costs about
+        # |E|^1.1 on the shared generator -- 38.1 s over 40,833 edges, 227.0 s
+        # over 206,713 -- so SF10's roughly 1.9M edges EXTRAPOLATE to a cold
+        # pass of tens of minutes, and the arrow form to several times that.
+        # Extrapolated, not measured: no SF10 cell has run since this query
+        # existed, and the extrapolation crosses a corpus change as well as a
+        # size one, since a triangle count's real cost is sum(deg(u)*deg(v))
+        # over the edges and LDBC's degree distribution is not the
+        # generator's. The 3.2.4 server inverts the spelling preference, and
+        # its subclass overrides this entry for that reason.
+        "triangles": ("SELECT math::sum(n) AS n FROM ("
+                      "SELECT array::len(array::filter(array::intersect("
+                      "out->knows.out, in<-knows.in), |$c| $c > in)) AS n "
+                      "FROM knows WHERE in < out) GROUP ALL"),
     }
-    # NOT IN THE MAP, AND THAT IS THE ANSWER (DECISIONS #88: an engine that
-    # cannot express a query declares it, never skips it silently). A triangle
-    # count needs a path pattern that binds all three vertices at once so the
-    # id ordering that counts each triangle once can be written; SurrealQL's
-    # arrow traversal returns the endpoint SET of a path, with no name for the
-    # intermediate vertex, so the predicate has nowhere to attach. Recorded on
-    # the row as unexpressible with this reason.
-    UNEXPRESSIBLE = {
-        "triangles": ("SurrealQL arrow traversal returns a path's endpoint set and "
-                      "names no intermediate vertex, so the per-path id ordering "
-                      "that counts each triangle once cannot be written"),
-    }
+    # Nothing on this lane is unexpressible in SurrealQL any more. The hook
+    # stays, and stays empty, because DECISIONS #88 is about declaring an
+    # absence rather than skipping it silently, and the next query added to
+    # OLAP_QUERIES may need it.
+    UNEXPRESSIBLE = {}
 
     def run_olap(self, qname):
         return self._rows(self.db.query(self.OLAP[qname]))
@@ -631,6 +683,30 @@ class SurrealGraph(Base):
 
 class SurrealGraphServer(SurrealGraph):
     name = "surrealdb_graph_server"
+
+    # THE SAME QUESTION, THE SPELLING THIS ENGINE'S PLANNER PREFERS. Every
+    # other entry is inherited unchanged; only the triangle count is
+    # overridden, and only in how it names the two hops. Measured on the
+    # laptop on 2026-09-14, both spellings returning the identical count on
+    # both engines:
+    #
+    #            core 2.3.10 (embedded, 1,000 persons)   3.2.4 (served, 2,000)
+    #   .out/.in              16.4 s                            7.3 s
+    #   ->person/<-person     85.9 s                            1.7 s
+    #
+    # The preference inverts between the two engine versions -- 2.3.10 pays
+    # for the record fetch that ->person forces, 3.2.4 plans the arrow form
+    # better than the field form -- so one shared text would hand one of the
+    # two arms a 4 to 5x penalty we know is avoidable. That is the same
+    # reading as the bulk relation insert (60x over RELATE) and the index
+    # defined before the TPC load (BUGS F37): a per-engine path is chosen for
+    # each engine, not for the one we measured first. Both texts are here so
+    # the choice can be checked rather than trusted.
+    OLAP = dict(SurrealGraph.OLAP,
+                triangles=("SELECT math::sum(n) AS n FROM ("
+                           "SELECT array::len(array::filter(array::intersect("
+                           "out->knows->person, in<-knows<-person), |$c| $c > in)) AS n "
+                           "FROM knows WHERE in < out) GROUP ALL"))
 
     def _open(self):
         from surrealdb import Surreal
