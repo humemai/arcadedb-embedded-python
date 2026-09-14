@@ -42,7 +42,12 @@ sys.path.insert(0, str(HERE))
 
 from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path set above)
 
-FROZEN = HERE / "results" / "runs_paper.csv"
+# The frozen selection this payload is built from. A skeleton publish reads
+# its own freeze (DECISIONS #86), so the campaign's tracked runs_paper.csv is
+# never touched and the page's source link names the file it really used.
+FROZEN_NAME = ("runs_skeleton_laptop.csv"
+               if os.environ.get("BENCH_SKELETON") == "1" else "runs_paper.csv")
+FROZEN = HERE / "results" / FROZEN_NAME
 OUT = HERE / "results" / "web_benchmarks.json"
 
 # Version names live as trailing comments beside each pin in runner.py; the
@@ -96,8 +101,17 @@ _UNUSABLE_VERSION = re.compile(
     re.I)
 
 
+# DECISIONS #86, declared here because the module-level artifact readers below
+# depend on it: BENCH_SKELETON=1 says the frozen rows are the laptop's
+# micro-scale placeholder run. A skeleton reads NO bench-host overlay, so the
+# readers that refuse a missing pinned directory must not fire for it.
+SKELETON = os.environ.get("BENCH_SKELETON") == "1"
+
+
 def _dense_overlay_is_pinned():
     """Always, since 2026-09-08: dense_mp_dir() refuses instead of falling back."""
+    if SKELETON:
+        return False
     import make_paper_tables as _MPT
     _MPT.dense_mp_dir()
     return True
@@ -542,6 +556,22 @@ SCALE_LABELS = {
     ("lifecycle", "lc10m"): "10M",
 }
 
+# THE SKELETON'S OWN LABELS (DECISIONS #86). The placeholder run uses the
+# laptop's micro corpora, and the campaign labels above would print "2.59M
+# points" over 12 hours of TSBS or "TPC-H SF1" over SF0.01. A banner saying
+# the numbers are placeholders does not excuse a size column that names a
+# corpus the cell never read, so the sizes here are the ones actually
+# measured, each marked so it cannot be mistaken for a campaign tier.
+SKELETON_SCALE_LABELS = {
+    ("l1tpc", "micro"): "TPC-H SF0.01 (60k line items, skeleton)",
+    ("l2", "micro"): "2k people (skeleton)",
+    ("l3d", "micro"): "5k vectors (skeleton)",
+    ("l3s", "micro"): "5k vectors (skeleton)",
+    ("l4", "ts100"): "432k points, 12 h (skeleton)",
+    ("e2", "e2"): "50k products (skeleton)",
+    ("lifecycle", "lc10k"): "10k (skeleton)",
+}
+
 
 def scale_label(lane: str, scale: str) -> str:
     """Reader-facing size for a lane's tier name.
@@ -551,6 +581,8 @@ def scale_label(lane: str, scale: str) -> str:
     prevent, and a silent fallback would let it through looking deliberate.
     """
     try:
+        if SKELETON:
+            return SKELETON_SCALE_LABELS[(lane, scale)]
         return SCALE_LABELS[(lane, scale)]
     except KeyError:
         raise SystemExit(
@@ -598,22 +630,22 @@ REPO = "https://github.com/humemai/arcadedb-embedded-python/blob/main"
 # reader can open the rows rather than take the page's word for them, which is
 # the whole point of generating these from data in the first place.
 SOURCES = {
-    "l3s": "benchmarks/experiments/results/runs_paper.csv",
+    "l3s": f"benchmarks/experiments/results/{FROZEN_NAME}",
     # Two tiers, two artifacts: small comes from the campaign's frozen rows,
     # DEEP-10M from the matched multipass overlay. Both are published.
-    "l3d": ["benchmarks/experiments/results/runs_paper.csv",
+    "l3d": [f"benchmarks/experiments/results/{FROZEN_NAME}",
             "benchmarks/experiments/results/dense_mp5_<pin or 2681>"],   # resolved in _dense_overlay_entries
-    "l2": "benchmarks/experiments/results/runs_paper.csv",
-    "l1": "benchmarks/experiments/results/runs_paper.csv",
-    "l1tpc": "benchmarks/experiments/results/runs_paper.csv",
-    "e2": "benchmarks/experiments/results/runs_paper.csv",
-    "l4": "benchmarks/experiments/results/runs_paper.csv",
+    "l2": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    "l1": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    "l1tpc": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    "e2": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    "l4": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "e4": "benchmarks/experiments/results/e4decomp_" + (os.environ.get("BENCH_ENGINE_COMMIT", "").strip() or "UNPINNED"),
-    "l2olap": "benchmarks/experiments/results/runs_paper.csv",
-    "e2atom": "benchmarks/experiments/results/runs_paper.csv",
-    "lifecycle": "benchmarks/experiments/results/runs_paper.csv",
-    "docs_oltp": "benchmarks/experiments/results/runs_paper.csv",
-    "docs_olap": "benchmarks/experiments/results/runs_paper.csv",
+    "l2olap": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    "e2atom": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    "lifecycle": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    "docs_oltp": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    "docs_olap": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "pycost": "benchmarks/python-bindings/jpype_overhead/results/mini_results.csv",
     "pyb_tabular": "benchmarks/python-bindings/results/runs_paper.csv",
     "pyb_graph": "benchmarks/python-bindings/results/runs_paper.csv",
@@ -660,6 +692,11 @@ DENSE_10M_ARMS = [
 
 
 def _dense_overlay_entries(scale="deep10m"):
+    # See _extras in main(): a skeleton draws only what it measured, so the
+    # multipass overlay (a bench-host artifact) is not read and the dense
+    # table comes from the skeleton's own single-pass rows, cold only.
+    if SKELETON:
+        return []
     """The DEEP-10M tier, every engine, both passes.
 
     THIS TIER WAS WITHHELD AND SHOULD NOT HAVE BEEN. The withheld note said
@@ -950,7 +987,6 @@ def _metrics_for(lane, spec):
 # changes nothing about how a cell is aggregated; it stamps the payload so
 # that neither a reader nor the live publish can mistake a placeholder for a
 # measurement.
-SKELETON = os.environ.get("BENCH_SKELETON") == "1"
 SKELETON_BANNER = (
     "PLACEHOLDER NUMBERS. Every cell on this page comes from a single "
     "repetition at micro scale on the laptop, run to fill in the October "
@@ -965,6 +1001,18 @@ SKELETON_TABLE_NOTE = (
 # A laptop skeleton cannot satisfy either (no cpuset pinning, no per-scale
 # memory envelope), and every other gate must pass exactly as it will in
 # October. Named in the payload so the waiver is published, not assumed.
+# What a laptop skeleton cannot draw, and why, published beside the banner so
+# the reader is not left wondering whether a table was dropped or forgotten.
+SKELETON_ABSENT = {
+    "l3smp": "the sparse second pass is a separate multipass driver on the "
+             "bench host; the skeleton runs the lane once.",
+    "l3d warm columns": "the dense warm pass comes from the same multipass "
+                        "driver; the skeleton's dense table is cold only.",
+    "e4": "the client/server decomposition is its own overlay, measured on "
+          "the bench host.",
+    "pycost": "the Python-cost table is the binding suite's own frozen file, "
+              "not a lane the skeleton runs.",
+}
 SKELETON_WAIVERS = [
     "FAIRNESS F1 (cpuset pinning): the skeleton runs on the laptop's shared "
     "cpuset, not a pinned one.",
@@ -1226,13 +1274,61 @@ GLOBAL_CONDITIONS = [
     "to turn that off.",
 ]
 
+# THE 2026-10 DURABILITY CONDITION (DECISIONS #81). It replaces the paragraph
+# above, which describes the September rows: from October every engine that
+# has the knob is set to the same class, so the sentence stops being a list of
+# differences and becomes one rule plus its named exceptions. Written from the
+# ROWS, not typed: each table's own engines decide which exceptions it names,
+# so a table with no Neo4j row never mentions Neo4j.
+OCT_DURABILITY_CONDITION = (
+    "Durability is matched at the relaxed end: on every engine that has the "
+    "setting, a commit returns without waiting for the disk and the log is "
+    "flushed by the engine's own background policy, which is ArcadeDB's engine "
+    "default and a documented production mode for each of the others. Every "
+    "engine's setting was read out of the engine rather than assumed, and each "
+    "row records what it ran as `durability`.")
+
+
+def _durability_note(entries, rows, table_lane=None):
+    """The durability sentence THIS table needs, from the engines it shows.
+
+    Returns None for a table whose rows predate the 2026-10 instrument, so a
+    September payload is untouched.
+    """
+    import bench_common
+    want = {str(e.get("backend")) for e in entries}
+    seen = {}
+    for r in rows:
+        if str(r.get("instrument") or "") != "2026-10":
+            continue
+        lbl = display_name(str(r.get("backend") or ""))
+        if lbl not in want and not any(lbl in w for w in want):
+            continue
+        cls = bench_common.durability_class(r.get("durability"))
+        if cls:
+            seen.setdefault(cls, set()).add(lbl)
+    if not seen:
+        return None
+    parts = [OCT_DURABILITY_CONDITION]
+    if seen.get("strict"):
+        names = ", ".join(sorted(seen["strict"]))
+        parts.append(f"The exception on this table is {names}, which has no setting "
+                     f"to relax and waits for the disk at every commit; its write and "
+                     f"transaction cells are paying for that.")
+    if seen.get("unverified"):
+        names = ", ".join(sorted(seen["unverified"]))
+        parts.append(f"{names} exposes no durability setting at all and what it does at "
+                     f"commit could not be established, so it is in neither class and its "
+                     f"row says so rather than claiming one.")
+    return " ".join(parts)
+
 
 # _pinned_dir cannot be used here: it is defined below and this is module scope.
 # Resolved the same way, and for the same reason -- e4decomp_2681 is a 2026-08-07
 # artifact on 26.8.1, so a pinned re-run must be able to supersede it without an
 # edit here. The "_2681" name is kept as the fallback because that is what exists.
 E4_DIR = HERE / "results" / f"e4decomp_{os.environ.get('BENCH_ENGINE_COMMIT', '').strip() or 'UNPINNED'}"
-if not E4_DIR.is_dir():
+if not E4_DIR.is_dir() and not SKELETON:
     raise SystemExit(f"{E4_DIR.name} missing; E4 is pinned only since 2026-09-08 (e4decomp_2681 retired), run the e4 lane")
 
 # Named so the page can say what each step is rather than showing three opaque
@@ -1717,9 +1813,9 @@ def _lifecycle_table(all_rows):
         "withheld_scales": [],
         "withheld_reason": None,
         "entries": entries,
-        "source_paths": ["benchmarks/experiments/results/runs_paper.csv"],
+        "source_paths": [f"benchmarks/experiments/results/{FROZEN_NAME}"],
         "source_urls": ["https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv"],
-        "source_path": "benchmarks/experiments/results/runs_paper.csv",
+        "source_path": f"benchmarks/experiments/results/{FROZEN_NAME}",
         "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper.csv",
     }
 
@@ -2699,8 +2795,17 @@ def main() -> int:
     # The function stays because the SciPy paper still publishes these rows and
     # a future page may want them WITH the matrix. Restoring them means adding
     # the matrix too, and re-adding their cells to page_check.MAPPING.
-    for extra in (_sparse_multipass_table(), _l4_table(rows), _lifecycle_table(rows),
-                  _e4_table(), _python_cost_table()):
+    # A SKELETON CARRIES NO CELL IT DID NOT MEASURE (DECISIONS #86). The
+    # sparse second-pass table, the client/server decomposition, and the
+    # Python-cost table are all built from artifacts of the bench host's
+    # campaign, not from the skeleton's own rows, and dropping a laptop banner
+    # over a mini measurement is the same lie in the other direction. They are
+    # withheld and NAMED in the payload, so the reader can see which of the
+    # October page's tables the skeleton could not draw and why.
+    _extras = [_l4_table(rows), _lifecycle_table(rows)]
+    if not SKELETON:
+        _extras = [_sparse_multipass_table()] + _extras + [_e4_table(), _python_cost_table()]
+    for extra in _extras:
         if extra and extra["entries"]:
             tables.append(extra)
 
@@ -2718,13 +2823,21 @@ def main() -> int:
                 _t["conditions"].append(DISK_NOTE)
     # EVERY TABLE SAYS IT, not only the banner at the top (DECISIONS #86). A
     # reader who lands on one table, or who screenshots one, must see it.
+    # THE DURABILITY CLASS, ON THE TABLE THAT PAYS FOR IT (DECISIONS #81).
+    # Before the skeleton note, so the placeholder warning stays first.
+    for _t in tables:
+        _note = _durability_note(_t.get("entries", []), rows)
+        if _note:
+            _t.setdefault("conditions", [])
+            if _note not in _t["conditions"]:
+                _t["conditions"].append(_note)
     if SKELETON:
         for _t in tables:
             _t.setdefault("conditions", [])
             if SKELETON_TABLE_NOTE not in _t["conditions"]:
                 _t["conditions"].insert(0, SKELETON_TABLE_NOTE)
     payload = {
-        "source": "benchmarks/experiments/results/runs_paper.csv",
+        "source": f"benchmarks/experiments/results/{FROZEN_NAME}",
         "generator": "benchmarks/experiments/export_web.py",
         # DECISIONS #86. Present and false on a real payload, so a reader (and
         # refresh_web_page's live publish) tests a field that always exists
@@ -2732,6 +2845,7 @@ def main() -> int:
         "skeleton": SKELETON,
         "skeleton_banner": SKELETON_BANNER if SKELETON else None,
         "gates_waived": SKELETON_WAIVERS if SKELETON else [],
+        "skeleton_absent_tables": SKELETON_ABSENT if SKELETON else {},
         # Read from the rows, not asserted here. The literal "26.8.1" survived a
         # re-pin and two campaigns because nothing recomputed it (DECISIONS #49).
         "arcadedb_version": _arcadedb_identity(rows),

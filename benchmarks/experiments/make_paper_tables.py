@@ -134,8 +134,10 @@ PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
 SKELETON_SCALES = {"l1tpc": ["micro"], "l2": ["micro"], "l3s": ["micro"],
                    "l3d": ["micro"], "e2": ["e2"], "l4": ["ts100"],
                    "lifecycle": ["lc10k"]}
-if os.environ.get("BENCH_SKELETON") == "1":
+SKELETON = os.environ.get("BENCH_SKELETON") == "1"
+if SKELETON:
     PAPER_SCALES = dict(SKELETON_SCALES)
+FROZEN_NAME = "runs_skeleton_laptop.csv" if SKELETON else "runs_paper.csv"
 
 NAMES = {
     "arcadedb_embedded": "ArcadeDB (emb)", "arcadedb_server": "ArcadeDB (srv)",
@@ -186,7 +188,12 @@ def load_canonical(apply_corpus=True):
     # Dedupe on PAYLOAD fields, never run_id: pre-2026-07-21 run_ids were not
     # scale-qualified, so different scales collided under one id (the 100k
     # sparse tier was invisible under run_id-keyed dedupe).
-    rows = [json.loads(l) for l in open(os.path.join(RESULTS, "runs.jsonl"))
+    # WHICH LOG. runs.jsonl is the campaign's append log and the default. A
+    # skeleton freeze (DECISIONS #86) reads its own file instead, so the
+    # campaign's rows and the laptop's placeholders can never be pooled by a
+    # freeze that happened to run in the wrong directory.
+    rows = [json.loads(l) for l in open(os.path.join(
+                RESULTS, os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")))
             if l.strip()]
     best = {}
     for r in rows:
@@ -1123,7 +1130,11 @@ def freeze_paper_rows(rows):
         for k in r:
             if k not in cols:
                 cols.append(k)
-    path = os.path.join(RESULTS, "runs_paper.csv")
+    # A SKELETON FREEZE HAS ITS OWN FILE (DECISIONS #86). runs_paper.csv is
+    # the campaign's tracked freeze and the live page publishes from it; a
+    # laptop placeholder run must not be able to overwrite it, not even for
+    # the minutes a publish takes.
+    path = os.path.join(RESULTS, FROZEN_NAME)
     with open(path, "w", newline="") as f:
         w = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()

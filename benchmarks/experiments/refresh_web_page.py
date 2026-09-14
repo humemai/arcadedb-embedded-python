@@ -92,7 +92,7 @@ GATES = ["provenance_check", "fairness_check", "page_check"]
 #   * a live publish refuses a payload the exporter stamped skeleton;
 #   * --skeleton implies --preview, and cannot be combined with a live target.
 BENCH_HOST_FORBIDDEN = {"mini"}
-FROZEN_CSV = HERE / "results" / "runs_paper.csv"
+FROZEN_CSV = HERE / "results" / "runs_skeleton_laptop.csv"
 
 
 def _assert_skeleton_rows():
