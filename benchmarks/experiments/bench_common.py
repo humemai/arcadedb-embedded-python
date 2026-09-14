@@ -5,6 +5,9 @@ Stdlib-only (so every backend image can import it): latency summary stats,
 on-disk size, a raw-latency sidecar dump, and a small timing context manager.
 """
 import contextlib
+import datetime as _dt
+import decimal as _decimal
+import hashlib
 import json
 import os
 import socket
@@ -486,3 +489,284 @@ class SelfMemorySampler:
             "peak_anon_mib_sum": round(self.peak_anon / (1 << 20), 1),
             "end_anon_mib_sum": round((self.end_anon or 0) / (1 << 20), 1),
         }
+
+
+# ---------------------------------------------------------------------------
+# RESULT EQUIVALENCE (DECISIONS #88).
+#
+# A benchmark that never checks the answer measures how fast an engine can be
+# wrong. Until 2026-09-14 the only cross-engine correctness in this harness was
+# recall against ground truth on the vector lanes and the torn-state comparison
+# in the cross-model trial: every other lane recorded latency, throughput, and
+# for a few queries a row count. An adapter that silently dropped a filter, a
+# group, or a join condition would have shown up as a lead rather than as a bug.
+#
+# So every timed query whose answer is deterministic records a canonical digest
+# of that answer on its row, plus a short readable sample so a disagreement can
+# be READ rather than only detected, and equivalence_check.py refuses a table
+# whose engines disagree at the same scale.
+#
+# Three rules that are not negotiable, because each of them is a way to make
+# the check pass while proving nothing:
+#
+#   1. The digest is computed from the object the TIMED call returned, outside
+#      the timed section. Re-running the query to digest it would digest a
+#      second execution -- a different transaction, a different cache state,
+#      and on a lane with writes a different database.
+#   2. An engine that cannot express a query records
+#      "unexpressible: <reason>", never a blank. Silence is indistinguishable
+#      from agreement, and that is exactly the failure #88 was written after.
+#   3. Normalisation is identical for every engine. Anything that varies with
+#      the driver -- tuple versus dict, int versus double, a trailing space, a
+#      timezone-aware datetime -- is normalised away BEFORE hashing, so a
+#      digest mismatch means the ANSWERS differ and nothing else.
+
+DIGEST_VERSION = "rd1"
+NULL_TOKEN = "<null>"
+MISSING_TOKEN = "<missing>"
+UNEXPRESSIBLE_PREFIX = "unexpressible: "
+SAMPLE_MAX_CHARS = 240
+SAMPLE_ROWS = 3
+
+
+class _Missing:
+    __slots__ = ()
+
+    def __repr__(self):
+        return MISSING_TOKEN
+
+
+_MISSING = _Missing()
+
+
+def _fmt_number(v, float_digits):
+    """One number, one string, whatever driver produced it.
+
+    An int is printed EXACTLY, because a count is exact and rounding one to
+    six significant digits would let 1,234,567 and 1,234,568 collide. A float
+    is printed to `float_digits` SIGNIFICANT digits, not decimal places: two
+    correct engines summing 60,000 doubles in different orders differ in the
+    last bits, which on a sum of 1e8 is an absolute difference of ~1e-8 * 1e8,
+    and absolute decimal rounding cannot reconcile that while significant-digit
+    rounding can. Below 10**float_digits the two spellings coincide (str(60175)
+    and "%.6g" % 60175.0 are both "60175"), which is where counts live.
+    """
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    x = float(v)
+    if x != x:
+        return "nan"
+    if x == float("inf"):
+        return "inf"
+    if x == float("-inf"):
+        return "-inf"
+    s = f"{x:.{float_digits}g}"
+    return "0" if s in ("-0", "-0.0") else s
+
+
+def _fmt_value(v, float_digits):
+    """One cell of one row, canonical."""
+    if v is None or v is _MISSING:
+        return MISSING_TOKEN if v is _MISSING else NULL_TOKEN
+    if isinstance(v, (bool, int, float)):
+        return _fmt_number(v, float_digits)
+    if isinstance(v, _decimal.Decimal):
+        return _fmt_number(float(v), float_digits)
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, bytes):
+        return v.hex()
+    if isinstance(v, _dt.datetime):
+        # Aware datetimes land in UTC and lose the offset, so a driver that
+        # returns UTC+00:00 and one that returns naive UTC agree.
+        if v.tzinfo is not None:
+            v = v.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+        s = v.isoformat(sep="T")
+        return s[:-7] if s.endswith(".000000") else s
+    if isinstance(v, _dt.date):
+        return v.isoformat()
+    if isinstance(v, _dt.timedelta):
+        return _fmt_number(v.total_seconds(), float_digits)
+    # numpy scalars and anything else that knows how to become a Python scalar
+    item = getattr(v, "item", None)
+    if callable(item):
+        try:
+            return _fmt_value(item(), float_digits)
+        except Exception:  # noqa: BLE001  (not a scalar after all)
+            pass
+    if isinstance(v, dict):
+        return "{" + ",".join(f"{k}={_fmt_value(v[k], float_digits)}"
+                              for k in sorted(v, key=str)) + "}"
+    if isinstance(v, (list, tuple, set, frozenset)):
+        items = [_fmt_value(x, float_digits) for x in v]
+        if isinstance(v, (set, frozenset)):
+            items.sort()
+        return "[" + "|".join(items) + "]"
+    return str(v).strip()
+
+
+def _is_mapping(row):
+    return hasattr(row, "keys") and hasattr(row, "__getitem__")
+
+
+def _lookup(row, spec):
+    """One declared column out of one row.
+
+    `spec` is a column name, or a tuple of alternative names, because the same
+    question is answered under different names by different drivers: a Mongo
+    $group calls the key "_id", an AQL COLLECT calls it whatever the RETURN
+    names it, and a SQL driver hands back a positional tuple. Dotted names
+    reach into a sub-document ("_id.f"), which is how Mongo's composite group
+    keys are read without a per-engine digest.
+    """
+    for cand in (spec if isinstance(spec, (tuple, list)) else (spec,)):
+        cur = row
+        ok = True
+        for part in str(cand).split("."):
+            if _is_mapping(cur):
+                try:
+                    if part in cur.keys():
+                        cur = cur[part]
+                        continue
+                except Exception:  # noqa: BLE001  (driver row types vary)
+                    pass
+                ok = False
+                break
+            if isinstance(cur, (list, tuple)) and part.isdigit():
+                idx = int(part)
+                if idx < len(cur):
+                    cur = cur[idx]
+                    continue
+            ok = False
+            break
+        if ok:
+            return cur
+    return _MISSING
+
+
+def canonical_rows(rows, columns=None, float_digits=6):
+    """The engine's answer as a list of tuples of strings, driver removed.
+
+    `columns` is the query's DECLARED column order and is what makes a dict
+    row comparable with a tuple row. Without it a mapping row falls back to
+    its own keys sorted, which is deterministic but only comparable against
+    another engine that happened to use the same names; every caller in this
+    harness declares its columns.
+    """
+    if rows is None:
+        return []
+    if _is_mapping(rows) or not hasattr(rows, "__iter__") or isinstance(rows, (str, bytes)):
+        rows = [rows]
+    out = []
+    for row in rows:
+        if columns and _is_mapping(row):
+            vals = [_lookup(row, c) for c in columns]
+        elif columns and isinstance(row, (list, tuple)):
+            # A POSITIONAL ROW ALREADY IS THE DECLARED ORDER. A SQL driver
+            # hands back a tuple whose order is the SELECT list's, which is
+            # what `columns` names; looking those names up in a tuple would
+            # find nothing and silently digest a row of sentinels.
+            vals = list(row)
+        elif columns:
+            vals = [row] + [_MISSING] * (len(columns) - 1)
+        elif _is_mapping(row):
+            vals = [row[k] for k in sorted(row.keys(), key=str)]
+        elif isinstance(row, (list, tuple)):
+            vals = list(row)
+        else:
+            vals = [row]
+        out.append(tuple(_fmt_value(v, float_digits) for v in vals))
+    return out
+
+
+def _key_positions(columns, key):
+    if key is None:
+        return None
+    keys = key if isinstance(key, (tuple, list)) else (key,)
+    pos = []
+    for k in keys:
+        if isinstance(k, int):
+            pos.append(k)
+        elif columns:
+            names = [c[0] if isinstance(c, (tuple, list)) else c for c in columns]
+            pos.append(names.index(k))
+        else:
+            raise ValueError(f"order_key {k!r} needs `columns` to resolve to a position")
+    return tuple(pos)
+
+
+def result_digest(rows, columns=None, order_matters=False, float_digits=6,
+                  order_key=None, id_key=None, sample_rows=SAMPLE_ROWS):
+    """Canonical digest of one query's answer: {"digest", "sample", "n"}.
+
+    `digest` is a short stable hash (16 hex characters of SHA-256 over the
+    canonical form, the declared column names, and the ordering flags), `n` is
+    the row count, and `sample` is the first few canonical rows as one short
+    CSV-safe line, so a gate can print both sides of a disagreement instead of
+    only announcing one.
+
+    ORDER. Sorted unless `order_matters`, because a query without an ORDER BY
+    does not define one and two engines returning the same set in different
+    orders agree. When the query DOES define an order, the canonical form is a
+    stable sort on the declared key with `id_key` as tie-break: engines break
+    ties arbitrarily and identically-ranked rows in a different order are not a
+    disagreement, while the membership of an ORDER BY ... LIMIT still is,
+    because a wrong order returns a different SET of rows. The sort is applied
+    to every engine identically, so it is a canonicalisation, not a relaxation.
+    """
+    canon = canonical_rows(rows, columns=columns, float_digits=float_digits)
+    if order_matters:
+        pos = _key_positions(columns, order_key)
+        idp = _key_positions(columns, id_key)
+        if pos is not None:
+            def _k(r):
+                head = tuple(r[i] for i in pos if i < len(r))
+                tail = tuple(r[i] for i in idp if i < len(r)) if idp else r
+                return (head, tail)
+            canon = sorted(canon, key=_k)
+        # order_key not declared: the engine's own order is the canonical one.
+    else:
+        canon = sorted(canon)
+    names = [c[0] if isinstance(c, (tuple, list)) else str(c) for c in (columns or ())]
+    blob = "\x1d".join([DIGEST_VERSION, ",".join(names),
+                        "ordered" if order_matters else "unordered",
+                        str(float_digits), str(len(canon))]
+                       + ["\x1f".join(r) for r in canon])
+    h = hashlib.sha256(blob.encode("utf-8", "replace")).hexdigest()[:16]
+    shown = " ; ".join("(" + ",".join(r) + ")" for r in canon[:sample_rows])
+    if len(shown) > SAMPLE_MAX_CHARS:
+        shown = shown[:SAMPLE_MAX_CHARS - 1] + "…"
+    return {"digest": h, "sample": shown, "n": len(canon)}
+
+
+def record_result(out, name, rows, **kw):
+    """Stamp res_<name>_digest / _sample / _n onto a lane's output dict.
+
+    Call it OUTSIDE the timed section with the object the timed call returned.
+    Returns the digest dict so a caller can assert on it.
+    """
+    d = result_digest(rows, **kw)
+    out[f"res_{name}_digest"] = d["digest"]
+    out[f"res_{name}_sample"] = d["sample"]
+    out[f"res_{name}_n"] = d["n"]
+    return d
+
+
+def record_unexpressible(out, name, reason):
+    """This engine cannot ask this question, and the row says so.
+
+    DECISIONS #88: "Queries that an engine cannot express are declared absent
+    in its adapter, never silently skipped, and the gate names them." A blank
+    is indistinguishable from agreement; this string is not.
+    """
+    text = UNEXPRESSIBLE_PREFIX + str(reason)
+    out[f"res_{name}_digest"] = text
+    out[f"res_{name}_sample"] = text
+    out[f"res_{name}_n"] = None
+    return text
+
+
+def is_unexpressible(value):
+    return isinstance(value, str) and value.startswith(UNEXPRESSIBLE_PREFIX)
