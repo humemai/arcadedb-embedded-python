@@ -1481,7 +1481,7 @@ def _sparse_multipass_table():
         "columns": ["cold p50 ms", "cold p99 ms", "warm p50 ms", "warm p99 ms", "gain"],
         "withheld_scales": [],
         "withheld_reason": None,
-        "source_paths": ["benchmarks/experiments/results/sparse_mp"],
+        "source_paths": ["benchmarks/experiments/results/sparse_mp_<pin>"],   # _pinned_dir reads the pinned name
         "source_urls": [f"{REPO}/benchmarks/experiments/results/sparse_mp"],
         "entries": entries,
     }

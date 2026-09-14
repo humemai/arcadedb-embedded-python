@@ -65,7 +65,7 @@ def verify():
     # Stamp the wheel and persist the trial. E3 is the only lane whose paper
     # claims ("recovers in under one second ... across five trials", failover
     # "0.2--3.3 s", "251 of 251 rows") trace to a single hand-written line in
-    # CAMPAIGN_2026-07.md rather than to per-trial data, because this script
+    # the campaign's own summary rather than to per-trial data, because this script
     # only ever printed to stdout and the logs that captured it are gone. The
     # numbers are right, but nothing can re-derive them. Fixed here so the
     # freeze re-run leaves evidence.

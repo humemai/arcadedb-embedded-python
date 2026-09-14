@@ -2,7 +2,7 @@
 """Generate the paper's LaTeX tables (T2-T5) from results/runs.jsonl +
 results/l4_tsbs.jsonl.
 
-Canonical-row rule (see CAMPAIGN_2026-07.md): latest row per
+Canonical-row rule (see .notes/bench/DECISIONS.md #44): latest row per
 (lane, scale, workload, backend, rep), rc==0, paper scales only.
 Cells are median [min-max] over N=5 reps. Raw rows are never edited;
 rerun this script after the October freeze re-measure.

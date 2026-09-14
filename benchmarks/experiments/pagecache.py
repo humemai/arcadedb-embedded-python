@@ -1,7 +1,7 @@
 """Evict a database's pages from the page cache, and prove they left.
 
 Cold open -- the first open after a boot, with nothing cached -- was the one
-lifecycle question `lifecycle-open-close.md` recorded as untestable, because the
+lifecycle question DECISIONS #50 recorded as untestable, because the
 obvious instrument is `echo 3 > /proc/sys/vm/drop_caches` and mini has no
 passwordless sudo.
 

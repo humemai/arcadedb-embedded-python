@@ -9,7 +9,7 @@ left the index MUTABLE, so close rebuilt the whole graph; ours, fixed by PR
 that can slide from 8 ms to 30 s between releases with nobody watching is what a
 regression gate is for.
 
-THE INVARIANT, from lifecycle-open-close.md and DECISIONS #50:
+THE INVARIANT, from DECISIONS #50:
 
     Close should be O(what was written), not O(what is stored),
     and on the order of 100 ms.
