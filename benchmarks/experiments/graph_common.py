@@ -175,19 +175,36 @@ OLAP_QUERIES = {
 # WHAT EACH ANSWER LOOKS LIKE (DECISIONS #88). Declared once per query, never
 # per engine; the alternatives inside a tuple are the names the four dialects
 # give the same column.
+#
+# A MEASURE IS DECLARED `num`, A COUNT IS NOT. The canonical form prints an int
+# exactly and a float to six significant digits, and the two spellings coincide
+# only below 10**6 -- so a column whose value an engine returns as an integer
+# and its neighbour returns as a double is the SAME NUMBER canonicalised two
+# ways, and the digest splits as soon as the value passes a million. That is
+# not hypothetical: at TPC-H SF1 it split the pricing summary seven engines to
+# one, with ArangoDB's integral SUM on one side and every SQL engine's double
+# on the other (2026-09-14). `num` says "this column is a measure, compare it
+# as a number", and is applied to every AVERAGE here.
+#
+# Counts, degrees, ages and identifiers deliberately stay exact: `d`, `n`,
+# `deg`, `age` and the person key are whole numbers that every engine already
+# agrees on, and rounding one to six significant digits would let two DIFFERENT
+# counts collide. Declared once per query, never per engine, so it cannot be
+# used to make one engine's answer match another's.
 OLAP_DIGEST = {
     "top_degree": dict(columns=(("id", "pid"), "d"),
                        order_matters=True, order_key="d", id_key="id"),
     "same_city_edges": dict(columns=("c", "n"),
                             order_matters=True, order_key="n", id_key="c"),
     "friend_age_by_city": dict(columns=("c", "a", "n"),
-                               order_matters=True, order_key="n", id_key="c"),
+                               order_matters=True, order_key="n", id_key="c",
+                               coerce={"a": "num"}),
     "degree_dist": dict(columns=("deg", "n")),
     "triangles": dict(columns=("n",)),
 }
 READ_DIGEST = {
     "point": dict(columns=("name", "age")),
-    "hop1": dict(columns=("n", "a")),
+    "hop1": dict(columns=("n", "a"), coerce={"a": "num"}),
     "hop2": dict(columns=("n",)),
     "hop3f": dict(columns=("n",)),
 }

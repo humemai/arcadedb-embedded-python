@@ -29,6 +29,23 @@ Which arms are on the page and which are still queued is PAGE-SPEC.md section 2;
 
 The composed cross-model stack (Qdrant + Neo4j) is not a pinned engine of its own: it is two of the rows above wired together, and it still carries the retired Neo4j 5-community pin until qDT re-runs it.
 
+## Dialect facts that decide a comparison
+
+Things an engine does that are not wrong and are not a performance property, but that change what comes back and therefore what the #88 answer check sees. Each was found by a disagreement, and each is written down here so the next lane does not have to find it again.
+
+- **ArangoDB returns an integral `SUM` as an integer.** AQL's `SUM` over a column whose values VelocyPack stored as integers returns an integer, where every SQL engine, MongoDB's `$sum` and SurrealQL's `math::sum` return a double. Found 2026-09-14 on TPC-H Q1 at SF1: `sum_qty` came back `37734107` against every other engine's `37734107.0`, the same number, and the canonical form printed the first exactly and the second as `3.77341e+07`. Seven engines to one, on an answer nobody got wrong. It is invisible below a million, which is why SF0.01 passed. The fix is in the lane's column declaration — a summed measure is declared `num` — not in the engine and not in the hash.
+- **The ArcadeDB SQL parser narrows a decimal literal that needs more than single precision.** `INSERT INTO T SET v=0.33333333` into a `DOUBLE` property stores 0.33333334; a bound parameter with the same value stores the double exactly. TPC-H money is unaffected (two decimals below 131072 round-trip through float32 and the served arm's corpus is bit-identical to the embedded arm's, measured at SF1), but any lane that loads through SQL text with more than about seven significant digits is exposed. BUGS F43 recorded the comparison half of this; the insert half is the same parser.
+- **The ArcadeDB HTTP API truncates a result at 20,000 rows** unless the request says otherwise, and `/command` takes no `limit` field. Lanes that send scans over HTTP carry an explicit `LIMIT` in the SQL instead.
+- **A two-sided indexed range on a STRING column loses rows at its `>=` lower bound.** Found 2026-09-14 at TPC-H SF0.1, where both ArcadeDB arms returned a Q6 revenue of 11,801,684.4174 against every other engine's 11,803,420.2534. The deficit is 1,735.836, which is exactly one line item of the qualifying set (shipdate 1994-01-01, quantity 17, extendedprice 28930.6, discount 0.06). Isolated through the lane's own adapter, with a `NOTUNIQUE` index on `l_shipdate`:
+
+  | predicate over the same window | rows, SF0.1 | rows, SF1 |
+  |---|---|---|
+  | `l_shipdate >= '1994-01-01' AND l_shipdate < '1995-01-01'` | 92,037 | 908,652 |
+  | `l_shipdate > '1993-12-31' AND l_shipdate < '1995-01-01'` | 92,040 | 909,455 |
+  | `l_shipdate.substring(0, 4) = '1994'` (no index can serve it) | 92,040 | 909,455 |
+
+  Deterministic: ten repeats inside one build and two independent builds all returned 92,037. The two rewrites, which denote the same set, both return the truth, so it is the `>=` bound on the index scan and not the data. It is NOT registered as a known disagreement: at SF1 the extra Q6 predicates happen to exclude every lost row and the answer is right to 1e-14, so registering it would suppress a gate that is correctly failing at the size where the loss lands on a qualifying row. `arcadedb_literal_precision_probe.py` is the sibling finding on the insert path; this one wants a Java repro against the engine's index range scan before it goes upstream.
+
 ## Retired pins
 
 | Engine | Pin | Replaced by |

@@ -82,6 +82,37 @@ def test_value_rules():
     print("values: two counts that differ do NOT collide under rounding")
     ne("1234567 != 1234568", d([(1234567,)], columns=("n",)), d([(1234568,)], columns=("n",)))
 
+    # THE TWO SPELLINGS ONLY COINCIDE BELOW A MILLION, AND THAT COST A PUBLISH.
+    # str(60175) and "%.6g" % 60175.0 are both "60175", which is why the two
+    # cases above pass and why nothing noticed for six weeks. At 10**7 they part
+    # company: ArangoDB's AQL SUM over an integer column returns an INTEGER
+    # where every SQL engine, MongoDB's $sum and SurrealQL's math::sum return a
+    # double, and at TPC-H SF1 that split the pricing summary seven engines to
+    # one on an answer nobody got wrong (2026-09-14, sum_qty 37,734,107).
+    print("values: above a million the int and float spellings DIVERGE")
+    ne("37734107 != 37734107.0 undeclared",
+       d([(37734107,)], columns=("sum_qty",)), d([(37734107.0,)], columns=("sum_qty",)))
+
+    # WHICH IS WHAT `num` IS FOR. A column that holds a MEASURE is declared
+    # num, once per query and never per engine, and then the driver's choice of
+    # integer or double stops deciding the digest.
+    print("values: a column declared `num` is a measure, whatever type it arrives as")
+    meas = dict(columns=("sum_qty",), coerce={"sum_qty": "num"})
+    eq("37734107 == 37734107.0 declared num",
+       d([(37734107,)], **meas), d([(37734107.0,)], **meas))
+    eq("Decimal == int == float declared num",
+       d([(decimal.Decimal("37734107"),)], **meas), d([(37734107,)], **meas))
+
+    # AND WHY A COUNT MUST NOT BE DECLARED ONE. The float side of `num` is
+    # six significant digits, so two counts a million apart in magnitude and one
+    # apart in value would agree. A count stays exact for exactly this reason.
+    print("values: a count declared `num` WOULD collide, which is why it is not")
+    cnt = dict(columns=("n",), coerce={"n": "num"})
+    eq("12345671 == 12345672 if a count were wrongly declared a measure",
+       d([(12345671,)], **cnt), d([(12345672,)], **cnt))
+    ne("...and they stay distinct when it is not",
+       d([(12345671,)], columns=("n",)), d([(12345672,)], columns=("n",)))
+
     print("values: strings are stripped, not otherwise touched")
     eq("' A ' == 'A'", d([(" A ",)], columns=("c",)), d([("A",)], columns=("c",)))
     ne("'A' != 'a'", d([("A",)], columns=("c",)), d([("a",)], columns=("c",)))

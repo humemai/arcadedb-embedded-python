@@ -265,6 +265,33 @@ def served_client(url=None, ns="bench", db="bench", user="root", password="root"
 _SAMPLE_EPOCHS = {}
 
 
+def _counter(client, name):
+    """The int a ReconnectingClient keeps under `name`, or None.
+
+    NOT `getattr(client, name, None)`, AND THE DIFFERENCE KILLED EVERY MONGODB
+    CELL IN THE TPC LANE (2026-09-14, found at SF1). A pymongo `Database`
+    answers ANY attribute name by returning a `Collection` of that name, so
+    `getattr(db, "reconnects", None)` is not None, it is
+    `Collection(bench.reconnects)`. `stamp_reconnects` then wrote that object
+    onto the row and the cell died four and a half minutes in, at the final
+    `json.dump`, with "Object of type Collection is not JSON serializable" --
+    after the load, after every query, having produced nothing. The same
+    duck-typing made `sample_kept` compare two freshly minted Collections on
+    every timed sample; pymongo's `__eq__` happened to call them equal, so it
+    returned True by luck rather than by design.
+
+    The skeleton sweep did not catch it because DECISIONS #91 landed mid-sweep
+    and the l1tpc MongoDB cells had already run. It is not scale-dependent: SF1
+    is simply the first size at which those cells were run again.
+
+    A reconnect counter is an int. Anything else is an adapter answering a
+    question it was not asked, and the right reading of it is "this adapter has
+    no reconnect counter".
+    """
+    v = getattr(client, name, None)
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
 def sample_kept(adapter) -> bool:
     """Did the sample just timed run on a connection that never dropped?
 
@@ -279,7 +306,7 @@ def sample_kept(adapter) -> bool:
     one discarded. One sample out of a thousand is the cheaper error.
     """
     client = getattr(adapter, "db", None)
-    epoch = getattr(client, "reconnect_epoch", None)
+    epoch = _counter(client, "reconnect_epoch")
     if epoch is None:
         return True
     key = id(client)
@@ -303,7 +330,7 @@ def stamp_reconnects(out, adapter):
     and come back.
     """
     client = getattr(adapter, "db", None)
-    n = getattr(client, "reconnects", None)
+    n = _counter(client, "reconnects")
     if n is not None:
         out["reconnects"] = n
         out["surreal_ws_options"] = WS_OPTIONS_NOTE

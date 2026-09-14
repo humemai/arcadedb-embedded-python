@@ -172,17 +172,50 @@ OLAP_QUERIES = ("q1", "q6", "top_parts", "ship_mode", "by_month")
 # mean the same thing: by_month's key is a truncated DATE in DuckDB and
 # PostgreSQL and a seven-character substring everywhere else, which is the same
 # month.
+#
+# A MEASURE IS DECLARED `num`; A COUNT AND AN IDENTIFIER ARE NOT. Found at the
+# campaign's own SF1 on 2026-09-14, where the pricing summary split SEVEN
+# ENGINES TO ONE and nobody had the wrong answer:
+#
+#     ArangoDB   sum_qty = 37734107     (an int: AQL's SUM over a column
+#                                        VelocyPack stored as integers returns
+#                                        an integer)
+#     every other engine
+#                sum_qty = 37734107.0   (a double: SQL sum(), MongoDB $sum,
+#                                        SurrealQL math::sum)
+#
+# The canonical form prints an int exactly and a double to six significant
+# digits, so those became "37734107" and "3.77341e+07". `n` in the same row was
+# an int on every engine and identical, `avg_qty` was bit-identical, and
+# `avg_qty * n` is `sum_qty` -- so the two sides held the SAME NUMBER and the
+# digest split on its spelling. It is invisible below 10**6, which is why the
+# SF0.01 skeleton passed: at that size sum_qty is 377,341 and both spellings
+# are "377341". At SF1 three of Q1's four groups cross the boundary; at SF10 all
+# four do. A gate that refuses a publish over this is refusing arithmetic.
+#
+# So the fix is a declaration, not a looser hash: every summed or averaged
+# MEASURE is declared `num` and compared as a number whatever type the driver
+# returns, while `n`, `l_partkey` and the CRUD keys stay EXACT -- a count
+# rounded to six significant digits would let 1,234,567 and 1,234,568 agree.
+# Declared once per query and never per engine, so it cannot be used to make
+# one engine's answer match another's. Verified across all eight engines that
+# produced a clean SF1 row (tpc_rounding_audit.py).
 OLAP_DIGEST = {
     "q1": dict(columns=(("l_returnflag", "_id.f", "f"), ("l_linestatus", "_id.s", "s"),
-                        "sum_qty", "sum_base", "sum_disc", "avg_qty", "n")),
-    "q6": dict(columns=("revenue",)),
+                        "sum_qty", "sum_base", "sum_disc", "avg_qty", "n"),
+               coerce={"sum_qty": "num", "sum_base": "num",
+                       "sum_disc": "num", "avg_qty": "num"}),
+    "q6": dict(columns=("revenue",), coerce={"revenue": "num"}),
     # ORDER BY rev DESC LIMIT 10: the membership of the top ten is the answer,
     # and two engines may break a revenue tie differently, so the canonical
     # form sorts on rev with the part key as tie-break.
     "top_parts": dict(columns=(("l_partkey", "_id", "k"), "rev"),
-                      order_matters=True, order_key="rev", id_key="l_partkey"),
+                      order_matters=True, order_key="rev", id_key="l_partkey",
+                      coerce={"rev": "num"}),
+    # No measure here: the only value column is a count.
     "ship_mode": dict(columns=(("l_shipmode", "_id", "m"), "n")),
-    "by_month": dict(columns=(("m", "_id"), "rev"), coerce={"m": "month"}),
+    "by_month": dict(columns=(("m", "_id"), "rev"),
+                     coerce={"m": "month", "rev": "num"}),
 }
 
 # ---------------------------------------------------------------------------

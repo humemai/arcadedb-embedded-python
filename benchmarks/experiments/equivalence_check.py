@@ -237,8 +237,9 @@ def _fmt_sample(text, width=150):
     return t if len(t) <= width else t[:width - 1] + "…"
 
 
-def report(groups, seen_backends, out=print):
+def report(groups, seen_backends, out=print, list_groups=False):
     agreed = disagreed = unchecked = 0
+    roster = []            # (key, [(digest, [backends])]) for --list
     failures = []          # (arcade_involved, key, lines)
     absences = []          # (key, backend, reason)
     unstable = []          # (key, backend, digests)
@@ -279,12 +280,21 @@ def report(groups, seen_backends, out=print):
             if be not in per_backend:
                 silent.append((key, be))
 
-        if len(real) < 2:
-            unchecked += 1
-            continue
         by_digest = collections.defaultdict(list)
         for be, (d, _s, _n) in real.items():
             by_digest[d].append(be)
+        # THE ROSTER, under --list: which engines answered this question and
+        # what each of them said. The counts below are the gate; this is what
+        # makes "32 groups agreeing" auditable instead of a number to trust.
+        # An agreeing group is only evidence if you can see WHO agreed, and a
+        # group with one engine in it is the thing #88 warns about.
+        if list_groups:
+            roster.append((key, [(d, sorted(bes)) for d, bes in
+                                 sorted(by_digest.items(), key=lambda kv: -len(kv[1]))],
+                           real[sorted(real)[0]][2] if real else None))
+        if len(real) < 2:
+            unchecked += 1
+            continue
         if len(by_digest) == 1:
             agreed += 1
             continue
@@ -341,6 +351,17 @@ def report(groups, seen_backends, out=print):
         out(f"  ok: {agreed} group(s) where two or more engines answered, all agreeing")
     else:
         out("  no group had two engines answering the same question; see E5 and E6")
+
+    if list_groups:
+        out("\n=== EVERY GROUP, AND WHO ANSWERED IT (--list) ===")
+        for key, entries, n in roster:
+            n_engines = sum(len(bes) for _d, bes in entries)
+            verdict = ("UNCHECKED" if n_engines < 2 else
+                       "AGREE" if len(entries) == 1 else f"SPLIT x{len(entries)}")
+            out(f"  {key[0]:9} {str(key[1]):8} {str(key[2]):10} {str(key[3]):16} "
+                f"{verdict:10} {n_engines} engine(s), n={n}")
+            for d, bes in entries:
+                out(f"      {d}  {', '.join(bes)}")
 
     if unstable:
         out("\n=== E2: an engine must agree with itself across repetitions ===")
@@ -412,6 +433,12 @@ def main():
                     help="a results .jsonl or .csv to check instead of the canonical set")
     ap.add_argument("--no-selftest", action="store_true",
                     help="skip the result_digest unit tests (they are the gate's own instrument)")
+    ap.add_argument("--list", action="store_true", dest="list_groups",
+                    help="print EVERY group with the engines that answered it and "
+                         "the digest each gave, agreeing groups included. The "
+                         "counts alone cannot be audited: 'ok, 32 groups agreeing' "
+                         "reads the same whether thirty-two questions were put to "
+                         "ten engines or to two.")
     args = ap.parse_args()
 
     if not args.no_selftest:
@@ -438,7 +465,7 @@ def main():
         print("  no 2026-10 rows at all; nothing to check yet")
         return 0
 
-    bad, agreed, _dis, unchecked = report(groups, seen)
+    bad, agreed, _dis, unchecked = report(groups, seen, list_groups=args.list_groups)
     bad += report_silent_lanes(silent_lanes)
     print(f"\n{bad} equivalence failure(s); {agreed} group(s) checked and agreeing, "
           f"{unchecked} unchecked")

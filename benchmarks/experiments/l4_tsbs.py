@@ -65,14 +65,27 @@ ORDERLIMIT_N = 5   # TSBS groupby-orderby-limit takes the last five buckets
 # TimescaleDB, and a timestamp on QuestDB. Those are one instant in six
 # spellings, and without the coercion the gate would report six disagreements
 # per query and hide any real one among them.
+#
+# AND THE READING IS DECLARED A MEASURE. The TSBS cpu corpus carries its fields
+# as line-protocol INTEGERS (`usage_user=58i`), so every value here is a whole
+# number that one engine can hand back as an int and the next as a double. The
+# canonical form prints an int exactly and a float to six significant digits,
+# and the two spellings coincide only below 10**6 -- which is the only reason
+# this lane has never split on it: `uu` is a percentage and `v` its average, so
+# both sit under a hundred. It is latent rather than absent, and the same
+# latency became a real split on the TPC lane at SF1, seven engines to one
+# (2026-09-14). `num` says "this column is a measure"; the host name and the
+# bucket key stay what they are.
 Q_DIGEST = {
-    "q_last": dict(columns=(("ts", "timestamp"), "uu"), coerce={"ts": "epoch_s"}),
-    "q_range": dict(columns=(("m", "_id"), "v"), coerce={"m": "epoch_s"}),
-    "q_global": dict(columns=(("h", "_id"), "v"), coerce={"h": "epoch_s"}),
+    "q_last": dict(columns=(("ts", "timestamp"), "uu"),
+                   coerce={"ts": "epoch_s", "uu": "num"}),
+    "q_range": dict(columns=(("m", "_id"), "v"), coerce={"m": "epoch_s", "v": "num"}),
+    "q_global": dict(columns=(("h", "_id"), "v"), coerce={"h": "epoch_s", "v": "num"}),
     "q_groupby": dict(columns=(("host", "_id.host"), ("h", "_id.h"), "v"),
-                      coerce={"h": "epoch_s"}),
-    "q_high": dict(columns=("host", ("ts", "timestamp"), "uu"), coerce={"ts": "epoch_s"}),
-    "q_orderlimit": dict(columns=(("h", "_id"), "v"), coerce={"h": "epoch_s"},
+                      coerce={"h": "epoch_s", "v": "num"}),
+    "q_high": dict(columns=("host", ("ts", "timestamp"), "uu"),
+                   coerce={"ts": "epoch_s", "uu": "num"}),
+    "q_orderlimit": dict(columns=(("h", "_id"), "v"), coerce={"h": "epoch_s", "v": "num"},
                          order_matters=True, order_key="h"),
 }
 

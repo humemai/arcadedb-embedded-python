@@ -11,8 +11,11 @@ in a second and with no container, is the machinery that answers it:
   * anything that is not a dropped connection is raised, not retried,
   * close() never reconnects, because a reconnect made to close is a reconnect
     that would count itself on the row,
-  * the retried call's LATENCY is not counted (sample_kept), and
-  * `reconnects` lands on the row whether or not anything happened.
+  * the retried call's LATENCY is not counted (sample_kept),
+  * `reconnects` lands on the row whether or not anything happened, and
+  * an adapter whose client answers EVERY attribute name -- a pymongo
+    `Database` returns a `Collection` for any name -- gets no reconnect field
+    at all, so the row it writes is still JSON.
 
 Run directly, or as part of a smoke:
 
@@ -25,6 +28,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import surreal_common  # noqa: E402
+
+
+def _json_ok(row):
+    """A row the lane could actually write: json.dump is what the cell ends on."""
+    import json
+    try:
+        json.dumps(row)
+        return True
+    except TypeError:
+        return False
 
 
 class FakeClient:
@@ -150,6 +163,43 @@ def main():
     out3 = {}
     surreal_common.stamp_reconnects(out3, Other())
     bad += check("a non-SurrealDB row carries nothing", "reconnects" not in out3)
+
+    # AN ADAPTER WHOSE CLIENT ANSWERS EVERY ATTRIBUTE NAME. `Other` above has
+    # no `db` at all, which is the easy case and the only one this file used to
+    # test. A pymongo `Database` is the hard one: it returns a `Collection` for
+    # any name asked of it, so the old `getattr(client, "reconnects", None)`
+    # came back not-None and put a Collection on the row. Every MongoDB cell in
+    # the TPC lane then died at the final json.dump, after the load and after
+    # every query (2026-09-14, found at SF1).
+    print("\n=== a client that answers any attribute name is not a counter ===")
+
+    class AnswersAnything:
+        def __init__(self, name="bench"):
+            self._name = name
+
+        def __getattr__(self, item):        # pymongo Database.__getattr__
+            if item.startswith("_"):
+                raise AttributeError(item)
+            return AnswersAnything(f"{self._name}.{item}")
+
+        def __eq__(self, o):                # pymongo Collection.__eq__
+            return isinstance(o, AnswersAnything) and o._name == self._name
+
+    class MongoLike:
+        name = "mongodb"
+
+    ml = MongoLike()
+    ml.db = AnswersAnything()
+    out4 = {}
+    surreal_common.stamp_reconnects(out4, ml)
+    bad += check("no reconnect field from a duck-typed client",
+                 "reconnects" not in out4 and "surreal_ws_options" not in out4)
+    bad += check("the row it would have written is JSON-serialisable",
+                 _json_ok(dict(out4, backend="mongodb")))
+    samples4 = []
+    surreal_common.keep(ml, samples4, 1.0)
+    surreal_common.keep(ml, samples4, 2.0)
+    bad += check("its timed samples are all kept", samples4 == [1.0, 2.0])
 
     print(f"\n{bad} failure(s)")
     return 1 if bad else 0

@@ -200,8 +200,17 @@ of that answer, a row count, and a short readable sample, written by
   cover the dialects (`_id`, `_id.f`, an AQL `RETURN` name, a positional SQL
   tuple), integers print exactly, floats to six significant digits, strings are
   stripped, dates are ISO, aware datetimes land in UTC, and a column that holds
-  an instant or a month is declared as such so epoch seconds, epoch
-  milliseconds, a datetime and a truncated date are one value.
+  an instant, a month or a MEASURE is declared as such so epoch seconds, epoch
+  milliseconds, a datetime and a truncated date are one value, and so are an
+  integral sum and the same sum as a double.
+* A column that holds a **measure** is declared `num`; a column that holds a
+  **count or an identifier** is not. The two spellings of a whole number --
+  exact for an int, six significant digits for a double -- coincide only below
+  a million, so an engine whose `SUM` returns an integer agrees with its
+  neighbours at SF0.01 and disagrees at SF1 on the same correct answer. That
+  happened, seven engines to one (2026-09-14, TPC-H Q1, ArangoDB). Counts stay
+  exact in the other direction: rounding a count to six significant digits
+  would let 1,234,567 and 1,234,568 agree.
 
 A write has no answer to digest, so what is digested is the state it left: the
 whole CRUD table read back after each phase, the orders after the new-order and
