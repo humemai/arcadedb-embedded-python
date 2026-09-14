@@ -34,9 +34,11 @@ proving nothing:
     "unexpressible: <reason>" and is listed, with its reason, as a declared
     absence.
   * AN ENGINE MUST AGREE WITH ITSELF. Repetitions of one cell are the same
-    database asked the same question; two digests across reps of one backend
-    mean the digest is not a property of the cell, and that is reported as
-    its own failure class.
+    database asked the same question, and since DECISIONS #90 so are its two
+    durability classes: a strict commit changes when a write becomes durable,
+    not what the answer is. Two digests from one backend within a group mean
+    the digest is not a property of the cell, and that is its own failure
+    class.
 
 Exit status is 1 if any group disagrees, so it can gate a publish. It is
 wired into refresh_web_page.py's GATES.
@@ -129,7 +131,8 @@ def collect(rows):
             q = m.group(1)
             entry = groups[key0 + (q,)][r.get("backend")]
             entry.setdefault(str(val), []).append(
-                (r.get("rep"), str(r.get(f"res_{q}_sample") or ""), r.get(f"res_{q}_n")))
+                (r.get("rep"), str(r.get(f"res_{q}_sample") or ""), r.get(f"res_{q}_n"),
+                 r.get("durability_class") or "relaxed"))
         if not got:
             silent_lanes[r.get("lane")].add(r.get("backend"))
     return groups, skipped, seen_backends, silent_lanes
@@ -183,7 +186,14 @@ def report(groups, seen_backends, out=print):
                 if bench_common.is_unexpressible(d):
                     absences.append((key, be, d[len(bench_common.UNEXPRESSIBLE_PREFIX):]))
             if len(expressed) > 1:
-                unstable.append((key, be, sorted(expressed)))
+                # WHERE THE TWO ANSWERS CAME FROM. Since #90 a backend appears
+                # in a group twice, once per durability class, and a strict
+                # commit must not change the ANSWER, only its latency. Naming
+                # the reps and classes behind each digest is what turns "this
+                # engine disagrees with itself" into something actionable.
+                where = {d: sorted({f"{o[3]}/r{o[0]}" for o in occ})
+                         for d, occ in expressed.items()}
+                unstable.append((key, be, where))
             if expressed:
                 # The newest rep wins the display; the instability is reported
                 # separately above rather than hidden by this choice.
@@ -207,9 +217,16 @@ def report(groups, seen_backends, out=print):
             agreed += 1
             continue
         disagreed += 1
+        # WHICH SIDE IS ARCADEDB ON, and is it alone there? The first version
+        # printed "ArcadeDB disagrees with the other engines" whenever any
+        # ArcadeDB arm was in a disagreeing group, which labelled a LadybugDB
+        # outlier as an ArcadeDB failure. Alone means: every digest an ArcadeDB
+        # arm produced is held by ArcadeDB arms only.
         arcade_side = {d for d, bes in by_digest.items() if any(_is_arcade(b) for b in bes)}
         others = set(by_digest) - arcade_side
         arcade_involved = bool(arcade_side and others)
+        arcade_alone = arcade_involved and all(
+            all(_is_arcade(b) for b in by_digest[d]) for d in arcade_side)
         lines = [f"FAIL {lane} {scale} {workload} :: {query} -- "
                  f"{len(by_digest)} different answers from {len(real)} engines"]
         for d in sorted(by_digest, key=lambda x: (not any(_is_arcade(b) for b in by_digest[x]), x)):
@@ -217,16 +234,18 @@ def report(groups, seen_backends, out=print):
             n = real[bes[0]][2]
             lines.append(f"    {d}  n={n}  {', '.join(bes)}")
             lines.append(f"        {_fmt_sample(real[bes[0]][1])}")
-        failures.append((arcade_involved, key, lines))
+        failures.append((arcade_alone, arcade_involved, key, lines))
 
     # ARCADEDB AGAINST EVERYONE, FIRST. If our own engine is the odd one out,
     # that is the finding that decides whether a published number is wrong,
     # and it must not be read after forty comparator rows.
     out("=== E1: equivalent queries, equivalent answers (DECISIONS #88) ===")
     if failures:
-        for arcade_involved, _key, lines in sorted(failures, key=lambda f: (not f[0], f[1])):
-            if arcade_involved:
-                out("  [ArcadeDB disagrees with the other engines]")
+        for alone, involved, _key, lines in sorted(failures, key=lambda f: (not f[0], not f[1], f[2])):
+            if alone:
+                out("  [ArcadeDB is the odd one out]")
+            elif involved:
+                out("  [ArcadeDB is on one side of this; the outlier is another engine]")
             for line in lines:
                 out("  " + line)
             out("")
@@ -237,9 +256,14 @@ def report(groups, seen_backends, out=print):
 
     if unstable:
         out("\n=== E2: an engine must agree with itself across repetitions ===")
-        for key, be, digests in unstable:
+        for key, be, where in unstable:
             out(f"  FAIL {key[0]} {key[1]} {key[2]} :: {key[3]} -- {be} gave "
-                f"{len(digests)} different answers across reps: {digests}")
+                f"{len(where)} different answers across its own repetitions and "
+                f"durability classes:")
+            for d, tags in sorted(where.items()):
+                out(f"         {d}  {', '.join(tags)}")
+            out("         A strict commit changes when a write is durable, not "
+                "what the answer is (DECISIONS #90).")
 
     if silent:
         out("\n=== E3: a backend that recorded no digest for a query its neighbours answered ===")

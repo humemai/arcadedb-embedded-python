@@ -695,7 +695,9 @@ def main():
         b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = getattr(b, "version", "?")
-    out["durability"] = DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY)
+    # Ingest only, so the relaxed class only (DECISIONS #90).
+    bench_common.stamp_durability(out, getattr(b, "durability", None)
+                                  or DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY))
     out["instrument"] = bench_common.INSTRUMENT
     # DECISIONS #89: where the split does not apply, the reason, not a blank.
     out["cold_warm_na"] = bench_common.NA_COLD_WARM_SPARSE_LANE

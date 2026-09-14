@@ -183,11 +183,14 @@ class ArcadeE2:
             # __size pinned, so under a protocol the paper says applies to
             # everyone, the comparator got the committed, latency-stable
             # heap and ArcadeDB got one that grows.
-            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
+            # txWalFlush explicit at both classes (DECISIONS #90).
+            jvm_kwargs={"heap_size": heap,
+                        "jvm_args": bench_common.arcade_jvm_args(f"-Xms{heap}")})
         # THE WHEEL'S version, not its name (#156). A row stamped
         # "arcadedb-embedded" cannot be re-measured by anyone including us.
         from importlib.metadata import version as _v
         self.version = _v("arcadedb-embedded")
+        self.durability = bench_common.arcade_durability_readback()
 
     def build(self, vecs, edges):
         db, a = self.db, self._a
@@ -298,6 +301,8 @@ class ArcadeE2Server(ArcadeE2):
     name = "arcadedb_e2_server"
 
     def __init__(self):
+        self.durability = (bench_common.at_class(bench_common.DURABILITY_ARCADEDB)
+                           + bench_common.ARCADE_SERVER_DURABILITY_NOTE)
         import requests
         self.rq = requests.Session()
         self.rq.auth = ("root", "dbbenchpass")
@@ -428,6 +433,9 @@ class SurrealE2:
     URL = "surrealkv:///tmp/e2_surrealkv"
 
     def __init__(self):
+        # SURREAL_SYNC_DATA before the datastore opens (DECISIONS #90).
+        self.durability = bench_common.at_class(bench_common.DURABILITY_SURREAL_EMBEDDED)
+        surreal_common.apply_durability()
         import shutil
         from surrealdb import Surreal
         shutil.rmtree("/tmp/e2_surrealkv", ignore_errors=True)
@@ -560,8 +568,11 @@ class ArangoE2:
         self.cl, self.db, self.version = arango_common.connect()
 
     def build(self, vecs, edges):
-        prod = self.db.create_collection("product")
+        # waitForSync on the collection the timed transaction writes (#90).
+        _sync = arango_common.sync_flag()
+        prod = self.db.create_collection("product", sync=_sync)
         rel = self.db.create_collection("related", edge=True)
+        self.durability = arango_common.durability_readback(self.db, "product")
         for s in range(0, len(vecs), BATCH):
             prod.import_bulk([{"_key": str(i), "pid": i, "views": 0, "embedding": vecs[i].tolist()}
                               for i in range(s, min(s + BATCH, len(vecs)))])
@@ -641,9 +652,8 @@ class PgAgeE2:
         self.cx = psycopg.connect(f"host={host} dbname=bench user=postgres password=dbbenchpass",
                                   autocommit=False)
         with self.cx.cursor() as c:
-            c.execute("SHOW synchronous_commit")   # the server runs it off (#81); read, not asserted
-            _sc = c.fetchone()[0]
-            self.durability = f"synchronous_commit={_sc}" + ("" if _sc == "off" else " (NOT the #81 setting)")
+            c.execute("SHOW synchronous_commit")   # read, not asserted (#81, #90)
+            self.durability = bench_common.pg_durability_string(c.fetchone()[0])
             c.execute("CREATE EXTENSION IF NOT EXISTS vector")
             c.execute("CREATE EXTENSION IF NOT EXISTS age")
             c.execute("SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector','age')")
@@ -1057,7 +1067,9 @@ def main():
     with _beat.phase("connect", backend=args.backend):
         b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
-    out["durability"] = getattr(b, "durability", None) or DURABILITY.get(args.backend)
+    # `durability`, `durability_class`, `durability_no_setting` (DECISIONS #90).
+    bench_common.stamp_durability(out, getattr(b, "durability", None)
+                                  or DURABILITY.get(args.backend))
     out["instrument"] = bench_common.INSTRUMENT
     t0 = time.perf_counter()
     with _beat.phase("build", n=PRODUCTS, n_edges=len(edges)):

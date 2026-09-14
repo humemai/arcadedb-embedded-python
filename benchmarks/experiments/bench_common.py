@@ -37,6 +37,15 @@ STRICT_PREFIX = "fsync at commit"
 UNVERIFIED_MARK = "not verified"
 
 
+# WHAT A DURABILITY STRING MEANS, read from the string itself. Since #90 a row
+# also carries an explicit `durability_class` field, which is what the CELL
+# asked for; this classifies what the ENGINE reported, and fairness_check
+# compares the two. A mismatch is a cell that asked for one setting and got
+# another, which is the failure mode a flag the server ignores produces.
+STRICT_MARKS = ("txWalFlush=2", "synchronous=FULL", "j=true", "commit.mode=sync",
+                "SURREAL_SYNC_DATA=true", "waitForSync=true", "synchronous_commit=on")
+
+
 def durability_class(text):
     """'relaxed', 'strict', 'unverified', or None when the row recorded nothing."""
     if not text:
@@ -44,7 +53,9 @@ def durability_class(text):
     t = str(text)
     if UNVERIFIED_MARK in t:
         return "unverified"
-    return "strict" if t.startswith(STRICT_PREFIX) else "relaxed"
+    if t.startswith(STRICT_PREFIX) or any(m in t for m in STRICT_MARKS):
+        return "strict"
+    return "relaxed"
 
 
 # HOW EVERY DEFAULT IN THE LANES' DURABILITY MAPS WAS CHECKED.
@@ -102,6 +113,196 @@ DURABILITY_SURREAL_SERVER = ("RocksDB at the engine default; SurrealDB 3.2.4 exp
 DURABILITY_NEO4J = ("fsync at commit, not configurable (no durability setting in "
                     "SHOW SETTINGS at 2026.07.1)")
 DURABILITY_PG_OFF = "synchronous_commit=off"
+# Defined here, not in arango_common, so at_class() can map it like every other
+# engine's; arango_common re-exports this name as its DURABILITY.
+DURABILITY_ARANGO = "waitForSync=false (default); RocksDB WAL synced every 100 ms"
+
+# ---------------------------------------------------------------------------
+# BOTH DURABILITY SETTINGS, ON THE WRITES (DECISIONS #90, superseding the
+# single-setting half of #81).
+#
+# "Every timed write operation runs twice, once with each setting: the six
+# document operations, the three graph writes, and the cross-model
+# transaction. Bulk ingest stays at one setting, because an fsync per batch at
+# ten million vectors is hours and teaches nothing the write cells do not.
+# Reads are untouched."
+#
+# Most engines cannot switch this per operation -- ArcadeDB's txWalFlush is per
+# database, SurrealDB's and QuestDB's are server flags -- so this is an AXIS on
+# the cell, not two measurements inside one: runner.py takes --durability, the
+# class reaches the lane as BENCH_DURABILITY, and the row records
+# `durability_class` beside the `durability` string the engine itself reports.
+# `durability_class` is part of the canonical key, so a strict cell cannot
+# shadow the relaxed one it sits beside.
+CLASS_RELAXED = "relaxed"
+CLASS_STRICT = "strict"
+DURABILITY_CLASS = os.environ.get("BENCH_DURABILITY", CLASS_RELAXED).strip() or CLASS_RELAXED
+if DURABILITY_CLASS not in (CLASS_RELAXED, CLASS_STRICT):
+    raise SystemExit(f"BENCH_DURABILITY must be 'relaxed' or 'strict', not {DURABILITY_CLASS!r}")
+
+DURABILITY_ARCADEDB_STRICT = "txWalFlush=2: the WAL is flushed and synced at every commit"
+DURABILITY_SQLITE_STRICT = "WAL, synchronous=FULL: synced at every commit"
+DURABILITY_MONGODB_STRICT = "write concern w=1, j=true (the journal is synced before the ack)"
+DURABILITY_QUESTDB_STRICT = "cairo.commit.mode=sync: fsync at commit"
+DURABILITY_SURREAL_EMBEDDED_STRICT = "SurrealKV, SURREAL_SYNC_DATA=true: sync at commit"
+DURABILITY_ARANGO_STRICT = "waitForSync=true: the commit waits for the WAL sync"
+DURABILITY_PG_ON = "synchronous_commit=on"
+
+# THE ENGINES WITH NO KNOB. #90: "The three engines with no knob (Neo4j,
+# DuckDB, and LadybugDB, each straced rather than assumed) print one number in
+# the strict column and say so, which also puts them on an equal footing rather
+# than comparing their strict numbers against everyone else's relaxed ones."
+#
+# A FOURTH BELONGS HERE and the decision's list does not name it, so the reason
+# is written down rather than assumed: SurrealDB 3.2.4 SERVED has no sync
+# setting either. Its binary holds no "SYNC_DATA" and no "SURREAL_DATASTORE"
+# token and none of its 110 SURREAL_* variables names sync, WAL, fsync or
+# durability (#81's evidence block above). Setting an invented flag would label
+# the rows as strict while changing nothing, which is the exact failure #81 was
+# written after. It runs once and declares no setting, like the other three,
+# and its string keeps saying its behaviour at commit is not verified.
+NO_DURABILITY_SETTING = {
+    DURABILITY_NEO4J,
+    DURABILITY_DUCKDB,
+    DURABILITY_LADYBUG,
+    DURABILITY_SURREAL_SERVER,
+}
+
+# relaxed string -> strict string, for the engines that HAVE the knob.
+STRICT_OF = {
+    DURABILITY_ARCADEDB: DURABILITY_ARCADEDB_STRICT,
+    DURABILITY_SQLITE: DURABILITY_SQLITE_STRICT,
+    DURABILITY_MONGODB: DURABILITY_MONGODB_STRICT,
+    DURABILITY_QUESTDB: DURABILITY_QUESTDB_STRICT,
+    DURABILITY_SURREAL_EMBEDDED: DURABILITY_SURREAL_EMBEDDED_STRICT,
+    DURABILITY_PG_OFF: DURABILITY_PG_ON,
+    DURABILITY_ARANGO: DURABILITY_ARANGO_STRICT,
+}
+
+
+def at_class(relaxed_string, cls=None):
+    """The durability string this engine runs at the requested class.
+
+    An engine with no knob returns its own string unchanged in both classes;
+    `has_no_setting` is what tells a table to print one number and say so.
+    """
+    cls = cls or DURABILITY_CLASS
+    if cls != CLASS_STRICT:
+        return relaxed_string
+    return STRICT_OF.get(relaxed_string, relaxed_string)
+
+
+def has_no_setting(relaxed_string):
+    return relaxed_string in NO_DURABILITY_SETTING
+
+
+def pg_expected(cls=None):
+    """What `SHOW synchronous_commit` must answer at this class."""
+    return "on" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "off"
+
+
+def pg_durability_string(value, cls=None):
+    """Read, not asserted: the server's own answer, with a mark when it is not
+    the setting this cell asked for."""
+    want = pg_expected(cls)
+    return f"synchronous_commit={value}" + ("" if value == want
+                                            else f" (NOT the #90 {cls or DURABILITY_CLASS} setting)")
+
+
+def arcade_jvm_args(base="", cls=None):
+    """The embedded engine's JVM arguments with the durability flag appended.
+
+    ArcadeDB's setting is a system property read at database open, so it is a
+    JVM argument on this side and a JAVA_OPTS entry on the served side; the
+    runner does the served half. txWalFlush=0 is the engine default and is
+    passed EXPLICITLY at the relaxed class too, so the row's claim is a flag
+    this process set rather than a default someone remembered.
+    """
+    flush = "2" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "0"
+    arg = f"-Darcadedb.txWalFlush={flush}"
+    return f"{base} {arg}".strip() if base else arg
+
+
+# The served twin's txWalFlush is a JAVA_OPTS entry on its container, set by
+# runner.py for the strict class and recorded on the row as
+# durability_server_flags. The server exposes no read-back for it, so its
+# string says the flag was SET rather than implying the engine was asked.
+ARCADE_SERVER_DURABILITY_NOTE = (" (set on the server's JAVA_OPTS by runner.py and recorded as "
+                                 "durability_server_flags; the server exposes no read-back)")
+
+
+def arcade_durability_readback(fallback_cls=None):
+    """ASK THE ENGINE what txWalFlush it is running at, do not assert it.
+
+    #81's standard for every durability string on a row is that it was read out
+    of the engine rather than assumed, and #90 doubles the number of claims by
+    adding a second class. The flag is a JVM system property this process set,
+    which is exactly the kind of thing that can be set and not take: a typo, a
+    JVM already started by an earlier open, a binding that filters unknown
+    arguments. So the value comes back from GlobalConfiguration.
+
+    Returns the string for the value the engine reports, or the asserted string
+    with a note when the engine cannot be asked -- never silence.
+    """
+    want = at_class(DURABILITY_ARCADEDB, fallback_cls)
+    try:
+        import jpype
+        gc = jpype.JClass("com.arcadedb.GlobalConfiguration")
+        value = int(gc.TX_WAL_FLUSH.getValue())
+    except Exception as e:  # noqa: BLE001
+        return want + f" (asserted: the engine could not be asked, {e.__class__.__name__})"
+    if value == 0:
+        return DURABILITY_ARCADEDB
+    if value == 2:
+        return DURABILITY_ARCADEDB_STRICT
+    return f"txWalFlush={value}, which is neither class (DECISIONS #90)"
+
+
+def sqlite_synchronous(cls=None):
+    return "FULL" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "NORMAL"
+
+
+def journal_ack(cls=None):
+    """MongoDB's j, ArangoDB's waitForSync: True at the strict class."""
+    return (cls or DURABILITY_CLASS) == CLASS_STRICT
+
+
+def sqlite_durability_readback(cx):
+    """ASK SQLITE what it is running at, do not assert the PRAGMA took.
+
+    `PRAGMA synchronous` answers 1 for NORMAL and 2 for FULL, and
+    `PRAGMA journal_mode` answers wal; both are read back here so the row's
+    string is the database's answer rather than the statement we sent.
+    """
+    try:
+        jm = str(cx.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        sync = int(cx.execute("PRAGMA synchronous").fetchone()[0])
+    except Exception as e:  # noqa: BLE001
+        return at_class(DURABILITY_SQLITE) + f" (asserted: PRAGMA read-back failed, {e.__class__.__name__})"
+    if jm == "wal" and sync == 1:
+        return DURABILITY_SQLITE
+    if jm == "wal" and sync == 2:
+        return DURABILITY_SQLITE_STRICT
+    return f"journal_mode={jm}, synchronous={sync}, which is neither class (DECISIONS #90)"
+
+
+def stamp_durability(out, engine_string, cls=None):
+    """The three fields every 2026-10 row carries about durability.
+
+    `durability` is what the ENGINE reports, taken VERBATIM: the adapter has
+    already resolved it, by reading it back where the engine can be asked and
+    by at_class() where it cannot, and re-mapping it here would turn a flag
+    that did not take into a claim that it did -- which is the whole failure
+    #81 was written after. `durability_class` is what the CELL asked for, so
+    fairness_check can compare the two. `durability_no_setting` says the engine
+    has no knob, so a table prints its one number in both columns and says why
+    instead of comparing its strict number against everyone else's relaxed one.
+    """
+    cls = cls or DURABILITY_CLASS
+    out["durability"] = engine_string
+    out["durability_class"] = cls
+    out["durability_no_setting"] = bool(engine_string) and has_no_setting(engine_string)
+    return out["durability"]
 
 
 def _host_identity():

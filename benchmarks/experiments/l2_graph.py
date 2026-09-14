@@ -121,8 +121,11 @@ class ArcadeGraphEmbedded(Base):
         # -Xms pinned to -Xmx for parity with the server deployment
         self.db = arcadedb.create_database(
             "/tmp/l2_arcade",
-            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
+            # txWalFlush passed explicitly at both classes (DECISIONS #90).
+            jvm_kwargs={"heap_size": heap,
+                        "jvm_args": bench_common.arcade_jvm_args(f"-Xms{heap}")})
         self.version = arcadedb.__version__
+        self.durability = bench_common.arcade_durability_readback()
         for ddl in ["CREATE VERTEX TYPE Person",
                     "CREATE PROPERTY Person.id LONG",
                     "CREATE PROPERTY Person.name STRING",
@@ -231,8 +234,15 @@ class ArcadeGraphEmbedded(Base):
 
 class ArcadeGraphServer(ArcadeGraphEmbedded):
     name = "arcadedb_graph_server"
+    # The served twin's txWalFlush is a JAVA_OPTS entry runner.py sets for the
+    # strict class; no HTTP read-back exists and the string says so. Built in
+    # connect() rather than here, because at_class must see the bare relaxed
+    # string to map it and a class attribute would freeze one class at import.
+    durability = bench_common.DURABILITY_ARCADEDB
 
     def connect(self):
+        self.durability = (bench_common.at_class(bench_common.DURABILITY_ARCADEDB)
+                           + bench_common.ARCADE_SERVER_DURABILITY_NOTE)
         import requests
         self.rq = requests.Session()
         self.rq.auth = ("root", "dbbenchpass")
@@ -485,6 +495,9 @@ class SurrealGraph(Base):
     URL = "surrealkv:///tmp/l2_surrealkv"
 
     def _open(self):
+        # SURREAL_SYNC_DATA must be set before the datastore opens (#90).
+        self.durability = bench_common.at_class(bench_common.DURABILITY_SURREAL_EMBEDDED)
+        surreal_common.apply_durability()
         import shutil
         from surrealdb import Surreal
         shutil.rmtree("/tmp/l2_surrealkv", ignore_errors=True)
@@ -560,16 +573,25 @@ class SurrealGraph(Base):
         self.db.query(f"BEGIN; DELETE person:{new_id}<->knows; DELETE person:{new_id}; COMMIT;")
 
     OLAP = {
-        "top_degree": "SELECT pid, count(->knows) AS d FROM person ORDER BY d DESC LIMIT 10",
+        "top_degree": "SELECT pid, count(->knows) AS d FROM person ORDER BY d DESC, pid ASC LIMIT 10",
         # subquery form: on core 2.3.10 ORDER BY after GROUP BY sorted by the group
         # key, not n (laptop smoke, 2026-09-11); 3.2.4 accepts both forms
-        "same_city_edges": "SELECT * FROM (SELECT in.city AS c, count() AS n FROM knows WHERE in.city = out.city GROUP BY c) ORDER BY n DESC LIMIT 10",
-        "friend_age_by_city": "SELECT * FROM (SELECT in.city AS c, math::mean(out.age) AS a, count() AS n FROM knows GROUP BY c) ORDER BY n DESC LIMIT 10",
+        "same_city_edges": "SELECT * FROM (SELECT in.city AS c, count() AS n FROM knows WHERE in.city = out.city GROUP BY c) ORDER BY n DESC, c ASC LIMIT 10",
+        "friend_age_by_city": "SELECT * FROM (SELECT in.city AS c, math::mean(out.age) AS a, count() AS n FROM knows GROUP BY c) ORDER BY n DESC, c ASC LIMIT 10",
         # 2026-10 (#82b). The degree distribution is a group-by over a computed
         # out-degree; degree zero is excluded to match the Cypher MATCH, which
         # does not reach a person with no outgoing KNOWS.
-        "degree_dist": ("SELECT * FROM (SELECT count(->knows) AS deg, count() AS n FROM person GROUP BY deg) "
-                        "WHERE deg > 0 ORDER BY deg"),
+        # TWO SUBQUERIES, not one GROUP BY on a computed alias. The one-level
+        # form `SELECT count(->knows) AS deg, count() AS n FROM person GROUP BY
+        # deg` did NOT group: it returned 2,000 rows, one per person, each
+        # reading (1,1), where the Cypher engines return one row per distinct
+        # degree. The digest caught it on its first comparison, which is what
+        # #88 is for. The degree is computed in the inner query and grouped in
+        # the outer one, so the group key is a plain field by the time GROUP BY
+        # sees it.
+        "degree_dist": ("SELECT * FROM (SELECT deg, count() AS n FROM "
+                        "(SELECT count(->knows) AS deg FROM person) WHERE deg > 0 "
+                        "GROUP BY deg) ORDER BY deg"),
     }
     # NOT IN THE MAP, AND THAT IS THE ANSWER (DECISIONS #88: an engine that
     # cannot express a query declares it, never skips it silently). A triangle
@@ -619,8 +641,11 @@ class ArangoGraph(Base):
 
     def connect(self):
         self.cl, self.db, self.version = arango_common.connect()
-        self.person = self.db.create_collection("person")
-        self.knows = self.db.create_collection("knows", edge=True)
+        # waitForSync on both collections the writes touch (DECISIONS #90).
+        _sync = arango_common.sync_flag()
+        self.person = self.db.create_collection("person", sync=_sync)
+        self.knows = self.db.create_collection("knows", edge=True, sync=_sync)
+        self.durability = arango_common.durability_readback(self.db, "person")
 
     def build(self, n_persons):
         buf = []
@@ -653,12 +678,12 @@ class ArangoGraph(Base):
                "RETURN LENGTH(s)")
     OLAP = {
         "top_degree": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
-                       "COLLECT id = p.id WITH COUNT INTO d SORT d DESC LIMIT 10 RETURN {id, d}"),
+                       "COLLECT id = p.id WITH COUNT INTO d SORT d DESC, id ASC LIMIT 10 RETURN {id, d}"),
         "same_city_edges": ("FOR a IN person FOR b IN 1..1 OUTBOUND a knows FILTER a.city == b.city "
-                            "COLLECT c = a.city WITH COUNT INTO n SORT n DESC LIMIT 10 RETURN {c, n}"),
+                            "COLLECT c = a.city WITH COUNT INTO n SORT n DESC, c ASC LIMIT 10 RETURN {c, n}"),
         "friend_age_by_city": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
                                "COLLECT c = p.city AGGREGATE a = AVG(f.age), n = COUNT(1) "
-                               "SORT n DESC LIMIT 10 RETURN {c, a, n}"),
+                               "SORT n DESC, c ASC LIMIT 10 RETURN {c, a, n}"),
         # 2026-10 (#82b), the same two questions in AQL. degree zero is filtered
         # out to match the Cypher MATCH.
         "degree_dist": ("FOR p IN person LET d = LENGTH(FOR f IN 1..1 OUTBOUND p knows RETURN 1) "
@@ -819,7 +844,10 @@ def main():
         ad.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = ad.version
-    out["durability"] = DURABILITY.get(args.backend)
+    # `durability`, `durability_class`, `durability_no_setting` (DECISIONS #90).
+    # An adapter that read the value out of its own engine wins over the map.
+    bench_common.stamp_durability(out, getattr(ad, "durability", None)
+                                  or DURABILITY.get(args.backend))
     out["instrument"] = bench_common.INSTRUMENT
 
     t0 = time.perf_counter()

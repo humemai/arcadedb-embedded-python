@@ -371,8 +371,16 @@ def load_canonical(apply_corpus=True):
         # stamp existed built the view, so a missing field means with-view and
         # must land in the SAME bucket as an explicit True. Defaulting the other
         # way would split one N=5 cell into two N=5 cells wearing one label.
+        # THE DURABILITY CLASS IS PART OF THE KEY (DECISIONS #90). The strict
+        # arm of a write cell is the SAME lane, scale, workload, backend and
+        # rep as the relaxed one; without the class here the later of the two
+        # would silently replace the earlier on ts_utc, which is exactly how a
+        # sweep row and a GAV-ablation row could once have shadowed a published
+        # cell. Rows before #90 carry no class and default to relaxed, which is
+        # what they were.
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
-             r["backend"], r.get("gav") is not False, r["rep"])
+             r["backend"], r.get("gav") is not False, r["rep"],
+             r.get("durability_class") or "relaxed")
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
             best[k] = r
     out = list(best.values())

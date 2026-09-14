@@ -1834,7 +1834,10 @@ def main():
         _v = getattr(b, _k, None)
         if _v is not None:
             out[_k] = _v
-    out["durability"] = DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY)
+    # Ingest only, so the relaxed class only (DECISIONS #90); the class is on
+    # the row regardless.
+    bench_common.stamp_durability(out, getattr(b, "durability", None)
+                                  or DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY))
     out["instrument"] = bench_common.INSTRUMENT
     # DECISIONS #89: where the split does not apply, the reason, not a blank.
     out["cold_warm_na"] = bench_common.NA_COLD_WARM_DENSE_LANE

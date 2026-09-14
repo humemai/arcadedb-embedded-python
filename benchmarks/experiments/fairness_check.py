@@ -677,6 +677,13 @@ STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo
 UNVERIFIED_ALLOWED = {"surrealdb_tpc_server", "surrealdb_graph_server",
                       "surrealdb_dense_server", "surrealdb_e2_server"}
 
+# THE CELLS THAT MUST EXIST IN BOTH DURABILITY CLASSES (DECISIONS #90): the six
+# document operations, the three graph writes, and the cross-model transaction.
+# Bulk ingest stays at one setting, because an fsync per batch at ten million
+# vectors is hours and teaches nothing the write cells do not, and every read
+# path is untouched.
+WRITE_CELLS = {("l1tpc", "oltp"), ("l2", "oltp"), ("e2", "hybrid")}
+
 
 def check_durability(rows):
     import bench_common
@@ -687,21 +694,64 @@ def check_durability(rows):
         return 0
     bad = 0
     unverified = set()
+    no_setting = set()
+    seen_classes = collections.defaultdict(set)   # (lane, scale, workload, backend) -> classes
     for r in oct_rows:
         d = str(r.get("durability") or "")
-        cls = bench_common.durability_class(d)
-        where = f"{r.get('lane')} {r.get('scale')} {r.get('backend')}"
-        if cls is None:
+        # THE TWO THINGS A ROW NOW SAYS (DECISIONS #90): the class the CELL
+        # asked for, and the class the ENGINE reported. A cell that asked for
+        # strict and whose engine reports relaxed is a flag that did not take,
+        # which is the failure a server that silently ignores an environment
+        # variable produces and the reason #81 refuses an asserted string.
+        asked = str(r.get("durability_class") or "relaxed")
+        got = bench_common.durability_class(d)
+        where = f"{r.get('lane')} {r.get('scale')} {r.get('workload')} {r.get('backend')} [{asked}]"
+        key = (r.get("lane"), str(r.get("scale")), r.get("workload"), r.get("backend"))
+        if r.get("durability_no_setting"):
+            no_setting.add(r.get("backend"))
+            seen_classes[key].add("no-setting")
+        else:
+            seen_classes[key].add(asked)
+        if got is None:
             print(f"  FAIL {where}: 2026-10 row records no durability"); bad += 1
-        elif cls == "strict" and r.get("backend") not in STRICT_ALLOWED:
-            print(f"  FAIL {where}: '{d}' on an engine that has the knob"); bad += 1
-        elif cls == "unverified" and r.get("backend") not in UNVERIFIED_ALLOWED:
+            continue
+        if r.get("durability_no_setting"):
+            # An engine with no knob reports the same string in both classes,
+            # by construction; #90 puts it on an equal footing by printing that
+            # one number in both columns rather than comparing its strict
+            # number against everyone else's relaxed one.
+            if r.get("backend") not in STRICT_ALLOWED | UNVERIFIED_ALLOWED:
+                print(f"  FAIL {where}: declares no durability setting but is not "
+                      f"one of the named exceptions"); bad += 1
+            if got == "unverified":
+                unverified.add(r.get("backend"))
+            continue
+        if got == "unverified" and r.get("backend") not in UNVERIFIED_ALLOWED:
             print(f"  FAIL {where}: '{d}' -- an unchecked default on an engine "
                   f"that is not one of the named exceptions"); bad += 1
-        elif cls == "unverified":
+        elif got == "unverified":
             unverified.add(r.get("backend"))
-        elif "NOT the #81 setting" in d:
+        elif got != asked:
+            print(f"  FAIL {where}: the cell asked for the {asked} class and the "
+                  f"engine reports '{d}', which is {got}"); bad += 1
+        elif "NOT the #" in d:
             print(f"  FAIL {where}: the server answered '{d}'"); bad += 1
+
+    # BOTH CLASSES ON THE WRITE CELLS (DECISIONS #90). "Every timed write
+    # operation runs twice, once with each setting." A write cell that exists
+    # in only one class is a failure unless the engine declared no setting, in
+    # which case one cell is the whole answer and the page says so.
+    for (lane, scale, workload, backend), classes in sorted(seen_classes.items()):
+        if (lane, workload) not in WRITE_CELLS:
+            continue
+        if "no-setting" in classes:
+            continue
+        missing = {"relaxed", "strict"} - classes
+        if missing:
+            print(f"  FAIL {lane} {scale} {workload} {backend}: a timed write cell "
+                  f"in only the {sorted(classes)} class; #90 runs it at both "
+                  f"(missing {sorted(missing)})")
+            bad += 1
     # The two data-dependent time-series shapes must agree across engines
     # (l4_tsbs records the counts; a query that returned a different number
     # of rows measured a different question).
@@ -724,8 +774,14 @@ def check_durability(rows):
         print(f"  NAMED EXCEPTION: {sorted(unverified)} run at an engine default "
               f"this project could not establish; their rows and tables say so "
               f"(FAIRNESS F10)")
+    if no_setting:
+        print(f"  NO SETTING: {sorted(no_setting)} have no durability knob "
+              f"(each straced rather than assumed); they run once and the page "
+              f"prints that one number in both columns (DECISIONS #90)")
     if not bad:
-        print(f"  ok: {len(oct_rows)} 2026-10 rows, every durability recorded and in class")
+        print(f"  ok: {len(oct_rows)} 2026-10 rows, every durability recorded, "
+              f"in the class the cell asked for, and both classes present on "
+              f"every write cell")
     return bad
 
 

@@ -700,9 +700,9 @@ class TimescaleTS:
             self._v = c.fetchone()[0]
             c.execute("SELECT version()")
             self._pv = c.fetchone()[0].split(" (")[0]
-            c.execute("SHOW synchronous_commit")   # the server was started with it off (#81); read, not asserted
+            c.execute("SHOW synchronous_commit")   # read, not asserted (#81, #90)
             _sc = c.fetchone()[0]
-        self.durability = f"synchronous_commit={_sc}" + ("" if _sc == "off" else " (NOT the #81 setting)")
+        self.durability = bench_common.pg_durability_string(_sc)
 
     def version(self):
         return f"timescaledb {self._v} on {self._pv}"
@@ -1049,7 +1049,11 @@ def main():
         out["backend_version"] = b.version()
     except Exception as e:
         out["backend_version"] = f"unknown ({e.__class__.__name__})"
-    out["durability"] = getattr(b, "durability", None) or DURABILITY.get(args.backend)
+    # DECISIONS #90: this lane times an ingest, not a transactional write, so
+    # it runs at the relaxed class only; the row still names the class it ran
+    # under so a reader never has to infer it.
+    bench_common.stamp_durability(out, getattr(b, "durability", None)
+                                  or DURABILITY.get(args.backend))
     out["instrument"] = bench_common.INSTRUMENT
     # DECISIONS #89: the queries carry a cold/warm split; the ingest does not,
     # and the row says why rather than leaving the pair blank.

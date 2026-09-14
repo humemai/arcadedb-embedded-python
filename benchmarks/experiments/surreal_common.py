@@ -56,6 +56,28 @@ def engine_stamp(db=None) -> str:
     return f"surrealdb-embedded:{sdk or '?'}"
 
 
+def apply_durability(cls: str | None = None) -> str:
+    """Set SURREAL_SYNC_DATA before the embedded store is opened (DECISIONS #90).
+
+    The variable is read by the compiled core when the datastore opens, so it
+    has to be in the environment BEFORE the first Surreal(...) call rather than
+    passed to it. Verified by strace in #81's evidence block: unset gives 6
+    fsync calls at both 50 and 250 commits, "true" gives 56 and 256.
+
+    The served twin has no equivalent -- SurrealDB 3.2.4 exposes no sync
+    setting at all -- and is a declared no-setting engine instead of being
+    given a flag the server does not read.
+    """
+    import os
+    import bench_common
+    cls = cls or bench_common.DURABILITY_CLASS
+    if cls == bench_common.CLASS_STRICT:
+        os.environ["SURREAL_SYNC_DATA"] = "true"
+    else:
+        os.environ.pop("SURREAL_SYNC_DATA", None)
+    return cls
+
+
 def legacy_stamp_fixup(engine_version: str) -> str:
     """Rows stamped before 2026-09-13 read "surrealdb-embedded:<sdk>". The core
     is a function of the pinned SDK wheel, so the same wheel resolves it."""

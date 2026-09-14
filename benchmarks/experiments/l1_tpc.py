@@ -37,7 +37,13 @@ import bench_common
 
 
 def pg_durability(cx):
-    """What the PostgreSQL server actually runs, read from it (#81)."""
+    """What the PostgreSQL server actually runs, read from it (#81, #90).
+
+    The expected answer depends on the cell's durability class: `off` at the
+    relaxed class, `on` at the strict one, both set by runner.py on the server
+    itself so every session runs under it. Read rather than asserted, and a
+    server that answers something else marks the row instead of passing.
+    """
     try:
         with cx.cursor() as c:
             c.execute("SHOW synchronous_commit")
@@ -46,7 +52,7 @@ def pg_durability(cx):
             cx.rollback()
         except Exception:  # noqa: BLE001
             pass
-        return f"synchronous_commit={v}" + ("" if v == "off" else " (NOT the #81 setting)")
+        return bench_common.pg_durability_string(v)
     except Exception as e:  # noqa: BLE001
         return f"synchronous_commit=unknown ({e.__class__.__name__})"
 
@@ -77,8 +83,12 @@ WHERE l_shipdate >= DATE '1994-01-01' AND l_shipdate < DATE '1995-01-01'
 """
 # The 2026-10 line-item set (DECISIONS #82): the same three questions in
 # every engine's language, no join anywhere.
+# A TOTAL ORDER, because "the top ten" must be one ten. Revenue ties are
+# unlikely here, but the graph lane's analytics showed what an ambiguous
+# ORDER BY ... LIMIT does across engines, and the same rule applies to every
+# limited query in the instrument (2026-09-14).
 TOP_PARTS_SQL = ("SELECT l_partkey, sum(l_extendedprice * (1 - l_discount)) AS rev "
-                 "FROM lineitem GROUP BY l_partkey ORDER BY rev DESC LIMIT 10")
+                 "FROM lineitem GROUP BY l_partkey ORDER BY rev DESC, l_partkey ASC LIMIT 10")
 SHIP_MODE_SQL = "SELECT l_shipmode, count(*) AS n FROM lineitem GROUP BY l_shipmode ORDER BY l_shipmode"
 BY_MONTH_DUCK = ("SELECT date_trunc('month', l_shipdate) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev "
                  "FROM lineitem GROUP BY m ORDER BY m")
@@ -129,7 +139,7 @@ Q6_ARCADE = ("SELECT sum(l_extendedprice * l_discount) AS revenue FROM LineItem 
 ARCADE_OLAP = {
     "q1": Q1_ARCADE, "q6": Q6_ARCADE,
     "top_parts": ("SELECT l_partkey, sum(l_extendedprice * (1 - l_discount)) AS rev FROM LineItem "
-                  "GROUP BY l_partkey ORDER BY rev DESC LIMIT 10"),
+                  "GROUP BY l_partkey ORDER BY rev DESC, l_partkey ASC LIMIT 10"),
     "ship_mode": "SELECT l_shipmode, count(*) AS n FROM LineItem GROUP BY l_shipmode ORDER BY l_shipmode",
     "by_month": ("SELECT l_shipdate.substring(0, 7) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev "
                  "FROM LineItem GROUP BY m ORDER BY m"),
@@ -291,7 +301,9 @@ class SQLiteTPC:
         self.cx = sqlite3.connect("/tmp/tpc_sqlite.db")
         self.cx.execute("PRAGMA foreign_keys=ON")   # no schema here declares one; stated for completeness
         self.cx.execute("PRAGMA journal_mode=WAL")
-        self.cx.execute("PRAGMA synchronous=NORMAL")
+        # NORMAL at the relaxed class, FULL at the strict one (DECISIONS #90).
+        self.cx.execute(f"PRAGMA synchronous={bench_common.sqlite_synchronous()}")
+        self.durability = bench_common.sqlite_durability_readback(self.cx)
         self.version = f"sqlite {sqlite3.sqlite_version}"
 
     def build(self, li, part):
@@ -410,7 +422,10 @@ class MongoTPC:
         self.version = f"mongodb {self.cl.server_info()['version']}"
         self.db = self.cl["bench"]
         from pymongo import WriteConcern
-        self._wc = WriteConcern(w=1, j=False)
+        # j=false at the relaxed class, j=true at the strict one, which is what
+        # makes the ack wait for the journal sync (DECISIONS #90).
+        self._wc = WriteConcern(w=1, j=bench_common.journal_ack())
+        self.durability = bench_common.at_class(bench_common.DURABILITY_MONGODB)
 
     def build(self, li, part):
         lc, pc, oc = self.db["lineitem"], self.db["part"], self.db["orders_new"]
@@ -434,7 +449,8 @@ class MongoTPC:
         self._crud.create_index("ckey", unique=True)
 
     _REV = {"$sum": {"$multiply": ["$l_extendedprice", {"$subtract": [1, "$l_discount"]}]}}
-    TOP_PARTS = [{"$group": {"_id": "$l_partkey", "rev": _REV}}, {"$sort": {"rev": -1}}, {"$limit": 10}]
+    TOP_PARTS = [{"$group": {"_id": "$l_partkey", "rev": _REV}},
+                 {"$sort": {"rev": -1, "_id": 1}}, {"$limit": 10}]
     SHIP_MODE = [{"$group": {"_id": "$l_shipmode", "n": {"$sum": 1}}}, {"$sort": {"_id": 1}}]
     BY_MONTH = [{"$group": {"_id": {"$substr": ["$l_shipdate", 0, 7]}, "rev": _REV}}, {"$sort": {"_id": 1}}]
     Q1 = [{"$match": {"l_shipdate": {"$lte": "1998-09-02"}}},
@@ -507,6 +523,10 @@ class SurrealTPC:
     durability = bench_common.DURABILITY_SURREAL_EMBEDDED
 
     def _open(self):
+        # SURREAL_SYNC_DATA must be in the environment before the datastore is
+        # opened, not passed to it (DECISIONS #90).
+        self.durability = bench_common.at_class(bench_common.DURABILITY_SURREAL_EMBEDDED)
+        surreal_common.apply_durability()
         import shutil
         from surrealdb import Surreal
         shutil.rmtree("/tmp/tpc_surrealkv", ignore_errors=True)
@@ -548,7 +568,7 @@ class SurrealTPC:
     # key after GROUP BY (the l2 finding of 2026-09-11); 3.2.4 accepts both.
     OLAP = {
         "top_parts": ("SELECT * FROM (SELECT l_partkey, math::sum(l_extendedprice * (1 - l_discount)) AS rev "
-                      "FROM lineitem GROUP BY l_partkey) ORDER BY rev DESC LIMIT 10"),
+                      "FROM lineitem GROUP BY l_partkey) ORDER BY rev DESC, l_partkey ASC LIMIT 10"),
         "ship_mode": "SELECT l_shipmode, count() AS n FROM lineitem GROUP BY l_shipmode ORDER BY l_shipmode",
         "by_month": ("SELECT * FROM (SELECT string::slice(l_shipdate, 0, 7) AS m, "
                      "math::sum(l_extendedprice * (1 - l_discount)) AS rev FROM lineitem GROUP BY m) ORDER BY m"),
@@ -746,10 +766,16 @@ class ArcadeTPC:
                                            # under load. The paper states -Xms=-Xmx as a protocol invariant for
                                            # everyone. It was true of l1, l2, l3s, l3d and every server arm, and
                                            # false here.
+                                           # txWalFlush passed EXPLICITLY at both classes
+                                           # (DECISIONS #90): 0 relaxed, 2 strict, so the
+                                           # row's claim is a flag this process set rather
+                                           # than a default someone remembered.
                                            jvm_kwargs={"heap_size": heap,
-                                                       "jvm_args": f"-Xms{heap}"})
+                                                       "jvm_args": bench_common.arcade_jvm_args(f"-Xms{heap}")})
         from importlib.metadata import version as _pv
         self.version = _pv("arcadedb-embedded")
+        # ASKED, not asserted (#81's standard, doubled by #90's second class).
+        self.durability = bench_common.arcade_durability_readback()
 
     def build(self, li, part):
         db = self.db
@@ -876,8 +902,15 @@ class ArcadeTPC:
 
 class ArcadeServerTPC(ArcadeTPC):
     name = "arcadedb_server"
+    # The served twin's txWalFlush is a JAVA_OPTS entry on its container, which
+    # runner.py sets for the strict class and records as durability_server_flags.
+    # There is no HTTP read-back for it, and the string says so rather than
+    # implying the engine was asked.
+    durability = bench_common.DURABILITY_ARCADEDB
 
     def connect(self):
+        self.durability = (bench_common.at_class(bench_common.DURABILITY_ARCADEDB)
+                           + bench_common.ARCADE_SERVER_DURABILITY_NOTE)
         import requests
         self.rq = requests.Session()
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
@@ -1017,11 +1050,15 @@ class ArangoTPC:
         self.cl, self.db, self.version = arango_common.connect()
 
     def build(self, li, part):
+        # waitForSync on the collections the timed writes touch (DECISIONS #90);
+        # the two bulk-loaded ones stay at the default, because #90 keeps bulk
+        # ingest at one setting.
+        _sync = arango_common.sync_flag()
         lc = self.db.create_collection("lineitem")
         pc = self.db.create_collection("part")
-        self.db.create_collection("orders_new")
-        self.db.create_collection("payments")
-        self.db.create_collection("crud")
+        self.db.create_collection("orders_new", sync=_sync)
+        self.db.create_collection("payments", sync=_sync)
+        self.db.create_collection("crud", sync=_sync)
         buf = []
         for t in li[LI_COLS].itertuples(index=False, name=None):
             buf.append(dict(zip(LI_COLS, t)))
@@ -1032,6 +1069,8 @@ class ArangoTPC:
         pc.import_bulk([{"_key": str(int(k)), "p_partkey": int(k), "p_retailprice": float(v), "stock": 100}
                         for k, v in part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)])
         lc.add_index({"type": "persistent", "fields": ["l_shipdate"]})
+        # Read back from the collection the timed writes touch (#90).
+        self.durability = arango_common.durability_readback(self.db, "orders_new")
 
     Q1 = ("FOR l IN lineitem FILTER l.l_shipdate <= '1998-09-02' "
           "COLLECT f = l.l_returnflag, s = l.l_linestatus "
@@ -1045,7 +1084,7 @@ class ArangoTPC:
     OLAP = {
         "top_parts": ("FOR l IN lineitem COLLECT k = l.l_partkey "
                       "AGGREGATE rev = SUM(l.l_extendedprice * (1 - l.l_discount)) "
-                      "SORT rev DESC LIMIT 10 RETURN {k, rev}"),
+                      "SORT rev DESC, k ASC LIMIT 10 RETURN {k, rev}"),
         "ship_mode": "FOR l IN lineitem COLLECT m = l.l_shipmode WITH COUNT INTO n SORT m RETURN {m, n}",
         "by_month": ("FOR l IN lineitem COLLECT m = SUBSTRING(l.l_shipdate, 0, 7) "
                      "AGGREGATE rev = SUM(l.l_extendedprice * (1 - l.l_discount)) SORT m RETURN {m, rev}"),
@@ -1141,7 +1180,10 @@ def main():
         b.build(li, part)
     out["build_s"] = round(time.perf_counter() - t0, 2)
 
-    out["durability"] = getattr(b, "durability", None)
+    # `durability` (what the engine runs), `durability_class` (what the cell
+    # asked for), and `durability_no_setting` (this engine has no knob), all
+    # from one place (DECISIONS #90).
+    bench_common.stamp_durability(out, getattr(b, "durability", None))
     out["instrument"] = bench_common.INSTRUMENT
     if args.workload == "olap":
         out["olap_iters"] = OLAP_ITER

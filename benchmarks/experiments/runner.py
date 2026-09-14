@@ -1330,6 +1330,45 @@ LANES = {
 }
 
 
+def durability_server_patch(cfg, cls):
+    """The SERVED half of the durability axis (DECISIONS #90).
+
+    Client-side engines read BENCH_DURABILITY inside the container and turn it
+    into a PRAGMA, a write concern, a waitForSync, or a JVM property. The ones
+    whose setting lives on the server have to be started differently, and that
+    is this function: it returns a copy of the backend config with the strict
+    flags applied, so nothing here mutates the module-level BACKENDS table that
+    every other cell reads.
+
+    Returns (patched_config, note) where the note lands on the row.
+    """
+    if cls != "strict":
+        return cfg, None
+    cfg = dict(cfg)
+    cmd = list(cfg.get("server_cmd", []))
+    env = list(cfg.get("server_env", []))
+    notes = []
+    # PostgreSQL, pgvector, PG+AGE, TimescaleDB: one flag, already present at
+    # its relaxed value, so this is a replacement rather than an addition and
+    # a server that somehow carried neither would be visible as a missing note.
+    if "-c" in cmd and "synchronous_commit=off" in cmd:
+        cmd[cmd.index("synchronous_commit=off")] = "synchronous_commit=on"
+        notes.append("synchronous_commit=on")
+    # ArcadeDB served: the same system property the embedded arm passes to its
+    # own JVM, appended to JAVA_OPTS.
+    for i, e in enumerate(env):
+        if isinstance(e, str) and e.startswith("JAVA_OPTS="):
+            env[i] = e + " -Darcadedb.txWalFlush=2"
+            notes.append("txWalFlush=2")
+    # QuestDB: its commit mode is a server setting.
+    if "questdb" in str(cfg.get("server_image", "")):
+        env += ["-e", "QDB_CAIRO_COMMIT_MODE=sync"]
+        notes.append("cairo.commit.mode=sync")
+    cfg["server_cmd"] = cmd
+    cfg["server_env"] = env
+    return cfg, (", ".join(notes) if notes else None)
+
+
 def _pagecache_for(server_mem_bytes, heap):
     """What is left for an off-heap page cache once the heap is taken out.
 
@@ -1808,7 +1847,15 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     # scale in run_id: out-file names must never collide across campaigns
     # (a stale same-name out file once resurfaced a previous campaign's
     # metrics into a killed cell's row)
-    run_id = f"{job['run_id']}_{scale}_r{rep}"
+    # THE CLASS IS PART OF THE CELL'S IDENTITY (DECISIONS #90). Without it a
+    # strict cell writes the same run_id, the same raw artifact path, and the
+    # same canonical key as the relaxed cell beside it, and the later one
+    # silently shadows the earlier -- the exact shape of the sweep-tier and
+    # GAV-ablation shadowing this file already documents twice.
+    _dcls = os.environ.get("BENCH_DURABILITY", "relaxed")
+    be, _dnote = durability_server_patch(be, _dcls)
+    _dsuffix = "" if _dcls == "relaxed" else f"_d{_dcls}"
+    run_id = f"{job['run_id']}_{scale}_r{rep}{_dsuffix}"
     stale = os.path.join(RAW, f"{run_id}.json")
     if os.path.exists(stale):
         os.unlink(stale)  # belt-and-braces vs stale out-file reads
@@ -1826,6 +1873,15 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
            # cell ran under; make_paper_tables refuses to mix two in a table.
            "bench_host": os.environ.get("BENCH_HOST"),
            "instrument": bench_common.INSTRUMENT,
+           # The class the cell ASKED for. The lane also stamps it, from the
+           # same variable, beside the string the engine itself reports; both
+           # are here so a row missing the lane's stamp (an old artifact, a
+           # crashed cell) still says which arm it was.
+           "durability_class": _dcls,
+           # What the runner changed on the SERVER for this class, if anything.
+           # Blank on an embedded arm and on a served engine with no knob, and
+           # the lane's own `durability` string is what says which of the two.
+           "durability_server_flags": _dnote,
            "lane": job["lane"], "backend": job["backend"],
            "workload": job["workload"], "scale": scale, "rep": rep, "tier": tier,
            "cpuset": cpuset, "topology": be["topology"],
@@ -2012,7 +2068,14 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # count is expected to exceed it at the larger scale factor
                    # and the row records the censoring rather than running for
                    # hours.
-                   "BENCH_GRAPH_OLAP_ITER", "BENCH_GRAPH_OLAP_BUDGET_S"):
+                   "BENCH_GRAPH_OLAP_ITER", "BENCH_GRAPH_OLAP_BUDGET_S",
+                   # The durability class (DECISIONS #90). Client-side engines
+                   # read it here: ArcadeDB embedded turns it into a JVM system
+                   # property, SQLite into a PRAGMA, MongoDB into j=true,
+                   # ArangoDB into waitForSync, SurrealDB embedded into
+                   # SURREAL_SYNC_DATA. The served engines are set below, on
+                   # their own containers.
+                   "BENCH_DURABILITY", "SURREAL_SYNC_DATA"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
@@ -2459,6 +2522,18 @@ def main():
                          "resuming a long stage after an interruption without "
                          "re-running finished cells. Errored and timed-out cells "
                          "are NOT skipped -- they are exactly what a resume retries.")
+    # THE DURABILITY AXIS (DECISIONS #90). Every timed WRITE runs at both
+    # settings, and most engines cannot switch per operation -- ArcadeDB's
+    # txWalFlush is per database, SurrealDB's and QuestDB's are server flags --
+    # so the class is a property of the CELL. A queue script asks for the write
+    # workloads twice, once with each value; the reads and the bulk ingests run
+    # at the relaxed default only, because an fsync per batch at ten million
+    # vectors is hours and teaches nothing the write cells do not.
+    ap.add_argument("--durability", default="relaxed", choices=["relaxed", "strict"],
+                    help="durability class for this run (DECISIONS #90). "
+                         "strict makes every engine that HAS the knob wait for "
+                         "the disk at commit; the four that have none run "
+                         "unchanged and their rows declare it.")
     ap.add_argument("--tier", default="paper", choices=["paper", "sweep"])
     ap.add_argument("--workers", type=int, default=0,
                     help="parallel workers on disjoint cpuset shards "
@@ -2574,6 +2649,14 @@ def main():
         for j in jobs:
             j["driver"] = args.driver
             j["driver_out_dir"] = args.driver_out_dir
+    # The lanes read the class from the environment (bench_common.DURABILITY_CLASS)
+    # and the allowlist carries it into the container; set it before anything
+    # reads it, and before the jobs are described.
+    os.environ["BENCH_DURABILITY"] = args.durability
+    if args.durability == "strict":
+        print(f"[durability] STRICT class (DECISIONS #90): every engine with the "
+              f"knob waits for the disk at commit; Neo4j, DuckDB, LadybugDB and "
+              f"the SurrealDB server have none and run unchanged.")
     _require_engine_commit(args.tier, {j["backend"] for j in jobs})
     # THE HOST IS A ROW FIELD, not a page assumption (#74 item 3). A paper-tier
     # cell without it would write bench_host=None on every row and exit 0.

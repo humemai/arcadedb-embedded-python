@@ -658,26 +658,14 @@ def main():
     # cached: running it after the warm modes would measure an eviction of a
     # database that several cycles had just re-warmed, which is the same
     # number by construction but a weaker claim.
-    out["durability"] = bench_common.DURABILITY_ARCADEDB   # DECISIONS #81
+    # Read out of the engine, not asserted (#81), and the class named (#90).
+    # This lane's write is an open/write/close cycle rather than one of the ten
+    # timed write operations #90 doubles, so it runs at the relaxed class only.
+    bench_common.stamp_durability(out, bench_common.arcade_durability_readback())
     out["instrument"] = bench_common.INSTRUMENT
     # DECISIONS #89: "the lifecycle table is itself the cold measurement", so
     # the row says that rather than leaving a cold/warm pair blank.
     out["cold_warm_na"] = bench_common.NA_COLD_WARM_LIFECYCLE
-    # THE READ'S ANSWER (DECISIONS #88). One engine, two deployments: the
-    # embedded and served arms of this lane must return the same rows for the
-    # same situation, and the gate says so. The vector situation records the
-    # reason instead, because its read is approximate.
-    if args.workload == "vector":
-        bench_common.record_unexpressible(
-            out, "lifecycle_read",
-            "the vector situation's read goes through an approximate index; "
-            "it is checked by recall on the dense lane, not by an exact digest")
-    elif _LAST_READ["rows"] is not None:
-        bench_common.record_result(out, "lifecycle_read", _LAST_READ["rows"])
-    else:
-        bench_common.record_unexpressible(
-            out, "lifecycle_read",
-            f"situation {args.workload!r} issues no read")
     o, c, w = measure(args.workload, "clean", cold=True)
     out["cold_open_ms"], out["cold_close_ms"] = round(o, 3), round(c, 3)
     out["build_close_ms"] = round(build_close_ms, 3)
@@ -743,6 +731,25 @@ def main():
         out["drop_action_ms"] = round(w, 3)
         out["drop_is_single_cycle"] = True
 
+    # THE READ'S ANSWER (DECISIONS #88), AFTER the cycles have run. The first
+    # version of this block sat above the measure() calls, so it digested a
+    # _LAST_READ that nothing had filled yet and every row said "issues no
+    # read" while read_action_ms sat beside it (laptop, 2026-09-14). One
+    # engine, two deployments: the embedded and served arms must return the
+    # same rows for the same situation, and the gate says so. The vector
+    # situation records the reason instead, because its read is approximate.
+    if args.workload == "vector":
+        bench_common.record_unexpressible(
+            out, "lifecycle_read",
+            "the vector situation's read goes through an approximate index; "
+            "it is checked by recall on the dense lane, not by an exact digest")
+    elif _LAST_READ["rows"] is not None:
+        bench_common.record_result(out, "lifecycle_read", _LAST_READ["rows"])
+        out["lifecycle_read_situation"] = _LAST_READ["situation"]
+    else:
+        bench_common.record_unexpressible(
+            out, "lifecycle_read",
+            f"situation {args.workload!r} issues no read in the modes this cell ran")
     out["close_over_budget"] = out["clean_close_ms"] > 100.0
     if args.workload == "graph_gav":
         out["gav_cypher_reads_issued"] = _gav_cypher_reads[0]
