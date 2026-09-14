@@ -17,6 +17,7 @@ import statistics
 import sys
 import time
 import bench_common
+import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 # Data source: synthetic SPLADE-shaped (default) or real Big-ANN SPLADE/MS MARCO
 # (BENCH_SPARSE_SOURCE=bigann). Both expose the same surface.
@@ -685,7 +686,7 @@ def main():
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = getattr(b, "version", "?")
     out["durability"] = DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY)
-    out["instrument"] = bench_common.INSTRUMENT
+    out["instrument"] = _bench_common_mod.INSTRUMENT
     # Only Elasticsearch sets this. A row must say which operating point it
     # measured; the 9.0.0-vs-9.4.1 recall gap was only diagnosable because the
     # engine version happened to be recorded, and pruning is not visible from

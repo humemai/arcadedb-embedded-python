@@ -24,6 +24,7 @@ import os
 import statistics
 import time
 import bench_common
+import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 # THE CORPUS. BENCH_-prefixed because runner.py's env allowlist is a CLOSED
 # tuple: a variable not in it is dropped at the container boundary and the
@@ -953,7 +954,7 @@ def main():
     except Exception as e:
         out["backend_version"] = f"unknown ({e.__class__.__name__})"
     out["durability"] = getattr(b, "durability", None) or DURABILITY.get(args.backend)
-    out["instrument"] = bench_common.INSTRUMENT
+    out["instrument"] = _bench_common_mod.INSTRUMENT
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
     # settles a roughly fixed 30-87 MB, against nothing at all for an

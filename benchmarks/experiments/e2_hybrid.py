@@ -27,6 +27,7 @@ import random
 import statistics
 import time
 import bench_common
+import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 import numpy as np
 import surreal_common
@@ -676,7 +677,7 @@ def main():
     b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
     out["durability"] = getattr(b, "durability", None) or DURABILITY.get(args.backend)
-    out["instrument"] = bench_common.INSTRUMENT
+    out["instrument"] = _bench_common_mod.INSTRUMENT
     t0 = time.perf_counter()
     b.build(vecs, edges)
     out["build_s"] = round(time.perf_counter() - t0, 2)

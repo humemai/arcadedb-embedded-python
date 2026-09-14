@@ -74,9 +74,33 @@ The DuckDB bias runs **against** DuckDB, which wins that lane regardless, so not
 
 Scope, and it is narrow. One tier, k=10, one query in flight at a time, embedded backends only. It says nothing about concurrent query load, and nothing about Qdrant or Milvus, which run as servers and are the ones most likely to hold per-query pools. Re-measure before extending the claim.
 
-**F9. A kept row needs a control, because the host is not an invariant.** F1 to F8 constrain a cell's *configuration*; none constrains *when* it ran. A row printed tonight beside one measured five weeks ago is fully compliant and still potentially wrong, because the kernel, the docker version and the machine's thermal history all moved and none of that is recorded as a run condition.
+**F9. A kept row needs a control, because the host is not an invariant.** F1 to F8 and F10 constrain a cell's *configuration*; none constrains *when* it ran. A row printed tonight beside one measured five weeks ago is fully compliant and still potentially wrong, because the kernel, the docker version and the machine's thermal history all moved and none of that is recorded as a run condition.
 
 So when a campaign re-measures one engine and carries the others forward, **re-run one untouched comparator as a control and show it reproduces its kept numbers within run-to-run spread.** One extra cell buys evidence for every row that was not re-run. If the control does not reproduce, the carried-forward rows are not usable and the whole tier is re-measured. Record the control's old-against-new delta next to the table it licenses, so a reader can see the carry-forward was checked rather than assumed.
+
+**F10. Same durability class per table, and one instrument.** A commit that
+waits for the disk and one that does not are different operations, and a write
+latency compares them only if every engine in the table waited the same way.
+Since the 2026-10 instrument (DECISIONS #81) the matched class is *relaxed*: a
+commit returns without waiting for the disk and the log is flushed by the
+engine's own background policy. ArcadeDB's engine default (`txWalFlush=0`),
+SQLite and sqlite-vec under WAL with `synchronous=NORMAL`, PostgreSQL, pgvector,
+PG+AGE, and TimescaleDB with `synchronous_commit=off` on the server, MongoDB's
+timed writes at `w=1, j=false`, ArangoDB's default (`waitForSync=false`, WAL
+synced every 100 ms), QuestDB's default (`cairo.commit.mode=nosync`), SurrealDB
+embedded at its 2.x default (`SURREAL_SYNC_DATA=false`), and the SurrealDB
+server with `SURREAL_DATASTORE_SYNC_DATA=never` (its 3.x default syncs every
+commit) all sit in that class. Three engines cannot be relaxed and are the named
+exceptions on their tables: Neo4j (no setting), LadybugDB (Kùzu's WAL fsyncs on
+every logged commit), and DuckDB (its WAL is flushed at every commit). Every row
+records what it ran as `durability`; `fairness_check.check_durability` refuses a
+2026-10 row with none, a strict string on an engine that has the knob, or a
+PostgreSQL row whose server answered anything but `off`. The same check refuses
+two `instrument` values in one table (rows before 2026-10 carry none and are
+the September instrument), and it refuses a time-series table whose engines
+disagree on the row counts of the two data-dependent queries (`q_groupby_rows`,
+`q_high_rows`), because a query that returned a different number of rows
+measured a different question.
 
 ## Parallelism policy: maximise it, but never inside a published absolute
 

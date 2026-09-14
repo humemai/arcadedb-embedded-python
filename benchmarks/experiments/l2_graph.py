@@ -20,6 +20,7 @@ from graph_common import (OLAP_ITERATIONS, OLAP_QUERIES, OLTP_READS,
                           OLTP_WRITE, OLTP_DELETE, SCALE_OLTP_QUERIES, SCALE_PERSONS,
                           gen_edges, gen_persons, pick_query_ids)
 import bench_common
+import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 # Data-source switch (same pattern as l3_sparse/bigann): BENCH_GRAPH_SOURCE=ldbc
 # swaps the synthetic generator for the LDBC-SNB persons+KNOWS projection.
@@ -517,8 +518,10 @@ class SurrealGraph(Base):
 
     def run_delete(self, new_id):
         # One transaction: the edges into the record, then the record.
-        self.db.query(f"BEGIN; DELETE FROM knows WHERE out = person:{new_id} OR in = person:{new_id}; "
-                      f"DELETE person:{new_id}; COMMIT;")
+        # person:{id}<->knows deletes the edges touching the record through
+        # the graph (laptop, 2026-09-14: the WHERE form scanned the edge table,
+        # 777 ms at micro); then the record, one transaction.
+        self.db.query(f"BEGIN; DELETE person:{new_id}<->knows; DELETE person:{new_id}; COMMIT;")
 
     OLAP = {
         "top_degree": "SELECT pid, count(->knows) AS d FROM person ORDER BY d DESC LIMIT 10",
@@ -713,7 +716,7 @@ def main():
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = ad.version
     out["durability"] = DURABILITY.get(args.backend)
-    out["instrument"] = bench_common.INSTRUMENT
+    out["instrument"] = _bench_common_mod.INSTRUMENT
 
     t0 = time.perf_counter()
     ad.build(n_persons)

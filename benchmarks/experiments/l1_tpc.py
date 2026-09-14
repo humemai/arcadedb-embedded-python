@@ -34,6 +34,7 @@ import time
 import surreal_common
 import arango_common
 import bench_common
+import bench_common as _bench_common_mod  # a name no function-local import can shadow
 
 
 def pg_durability(cx):
@@ -147,7 +148,7 @@ class DuckTPC:
         self.cx.execute("BEGIN")
         self.cx.execute("SELECT p_retailprice, stock FROM part WHERE p_partkey=?",
                         [pkey]).fetchone()
-        self.cx.execute("INSERT INTO orders_new VALUES (?, ?, ?)", [i, pkey, 1])
+        self.cx.execute("INSERT INTO orders_new VALUES (?, ?, ?, 0)", [i, pkey, 1])
         self.cx.execute("UPDATE part SET stock = stock - 1 WHERE p_partkey=?",
                         [pkey])
         self.cx.execute("COMMIT")
@@ -528,7 +529,7 @@ class ArcadeTPC:
         db = self.db
         db.command("sql", "CREATE DOCUMENT TYPE LineItem")
         for c in LI_COLS:
-            t = ("STRING" if c in ("l_returnflag", "l_linestatus", "l_shipdate")
+            t = ("STRING" if c in ("l_returnflag", "l_linestatus", "l_shipdate", "l_shipmode")
                  else ("LONG" if c.endswith("key") else "DOUBLE"))
             db.command("sql", f"CREATE PROPERTY LineItem.{c} {t}")
         db.command("sql", "CREATE DOCUMENT TYPE Part")
@@ -810,7 +811,7 @@ def main():
     out["build_s"] = round(time.perf_counter() - t0, 2)
 
     out["durability"] = getattr(b, "durability", None)
-    out["instrument"] = bench_common.INSTRUMENT
+    out["instrument"] = _bench_common_mod.INSTRUMENT
     if args.workload == "olap":
         for which in OLAP_QUERIES:
             times = []

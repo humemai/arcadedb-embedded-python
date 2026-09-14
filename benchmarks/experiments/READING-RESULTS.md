@@ -40,7 +40,17 @@ The single rule, from which most of the rest follows:
 
 **A timed-out row records where it died.** `timeout_client_disk_mb` and `timeout_cpu_mem` are written on the timeout path, and the cell log carries the lane's `PHASE` markers (BUGS.md F41). Read them before recording a DNF.
 
-**`host` is recorded on two lanes of seven.** Sparse and dense have it; the rest record the container but not the machine. Do not imply a uniform environment from rows that cannot prove one. Recording `BENCH_HOST` on every row is on the October checklist (DECISIONS #74).
+**`host` is recorded on two lanes of seven; `bench_host` on every row since 2026-10.** Sparse and dense have `host`; the rest record the container but not the machine. Rows measured under the 2026-10 instrument carry `bench_host`, written by the runner and refused at paper tier when unset (DECISIONS #74). Do not imply a uniform environment from rows that cannot prove one.
+
+**`instrument` names the query set, timers, and durability rule a row ran under.** Rows before 2026-10 carry none and are the September instrument; `load_canonical` and `export_web` refuse two values in one table. Read a 2026-10 document OLTP row's `oltp_ops_per_s` as new-order and payment together (`oltp_ops` says how many), where a September row's is new-order alone.
+
+**`durability` is what the engine ran at commit, read from the engine where it can be read.** PostgreSQL-family rows carry the server's own `SHOW synchronous_commit` answer; a value ending "(NOT the #81 setting)" means the server was not started with the flag and the row fails F10. Strings starting "fsync at commit" are the named exceptions (Neo4j, LadybugDB, DuckDB).
+
+**`ingest_s` and `index_s` are present only where the engine has the boundary** (ArcadeDB, pgvector, Neo4j, Milvus, LanceDB); `build_s` is still the whole timer and the two do not sum to it exactly (schema creation and Milvus's compaction sit outside them). Milvus's `index_s` is its post-build wait, flush through load.
+
+**The graph write pass now has a partner.** `delete_p50_ms` and `delete_p99_ms` come from deleting, in order, the persons the write pass created (with their edge), one transaction each; `hop3f_*` is the 3-hop read filtered on the far end. Neither exists on September rows.
+
+**`q_groupby_rows` and `q_high_rows` are data-dependent shapes.** The time-series lane records them instead of asserting them, and F10 refuses a table whose engines disagree; the other three queries keep their asserted shapes (1, 60, 12 rows).
 
 ## Publishing traps
 

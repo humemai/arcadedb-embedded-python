@@ -643,14 +643,14 @@ def check_close_cost(rows):
 
 
 # ---------------------------------------------------------------------------
-# F8: one durability class per table, and one instrument (DECISIONS #81, #84).
+# F10: one durability class per table, and one instrument (DECISIONS #81, #84).
 #
 # Every row measured under the 2026-10 instrument records `durability`, the
 # setting its engine ran at commit, and `instrument`. The matched class is
 # "relaxed" (a commit returns without waiting for the disk); an engine that
 # cannot be relaxed says so with a string starting "fsync at commit" and is
 # the named exception on its tables (Neo4j, DuckDB, LadybugDB). Anything
-# else on a 2026-10 row is a FAIL: a row with no durability, a "strict"
+# else on a 2026-10 row is a FAIL (FAIRNESS.md F10): a row with no durability, a "strict"
 # string on an engine that has the knob, or a PostgreSQL row whose server
 # answered anything but synchronous_commit=off.
 STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo4j",
@@ -659,7 +659,7 @@ STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo
 
 def check_durability(rows):
     import bench_common
-    print("=== F8: durability class and instrument per table ===")
+    print("=== F10: durability class and instrument per table ===")
     oct_rows = [r for r in rows if str(r.get("instrument") or "") == "2026-10"]
     if not oct_rows:
         print("  no 2026-10 rows in the canonical set; nothing to check yet")
@@ -678,13 +678,21 @@ def check_durability(rows):
     # The two data-dependent time-series shapes must agree across engines
     # (l4_tsbs records the counts; a query that returned a different number
     # of rows measured a different question).
-    for qn in ("q_groupby_rows", "q_high_rows"):
-        got = {}
-        for r in oct_rows:
-            if r.get("lane") == "l4" and r.get(qn) not in (None, ""):
-                got.setdefault(str(r.get(qn)), set()).add(r.get("backend"))
-        if len(got) > 1:
-            print(f"  FAIL l4 {qn} disagrees across engines: {got}"); bad += 1
+    # ...and the document analytics shapes, per scale (the three 2026-10
+    # queries return a fixed count only if every engine grouped the same way).
+    for lane, fields in (("l4", ("q_groupby_rows", "q_high_rows")),
+                         ("l1tpc", ("top_parts_rows", "ship_mode_rows", "by_month_rows"))):
+        for qn in fields:
+            got = {}
+            for r in oct_rows:
+                if r.get("lane") == lane and r.get(qn) not in (None, ""):
+                    got.setdefault((r.get("scale"), str(r.get(qn))), set()).add(r.get("backend"))
+            per_scale = {}
+            for (sc, n), bes in got.items():
+                per_scale.setdefault(sc, {})[n] = sorted(bes)
+            for sc, d in per_scale.items():
+                if len(d) > 1:
+                    print(f"  FAIL {lane} {sc} {qn} disagrees across engines: {d}"); bad += 1
     if not bad:
         print(f"  ok: {len(oct_rows)} 2026-10 rows, every durability recorded and in class")
     return bad
