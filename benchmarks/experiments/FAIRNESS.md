@@ -132,6 +132,65 @@ row counts of the two data-dependent queries (`q_groupby_rows`, `q_high_rows`),
 because a query that returned a different number of rows measured a different
 question.
 
+**F11. Equivalent queries must return equivalent answers.** A benchmark that
+never checks the answer measures how fast an engine can be wrong, and until
+2026-09-14 this one never checked: recall against ground truth on the two
+vector lanes and the torn-state comparison in the cross-model trial were the
+only cross-engine correctness anywhere, so an adapter that dropped a filter, a
+group or a join condition would have printed a lead rather than a bug
+(DECISIONS #88).
+
+Every timed query whose answer is deterministic now records a canonical digest
+of that answer, a row count, and a short readable sample, written by
+`bench_common.result_digest`. Three rules make the check mean something:
+
+* The digest is computed from the object the **timed call returned**, outside
+  the timed section. Re-running the query to digest it would digest a second
+  execution against a different cache state, and on a lane with writes a
+  different database.
+* An engine that cannot express a query records
+  `unexpressible: <reason>`, never a blank, because silence is
+  indistinguishable from agreement.
+* Normalisation is identical for every engine and is declared once per query,
+  never per engine: the column order is the query's, alternative column names
+  cover the dialects (`_id`, `_id.f`, an AQL `RETURN` name, a positional SQL
+  tuple), integers print exactly, floats to six significant digits, strings are
+  stripped, dates are ISO, aware datetimes land in UTC, and a column that holds
+  an instant or a month is declared as such so epoch seconds, epoch
+  milliseconds, a datetime and a truncated date are one value.
+
+A write has no answer to digest, so what is digested is the state it left: the
+whole CRUD table read back after each phase, the orders after the new-order and
+payment loops, the persons the graph writes created. An insert that wrote
+nothing, an update that matched nothing and a delete that deleted nothing each
+fail the gate instead of printing a fast number.
+
+`equivalence_check.py` groups the digests by lane, scale, workload and query
+and refuses a publish when two engines disagree, printing both samples. A group
+with one engine is reported as UNCHECKED and never counted as a pass; a backend
+that ran the cell and recorded neither a digest nor a declared absence fails; a
+lane that recorded nothing at all fails unless it is declared as checked
+otherwise, which the two vector lanes are, by recall.
+
+**F12. Every table reports the same measurement set, or says why not.** Cold
+latency, warm latency at the median and the ninety-ninth percentile, throughput
+where the operation has a natural rate, recall where the index is approximate,
+peak memory, on-disk size after the workload, and for the vector tables ingest
+and index build as separate timers (DECISIONS #89). The cold number is the
+first iteration after the database is opened and the warm numbers are the rest,
+which costs nothing because those iterations already run; they are recorded as
+`cold_<q>_ms`, `warm_<q>_p50_ms` and `warm_<q>_p99_ms` in every lane, under one
+naming convention, so a table can ask every lane the same question without
+knowing which lane it is asking.
+
+Where a measurement genuinely does not apply the row carries a stated reason in
+`cold_warm_na` rather than a blank cell, and the strings are defined once in
+`bench_common` so two lanes cannot phrase one exemption differently: a
+transactional cell has no cold and warm split because every operation runs
+against an already-warm database by construction; the lifecycle lane is itself
+the cold measurement; the two vector lanes warm on a held-out slice before they
+time anything, and their cold and warm columns come from the multipass driver.
+
 ## Parallelism policy: maximise it, but never inside a published absolute
 
 The standing direction is to use the machine. But "run more at once" and "report this latency" are not compatible everywhere, so the rule has to say where the line falls.
