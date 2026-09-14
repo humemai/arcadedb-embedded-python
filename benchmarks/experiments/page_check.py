@@ -491,6 +491,19 @@ def _check_no_arcadedb_row_lost(payload):
             print(f"  LOST   table {tid}: on the live page, not in the export")
             bad += 1
         elif not any(_is_arc(e) for e in t.get("entries", [])):
+            # A WITHDRAWAL IS DECLARED, A LOSS IS NOT. Taking our own row down
+            # is sometimes the honest act: on 2026-09-14 answer checking found
+            # that ArcadeDB's two document analytics queries were not the
+            # questions the comparators answered, and numbers that flatter us
+            # come down rather than stand with a caveat (BUGS F42, F43). The
+            # gate stays loud: the table must say so in a condition a reader
+            # sees, naming ArcadeDB and giving the reason, or this is still a
+            # deletion.
+            _conds = " ".join(str(c) for c in t.get("conditions", []))
+            _declared = "ArcadeDB has no row on this table" in _conds
+            if _declared and len(_conds) > 200:
+                print(f"  WITHDRAWN {tid}: ArcadeDB's row is down by declaration, and the table says why")
+                continue
             print(f"  LOST   table {tid}: live page has ArcadeDB, export has {[e.get('backend') for e in t.get('entries', [])][:4]}")
             bad += 1
     return checked, bad

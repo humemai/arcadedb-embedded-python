@@ -10840,6 +10840,7 @@
         "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
         "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs."
       ],
       "columns": [
@@ -10853,132 +10854,6 @@
         "disk GiB"
       ],
       "entries": [
-        {
-          "backend": "ArcadeDB (embedded)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "tpch1",
-          "scale_label": "TPC-H SF1 (6.0M line items)",
-          "workload": "",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "Q1 p50 ms": {
-              "median": 10224.85,
-              "min": 10143.5,
-              "max": 10400.25,
-              "n": 5
-            },
-            "Q1 p99 ms": {
-              "median": 10360.3,
-              "min": 10291.89,
-              "max": 10625.09,
-              "n": 5
-            },
-            "Q6 p50 ms": {
-              "median": 766.87,
-              "min": 762.22,
-              "max": 774.08,
-              "n": 5
-            },
-            "Q6 p99 ms": {
-              "median": 787.0,
-              "min": 780.69,
-              "max": 817.67,
-              "n": 5
-            },
-            "ingest documents/s": {
-              "median": 41107.4046,
-              "min": 39858.6901,
-              "max": 43353.0131,
-              "n": 10
-            },
-            "ingest total s": {
-              "median": 150.855,
-              "min": 143.04,
-              "max": 155.58,
-              "n": 10
-            },
-            "peak memory GiB": {
-              "median": 6.6436,
-              "min": 6.6379,
-              "max": 6.6603,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.6189,
-              "min": 0.6188,
-              "max": 0.6189,
-              "n": 10
-            }
-          }
-        },
-        {
-          "backend": "ArcadeDB (server)",
-          "is_arcadedb": true,
-          "precision": null,
-          "scale": "tpch1",
-          "scale_label": "TPC-H SF1 (6.0M line items)",
-          "workload": "",
-          "n_docs": null,
-          "deployment": "server",
-          "image": "arcadedb-c25:8d6af9475",
-          "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": null,
-          "metrics": {
-            "Q1 p50 ms": {
-              "median": 10287.38,
-              "min": 10199.54,
-              "max": 10354.87,
-              "n": 5
-            },
-            "Q1 p99 ms": {
-              "median": 10541.37,
-              "min": 10419.01,
-              "max": 11425.06,
-              "n": 5
-            },
-            "Q6 p50 ms": {
-              "median": 776.61,
-              "min": 770.47,
-              "max": 845.07,
-              "n": 5
-            },
-            "Q6 p99 ms": {
-              "median": 797.81,
-              "min": 792.27,
-              "max": 856.7,
-              "n": 5
-            },
-            "ingest documents/s": {
-              "median": 32148.6112,
-              "min": 31363.6203,
-              "max": 33186.423,
-              "n": 10
-            },
-            "ingest total s": {
-              "median": 192.935,
-              "min": 186.86,
-              "max": 197.72,
-              "n": 10
-            },
-            "peak memory GiB": {
-              "median": 9.2164,
-              "min": 9.2052,
-              "max": 9.2683,
-              "n": 5
-            },
-            "disk GiB": {
-              "median": 0.6488,
-              "min": 0.6382,
-              "max": 0.6623,
-              "n": 10
-            }
-          }
-        },
         {
           "backend": "DuckDB",
           "is_arcadedb": false,

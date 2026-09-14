@@ -2274,11 +2274,30 @@ def _restructure_tables(tables, rows):
                        "conditions": list(src["conditions"]),
                        "columns": ["new-order p50 ms", "new-order p99 ms", "OLTP ops/s"],
                        "entries": [clone(e, OLTP_KEEP) for e in src["entries"]], **base})
+        # THE ARCADEDB ROWS ARE WITHDRAWN FROM THIS TABLE (2026-09-14, BUGS F42
+        # and F43). Cross-engine answer checking, built for October, found that
+        # the two queries ArcadeDB ran here were not the questions the
+        # comparators answered: our Q1 text computed four aggregates where every
+        # comparator computes five, and Q6's discount bound excluded the 0.05
+        # bucket because the engine evaluates `>= 0.05` against a decimal literal
+        # as strictly greater (reproduced on fifty rows: `= 0.05` returns none,
+        # `BETWEEN` is correct). Both errors make ArcadeDB's numbers faster than
+        # the truth, so the cells come down rather than stand with a caveat, and
+        # October re-measures them with the answers checked.
+        _olap_entries = [clone(e, OLAP_KEEP) for e in src["entries"]
+                         if not str(e.get("backend", "")).lower().startswith("arcadedb")]
         tables.append({"id": "docs_olap", "title": "Document OLAP",
                        "dataset": "TPC-H Q1 and Q6 at SF1",
-                       "conditions": list(src["conditions"]),
+                       "conditions": list(src["conditions"]) + [
+                           "ArcadeDB has no row on this table. Answer checking built for the next campaign "
+                           "found that the two queries it ran here were not the questions the comparators "
+                           "answered: one of the five aggregates was missing from our Q1 text, and its Q6 "
+                           "excluded the boundary discount because the engine reads `>= 0.05` against a "
+                           "decimal literal as strictly greater. Both errors made its numbers faster than "
+                           "the truth, so they are withdrawn rather than shown with a caveat, and the next "
+                           "campaign measures them with every engine's answer compared."],
                        "columns": ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"],
-                       "entries": [clone(e, OLAP_KEEP) for e in src["entries"]], **base})
+                       "entries": _olap_entries, **base})
         for i in ("l1", "l1olap", "l1tpc"):
             tables.remove(by[i])
     return tables
