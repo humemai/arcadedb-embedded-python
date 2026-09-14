@@ -317,6 +317,15 @@ class Base:
     def post_build(self):
         pass
 
+    # INGEST AND INDEX AS TWO TIMERS (DECISIONS #74 item 2, #66): an adapter
+    # whose engine has the boundary sets both inside build() (or index_s in
+    # post_build() where the index is waited for there); main() records them
+    # beside the unchanged build_s. An engine that indexes while ingesting
+    # (Qdrant, Chroma, SurrealDB, ArangoDB, sqlite-vec) leaves them None and
+    # the page keeps the total for it.
+    ingest_s = None
+    index_s = None
+
     def engine_stats(self):
         """Engine-side counters for this run, or {} for engines that have none.
 
@@ -455,6 +464,7 @@ class ArcadeEmbedded(Base):
         db.command("sql", "CREATE VERTEX TYPE Article")
         db.command("sql", "CREATE PROPERTY Article.vid INTEGER")
         db.command("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
+        _t0 = time.perf_counter()
         db.begin()
         for vid in range(len(vecs)):
             db.command("sql", "INSERT INTO Article SET vid = :v, embedding = :e",
@@ -463,12 +473,15 @@ class ArcadeEmbedded(Base):
                 db.commit()
                 db.begin()
         db.commit()
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
         quant = resolve_quant(os.environ.get("BENCH_DENSE_QUANT", ""))
         qline = f'"quantization": "{quant}", ' if quant else ""
+        _t1 = time.perf_counter()
         db.command("sql", f'''CREATE INDEX ON Article (embedding) LSM_VECTOR
                    METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
                    "maxConnections": {M}, "beamWidth": {EF_CONSTRUCTION}, {qline}
                    "storeVectorsInGraph": false, "addHierarchy": true }}''')
+        self.index_s = round(time.perf_counter() - _t1, 2)
 
     def engine_stats(self):
         """The engine's own counters for this run.
@@ -545,6 +558,7 @@ class ArcadeServer(Base):
         self._cmd("sql", "CREATE VERTEX TYPE Article")
         self._cmd("sql", "CREATE PROPERTY Article.vid INTEGER")
         self._cmd("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
+        _t0 = time.perf_counter()
         buf = []
         for vid in range(len(vecs)):
             # 9 significant digits: exact float32 round-trip, matching the
@@ -562,6 +576,8 @@ class ArcadeServer(Base):
                 buf = []
         if buf:
             self._cmd("sqlscript", ";".join(buf))
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
+        _t1 = time.perf_counter()
         self._cmd("sql", f'''CREATE INDEX ON Article (embedding) LSM_VECTOR
                   METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
                   "maxConnections": {M}, "beamWidth": {EF_CONSTRUCTION},
@@ -577,6 +593,7 @@ class ArcadeServer(Base):
                   # near it, because the cost of a too-short timeout is a whole
                   # cell and the cost of a too-long one is only lateness.
                   timeout=12 * 3600)
+        self.index_s = round(time.perf_counter() - _t1, 2)
 
     def search(self, qvec, k):
         w = ", ".join("%.9g" % x for x in qvec)  # see build(): float32 round-trip
@@ -654,10 +671,14 @@ class LanceDB(Base):
         tbl = pa.table({"id": pa.array(range(len(vecs)), type=pa.int64()),
                         "vector": pa.FixedSizeListArray.from_arrays(
                             pa.array(vecs.ravel(), type=pa.float32()), DIM)})
+        _t0 = time.perf_counter()
         self.tbl = self.db.create_table("articles", tbl)
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
         # IVF_HNSW_SQ is LanceDB's HNSW offering (int8 SQ; disclosed above)
+        _t1 = time.perf_counter()
         self.tbl.create_index(metric="l2", index_type="IVF_HNSW_SQ",
                               m=COMPARATOR_M, ef_construction=EF_CONSTRUCTION)
+        self.index_s = round(time.perf_counter() - _t1, 2)
 
     def search(self, qvec, k):
         # Apply the search-time knobs. Without .ef() LanceDB used its own
@@ -902,12 +923,16 @@ class PgVector(Base):
 
     def build(self, vecs):
         with self.cx.cursor() as c:
+            _t0 = time.perf_counter()
             c.execute(f"CREATE TABLE articles (vid INTEGER, embedding vector({DIM}))")
             with c.copy("COPY articles (vid, embedding) FROM STDIN") as cp:
                 for i in range(len(vecs)):
                     cp.write_row((i, "[" + ",".join("%.9g" % x for x in vecs[i]) + "]"))
+            self.ingest_s = round(time.perf_counter() - _t0, 2)
+            _t1 = time.perf_counter()
             c.execute(f"CREATE INDEX ON articles USING hnsw (embedding vector_l2_ops) "
                       f"WITH (m = {COMPARATOR_M}, ef_construction = {EF_CONSTRUCTION})")
+            self.index_s = round(time.perf_counter() - _t1, 2)
             c.execute(f"SET hnsw.ef_search = {EF_SEARCH}")
 
     def search(self, qvec, k):
@@ -939,14 +964,18 @@ class Neo4jVector(Base):
 
     def build(self, vecs):
         with self.drv.session() as s:
+            _t0 = time.perf_counter()
             for i in range(0, len(vecs), BATCH):
                 rows = [{"vid": i + j, "e": vecs[i + j].tolist()} for j in range(len(vecs[i:i + BATCH]))]
                 s.run("UNWIND $rows AS r CREATE (:Article {vid: r.vid, embedding: r.e})", rows=rows).consume()
+            self.ingest_s = round(time.perf_counter() - _t0, 2)
+            _t1 = time.perf_counter()
             s.run(f"CREATE VECTOR INDEX art_emb IF NOT EXISTS FOR (a:Article) ON (a.embedding) "
                   f"OPTIONS {{indexConfig: {{`vector.dimensions`: {DIM}, "
                   f"`vector.similarity_function`: 'euclidean', "
                   f"`vector.hnsw.m`: {COMPARATOR_M}, `vector.hnsw.ef_construction`: {EF_CONSTRUCTION}}}}}").consume()
             s.run("CALL db.awaitIndexes(36000)").consume()
+            self.index_s = round(time.perf_counter() - _t1, 2)
 
     def search(self, qvec, k):
         with self.drv.session() as s:
@@ -1104,10 +1133,15 @@ class Milvus(Base):
         idx.add_index("vec", index_type="HNSW", metric_type="L2",
                       params={"M": COMPARATOR_M, "efConstruction": EF_CONSTRUCTION})
         self.cl.create_collection("articles", schema=sch, index_params=idx)
+        _t0 = time.perf_counter()
         for i in range(0, len(vecs), BATCH):
             self.cl.insert("articles", [
                 {"id": i + j, "vec": vecs[i + j].tolist()}
                 for j in range(min(BATCH, len(vecs) - i))])
+        # The boundary Milvus has: inserts accepted here; post_build() flushes,
+        # waits for the HNSW index on every sealed segment, compacts, and
+        # loads, and that whole wait is index_s (#74 item 2).
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
 
     def post_build(self):
         """Wait for the HNSW index to EXIST before stopping the clock.
@@ -1141,6 +1175,7 @@ class Milvus(Base):
         every scale has to be re-run and the change disclosed. It is not a patch
         to apply quietly to existing rows.
         """
+        _t1 = time.perf_counter()
         self.cl.flush("articles")
         # COMPACT, THEN WAIT FOR THE INDEX. Not the other way round, and not
         # index-only. At deep10m every row reported state=Finished with all
@@ -1196,6 +1231,7 @@ class Milvus(Base):
             if n >= self._segments_trace[-2]:
                 break
         self.cl.load_collection("articles")
+        self.index_s = round(time.perf_counter() - _t1, 2)
 
     def engine_stats(self):
         """Report whether the HNSW index actually EXISTS, without changing timing.
@@ -1387,10 +1423,15 @@ class MilvusInt8(Milvus):
                       params={"M": COMPARATOR_M, "efConstruction": EF_CONSTRUCTION,
                               "sq_type": "SQ8"})
         self.cl.create_collection("articles", schema=sch, index_params=idx)
+        _t0 = time.perf_counter()
         for i in range(0, len(vecs), BATCH):
             self.cl.insert("articles", [
                 {"id": i + j, "vec": vecs[i + j].tolist()}
                 for j in range(min(BATCH, len(vecs) - i))])
+        # The boundary Milvus has: inserts accepted here; post_build() flushes,
+        # waits for the HNSW index on every sealed segment, compacts, and
+        # loads, and that whole wait is index_s (#74 item 2).
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
 
 
 BACKENDS = {b.name: b for b in
@@ -1526,6 +1567,18 @@ def main():
     build = time.perf_counter() - t0
     out["build_s"] = round(build, 2)
     out["build_docs_per_s"] = round(len(train) / build, 1)
+    # INGEST AND INDEX AS TWO TIMERS, where the engine has the boundary
+    # (DECISIONS #74 item 2, #66). Additive: build_s is the same number it
+    # always was, measured around the same statements in the same order, and an
+    # arm that indexes while ingesting records neither field. The two need not
+    # sum to build_s: the schema DDL before the load and the settle step after
+    # the index sit inside build_s and outside both timers. Landed mid-chain
+    # on 2026-09-14 because it cannot move a published number; the arms that
+    # need their procedure reordered wait for October.
+    for _k in ("ingest_s", "index_s"):
+        _v = getattr(b, _k, None)
+        if _v is not None:
+            out[_k] = _v
     # An IVF arm chooses its probe count by effect before the warmup and the
     # timed passes (arango_common), on a HELD-OUT slice of 200 queries the
     # timed pass never asks (queries 1000:1200 of the fixture's 10,000), so
