@@ -1782,7 +1782,7 @@ def _overhead_medians():
             try:
                 # Column 7 is p50. Column 6 is the MEAN, and the page printed
                 # it as a median from 2026-09-07 to 2026-09-11 under a global
-                # condition that says every cell is a median (PAGE-PLAN S9).
+                # condition that says every cell is a median (PAGE-SPEC rule 2, the conditions block).
                 val = float(row[7])
             except ValueError:
                 continue
