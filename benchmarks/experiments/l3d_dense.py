@@ -717,6 +717,10 @@ class SqliteVec(Base):
         import sqlite_vec
         self.version = lib_version(sqlite_vec, "sqlite-vec")
         self.cx = sqlite3.connect("/tmp/l3d_sqlitevec.db")
+        # The same PRAGMAs as every SQLite arm (DECISIONS #70, #74 item 5).
+        self.cx.execute("PRAGMA foreign_keys=ON")
+        self.cx.execute("PRAGMA journal_mode=WAL")
+        self.cx.execute("PRAGMA synchronous=NORMAL")
         self.cx.enable_load_extension(True)
         sqlite_vec.load(self.cx)
         self.cx.enable_load_extension(False)
@@ -1466,6 +1470,26 @@ def pct(vals):
             "mean": statistics.mean(s), "max": s[-1]}
 
 
+# DECISIONS #81, recorded on every row. This lane times no transactional
+# write, only an ingest, so most arms carry the ingest-only note; the engines
+# that also serve a transactional table carry the same string they carry there.
+DURABILITY_INGEST_ONLY = "engine default; no transactional write timed on this lane"
+DURABILITY = {
+    "arcadedb_dense_embedded": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_dense_embedded_int8": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_dense_server": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_dense_server_int8": "txWalFlush=0 (engine default): no flush at commit",
+    "pgvector_dense": "synchronous_commit=off",
+    "neo4j_dense": "fsync at commit, not configurable (Neo4j transaction log)",
+    "duckdb_vss_dense": "fsync at commit, not configurable (DuckDB WAL)",
+    "sqlite_vec_dense": "WAL, synchronous=NORMAL: synced at checkpoint, not at commit",
+    "sqlite_vec_dense_int8": "WAL, synchronous=NORMAL: synced at checkpoint, not at commit",
+    "surrealdb_dense": "SurrealKV, SURREAL_SYNC_DATA=false (2.x default): no sync at commit",
+    "surrealdb_dense_server": "RocksDB, SURREAL_DATASTORE_SYNC_DATA=never (3.x default is every commit)",
+    "arangodb_dense": arango_common.DURABILITY,
+}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", required=True, choices=list(BACKENDS))
@@ -1579,6 +1603,8 @@ def main():
         _v = getattr(b, _k, None)
         if _v is not None:
             out[_k] = _v
+    out["durability"] = DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY)
+    out["instrument"] = bench_common.INSTRUMENT
     # An IVF arm chooses its probe count by effect before the warmup and the
     # timed passes (arango_common), on a HELD-OUT slice of 200 queries the
     # timed pass never asks (queries 1000:1200 of the fixture's 10,000), so

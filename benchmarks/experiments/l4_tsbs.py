@@ -7,9 +7,13 @@ questdb (server; ILP ingest on 9009, SQL over pg-wire). InfluxDB3 omitted
 (no stable embedded/pinnable OSS artifact at eval time; disclosed).
 
 Queries (TSBS-flavored):
-  q_last   last point for one host
-  q_range  1h of one host, per-minute max(usage_user)
-  q_global 12h across all hosts, hourly avg(usage_user)
+  q_last    last point for one host
+  q_range   1h of one host, per-minute max(usage_user)
+  q_global  12h across all hosts, hourly avg(usage_user)
+  q_groupby 12h across all hosts, avg(usage_user) per host per hour (TSBS
+            double-groupby-1; 2026-10, DECISIONS #82)
+  q_high    12h across all hosts, readings with usage_user > 90 (TSBS
+            high-cpu-all; 2026-10, DECISIONS #82)
 
 Metrics per rep: ingest points/s, per-query p50 and p99 ms over QITER iterations.
 """
@@ -19,6 +23,7 @@ import json
 import os
 import statistics
 import time
+import bench_common
 
 # THE CORPUS. BENCH_-prefixed because runner.py's env allowlist is a CLOSED
 # tuple: a variable not in it is dropped at the container boundary and the
@@ -35,6 +40,8 @@ SCALE_POINTS = {"ts100": 2_592_000}
 QITER = 100   # was 10; a p99 needs the samples (2026-09-10, BUGS F29)
 HOST = "host_42"
 T0 = 1767225600  # 2026-01-01T00:00:00Z epoch seconds
+HIGH = 90.0      # the high-cpu threshold, TSBS's own
+QUERIES = ("q_last", "q_range", "q_global", "q_groupby", "q_high")
 
 
 def parse_lp():
@@ -106,6 +113,15 @@ class ArcadeTS:
             f"SELECT (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
             f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY h ORDER BY h").to_list()
 
+    def q_groupby(self):
+        return self.db.query("sql",
+            f"SELECT host, (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
+            f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h").to_list()
+
+    def q_high(self):
+        return self.db.query("sql",
+            f"SELECT host, ts, uu FROM Point WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").to_list()
+
     def close(self):
         self.db.close()
 
@@ -164,6 +180,13 @@ class ArcadeTSServer(ArcadeTS):
     def q_global(self):
         return self._post("query", f"SELECT (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
                                    f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY h ORDER BY h")
+
+    def q_groupby(self):
+        return self._post("query", f"SELECT host, (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
+                                   f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h")
+
+    def q_high(self):
+        return self._post("query", f"SELECT host, ts, uu FROM Point WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}")
 
     def close(self):
         self.rq.close()
@@ -292,6 +315,17 @@ class ArcadeNativeTS(ArcadeTS):
             f"WHERE ts >= {a} AND ts < {b} "
             f"GROUP BY h ORDER BY h").to_list()
 
+    def q_groupby(self):
+        a, b = T0 * 1000, (T0 + 43200) * 1000
+        return self.db.query("sql",
+            f"SELECT host, ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point "
+            f"WHERE ts >= {a} AND ts < {b} GROUP BY host, h ORDER BY host, h").to_list()
+
+    def q_high(self):
+        a, b = T0 * 1000, (T0 + 43200) * 1000
+        return self.db.query("sql",
+            f"SELECT host, ts, uu FROM Point WHERE ts >= {a} AND ts < {b} AND uu > {HIGH}").to_list()
+
     def settle(self):
         """OUTSIDE the ingest timer, like every other arm's settle.
 
@@ -381,6 +415,15 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
         return self._post("query", f"SELECT ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point "
                                    f"WHERE ts >= {T0 * 1000} AND ts < {(T0 + 43200) * 1000} GROUP BY h ORDER BY h")
 
+    def q_groupby(self):
+        return self._post("query", f"SELECT host, ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point "
+                                   f"WHERE ts >= {T0 * 1000} AND ts < {(T0 + 43200) * 1000} "
+                                   "GROUP BY host, h ORDER BY host, h")
+
+    def q_high(self):
+        return self._post("query", f"SELECT host, ts, uu FROM Point WHERE ts >= {T0 * 1000} "
+                                   f"AND ts < {(T0 + 43200) * 1000} AND uu > {HIGH}")
+
     def settle(self):
         self._settled_s = 0.0
 
@@ -425,6 +468,15 @@ class DuckTS:
             f"SELECT (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
             f"AND ts < {T0+43200} GROUP BY h ORDER BY h").fetchall()
 
+    def q_groupby(self):
+        return self.cx.execute(
+            f"SELECT host, (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
+            f"AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h").fetchall()
+
+    def q_high(self):
+        return self.cx.execute(
+            f"SELECT host, ts, uu FROM p WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").fetchall()
+
     def close(self):
         self.cx.close()
 
@@ -468,6 +520,15 @@ class SQLiteTS:
         return self.cx.execute(
             f"SELECT (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
             f"AND ts < {T0+43200} GROUP BY h ORDER BY h").fetchall()
+
+    def q_groupby(self):
+        return self.cx.execute(
+            f"SELECT host, (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
+            f"AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h").fetchall()
+
+    def q_high(self):
+        return self.cx.execute(
+            f"SELECT host, ts, uu FROM p WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").fetchall()
 
     def close(self):
         self.cx.close()
@@ -520,9 +581,12 @@ class MongoTS:
 
     def ingest(self, pts):
         import datetime as _dt
+        from pymongo import WriteConcern
         self.db.drop_collection("p")
         self.db.create_collection("p", timeseries={"timeField": "ts", "metaField": "host", "granularity": "seconds"})
-        col = self.db["p"]
+        # w=1, j=false (#81): the insert returns once applied in memory; the
+        # journal is flushed by the storage engine's own 100 ms interval.
+        col = self.db.get_collection("p", write_concern=WriteConcern(w=1, j=False))
         for lo in range(0, len(pts), 50_000):
             col.insert_many([{"host": p[0], "ts": _dt.datetime.fromtimestamp(p[1], _dt.timezone.utc),
                               "uu": p[2], "us": p[3], "ui": p[4]} for p in pts[lo:lo + 50_000]], ordered=False)
@@ -546,6 +610,16 @@ class MongoTS:
             {"$group": {"_id": {"$dateTrunc": {"date": "$ts", "unit": "hour"}}, "v": {"$avg": "$uu"}}},
             {"$sort": {"_id": 1}}]))
 
+    def q_groupby(self):
+        return list(self.db["p"].aggregate([
+            {"$match": {"ts": {"$gte": self._t(T0), "$lt": self._t(T0 + 43200)}}},
+            {"$group": {"_id": {"host": "$host", "h": {"$dateTrunc": {"date": "$ts", "unit": "hour"}}}, "v": {"$avg": "$uu"}}},
+            {"$sort": {"_id.host": 1, "_id.h": 1}}]))
+
+    def q_high(self):
+        return list(self.db["p"].find({"ts": {"$gte": self._t(T0), "$lt": self._t(T0 + 43200)}, "uu": {"$gt": HIGH}},
+                                      {"host": 1, "ts": 1, "uu": 1}))
+
     def close(self):
         self.cl.close()
 
@@ -566,6 +640,9 @@ class TimescaleTS:
             self._v = c.fetchone()[0]
             c.execute("SELECT version()")
             self._pv = c.fetchone()[0].split(" (")[0]
+            c.execute("SHOW synchronous_commit")   # the server was started with it off (#81); read, not asserted
+            _sc = c.fetchone()[0]
+        self.durability = f"synchronous_commit={_sc}" + ("" if _sc == "off" else " (NOT the #81 setting)")
 
     def version(self):
         return f"timescaledb {self._v} on {self._pv}"
@@ -597,6 +674,18 @@ class TimescaleTS:
         with self.cx.cursor() as c:
             c.execute("SELECT time_bucket('1 hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s GROUP BY h ORDER BY h",
                       (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def q_groupby(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT host, time_bucket('1 hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s "
+                      "GROUP BY host, h ORDER BY host, h", (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def q_high(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT host, ts, uu FROM p WHERE ts >= %s AND ts < %s AND uu > %s",
+                      (self._t(T0), self._t(T0 + 43200), HIGH))
             return c.fetchall()
 
     def close(self):
@@ -698,6 +787,18 @@ class QuestTS:
             f"WHERE timestamp >= '2026-01-01T00:00:00Z' "
             f"AND timestamp < '2026-01-01T12:00:00Z' SAMPLE BY 1h").fetchall()
 
+    def q_groupby(self):
+        # SAMPLE BY with a key column groups per host per bucket, QuestDB's own form.
+        return self.cx.execute(
+            f"SELECT host, timestamp, avg(uu) FROM p "
+            f"WHERE timestamp >= '2026-01-01T00:00:00Z' "
+            f"AND timestamp < '2026-01-01T12:00:00Z' SAMPLE BY 1h ORDER BY host, timestamp").fetchall()
+
+    def q_high(self):
+        return self.cx.execute(
+            f"SELECT host, timestamp, uu FROM p WHERE timestamp >= '2026-01-01T00:00:00Z' "
+            f"AND timestamp < '2026-01-01T12:00:00Z' AND uu > {HIGH}").fetchall()
+
     def close(self):
         self.cx.close()
 
@@ -708,6 +809,21 @@ class QuestTS:
 _CLIENT_SERVER = {"questdb"}
 
 BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS)}
+
+# DECISIONS #81: what each arm runs at commit, recorded on the row. DuckDB
+# flushes its WAL at every commit and cannot be relaxed (the named exception
+# here); QuestDB's cairo.commit.mode defaults to nosync; TimescaleDB reads the
+# server's synchronous_commit on connect.
+DURABILITY = {
+    "arcadedb_ts_doc": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_ts_doc_server": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_ts_native": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_ts_native_server": "txWalFlush=0 (engine default): no flush at commit",
+    "duckdb": "fsync at commit, not configurable (DuckDB WAL)",
+    "sqlite": "WAL, synchronous=NORMAL: synced at checkpoint, not at commit",
+    "mongodb": "write concern w=1, j=false (journal flushed every 100 ms)",
+    "questdb": "cairo.commit.mode=nosync (default): no fsync at commit",
+}
 
 
 def main():
@@ -774,7 +890,7 @@ def main():
     if settle > 0:
         time.sleep(settle)
 
-    for qn in ("q_last", "q_range", "q_global"):
+    for qn in QUERIES:
         times = []
         ref = None
         for _ in range(QITER):
@@ -813,8 +929,14 @@ def main():
         out["last_window_s"] = 86400 * 40
 
     _expect = {"q_range": 60, "q_global": 12, "q_last": 1}
+    # The two 2026-10 queries have data-dependent shapes (one row per host
+    # per hour; one row per reading above the threshold), so they are
+    # asserted across engines instead: the row records the count and
+    # fairness_check refuses a table whose engines disagree on it.
     _wrong = {qn: out[f"{qn}_rows"] for qn, want in _expect.items()
               if out.get(f"{qn}_rows") != want}
+    if out.get("q_groupby_rows", 0) <= 12 or out.get("q_high_rows", 0) <= 0:
+        _wrong.update({k: out.get(f"{k}_rows") for k in ("q_groupby", "q_high")})
     if _wrong:
         raise SystemExit(
             f"{args.backend}: query shapes did not match the corpus: got {_wrong}, "
@@ -830,6 +952,8 @@ def main():
         out["backend_version"] = b.version()
     except Exception as e:
         out["backend_version"] = f"unknown ({e.__class__.__name__})"
+    out["durability"] = getattr(b, "durability", None) or DURABILITY.get(args.backend)
+    out["instrument"] = bench_common.INSTRUMENT
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
     # settles a roughly fixed 30-87 MB, against nothing at all for an

@@ -354,7 +354,22 @@ def load_canonical(apply_corpus=True):
              r["backend"], r.get("gav") is not False, r["rep"])
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
             best[k] = r
-    return list(best.values())
+    out = list(best.values())
+    # ONE INSTRUMENT PER TABLE (DECISIONS #84). A row names the instrument it
+    # was measured under (bench_common.INSTRUMENT; rows before 2026-10 carry
+    # none and are the September instrument). Two instruments in one
+    # (lane, scale) would seat a five-query OLAP row beside a two-query one,
+    # or a relaxed-durability write beside an fsync one, under one header.
+    # Refused here, at the freeze, rather than left for a reader to notice.
+    mixed = {}
+    for r in out:
+        mixed.setdefault((r["lane"], r["scale"]), set()).add(str(r.get("instrument") or "2026-09"))
+    bad = {k: sorted(v) for k, v in mixed.items() if len(v) > 1}
+    if bad:
+        raise SystemExit("REFUSING: rows from two instruments share a table: "
+                         + "; ".join(f"{k[0]}/{k[1]} {v}" for k, v in sorted(bad.items()))
+                         + ". Freeze from one campaign, or exclude the other instrument's rows.")
+    return out
 
 
 def cells(rows, key):

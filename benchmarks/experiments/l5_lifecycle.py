@@ -634,6 +634,8 @@ def main():
     # cached: running it after the warm modes would measure an eviction of a
     # database that several cycles had just re-warmed, which is the same
     # number by construction but a weaker claim.
+    out["durability"] = "txWalFlush=0 (engine default): no flush at commit"   # DECISIONS #81
+    out["instrument"] = bench_common.INSTRUMENT
     o, c, w = measure(args.workload, "clean", cold=True)
     out["cold_open_ms"], out["cold_close_ms"] = round(o, 3), round(c, 3)
     out["build_close_ms"] = round(build_close_ms, 3)

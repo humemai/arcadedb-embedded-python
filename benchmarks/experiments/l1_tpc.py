@@ -9,7 +9,18 @@ paper states plainly as a dialect boundary rather than papering over.
 
 OLTP: a New-Order-STYLE transactional mix over the same schema (disclosed
 as TPC-C-inspired, not official TPC-C): per transaction, read a part row,
-insert an order document, bump the part's stock counter — one ACID txn.
+insert an order document, bump the part's stock counter, one ACID txn.
+Since the 2026-10 instrument (DECISIONS #82) a PAYMENT-style transaction
+follows: read an order placed by new-order, mark it paid, insert a payment
+row, one ACID txn; the two are 88% of TPC-C's mix. OLTP ops/s covers both.
+
+OLAP since 2026-10: Q1 and Q6 plus three line-item queries every engine can
+answer without a join (top ten parts by revenue, count by ship mode, revenue
+by month), 100 runs each per repetition.
+
+Durability (DECISIONS #81): every engine commits without waiting for the
+disk where it has the knob; each adapter declares what it ran as
+`durability`, and the class that cannot be relaxed says so.
 
 Data: DuckDB dbgen parquet staged under BENCH_DATA/tpch (sf1_lineitem.parquet,
 sf1_part.parquet). Deterministic; identical rows for every backend.
@@ -22,6 +33,22 @@ import statistics
 import time
 import surreal_common
 import arango_common
+import bench_common
+
+
+def pg_durability(cx):
+    """What the PostgreSQL server actually runs, read from it (#81)."""
+    try:
+        with cx.cursor() as c:
+            c.execute("SHOW synchronous_commit")
+            v = c.fetchone()[0]
+        try:
+            cx.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return f"synchronous_commit={v}" + ("" if v == "off" else " (NOT the #81 setting)")
+    except Exception as e:  # noqa: BLE001
+        return f"synchronous_commit=unknown ({e.__class__.__name__})"
 
 DATA = os.environ.get("BENCH_TPC_DATA", "/data/tpch")
 SF = os.environ.get("BENCH_TPC_SF", "1")
@@ -43,6 +70,15 @@ SELECT sum(l_extendedprice * l_discount) AS revenue FROM lineitem
 WHERE l_shipdate >= DATE '1994-01-01' AND l_shipdate < DATE '1995-01-01'
   AND l_discount BETWEEN 0.05 AND 0.07 AND l_quantity < 24
 """
+# The 2026-10 line-item set (DECISIONS #82): the same three questions in
+# every engine's language, no join anywhere.
+TOP_PARTS_SQL = ("SELECT l_partkey, sum(l_extendedprice * (1 - l_discount)) AS rev "
+                 "FROM lineitem GROUP BY l_partkey ORDER BY rev DESC LIMIT 10")
+SHIP_MODE_SQL = "SELECT l_shipmode, count(*) AS n FROM lineitem GROUP BY l_shipmode ORDER BY l_shipmode"
+BY_MONTH_DUCK = ("SELECT date_trunc('month', l_shipdate) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev "
+                 "FROM lineitem GROUP BY m ORDER BY m")
+BY_MONTH_TEXT = ("SELECT substr(l_shipdate, 1, 7) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev "
+                 "FROM lineitem GROUP BY m ORDER BY m")
 # ArcadeDB SQL: same semantics on the LineItem document type; dates stored
 # as ISO strings (lexicographic order == chronological for ISO-8601).
 Q1_ARCADE = ("SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty, "
@@ -53,9 +89,20 @@ Q1_ARCADE = ("SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty, "
 Q6_ARCADE = ("SELECT sum(l_extendedprice * l_discount) AS revenue FROM LineItem "
              "WHERE l_shipdate >= '1994-01-01' AND l_shipdate < '1995-01-01' "
              "AND l_discount >= 0.05 AND l_discount <= 0.07 AND l_quantity < 24")
+ARCADE_OLAP = {
+    "q1": Q1_ARCADE, "q6": Q6_ARCADE,
+    "top_parts": ("SELECT l_partkey, sum(l_extendedprice * (1 - l_discount)) AS rev FROM LineItem "
+                  "GROUP BY l_partkey ORDER BY rev DESC LIMIT 10"),
+    "ship_mode": "SELECT l_shipmode, count(*) AS n FROM LineItem GROUP BY l_shipmode ORDER BY l_shipmode",
+    "by_month": ("SELECT l_shipdate.substring(0, 7) AS m, sum(l_extendedprice * (1 - l_discount)) AS rev "
+                 "FROM LineItem GROUP BY m ORDER BY m"),
+}
+DUCK_OLAP = {"q1": Q1_DUCK, "q6": Q6_DUCK, "top_parts": TOP_PARTS_SQL, "ship_mode": SHIP_MODE_SQL, "by_month": BY_MONTH_DUCK}
 
 LI_COLS = ["l_orderkey", "l_partkey", "l_quantity", "l_extendedprice",
-           "l_discount", "l_returnflag", "l_linestatus", "l_shipdate"]
+           "l_discount", "l_returnflag", "l_linestatus", "l_shipdate",
+           "l_shipmode"]   # l_shipmode joined for the 2026-10 ship-mode query
+OLAP_QUERIES = ("q1", "q6", "top_parts", "ship_mode", "by_month")
 
 
 def load_frames():
@@ -73,6 +120,10 @@ def load_frames():
 
 class DuckTPC:
     name = "duckdb"
+    # DuckDB flushes its write-ahead log to disk at every commit and has no
+    # setting that relaxes it (its durability page: a commit returns after the
+    # WAL is written and flushed). Named as the exception it is (#81).
+    durability = "fsync at commit, not configurable (DuckDB WAL)"
 
     def connect(self):
         import duckdb
@@ -84,12 +135,13 @@ class DuckTPC:
         self.cx.execute("CREATE TABLE lineitem AS SELECT * FROM li_src")
         self.cx.register("p_src", part)
         self.cx.execute("CREATE TABLE part AS SELECT *, 100 AS stock FROM p_src")
-        self.cx.execute("CREATE TABLE orders_new (okey BIGINT, pkey BIGINT, qty INT)")
+        self.cx.execute("CREATE TABLE orders_new (okey BIGINT, pkey BIGINT, qty INT, paid INT DEFAULT 0)")
+        self.cx.execute("CREATE INDEX o_okey ON orders_new (okey)")
+        self.cx.execute("CREATE TABLE payments (okey BIGINT, pkey BIGINT, amount DOUBLE)")
         self.cx.execute("ALTER TABLE lineitem ALTER l_shipdate TYPE DATE")
 
     def olap(self, which):
-        q = Q1_DUCK if which == "q1" else Q6_DUCK
-        return self.cx.execute(q).fetchall()
+        return self.cx.execute(DUCK_OLAP[which]).fetchall()
 
     def new_order(self, i, pkey):
         self.cx.execute("BEGIN")
@@ -100,12 +152,20 @@ class DuckTPC:
                         [pkey])
         self.cx.execute("COMMIT")
 
+    def payment(self, okey):
+        self.cx.execute("BEGIN")
+        r = self.cx.execute("SELECT okey, pkey, qty FROM orders_new WHERE okey=?", [okey]).fetchone()
+        self.cx.execute("UPDATE orders_new SET paid = 1 WHERE okey=?", [okey])
+        self.cx.execute("INSERT INTO payments VALUES (?, ?, ?)", [okey, r[1] if r else 0, 1.0])
+        self.cx.execute("COMMIT")
+
     def close(self):
         self.cx.close()
 
 
 Q1_SQLITE = Q1_DUCK.replace("DATE '1998-09-02'", "'1998-09-02'")
 Q6_SQLITE = Q6_DUCK.replace("DATE '1994-01-01'", "'1994-01-01'").replace("DATE '1995-01-01'", "'1995-01-01'")
+SQLITE_OLAP = {"q1": Q1_SQLITE, "q6": Q6_SQLITE, "top_parts": TOP_PARTS_SQL, "ship_mode": SHIP_MODE_SQL, "by_month": BY_MONTH_TEXT}
 
 
 class SQLiteTPC:
@@ -113,6 +173,7 @@ class SQLiteTPC:
     dates as ISO text like the ArcadeDB arm, so the comparisons are
     lexicographic and equal to chronological (2026-09-11)."""
     name = "sqlite"
+    durability = "WAL, synchronous=NORMAL: synced at checkpoint, not at commit"
 
     def connect(self):
         import sqlite3
@@ -125,18 +186,19 @@ class SQLiteTPC:
     def build(self, li, part):
         self.cx.execute("CREATE TABLE lineitem (l_orderkey INTEGER, l_partkey INTEGER, "
                         "l_quantity REAL, l_extendedprice REAL, l_discount REAL, "
-                        "l_returnflag TEXT, l_linestatus TEXT, l_shipdate TEXT)")
+                        "l_returnflag TEXT, l_linestatus TEXT, l_shipdate TEXT, l_shipmode TEXT)")
         self.cx.execute("CREATE TABLE part (p_partkey INTEGER PRIMARY KEY, p_retailprice REAL, stock INTEGER)")
-        self.cx.execute("CREATE TABLE orders_new (okey INTEGER, pkey INTEGER, qty INTEGER)")
+        self.cx.execute("CREATE TABLE orders_new (okey INTEGER PRIMARY KEY, pkey INTEGER, qty INTEGER, paid INTEGER DEFAULT 0)")
+        self.cx.execute("CREATE TABLE payments (okey INTEGER, pkey INTEGER, amount REAL)")
         rows = li[LI_COLS].itertuples(index=False, name=None)
         buf = []
         for r in rows:
             buf.append(r)
             if len(buf) >= 50_000:
-                self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?)", buf)
+                self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?,?)", buf)
                 self.cx.commit(); buf = []
         if buf:
-            self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?)", buf)
+            self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?,?)", buf)
             self.cx.commit()
         self.cx.executemany("INSERT INTO part VALUES (?,?,100)",
                             list(part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)))
@@ -145,13 +207,18 @@ class SQLiteTPC:
         self.cx.commit()
 
     def olap(self, which):
-        q = Q1_SQLITE if which == "q1" else Q6_SQLITE
-        return self.cx.execute(q).fetchall()
+        return self.cx.execute(SQLITE_OLAP[which]).fetchall()
 
     def new_order(self, i, pkey):
         self.cx.execute("SELECT p_retailprice, stock FROM part WHERE p_partkey=?", (pkey,)).fetchone()
-        self.cx.execute("INSERT INTO orders_new VALUES (?, ?, ?)", (i, pkey, 1))
+        self.cx.execute("INSERT INTO orders_new VALUES (?, ?, ?, 0)", (i, pkey, 1))
         self.cx.execute("UPDATE part SET stock = stock - 1 WHERE p_partkey=?", (pkey,))
+        self.cx.commit()
+
+    def payment(self, okey):
+        r = self.cx.execute("SELECT okey, pkey, qty FROM orders_new WHERE okey=?", (okey,)).fetchone()
+        self.cx.execute("UPDATE orders_new SET paid = 1 WHERE okey=?", (okey,))
+        self.cx.execute("INSERT INTO payments VALUES (?, ?, ?)", (okey, r[1] if r else 0, 1.0))
         self.cx.commit()
 
     def close(self):
@@ -164,6 +231,11 @@ class MongoTPC:
     one multi-document transaction (which is why the server runs as a
     single-node replica set) (2026-09-11)."""
     name = "mongodb"
+    # w=1, j=false on every timed write (#81): the write returns once the
+    # primary has applied it in memory; the journal is flushed by the
+    # storage engine's own commit interval (100 ms). A replica set's default
+    # is w:majority with journaling, which waits for the disk.
+    durability = "write concern w=1, j=false (journal flushed every 100 ms)"
 
     def connect(self):
         import pymongo
@@ -201,6 +273,8 @@ class MongoTPC:
             time.sleep(0.5)
         self.version = f"mongodb {self.cl.server_info()['version']}"
         self.db = self.cl["bench"]
+        from pymongo import WriteConcern
+        self._wc = WriteConcern(w=1, j=False)
 
     def build(self, li, part):
         lc, pc, oc = self.db["lineitem"], self.db["part"], self.db["orders_new"]
@@ -217,7 +291,12 @@ class MongoTPC:
                        ordered=False)
         pc.create_index("p_partkey", unique=True)
         lc.create_index("l_shipdate")
+        oc.create_index("okey", unique=True)
 
+    _REV = {"$sum": {"$multiply": ["$l_extendedprice", {"$subtract": [1, "$l_discount"]}]}}
+    TOP_PARTS = [{"$group": {"_id": "$l_partkey", "rev": _REV}}, {"$sort": {"rev": -1}}, {"$limit": 10}]
+    SHIP_MODE = [{"$group": {"_id": "$l_shipmode", "n": {"$sum": 1}}}, {"$sort": {"_id": 1}}]
+    BY_MONTH = [{"$group": {"_id": {"$substr": ["$l_shipdate", 0, 7]}, "rev": _REV}}, {"$sort": {"_id": 1}}]
     Q1 = [{"$match": {"l_shipdate": {"$lte": "1998-09-02"}}},
           {"$group": {"_id": {"f": "$l_returnflag", "s": "$l_linestatus"},
                       "sum_qty": {"$sum": "$l_quantity"}, "sum_base": {"$sum": "$l_extendedprice"},
@@ -229,14 +308,23 @@ class MongoTPC:
           {"$group": {"_id": None, "revenue": {"$sum": {"$multiply": ["$l_extendedprice", "$l_discount"]}}}}]
 
     def olap(self, which):
-        return list(self.db["lineitem"].aggregate(self.Q1 if which == "q1" else self.Q6, allowDiskUse=True))
+        q = {"q1": self.Q1, "q6": self.Q6, "top_parts": self.TOP_PARTS,
+             "ship_mode": self.SHIP_MODE, "by_month": self.BY_MONTH}[which]
+        return list(self.db["lineitem"].aggregate(q, allowDiskUse=True))
 
     def new_order(self, i, pkey):
         with self.cl.start_session() as sess:
-            with sess.start_transaction():
+            with sess.start_transaction(write_concern=self._wc):
                 self.db["part"].find_one({"p_partkey": pkey}, {"p_retailprice": 1, "stock": 1}, session=sess)
-                self.db["orders_new"].insert_one({"okey": i, "pkey": pkey, "qty": 1}, session=sess)
+                self.db["orders_new"].insert_one({"okey": i, "pkey": pkey, "qty": 1, "paid": 0}, session=sess)
                 self.db["part"].update_one({"p_partkey": pkey}, {"$inc": {"stock": -1}}, session=sess)
+
+    def payment(self, okey):
+        with self.cl.start_session() as sess:
+            with sess.start_transaction(write_concern=self._wc):
+                o = self.db["orders_new"].find_one({"okey": okey}, {"pkey": 1, "qty": 1}, session=sess)
+                self.db["orders_new"].update_one({"okey": okey}, {"$set": {"paid": 1}}, session=sess)
+                self.db["payments"].insert_one({"okey": okey, "pkey": (o or {}).get("pkey", 0), "amount": 1.0}, session=sess)
 
     def close(self):
         self.cl.close()
@@ -249,6 +337,9 @@ class SurrealTPC:
     (2026-09-11). The served twin runs the 3.2.4 server on RocksDB."""
     name = "surrealdb_tpc"   # not "surrealdb": that is the cross-model lane's old row name
     URL = "surrealkv:///tmp/tpc_surrealkv"
+    # core 2.3.10: SURREAL_SYNC_DATA defaults to false (crates/core/src/kvs/
+    # surrealkv/cnf.rs at v2.3.10), so a commit does not wait for the disk.
+    durability = "SurrealKV, SURREAL_SYNC_DATA=false (2.x default): no sync at commit"
 
     def _open(self):
         import shutil
@@ -260,7 +351,8 @@ class SurrealTPC:
 
     def connect(self):
         self._open()
-        self.db.query("REMOVE TABLE IF EXISTS lineitem; REMOVE TABLE IF EXISTS part; REMOVE TABLE IF EXISTS orders_new")
+        self.db.query("REMOVE TABLE IF EXISTS lineitem; REMOVE TABLE IF EXISTS part; "
+                      "REMOVE TABLE IF EXISTS orders_new; REMOVE TABLE IF EXISTS payments")
 
     def build(self, li, part):
         # Index BEFORE the load (2026-09-13): on the SDK's SurrealKV store a
@@ -286,6 +378,15 @@ class SurrealTPC:
           "FROM lineitem WHERE l_shipdate <= '1998-09-02' GROUP BY l_returnflag, l_linestatus ORDER BY l_returnflag, l_linestatus")
     Q6 = ("SELECT math::sum(l_extendedprice * l_discount) AS revenue FROM lineitem WHERE l_shipdate >= '1994-01-01' "
           "AND l_shipdate < '1995-01-01' AND l_discount >= 0.05 AND l_discount <= 0.07 AND l_quantity < 24 GROUP ALL")
+    # Subquery form for the ordered group-bys: core 2.3.10 sorts by the group
+    # key after GROUP BY (the l2 finding of 2026-09-11); 3.2.4 accepts both.
+    OLAP = {
+        "top_parts": ("SELECT * FROM (SELECT l_partkey, math::sum(l_extendedprice * (1 - l_discount)) AS rev "
+                      "FROM lineitem GROUP BY l_partkey) ORDER BY rev DESC LIMIT 10"),
+        "ship_mode": "SELECT l_shipmode, count() AS n FROM lineitem GROUP BY l_shipmode ORDER BY l_shipmode",
+        "by_month": ("SELECT * FROM (SELECT string::slice(l_shipdate, 0, 7) AS m, "
+                     "math::sum(l_extendedprice * (1 - l_discount)) AS rev FROM lineitem GROUP BY m) ORDER BY m"),
+    }
 
     @staticmethod
     def _rows(res):
@@ -294,12 +395,18 @@ class SurrealTPC:
         return res if isinstance(res, list) else ([res] if res is not None else [])
 
     def olap(self, which):
-        return self._rows(self.db.query(self.Q1 if which == "q1" else self.Q6))
+        q = {"q1": self.Q1, "q6": self.Q6}.get(which) or self.OLAP[which]
+        return self._rows(self.db.query(q))
 
     def new_order(self, i, pkey):
         self.db.query(f"BEGIN; SELECT p_retailprice, stock FROM ONLY part:{pkey}; "
-                      f"CREATE orders_new SET okey = {i}, pkey = {pkey}, qty = 1; "
+                      f"CREATE orders_new:{i} SET okey = {i}, pkey = {pkey}, qty = 1, paid = 0; "
                       f"UPDATE part:{pkey} SET stock -= 1; COMMIT;")
+
+    def payment(self, okey):
+        self.db.query(f"BEGIN; SELECT pkey, qty FROM ONLY orders_new:{okey}; "
+                      f"UPDATE orders_new:{okey} SET paid = 1; "
+                      f"CREATE payments SET okey = {okey}, amount = 1.0; COMMIT;")
 
     def close(self):
         try:
@@ -310,6 +417,9 @@ class SurrealTPC:
 
 class SurrealServedTPC(SurrealTPC):
     name = "surrealdb_tpc_server"
+    # 3.2.4 defaults to SyncMode::Every; the runner starts the server with
+    # SURREAL_DATASTORE_SYNC_DATA=never (#81), the class ArcadeDB runs in.
+    durability = "RocksDB, SURREAL_DATASTORE_SYNC_DATA=never (3.x default is every commit)"
 
     def _open(self):
         from surrealdb import Surreal
@@ -329,6 +439,9 @@ class PostgresTPC:
         self.cx = psycopg.connect(
             f"host={host} dbname=bench user=postgres password=dbbenchpass",
             autocommit=False)
+        # READ, not asserted: the server was started with synchronous_commit=off
+        # (runner.BACKENDS, #81); the row records what the server answers.
+        self.durability = pg_durability(self.cx)
         # ASK THE SERVER. "postgres" is a name, not a version, and a row
         # carrying one cannot be re-measured by anyone including us (#156).
         # Never lose a completed run over provenance: record the reason.
@@ -345,7 +458,7 @@ class PostgresTPC:
         cur.execute("CREATE TABLE lineitem (l_orderkey BIGINT, l_partkey BIGINT, "
                     "l_quantity DOUBLE PRECISION, l_extendedprice DOUBLE PRECISION, "
                     "l_discount DOUBLE PRECISION, l_returnflag TEXT, "
-                    "l_linestatus TEXT, l_shipdate DATE)")
+                    "l_linestatus TEXT, l_shipdate DATE, l_shipmode TEXT)")
         with cur.copy("COPY lineitem FROM STDIN") as cp:
             for t in li.itertuples(index=False):
                 cp.write_row(tuple(t))
@@ -354,11 +467,12 @@ class PostgresTPC:
         with cur.copy("COPY part (p_partkey, p_retailprice) FROM STDIN") as cp:
             for t in part.itertuples(index=False):
                 cp.write_row(tuple(t))
-        cur.execute("CREATE TABLE orders_new (okey BIGINT, pkey BIGINT, qty INT)")
+        cur.execute("CREATE TABLE orders_new (okey BIGINT PRIMARY KEY, pkey BIGINT, qty INT, paid INT DEFAULT 0)")
+        cur.execute("CREATE TABLE payments (okey BIGINT, pkey BIGINT, amount DOUBLE PRECISION)")
         self.cx.commit()
 
     def olap(self, which):
-        q = Q1_DUCK if which == "q1" else Q6_DUCK
+        q = DUCK_OLAP[which]
         cur = self.cx.cursor()
         cur.execute(q)
         r = cur.fetchall()
@@ -370,9 +484,17 @@ class PostgresTPC:
         cur.execute("SELECT p_retailprice, stock FROM part WHERE p_partkey=%s",
                     (pkey,))
         cur.fetchone()
-        cur.execute("INSERT INTO orders_new VALUES (%s, %s, %s)", (i, pkey, 1))
+        cur.execute("INSERT INTO orders_new VALUES (%s, %s, %s, 0)", (i, pkey, 1))
         cur.execute("UPDATE part SET stock = stock - 1 WHERE p_partkey=%s",
                     (pkey,))
+        self.cx.commit()
+
+    def payment(self, okey):
+        cur = self.cx.cursor()
+        cur.execute("SELECT okey, pkey, qty FROM orders_new WHERE okey=%s", (okey,))
+        r = cur.fetchone()
+        cur.execute("UPDATE orders_new SET paid = 1 WHERE okey=%s", (okey,))
+        cur.execute("INSERT INTO payments VALUES (%s, %s, %s)", (okey, r[1] if r else 0, 1.0))
         self.cx.commit()
 
     def close(self):
@@ -381,6 +503,10 @@ class PostgresTPC:
 
 class ArcadeTPC:
     name = "arcadedb_embedded"
+    # The engine default (GlobalConfiguration TX_WAL_FLUSH = 0): the WAL is
+    # written, not flushed, at commit. DECISIONS #81 keeps it; the comparators
+    # are set to the same class.
+    durability = "txWalFlush=0 (engine default): no flush at commit"
 
     def connect(self):
         import arcadedb_embedded as arcadedb
@@ -409,6 +535,9 @@ class ArcadeTPC:
         db.command("sql", "CREATE PROPERTY Part.p_partkey LONG")
         db.command("sql", "CREATE INDEX ON Part (p_partkey) UNIQUE")
         db.command("sql", "CREATE DOCUMENT TYPE OrderNew")
+        db.command("sql", "CREATE PROPERTY OrderNew.okey LONG")
+        db.command("sql", "CREATE INDEX ON OrderNew (okey) UNIQUE")
+        db.command("sql", "CREATE DOCUMENT TYPE Payment")
         # THE ENGINE'S BULK PATH, not one SQL statement per row.
         #
         # This block used to issue a parameterised INSERT per row and call
@@ -441,7 +570,8 @@ class ArcadeTPC:
                  "l_discount": float(t.l_discount),
                  "l_returnflag": str(t.l_returnflag),
                  "l_linestatus": str(t.l_linestatus),
-                 "l_shipdate": str(t.l_shipdate)}
+                 "l_shipdate": str(t.l_shipdate),
+                 "l_shipmode": str(t.l_shipmode)}
                 for t in chunk.itertuples(index=False)], commit_every=BATCH)
         for start in range(0, len(part), BATCH):
             chunk = part.iloc[start:start + BATCH]
@@ -453,18 +583,26 @@ class ArcadeTPC:
         db.command("sql", "CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
 
     def olap(self, which):
-        q = Q1_ARCADE if which == "q1" else Q6_ARCADE
-        return self.db.query("sql", q).to_list()
+        return self.db.query("sql", ARCADE_OLAP[which]).to_list()
 
     def new_order(self, i, pkey):
         db = self.db
         db.begin()
         db.query("sql", "SELECT p_retailprice, stock FROM Part WHERE p_partkey=:k",
                  {"k": pkey}).to_list()
-        db.command("sql", "INSERT INTO OrderNew SET okey=:o, pkey=:p, qty=1",
+        db.command("sql", "INSERT INTO OrderNew SET okey=:o, pkey=:p, qty=1, paid=0",
                    {"o": i, "p": pkey})
         db.command("sql", "UPDATE Part SET stock = stock - 1 WHERE p_partkey=:k",
                    {"k": pkey})
+        db.commit()
+
+    def payment(self, okey):
+        db = self.db
+        db.begin()
+        r = db.query("sql", "SELECT pkey, qty FROM OrderNew WHERE okey=:o", {"o": okey}).to_list()
+        db.command("sql", "UPDATE OrderNew SET paid = 1 WHERE okey=:o", {"o": okey})
+        db.command("sql", "INSERT INTO Payment SET okey=:o, pkey=:p, amount=1.0",
+                   {"o": okey, "p": (r[0].get("pkey") if r else 0)})
         db.commit()
 
     def close(self):
@@ -507,19 +645,23 @@ class ArcadeServerTPC(ArcadeTPC):
                     "CREATE PROPERTY LineItem.l_quantity DOUBLE",
                     "CREATE PROPERTY LineItem.l_extendedprice DOUBLE",
                     "CREATE PROPERTY LineItem.l_discount DOUBLE",
+                    "CREATE PROPERTY LineItem.l_shipmode STRING",
                     "CREATE DOCUMENT TYPE Part",
                     "CREATE PROPERTY Part.p_partkey LONG",
                     "CREATE INDEX ON Part (p_partkey) UNIQUE",
-                    "CREATE DOCUMENT TYPE OrderNew"):
+                    "CREATE DOCUMENT TYPE OrderNew",
+                    "CREATE PROPERTY OrderNew.okey LONG",
+                    "CREATE INDEX ON OrderNew (okey) UNIQUE",
+                    "CREATE DOCUMENT TYPE Payment"):
             self._cmd(ddl)
         buf = []
         for t in li.itertuples(index=False):
             buf.append("INSERT INTO LineItem SET l_orderkey=%d, l_partkey=%d, "
                        "l_quantity=%f, l_extendedprice=%f, l_discount=%f, "
-                       "l_returnflag='%s', l_linestatus='%s', l_shipdate='%s'"
+                       "l_returnflag='%s', l_linestatus='%s', l_shipdate='%s', l_shipmode='%s'"
                        % (t.l_orderkey, t.l_partkey, t.l_quantity,
                           t.l_extendedprice, t.l_discount, t.l_returnflag,
-                          t.l_linestatus, t.l_shipdate))
+                          t.l_linestatus, t.l_shipdate, t.l_shipmode))
             if len(buf) >= 2_000:
                 self._cmd(";".join(buf), language="sqlscript")
                 buf = []
@@ -537,12 +679,18 @@ class ArcadeServerTPC(ArcadeTPC):
         self._cmd("CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
 
     def olap(self, which):
-        return self._cmd(Q1_ARCADE if which == "q1" else Q6_ARCADE)
+        return self._cmd(ARCADE_OLAP[which])
 
     def new_order(self, i, pkey):
         self._cmd(f"SELECT p_retailprice, stock FROM Part WHERE p_partkey={pkey};"
-                  f"INSERT INTO OrderNew SET okey={i}, pkey={pkey}, qty=1;"
+                  f"INSERT INTO OrderNew SET okey={i}, pkey={pkey}, qty=1, paid=0;"
                   f"UPDATE Part SET stock = stock - 1 WHERE p_partkey={pkey}",
+                  language="sqlscript")
+
+    def payment(self, okey):
+        self._cmd(f"SELECT pkey, qty FROM OrderNew WHERE okey={okey};"
+                  f"UPDATE OrderNew SET paid = 1 WHERE okey={okey};"
+                  f"INSERT INTO Payment SET okey={okey}, amount=1.0",
                   language="sqlscript")
 
     def close(self):
@@ -568,6 +716,7 @@ class ArangoTPC:
     the part, insert the order, decrement the stock). Server only: the
     driver is an HTTP client and the engine has no in-process mode."""
     name = "arangodb_tpc"
+    durability = arango_common.DURABILITY
 
     def connect(self):
         self.cl, self.db, self.version = arango_common.connect()
@@ -576,6 +725,7 @@ class ArangoTPC:
         lc = self.db.create_collection("lineitem")
         pc = self.db.create_collection("part")
         self.db.create_collection("orders_new")
+        self.db.create_collection("payments")
         buf = []
         for t in li[LI_COLS].itertuples(index=False, name=None):
             buf.append(dict(zip(LI_COLS, t)))
@@ -596,16 +746,38 @@ class ArangoTPC:
           "AND l.l_discount >= 0.05 AND l.l_discount <= 0.07 AND l.l_quantity < 24 "
           "COLLECT AGGREGATE revenue = SUM(l.l_extendedprice * l.l_discount) RETURN {revenue}")
 
+    OLAP = {
+        "top_parts": ("FOR l IN lineitem COLLECT k = l.l_partkey "
+                      "AGGREGATE rev = SUM(l.l_extendedprice * (1 - l.l_discount)) "
+                      "SORT rev DESC LIMIT 10 RETURN {k, rev}"),
+        "ship_mode": "FOR l IN lineitem COLLECT m = l.l_shipmode WITH COUNT INTO n SORT m RETURN {m, n}",
+        "by_month": ("FOR l IN lineitem COLLECT m = SUBSTRING(l.l_shipdate, 0, 7) "
+                     "AGGREGATE rev = SUM(l.l_extendedprice * (1 - l.l_discount)) SORT m RETURN {m, rev}"),
+    }
+
     def olap(self, which):
-        return list(self.db.aql.execute(self.Q1 if which == "q1" else self.Q6, batch_size=10_000))
+        q = {"q1": self.Q1, "q6": self.Q6}.get(which) or self.OLAP[which]
+        return list(self.db.aql.execute(q, batch_size=10_000))
 
     def new_order(self, i, pkey):
         txn = self.db.begin_transaction(write=["part", "orders_new"])
         try:
             txn.collection("part").get(str(pkey))
-            txn.collection("orders_new").insert({"okey": i, "pkey": pkey, "qty": 1})
+            txn.collection("orders_new").insert({"_key": str(i), "okey": i, "pkey": pkey, "qty": 1, "paid": 0})
             txn.aql.execute("LET p = DOCUMENT('part', @k) UPDATE p WITH {stock: p.stock - 1} IN part",
                             bind_vars={"k": str(pkey)})
+            txn.commit_transaction()
+        except Exception:
+            txn.abort_transaction()
+            raise
+
+    def payment(self, okey):
+        txn = self.db.begin_transaction(write=["orders_new", "payments"])
+        try:
+            o = txn.collection("orders_new").get(str(okey)) or {}
+            txn.aql.execute("LET o = DOCUMENT('orders_new', @k) UPDATE o WITH {paid: 1} IN orders_new",
+                            bind_vars={"k": str(okey)})
+            txn.collection("payments").insert({"okey": okey, "pkey": o.get("pkey", 0), "amount": 1.0})
             txn.commit_transaction()
         except Exception:
             txn.abort_transaction()
@@ -637,8 +809,10 @@ def main():
     b.build(li, part)
     out["build_s"] = round(time.perf_counter() - t0, 2)
 
+    out["durability"] = getattr(b, "durability", None)
+    out["instrument"] = bench_common.INSTRUMENT
     if args.workload == "olap":
-        for which in ("q1", "q6"):
+        for which in OLAP_QUERIES:
             times = []
             ref = None
             for _ in range(OLAP_ITER):
@@ -674,9 +848,27 @@ def main():
             if i >= 20:
                 lat.append((time.perf_counter() - t) * 1000)
         lat.sort()
-        out["oltp_ops_per_s"] = round(len(lat) / (sum(lat) / 1000), 1)
         out["neworder_p50_ms"] = round(statistics.median(lat), 3)
         out["neworder_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)
+        # PAYMENT (2026-10, DECISIONS #82): the same count, against the orders
+        # new-order just placed, each chosen at random so the read is not a
+        # scan of the newest page. Read the order, mark it paid, insert the
+        # payment, one transaction.
+        plat = []
+        for j in range(OLTP_OPS):
+            okey = rng.randrange(OLTP_OPS)
+            t = time.perf_counter()
+            b.payment(okey)
+            if j >= 20:
+                plat.append((time.perf_counter() - t) * 1000)
+        plat.sort()
+        out["payment_p50_ms"] = round(statistics.median(plat), 3)
+        out["payment_p99_ms"] = round(plat[int(len(plat) * 0.99)], 3)
+        # ops/s over BOTH transaction types since 2026-10; the September rows
+        # (new-order alone) carry the same field under the old instrument, and
+        # make_paper_tables keeps the two instruments out of one table.
+        out["oltp_ops_per_s"] = round((len(lat) + len(plat)) / ((sum(lat) + sum(plat)) / 1000), 1)
+        out["oltp_ops"] = len(lat) + len(plat)
 
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it

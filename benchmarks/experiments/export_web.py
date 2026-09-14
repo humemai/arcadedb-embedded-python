@@ -898,6 +898,42 @@ def _agg(rows, field):
     }
 
 
+# THE 2026-10 COLUMNS (DECISIONS #82, #74), keyed on the ROWS, not on a flag:
+# a lane whose frozen rows all carry instrument "2026-10" gets these beside
+# its September columns; a lane whose rows carry none is printed as before;
+# a lane with both refuses, because a table cannot mix two instruments
+# (make_paper_tables refuses the same mix at freeze). Rows without the field
+# are the September instrument.
+OCT_METRICS = {
+    "l1tpc": [("payment_p50_ms", "payment p50 ms"), ("payment_p99_ms", "payment p99 ms"),
+              ("top_parts_ms", "top parts p50 ms"), ("top_parts_p99_ms", "top parts p99 ms"),
+              ("ship_mode_ms", "ship mode p50 ms"), ("ship_mode_p99_ms", "ship mode p99 ms"),
+              ("by_month_ms", "by month p50 ms"), ("by_month_p99_ms", "by month p99 ms")],
+    "l2": [("hop3f_p50_ms", "3-hop filtered p50 ms"), ("hop3f_p99_ms", "3-hop filtered p99 ms"),
+           ("delete_p50_ms", "delete p50 ms"), ("delete_p99_ms", "delete p99 ms")],
+    "l3d": [("ingest_s", "ingest s"), ("index_s", "index s")],
+    "l4": [("q_groupby_ms", "per-host hourly p50 ms"), ("q_groupby_p99_ms", "per-host hourly p99 ms"),
+           ("q_high_ms", "high-usage p50 ms"), ("q_high_p99_ms", "high-usage p99 ms")],
+}
+OCT_DOCS_OLTP = {"payment p50 ms", "payment p99 ms"}
+OCT_DOCS_OLAP = {"top parts p50 ms", "top parts p99 ms", "ship mode p50 ms", "ship mode p99 ms",
+                 "by month p50 ms", "by month p99 ms"}
+_FROZEN_ROWS = []   # set by main() once the CSV is read; the switch reads it
+
+
+def _instrument_of(lane):
+    """'2026-10', '2026-09', or a refusal when the lane's rows mix the two."""
+    seen = {str(r.get("instrument") or "2026-09") for r in _FROZEN_ROWS if r.get("lane") == lane}
+    if len(seen) > 1:
+        raise SystemExit(f"REFUSING: lane {lane} carries rows from two instruments {sorted(seen)}; "
+                         "a table cannot mix them (DECISIONS #84). Re-freeze from one campaign.")
+    return next(iter(seen), "2026-09")
+
+
+def _metrics_for(lane, spec):
+    return list(spec["metrics"]) + (OCT_METRICS.get(lane, []) if _instrument_of(lane) == "2026-10" else [])
+
+
 LANES = {
     "l3s": {
         "title": "Sparse vector search",
@@ -1690,7 +1726,7 @@ def _l4_table(all_rows):
             "host": rs[0].get("host"),
             "metrics": {},
         }
-        for field, lab in L4_METRICS:
+        for field, lab in list(L4_METRICS) + (OCT_METRICS["l4"] if _instrument_of("l4") == "2026-10" else []):
             for candidate in ((field,) if isinstance(field, str) else field):
                 got = _agg(rs, candidate)
                 if got is not None:
@@ -1727,7 +1763,7 @@ def _l4_table(all_rows):
             "0.720, because evaluating the time filter costs more than the "
             "scan it saves.",
         ],
-        "columns": [lab for _, lab in L4_METRICS],
+        "columns": [lab for _, lab in list(L4_METRICS) + (OCT_METRICS["l4"] if _instrument_of("l4") == "2026-10" else [])],
         "withheld_scales": [],
         "withheld_reason": None,
         "entries": entries,
@@ -2261,6 +2297,10 @@ def _restructure_tables(tables, rows):
                      "ingest documents/s", "ingest total s", "peak memory GiB", "disk GiB"}
         OLAP_KEEP = {"Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms",
                      "ingest documents/s", "ingest total s", "peak memory GiB", "disk GiB"}
+        _oct = _instrument_of("l1tpc") == "2026-10"
+        if _oct:
+            OLTP_KEEP |= OCT_DOCS_OLTP
+            OLAP_KEEP |= OCT_DOCS_OLAP
         src = by["l1tpc"]
         # The tuned PostgreSQL arm answered its question (image defaults do
         # not distort the comparison: 2.33 vs 2.39 ms new-order, 337 vs 331 ms
@@ -2272,12 +2312,14 @@ def _restructure_tables(tables, rows):
         tables.append({"id": "docs_oltp", "title": "Document OLTP",
                        "dataset": "TPC-C new-order on the TPC-H SF1 tables",
                        "conditions": list(src["conditions"]),
-                       "columns": ["new-order p50 ms", "new-order p99 ms", "OLTP ops/s"],
+                       "columns": ["new-order p50 ms", "new-order p99 ms"]
+                                  + (["payment p50 ms", "payment p99 ms"] if _oct else []) + ["OLTP ops/s"],
                        "entries": [clone(e, OLTP_KEEP) for e in src["entries"]], **base})
         tables.append({"id": "docs_olap", "title": "Document OLAP",
                        "dataset": "TPC-H Q1 and Q6 at SF1",
                        "conditions": list(src["conditions"]),
-                       "columns": ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"],
+                       "columns": ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"]
+                                  + (sorted(OCT_DOCS_OLAP, key=lambda c: [m[1] for m in OCT_METRICS["l1tpc"]].index(c)) if _oct else []),
                        "entries": [clone(e, OLAP_KEEP) for e in src["entries"]], **base})
         for i in ("l1", "l1olap", "l1tpc"):
             tables.remove(by[i])
@@ -2290,6 +2332,8 @@ def main() -> int:
         return 2
 
     rows = list(csv.DictReader(FROZEN.open()))
+    global _FROZEN_ROWS
+    _FROZEN_ROWS = rows
     # F39: rows frozen before 2026-09-13 stamp the SurrealDB SDK version as the
     # embedded engine; the core is a function of the pinned wheel, resolved once.
     import surreal_common
@@ -2470,7 +2514,7 @@ def main() -> int:
                 "host": rs[0].get("host") or None,
                 "metrics": {},
             }
-            for field, label in spec["metrics"]:
+            for field, label in _metrics_for(src_lane, spec):
                 if field == "disk_data_mb" and backend in spec.get("in_memory", ()):
                     # An engine with no disk at all reads as a blank with the
                     # note below, not as 0.00 (SurrealDB at mem://).
@@ -2556,13 +2600,15 @@ def main() -> int:
                 "title": spec["title"],
                 "dataset": spec["dataset"],
                 "conditions": spec["conditions"],
-                "columns": ([label for _, label in spec["metrics"]]
+                "columns": ([label for _, label in _metrics_for(src_lane, spec)]
                             if lane != "l3d" else
                             # warm exists only where a second pass was run,
                             # so it sits beside cold rather than replacing it
                             ["cold p50 ms", "cold p99 ms", "warm p50 ms",
                              "warm p99 ms", "recall@10", "ingest+index vectors/s",
-                             "ingest+index total s", "peak memory GiB", "disk GiB"]),
+                             "ingest+index total s"]
+                            + [lab for _, lab in OCT_METRICS["l3d"] if _instrument_of("l3d") == "2026-10"]
+                            + ["peak memory GiB", "disk GiB"]),
                 "withheld_scales": withheld,
                 "withheld_reason": (
                     "Comparator rows exist at these sizes but ArcadeDB's were "

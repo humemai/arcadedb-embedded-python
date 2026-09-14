@@ -46,6 +46,12 @@ FALLBACK_RECALL_TARGET = 0.95
 FROZEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results", "runs_paper.csv")
 
 
+# DECISIONS #81: ArangoDB's collections default to waitForSync=false and the
+# RocksDB WAL is synced by --rocksdb.sync-interval (100 ms), so a commit does
+# not wait for the disk; nothing is set, and the row records the default.
+DURABILITY = "waitForSync=false (default); RocksDB WAL synced every 100 ms"
+
+
 def connect(fresh: bool = True, wait_s: int = 120):
     """(client, bench db, "arangodb:<server version>"), waiting for the server."""
     from arango import ArangoClient

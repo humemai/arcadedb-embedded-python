@@ -642,6 +642,54 @@ def check_close_cost(rows):
     return bad
 
 
+# ---------------------------------------------------------------------------
+# F8: one durability class per table, and one instrument (DECISIONS #81, #84).
+#
+# Every row measured under the 2026-10 instrument records `durability`, the
+# setting its engine ran at commit, and `instrument`. The matched class is
+# "relaxed" (a commit returns without waiting for the disk); an engine that
+# cannot be relaxed says so with a string starting "fsync at commit" and is
+# the named exception on its tables (Neo4j, DuckDB, LadybugDB). Anything
+# else on a 2026-10 row is a FAIL: a row with no durability, a "strict"
+# string on an engine that has the knob, or a PostgreSQL row whose server
+# answered anything but synchronous_commit=off.
+STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo4j",
+                  "ladybug_graph", "duckdb", "duckdb_vss_dense"}
+
+
+def check_durability(rows):
+    import bench_common
+    print("=== F8: durability class and instrument per table ===")
+    oct_rows = [r for r in rows if str(r.get("instrument") or "") == "2026-10"]
+    if not oct_rows:
+        print("  no 2026-10 rows in the canonical set; nothing to check yet")
+        return 0
+    bad = 0
+    for r in oct_rows:
+        d = str(r.get("durability") or "")
+        cls = bench_common.durability_class(d)
+        where = f"{r.get('lane')} {r.get('scale')} {r.get('backend')}"
+        if cls is None:
+            print(f"  FAIL {where}: 2026-10 row records no durability"); bad += 1
+        elif cls == "strict" and r.get("backend") not in STRICT_ALLOWED:
+            print(f"  FAIL {where}: '{d}' on an engine that has the knob"); bad += 1
+        elif "NOT the #81 setting" in d:
+            print(f"  FAIL {where}: the server answered '{d}'"); bad += 1
+    # The two data-dependent time-series shapes must agree across engines
+    # (l4_tsbs records the counts; a query that returned a different number
+    # of rows measured a different question).
+    for qn in ("q_groupby_rows", "q_high_rows"):
+        got = {}
+        for r in oct_rows:
+            if r.get("lane") == "l4" and r.get(qn) not in (None, ""):
+                got.setdefault(str(r.get(qn)), set()).add(r.get("backend"))
+        if len(got) > 1:
+            print(f"  FAIL l4 {qn} disagrees across engines: {got}"); bad += 1
+    if not bad:
+        print(f"  ok: {len(oct_rows)} 2026-10 rows, every durability recorded and in class")
+    return bad
+
+
 def main():
     try:
         rows = _canonical()
@@ -650,6 +698,7 @@ def main():
         return 2
     bad = check_cpuset(rows) + check_envelope(rows) + check_degree(rows)
     bad += check_close_cost(rows)
+    bad += check_durability(rows)
     check_protocol_overlays()
     bad += report_producers(rows)
     print(f"\n{bad} fairness invariant failure(s)")

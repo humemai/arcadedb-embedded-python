@@ -30,8 +30,9 @@ import time
 import bench_common
 
 from l3d_dense import (BACKENDS, load_dataset, K, canonical_quant_label,
-                        degree_stamp, IVF_FIELDS, calibration_slice)
-from bench_common import run_conditions, SelfMemorySampler
+                        degree_stamp, IVF_FIELDS, calibration_slice,
+                        DURABILITY, DURABILITY_INGEST_ONLY)
+from bench_common import run_conditions, SelfMemorySampler, INSTRUMENT
 
 # Read with .get, not [], so the module can be IMPORTED without the run
 # environment. queue61's contract check does `import dense_multipass_driver`
@@ -138,10 +139,13 @@ def main():
                # about the engine it actually measured. l3d_dense sets
                # self.version in connect() for every backend.
                "lib_version": getattr(b, "version", None),
-               # The same two timers the lane records, so a multipass row can
-               # sit beside a lane row (DECISIONS #74 item 2).
+               # The same two timers the lane records, plus the durability
+               # class and the instrument, so a multipass row can sit beside a
+               # lane row (DECISIONS #74 item 2, #81, #84).
                **{_k: getattr(b, _k) for _k in ("ingest_s", "index_s")
                   if getattr(b, _k, None) is not None},
+               "durability": DURABILITY.get(BACKEND, DURABILITY_INGEST_ONLY),
+               "instrument": INSTRUMENT,
                "p50": round(lats[len(lats) // 2], 3),
                "p95": round(lats[int(0.95 * len(lats))], 3),
                "p99": round(lats[int(0.99 * len(lats))], 3),

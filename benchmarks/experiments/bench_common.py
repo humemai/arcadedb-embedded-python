@@ -12,6 +12,27 @@ import statistics as st
 import sys
 import time
 
+# THE INSTRUMENT VERSION. Rows measured under different query sets, timers, or
+# durability settings cannot share a table, so every row names the instrument
+# it was measured with and make_paper_tables refuses to mix them within a
+# table (DECISIONS #84). "2026-09" is the September campaign (rows without the
+# field); "2026-10" carries the #82 query set, the #81 durability rule, the
+# ingest/index timer split, and bench_host.
+INSTRUMENT = "2026-10"
+
+# DECISIONS #81: the matched durability class is "relaxed" (a commit returns
+# without waiting for the disk). An engine that cannot be relaxed declares a
+# `durability` string starting with this prefix and is the named exception on
+# its tables; fairness_check F8 refuses anything else.
+STRICT_PREFIX = "fsync at commit"
+
+
+def durability_class(text):
+    """'relaxed', 'strict', or None when the row recorded nothing."""
+    if not text:
+        return None
+    return "strict" if str(text).startswith(STRICT_PREFIX) else "relaxed"
+
 
 def _host_identity():
     """Which machine this is, read rather than assumed.

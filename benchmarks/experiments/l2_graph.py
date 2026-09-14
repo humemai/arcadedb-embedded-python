@@ -17,8 +17,9 @@ import surreal_common
 import arango_common
 
 from graph_common import (OLAP_ITERATIONS, OLAP_QUERIES, OLTP_READS,
-                          OLTP_WRITE, SCALE_OLTP_QUERIES, SCALE_PERSONS,
+                          OLTP_WRITE, OLTP_DELETE, SCALE_OLTP_QUERIES, SCALE_PERSONS,
                           gen_edges, gen_persons, pick_query_ids)
+import bench_common
 
 # Data-source switch (same pattern as l3_sparse/bigann): BENCH_GRAPH_SOURCE=ldbc
 # swaps the synthetic generator for the LDBC-SNB persons+KNOWS projection.
@@ -76,6 +77,9 @@ class Base:
 
     def run_write(self, pid, new_id):
         self.run_cypher_write(OLTP_WRITE.format(id=pid, new_id=new_id))
+
+    def run_delete(self, new_id):
+        self.run_cypher_write(OLTP_DELETE.format(new_id=new_id))
 
     def run_olap(self, qname):
         return self.run_cypher(OLAP_QUERIES[qname])
@@ -501,6 +505,8 @@ class SurrealGraph(Base):
             r = self.db.query(f"SELECT name, age FROM ONLY person:{pid}")
         elif op == "hop1":
             r = self.db.query(f"SELECT count(->knows->person) AS n, math::mean(->knows->person.age) AS a FROM ONLY person:{pid}")
+        elif op == "hop3f":
+            r = self.db.query(f"SELECT array::len(array::distinct(->knows->person->knows->person->knows->(person WHERE age > 30))) AS n FROM ONLY person:{pid}")
         else:
             r = self.db.query(f"SELECT array::len(array::distinct(->knows->person->knows->person)) AS n FROM ONLY person:{pid}")
         return len(self._rows(r))
@@ -508,6 +514,11 @@ class SurrealGraph(Base):
     def run_write(self, pid, new_id):
         self.db.query(f"CREATE person:{new_id} SET pid = {new_id}, name = 'w{new_id}', age = 33, city = 'city_0'; "
                       f"RELATE person:{pid}->knows->person:{new_id} SET since = 2026")
+
+    def run_delete(self, new_id):
+        # One transaction: the edges into the record, then the record.
+        self.db.query(f"BEGIN; DELETE FROM knows WHERE out = person:{new_id} OR in = person:{new_id}; "
+                      f"DELETE person:{new_id}; COMMIT;")
 
     OLAP = {
         "top_degree": "SELECT pid, count(->knows) AS d FROM person ORDER BY d DESC LIMIT 10",
@@ -579,6 +590,8 @@ class ArangoGraph(Base):
         # uniqueness matches Cypher's relationship isomorphism.
         "hop2": ("LET s = (FOR v IN 2..2 OUTBOUND CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
                  "RETURN LENGTH(s)"),
+        "hop3f": ("LET s = (FOR v IN 3..3 OUTBOUND CONCAT('person/', @k) knows FILTER v.age > 30 RETURN DISTINCT v._key) "
+                  "RETURN LENGTH(s)"),
     }
     OLAP = {
         "top_degree": ("FOR p IN person FOR f IN 1..1 OUTBOUND p knows "
@@ -601,6 +614,13 @@ class ArangoGraph(Base):
                 "INSERT {_from: CONCAT('person/', @k), _to: CONCAT('person/', @nk), since: 2026} INTO knows",
                 k=str(pid), nk=str(new_id), n=new_id)
 
+    def run_delete(self, new_id):
+        # One AQL query, so one transaction: the edges touching the vertex, then the vertex.
+        self._n("LET v = CONCAT('person/', @nk) "
+                "FOR e IN knows FILTER e._from == v OR e._to == v REMOVE e IN knows "
+                "REMOVE {_key: @nk} IN person",
+                nk=str(new_id))
+
     def run_olap(self, qname):
         return self._n(self.OLAP[qname])
 
@@ -614,6 +634,19 @@ class ArangoGraph(Base):
 ADAPTERS = {a.name: a for a in
             [ArcadeGraphEmbedded, ArcadeGraphServer, Neo4jGraph, LadybugGraph,
              SurrealGraph, SurrealGraphServer, ArangoGraph]}
+
+# DECISIONS #81: what each arm runs at commit, recorded on the row. Neo4j and
+# LadybugDB cannot be relaxed (Neo4j has no setting; Kùzu's WAL fsyncs on
+# every logged commit, src/storage/wal/wal.cpp) and are the named exceptions.
+DURABILITY = {
+    "arcadedb_graph_embedded": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_graph_server": "txWalFlush=0 (engine default): no flush at commit",
+    "neo4j_graph": "fsync at commit, not configurable (Neo4j transaction log)",
+    "ladybug_graph": "fsync at commit, not configurable (Kùzu WAL)",
+    "surrealdb_graph": "SurrealKV, SURREAL_SYNC_DATA=false (2.x default): no sync at commit",
+    "surrealdb_graph_server": "RocksDB, SURREAL_DATASTORE_SYNC_DATA=never (3.x default is every commit)",
+    "arangodb_graph": arango_common.DURABILITY,
+}
 
 
 def pct(sorted_ms, q):
@@ -679,6 +712,8 @@ def main():
     ad.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = ad.version
+    out["durability"] = DURABILITY.get(args.backend)
+    out["instrument"] = bench_common.INSTRUMENT
 
     t0 = time.perf_counter()
     ad.build(n_persons)
@@ -740,6 +775,20 @@ def main():
         # The reads recorded p99 and the writes stopped at p95, so the page
         # had a p99 beside every latency except this one (2026-09-10).
         out["write_p99_ms"] = round(pct(lat, 0.99), 3)
+        # DELETE (2026-10, DECISIONS #82): the write's partner, over the same
+        # ids the write pass created, in the same order. Single pass, like the
+        # write, and for the same reason: a delete is not repeatable.
+        dlat = []
+        for w in range(n_writes):
+            new_id = write_id_base + w
+            t = time.perf_counter()
+            ad.run_delete(new_id)
+            if w >= 5:
+                dlat.append((time.perf_counter() - t) * 1000)
+        dlat.sort()
+        out["delete_p50_ms"] = round(pct(dlat, 0.50), 3)
+        out["delete_p95_ms"] = round(pct(dlat, 0.95), 3)
+        out["delete_p99_ms"] = round(pct(dlat, 0.99), 3)
         out["oltp_total_s"] = round(time.perf_counter() - total_t0, 2)
     else:
         for qname, text in OLAP_QUERIES.items():

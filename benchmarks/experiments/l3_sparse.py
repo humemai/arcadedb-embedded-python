@@ -16,6 +16,7 @@ import os
 import statistics
 import sys
 import time
+import bench_common
 
 # Data source: synthetic SPLADE-shaped (default) or real Big-ANN SPLADE/MS MARCO
 # (BENCH_SPARSE_SOURCE=bigann). Both expose the same surface.
@@ -606,6 +607,20 @@ BACKENDS = {c.name: c for c in
              ArcadeServer, Qdrant, Milvus, PgVectorSparse, Elastic]}
 
 
+# DECISIONS #81, recorded on every row. The sparse lane times an ingest and
+# searches, no transactional write; pgvector's server runs
+# synchronous_commit=off like every PostgreSQL arm.
+DURABILITY_INGEST_ONLY = "engine default; no transactional write timed on this lane"
+DURABILITY = {
+    "arcadedb_sparse_embedded": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_sparse_embedded_fp32": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_sparse_embedded_nocompact": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_sparse_server": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_sparse_server_fp32": "txWalFlush=0 (engine default): no flush at commit",
+    "pgvector_sparse": "synchronous_commit=off",
+}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", required=True, choices=list(BACKENDS))
@@ -669,6 +684,8 @@ def main():
     b.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = getattr(b, "version", "?")
+    out["durability"] = DURABILITY.get(args.backend, DURABILITY_INGEST_ONLY)
+    out["instrument"] = bench_common.INSTRUMENT
     # Only Elasticsearch sets this. A row must say which operating point it
     # measured; the 9.0.0-vs-9.4.1 recall gap was only diagnosable because the
     # engine version happened to be recorded, and pruning is not visible from

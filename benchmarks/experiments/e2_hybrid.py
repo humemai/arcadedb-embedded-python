@@ -26,6 +26,7 @@ import os
 import random
 import statistics
 import time
+import bench_common
 
 import numpy as np
 import surreal_common
@@ -387,6 +388,9 @@ class PgAgeE2:
         self.cx = psycopg.connect(f"host={host} dbname=bench user=postgres password=dbbenchpass",
                                   autocommit=False)
         with self.cx.cursor() as c:
+            c.execute("SHOW synchronous_commit")   # the server runs it off (#81); read, not asserted
+            _sc = c.fetchone()[0]
+            self.durability = f"synchronous_commit={_sc}" + ("" if _sc == "off" else " (NOT the #81 setting)")
             c.execute("CREATE EXTENSION IF NOT EXISTS vector")
             c.execute("CREATE EXTENSION IF NOT EXISTS age")
             c.execute("SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector','age')")
@@ -644,6 +648,20 @@ class ComposedE2:
 BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, ArangoE2, PgAgeE2, Neo4jE2, ComposedE2)}
 
 
+# DECISIONS #81, recorded on every row. PG+AGE reads the server's
+# synchronous_commit on connect (see PgAgeE2); the composed stack's document
+# and graph half is Neo4j, which cannot be relaxed.
+DURABILITY = {
+    "arcadedb_e2": "txWalFlush=0 (engine default): no flush at commit",
+    "arcadedb_e2_server": "txWalFlush=0 (engine default): no flush at commit",
+    "surrealdb_e2": "SurrealKV, SURREAL_SYNC_DATA=false (2.x default): no sync at commit",
+    "surrealdb_e2_server": "RocksDB, SURREAL_DATASTORE_SYNC_DATA=never (3.x default is every commit)",
+    "arangodb_e2": arango_common.DURABILITY,
+    "neo4j_e2": "fsync at commit, not configurable (Neo4j transaction log)",
+    "composed_qdrant_neo4j": "fsync at commit, not configurable (Neo4j transaction log; Qdrant WAL at its default)",
+}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", required=True, choices=list(BACKENDS))
@@ -657,6 +675,8 @@ def main():
 
     b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
+    out["durability"] = getattr(b, "durability", None) or DURABILITY.get(args.backend)
+    out["instrument"] = bench_common.INSTRUMENT
     t0 = time.perf_counter()
     b.build(vecs, edges)
     out["build_s"] = round(time.perf_counter() - t0, 2)

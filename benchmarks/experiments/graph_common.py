@@ -69,12 +69,22 @@ OLTP_READS = {
              "RETURN count(f) AS n, avg(f.age) AS a"),
     "hop2": ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(fof:Person) "
              "WHERE p.id = {id} RETURN count(DISTINCT fof) AS n"),
+    # 2026-10 (DECISIONS #82): three hops with a property filter on the far
+    # end, the interactive workload's characteristic shape, where the planner
+    # decides whether the filter or the expansion goes first.
+    "hop3f": ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(x:Person) "
+              "WHERE p.id = {id} AND x.age > 30 RETURN count(DISTINCT x) AS n"),
 }
 # write op: create a person and link them to an existing one (one txn)
 OLTP_WRITE = ("MATCH (p:Person) WHERE p.id = {id} "
               "CREATE (q:Person {{id: {new_id}, name: 'w{new_id}', age: 33, "
               "city: 'city_0'}}) "
               "CREATE (p)-[:KNOWS {{since: 2026}}]->(q)")
+
+# 2026-10 (DECISIONS #82): the write's partner. Delete the person the write
+# created, with the edge that linked them, one transaction; the page then
+# carries a delete per engine, which no table did.
+OLTP_DELETE = "MATCH (q:Person) WHERE q.id = {new_id} DETACH DELETE q"
 
 OLAP_QUERIES = {
     "top_degree": ("MATCH (p:Person)-[:KNOWS]->(:Person) "
