@@ -1866,8 +1866,19 @@ def main():
     # never seen. sparse_multipass_driver.py already draws from a held-out
     # slice; this is the same fix.
     with _beat.phase("warmup", n=len(test[timed_n:])):
-        for q in test[timed_n:]:  # warmup, untimed, held out of the timed set
+        for _wi, q in enumerate(test[timed_n:]):  # warmup, untimed, held out
+            _w0 = time.perf_counter()
             b.search(q, K)
+            if _wi == 0:
+                # THE CELL'S COLD NUMBER IS THE FIRST QUERY AFTER THE DATABASE
+                # OPENED (#89 as amended), and on this lane that is the first
+                # WARMUP query, not the first timed one: the timed pass runs
+                # against an engine the warmup has already touched. It stays
+                # untimed for the percentiles and is recorded here so the
+                # page's one cold column is a real first touch rather than the
+                # twenty-first.
+                bench_common.record_first_query(out, "search[warmup 0]",
+                                                (time.perf_counter() - _w0) * 1e3)
     lats, recalls = [], []
     _beat.mark("queries-start", n=timed_n)
     t0 = time.perf_counter()

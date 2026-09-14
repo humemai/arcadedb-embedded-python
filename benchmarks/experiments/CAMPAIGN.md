@@ -74,6 +74,24 @@ campaign_env_check                   # asserts every corpus is present
 python3 -u runner.py --lanes ... --scale ... --reps 5
 ```
 
+**The write workloads run twice, once per durability class (DECISIONS #90).**
+The class is a property of the cell, not a second measurement inside one, so a
+queue script asks for the same cell twice:
+
+```sh
+python3 -u runner.py --lanes l1tpc --workloads oltp --scale tpch1 --reps 5                      # relaxed
+python3 -u runner.py --lanes l1tpc --workloads oltp --scale tpch1 --reps 5 --durability strict  # strict
+```
+
+The same pair for `--lanes l2 --workloads oltp` and `--lanes e2 --workloads
+hybrid`. Everything else -- every read workload, every analytics workload, both
+vector lanes' ingests, and the lifecycle lane -- runs once, at the relaxed
+default. The strict cell writes its own `run_id` (a `_dstrict` suffix), its own
+raw artifact, and its own canonical key, so the two never shadow each other;
+`fairness_check` F10b fails a write cell that exists in only one class, and the
+four engines with no knob (Neo4j, DuckDB, LadybugDB, the SurrealDB 3.2.4
+server) are exempt because they run once and declare it.
+
 Rules that have each cost a run:
 
 - Never sync the repo mid-campaign. A `git checkout` reverted a tracked `runs.jsonl` and lost rows; a mid-campaign merge split one lane's rows across two schemas. Sync between stages, never inside one.

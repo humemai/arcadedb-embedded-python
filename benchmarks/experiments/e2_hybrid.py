@@ -1097,6 +1097,8 @@ def main():
             t = time.perf_counter()
             pids, docs = do_retrieval(b, q, sp)
             rlat.append((time.perf_counter() - t) * 1000)
+            if i == 0:
+                bench_common.record_first_query(out, "retrieval", rlat[0])
             # Recall of the VECTOR half against an exact answer, computed
             # outside the clock. The graph and document halves are digested.
             rrec.append(recall_at_k(pids, brute_topk(vecs, q, K)))
@@ -1176,6 +1178,12 @@ def main():
         warm_clean = 50            # establishes a non-zero baseline once
         per_trial_clean = 5        # fresh clean work before each injection
 
+        # DECISIONS #89 as amended: this workload times no query. Its own
+        # first operation is a clean composed WRITE, and the cold column the
+        # page prints comes from the hybrid cell beside it.
+        out["cold_first_query_na"] = ("this workload times an interrupted write, not a "
+                                      "query; the cold column comes from the hybrid cell "
+                                      "(DECISIONS #89)")
         _beat.mark("atomicity-warmup-start", n=warm_clean, trials=trials)
         for q in queries[:warm_clean]:
             b.hybrid_op(q, mirror=True)

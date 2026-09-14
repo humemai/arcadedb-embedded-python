@@ -52,6 +52,23 @@ The single rule, from which most of the rest follows:
 
 **`q_groupby_rows` and `q_high_rows` are data-dependent shapes.** The time-series lane records them instead of asserting them, and F10 refuses a table whose engines disagree; the other three queries keep their asserted shapes (1, 60, 12 rows).
 
+**A row says two things about durability, and they can disagree.** `durability`
+is what the ENGINE reported, read back out of it wherever it can be asked;
+`durability_class` is what the CELL asked for (DECISIONS #90). They agree on a
+healthy row. A row where they differ is a flag that did not take -- an
+environment variable the server ignores, a JVM property that never reached the
+JVM -- and `fairness_check` fails it rather than publishing the asserted value.
+`durability_no_setting` marks the four engines with no knob (Neo4j, DuckDB,
+LadybugDB, the SurrealDB 3.2.4 server); they run once and the page prints that
+one number in both columns. `durability_server_flags` says what the runner
+changed on a server container for the class, and is blank for an embedded arm.
+
+**A strict cell is a different cell, not a different column.** The strict arm of
+a write cell carries the same lane, scale, workload, backend and rep as the
+relaxed one and is told apart only by `durability_class`, which is why that
+field is part of the canonical key and why the run_id carries a `_dstrict`
+suffix. Reads and bulk ingests exist in the relaxed class only.
+
 **`res_<query>_digest` is the ANSWER, not a checksum of the row.** Every timed query whose answer is deterministic carries three fields: `res_<q>_digest` (sixteen hex characters over the canonical answer), `res_<q>_sample` (the first few canonical rows, readable), and `res_<q>_n` (the row count). A digest that reads `unexpressible: <reason>` means the engine cannot ask that question and the reason is the adapter's own (DECISIONS #88). Two engines with the same digest gave the same answer; two with different digests did not, and the samples say how. Do not compare digests across scales or across queries: the declared column names and the ordering flags are hashed with the rows, so a digest identifies an answer to one question at one size.
 
 **A write's digest is the state it left, not what it returned.** `res_crud_insert_*`, `res_crud_update_*` and `res_crud_delete_*` are untimed read-backs of the whole CRUD table after each phase; `res_neworder_*` and `res_payment_*` are the orders table after each loop; `res_graph_insert/update/delete_*` are the persons the graph writes created. `res_crud_read_*` is the only one of the set that digests what the timed calls actually returned.
@@ -61,6 +78,18 @@ The single rule, from which most of the rest follows:
 **`recall_filtered` near zero is a capability, not a bug.** `filtered_mode` says how the arm ran the graph-filtered vector search. An arm that pre-filters ranks the candidate set directly and should reach 1.0; an arm that post-filters searches globally to `filtered_overfetch` and then drops non-neighbours, and its recall is bounded by how many of the candidates fall in that global top-N. Both ArcadeDB arms post-filter, because ArcadeDB SQL at 26.8.1 has no scalar vector-distance function to rank a candidate set with. Read `filtered_candset_match` first: it is the fraction of queries where the engine's own traversal found the same candidate set the harness derives from the generated edges, and a recall means nothing if that is not 1.0.
 
 **`mutate_*` exists only where the mutation phase ran.** `mutate_ran` and `mutate_reason` are on every dense row and say which of the three cases applied: the one-million tier, forced on by `BENCH_DENSE_MUTATE=1`, or not this tier. `mutate_deleted_hits` must be zero; a non-zero value is an index still returning records the engine said it deleted, which is a correctness failure and not a latency one.
+
+**The page's cold column is `cold_first_query_ms`, one per cell.** It is the
+first query the cell ran after the database opened, named by
+`cold_first_query_name`, and on the two vector lanes that is a warmup query
+rather than the first timed one -- which is why it is the cold one (#89 as
+amended). The per-query `cold_<q>_ms` fields are still on the row and are still
+true; they are simply more than the page prints. `cold_first_query_na` carries
+the reason where the cell times no query at all.
+
+**No table prints an aggregate across its queries.** No mean, no median, no
+geometric mean: the per-query columns are the report (#89 as amended). A row
+that looks like it should have one does not.
 
 **`cold_<q>_ms` / `warm_<q>_p50_ms` / `warm_<q>_p99_ms` are the same three questions in every lane.** The cold number is the first iteration after the database was opened; the warm numbers are the rest. A lane's own older field names still exist and still mean what they did: `q1_ms` on the document lane pools cold and warm, and the graph lane's unprefixed read fields ARE the cold pass, with `cold_point_p50_ms` and friends added as aliases so a table need not know which lane it is reading. `cold_warm_na` carries the reason where the split does not apply, and a blank there means nobody has said why.
 

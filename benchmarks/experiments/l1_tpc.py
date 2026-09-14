@@ -1215,6 +1215,10 @@ def main():
             # published tail was sometimes the cold number wearing a
             # percentile's name. One naming convention across every lane.
             bench_common.record_cold_warm(out, which, times, digits=2)
+            # The cell's one cold number, from the first query it ran after the
+            # database opened (DECISIONS #89 as amended); setdefault inside, so
+            # only the first of these five calls sticks.
+            bench_common.record_first_query(out, which, times[0])
             out[f"{which}_rows"] = len(ref) if ref is not None else 0
             # THE ANSWER, not just how long it took (DECISIONS #88). Computed
             # here, outside the timed loop, from the object the LAST timed call
@@ -1233,8 +1237,14 @@ def main():
             k = keys[rng.randrange(len(keys))]
             t = time.perf_counter()
             b.new_order(i, int(k))
+            _dt = (time.perf_counter() - t) * 1000
+            if i == 0:
+                # The first timed operation of the cell, which is this lane's
+                # cold number under #89 as amended. The twenty discarded
+                # warmups below are still discarded from the percentiles.
+                bench_common.record_first_query(out, "new_order", _dt)
             if i >= 20:
-                lat.append((time.perf_counter() - t) * 1000)
+                lat.append(_dt)
         lat.sort()
         out["neworder_p50_ms"] = round(statistics.median(lat), 3)
         out["neworder_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)

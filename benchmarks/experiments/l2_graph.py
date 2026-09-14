@@ -888,6 +888,11 @@ def main():
                     t = time.perf_counter()
                     rows = ad.run_read(op, pid)
                     dt = (time.perf_counter() - t) * 1000
+                    if not prefix and w == 0:
+                        # The cell's first query after the database opened
+                        # (#89 as amended): the first id of the first read op
+                        # of the cold pass.
+                        bench_common.record_first_query(out, op, dt)
                     # Collected AFTER the clock stops, from the object the
                     # timed call returned (DECISIONS #88).
                     if rows:
@@ -1045,6 +1050,7 @@ def main():
             _c0 = time.perf_counter()
             rows0 = ad.run_olap(qname)  # first touch, now measured
             out[f"cold_{qname}_ms"] = round((time.perf_counter() - _c0) * 1000, 2)
+            bench_common.record_first_query(out, qname, out[f"cold_{qname}_ms"])
             lat = []
             for _ in range(OLAP_ITERATIONS):
                 if time.perf_counter() - _budget_t0 > OLAP_BUDGET_S:

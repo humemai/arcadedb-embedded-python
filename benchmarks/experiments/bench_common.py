@@ -193,7 +193,12 @@ def at_class(relaxed_string, cls=None):
 
 
 def has_no_setting(relaxed_string):
-    return relaxed_string in NO_DURABILITY_SETTING
+    """Prefix match, not equality, because a composite arm's string starts with
+    its no-knob half: the composed Qdrant+Neo4j stack records Neo4j's string
+    with "; Qdrant WAL at its default" appended, and the whole operation waits
+    for Neo4j's log either way."""
+    t = str(relaxed_string or "")
+    return any(t.startswith(k) for k in NO_DURABILITY_SETTING)
 
 
 def pg_expected(cls=None):
@@ -1079,6 +1084,26 @@ NA_COLD_WARM_SPARSE_LANE = ("no cold/warm split on this row: the lane warms "
                             "before it times, so every timed query here is "
                             "warm. The sparse table's cold and warm columns "
                             "come from the multipass driver (DECISIONS #89)")
+
+
+def record_first_query(out, name, ms):
+    """THE CELL'S ONE COLD NUMBER (DECISIONS #89, as amended).
+
+    "One cold column for the first query after the database opens rather than a
+    cold number per query (the cold question is about the session, and the
+    session-cost table covers the rest)." The per-query cold fields stay on the
+    row -- a row carrying more than the page prints is fine and useful -- and
+    this is the one the page reads.
+
+    setdefault, not assignment, so a lane can call it at the top of every query
+    and only the FIRST call sticks. That makes the field mean what it says
+    however the lane's loops are arranged, instead of depending on someone
+    remembering to call it once.
+    """
+    if ms is None:
+        return
+    out.setdefault("cold_first_query_name", name)
+    out.setdefault("cold_first_query_ms", round(float(ms), 4))
 
 
 def record_cold_warm(out, name, warm_ms, cold_ms=None, digits=3):

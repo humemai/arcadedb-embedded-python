@@ -997,6 +997,7 @@ def main():
         # {qn}_ms and {qn}_p99_ms above blend the first touch with the repeats;
         # these say what that blend is made of.
         bench_common.record_cold_warm(out, qn, times, digits=4)
+        bench_common.record_first_query(out, qn, times[0])
         # THE ANSWER (DECISIONS #88), from the object the last timed call
         # returned, outside the timed loop.
         bench_common.record_result(out, qn, ref, **Q_DIGEST[qn])

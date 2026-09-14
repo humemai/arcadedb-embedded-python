@@ -666,6 +666,11 @@ def main():
     # DECISIONS #89: "the lifecycle table is itself the cold measurement", so
     # the row says that rather than leaving a cold/warm pair blank.
     out["cold_warm_na"] = bench_common.NA_COLD_WARM_LIFECYCLE
+    # DECISIONS #89 as amended: the one cold column is "the first query after
+    # the database opens", and on this lane that IS the measurement --
+    # clean_open_ms plus clean_action_ms is a cold open followed by a cold
+    # first query, reported as its own table.
+    out["cold_first_query_na"] = bench_common.NA_COLD_WARM_LIFECYCLE
     o, c, w = measure(args.workload, "clean", cold=True)
     out["cold_open_ms"], out["cold_close_ms"] = round(o, 3), round(c, 3)
     out["build_close_ms"] = round(build_close_ms, 3)

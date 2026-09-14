@@ -132,6 +132,50 @@ row counts of the two data-dependent queries (`q_groupby_rows`, `q_high_rows`),
 because a query that returned a different number of rows measured a different
 question.
 
+**F10b. Both durability classes on every timed write (DECISIONS #90,
+superseding the single-setting half of #81).** F10 fixes the class within a
+table; #90 adds the second table. Every timed write operation runs twice, once
+at each setting: the six document operations, the three graph writes, and the
+cross-model transaction. Bulk ingest stays at one setting, because an fsync per
+batch at ten million vectors is hours and teaches nothing the write cells do
+not, and every read path is untouched.
+
+Most engines cannot switch this per operation -- ArcadeDB's `txWalFlush` is per
+database, SurrealDB's and QuestDB's are server flags -- so the class is a
+property of the CELL. `runner.py --durability strict` sets the flags that live
+on a server and puts the class in the container's environment for the ones that
+live on the client; `bench_common` holds one strict string per engine beside
+its relaxed one; the row records `durability` (what the engine reports),
+`durability_class` (what the cell asked for), `durability_no_setting`, and
+`durability_server_flags`. The class is part of the canonical key, so a strict
+cell cannot shadow the relaxed one beside it.
+
+**Read back, not asserted, on both sides.** ArcadeDB's value comes from
+`GlobalConfiguration.TX_WAL_FLUSH` after the database is open; SQLite's from
+`PRAGMA journal_mode` and `PRAGMA synchronous`; ArangoDB's from the collection's
+own `properties()["sync"]`; the PostgreSQL family's from `SHOW
+synchronous_commit`. `fairness_check` fails a row whose engine reports a
+different class from the one the cell asked for, which is what a flag that did
+not take looks like.
+
+**Four engines have no knob** and are the named exceptions: Neo4j, DuckDB and
+LadybugDB, each straced rather than assumed, and the SurrealDB 3.2.4 server,
+whose binary exposes no sync setting at all. They run once, declare
+`durability_no_setting`, and the page prints their one number in both columns,
+which puts them on an equal footing instead of comparing their strict numbers
+against everyone else's relaxed ones.
+
+**The answer must not change with the class.** A strict commit changes when a
+write becomes durable, not what it wrote, so the #88 digests of one engine must
+match across its two classes; `equivalence_check` E2 fails a backend that gives
+two answers across its own repetitions and classes.
+
+Laptop, micro, one repetition, both classes, the ratio of strict to relaxed on
+new-order p50: SQLite 48.4x, PostgreSQL 9.8x, SurrealDB embedded 9.0x, ArcadeDB
+embedded 4.6x, MongoDB 1.8x, ArangoDB 1.7x, DuckDB 1.00x (no knob, as
+predicted). On the single-record insert the spread is wider still: SQLite 98x,
+ArcadeDB 33.6x, PostgreSQL 28.5x.
+
 **F11. Equivalent queries must return equivalent answers.** A benchmark that
 never checks the answer measures how fast an engine can be wrong, and until
 2026-09-14 this one never checked: recall against ground truth on the two
@@ -172,16 +216,26 @@ that ran the cell and recorded neither a digest nor a declared absence fails; a
 lane that recorded nothing at all fails unless it is declared as checked
 otherwise, which the two vector lanes are, by recall.
 
-**F12. Every table reports the same measurement set, or says why not.** Cold
-latency, warm latency at the median and the ninety-ninth percentile, throughput
-where the operation has a natural rate, recall where the index is approximate,
-peak memory, on-disk size after the workload, and for the vector tables ingest
-and index build as separate timers (DECISIONS #89). The cold number is the
-first iteration after the database is opened and the warm numbers are the rest,
-which costs nothing because those iterations already run; they are recorded as
-`cold_<q>_ms`, `warm_<q>_p50_ms` and `warm_<q>_p99_ms` in every lane, under one
-naming convention, so a table can ask every lane the same question without
-knowing which lane it is asking.
+**F12. Every table reports the same measurement set, or says why not.** One
+warm median per query, a ninety-ninth percentile for the table's headline
+query, ONE cold column per table, throughput where the operation has a natural
+rate, recall where the index is approximate, peak memory, on-disk size after
+the workload, and for the vector tables ingest and index build as separate
+timers (DECISIONS #89, as amended). About nine columns on the widest table
+rather than twenty-one, and **no aggregated per-table statistic**: no mean, no
+median, and no geometric mean across query types. An arithmetic mean across
+queries whose times span five orders of magnitude is the slowest query in
+disguise, a median across them moves when a query is added, and the summary
+figure already carries the cross-table ratio view.
+
+The cold number is one per CELL, not one per query, because the cold question
+is about the session: `cold_first_query_ms` and `cold_first_query_name`, from
+the first query the cell ran after the database opened. On the two vector lanes
+that is a WARMUP query rather than the first timed one, which is exactly why it
+is the cold one. The rows also keep `cold_<q>_ms`, `warm_<q>_p50_ms` and
+`warm_<q>_p99_ms` per query under one naming convention across every lane -- a
+row carrying more than the page prints is useful, and it is what lets a table
+ask every lane the same question without knowing which lane it is asking.
 
 Where a measurement genuinely does not apply the row carries a stated reason in
 `cold_warm_na` rather than a blank cell, and the strings are defined once in

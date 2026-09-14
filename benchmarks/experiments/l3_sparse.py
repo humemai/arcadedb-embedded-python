@@ -725,6 +725,11 @@ def main():
         t0 = time.perf_counter()
         ids = b.search(idx, vals, K)
         dt = time.perf_counter() - t0
+        if qi == 0:
+            # The first query after the database opened (#89 as amended). It is
+            # one of the WARMUP queries the percentiles discard, which is
+            # exactly why it is the cold one.
+            bench_common.record_first_query(out, "search[0]", dt * 1e3)
         if qi >= WARMUP:
             lats.append(dt)
         raw_results.append(ids)
