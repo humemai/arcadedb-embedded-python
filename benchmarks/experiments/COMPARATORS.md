@@ -4,6 +4,8 @@ One row per engine. The digest is the amd64 manifest digest (`docker manifest in
 
 Which arms are on the page and which are still queued is PAGE-SPEC.md section 2; the queue chain is CAMPAIGN.md section 6. This file says only what each engine is pinned to and why it runs the way it does.
 
+
+ArcadeDB's document analytics rows were withdrawn from the page on 2026-09-14 (BUGS F42 and F43), so the `docs_olap` comparisons on the live page are between comparators only until October re-measures them. The engine defect behind half of it, a bare decimal literal compared at single precision, is the reason this repository's ArcadeDB SQL never compares a numeric column against a bare decimal literal and uses a bound parameter or an explicit type suffix instead.
 ## In the harness
 
 | Engine | Pin | Version | Lanes | Deployment | Ingest path |

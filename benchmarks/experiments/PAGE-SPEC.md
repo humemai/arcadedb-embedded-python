@@ -94,6 +94,8 @@ The triangle count is the cell most likely to exceed its budget at SF10. A named
 
 The page's document tables are TPC only (DECISIONS #67): `docs_oltp` and `docs_olap`, with PostgreSQL beside the default arm.
 
+ArcadeDB has no row on `docs_olap` since 2026-09-14 (BUGS F42 and F43): answer checking found that its two queries were not the questions the comparators answered, our Q1 text computed four of the five aggregates, and its Q6 lost the boundary discount to the engine's decimal-literal comparison. Both errors made its numbers faster than the truth, so the cells came down. A table may lose its ArcadeDB row only by declaring it in a condition a reader sees, naming ArcadeDB and giving the reason; `page_check` passes a declared withdrawal and still fails a silent one. October re-measures the table with every engine's answer compared.
+
 | id | title | rows | columns |
 |---|---|---|---|
 | `docs_oltp` | Document OLTP | ArcadeDB embedded and server, DuckDB, MongoDB, PostgreSQL, SQLite, SurrealDB server (all published); SurrealDB embedded queued (qDU, after BUGS.md F37); ArangoDB queued (qDV) | new-order and payment, and one order line inserted, read by key, updated, and deleted, each p50 and p99, OLTP ops/s over new-order and payment, ingest documents/s, ingest total s, peak memory GiB, disk GiB |
