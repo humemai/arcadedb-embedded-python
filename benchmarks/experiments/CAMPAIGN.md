@@ -275,17 +275,13 @@ build" has to say WHICH build, because 26.8.1 runs two.
 
 ## 4. Monitoring
 
-`monitoring/campaign_watch.py` reads the rows and reports what looks wrong;
-`monitoring/campaign_monitor.sh` polls mini and forwards only the SUSPECT
-section. Every check exists because this project shipped or nearly shipped that
-exact defect. It is not a liveness check: a monitor that only greps for progress
-markers is silent through a crash, and silence looks like "still running".
+Monitoring during a campaign is the session's own watch on STATUS.txt and docker on the bench host; the monitoring/ scripts of August were deleted on 2026-09-14, unused since 2026-08-15.
 
 ## 5. Launching
 
 ```sh
 bash build_images.sh                 # Phase A; refuses a pre-release pin
-source campaign_env.sh               # the eleven BENCH_* dataset switches
+source campaign_env.sh               # the BENCH_* dataset switches (the October queue scripts source it; the September scripts set them inline)
 campaign_env_check                   # asserts every corpus is present
 python3 -u runner.py --lanes ... --scale ... --reps 5
 ```

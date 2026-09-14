@@ -138,7 +138,7 @@ filter at all; the tags below say where that matters.
 
 ## 6. How work is queued and stored
 
-- Every campaign dataset switch lives in `campaign_env.sh` in the repo and is sourced by the lane scripts. A launcher in a home directory is not where configuration lives: one written on 2026-08-08 omitted all six `BENCH_*` switches, and only l2 happened to validate its scale name. **REMEMBERED**: nothing sources the file, and the one live campaign script hardcodes its own switches and corpus test
+- Every campaign dataset switch lives in `campaign_env.sh` in the repo; the October queue scripts source it (the September scripts set the same variables inline). A launcher in a home directory is not where configuration lives: one written on 2026-08-08 omitted all six `BENCH_*` switches, and only l2 happened to validate its scale name. **REMEMBERED**: nothing sources the file, and the one live campaign script hardcodes its own switches and corpus test
 - Check each corpus is present, not merely that its path variable is set; a set path with no corpus is how the synthetic sparse rows got in. **GATE** `campaign_env_check()` for a caller that sources it
 - Run a smoke stage before any long matrix and let it abort the campaign. It caught an unknown backend arm in 19 seconds, and aborted q87 when the new disk columns came back null. **REMEMBERED**: no SMOKE-BAD stage survives outside the archive, and queue82's per-image import check runs no cell
 - One runner per bench host. `sweep_orphans()` destroys a live campaign's in-flight cells, so the runner takes an exclusive flock; never rebuild a bench image and never co-run a smoke while a campaign is live. **GATE** `results/.runner.lock`

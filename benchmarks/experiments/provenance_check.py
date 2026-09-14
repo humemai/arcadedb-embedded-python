@@ -731,7 +731,7 @@ def check_schema_homogeneity(rows):
 def _stamp_for(commit):
     """The sha buildnumber-maven-plugin writes for a commit-ish.
 
-    Identical to build_engine_pair.sh's stamp_sha_for(): the last NON-MERGE
+    Identical to build_matched_pair.sh (the pair recipe, in the repository since 2026-09-14)'s stamp_sha_for(): the last NON-MERGE
     commit reachable from it. Falls back to the input when git cannot answer,
     so an unresolvable sha compares as itself rather than silently passing.
     """
@@ -768,7 +768,7 @@ def check_engine_commit_matches_build(rows):
 
     Embedded rows report only a package version and carry no build sha, so
     they are NOT CHECKED here rather than passed: the wheel's own jar has the
-    same property and build_engine_pair.sh --verify reads it, which is where
+    same property and verify_pair_c25.sh reads it, which is where
     that arm is covered.
     """
     print("\n== engine_commit against the sha the engine reports ==")
@@ -807,7 +807,7 @@ def check_engine_commit_matches_build(rows):
         print(f"  {checked} row(s) checked, {bad} disagreement(s); "
               f"{unchecked} row(s) carry no build sha (embedded arms report "
               f"only a package version and are covered by "
-              f"build_engine_pair.sh --verify)")
+              f"verify_pair_c25.sh)")
     return bad
 
 

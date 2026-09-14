@@ -34,6 +34,8 @@ import time
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import bench_common  # noqa: E402  (INSTRUMENT, stamped on every row)
 DATA = os.path.abspath(os.environ.get("BENCH_DATA", os.path.join(HERE, "data")))
 RESULTS = os.path.join(HERE, "results")
 RAW = os.path.join(RESULTS, "raw")
@@ -425,7 +427,7 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "timescale/timescaledb@sha256:189fd4822991918322c1f0d17e5adcf42853bf022a3d0dbdb56da61c5f811286",  # 2.28.3-pg17
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
-        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
@@ -464,6 +466,14 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",  # 17.10
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        # DURABILITY MATCHED AT THE RELAXED END (DECISIONS #81): a commit
+        # returns when the WAL record is in the OS, the walwriter flushes it
+        # within wal_writer_delay (200 ms). The same class as ArcadeDB's
+        # txWalFlush=0 and SQLite's WAL with synchronous=NORMAL. Set on the
+        # server so every session, timed or not, runs under it; the adapter
+        # records it on the row as `durability`. The tuned arm, TimescaleDB,
+        # pgvector, and PG+AGE carry the same flag in their server_cmd.
+        "server_cmd": ["-c", "synchronous_commit=off"],
         "server_port": 5432,
         # the image prints "ready to accept connections" TWICE (initdb's
         # temporary server, then the real one); anchor on the init-complete
@@ -507,7 +517,7 @@ BACKENDS = {
         # tpch1), so a literal 6GB would be a quarter of one and a half of the
         # other. {sb} and {ecs} are filled in below from the memory this
         # container is actually given.
-        "server_cmd": ["-c", "shared_buffers={sb}",
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}",
                        "-c", "effective_cache_size={ecs}",
                        "-c", "work_mem=64MB",
                        "-c", "maintenance_work_mem=1GB",
@@ -617,7 +627,7 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "dbbench:pg-age",  # PostgreSQL 17.11 + pgvector 0.8.6 + AGE 1.7.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
-        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
@@ -686,6 +696,10 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        # SurrealDB 3.x syncs RocksDB on EVERY commit by default
+        # (SyncMode::Every, core/src/kvs/rocksdb/cnf.rs at v3.2.4); "never"
+        # leaves flushing to the OS, the relaxed class of DECISIONS #81.
+        "server_env": ["-e", "SURREAL_DATASTORE_SYNC_DATA=never"],
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
@@ -695,6 +709,10 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        # SurrealDB 3.x syncs RocksDB on EVERY commit by default
+        # (SyncMode::Every, core/src/kvs/rocksdb/cnf.rs at v3.2.4); "never"
+        # leaves flushing to the OS, the relaxed class of DECISIONS #81.
+        "server_env": ["-e", "SURREAL_DATASTORE_SYNC_DATA=never"],
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
@@ -704,6 +722,10 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        # SurrealDB 3.x syncs RocksDB on EVERY commit by default
+        # (SyncMode::Every, core/src/kvs/rocksdb/cnf.rs at v3.2.4); "never"
+        # leaves flushing to the OS, the relaxed class of DECISIONS #81.
+        "server_env": ["-e", "SURREAL_DATASTORE_SYNC_DATA=never"],
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
@@ -712,6 +734,10 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        # SurrealDB 3.x syncs RocksDB on EVERY commit by default
+        # (SyncMode::Every, core/src/kvs/rocksdb/cnf.rs at v3.2.4); "never"
+        # leaves flushing to the OS, the relaxed class of DECISIONS #81.
+        "server_env": ["-e", "SURREAL_DATASTORE_SYNC_DATA=never"],
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
@@ -958,7 +984,7 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",  # 0.8.6-pg17
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
-        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
@@ -969,7 +995,7 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",  # 0.8.6-pg17
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
-        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
@@ -1078,7 +1104,7 @@ def _require_engine_commit(tier, backends):
     """Rule 3 is a PUBLISHING rule that nothing enforced at production time.
 
     PAGE-SPEC rule 3: every ArcadeDB row in one table comes from the same
-    upstream commit, stamped as engine_commit. build_engine_pair.sh ends by
+    upstream commit, stamped as engine_commit. build_matched_pair.sh (the pair recipe, in the repository since 2026-09-14) ends by
     printing "stamp rows with ARCADEDB_ENGINE_COMMIT=<sha>" -- an instruction to
     a human, which is the whole problem. On 2026-08-25 four separate runs came
     back rc=0 with engine_commit None on every row: 118 lifecycle rows costing
@@ -1103,7 +1129,7 @@ def _require_engine_commit(tier, backends):
         "rule 3 forbids publishing, and the run would still exit 0.\n"
         "Export the pin the pair was built and VERIFIED at:\n"
         "    ~/verify_pair_c25.sh <sha> && export ARCADEDB_ENGINE_COMMIT=<sha>\n"
-        "    (build_engine_pair.sh verifies a locally COMPILED pair; the pair is now\n"
+        "    (build_matched_pair.sh (the pair recipe, in the repository since 2026-09-14) verifies a locally COMPILED pair; the pair is now\n"
         "     assembled from upstream's published jars, and verify_pair_c25.sh also\n"
         "     checks the JVM major matches on both arms, which it never did.)\n"
         "Or pass --tier sweep if these rows are not for the page.")
@@ -1768,6 +1794,13 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     # now tracks main rather than a release, the commit is the only thing that identifies what was measured
     # -- and it is resolvable, because our fork is public. Stamped on every row.
     row = {"run_id": run_id, "engine_commit": _LOCAL_ENGINE_COMMIT,
+           # WHICH MACHINE, and WHICH INSTRUMENT (DECISIONS #74 item 3, #84).
+           # The row used to record only the container id, so the host was a
+           # fact about the page's setup prose and not about the row. The
+           # instrument names the query set, timers, and durability rule the
+           # cell ran under; make_paper_tables refuses to mix two in a table.
+           "bench_host": os.environ.get("BENCH_HOST"),
+           "instrument": bench_common.INSTRUMENT,
            "lane": job["lane"], "backend": job["backend"],
            "workload": job["workload"], "scale": scale, "rep": rep, "tier": tier,
            "cpuset": cpuset, "topology": be["topology"],
@@ -2462,6 +2495,12 @@ def main():
             j["driver"] = args.driver
             j["driver_out_dir"] = args.driver_out_dir
     _require_engine_commit(args.tier, {j["backend"] for j in jobs})
+    # THE HOST IS A ROW FIELD, not a page assumption (#74 item 3). A paper-tier
+    # cell without it would write bench_host=None on every row and exit 0.
+    if args.tier == "paper" and not os.environ.get("BENCH_HOST"):
+        raise SystemExit("REFUSING: BENCH_HOST is unset and this is a PAPER-tier run. "
+                         "Every row would record bench_host=None. Export BENCH_HOST=mini "
+                         "(the queue scripts do) or pass --tier sweep.")
     if args.tier == "paper" and "l3s" in args.lanes.split(",") \
             and os.environ.get("BENCH_SPARSE_SOURCE") != "bigann":
         raise SystemExit("REFUSING: l3s at paper tier needs BENCH_SPARSE_SOURCE=bigann "

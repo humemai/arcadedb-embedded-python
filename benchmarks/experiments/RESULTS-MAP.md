@@ -64,7 +64,7 @@ Until step 1 runs, treat every `runs_*.jsonl` as irreplaceable.
 | `runs_lifecycle_<pin>.jsonl` | current campaign, lifecycle lane | as above |
 | `runs_lifecycle_gav_<pin>.jsonl` | lifecycle `graph_gav` situation, run separately | as above |
 | `runs_remeasure_1b04483bf.jsonl` | the #5467 re-measure posted upstream | evidence; do not merge |
-| `raw/` | one JSON per cell, 788 files | `provenance_check`, `claims_check`, `page_check`, `make_paper_figures` |
+| `raw/` | one server and client log per cell, written by the runner on the bench host; untracked since 2026-09-14 (the 117 tracked files were pre-pin and nothing opened them) | nothing on the page; read by hand when a cell needs explaining |
 | `manifest-*.json` | per-invocation image digests, cpuset, heap, reps; every row names its manifest by timestamp (`runner.py`, row["manifest"]) | nothing opens them; kept as provenance by reference |
 | `runs-*.csv` | per-invocation summary written by `runner.py`, read by nothing | deleted on both hosts 2026-09-13; the writer stays, delete the files when they pile up |
 
@@ -150,7 +150,7 @@ merge. **Do not hand-edit the frozen CSV**; re-freeze after the campaign.
 ### Queue scripts
 
 `queue-archive-20260830/` on the bench host holds the 15 retired `qB*` scripts.
-They pin `b7c6c800d` and verify the pair with `build_engine_pair.sh`, which
+They pin `b7c6c800d` and verify the pair with `verify_pair_c25.sh` (in the repository since 2026-09-14, beside `build_matched_pair.sh` and `build_c25_wheel.sh`, the pair recipe), which
 checks a locally COMPILED pair -- the wrong claim for a pair assembled from
 upstream's published jars. Live scripts (2026-09-13): `qDO` (running) -> `qDP` -> `qDQ` -> `qDR` -> `qDS` -> `qDT` ->
 `qDU` -> `qDV` -> `qDW` (SurrealDB served re-run for the disk reading, F38; 2026-09-14), each gated on `verify_pair_c25.sh`; finished scripts
