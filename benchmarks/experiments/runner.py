@@ -1983,7 +1983,36 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # exists to close a fairness violation.
                    "BENCH_TSBS_DATA", "BENCH_TSBS_LP", "BENCH_TS_LIMIT",
                    "BENCH_TS_TAGS", "BENCH_TS_SETTLE_S", "BENCH_TS_LAST_AB",
-                   "BENCH_NEO4J_PAGECACHE"):
+                   "BENCH_NEO4J_PAGECACHE",
+                   # THE 2026-10 INSTRUMENT'S OWN KNOBS, added with the lanes
+                   # that read them, because this tuple is CLOSED: a knob added
+                   # to a lane and forgotten here runs the lane's in-script
+                   # default while the launcher believes otherwise, which is
+                   # exactly how BENCH_LC_ITERS stayed latent for a campaign.
+                   #
+                   #   BENCH_CRUD_OPS          the #82a single-record count (1000)
+                   #   BENCH_DENSE_MUTATE      forces the #82d insert/delete
+                   #                           phase on or off; unset means the
+                   #                           one-million tier only
+                   #   BENCH_DENSE_MUTATE_N    how many vectors are mutated
+                   #   BENCH_DENSE_MUTATE_QUERIES  queries in each post-mutation pass
+                   #   E2_READ_OPS             the #82c read-path op count
+                   #   E2_FILTER_OVERFETCH     how wide a post-filtering engine
+                   #                           searches before dropping
+                   #                           non-neighbours; it decides what a
+                   #                           post-filter arm's recall can be
+                   "BENCH_CRUD_OPS", "BENCH_DENSE_MUTATE",
+                   "BENCH_DENSE_MUTATE_N", "BENCH_DENSE_MUTATE_QUERIES",
+                   "E2_READ_OPS", "E2_FILTER_OVERFETCH", "E2_OPS", "E2_PRODUCTS",
+                   # Analytical iteration counts. The default is the campaign's
+                   # 100 everywhere; a laptop smoke lowers them and the row
+                   # records what it ran (olap_iters, query_iters).
+                   "BENCH_OLAP_ITER", "BENCH_QITER",
+                   # The graph lane's analytics budget (#82b): the triangle
+                   # count is expected to exceed it at the larger scale factor
+                   # and the row records the censoring rather than running for
+                   # hours.
+                   "BENCH_GRAPH_OLAP_ITER", "BENCH_GRAPH_OLAP_BUDGET_S"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 

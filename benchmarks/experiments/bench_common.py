@@ -607,6 +607,69 @@ def _fmt_value(v, float_digits):
     return str(v).strip()
 
 
+def _to_epoch_s(v):
+    """An instant, as integer seconds, however the engine spells it.
+
+    One lane, one question, six spellings: the ArcadeDB document arm buckets on
+    epoch SECONDS, its native arm on epoch MILLISECONDS (timeBucket takes ms),
+    TimescaleDB and MongoDB return datetimes, QuestDB a timestamp, and DuckDB
+    and SQLite integers. Those are the same instant in different units, and a
+    digest that called them different answers would report six disagreements
+    per query and hide any real one among them.
+
+    The seconds/milliseconds split is decided by magnitude: epoch seconds do
+    not reach 1e12 until the year 33658, so a value at or above it is
+    milliseconds. Stated rather than inferred, because it is the one rule here
+    that could in principle be wrong.
+    """
+    if isinstance(v, _dt.datetime):
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=_dt.timezone.utc)
+        return int(v.timestamp())
+    if isinstance(v, _dt.date):
+        return int(_dt.datetime(v.year, v.month, v.day, tzinfo=_dt.timezone.utc).timestamp())
+    if isinstance(v, str):
+        s = v.strip().replace("Z", "+00:00")
+        try:
+            return _to_epoch_s(_dt.datetime.fromisoformat(s))
+        except ValueError:
+            return v.strip()
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, (int, float, _decimal.Decimal)):
+        x = float(v)
+        return int(x / 1000.0) if abs(x) >= 1e12 else int(x)
+    return v
+
+
+def _to_month(v):
+    """A month key, "YYYY-MM", whether the engine grouped on a truncated date
+    (date_trunc returns 1994-01-01) or on a substring of an ISO string."""
+    if isinstance(v, (_dt.datetime, _dt.date)):
+        return f"{v.year:04d}-{v.month:02d}"
+    if isinstance(v, str):
+        return v.strip()[:7]
+    return v
+
+
+COERCIONS = {
+    "epoch_s": _to_epoch_s,
+    "month": _to_month,
+    "text": lambda v: v if v is None else str(v).strip(),
+    "num": lambda v: v if v is None else float(v),
+}
+
+
+def _coerce(v, how):
+    if v is None or v is _MISSING or how is None:
+        return v
+    fn = COERCIONS[how] if isinstance(how, str) else how
+    try:
+        return fn(v)
+    except Exception:  # noqa: BLE001  (a coercion never turns a value into a failure)
+        return v
+
+
 def _is_mapping(row):
     return hasattr(row, "keys") and hasattr(row, "__getitem__")
 
@@ -646,7 +709,7 @@ def _lookup(row, spec):
     return _MISSING
 
 
-def canonical_rows(rows, columns=None, float_digits=6):
+def canonical_rows(rows, columns=None, float_digits=6, coerce=None):
     """The engine's answer as a list of tuples of strings, driver removed.
 
     `columns` is the query's DECLARED column order and is what makes a dict
@@ -654,6 +717,12 @@ def canonical_rows(rows, columns=None, float_digits=6):
     its own keys sorted, which is deterministic but only comparable against
     another engine that happened to use the same names; every caller in this
     harness declares its columns.
+
+    `coerce` declares what a COLUMN IS, by name or position: {"h": "epoch_s"}
+    says the column holds an instant, so an engine returning a datetime and one
+    returning epoch milliseconds agree. It is declared once per query in the
+    lane, never per engine, so it cannot be used to make one engine's answer
+    match another's.
     """
     if rows is None:
         return []
@@ -677,6 +746,14 @@ def canonical_rows(rows, columns=None, float_digits=6):
             vals = list(row)
         else:
             vals = [row]
+        if coerce:
+            names = [c[0] if isinstance(c, (tuple, list)) else str(c) for c in (columns or ())]
+            for i in range(len(vals)):
+                how = coerce.get(i)
+                if how is None and i < len(names):
+                    how = coerce.get(names[i])
+                if how is not None:
+                    vals[i] = _coerce(vals[i], how)
         out.append(tuple(_fmt_value(v, float_digits) for v in vals))
     return out
 
@@ -698,7 +775,8 @@ def _key_positions(columns, key):
 
 
 def result_digest(rows, columns=None, order_matters=False, float_digits=6,
-                  order_key=None, id_key=None, sample_rows=SAMPLE_ROWS):
+                  order_key=None, id_key=None, sample_rows=SAMPLE_ROWS,
+                  coerce=None):
     """Canonical digest of one query's answer: {"digest", "sample", "n"}.
 
     `digest` is a short stable hash (16 hex characters of SHA-256 over the
@@ -716,7 +794,7 @@ def result_digest(rows, columns=None, order_matters=False, float_digits=6,
     because a wrong order returns a different SET of rows. The sort is applied
     to every engine identically, so it is a canonicalisation, not a relaxation.
     """
-    canon = canonical_rows(rows, columns=columns, float_digits=float_digits)
+    canon = canonical_rows(rows, columns=columns, float_digits=float_digits, coerce=coerce)
     if order_matters:
         pos = _key_positions(columns, order_key)
         idp = _key_positions(columns, id_key)
@@ -730,7 +808,9 @@ def result_digest(rows, columns=None, order_matters=False, float_digits=6,
     else:
         canon = sorted(canon)
     names = [c[0] if isinstance(c, (tuple, list)) else str(c) for c in (columns or ())]
-    blob = "\x1d".join([DIGEST_VERSION, ",".join(names),
+    marks = ",".join(f"{k}:{v if isinstance(v, str) else 'fn'}"
+                     for k, v in sorted((coerce or {}).items(), key=lambda kv: str(kv[0])))
+    blob = "\x1d".join([DIGEST_VERSION, ",".join(names), marks,
                         "ordered" if order_matters else "unordered",
                         str(float_digits), str(len(canon))]
                        + ["\x1f".join(r) for r in canon])
@@ -770,3 +850,65 @@ def record_unexpressible(out, name, reason):
 
 def is_unexpressible(value):
     return isinstance(value, str) and value.startswith(UNEXPRESSIBLE_PREFIX)
+
+
+# WHERE A MEASUREMENT DOES NOT APPLY, THE ROW SAYS SO (DECISIONS #89). "A
+# table that omits one of these carries a stated reason, which page_check
+# enforces the way it enforces the other page invariants." A blank cell is
+# read as "not measured"; these strings say which of the two it is, and they
+# live here so two lanes cannot phrase the same exemption differently.
+NA_COLD_WARM_TXN = ("no cold/warm split: each operation runs against an "
+                    "already-built, already-warm database by construction "
+                    "(DECISIONS #89)")
+NA_COLD_WARM_LIFECYCLE = ("no cold/warm split: this lane IS the cold "
+                          "measurement -- it times opening a database "
+                          "(DECISIONS #89)")
+NA_COLD_WARM_INGEST = ("no cold/warm split: the timed work is a single "
+                       "ingest, which happens once (DECISIONS #89)")
+NA_INDEX_SPLIT_NONE = ("ingest and index are one timer: this engine indexes "
+                       "while it ingests and has no boundary to split "
+                       "(DECISIONS #66, #74 item 2)")
+NA_COLD_WARM_DENSE_LANE = ("no cold/warm split on this row: the lane warms on a "
+                           "held-out query slice before it times anything, so "
+                           "every timed query here is warm. The dense table's "
+                           "cold and warm columns come from the multipass "
+                           "driver, whose pass 0 is the cold pass and whose "
+                           "passes 1 to 5 are the warm ones (DECISIONS #89)")
+NA_COLD_WARM_SPARSE_LANE = ("no cold/warm split on this row: the lane warms "
+                            "before it times, so every timed query here is "
+                            "warm. The sparse table's cold and warm columns "
+                            "come from the multipass driver (DECISIONS #89)")
+
+
+def record_cold_warm(out, name, warm_ms, cold_ms=None, digits=3):
+    """COLD AND WARM, on every timed query (DECISIONS #89).
+
+    "The first iteration after the database is opened is the cold number and
+    the remaining iterations are the warm number, which costs nothing because
+    those iterations already run, and it answers the question a reader actually
+    has, which is what the first query of a session costs against the
+    hundredth."
+
+    Two call shapes, because the lanes differ in whether the cold pass is
+    already separate:
+
+        record_cold_warm(out, "q1", times)               # times[0] is cold
+        record_cold_warm(out, "top_degree", warm, cold)  # cold measured apart
+
+    One naming convention for all of them, so a table reads one field per lane
+    instead of six spellings: cold_<q>_ms, warm_<q>_p50_ms, warm_<q>_p99_ms,
+    warm_<q>_n. A lane keeps whatever pooled field it published before; these
+    say what that pooled number is made of.
+    """
+    if cold_ms is None:
+        if not warm_ms:
+            return
+        cold_ms, warm = warm_ms[0], list(warm_ms[1:])
+    else:
+        warm = list(warm_ms)
+    out[f"cold_{name}_ms"] = round(float(cold_ms), digits)
+    if warm:
+        w = sorted(float(x) for x in warm)
+        out[f"warm_{name}_p50_ms"] = round(_pct(w, 50), digits)
+        out[f"warm_{name}_p99_ms"] = round(_pct(w, 99), digits)
+        out[f"warm_{name}_n"] = len(w)

@@ -194,12 +194,40 @@ def test_record_fields():
           not B.is_unexpressible(B.result_digest([(1,)], columns=("a",))["digest"]))
 
 
+def test_coercions():
+    print("coercions: an instant is an instant, in whichever unit the engine keeps it")
+    epoch_s = 1767225600                  # 2026-01-01T00:00:00Z
+    kw = dict(columns=("h", "v"), coerce={"h": "epoch_s"})
+    seconds = [(epoch_s, 1.5)]                                     # arcadedb doc, duckdb, sqlite
+    millis = [(epoch_s * 1000, 1.5)]                               # arcadedb native (timeBucket ms)
+    aware = [(_dt.datetime(2026, 1, 1, tzinfo=_dt.timezone.utc), 1.5)]   # mongo, timescaledb
+    naive = [(_dt.datetime(2026, 1, 1), 1.5)]                      # questdb through pg-wire
+    iso = [("2026-01-01T00:00:00Z", 1.5)]
+    eq("seconds == milliseconds", d(seconds, **kw), d(millis, **kw))
+    eq("seconds == aware datetime", d(seconds, **kw), d(aware, **kw))
+    eq("seconds == naive datetime", d(seconds, **kw), d(naive, **kw))
+    eq("seconds == ISO string", d(seconds, **kw), d(iso, **kw))
+    print("coercions: and a different bucket is still a different answer")
+    ne("the next hour disagrees", d(seconds, **kw), d([(epoch_s + 3600, 1.5)], **kw))
+
+    print("coercions: a month key, truncated date or substring")
+    mkw = dict(columns=("m", "rev"), coerce={"m": "month"})
+    eq("date_trunc == substr",
+       d([(_dt.date(1994, 1, 1), 10.0)], **mkw), d([("1994-01", 10.0)], **mkw))
+    ne("a different month disagrees",
+       d([("1994-01", 10.0)], **mkw), d([("1994-02", 10.0)], **mkw))
+
+    print("coercions: a declared coercion is part of the digest")
+    ne("coerced != uncoerced",
+       d(seconds, columns=("h", "v")), d(seconds, **kw))
+
+
 def test_stability():
     """The digest is a PUBLISHED value: pin it, so a silent normalisation change
     shows up as a failing test rather than as every engine disagreeing at once."""
     print("stability: the canonical form is pinned")
     rows = [("A", "F", 3, 10.5), ("N", "O", 4, 20.25)]
-    eq("pinned digest", d(rows, columns=("f", "s", "n", "rev")), "59cad61b0b0b14ad")
+    eq("pinned digest", d(rows, columns=("f", "s", "n", "rev")), "6e42c35c57e68273")
     eq("pinned sample", B.result_digest(rows, columns=("f", "s", "n", "rev"))["sample"],
        "(A,F,3,10.5) ; (N,O,4,20.25)")
 
@@ -217,8 +245,8 @@ def test_empty_and_scalar():
 
 def main():
     for t in (test_driver_shapes, test_value_rules, test_float_tolerance, test_order,
-              test_dropped_predicate, test_record_fields, test_stability,
-              test_empty_and_scalar):
+              test_dropped_predicate, test_coercions, test_record_fields,
+              test_stability, test_empty_and_scalar):
         t()
     if FAILURES:
         print(f"\n{len(FAILURES)} result_digest test(s) failed: {FAILURES}")
