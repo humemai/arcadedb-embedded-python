@@ -837,7 +837,7 @@ BACKENDS = {
     "elasticsearch_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",  # 9.4.1, matches the 9.4.1 client
+        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",  # server 9.4.1; the client image pins elasticsearch==9.5.0, a minor ahead (both re-pinned in October, DECISIONS #87)
         "server_env": ["-e", "discovery.type=single-node",
                        "-e", "xpack.security.enabled=false",
                        # F3. This was hardcoded "-Xms2g -Xmx4g", the only
