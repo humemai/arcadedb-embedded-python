@@ -53,7 +53,12 @@ def pg_durability(cx):
 DATA = os.environ.get("BENCH_TPC_DATA", "/data/tpch")
 SF = os.environ.get("BENCH_TPC_SF", "1")
 OLTP_OPS = 1_000
-OLAP_ITER = 100   # was 5; a p99 needs the samples (2026-09-10, BUGS F29)
+# 100 runs per analytical query per repetition (DECISIONS #82): was 5, and a
+# p99 needs the samples (2026-09-10, BUGS F29). BENCH_OLAP_ITER lowers it for a
+# laptop smoke, where one SurrealDB cell is 16 minutes of the same query; the
+# count lands on the row as `olap_iters`, so a cell that ran fewer says so
+# instead of looking like a campaign cell.
+OLAP_ITER = int(os.environ.get("BENCH_OLAP_ITER") or 100)
 SEED = 20260722
 BATCH = 10_000
 
@@ -81,14 +86,46 @@ BY_MONTH_TEXT = ("SELECT substr(l_shipdate, 1, 7) AS m, sum(l_extendedprice * (1
                  "FROM lineitem GROUP BY m ORDER BY m")
 # ArcadeDB SQL: same semantics on the LineItem document type; dates stored
 # as ISO strings (lexicographic order == chronological for ISO-8601).
+# sum_disc WAS MISSING HERE, AND ONLY HERE (found 2026-09-14 while declaring
+# the #88 digest columns). Every comparator's Q1 -- DuckDB, PostgreSQL, SQLite,
+# MongoDB, SurrealDB, ArangoDB -- computes five aggregates; this one computed
+# four, because sum(l_extendedprice * (1 - l_discount)) was never written into
+# the ArcadeDB text. Both ArcadeDB arms therefore ran a cheaper Q1 than every
+# engine they were printed beside, from the first TPC-H row in August to the
+# September freeze on the live page. The digest would have caught it on the
+# first comparison; the point of #88 is that nothing did for six weeks.
 Q1_ARCADE = ("SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty, "
-             "sum(l_extendedprice) AS sum_base, avg(l_quantity) AS avg_qty, "
+             "sum(l_extendedprice) AS sum_base, "
+             "sum(l_extendedprice * (1 - l_discount)) AS sum_disc, "
+             "avg(l_quantity) AS avg_qty, "
              "count(*) AS n FROM LineItem WHERE l_shipdate <= '1998-09-02' "
              "GROUP BY l_returnflag, l_linestatus "
              "ORDER BY l_returnflag, l_linestatus")
+# BETWEEN, NOT >= AND <=, AND THE REASON IS AN ENGINE DEFECT (found 2026-09-14
+# by the #88 digest, on its first cross-engine comparison). ArcadeDB SQL parses
+# a decimal literal in a comparison at single precision, so a literal 0.05 is
+# 0.05000000074505806 and the stored DOUBLE 0.05 is 0.05000000000000000277:
+# `l_discount >= 0.05` therefore behaves as `> 0.05` and drops the whole 0.05
+# bucket. Measured on the laptop at SF0.01 against wheel 26.8.1, 60,175 line
+# items, 11 discount values of about 5,470 rows each:
+#
+#     l_discount = 0.05                              0 rows
+#     l_discount >= 0.05      == l_discount > 0.05   27,187 (five buckets)
+#     l_discount <= 0.07      == l_discount < 0.07   43,749 (eight buckets)
+#     >= 0.05 AND <= 0.07                            10,761 (TWO buckets)
+#     BETWEEN 0.05 AND 0.07                          16,323 (three buckets)
+#     >= :a AND <= :b as bound parameters            16,323 (three buckets)
+#
+# So both ArcadeDB arms have been answering Q6 over two thirds of the qualifying
+# rows since the lane was written: revenue 842,572.68 against every comparator's
+# 1,193,053.23, and a latency over a third fewer rows. BETWEEN and bound
+# parameters are both correct; BETWEEN is also what Q6_DUCK writes, so the two
+# texts now say the same thing in the same shape. The defect itself is an
+# upstream matter (a Java repro against the engine's SQL parser), not a harness
+# one, and the published September Q6 cell for ArcadeDB is wrong.
 Q6_ARCADE = ("SELECT sum(l_extendedprice * l_discount) AS revenue FROM LineItem "
              "WHERE l_shipdate >= '1994-01-01' AND l_shipdate < '1995-01-01' "
-             "AND l_discount >= 0.05 AND l_discount <= 0.07 AND l_quantity < 24")
+             "AND l_discount BETWEEN 0.05 AND 0.07 AND l_quantity < 24")
 ARCADE_OLAP = {
     "q1": Q1_ARCADE, "q6": Q6_ARCADE,
     "top_parts": ("SELECT l_partkey, sum(l_extendedprice * (1 - l_discount)) AS rev FROM LineItem "
@@ -103,6 +140,53 @@ LI_COLS = ["l_orderkey", "l_partkey", "l_quantity", "l_extendedprice",
            "l_discount", "l_returnflag", "l_linestatus", "l_shipdate",
            "l_shipmode"]   # l_shipmode joined for the 2026-10 ship-mode query
 OLAP_QUERIES = ("q1", "q6", "top_parts", "ship_mode", "by_month")
+
+# ---------------------------------------------------------------------------
+# WHAT THE ANSWER LOOKS LIKE (DECISIONS #88). One declaration per query, not
+# per engine: the tuple is the query's column order, and the alternatives in a
+# tuple are the names the dialects give the same column -- a MongoDB $group
+# calls its key "_id" (and reaches into it for a composite key), an AQL COLLECT
+# calls it whatever its RETURN names, and psycopg, DuckDB and SQLite hand back
+# positional tuples that already ARE this order.
+#
+# `coerce` says what a column IS where the engines spell it differently but
+# mean the same thing: by_month's key is a truncated DATE in DuckDB and
+# PostgreSQL and a seven-character substring everywhere else, which is the same
+# month.
+OLAP_DIGEST = {
+    "q1": dict(columns=(("l_returnflag", "_id.f", "f"), ("l_linestatus", "_id.s", "s"),
+                        "sum_qty", "sum_base", "sum_disc", "avg_qty", "n")),
+    "q6": dict(columns=("revenue",)),
+    # ORDER BY rev DESC LIMIT 10: the membership of the top ten is the answer,
+    # and two engines may break a revenue tie differently, so the canonical
+    # form sorts on rev with the part key as tie-break.
+    "top_parts": dict(columns=(("l_partkey", "_id", "k"), "rev"),
+                      order_matters=True, order_key="rev", id_key="l_partkey"),
+    "ship_mode": dict(columns=(("l_shipmode", "_id", "m"), "n")),
+    "by_month": dict(columns=(("m", "_id"), "rev"), coerce={"m": "month"}),
+}
+
+# ---------------------------------------------------------------------------
+# THE FOUR SINGLE-RECORD OPERATIONS (DECISIONS #82a). "Nothing times the
+# simplest thing anyone does to a database, which is one record created, read,
+# updated, and deleted", and it is the most comparable operation across engines
+# because every one of them expresses it without dialect argument. 1,000 of
+# each per repetition, on a table of the same shape as a TPC-C order line,
+# printed as their own columns beside the two transactions.
+#
+# A WRITE HAS NO ANSWER TO DIGEST, so what is digested is the POST-STATE: the
+# whole crud table read back after each phase, untimed. After the inserts that
+# is 1,000 rows at qty 1, after the updates 1,000 rows at qty 2, after the
+# deletes none. An insert that wrote nothing, an update that matched nothing,
+# and a delete that deleted nothing each fail the gate instead of printing a
+# fast number (#82a). A read-back rather than count(*)+sum(qty) because
+# engines disagree about what an aggregate over no rows returns, and that
+# disagreement would be about SQL, not about the data.
+CRUD_OPS = int(os.environ.get("BENCH_CRUD_OPS", "1000"))
+CRUD_QTY_AFTER_UPDATE = 2
+CRUD_DIGEST = dict(columns=(("ckey", "_id"), "pkey", "qty"))
+OLTP_STATE_DIGEST = dict(columns=(("okey", "_id"), "pkey", "qty", "paid"))
+CRUD_READ_DIGEST = dict(columns=(("ckey", "_id"), "pkey", "qty"))
 
 
 def load_frames():
@@ -138,6 +222,7 @@ class DuckTPC:
         self.cx.execute("CREATE TABLE orders_new (okey BIGINT, pkey BIGINT, qty INT, paid INT DEFAULT 0)")
         self.cx.execute("CREATE INDEX o_okey ON orders_new (okey)")
         self.cx.execute("CREATE TABLE payments (okey BIGINT, pkey BIGINT, amount DOUBLE)")
+        self.cx.execute("CREATE TABLE crud (ckey BIGINT PRIMARY KEY, pkey BIGINT, qty INT, price DOUBLE)")
         self.cx.execute("ALTER TABLE lineitem ALTER l_shipdate TYPE DATE")
 
     def olap(self, which):
@@ -158,6 +243,29 @@ class DuckTPC:
         self.cx.execute("UPDATE orders_new SET paid = 1 WHERE okey=?", [okey])
         self.cx.execute("INSERT INTO payments VALUES (?, ?, ?)", [okey, r[1] if r else 0, 1.0])
         self.cx.execute("COMMIT")
+
+    # The four single-record operations (#82a). Each is one auto-committed
+    # statement, which on this engine is one transaction.
+    def crud_insert(self, i, pkey):
+        self.cx.execute("INSERT INTO crud VALUES (?, ?, 1, 9.99)", [i, pkey])
+
+    def crud_read(self, i):
+        return self.cx.execute("SELECT ckey, pkey, qty FROM crud WHERE ckey=?", [i]).fetchall()
+
+    def crud_update(self, i):
+        self.cx.execute("UPDATE crud SET qty = 2 WHERE ckey=?", [i])
+
+    def crud_delete(self, i):
+        self.cx.execute("DELETE FROM crud WHERE ckey=?", [i])
+
+    def crud_scan(self):
+        return self.cx.execute("SELECT ckey, pkey, qty FROM crud").fetchall()
+
+    def oltp_scan(self):
+        return self.cx.execute("SELECT okey, pkey, qty, paid FROM orders_new").fetchall()
+
+    def payments_n(self):
+        return self.cx.execute("SELECT count(*) FROM payments").fetchone()[0]
 
     def close(self):
         self.cx.close()
@@ -193,6 +301,7 @@ class SQLiteTPC:
         self.cx.execute("CREATE TABLE part (p_partkey INTEGER PRIMARY KEY, p_retailprice REAL, stock INTEGER)")
         self.cx.execute("CREATE TABLE orders_new (okey INTEGER PRIMARY KEY, pkey INTEGER, qty INTEGER, paid INTEGER DEFAULT 0)")
         self.cx.execute("CREATE TABLE payments (okey INTEGER, pkey INTEGER, amount REAL)")
+        self.cx.execute("CREATE TABLE crud (ckey INTEGER PRIMARY KEY, pkey INTEGER, qty INTEGER, price REAL)")
         rows = li[LI_COLS].itertuples(index=False, name=None)
         buf = []
         for r in rows:
@@ -223,6 +332,31 @@ class SQLiteTPC:
         self.cx.execute("UPDATE orders_new SET paid = 1 WHERE okey=?", (okey,))
         self.cx.execute("INSERT INTO payments VALUES (?, ?, ?)", (okey, r[1] if r else 0, 1.0))
         self.cx.commit()
+
+    # The four single-record operations (#82a), each one committed transaction.
+    def crud_insert(self, i, pkey):
+        self.cx.execute("INSERT INTO crud VALUES (?, ?, 1, 9.99)", (i, pkey))
+        self.cx.commit()
+
+    def crud_read(self, i):
+        return self.cx.execute("SELECT ckey, pkey, qty FROM crud WHERE ckey=?", (i,)).fetchall()
+
+    def crud_update(self, i):
+        self.cx.execute("UPDATE crud SET qty = 2 WHERE ckey=?", (i,))
+        self.cx.commit()
+
+    def crud_delete(self, i):
+        self.cx.execute("DELETE FROM crud WHERE ckey=?", (i,))
+        self.cx.commit()
+
+    def crud_scan(self):
+        return self.cx.execute("SELECT ckey, pkey, qty FROM crud").fetchall()
+
+    def oltp_scan(self):
+        return self.cx.execute("SELECT okey, pkey, qty, paid FROM orders_new").fetchall()
+
+    def payments_n(self):
+        return self.cx.execute("SELECT count(*) FROM payments").fetchone()[0]
 
     def close(self):
         self.cx.close()
@@ -294,6 +428,10 @@ class MongoTPC:
         pc.create_index("p_partkey", unique=True)
         lc.create_index("l_shipdate")
         oc.create_index("okey", unique=True)
+        # w=1, j=false on every timed write (#81); cached so the timed loop
+        # does not build a collection handle per operation.
+        self._crud = self.db.get_collection("crud", write_concern=self._wc)
+        self._crud.create_index("ckey", unique=True)
 
     _REV = {"$sum": {"$multiply": ["$l_extendedprice", {"$subtract": [1, "$l_discount"]}]}}
     TOP_PARTS = [{"$group": {"_id": "$l_partkey", "rev": _REV}}, {"$sort": {"rev": -1}}, {"$limit": 10}]
@@ -328,6 +466,30 @@ class MongoTPC:
                 self.db["orders_new"].update_one({"okey": okey}, {"$set": {"paid": 1}}, session=sess)
                 self.db["payments"].insert_one({"okey": okey, "pkey": (o or {}).get("pkey", 0), "amount": 1.0}, session=sess)
 
+    # The four single-record operations (#82a). No session: a single-document
+    # write is atomic in MongoDB by construction, and wrapping it in a
+    # transaction would time a distributed-commit path no other engine pays.
+    def crud_insert(self, i, pkey):
+        self._crud.insert_one({"ckey": i, "pkey": pkey, "qty": 1, "price": 9.99})
+
+    def crud_read(self, i):
+        return list(self._crud.find({"ckey": i}, {"_id": 0, "ckey": 1, "pkey": 1, "qty": 1}))
+
+    def crud_update(self, i):
+        self._crud.update_one({"ckey": i}, {"$set": {"qty": 2}})
+
+    def crud_delete(self, i):
+        self._crud.delete_one({"ckey": i})
+
+    def crud_scan(self):
+        return list(self.db["crud"].find({}, {"_id": 0, "ckey": 1, "pkey": 1, "qty": 1}))
+
+    def oltp_scan(self):
+        return list(self.db["orders_new"].find({}, {"_id": 0, "okey": 1, "pkey": 1, "qty": 1, "paid": 1}))
+
+    def payments_n(self):
+        return self.db["payments"].count_documents({})
+
     def close(self):
         self.cl.close()
 
@@ -355,7 +517,8 @@ class SurrealTPC:
     def connect(self):
         self._open()
         self.db.query("REMOVE TABLE IF EXISTS lineitem; REMOVE TABLE IF EXISTS part; "
-                      "REMOVE TABLE IF EXISTS orders_new; REMOVE TABLE IF EXISTS payments")
+                      "REMOVE TABLE IF EXISTS orders_new; REMOVE TABLE IF EXISTS payments; "
+                      "REMOVE TABLE IF EXISTS crud")
 
     def build(self, li, part):
         # Index BEFORE the load (2026-09-13): on the SDK's SurrealKV store a
@@ -410,6 +573,29 @@ class SurrealTPC:
         self.db.query(f"BEGIN; SELECT pkey, qty FROM ONLY orders_new:{okey}; "
                       f"UPDATE orders_new:{okey} SET paid = 1; "
                       f"CREATE payments SET okey = {okey}, amount = 1.0; COMMIT;")
+
+    # The four single-record operations (#82a), by record id.
+    def crud_insert(self, i, pkey):
+        self.db.query(f"CREATE crud:{i} SET ckey = {i}, pkey = {pkey}, qty = 1, price = 9.99")
+
+    def crud_read(self, i):
+        return self._rows(self.db.query(f"SELECT ckey, pkey, qty FROM crud:{i}"))
+
+    def crud_update(self, i):
+        self.db.query(f"UPDATE crud:{i} SET qty = 2")
+
+    def crud_delete(self, i):
+        self.db.query(f"DELETE crud:{i}")
+
+    def crud_scan(self):
+        return self._rows(self.db.query("SELECT ckey, pkey, qty FROM crud"))
+
+    def oltp_scan(self):
+        return self._rows(self.db.query("SELECT okey, pkey, qty, paid FROM orders_new"))
+
+    def payments_n(self):
+        r = self._rows(self.db.query("SELECT count() AS n FROM payments GROUP ALL"))
+        return (r[0].get("n") if r and isinstance(r[0], dict) else 0) or 0
 
     def close(self):
         try:
@@ -473,6 +659,7 @@ class PostgresTPC:
                 cp.write_row(tuple(t))
         cur.execute("CREATE TABLE orders_new (okey BIGINT PRIMARY KEY, pkey BIGINT, qty INT, paid INT DEFAULT 0)")
         cur.execute("CREATE TABLE payments (okey BIGINT, pkey BIGINT, amount DOUBLE PRECISION)")
+        cur.execute("CREATE TABLE crud (ckey BIGINT PRIMARY KEY, pkey BIGINT, qty INT, price DOUBLE PRECISION)")
         self.cx.commit()
 
     def olap(self, which):
@@ -500,6 +687,42 @@ class PostgresTPC:
         cur.execute("UPDATE orders_new SET paid = 1 WHERE okey=%s", (okey,))
         cur.execute("INSERT INTO payments VALUES (%s, %s, %s)", (okey, r[1] if r else 0, 1.0))
         self.cx.commit()
+
+    # The four single-record operations (#82a), each one committed transaction.
+    def crud_insert(self, i, pkey):
+        self.cx.cursor().execute("INSERT INTO crud VALUES (%s, %s, 1, 9.99)", (i, pkey))
+        self.cx.commit()
+
+    def crud_read(self, i):
+        cur = self.cx.cursor()
+        cur.execute("SELECT ckey, pkey, qty FROM crud WHERE ckey=%s", (i,))
+        r = cur.fetchall()
+        self.cx.commit()
+        return r
+
+    def crud_update(self, i):
+        self.cx.cursor().execute("UPDATE crud SET qty = 2 WHERE ckey=%s", (i,))
+        self.cx.commit()
+
+    def crud_delete(self, i):
+        self.cx.cursor().execute("DELETE FROM crud WHERE ckey=%s", (i,))
+        self.cx.commit()
+
+    def _all(self, sql):
+        cur = self.cx.cursor()
+        cur.execute(sql)
+        r = cur.fetchall()
+        self.cx.commit()
+        return r
+
+    def crud_scan(self):
+        return self._all("SELECT ckey, pkey, qty FROM crud")
+
+    def oltp_scan(self):
+        return self._all("SELECT okey, pkey, qty, paid FROM orders_new")
+
+    def payments_n(self):
+        return self._all("SELECT count(*) FROM payments")[0][0]
 
     def close(self):
         self.cx.close()
@@ -542,6 +765,9 @@ class ArcadeTPC:
         db.command("sql", "CREATE PROPERTY OrderNew.okey LONG")
         db.command("sql", "CREATE INDEX ON OrderNew (okey) UNIQUE")
         db.command("sql", "CREATE DOCUMENT TYPE Payment")
+        db.command("sql", "CREATE DOCUMENT TYPE Crud")
+        db.command("sql", "CREATE PROPERTY Crud.ckey LONG")
+        db.command("sql", "CREATE INDEX ON Crud (ckey) UNIQUE")
         # THE ENGINE'S BULK PATH, not one SQL statement per row.
         #
         # This block used to issue a parameterised INSERT per row and call
@@ -609,6 +835,41 @@ class ArcadeTPC:
                    {"o": okey, "p": (r[0].get("pkey") if r else 0)})
         db.commit()
 
+    # The four single-record operations (#82a), each in its own transaction so
+    # the number is a committed write, as it is on every other engine.
+    def crud_insert(self, i, pkey):
+        db = self.db
+        db.begin()
+        db.command("sql", "INSERT INTO Crud SET ckey=:c, pkey=:p, qty=1, price=9.99",
+                   {"c": i, "p": pkey})
+        db.commit()
+
+    def crud_read(self, i):
+        return self.db.query("sql", "SELECT ckey, pkey, qty FROM Crud WHERE ckey=:c",
+                             {"c": i}).to_list()
+
+    def crud_update(self, i):
+        db = self.db
+        db.begin()
+        db.command("sql", "UPDATE Crud SET qty = 2 WHERE ckey=:c", {"c": i})
+        db.commit()
+
+    def crud_delete(self, i):
+        db = self.db
+        db.begin()
+        db.command("sql", "DELETE FROM Crud WHERE ckey=:c", {"c": i})
+        db.commit()
+
+    def crud_scan(self):
+        return self.db.query("sql", "SELECT ckey, pkey, qty FROM Crud LIMIT 1000000").to_list()
+
+    def oltp_scan(self):
+        return self.db.query("sql", "SELECT okey, pkey, qty, paid FROM OrderNew LIMIT 1000000").to_list()
+
+    def payments_n(self):
+        r = self.db.query("sql", "SELECT count(*) AS n FROM Payment").to_list()
+        return (r[0].get("n") if r else 0) or 0
+
     def close(self):
         self.db.close()
 
@@ -656,7 +917,10 @@ class ArcadeServerTPC(ArcadeTPC):
                     "CREATE DOCUMENT TYPE OrderNew",
                     "CREATE PROPERTY OrderNew.okey LONG",
                     "CREATE INDEX ON OrderNew (okey) UNIQUE",
-                    "CREATE DOCUMENT TYPE Payment"):
+                    "CREATE DOCUMENT TYPE Payment",
+                    "CREATE DOCUMENT TYPE Crud",
+                    "CREATE PROPERTY Crud.ckey LONG",
+                    "CREATE INDEX ON Crud (ckey) UNIQUE"):
             self._cmd(ddl)
         buf = []
         for t in li.itertuples(index=False):
@@ -700,6 +964,30 @@ class ArcadeServerTPC(ArcadeTPC):
                   f"UPDATE OrderNew SET paid = 1 WHERE okey={okey}",
                   language="sqlscript")
 
+    # The four single-record operations (#82a), one HTTP command each, which
+    # on this server is one transaction each.
+    def crud_insert(self, i, pkey):
+        self._cmd(f"INSERT INTO Crud SET ckey={i}, pkey={pkey}, qty=1, price=9.99")
+
+    def crud_read(self, i):
+        return self._cmd(f"SELECT ckey, pkey, qty FROM Crud WHERE ckey={i}")
+
+    def crud_update(self, i):
+        self._cmd(f"UPDATE Crud SET qty = 2 WHERE ckey={i}")
+
+    def crud_delete(self, i):
+        self._cmd(f"DELETE FROM Crud WHERE ckey={i}")
+
+    def crud_scan(self):
+        return self._cmd("SELECT ckey, pkey, qty FROM Crud LIMIT 1000000")
+
+    def oltp_scan(self):
+        return self._cmd("SELECT okey, pkey, qty, paid FROM OrderNew LIMIT 1000000")
+
+    def payments_n(self):
+        r = self._cmd("SELECT count(*) AS n FROM Payment")
+        return (r[0].get("n") if r else 0) or 0
+
     def close(self):
         pass
 
@@ -733,6 +1021,7 @@ class ArangoTPC:
         pc = self.db.create_collection("part")
         self.db.create_collection("orders_new")
         self.db.create_collection("payments")
+        self.db.create_collection("crud")
         buf = []
         for t in li[LI_COLS].itertuples(index=False, name=None):
             buf.append(dict(zip(LI_COLS, t)))
@@ -790,6 +1079,34 @@ class ArangoTPC:
             txn.abort_transaction()
             raise
 
+    # The four single-record operations (#82a). One document operation is one
+    # transaction in ArangoDB, so no stream transaction is opened around it.
+    def crud_insert(self, i, pkey):
+        self.db.collection("crud").insert(
+            {"_key": str(i), "ckey": i, "pkey": pkey, "qty": 1, "price": 9.99})
+
+    def crud_read(self, i):
+        doc = self.db.collection("crud").get(str(i))
+        return [doc] if doc else []
+
+    def crud_update(self, i):
+        self.db.collection("crud").update({"_key": str(i), "qty": 2})
+
+    def crud_delete(self, i):
+        self.db.collection("crud").delete(str(i))
+
+    def crud_scan(self):
+        return list(self.db.aql.execute(
+            "FOR c IN crud RETURN {ckey: c.ckey, pkey: c.pkey, qty: c.qty}", batch_size=10_000))
+
+    def oltp_scan(self):
+        return list(self.db.aql.execute(
+            "FOR o IN orders_new RETURN {okey: o.okey, pkey: o.pkey, qty: o.qty, paid: o.paid}",
+            batch_size=10_000))
+
+    def payments_n(self):
+        return self.db.collection("payments").count()
+
     def close(self):
         arango_common.close(self.cl)
 
@@ -827,6 +1144,7 @@ def main():
     out["durability"] = getattr(b, "durability", None)
     out["instrument"] = bench_common.INSTRUMENT
     if args.workload == "olap":
+        out["olap_iters"] = OLAP_ITER
         for which in OLAP_QUERIES:
             times = []
             ref = None
@@ -849,12 +1167,21 @@ def main():
             #
             # The published field is unchanged so existing numbers stay
             # comparable. These two say what it is made of.
-            out[f"cold_{which}_ms"] = round(times[0], 2)
-            if len(times) > 1:
-                out[f"warm_{which}_ms"] = round(statistics.median(times[1:]), 2)
+            # COLD AND WARM AT p50 AND p99 (DECISIONS #89). The pooled p99
+            # above includes the cold iteration, which at OLAP_ITER=100 IS the
+            # 99th percentile whenever the first touch is the slowest -- so the
+            # published tail was sometimes the cold number wearing a
+            # percentile's name. One naming convention across every lane.
+            bench_common.record_cold_warm(out, which, times, digits=2)
             out[f"{which}_rows"] = len(ref) if ref is not None else 0
+            # THE ANSWER, not just how long it took (DECISIONS #88). Computed
+            # here, outside the timed loop, from the object the LAST timed call
+            # returned; re-running the query to digest it would digest a second
+            # execution against a different cache state.
+            bench_common.record_result(out, which, ref, **OLAP_DIGEST[which])
             _beat.mark(f"query-{which}-done", p50=out[f"{which}_ms"],
-                       rows=out[f"{which}_rows"])
+                       rows=out[f"{which}_rows"],
+                       digest=out[f"res_{which}_digest"])
     else:
         rng = random.Random(SEED)
         keys = part["p_partkey"].tolist()
@@ -870,6 +1197,12 @@ def main():
         out["neworder_p50_ms"] = round(statistics.median(lat), 3)
         out["neworder_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)
         _beat.mark("new-order-done", n=OLTP_OPS, p50=out["neworder_p50_ms"])
+        # WHAT THE TRANSACTION LEFT BEHIND (#88). A transaction returns nothing
+        # to digest, so what is digested is the state it wrote: every order the
+        # loop placed, read back untimed. A new-order that silently inserted
+        # nothing now fails the gate instead of printing the best number on the
+        # table. Taken BEFORE the payment loop, which changes `paid`.
+        bench_common.record_result(out, "neworder", b.oltp_scan(), **OLTP_STATE_DIGEST)
         # PAYMENT (2026-10, DECISIONS #82): the same count, against the orders
         # new-order just placed, each chosen at random so the read is not a
         # scan of the newest page. Read the order, mark it paid, insert the
@@ -891,6 +1224,53 @@ def main():
         # make_paper_tables keeps the two instruments out of one table.
         out["oltp_ops_per_s"] = round((len(lat) + len(plat)) / ((sum(lat) + sum(plat)) / 1000), 1)
         out["oltp_ops"] = len(lat) + len(plat)
+        # The same orders after the payments: the rows the loop marked paid are
+        # decided by the seeded rng, so the post-state is deterministic and the
+        # engines must agree on it.
+        bench_common.record_result(out, "payment", b.oltp_scan(), **OLTP_STATE_DIGEST)
+        out["payments_n"] = b.payments_n()
+
+        # ------------------------------------------------------------------
+        # THE FOUR SINGLE-RECORD OPERATIONS (2026-10, DECISIONS #82a), 1,000 of
+        # each, run in the order a record actually lives: created, read,
+        # updated, deleted. Each phase finishes before the next starts, so the
+        # read reads rows that exist and the delete deletes rows that are there.
+        crud_pkeys = [int(keys[rng.randrange(len(keys))]) for _ in range(CRUD_OPS)]
+        crud_read_rows = []
+        CRUD_WARMUP = min(20, max(0, CRUD_OPS // 10))
+
+        def _crud_phase(label, fn, collect=False):
+            lat = []
+            _beat.mark(f"{label}-start", n=CRUD_OPS)
+            for i in range(CRUD_OPS):
+                t = time.perf_counter()
+                r = fn(i)
+                dt = (time.perf_counter() - t) * 1000
+                if i >= CRUD_WARMUP:
+                    lat.append(dt)
+                if collect and r:
+                    crud_read_rows.extend(r)
+            lat.sort()
+            out[f"{label}_p50_ms"] = round(statistics.median(lat), 3)
+            out[f"{label}_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)
+            out[f"{label}_ops"] = CRUD_OPS
+            _beat.mark(f"{label}-done", n=CRUD_OPS, p50=out[f"{label}_p50_ms"])
+
+        _crud_phase("crud_insert", lambda i: b.crud_insert(i, crud_pkeys[i]))
+        bench_common.record_result(out, "crud_insert", b.crud_scan(), **CRUD_DIGEST)
+        _crud_phase("crud_read", b.crud_read, collect=True)
+        # The read's digest is the VALUES THE TIMED READS RETURNED, accumulated
+        # as they came back and hashed here; the three write phases have no
+        # answer of their own and are digested by the state they left.
+        bench_common.record_result(out, "crud_read", crud_read_rows, **CRUD_READ_DIGEST)
+        _crud_phase("crud_update", b.crud_update)
+        bench_common.record_result(out, "crud_update", b.crud_scan(), **CRUD_DIGEST)
+        _crud_phase("crud_delete", b.crud_delete)
+        bench_common.record_result(out, "crud_delete", b.crud_scan(), **CRUD_DIGEST)
+
+        # DECISIONS #89: where a measurement does not apply the row says so in
+        # one clause rather than leaving a blank.
+        out["cold_warm_na"] = bench_common.NA_COLD_WARM_TXN
 
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
