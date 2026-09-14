@@ -7419,7 +7419,7 @@
         "Known at this engine build: a vector database's no-op session close grows with the index (8 ms at 10k, 98 ms at 1M, 1.4 s at 10M), and a session with one search in it at 10M is 17.6 s, because the first search after a write started a full asynchronous graph rebuild and close() waited on it. Filed as #7183, fixed upstream in #7191 for 26.10.1; the October re-pin re-measures it.",
         "A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k documents and 10M.",
         "Server rows have no JVM start, first open, or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.",
-        "Graph with the analytical view is withheld: probe scope under revision; see PAGE-SPEC 4c"
+        "Graph with the analytical view is withheld: probe scope under revision; see PAGE-SPEC rule 7"
       ],
       "columns": [
         "JVM start ms",
