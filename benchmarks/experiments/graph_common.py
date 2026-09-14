@@ -129,16 +129,26 @@ HOP3_VISITED = ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)-[:KNOW
                 "WHERE p.id = {id} RETURN count(DISTINCT x) AS n")
 VISITED_SAMPLE = 20
 
+# EVERY "ORDER BY ... LIMIT" CARRIES A TOTAL ORDER, and it did not until
+# 2026-09-14, when the #88 digests showed what that costs. Three of these five
+# had ties spanning the limit boundary -- dozens of people share an out-degree,
+# dozens of cities share an edge count -- so "the top ten" was a different ten
+# on different engines, all of them correct. LadybugDB returned ten person ids
+# at degrees 102, 107 and 122; Neo4j, ArcadeDB and ArangoDB returned ten
+# DIFFERENT ids at exactly those degrees. A benchmark query whose answer is
+# ambiguous cannot be compared across engines and should not be published as
+# "the top ten" either, so the second sort key is part of the question now. It
+# costs one comparison per row and it is added on every engine at once.
 OLAP_QUERIES = {
     "top_degree": ("MATCH (p:Person)-[:KNOWS]->(:Person) "
-                   "RETURN p.id AS id, count(*) AS d ORDER BY d DESC LIMIT 10"),
+                   "RETURN p.id AS id, count(*) AS d ORDER BY d DESC, id ASC LIMIT 10"),
     "same_city_edges": ("MATCH (a:Person)-[:KNOWS]->(b:Person) "
                         "WHERE a.city = b.city "
-                        "RETURN a.city AS c, count(*) AS n ORDER BY n DESC "
+                        "RETURN a.city AS c, count(*) AS n ORDER BY n DESC, c ASC "
                         "LIMIT 10"),
     "friend_age_by_city": ("MATCH (p:Person)-[:KNOWS]->(f:Person) "
                            "RETURN p.city AS c, avg(f.age) AS a, count(*) AS n "
-                           "ORDER BY n DESC LIMIT 10"),
+                           "ORDER BY n DESC, c ASC LIMIT 10"),
     # 2026-10 (DECISIONS #82b), so the graph table is as thorough as the
     # document one: five analytics queries on each.
     #
