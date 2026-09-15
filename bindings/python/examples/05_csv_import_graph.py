@@ -66,25 +66,76 @@ Imports pre-exported JSONL file and reads from imported database:
 - Measures import time separately
 - Example: --import-jsonl ./exports/movielens_small_db.jsonl.tgz
 
+Rows the graph deliberately does not carry:
+===========================================
+download_data.py injects NULLs into the MovieLens CSVs on purpose (seeded, so
+the same rows every time): 3% of ratings.csv rows get an empty timestamp, 1%
+get an empty rating, 5% of tags.csv rows get an empty tag and 2% an empty
+timestamp. Example 04 imports all of them, empty cell -> SQL NULL, because
+NULL handling is what that example is about.
+
+This example builds edges whose timestamp is a declared LONG, so it selects
+only source rows that have one:
+- RATED:  WHERE timestamp IS NOT NULL       -> 97,823 of 100,836 Rating docs
+- TAGGED: WHERE timestamp IS NOT NULL AND tag IS NOT NULL -> 3,436 of 3,683
+
+The 3,013 skipped ratings and 247 skipped tags are the injected NULLs, not
+lost rows: count_data() applies the same filters, so the progress meter counts
+what it intends to create and reaches 100%. A NULL *rating* is not filtered --
+those 981 rows do become edges, with RATED.rating left NULL, which is why
+Query 8 sums to 96,842 and not to 97,823.
+
 Expected Results (movielens-small dataset):
 ==================================
 ✓ Vertices: 610 Users + 9,742 Movies = 10,352 total
-✓ Edges: 98,734 RATED + 3,494 TAGGED = 102,228 total
+✓ Edges: 97,823 RATED + 3,436 TAGGED = 101,259 total
 
 Performance (movielens-small dataset):
-- Java API w/ indexes + async: ~5-10K vertices/sec, ~2-3K edges/sec (FASTEST)
+- Java API w/ indexes + async: ~5-10K vertices/sec, ~2-3K edges/sec -- but see
+  the next section: that path does not currently produce a complete graph, so
+  these rates are not comparable with the SQL ones
 - SQL w/ indexes (sync): Slower than Java API (sequential processing)
 - Without indexes: MUCH slower (no optimization)
 
+`--method java` does not work on arcadedb-embedded 26.9.1:
+==========================================================
+Measured 2026-09-15 on 26.9.1, on the pristine file as well as this one, so
+it is not a regression from the baseline corrections below.
+
+It fails in two stages. First it raises "Async executor has been shut down"
+while creating Movie vertices: _create_users() calls async_exec.close() when
+it is done, but db.async_executor() hands out the database's ONE executor, so
+closing it there shuts it down for the whole database and _create_movies()
+gets the corpse.
+
+Second -- and this is the reason the close() is not simply deleted -- if the
+close() calls are removed so the run does get past that, the async executor
+silently loses most of the writes: 610 Users submitted, 458 stored; 9,742
+Movies submitted, 2,436 stored. Nothing is raised, nothing is logged at
+SEVERE, and wait_completion() returns normally. The edge phase then reads a
+graph missing three quarters of its Movies, misses the vertex cache, and
+creates 18,372 of 97,823 RATED edges. validate_counts_and_samples() does
+catch all of it, which is the one part working as intended.
+
+So the crash is the lesser fault and it stays until the loss is fixed, since
+"fixing" it would trade a loud failure for a quiet one.
+
+The Java API itself is not at fault -- the async executor is. `--method java
+--no-async` creates vertices in synchronous transactions and produces exactly
+the same graph as `--method sql`: 610 / 9,742 / 97,823 / 3,436, on the
+pristine file. `--method sql` is unaffected for the same reason, and
+EdgeCreator never touches the async executor at all in either method (it
+stores use_async and parallel_level and reads neither). CI runs --method sql.
+
 Usage:
 ======
-# Recommended (fastest):
-python 05_csv_import_graph.py --dataset movielens-small --method java
-
-# Compare SQL (synchronous):
+# Recommended, and the only method that currently produces a correct graph:
 python 05_csv_import_graph.py --dataset movielens-small --method sql
 
-# Compare Java API without async (synchronous):
+# Broken on 26.9.1, see above:
+python 05_csv_import_graph.py --dataset movielens-small --method java
+
+# Java API without async (synchronous) - correct, same graph as --method sql:
 python 05_csv_import_graph.py --dataset movielens-small --method java --no-async
 
 # Export graph database for reproducibility:
@@ -1058,7 +1109,13 @@ EXPECTED_RESULTS = {
             {
                 "name": "Query 4: Top 10 most rated movies (SQL - Aggregations)",
                 "count": 10,
-                "sample": {"top_movie": "", "top_movie_count": 508},
+                # Verified against data/movielens-small/ratings.csv: movie 356
+                # has 329 rows, 315 of them with a non-NULL timestamp.
+                # The previous baseline here, "" with 508, was recorded when
+                # this query still grouped by title alone: the 40 movies whose
+                # title the NULL injection blanked collapsed into one ""
+                # bucket of 508 ratings, which outranked Forrest Gump.
+                "sample": {"top_movie": "Forrest Gump (1994)", "top_movie_count": 315},
             },
             {
                 "name": "Query 5: Top 10 most tagged movies (SQL - Aggregations)",
@@ -1083,7 +1140,12 @@ EXPECTED_RESULTS = {
             },
             {
                 "name": "Query 10: Users who rated same movies as User #1 (OpenCypher - Pattern)",
-                "count": 188,
+                # 602, not 188: the query returns one row per other user who
+                # shares a movie with User #1, and ratings.csv has 602 such
+                # users. 188 is the top_shared value below, copied into the
+                # count field by mistake -- and it survived because nothing
+                # compared this count. The check below now does.
+                "count": 602,
                 "sample": {"top_user_id": 414, "top_shared": 188},
             },
         ],
@@ -1118,10 +1180,16 @@ EXPECTED_RESULTS = {
             {
                 "name": "Query 4: Top 10 most rated movies (SQL - Aggregations)",
                 "count": 10,
-                "sample": {
-                    "top_movie": "",
-                    "top_movie_count": 128016,
-                },
+                # No sample baseline: the "" / 128016 recorded here was the
+                # same artefact as the small dataset's "" / 508 -- the bucket
+                # of movies whose title the NULL injection blanked, from back
+                # when this query grouped by title alone. It was never the top
+                # movie. The real values for movielens-large have never been
+                # checked against ratings.csv, and a guess is worse than no
+                # baseline, so the check is skipped (absent key = skip) until
+                # someone re-records it from a verified large run; the JSON
+                # this example prints at the end is the paste-ready form.
+                "sample": {},
             },
             {
                 "name": "Query 5: Top 10 most tagged movies (SQL - Aggregations)",
@@ -2116,6 +2184,18 @@ def run_and_validate_queries(db: Any, size: str, check_baseline: bool = True):
         expected_sample = expected_queries[9].get("sample", {})
         exp_top_id = expected_sample.get("top_user_id")
         exp_top_shared = expected_sample.get("top_shared")
+
+        # Every other query compares its row count; this one did not, which is
+        # how a wrong baseline count sat here unnoticed. Compare it.
+        expected_count = expected_queries[9].get("count")
+        if expected_count is not None and len(collab_opencypher) != expected_count:
+            print(
+                f"  ❌ Count mismatch: expected {expected_count}, "
+                f"got {len(collab_opencypher)}"
+            )
+            all_passed = False
+        elif expected_count is not None:
+            print(f"  ✓ Count matches baseline: {len(collab_opencypher)}")
 
         if exp_top_id is not None and collab_opencypher:
             actual_top_id = collab_opencypher[0].get("other_user")

@@ -104,16 +104,34 @@ python 05_csv_import_graph.py --help
 **RATED** (User → Movie)
 
 - Properties: `rating` (FLOAT), `timestamp` (LONG)
-- Count: 98,734 (small) / 33,155,309 (large)
+- Count: 97,823 (small) / 33,155,309 (large)
 
 **TAGGED** (User → Movie)
 
 - Properties: `tag` (STRING), `timestamp` (LONG)
-- Count: 3,494 (small) / 2,212,213 (large)
+- Count: 3,436 (small) / 2,212,213 (large)
+
+The small-dataset counts are below the source row counts (100,836 ratings,
+3,683 tags) on purpose. `download_data.py` injects NULLs into the MovieLens
+CSVs, and this example only builds edges from rows that have the properties
+the edge declares: `timestamp IS NOT NULL` for RATED, plus `tag IS NOT NULL`
+for TAGGED. Example 04 keeps all the rows, NULLs included, because importing
+NULLs is what that example demonstrates.
 
 ## Performance Results
 
-### Small Dataset (610 users, 9,742 movies, 102,228 edges)
+!!! warning "The async rows predate a defect and have not been re-measured"
+
+    On arcadedb-embedded 26.9.1, `--method java` raises "Async executor has
+    been shut down" before it finishes the vertices, and if that is patched
+    out the async executor silently discards most of the writes (9,742 Movie
+    vertices submitted, 2,436 stored, no error raised). The `java (async)` and
+    `java_noindex (async)` rows below were recorded on an earlier version and
+    no run that loses three quarters of its vertices can be compared with one
+    that does not. `java_noasync` and the `sql` rows are unaffected; the
+    example's module docstring has the measurements.
+
+### Small Dataset (610 users, 9,742 movies, 101,259 edges)
 
 | Method | Vertices | Edges | Creation Time | Memory (Peak) |
 |--------|----------|-------|---------------|---------------|
