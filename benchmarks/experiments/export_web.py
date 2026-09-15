@@ -799,7 +799,7 @@ DISK_NOTE = ("Disk is what the workload left on disk, in GiB: the engine's writa
              "the stopped container. A blank cell is a row measured before the disk "
              "reading existed (2026-08-14). Neo4j's value includes the transaction-log "
              "files it preallocates in 256 MiB steps, which is how Neo4j uses disk; "
-             "turning that off would have slowed its writes by 65%, so it stays on.")
+             "turning that off would have slowed its writes, so it stays on.")
 
 
 def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
@@ -915,7 +915,7 @@ LANES = {
             "ingest+index total s is one timer around inserting the documents and building the index; the two are not timed separately (Qdrant builds its index while ingesting, so the split is not defined there). ingest+index vectors/s divides the document count by it.",
             "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
             "Cold is the first timed pass after the index is built; warm is the same engine run again over an index it has already read, and gain is cold over warm. Here a second pass changes little and the order of the table is the same either way. The dense table below is not like this: there ArcadeDB gains the most on a second pass and the order depends on which pass you time.",
-            "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
+            "ArcadeDB's server takes longer to build than its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
         ],
     },
     "l3d": {
@@ -939,8 +939,8 @@ LANES = {
             "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
 *(["ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not HNSW, so the degree match above does not apply to it; its rows record nLists (about the square root of the corpus) and nProbe (an eighth of the lists) instead."]
               if any(str(r.get("backend")) == "arangodb_dense" for r in _dense_rows_for_note()) else []),
-            "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
-            "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried 26 to 28 small segments and read 2.3x slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
+            "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. ArcadeDB pages its index off disk while most comparators are resident from build, so read the two columns against each other rather than either alone.",
+            "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, runs landed on many small segments and read slower with higher recall, at a moment the engine chose. One line changed from the image's configuration; sparse rows are at the default.",
             *([("ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.")]
               if _dense_overlay_is_pinned() else []),
         ],
@@ -1017,7 +1017,7 @@ LANES = {
                     (_disk_data, "disk GiB")],
         "conditions": [
             "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
-            "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
+            "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. It is built once, before any query is timed, and the view build column is what that took.",
             "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
             "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
         ],
@@ -1094,7 +1094,7 @@ LANES = {
         "conditions": [
             "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
             "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
-            "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
+            "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme: nearly all of the figure shown is the Python client and almost none of it is the database.",
         ],
     },
     "e2": {
@@ -1717,15 +1717,11 @@ def _l4_table(all_rows):
             "One tag and three fields, not the ten and ten the TSBS cpu schema "
             "defines. The reduction is applied identically to every engine, so "
             "the comparison is internally fair, but it is not the full "
-            "benchmark. A matched one-tag/ten-tag run prices the schema at "
-            "2.0x on ingest and 2.6x faster on last-point.",
+            "benchmark; a matched full-schema run costs more on ingest and answers the newest reading faster.",
             "Newest reading means the most recent value each sensor has "
             "reported, which is what a monitoring dashboard asks for when it "
             "shows the current state of a fleet. TSBS calls this query "
-            "last-point. It is run without a time bound: telling the engine to "
-            "look only at the past hour made it slower, 0.860 ms against "
-            "0.720, because evaluating the time filter costs more than the "
-            "scan it saves.",
+            "last-point. It is run without a time bound on every engine.",
         ],
         "columns": [lab for _, lab in L4_METRICS],
         "withheld_scales": [],
