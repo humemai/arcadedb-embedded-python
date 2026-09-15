@@ -2387,8 +2387,13 @@ def _durability_table(all_rows):
                 "n_docs": None,
                 "deployment": deployment_of(backend),
                 "image": rs[0].get("image"),
-                "version_name": _engine_identity(rs[0].get("engine_version"),
-                                                 rs[0].get("engine_commit")),
+                # ArcadeDB is identified by commit (#49); a comparator by its
+                # own stamp, else its row read "arcadedb surrealdb-embedded:...".
+                "version_name": (_engine_identity(rs[0].get("engine_version"),
+                                                  rs[0].get("engine_commit"))
+                                 if "arcadedb" in backend
+                                 else _engine_version(display_name(backend), _row_engine_string(rs[0]),
+                                                      image=rs[0].get("image"))),
                 "host": rs[0].get("host"),
                 "metrics": {},
             }

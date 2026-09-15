@@ -7439,7 +7439,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb arangodb:3.12.11",
+          "version_name": "arangodb 3.12.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7471,7 +7471,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb 1.5.5",
+          "version_name": "duckdb 1.5.5",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -7491,7 +7491,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb mongodb 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7523,7 +7523,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb PostgreSQL 17.10",
+          "version_name": "postgresql 17.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7555,7 +7555,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb sqlite 3.46.1",
+          "version_name": "sqlite 3.46.1",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7587,7 +7587,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb surrealdb-embedded:2.3.10 (sdk 2.0.0)",
+          "version_name": "surrealdb 2.3.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7619,7 +7619,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb surrealdb-server:3.2.4+20260803.93ab219",
+          "version_name": "surrealdb 3.2.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -7703,7 +7703,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb arangodb:3.12.11",
+          "version_name": "arangodb 3.12.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7735,7 +7735,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb 1.5.5",
+          "version_name": "duckdb 1.5.5",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -7755,7 +7755,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb mongodb 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7787,7 +7787,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb PostgreSQL 17.10",
+          "version_name": "postgresql 17.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7819,7 +7819,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb sqlite 3.46.1",
+          "version_name": "sqlite 3.46.1",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7851,7 +7851,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb surrealdb-embedded:2.3.10 (sdk 2.0.0)",
+          "version_name": "surrealdb 2.3.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7883,7 +7883,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb surrealdb-server:3.2.4+20260803.93ab219",
+          "version_name": "surrealdb 3.2.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -7967,7 +7967,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb arangodb:3.12.11",
+          "version_name": "arangodb 3.12.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -7999,7 +7999,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb 1.5.5",
+          "version_name": "duckdb 1.5.5",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -8019,7 +8019,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb mongodb 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8051,7 +8051,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb PostgreSQL 17.10",
+          "version_name": "postgresql 17.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8083,7 +8083,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb sqlite 3.46.1",
+          "version_name": "sqlite 3.46.1",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8115,7 +8115,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb surrealdb-embedded:2.3.10 (sdk 2.0.0)",
+          "version_name": "surrealdb 2.3.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8147,7 +8147,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb surrealdb-server:3.2.4+20260803.93ab219",
+          "version_name": "surrealdb 3.2.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -8231,7 +8231,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb arangodb:3.12.11",
+          "version_name": "arangodb 3.12.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8263,7 +8263,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb 1.5.5",
+          "version_name": "duckdb 1.5.5",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -8283,7 +8283,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb mongodb 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8315,7 +8315,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb PostgreSQL 17.10",
+          "version_name": "postgresql 17.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8347,7 +8347,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb sqlite 3.46.1",
+          "version_name": "sqlite 3.46.1",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8379,7 +8379,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb surrealdb-embedded:2.3.10 (sdk 2.0.0)",
+          "version_name": "surrealdb 2.3.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8411,7 +8411,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb surrealdb-server:3.2.4+20260803.93ab219",
+          "version_name": "surrealdb 3.2.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -8495,7 +8495,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb arangodb:3.12.11",
+          "version_name": "arangodb 3.12.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8527,7 +8527,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb 1.5.5",
+          "version_name": "duckdb 1.5.5",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -8547,7 +8547,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb mongodb 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8579,7 +8579,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb PostgreSQL 17.10",
+          "version_name": "postgresql 17.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8611,7 +8611,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb sqlite 3.46.1",
+          "version_name": "sqlite 3.46.1",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8643,7 +8643,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb surrealdb-embedded:2.3.10 (sdk 2.0.0)",
+          "version_name": "surrealdb 2.3.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8675,7 +8675,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb surrealdb-server:3.2.4+20260803.93ab219",
+          "version_name": "surrealdb 3.2.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -8759,7 +8759,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb arangodb:3.12.11",
+          "version_name": "arangodb 3.12.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8791,7 +8791,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb 1.5.5",
+          "version_name": "duckdb 1.5.5",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -8811,7 +8811,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb mongodb 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8843,7 +8843,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb PostgreSQL 17.10",
+          "version_name": "postgresql 17.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8875,7 +8875,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb sqlite 3.46.1",
+          "version_name": "sqlite 3.46.1",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8907,7 +8907,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb surrealdb-embedded:2.3.10 (sdk 2.0.0)",
+          "version_name": "surrealdb 2.3.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -8939,7 +8939,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb surrealdb-server:3.2.4+20260803.93ab219",
+          "version_name": "surrealdb 3.2.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9023,7 +9023,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb arangodb:3.12.11",
+          "version_name": "arangodb 3.12.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9055,7 +9055,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb ladybug:0.19.1",
+          "version_name": "ladybugdb 0.19.1",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9075,7 +9075,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb mongodb 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9107,7 +9107,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb neo4j:2026.07.1",
+          "version_name": "neo4j 2026.07.1",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9127,7 +9127,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb surrealdb-embedded:2.3.10 (sdk 2.0.0)",
+          "version_name": "surrealdb 2.3.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9159,7 +9159,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb surrealdb-server:3.2.4+20260803.93ab219",
+          "version_name": "surrealdb 3.2.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9243,7 +9243,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb arangodb:3.12.11",
+          "version_name": "arangodb 3.12.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9275,7 +9275,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb ladybug:0.19.1",
+          "version_name": "ladybugdb 0.19.1",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9295,7 +9295,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb mongodb 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9327,7 +9327,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb neo4j:2026.07.1",
+          "version_name": "neo4j 2026.07.1",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9347,7 +9347,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb surrealdb-embedded:2.3.10 (sdk 2.0.0)",
+          "version_name": "surrealdb 2.3.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9379,7 +9379,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb surrealdb-server:3.2.4+20260803.93ab219",
+          "version_name": "surrealdb 3.2.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9463,7 +9463,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb arangodb:3.12.11",
+          "version_name": "arangodb 3.12.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9495,7 +9495,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb ladybug:0.19.1",
+          "version_name": "ladybugdb 0.19.1",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9515,7 +9515,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb mongodb 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9547,7 +9547,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb neo4j:2026.07.1",
+          "version_name": "neo4j 2026.07.1",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9567,7 +9567,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb surrealdb-embedded:2.3.10 (sdk 2.0.0)",
+          "version_name": "surrealdb 2.3.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9599,7 +9599,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb surrealdb-server:3.2.4+20260803.93ab219",
+          "version_name": "surrealdb 3.2.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9683,7 +9683,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb arangodb:3.12.11",
+          "version_name": "arangodb 3.12.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9715,7 +9715,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb mongodb 8.2.12 + MongoDb Search Community Version 1.70.4 at localhost:27028",
+          "version_name": "mongodb 8.2.12",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9747,7 +9747,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb neo4j:2026.07.1",
+          "version_name": "neo4j 2026.07.1",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9767,7 +9767,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb PostgreSQL 17.11 + pgvector:0.8.6 + age:1.7.0",
+          "version_name": "postgresql + pgvector + age 17.11",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9799,7 +9799,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb qdrant-local:1.19.0+neo4j:2026.07.1",
+          "version_name": "qdrant + neo4j 1.19.0",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
@@ -9819,7 +9819,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "arcadedb surrealdb-embedded:2.3.10 (sdk 2.0.0)",
+          "version_name": "surrealdb 2.3.10",
           "host": "",
           "metrics": {
             "no wait ms": {
@@ -9851,7 +9851,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "",
-          "version_name": "arcadedb surrealdb-server:3.2.4+20260803.93ab219",
+          "version_name": "surrealdb 3.2.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
