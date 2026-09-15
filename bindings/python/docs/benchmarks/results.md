@@ -160,8 +160,14 @@ Some specifics that matter if you ever compare the page against the data yoursel
   because nothing pinned them.
 - **A count is pinned alongside every zero.** "No torn results" is what a broken reader also
   produces, so the trial count is asserted beside it.
-- **Conditions are generated, not typed.** Repetition and operation counts per table, and the
-  durability note naming each table's engines, are computed from the rows that table shows.
+- **The sentences under a table are page claims too.** Every number in one is either
+  generated from the rows or pinned like a prose number, and the gate refuses a sentence
+  with a number it cannot account for. A campaign in progress carries only two kinds of
+  text: generated sentences, and prose that describes the instrument. Interpretation of
+  the results, which engine moves between passes or what a ratio says, is written once at
+  the freeze, each sentence pinned, and never carried from one campaign's page to the next.
+  This rule exists because seven typed numbers once stood false under the live tables for
+  weeks with no gate reading them.
 - **After the copy, the served file is verified byte-identical** to the one the gates read.
 
 !!! info "Where the rules live"
