@@ -797,7 +797,7 @@ NOT_PRINTED = [
     (r"^(filtered_cand_p50|filtered_candset_match|filtered_overfetch|"
      r"filtered_hops|hop3_visited_\w+|gav_cypher_reads_issued|reconnects|"
      r"crash_raised_count|post_crash_state|degree_dist_budget_s|"
-     r"\w+_budget_s)$",
+     r"\w+_budget_s|\w+_elapsed_s)$",
      "diagnostics that explain a cell rather than measure it; crashes raised "
      "came off the page under DECISIONS #73"),
     (r"^(first_open_ms|first_open_server_ms|jvm_start_ms|cold_start_penalty_ms|"

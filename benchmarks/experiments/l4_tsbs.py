@@ -46,6 +46,30 @@ SCALE_POINTS = {"ts100": 2_592_000}
 # (2026-09-10, BUGS F29). BENCH_QITER lowers it for a laptop smoke; the count
 # lands on the row as `query_iters`.
 QITER = int(os.environ.get("BENCH_QITER") or 100)
+# THE PER-QUERY BUDGET (DECISIONS #100): the graph lane's mechanism
+# (graph_common.OLAP_BUDGET_S, DECISIONS #82b), a property of the lane and the
+# same for every engine on the table, so it moves no comparison by itself. The
+# clock starts before the cold pass, the cold pass always runs, and the loop
+# stops at the first iteration that would start after the budget is spent; the
+# row records <q>_budget_s, <q>_iters, <q>_elapsed_s and <q>_censored, and the
+# table names a censored query with its iteration count and the time it
+# reached while the cell's other queries keep their numbers.
+#
+# WHY 600 s. Derived from the slowest legitimate SERVED engine at ts100, which
+# is ArcadeDB's own served document path: on mini in September
+# (results/runs_paper.csv, five reps) its twelve-hour aggregate is 1.55-1.65 s
+# per iteration, so a hundred iterations is about 165 s, and the three October
+# scans of the same shape sit within 8% of it on the laptop skeleton
+# (4.85-5.31 s each, where the same aggregate is 4.93 s), so about 180 s on
+# mini. 600 s is 3.3x that. It is also the largest budget at which the slowest
+# engine measured so far, embedded SurrealDB 2.3.10 at 59-97 s per scan on the
+# laptop, fits its four scanning queries, its 513 s ingest, its 97 s of
+# last-point iterations and the untimed shape check inside the tier's 3,600 s
+# cell timeout (4 x 600 + about 800 s), and the laptop skeleton's slowest served
+# arm (531 s for a hundred iterations) stays under it, so the preview does not
+# censor an engine the bench host would not. The override exists for a laptop
+# probe of the mechanism and never for a campaign.
+QUERY_BUDGET_S = float(os.environ.get("BENCH_TS_QUERY_BUDGET_S") or 600.0)
 HOST = "host_42"
 T0 = 1767225600  # 2026-01-01T00:00:00Z epoch seconds
 HIGH = 90.0      # the high-cpu threshold, TSBS's own
@@ -1249,13 +1273,32 @@ def main():
     for qn in QUERIES:
         times = []
         ref = None
-        _beat.mark(f"query-{qn}-start", iters=QITER)
+        _beat.mark(f"query-{qn}-start", iters=QITER, budget_s=QUERY_BUDGET_S)
+        # THE BUDGET STARTS BEFORE THE COLD PASS (the graph lane's rule, #82b):
+        # the first iteration IS the cold pass and always runs, so a censored
+        # query still carries a measurement and a digest; every later
+        # iteration runs only if it starts inside the budget.
+        _budget_t0 = time.perf_counter()
+        _ran = 0
         for _ in range(QITER):
+            if _ran and time.perf_counter() - _budget_t0 > QUERY_BUDGET_S:
+                break
             t = time.perf_counter()
             ref = getattr(b, qn)()
+            _ran += 1
             # DECISIONS #91: a sample taken across a served SurrealDB reconnect
             # is discarded; every other adapter keeps every sample.
             surreal_common.keep(b, times, (time.perf_counter() - t) * 1000)
+        # Censored means the loop stopped short of QITER, counted on the
+        # iterations RUN rather than the samples KEPT, so a sample #91 dropped
+        # after a reconnect cannot read as a budget the engine did not hit.
+        out[f"{qn}_budget_s"] = QUERY_BUDGET_S
+        out[f"{qn}_iters"] = len(times)
+        out[f"{qn}_elapsed_s"] = round(time.perf_counter() - _budget_t0, 2)
+        out[f"{qn}_censored"] = _ran < QITER
+        if out[f"{qn}_censored"]:
+            _beat.mark(f"query-{qn}-censored", iters=_ran, budget_s=QUERY_BUDGET_S,
+                       elapsed_s=out[f"{qn}_elapsed_s"])
         # Four decimals, not two: SQLite's index-backed newest reading takes
         # about 4 us and two decimals printed it as 0.00 ms (2026-09-12).
         out[f"{qn}_ms"] = round(statistics.median(times), 4)

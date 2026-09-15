@@ -2856,6 +2856,98 @@ def _censored_notes(table_id):
     return notes
 
 
+# A QUERY THAT EXCEEDED ITS BUDGET, NAMED ON THE TABLE (DECISIONS #82b, #100).
+#
+# _censored_notes above is the WHOLE-CELL case: a timeout, no row. This is the
+# per-query case the graph lane's OLAP budget and the time-series lane's query
+# budget produce: the loop stopped at the budget, the row carries a p50 over
+# the iterations it took (the cold pass always runs, so there is at least one)
+# and says so in <q>_censored, <q>_budget_s and <q>_iters (the time-series
+# lane adds <q>_elapsed_s). The cell keeps its number; what the table owed and
+# did not print until 2026-09-15 is the sentence beside the counts note that
+# says which cells did NOT run the hundred iterations it announces -- three
+# skeleton triangle counts stood at 16, 5 and 18 iterations under a note that
+# said 100. Not a declared absence: the coverage gate reads absences as blanks
+# and this cell is not blank.
+#
+#   table id -> (lane, workload, {query field stem: column label},
+#                (lane module, iteration constant), what <q>_iters counts)
+# The graph lane times its cold pass OUTSIDE the warm loop, so its <q>_iters
+# is the warm count and its p50 is over warm samples; the time-series lane's
+# first iteration IS the cold pass and is inside the count. The sentence has
+# to say which, or "5 of 100" reads as five warm samples on one lane and four
+# on the other.
+_QUERY_BUDGET_TABLES = {
+    "l2olap": ("l2", "olap", {
+        "friend_age_by_city": "average friend age", "same_city_edges": "friends in same city",
+        "top_degree": "most friends", "degree_dist": "degree distribution",
+        "triangles": "triangle count"}, ("graph_common", "OLAP_ITERATIONS"),
+        "warm iterations after the cold pass"),
+    "l4": ("l4", None, {
+        "q_last": "newest reading", "q_range": "one-hour range", "q_global": "12h aggregate",
+        "q_groupby": "per-host hourly", "q_high": "high-usage",
+        "q_orderlimit": "grouped, ordered, limited"}, ("l4_tsbs", "QITER"),
+        "iterations, the first of which is the cold pass"),
+}
+
+
+def _row_label_for(table_id, r):
+    """The label this table gives the row's engine, for a sentence about it."""
+    backend = str(r.get("backend") or "")
+    if table_id == "l4":
+        return L4_CANON_LABELS.get(backend, display_name(backend))
+    label = display_name(backend)
+    if table_id == "l2olap" and str(r.get("gav")) != "False" and "arcade" in backend:
+        label = f"{label[:-1]}, GAV)" if label.endswith(")") else f"{label} (GAV)"
+    return label
+
+
+def _query_budget_notes(table_id):
+    spec = _QUERY_BUDGET_TABLES.get(table_id)
+    if not spec:
+        return []
+    lane, wl, labels, (mod, const), counted = spec
+    # The asked count comes from the lane module the runner executes, like
+    # _counts_note's, so the two sentences cannot disagree.
+    try:
+        import importlib
+        asked = int(getattr(importlib.import_module(mod), const))
+    except Exception:  # noqa: BLE001 - the lane module is optional here
+        asked = None
+    # (label, scale, query) -> [(iters, elapsed_s, budget_s)] across reps
+    hits = collections.defaultdict(list)
+    for r in _FROZEN_ROWS:
+        if r.get("lane") != lane or (wl and r.get("workload") != wl):
+            continue
+        for q, col in labels.items():
+            if str(r.get(f"{q}_censored") or "").strip().lower() != "true":
+                continue
+            try:
+                iters = int(float(r.get(f"{q}_iters") or 0))
+                budget = float(r.get(f"{q}_budget_s") or 0)
+            except ValueError:
+                continue
+            el = r.get(f"{q}_elapsed_s")
+            hits[(_row_label_for(table_id, r), str(r.get("scale")), col)].append(
+                (iters, float(el) if el not in (None, "") else None, budget))
+    notes = []
+    for (label, scale, col), occ in sorted(hits.items(), key=str):
+        its = sorted(o[0] for o in occ)
+        span = f"{its[0]}" if its[0] == its[-1] else f"{its[0]} to {its[-1]}"
+        of = f" of {asked}" if asked else ""
+        budget = occ[0][2]
+        els = [o[1] for o in occ if o[1] is not None]
+        reached = (f", reaching {min(els):.0f} s" if len(els) == 1 or min(els) == max(els)
+                   else f", reaching {min(els):.0f} to {max(els):.0f} s") if els else ""
+        notes.append(
+            f"{label} at {scale_label(lane, scale)}: the {col} query exceeded its "
+            f"{budget:g} s budget, the same budget every engine on this table had, "
+            f"after {span}{of} iterations{reached}; its p50 and p99 are over those "
+            f"{counted}, and the cell's other queries keep their numbers "
+            f"(DECISIONS #82b, #100).")
+    return notes
+
+
 def _mutation_note(rows):
     """Which dense tiers ran the two maintenance operations, and which did not.
 
@@ -2988,6 +3080,7 @@ def _finish_table(table: dict) -> dict:
     table["conditions"] = (list(table.get("conditions") or [])
                            + _counts_note(table.get("id"), table.get("entries", []))
                            + _censored_notes(table.get("id"))
+                           + _query_budget_notes(table.get("id"))
                            + _unexpressible_notes(table.get("id"), table.get("entries", [])))
     entries = table["entries"]
     seen = []
