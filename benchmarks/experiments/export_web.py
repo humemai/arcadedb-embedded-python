@@ -675,6 +675,7 @@ SOURCES = {
     "lifecycle": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "docs_oltp": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "docs_olap": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    "multimodel": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "pycost": "benchmarks/python-bindings/jpype_overhead/results/mini_results.csv",
     "pyb_tabular": "benchmarks/python-bindings/results/runs_paper.csv",
     "pyb_graph": "benchmarks/python-bindings/results/runs_paper.csv",
@@ -2420,6 +2421,139 @@ def _durability_table(all_rows):
     }
 
 
+# THE FOUR SINGLE-STACK MULTI-MODEL ENGINES, ON ONE TABLE (DECISIONS #95).
+# The roster is the decision's, typed once here and checked by page_check
+# against the payload (an engine named here that no table carries fails the
+# publish). Every cell is derived from the finished tables: which engine has
+# a row where, and where a table declares it absent instead. Nothing about
+# what an engine covers is typed.
+MULTIMODEL_ENGINES = ("ArcadeDB", "ArangoDB", "MongoDB", "SurrealDB")
+MULTIMODEL_CELLS = {"measured": "measured", "declared": "declared", "none": "no arm"}
+MULTIMODEL_KINDS = {"censored": "censored", "withheld": "withheld",
+                    "unexpressible": "cannot express"}
+
+
+def engine_family(backend, is_arcadedb=False):
+    """'ArcadeDB (server, int8)' -> 'ArcadeDB'; a lifecycle row, whose label
+    is the situation rather than the engine, folds by its flag."""
+    if is_arcadedb:
+        return "ArcadeDB"
+    return re.sub(r"\s*\(.*$", "", str(backend)).strip()
+
+
+def multimodel_cell(table, engine):
+    """(cell text, declared kinds) for one engine on one finished table, by
+    the coverage gate's own reading of declared_absences: a whole-row absence
+    or a per-cell one, either naming any arm of the engine."""
+    rows = [e for e in table.get("entries", [])
+            if engine_family(e.get("backend"), e.get("is_arcadedb")) == engine]
+    if rows:
+        return MULTIMODEL_CELLS["measured"], []
+    kinds = sorted({str(a.get("kind")) for a in table.get("declared_absences") or []
+                    if engine_family(a.get("backend")) == engine})
+    if kinds:
+        return (MULTIMODEL_CELLS["declared"] + ", "
+                + "; ".join(MULTIMODEL_KINDS.get(k, k) for k in kinds)), kinds
+    return MULTIMODEL_CELLS["none"], []
+
+
+def _page_table_order():
+    """The order the October page places its tables in, read from the prose
+    file's own benchmarkTable blocks (documents first, then graph, ...), so
+    the coverage table's columns read left to right as the page reads top to
+    bottom. Payload order when the site checkout is not at hand."""
+    site = os.environ.get("BENCH_SITE_DIR")
+    prose = Path(site) / "src" / "lib" / "projects" / "items" / "arcadedb-next.ts" if site else None
+    if not prose or not prose.exists():
+        return []
+    return re.findall(r'tableId:\s*"([A-Za-z0-9_]+)"', prose.read_text(encoding="utf-8"))
+
+
+def multimodel_sources(finished):
+    """The October tables the coverage table reads, in the page's order."""
+    order = _page_table_order()
+    rank = {tid: i for i, tid in enumerate(order)}
+    sources = [t for t in finished
+               if t.get("id") != "multimodel" and t.get("instrument") == "2026-10"]
+    return sorted(sources, key=lambda t: (rank.get(t.get("id"), len(rank)), sources.index(t)))
+
+
+def _multimodel_table(finished):
+    """One row per engine in MULTIMODEL_ENGINES, one column per October
+    comparison table already in the payload (its title), each cell derived
+    from that table's rows and declared absences. Built AFTER _finish_table
+    has run on every other table, because that is where the absences land."""
+    sources = multimodel_sources(finished)
+    if not sources:
+        return None
+    columns = [str(t.get("title")) for t in sources]
+    if len(set(columns)) != len(columns):
+        raise SystemExit("REFUSING: two October tables share a title, so the "
+                         "capability table cannot key its columns on titles: "
+                         f"{columns}")
+    entries, kinds_seen = [], set()
+    for engine in MULTIMODEL_ENGINES:
+        modes = sorted({str(e.get("deployment")) for t in sources
+                        for e in t.get("entries", [])
+                        if engine_family(e.get("backend"), e.get("is_arcadedb")) == engine
+                        and e.get("deployment")})
+        metrics = {}
+        for t, col in zip(sources, columns):
+            text, kinds = multimodel_cell(t, engine)
+            kinds_seen.update(kinds)
+            metrics[col] = {"text": text}
+        entries.append({
+            "backend": engine,
+            "is_arcadedb": engine == "ArcadeDB",
+            "scale": "all",
+            "scale_label": "every size above",
+            "workload": "coverage",
+            "n_docs": None,
+            "deployment": ", ".join(modes) if modes else "none",
+            "precision": None,
+            "image": None,
+            "version_name": None,
+            "host": None,
+            "metrics": metrics,
+        })
+    legend = {
+        "censored": "censored, the cell exceeded the budget every engine had",
+        "withheld": "withheld, the answer disagreed and the number was taken off the page",
+        "unexpressible": "cannot express, the engine's own language cannot ask the query",
+    }
+    kinds_text = "; ".join(legend[k] for k in ("censored", "withheld", "unexpressible")
+                           if k in kinds_seen)
+    n_tables = _WORDS.get(len(sources), str(len(sources))).lower()
+    sentence = _gen(
+        f"This table is derived from the {n_tables} tables above and carries no "
+        f"measurement of its own. Each column is one of those tables. "
+        f"{MULTIMODEL_CELLS['measured']} means the engine has at least one row on "
+        f"that table, counting every arm of one engine as one, so both ArcadeDB "
+        f"deployments are ArcadeDB and both SurrealDB modes are SurrealDB; "
+        f"{MULTIMODEL_CELLS['declared']} means the table has no row for the engine "
+        f"and says why beneath itself, in the words printed there"
+        + (f" ({kinds_text})" if kinds_text else "")
+        + f"; {MULTIMODEL_CELLS['none']} means the engine was not run on that "
+        f"workload, with neither a row nor a declared reason. The Mode column "
+        f"lists the deployments the engine has rows for anywhere on the page.",
+        n_tables)
+    return {
+        "id": "multimodel",
+        "title": "What the four multi-model engines cover",
+        "dataset": "Every October table on this page, read for which engine has a row",
+        "instrument": "2026-10",
+        "conditions": [sentence],
+        "columns": columns,
+        "directions": {},
+        "withheld_scales": [],
+        "withheld_reason": None,
+        "declared_absences": [],
+        "entries": entries,
+        "source_paths": [f"benchmarks/experiments/results/{FROZEN_NAME}"],
+        "source_path": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    }
+
+
 def _l4_table(all_rows):
     # Canonical first; the 2026-08 files are the fallback, not the source.
     grouped = _l4_canonical(all_rows)
@@ -2853,7 +2987,7 @@ def _table_instrument(table_id):
     """'2026-10' when every row behind this table ran on the October
     instrument, else '2026-09'. The durability table exists only under
     2026-10; artifact-backed tables (e4, pycost, l3smp) are September's."""
-    if table_id == "durability":
+    if table_id in ("durability", "multimodel"):
         return "2026-10"
     lane_wl = _TABLE_LANE.get(table_id)
     if not lane_wl:
@@ -3009,7 +3143,8 @@ def _R(table_id, key):
 
 
 _WORDS = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five",
-          6: "Six", 7: "Seven", 8: "Eight", 9: "Nine"}
+          6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten",
+          11: "Eleven", 12: "Twelve"}
 
 # What each timed query or operation asks, in plain words, keyed by the page's
 # own column label with its statistic stripped. The sentence is generated
@@ -4372,6 +4507,18 @@ def main() -> int:
         },
         "tables": [_finish_table(t) for t in tables],
     }
+    # THE CAPABILITY TABLE LAST (DECISIONS #95): it reads the other tables'
+    # rows and declared absences, and those are complete only once
+    # _finish_table has run on all of them. Appended to both lists so the
+    # source-path loop and the entry count below see it; the global
+    # conditions above were computed before it existed, so its text cells
+    # never enter the repetition count.
+    _mm = _multimodel_table(payload["tables"]) if _october else None
+    if _mm:
+        if SKELETON:
+            _mm["conditions"].insert(0, SKELETON_TABLE_NOTE)
+        tables.append(_mm)
+        payload["tables"].append(_mm)
 
     # A table can draw on more than one artifact, so this is a LIST. It was a
     # single string, and on 2026-08-13 that made the page lie: the DEEP-10M

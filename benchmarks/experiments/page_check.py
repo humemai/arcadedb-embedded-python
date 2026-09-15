@@ -385,7 +385,10 @@ def _page_index(payload):
     for table in payload.get("tables", []):
         for entry in table.get("entries", []):
             for column, stat in entry.get("metrics", {}).items():
-                out[(table["id"], entry["backend"], column)] = stat["median"]
+                # A derived table's cell is text ({"text": ...}, the
+                # multi-model coverage table); it has no median to index.
+                out[(table["id"], entry["backend"], column)] = (
+                    stat.get("median") if isinstance(stat, dict) else None)
     return out
 
 
@@ -648,6 +651,9 @@ def main() -> int:
     print(f"\ncoverage: {c_exp} operation-engine cell(s) expected, "
           f"{c_present} present, {c_declared} absent and declared, "
           f"{c_undeclared} absent and undeclared")
+    print("\nmulti-model coverage table, cell for cell against the tables it is derived from")
+    m_checked, m_bad = _check_multimodel(payload)
+    print(f"\n{m_checked} coverage cell(s) re-derived, {m_bad} disagree")
     h_bad = _check_setup_prose(payload)
     print("\nevery disk column is in gibibytes")
     u_ok = _check_disk_units(payload)
@@ -664,7 +670,7 @@ def main() -> int:
     k_bad = _check_conditions(payload, rows)
     print(f"\n{k_bad} condition finding(s)")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
-                 or not u_ok or k_bad) else 0
+                 or m_bad or not u_ok or k_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -856,6 +862,65 @@ def _not_printed_reason(field):
     return None
 
 
+def _derived_kind(table):
+    """How a table with no lane got its cells: numbers re-read from other
+    lanes' rows, or text derived from the other tables."""
+    stats = [v for e in table.get("entries", []) for v in (e.get("metrics") or {}).values()]
+    if stats and all(isinstance(v, dict) and "median" not in v for v in stats):
+        return "text cells derived from the other tables"
+    return "numbers re-read from other lanes' rows"
+
+
+# THE MULTI-MODEL COVERAGE TABLE (DECISIONS #95) is derived from the other
+# tables, so the gate derives it again, here, with the exporter's helpers but
+# its own loop, and compares cell for cell: the same two-generators pattern
+# the DEEP-10M tier gets. Every engine the roster names must appear on at
+# least one table, or the roster has a typo the table would print as a row of
+# "no arm".
+def _check_multimodel(payload):
+    """Returns (checked cells, bad)."""
+    import export_web as EW
+    tables = [t for t in payload.get("tables", []) if t.get("id") != "multimodel"]
+    mm = next((t for t in payload.get("tables", []) if t.get("id") == "multimodel"), None)
+    october = EW.multimodel_sources(tables)
+    if mm is None:
+        if october and payload.get("instrument") == "2026-10":
+            print("  MISSING the multi-model coverage table on an October payload")
+            return 0, 1
+        print("  (no multi-model table; not an October payload)")
+        return 0, 0
+    checked = bad = 0
+    want_cols = [str(t.get("title")) for t in october]
+    if list(mm.get("columns") or []) != want_cols:
+        print(f"  COLUMNS multimodel: {mm.get('columns')} != the October tables' titles {want_cols}")
+        bad += 1
+    rows = {str(e.get("backend")): e for e in mm.get("entries", [])}
+    if list(rows) != list(EW.MULTIMODEL_ENGINES):
+        print(f"  ROWS    multimodel: {list(rows)} != {list(EW.MULTIMODEL_ENGINES)}")
+        bad += 1
+    for engine in EW.MULTIMODEL_ENGINES:
+        anywhere = any(EW.engine_family(e.get("backend"), e.get("is_arcadedb")) == engine
+                       for t in tables for e in t.get("entries", []))
+        if not anywhere:
+            print(f"  ROSTER  multimodel: {engine} is on no table in the payload")
+            bad += 1
+        e = rows.get(engine)
+        if not e:
+            continue
+        for t in october:
+            col = str(t.get("title"))
+            want, _kinds = EW.multimodel_cell(t, engine)
+            got = ((e.get("metrics") or {}).get(col) or {}).get("text")
+            checked += 1
+            if got != want:
+                print(f"  DIFFER  multimodel: {engine} x {col!r}: page {got!r}, derived {want!r}")
+                bad += 1
+        if any("median" in (v or {}) for v in (e.get("metrics") or {}).values()):
+            print(f"  NUMBER  multimodel: {engine} carries a numeric cell on a table that measures nothing")
+            bad += 1
+    return checked, bad
+
+
 def _check_coverage(payload):
     """A1 the manifest, A2 the fields. Returns (bad, summary line)."""
     import csv as _csv
@@ -931,6 +996,11 @@ def _check_coverage(payload):
     for tid in tables:
         lane = (EW._TABLE_LANE.get(tid) or (None,))[0]
         if not lane:
+            # No lane feeds it: the durability table re-reads the write
+            # lanes' rows, and the multi-model table reads the other tables.
+            # Neither has a field of its own to have forgotten; said rather
+            # than skipped silently.
+            print(f"  -      {tid}: no lane of its own ({_derived_kind(tables[tid])}); nothing to cover")
             continue
         spec = (EW.OCT_TABLE_METRICS.get(tid) or EW.OCT_TABLE_METRICS.get(lane)
                 or (EW.LANES.get(tid) or EW.LANES.get(lane) or {}).get("metrics") or [])
