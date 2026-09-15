@@ -641,12 +641,302 @@ def main() -> int:
     print("\nno table loses its ArcadeDB row against the live page")
     l_checked, l_bad = _check_no_arcadedb_row_lost(payload)
     print(f"\n{l_checked} table(s) checked against the live page, {l_bad} lost ArcadeDB")
+    c_bad, (c_exp, c_present, c_declared, c_undeclared) = _check_coverage(payload)
+    print(f"\ncoverage: {c_exp} operation-engine cell(s) expected, "
+          f"{c_present} present, {c_declared} absent and declared, "
+          f"{c_undeclared} absent and undeclared")
     h_bad = _check_setup_prose(payload)
     print("\nevery disk column is in gibibytes")
     u_ok = _check_disk_units(payload)
     if u_ok:
         print("  no disk cell above 200 GiB")
-    return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or not u_ok) else 0
+    return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
+                 or not u_ok) else 0
+
+
+# --------------------------------------------------------------------------
+# COVERAGE: the query set the page owes, and the fields it measured
+#
+# WHY THIS EXISTS, twice over. The laptop skeleton found six tables whose
+# column lists had not moved when the instrument did, so the page printed
+# neither the four single-record operations, nor three of the five analytical
+# queries, nor either graph analytic, nor a cold column anywhere. The fix was
+# applied, and the two dense maintenance operations were missed again in the
+# same pass. Attention is not a mechanism; a gate is.
+#
+# TWO ASSERTIONS, because one of them only catches half of it.
+#
+#   A1, the manifest. Every operation the settled query set says a table
+#   carries must BE a column on that table, and every engine on the table must
+#   have a value in it or a declared reason why not. This is the half that
+#   catches a query which stopped being measured: no field, nothing unprinted,
+#   and without the manifest nothing to notice the silence against. The
+#   operations are written here EXPLICITLY, as data, because a list derived
+#   from what happens to be present cannot assert anything. The engines are
+#   not written here: they are read from the table, because the engine roster
+#   is a campaign decision that moves, while the query set is #82d and is
+#   settled.
+#
+#   A2, the fields. Every measured field on a published row either appears in
+#   a column of its table or is named in NOT_PRINTED with a reason. This is
+#   the half that catches a measurement the page forgot.
+#
+# A declared absence is one of three things, and all three are DATA on the
+# payload rather than prose a gate has to parse: a censored cell (the engine
+# exceeded the budget every arm had, so there is no row), a withheld cell (the
+# answer disagreed and the number was taken off the page), or a query the
+# engine's language cannot express, declared by the adapter under DECISIONS
+# #88. The fourth case, a measurement an engine does not make at all because
+# the operation has no meaning for it, is NOT_MEASURED_BY_ENGINE below.
+OPERATION_MANIFEST = {
+    # DECISIONS #82d, forty operations. The label is the page's own column
+    # heading, so a renamed column fails here and is renamed deliberately.
+    "docs_oltp": ["new-order p50 ms", "payment p50 ms", "insert p50 ms",
+                  "read p50 ms", "update p50 ms", "delete p50 ms",
+                  "OLTP ops/s"],
+    "docs_olap": ["Q1 p50 ms", "Q6 p50 ms", "top parts p50 ms",
+                  "ship mode p50 ms", "by month p50 ms", "cold first query ms"],
+    "l2": ["point p50 ms", "1-hop p50 ms", "2-hop p50 ms",
+           "3-hop filtered p50 ms", "insert p50 ms", "update p50 ms",
+           "delete p50 ms"],
+    "l2olap": ["average friend age p50 ms", "friends in same city p50 ms",
+               "most friends p50 ms", "degree distribution p50 ms",
+               "triangle count p50 ms", "cold first query ms"],
+    "l3d": ["cold p50 ms", "recall@10", "after insert p50 ms",
+            "after delete p50 ms", "insert into index ms/vector",
+            "delete from index ms/vector", "recall@10 after insert",
+            "recall@10 after delete", "ingest+index total s"],
+    "l3s": ["p50 ms", "recall@10", "ingest+index total s"],
+    "l4": ["newest reading p50 ms", "12h aggregate p50 ms",
+           "per-host hourly p50 ms", "high-usage p50 ms",
+           "grouped, ordered, limited p50 ms", "cold first query ms",
+           "ingest points/s"],
+    "e2": ["transaction p50 ms", "retrieval p50 ms",
+           "graph-filtered search p50 ms"],
+    "e2atom": ["torn results"],
+}
+
+# A measurement an engine does not make, for a reason that is about the engine
+# rather than about this run. Keyed (table, column, backend) or
+# (table, column, "*") for every engine on the table.
+NOT_MEASURED_BY_ENGINE = {
+    # Filled from the publish that first meets each case, with its reason.
+    # Seeded empty on purpose: a blank here is a finding, not a default.
+}
+
+# Fields that are measured and deliberately not printed. Patterns rather than
+# names, because these are families: 428 numeric fields across seven lanes,
+# and naming each would be a list nobody maintains. Each entry is (regex,
+# reason), and the reason is the thing being asserted -- a family added here
+# without one is the same miss this gate exists to catch.
+NOT_PRINTED = [
+    (r"^(rep|rc|trials|seed)$",
+     "provenance: which repetition this row is and whether it exited clean"),
+    (r"^(tpch_sf|n_docs|n_docs_ingested|n_lineitem|n_part|n_persons|"
+     r"n_persons_in_corpus|n_persons_ingested|n_edges|n_edges_ingested|"
+     r"n_points|n_products|n_rows|dim|dims|ts_chunk|ts_shards|last_window_s)$",
+     "the corpus: it is the Size column and the dataset line under the table"),
+    (r"^(oltp_ops|oltp_total_s|ops|payments_n|read_ops|write_ops|update_ops|"
+     r"delete_ops|crud_\w+_ops|n_queries|n_queries_timed|query_n|olap_iters|"
+     r"query_iters|lc_iters|lc_warmup|warmup_held_out|\w+_iters)$",
+     "how many operations stand behind a cell: a condition under the table "
+     "(_counts_note), never a column"),
+    (r"_p95_ms$",
+     "the page prints p50 and p99; p95 never changed a reading and costs a "
+     "column on a phone"),
+    (r"_p99_ms$",
+     "one ninety-ninth percentile per table, on that table's headline query "
+     "(DECISIONS #89 as amended): a p99 beside every p50 is twice the columns "
+     "for an answer the headline already gives. The others are on the row"),
+    (r"^q_range_(ms|p99_ms)$",
+     "TSBS's one-hour single-host range query: measured since the lane "
+     "existed and not in the October query set (#82), which replaced it with "
+     "the double group-by, the high-usage filter, and the ordered limit"),
+    (r"^\w+_mean_ms$|^\w+_min_ms$|_query_max_ms$|^query_max_ms$",
+     "the median is the statistic (DECISIONS #44); mean, min and max stay on "
+     "the row for an audit"),
+    (r"^mutate_(insert|delete)_s$",
+     "the batch total behind the per-vector maintenance columns; the page "
+     "prints the per-vector cost, which compares across engines and across "
+     "the two operations whatever size the batch was"),
+    (r"^cold_\w+|_cold_ms$",
+     "one cold column per table, the first query of a session, not a cold "
+     "number per query (DECISIONS #89 as amended); both spellings, because "
+     "two lanes name the same quantity at opposite ends of the field"),
+    (r"^q_groupby_distinct_\w+$",
+     "the shape of the time-series grouping answer, which is what caught the "
+     "served arm returning one bucket per host: an answer check, not a "
+     "latency"),
+    (r"^q_last_windowed_(ms|rows)$",
+     "the last-point query is published unbounded; the windowed form is the "
+     "A/B beside it and stays on the row"),
+    (r"^warm_\w+",
+     "the warm number IS the per-query column; this is the same value under "
+     "its explicit name"),
+    (r"^res_\w+_n$|^\w+_rows$",
+     "the answer check's own record (DECISIONS #88): how many rows an answer "
+     "held, compared across engines and not published as a latency"),
+    (r"^(client|server)_(peak|end|io|disk|cpu)_\w+$|^server_(mem_cap_g|shm_size)$|"
+     r"^(peak_mib_sum|peak_owned_mib_sum|peak_shmem_mib_sum|end_anon_mib_sum|"
+     r"io_read_mib_sum|io_write_mib_sum|disk_mb_sum|cpu_usec_sum|client_mem_cap|"
+     r"mem_cap|client_disk_mb|client_disk_baseline_mb)$",
+     "the page prints the summed peak memory and the workload's disk; these "
+     "are the per-side splits those two are computed from"),
+    (r"^(hnsw_M|m|k|ef_construction|ef_search|ivf_\w+|degree_param|"
+     r"graph_build_cache_\w+|qps)$",
+     "index parameters and their calibration: matched by effect and printed "
+     "as conditions under the table, never as columns"),
+    (r"^(settle_s|settle_s_lane|settle_s_adapter|engine_settle_s|gt_load_s|"
+     r"recall_calc_s|query_gen_s|search_wall_s|phases_accounted_s|connect_s|"
+     r"import_ms|build_close_ms|close_s|mutate_n|mutate_queries|mutate_ran)$",
+     "harness bookkeeping around a timed phase: settling, loading ground "
+     "truth, computing recall, and the phase accounting"),
+    (r"^(mutate_deleted_hits|mutate_reinserted_hits)$",
+     "correctness counters that must be zero; a non-zero one is a defect "
+     "report, not a column (l3d_dense records them on the row)"),
+    (r"^(filtered_cand_p50|filtered_candset_match|filtered_overfetch|"
+     r"filtered_hops|hop3_visited_\w+|gav_cypher_reads_issued|reconnects|"
+     r"crash_raised_count|post_crash_state|degree_dist_budget_s|"
+     r"\w+_budget_s)$",
+     "diagnostics that explain a cell rather than measure it; crashes raised "
+     "came off the page under DECISIONS #73"),
+    (r"^(first_open_ms|first_open_server_ms|jvm_start_ms|cold_start_penalty_ms|"
+     r"cold_process_ms|clean_\w+|drop_\w+|stale_\w+|write_own_\w+|"
+     r"write_read_\w+|read_\w+_ms|write_\w+_ms|\w+_session_ms|\w+_action_ms|"
+     r"\w+_open_ms|\w+_close_ms)$",
+     "the lifecycle lane measures every phase of a session and the table "
+     "prints the session totals it compares"),
+    (r"^(recall_filtered|recall_retrieval)$",
+     "recall for the two cross-model read paths, printed by the e2 table "
+     "under its own labels"),
+    (r"^(torn_count|build_docs_per_s|ingest_pts_per_s|disk_data_mb|"
+     r"peak_anon_mib_sum|build_s|ingest_s|index_s|gav_build_s)$",
+     "printed under a different label by the table that owns it; listed here "
+     "so a table which stops printing one still has to say so"),
+]
+
+
+def _measured_fields(rows, lane):
+    """Numeric fields present on this lane's published rows."""
+    out = set()
+    for r in rows:
+        if r.get("lane") != lane:
+            continue
+        for k, v in r.items():
+            if v in (None, ""):
+                continue
+            try:
+                float(v)
+            except (TypeError, ValueError):
+                continue
+            out.add(k)
+    return out
+
+
+def _not_printed_reason(field):
+    # search, not match: the families below are written as anchored patterns
+    # where they mean a whole name and as suffixes where they mean a family
+    # ("_p95_ms$" is every p95 on every lane).
+    for pattern, reason in NOT_PRINTED:
+        if re.search(pattern, field):
+            return reason
+    return None
+
+
+def _check_coverage(payload):
+    """A1 the manifest, A2 the fields. Returns (bad, summary line)."""
+    import csv as _csv
+    tables = {t["id"]: t for t in payload.get("tables", [])}
+    expected = present = declared = undeclared = 0
+    bad = 0
+
+    print("\ncoverage A1: every operation in the query set is a column, with "
+          "every engine answering or declared")
+    for tid, operations in sorted(OPERATION_MANIFEST.items()):
+        t = tables.get(tid)
+        if not t:
+            print(f"  MISS   {tid}: the payload has no such table")
+            bad += 1
+            continue
+        absences = t.get("declared_absences") or []
+        whole_row = {a["backend"] for a in absences if not a.get("column")}
+        per_cell = {(a["backend"], a.get("column")) for a in absences if a.get("column")}
+        engines = sorted({str(e["backend"]) for e in t.get("entries", [])} | whole_row)
+        for op in operations:
+            expected += len(engines)
+            if op not in (t.get("columns") or []):
+                print(f"  MISS   {tid}: the query set says this table carries "
+                      f"{op!r} and it is not a column")
+                bad += 1
+                undeclared += len(engines)
+                continue
+            for engine in engines:
+                got = [e for e in t.get("entries", [])
+                       if str(e["backend"]) == engine
+                       and (e.get("metrics") or {}).get(op) is not None]
+                if got:
+                    present += 1
+                elif engine in whole_row or (engine, op) in per_cell:
+                    declared += 1
+                elif NOT_MEASURED_BY_ENGINE.get((tid, op, engine)) or \
+                        NOT_MEASURED_BY_ENGINE.get((tid, op, "*")):
+                    declared += 1
+                else:
+                    print(f"  BLANK  {tid}: {engine} has no {op!r} and nothing "
+                          f"declares why")
+                    undeclared += 1
+                    bad += 1
+
+    print("\ncoverage A2: every measured field is printed or declared "
+          "not-printed, with a reason")
+    frozen = HERE / "results" / (
+        "runs_skeleton_laptop.csv" if SKELETON else "runs_paper.csv")
+    if not frozen.exists():
+        print(f"  (no {frozen.name}; field coverage skipped)")
+        return bad, (expected, present, declared, undeclared)
+    rows = list(_csv.DictReader(frozen.open()))
+    sys.path.insert(0, str(HERE))
+    import export_web as EW
+
+    def _fields(spec):
+        """Field names out of a (field, label) spec; a field can be a tuple of
+        fallbacks (the last-point query reads unbounded, then windowed)."""
+        out = set()
+        for field, _label in spec:
+            for f in (field if isinstance(field, tuple) else (field,)):
+                if isinstance(f, str):
+                    out.add(f)
+        return out
+
+    # THE UNION PER LANE, not per table. One lane feeds more than one table --
+    # the document lane feeds both document tables, the graph lane feeds the
+    # transactional and the analytical one -- so a field printed on either is
+    # printed. Keyed on the table id first and the lane second, because that
+    # is how OCT_TABLE_METRICS is keyed (l2olap has its own list; the two
+    # document tables share the lane's).
+    lanes = {}
+    for tid in tables:
+        lane = (EW._TABLE_LANE.get(tid) or (None,))[0]
+        if not lane:
+            continue
+        spec = (EW.OCT_TABLE_METRICS.get(tid) or EW.OCT_TABLE_METRICS.get(lane)
+                or (EW.LANES.get(tid) or EW.LANES.get(lane) or {}).get("metrics") or [])
+        lanes.setdefault(lane, set()).update(_fields(spec))
+    for lane, printed in sorted(lanes.items()):
+        missing = []
+        for field in sorted(_measured_fields(rows, lane)):
+            if field in printed:
+                continue
+            if _not_printed_reason(field):
+                continue
+            missing.append(field)
+        if missing:
+            print(f"  UNCOVERED {lane}: {len(missing)} measured field(s) are "
+                  f"neither a column nor declared: {', '.join(missing)}")
+            bad += len(missing)
+        else:
+            print(f"  ok     {lane}: every measured field printed or declared")
+    return bad, (expected, present, declared, undeclared)
 
 
 def _check_setup_prose(payload):
