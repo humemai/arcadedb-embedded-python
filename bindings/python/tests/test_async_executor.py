@@ -208,7 +208,15 @@ def test_async_executor_is_pending_true_while_queued(temp_db):
     async_exec = db.async_executor().set_parallel_level(1).set_commit_every(2000)
     assert async_exec.is_pending() is False
 
-    for i in range(2000):
+    # HOLD THE WORKER, RATHER THAN OUT-RUNNING IT. Submitting a backlog and
+    # hoping the single worker has not drained it is a race the test loses on a
+    # fast machine: CI failed here on 2026-09-15 while the same test passed
+    # three times in a row locally. A sleep submitted first occupies the one
+    # worker for a known interval, so the rows behind it are certainly still
+    # queued when is_pending() is asked, and the assertion is about the API
+    # rather than about who won.
+    async_exec.command("sql", "SELECT sleep(1500) AS held")  # 1.5 s on the worker
+    for i in range(50):
         async_exec.command("sql", "INSERT INTO Msg SET id = :id", id=i)
 
     start = time.time()
