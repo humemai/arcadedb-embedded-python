@@ -239,6 +239,16 @@ What belongs beside the pinned ratio: the view's cost per session is real. Its b
 | unexplained column | a rendered column is named by no condition and no methodology entry |
 | false protocol sentence | a page sentence asserts an n that any cell it covers does not meet |
 | unpinned literal | a numeric literal appears in page prose outside a pinned entry or a generated cell |
+
+## What the October page may say while the campaign runs (DECISIONS #102)
+
+Three kinds of text exist on the page, and only two are allowed before the freeze.
+
+- **Generated**: cells, counts, budgets, censored and withheld cells, declared absences, the durability setting each row ran, the disk definition. Derived from the frozen rows or from constants imported from the code that ran, by a registered generator. Cannot go stale.
+- **Instrument prose**: what a table measures, what its columns are, how to read them, the fairness setup, the licence table. Typed, carries no number that is not pinned, and describes the protocol rather than the outcome. Lives in the October prose file for the page body and in the exporter's October prose registry for the sentences under a table.
+- **Interpretation**: which engine moves between passes, which benefit is uneven, how far the comparators sit from one another, what the ratios say. Not written while the campaign runs. Written once at the freeze, when every row is in, each sentence with a pin, so a later re-measure that changes the number fails the publish.
+
+A condition sentence on an October payload that is neither generated nor registered fails `page_check`. No sentence that serves the September page is reused for October, whatever its content; the September sentences are deleted from the exporter at the switch.
 | labels | a corpus name, size, or dimension on the page disagrees with the artifact constant |
 | close cost | a clean close exceeds 100 ms, or grows with rows while nothing was written |
 
