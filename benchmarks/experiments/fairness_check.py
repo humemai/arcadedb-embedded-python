@@ -614,11 +614,22 @@ def check_close_cost(rows):
     # gate goes GREEN on that, and would equally go green on a change that moved
     # cost the other way and made a session slower overall. What a caller pays is
     # open plus close, so that is what gets budgeted.
-    lc = [r for r in rows if r.get("lane") == "lifecycle"
-          and r.get("clean_close_ms") is not None]
-    for r in lc:
-        r["_session_ms"] = (r["clean_close_ms"]
-                            + (r.get("clean_open_ms") or 0.0))
+    # OUR ENGINE'S INVARIANT (DECISIONS #50), checked on our rows. The lane
+    # carries a SurrealDB embedded arm since 2026-09-16 (DECISIONS #95a), and a
+    # cell keyed on (situation, size) alone would take one median over two
+    # engines and judge ArcadeDB's budget against a comparator's numbers. The
+    # comparator's rows are reported beside ours, per situation, and judged
+    # by nothing here: what its session costs is a page number, not a fairness
+    # question.
+    _all = [r for r in rows if r.get("lane") == "lifecycle"
+            and r.get("clean_close_ms") is not None]
+    lc = [r for r in _all if "arcadedb" in str(r.get("backend", ""))]
+    for r in _all:
+        r["_session_ms"] = (r["clean_close_ms"] + (r.get("clean_open_ms") or 0.0))
+    _others = collections.defaultdict(list)
+    for r in _all:
+        if r not in lc:
+            _others[(r.get("backend"), r["workload"], r.get("scale"))].append(r["_session_ms"])
     if not lc:
         # NOT a pass. This gate returned 0 for weeks while PAPER_SCALES was
         # silently deleting every lifecycle row upstream of it, so the one check
@@ -635,6 +646,9 @@ def check_close_cost(rows):
                   "it is deleted by load_canonical before any gate runs.")
         return 1
     print("\n== F11 session cost (open+close): O(written), not O(stored), under 100 ms ==")
+    for (be, sit, scale), vals in sorted(_others.items(), key=str):
+        print(f"  info: {be} {sit}/{scale} clean session (open+close) "
+              f"{statistics.median(vals):.1f} ms median of {len(vals)} (comparator, not judged)")
     bad = 0
     # AGGREGATE BY MEDIAN, per (situation, scale). The first version of this
     # assigned into a dict per row, so with N reps it kept whichever rep came

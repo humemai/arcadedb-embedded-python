@@ -139,6 +139,9 @@
     "surrealdb_graph_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
+    "surrealdb_lifecycle": [
+      "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
+    ],
     "surrealdb_tpc": [
       "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
     ],
@@ -182,6 +185,7 @@
     "container:12aa4ff523e4 (host unknown)",
     "container:17da845be344 (host unknown)",
     "container:1ca569993fdd (host unknown)",
+    "container:1e13d9854a66 (host unknown)",
     "container:1f62d4a525de (host unknown)",
     "container:1ff678e8b783 (host unknown)",
     "container:24f827918cc0 (host unknown)",
@@ -193,10 +197,13 @@
     "container:3955434bfa1a (host unknown)",
     "container:4047301c9126 (host unknown)",
     "container:4ed0c3af03be (host unknown)",
+    "container:5263ce08154f (host unknown)",
+    "container:56d0037eb4f6 (host unknown)",
     "container:5ac5df084522 (host unknown)",
     "container:6564e9ef3b96 (host unknown)",
     "container:6650ffd8dd62 (host unknown)",
     "container:6ceb3153e98f (host unknown)",
+    "container:6d2e1f6fe3dd (host unknown)",
     "container:6fb41ca977e6 (host unknown)",
     "container:70f866955ca6 (host unknown)",
     "container:8ecfdf1cc94e (host unknown)",
@@ -205,19 +212,23 @@
     "container:b1abaaf31ae7 (host unknown)",
     "container:b7571df5e813 (host unknown)",
     "container:b9248b48398f (host unknown)",
+    "container:bf6f0cd68861 (host unknown)",
     "container:c2376a13587c (host unknown)",
     "container:c423a3605810 (host unknown)",
     "container:cc1e8b3ec937 (host unknown)",
     "container:cc6ec61c578b (host unknown)",
     "container:ced33f3d01a9 (host unknown)",
     "container:d235b5d5e127 (host unknown)",
+    "container:d46a6ce04c6e (host unknown)",
     "container:d6fda8f16719 (host unknown)",
     "container:d753ec56252b (host unknown)",
     "container:d79f55854653 (host unknown)",
     "container:db69e9137b17 (host unknown)",
     "container:dc9ad523c114 (host unknown)",
+    "container:dcc693d5fe79 (host unknown)",
     "container:dfc57b786d7f (host unknown)",
     "container:e449f9f1e14d (host unknown)",
+    "container:e5ff479adc13 (host unknown)",
     "container:edc647a7790b (host unknown)",
     "container:eed80af52d22 (host unknown)",
     "container:f6bbbb54e6db (host unknown)",
@@ -284,6 +295,9 @@
         "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
         "ingest+index total s is one timer around inserting the documents and building the index; on this lane every engine builds its sparse index as it ingests, so there is no boundary to time separately. ingest+index vectors/s divides the document count by it.",
         "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
+        "ArangoDB has no row on this table. Its index types are the primary, edge, vertex-centric, persistent, inverted, TTL, geo, and vector indexes and the deprecated fulltext index (https://docs.arango.ai/arangodb/stable/indexes-and-search/indexing/basics/), and the vector index is FAISS IVF over one attribute that holds an array of numbers of a fixed dimension (https://docs.arango.ai/arangodb/stable/indexes-and-search/indexing/working-with-indexes/vector-indexes/); its sparse option means an index that skips documents missing the attribute. Nothing indexes a sparse vector, so the sparse nearest-neighbour search this table times cannot be expressed.",
+        "MongoDB has no row on this table. Its index types are single field, compound, multikey, wildcard, geospatial, hashed, text, clustered, and unique (https://www.mongodb.com/docs/manual/indexes/), and a Vector Search index's vector field must hold an array of numbers, as doubles or as a BinData vector of floats or small integers, with a fixed number of dimensions (https://www.mongodb.com/docs/vector-search/indexes/vector-search-type/); the field types an index accepts are vector, filter, and autoEmbed, and none is a sparse or token-and-weight form. Nothing indexes a sparse vector, so the sparse nearest-neighbour search this table times cannot be expressed.",
+        "SurrealDB has no row on this table. Its index types are the standard, unique, composite, count, full-text, HNSW, and DISKANN indexes, with brute force for an unindexed field and the MTREE index the embedded core also accepts, and every vector form is declared with a DIMENSION over one field that holds an array of numbers (https://surrealdb.com/docs/surrealql/statements/define/indexes); the nearest-neighbour operator takes one dense array (https://surrealdb.com/docs/surrealql/operators). Nothing indexes a sparse vector, so the sparse nearest-neighbour search this table times cannot be expressed.",
         "Each timed pass answers 1,000 queries.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load); pgvector COPY FROM STDIN in sparsevec text form, then CREATE INDEX."
       ],
@@ -766,7 +780,26 @@
         "peak memory GiB": "down",
         "disk GiB": "down"
       },
-      "declared_absences": [],
+      "declared_absences": [
+        {
+          "backend": "ArangoDB",
+          "column": null,
+          "kind": "unexpressible",
+          "why": "ArangoDB has no row on this table. Its index types are the primary, edge, vertex-centric, persistent, inverted, TTL, geo, and vector indexes and the deprecated fulltext index (https://docs.arango.ai/arangodb/stable/indexes-and-search/indexing/basics/), and the vector index is FAISS IVF over one attribute that holds an array of numbers of a fixed dimension (https://docs.arango.ai/arangodb/stable/indexes-and-search/indexing/working-with-indexes/vector-indexes/); its sparse option means an index that skips documents missing the attribute. Nothing indexes a sparse vector, so the sparse nearest-neighbour search this table times cannot be expressed."
+        },
+        {
+          "backend": "MongoDB",
+          "column": null,
+          "kind": "unexpressible",
+          "why": "MongoDB has no row on this table. Its index types are single field, compound, multikey, wildcard, geospatial, hashed, text, clustered, and unique (https://www.mongodb.com/docs/manual/indexes/), and a Vector Search index's vector field must hold an array of numbers, as doubles or as a BinData vector of floats or small integers, with a fixed number of dimensions (https://www.mongodb.com/docs/vector-search/indexes/vector-search-type/); the field types an index accepts are vector, filter, and autoEmbed, and none is a sparse or token-and-weight form. Nothing indexes a sparse vector, so the sparse nearest-neighbour search this table times cannot be expressed."
+        },
+        {
+          "backend": "SurrealDB",
+          "column": null,
+          "kind": "unexpressible",
+          "why": "SurrealDB has no row on this table. Its index types are the standard, unique, composite, count, full-text, HNSW, and DISKANN indexes, with brute force for an unindexed field and the MTREE index the embedded core also accepts, and every vector form is declared with a DIMENSION over one field that holds an array of numbers (https://surrealdb.com/docs/surrealql/statements/define/indexes); the nearest-neighbour operator takes one dense array (https://surrealdb.com/docs/surrealql/operators). Nothing indexes a sparse vector, so the sparse nearest-neighbour search this table times cannot be expressed."
+        }
+      ],
       "source_paths": [
         "benchmarks/experiments/results/runs_skeleton_laptop.csv"
       ],
@@ -6159,7 +6192,10 @@
         "A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k documents and 10M.",
         "Server rows have no JVM start, first open, or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.",
         "Graph with the analytical view is withheld: its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October",
-        "Every deterministic answer on this table is hashed and compared across the engines before anything is published, and a publish is refused when two of them disagree. What that comparison could not cover, declared rather than skipped: ArcadeDB (embedded) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; ArcadeDB (embedded) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; ArcadeDB (server) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; ArcadeDB (server) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; lifecycle_read: not compared across arms, because the embedded and served lifecycle arms run different mode sets, so their post-state record counts differ by construction."
+        "SurrealDB (embedded) has no Graph with the analytical view row: the situation cannot be built in the engine's own language, declared by the adapter rather than left blank (no graph analytical view: DEFINE has no statement that materialises a graph for traversal (https://surrealdb.com/docs/surrealql/statements/define); a table view (DEFINE TABLE ... AS SELECT) pre-computes one query's result table, not an adjacency layout (https://surrealdb.com/docs/surrealql/statements/define/table); tried `DEFINE ANALYTICAL VIEW lcv ON P` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected a define statement keyword --> [1:8]).",
+        "SurrealDB (embedded) has no Sparse vectors row: the situation cannot be built in the engine's own language, declared by the adapter rather than left blank (no sparse-vector index type: DEFINE INDEX offers standard, unique, composite, count, full-text, HNSW, and DISKANN (this core also accepts MTREE), and every vector form indexes one field holding a dense array of numbers of a fixed DIMENSION (https://surrealdb.com/docs/surrealql/statements/define/indexes); the knn operator takes one dense array (https://surrealdb.com/docs/surrealql/operators); tried `DEFINE INDEX s_tw ON S FIELDS tokens, weights SPARSE_VECTOR DIMENSION 30000` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected Eof --> [1:47]).",
+        "Every deterministic answer on this table is hashed and compared across the engines before anything is published, and a publish is refused when two of them disagree. What that comparison could not cover, declared rather than skipped: ArcadeDB (embedded) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; ArcadeDB (embedded) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; ArcadeDB (server) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; ArcadeDB (server) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; SurrealDB (embedded) cannot express lifecycle_read: no graph analytical view: DEFINE has no statement that materialises a graph for traversal (https://surrealdb.com/docs/surrealql/statements/define); a table view (DEFINE TABLE ... AS SELECT) pre-computes one query's result table, not an adjacency layout (https://surrealdb.com/docs/surrealql/statements/define/table); tried `DEFINE ANALYTICAL VIEW lcv ON P` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected a define statement keyword --> [1:8]; SurrealDB (embedded) cannot express lifecycle_read: no sparse-vector index type: DEFINE INDEX offers standard, unique, composite, count, full-text, HNSW, and DISKANN (this core also accepts MTREE), and every vector form indexes one field holding a dense array of numbers of a fixed DIMENSION (https://surrealdb.com/docs/surrealql/statements/define/indexes); the knn operator takes one dense array (https://surrealdb.com/docs/surrealql/operators); tried `DEFINE INDEX s_tw ON S FIELDS tokens, weights SPARSE_VECTOR DIMENSION 30000` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected Eof --> [1:47]; SurrealDB (embedded) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; SurrealDB (embedded) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; lifecycle_read: not compared across arms, because the embedded and served lifecycle arms run different mode sets, so their post-state record counts differ by construction.",
+        "SurrealDB rows have no JVM start: the SurrealDB core is a compiled extension that the Python import loads, so there is no runtime to start apart from the import. Their first open is the first open with the SDK already imported, and their cold process is interpreter start, import, open, and close, the same span the ArcadeDB embedded rows time. SurrealDB's time-series row is a plain table of timestamped records, the footing its time-series rows elsewhere on this page run on, because the engine has no time-series type."
       ],
       "columns": [
         "JVM start ms",
@@ -6177,6 +6213,7 @@
         {
           "backend": "Dense vectors (embedded)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6239,6 +6276,7 @@
         {
           "backend": "Dense vectors (server)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6283,6 +6321,7 @@
         {
           "backend": "Documents (embedded)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6345,6 +6384,7 @@
         {
           "backend": "Documents (server)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6389,6 +6429,7 @@
         {
           "backend": "Documents, ten indexes (embedded)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6451,6 +6492,7 @@
         {
           "backend": "Documents, ten indexes (server)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6495,6 +6537,7 @@
         {
           "backend": "Empty database (embedded)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6557,6 +6600,7 @@
         {
           "backend": "Empty database (server)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6601,6 +6645,7 @@
         {
           "backend": "Graph (embedded)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6663,6 +6708,7 @@
         {
           "backend": "Graph (server)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6707,6 +6753,7 @@
         {
           "backend": "Sparse vectors (embedded)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6769,6 +6816,7 @@
         {
           "backend": "Sparse vectors (server)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6813,6 +6861,7 @@
         {
           "backend": "Time series (embedded)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6875,6 +6924,7 @@
         {
           "backend": "Time series (server)",
           "is_arcadedb": true,
+          "engine": "ArcadeDB",
           "scale": "lc10k",
           "scale_label": "10k (skeleton)",
           "workload": "session",
@@ -6915,6 +6965,348 @@
               "n": 1
             }
           }
+        },
+        {
+          "backend": "Dense vectors (SurrealDB, embedded)",
+          "is_arcadedb": false,
+          "engine": "SurrealDB",
+          "scale": "lc10k",
+          "scale_label": "10k (skeleton)",
+          "workload": "session",
+          "n_docs": "10000",
+          "deployment": "embedded",
+          "image": "dbbench:client",
+          "version_name": "surrealdb 2.3.10",
+          "host": "container:5263ce08154f (host unknown)",
+          "metrics": {
+            "first open ms": {
+              "median": 212.61,
+              "min": 212.61,
+              "max": 212.61,
+              "n": 1
+            },
+            "cold process ms": {
+              "median": 638.237,
+              "min": 638.237,
+              "max": 638.237,
+              "n": 1
+            },
+            "open and close ms": {
+              "median": 153.309,
+              "min": 153.309,
+              "max": 153.309,
+              "n": 1
+            },
+            "one query ms": {
+              "median": 184.089,
+              "min": 184.089,
+              "max": 184.089,
+              "n": 1
+            },
+            "one write ms": {
+              "median": 165.169,
+              "min": 165.169,
+              "max": 165.169,
+              "n": 1
+            },
+            "write, then query ms": {
+              "median": 190.548,
+              "min": 190.548,
+              "max": 190.548,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.2271,
+              "min": 0.2271,
+              "max": 0.2271,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Documents (SurrealDB, embedded)",
+          "is_arcadedb": false,
+          "engine": "SurrealDB",
+          "scale": "lc10k",
+          "scale_label": "10k (skeleton)",
+          "workload": "session",
+          "n_docs": "10000",
+          "deployment": "embedded",
+          "image": "dbbench:client",
+          "version_name": "surrealdb 2.3.10",
+          "host": "container:bf6f0cd68861 (host unknown)",
+          "metrics": {
+            "first open ms": {
+              "median": 54.081,
+              "min": 54.081,
+              "max": 54.081,
+              "n": 1
+            },
+            "cold process ms": {
+              "median": 495.708,
+              "min": 495.708,
+              "max": 495.708,
+              "n": 1
+            },
+            "open and close ms": {
+              "median": 28.916,
+              "min": 28.916,
+              "max": 28.916,
+              "n": 1
+            },
+            "one query ms": {
+              "median": 36.479,
+              "min": 36.479,
+              "max": 36.479,
+              "n": 1
+            },
+            "one write ms": {
+              "median": 33.485,
+              "min": 33.485,
+              "max": 33.485,
+              "n": 1
+            },
+            "write, then query ms": {
+              "median": 39.24,
+              "min": 39.24,
+              "max": 39.24,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.0929,
+              "min": 0.0929,
+              "max": 0.0929,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Documents, ten indexes (SurrealDB, embedded)",
+          "is_arcadedb": false,
+          "engine": "SurrealDB",
+          "scale": "lc10k",
+          "scale_label": "10k (skeleton)",
+          "workload": "session",
+          "n_docs": "10000",
+          "deployment": "embedded",
+          "image": "dbbench:client",
+          "version_name": "surrealdb 2.3.10",
+          "host": "container:56d0037eb4f6 (host unknown)",
+          "metrics": {
+            "first open ms": {
+              "median": 337.97,
+              "min": 337.97,
+              "max": 337.97,
+              "n": 1
+            },
+            "cold process ms": {
+              "median": 764.158,
+              "min": 764.158,
+              "max": 764.158,
+              "n": 1
+            },
+            "open and close ms": {
+              "median": 324.749,
+              "min": 324.749,
+              "max": 324.749,
+              "n": 1
+            },
+            "one query ms": {
+              "median": 404.116,
+              "min": 404.116,
+              "max": 404.116,
+              "n": 1
+            },
+            "one write ms": {
+              "median": 328.832,
+              "min": 328.832,
+              "max": 328.832,
+              "n": 1
+            },
+            "write, then query ms": {
+              "median": 332.039,
+              "min": 332.039,
+              "max": 332.039,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.2182,
+              "min": 0.2182,
+              "max": 0.2182,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Empty database (SurrealDB, embedded)",
+          "is_arcadedb": false,
+          "engine": "SurrealDB",
+          "scale": "lc10k",
+          "scale_label": "10k (skeleton)",
+          "workload": "session",
+          "n_docs": "10000",
+          "deployment": "embedded",
+          "image": "dbbench:client",
+          "version_name": "surrealdb 2.3.10",
+          "host": "container:1e13d9854a66 (host unknown)",
+          "metrics": {
+            "first open ms": {
+              "median": 30.782,
+              "min": 30.782,
+              "max": 30.782,
+              "n": 1
+            },
+            "cold process ms": {
+              "median": 463.755,
+              "min": 463.755,
+              "max": 463.755,
+              "n": 1
+            },
+            "open and close ms": {
+              "median": 2.814,
+              "min": 2.814,
+              "max": 2.814,
+              "n": 1
+            },
+            "one query ms": {
+              "median": 2.56,
+              "min": 2.56,
+              "max": 2.56,
+              "n": 1
+            },
+            "one write ms": {
+              "median": 3.9,
+              "min": 3.9,
+              "max": 3.9,
+              "n": 1
+            },
+            "write, then query ms": {
+              "median": 4.18,
+              "min": 4.18,
+              "max": 4.18,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.0593,
+              "min": 0.0593,
+              "max": 0.0593,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Graph (SurrealDB, embedded)",
+          "is_arcadedb": false,
+          "engine": "SurrealDB",
+          "scale": "lc10k",
+          "scale_label": "10k (skeleton)",
+          "workload": "session",
+          "n_docs": "10000",
+          "deployment": "embedded",
+          "image": "dbbench:client",
+          "version_name": "surrealdb 2.3.10",
+          "host": "container:dcc693d5fe79 (host unknown)",
+          "metrics": {
+            "first open ms": {
+              "median": 692.232,
+              "min": 692.232,
+              "max": 692.232,
+              "n": 1
+            },
+            "cold process ms": {
+              "median": 1100.149,
+              "min": 1100.149,
+              "max": 1100.149,
+              "n": 1
+            },
+            "open and close ms": {
+              "median": 614.129,
+              "min": 614.129,
+              "max": 614.129,
+              "n": 1
+            },
+            "one query ms": {
+              "median": 608.924,
+              "min": 608.924,
+              "max": 608.924,
+              "n": 1
+            },
+            "one write ms": {
+              "median": 754.741,
+              "min": 754.741,
+              "max": 754.741,
+              "n": 1
+            },
+            "write, then query ms": {
+              "median": 623.122,
+              "min": 623.122,
+              "max": 623.122,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.3211,
+              "min": 0.3211,
+              "max": 0.3211,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "Time series (SurrealDB, embedded)",
+          "is_arcadedb": false,
+          "engine": "SurrealDB",
+          "scale": "lc10k",
+          "scale_label": "10k (skeleton)",
+          "workload": "session",
+          "n_docs": "10000",
+          "deployment": "embedded",
+          "image": "dbbench:client",
+          "version_name": "surrealdb 2.3.10",
+          "host": "container:e5ff479adc13 (host unknown)",
+          "metrics": {
+            "first open ms": {
+              "median": 62.302,
+              "min": 62.302,
+              "max": 62.302,
+              "n": 1
+            },
+            "cold process ms": {
+              "median": 474.347,
+              "min": 474.347,
+              "max": 474.347,
+              "n": 1
+            },
+            "open and close ms": {
+              "median": 27.765,
+              "min": 27.765,
+              "max": 27.765,
+              "n": 1
+            },
+            "one query ms": {
+              "median": 49.269,
+              "min": 49.269,
+              "max": 49.269,
+              "n": 1
+            },
+            "one write ms": {
+              "median": 36.086,
+              "min": 36.086,
+              "max": 36.086,
+              "n": 1
+            },
+            "write, then query ms": {
+              "median": 49.736,
+              "min": 49.736,
+              "max": 49.736,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.0918,
+              "min": 0.0918,
+              "max": 0.0918,
+              "n": 1
+            }
+          }
         }
       ],
       "source_paths": [
@@ -6936,7 +7328,20 @@
         "write, then query ms": "down",
         "peak memory GiB": "down"
       },
-      "declared_absences": []
+      "declared_absences": [
+        {
+          "backend": "SurrealDB (embedded)",
+          "column": null,
+          "kind": "unexpressible",
+          "why": "SurrealDB (embedded) has no Graph with the analytical view row: the situation cannot be built in the engine's own language, declared by the adapter rather than left blank (no graph analytical view: DEFINE has no statement that materialises a graph for traversal (https://surrealdb.com/docs/surrealql/statements/define); a table view (DEFINE TABLE ... AS SELECT) pre-computes one query's result table, not an adjacency layout (https://surrealdb.com/docs/surrealql/statements/define/table); tried `DEFINE ANALYTICAL VIEW lcv ON P` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected a define statement keyword --> [1:8])."
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "column": null,
+          "kind": "unexpressible",
+          "why": "SurrealDB (embedded) has no Sparse vectors row: the situation cannot be built in the engine's own language, declared by the adapter rather than left blank (no sparse-vector index type: DEFINE INDEX offers standard, unique, composite, count, full-text, HNSW, and DISKANN (this core also accepts MTREE), and every vector form indexes one field holding a dense array of numbers of a fixed DIMENSION (https://surrealdb.com/docs/surrealql/statements/define/indexes); the knn operator takes one dense array (https://surrealdb.com/docs/surrealql/operators); tried `DEFINE INDEX s_tw ON S FIELDS tokens, weights SPARSE_VECTOR DIMENSION 30000` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected Eof --> [1:47])."
+        }
+      ]
     },
     {
       "id": "durability",
@@ -11074,7 +11479,7 @@
       "instrument": "2026-10",
       "conditions": [
         "This table carries no number. On the skeleton it is derived from placeholder tables, so it shows which engines the October page will compare on each workload, not anything measured yet.",
-        "This table is derived from the eleven tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there; no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page."
+        "This table is derived from the eleven tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there (cannot express, the engine's own language cannot ask the query); no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page."
       ],
       "columns": [
         "Document OLTP",
@@ -11168,7 +11573,7 @@
               "text": "measured"
             },
             "Sparse vector search": {
-              "text": "no arm"
+              "text": "declared, cannot express"
             },
             "Dense vector search": {
               "text": "measured"
@@ -11216,7 +11621,7 @@
               "text": "measured"
             },
             "Sparse vector search": {
-              "text": "no arm"
+              "text": "declared, cannot express"
             },
             "Dense vector search": {
               "text": "measured"
@@ -11264,7 +11669,7 @@
               "text": "measured"
             },
             "Sparse vector search": {
-              "text": "no arm"
+              "text": "declared, cannot express"
             },
             "Dense vector search": {
               "text": "measured"
@@ -11282,7 +11687,7 @@
               "text": "measured"
             },
             "Session cost, open to close": {
-              "text": "no arm"
+              "text": "measured"
             }
           }
         }
@@ -11299,6 +11704,22 @@
   ],
   "condition_provenance": {
     "generated": [
+      {
+        "text": "SurrealDB (embedded) has no Graph with the analytical view row: the situation cannot be built in the engine's own language, declared by the adapter rather than left blank (no graph analytical view: DEFINE has no statement that materialises a graph for traversal (https://surrealdb.com/docs/surrealql/statements/define); a table view (DEFINE TABLE ... AS SELECT) pre-computes one query's result table, not an adjacency layout (https://surrealdb.com/docs/surrealql/statements/define/table); tried `DEFINE ANALYTICAL VIEW lcv ON P` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected a define statement keyword --> [1:8]).",
+        "values": [
+          "SurrealDB (embedded)",
+          "Graph with the analytical view",
+          "no graph analytical view: DEFINE has no statement that materialises a graph for traversal (https://surrealdb.com/docs/surrealql/statements/define); a table view (DEFINE TABLE ... AS SELECT) pre-computes one query's result table, not an adjacency layout (https://surrealdb.com/docs/surrealql/statements/define/table); tried `DEFINE ANALYTICAL VIEW lcv ON P` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected a define statement keyword --> [1:8]"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) has no Sparse vectors row: the situation cannot be built in the engine's own language, declared by the adapter rather than left blank (no sparse-vector index type: DEFINE INDEX offers standard, unique, composite, count, full-text, HNSW, and DISKANN (this core also accepts MTREE), and every vector form indexes one field holding a dense array of numbers of a fixed DIMENSION (https://surrealdb.com/docs/surrealql/statements/define/indexes); the knn operator takes one dense array (https://surrealdb.com/docs/surrealql/operators); tried `DEFINE INDEX s_tw ON S FIELDS tokens, weights SPARSE_VECTOR DIMENSION 30000` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected Eof --> [1:47]).",
+        "values": [
+          "SurrealDB (embedded)",
+          "Sparse vectors",
+          "no sparse-vector index type: DEFINE INDEX offers standard, unique, composite, count, full-text, HNSW, and DISKANN (this core also accepts MTREE), and every vector form indexes one field holding a dense array of numbers of a fixed DIMENSION (https://surrealdb.com/docs/surrealql/statements/define/indexes); the knn operator takes one dense array (https://surrealdb.com/docs/surrealql/operators); tried `DEFINE INDEX s_tw ON S FIELDS tokens, weights SPARSE_VECTOR DIMENSION 30000` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected Eof --> [1:47]"
+        ]
+      },
       {
         "text": "Graph with the analytical view is withheld: its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October",
         "values": [
@@ -11322,12 +11743,16 @@
         ]
       },
       {
-        "text": "Every deterministic answer on this table is hashed and compared across the engines before anything is published, and a publish is refused when two of them disagree. What that comparison could not cover, declared rather than skipped: ArcadeDB (embedded) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; ArcadeDB (embedded) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; ArcadeDB (server) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; ArcadeDB (server) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; lifecycle_read: not compared across arms, because the embedded and served lifecycle arms run different mode sets, so their post-state record counts differ by construction.",
+        "text": "Every deterministic answer on this table is hashed and compared across the engines before anything is published, and a publish is refused when two of them disagree. What that comparison could not cover, declared rather than skipped: ArcadeDB (embedded) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; ArcadeDB (embedded) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; ArcadeDB (server) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; ArcadeDB (server) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; SurrealDB (embedded) cannot express lifecycle_read: no graph analytical view: DEFINE has no statement that materialises a graph for traversal (https://surrealdb.com/docs/surrealql/statements/define); a table view (DEFINE TABLE ... AS SELECT) pre-computes one query's result table, not an adjacency layout (https://surrealdb.com/docs/surrealql/statements/define/table); tried `DEFINE ANALYTICAL VIEW lcv ON P` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected a define statement keyword --> [1:8]; SurrealDB (embedded) cannot express lifecycle_read: no sparse-vector index type: DEFINE INDEX offers standard, unique, composite, count, full-text, HNSW, and DISKANN (this core also accepts MTREE), and every vector form indexes one field holding a dense array of numbers of a fixed DIMENSION (https://surrealdb.com/docs/surrealql/statements/define/indexes); the knn operator takes one dense array (https://surrealdb.com/docs/surrealql/operators); tried `DEFINE INDEX s_tw ON S FIELDS tokens, weights SPARSE_VECTOR DIMENSION 30000` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected Eof --> [1:47]; SurrealDB (embedded) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; SurrealDB (embedded) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; lifecycle_read: not compared across arms, because the embedded and served lifecycle arms run different mode sets, so their post-state record counts differ by construction.",
         "values": [
           "ArcadeDB (embedded) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran",
           "ArcadeDB (embedded) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest",
           "ArcadeDB (server) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran",
           "ArcadeDB (server) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest",
+          "SurrealDB (embedded) cannot express lifecycle_read: no graph analytical view: DEFINE has no statement that materialises a graph for traversal (https://surrealdb.com/docs/surrealql/statements/define); a table view (DEFINE TABLE ... AS SELECT) pre-computes one query's result table, not an adjacency layout (https://surrealdb.com/docs/surrealql/statements/define/table); tried `DEFINE ANALYTICAL VIEW lcv ON P` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected a define statement keyword --> [1:8]",
+          "SurrealDB (embedded) cannot express lifecycle_read: no sparse-vector index type: DEFINE INDEX offers standard, unique, composite, count, full-text, HNSW, and DISKANN (this core also accepts MTREE), and every vector form indexes one field holding a dense array of numbers of a fixed DIMENSION (https://surrealdb.com/docs/surrealql/statements/define/indexes); the knn operator takes one dense array (https://surrealdb.com/docs/surrealql/operators); tried `DEFINE INDEX s_tw ON S FIELDS tokens, weights SPARSE_VECTOR DIMENSION 30000` and the engine answered: RuntimeError: Parse error: Unexpected token `an identifier`, expected Eof --> [1:47]",
+          "SurrealDB (embedded) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran",
+          "SurrealDB (embedded) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest",
           "lifecycle_read: not compared across arms, because the embedded and served lifecycle arms run different mode sets, so their post-state record counts differ by construction"
         ]
       },
@@ -11552,7 +11977,7 @@
         ]
       },
       {
-        "text": "This table is derived from the eleven tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there; no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page.",
+        "text": "This table is derived from the eleven tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there (cannot express, the engine's own language cannot ask the query); no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page.",
         "values": [
           "eleven"
         ]

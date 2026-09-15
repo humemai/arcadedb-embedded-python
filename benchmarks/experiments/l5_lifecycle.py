@@ -596,6 +596,12 @@ def main():
         # assertion: the database lives in the server container.
         import l5_lifecycle_server
         return l5_lifecycle_server.main(args)
+    if args.backend.startswith("surrealdb"):
+        # The comparator arm (2026-09-16, DECISIONS #95a): SurrealDB embedded
+        # through its SDK on SurrealKV, same situations, same sizes, same
+        # session and mode set, the reads digested against this arm's.
+        import l5_lifecycle_surreal
+        return l5_lifecycle_surreal.main(args)
 
     fs = _assert_fs()
     n = SCALE_ROWS[args.scale]

@@ -408,6 +408,7 @@ DISPLAY_NAMES = {
     "surrealdb_graph": "SurrealDB (embedded)", "surrealdb_graph_server": "SurrealDB (server)",
     "surrealdb_dense": "SurrealDB (embedded)", "surrealdb_dense_server": "SurrealDB (server)",
     "surrealdb_ts": "SurrealDB (embedded)", "surrealdb_ts_server": "SurrealDB (server)",
+    "surrealdb_lifecycle": "SurrealDB (embedded)",
     # Served only, so bare, like MongoDB and Neo4j; "(server)" marks an engine
     # that also has an embedded row.
     "arangodb_tpc": "ArangoDB", "arangodb_graph": "ArangoDB", "arangodb_dense": "ArangoDB", "arangodb_e2": "ArangoDB",
@@ -2160,27 +2161,50 @@ def _lifecycle_table(all_rows):
     if not rows:
         return None
 
-    by = {}
+    # Rows fold by situation, size, deployment, and ENGINE. Until 2026-09-16
+    # every row was ArcadeDB's and the label named only the situation; the
+    # SurrealDB embedded arm (DECISIONS #95a) shares the table now, so a
+    # comparator row names its engine inside the parentheses and carries an
+    # explicit `engine` for the coverage table, which otherwise reads the
+    # engine off the label. The ArcadeDB labels are unchanged: the page's
+    # prose pins address them (page_check PROSE).
+    def _engine_of(r):
+        be = str(r.get("backend", ""))
+        return "ArcadeDB" if "arcadedb" in be else display_name(be).split(" (")[0]
+
+    by, declared = {}, []
     for r in rows:
         _srv = str(r.get("backend", "")).endswith("_server")   # served twin, 2026-09-07
-        by.setdefault((r.get("workload"), r.get("scale"), _srv), []).append(r)
+        if r.get("lifecycle_situation_unexpressible"):
+            # DECLARED, NOT BUILT (DECISIONS #88, #92): the arm could not
+            # express the situation and the row says why. No session number
+            # exists, so no entry; the reason prints under the table and is
+            # registered as an absence the coverage gate reads.
+            declared.append(r)
+            continue
+        by.setdefault((r.get("workload"), r.get("scale"), _srv, _engine_of(r)), []).append(r)
 
     entries = []
-    for (situation, scale, _srv), rs in sorted(by.items()):
+    for (situation, scale, _srv, engine), rs in sorted(by.items()):
         if situation in LIFECYCLE_WITHHELD:
             continue
         _name = LIFECYCLE_SITUATION_LABELS.get(situation, situation)
+        _ours = engine == "ArcadeDB"
+        _mode = "server" if _srv else "embedded"
         entry = {
-            "backend": f"{_name} (server)" if _srv else f"{_name} (embedded)",
-            "is_arcadedb": True,
+            "backend": f"{_name} ({_mode})" if _ours else f"{_name} ({engine}, {_mode})",
+            "is_arcadedb": _ours,
+            "engine": engine,
             "scale": scale,
             "scale_label": scale_label("lifecycle", scale),
             "workload": "session",
             "n_docs": str(rs[0].get("n_rows") or ""),
-            "deployment": "server" if _srv else "embedded",
+            "deployment": _mode,
             "image": rs[0].get("image"),
-            "version_name": _engine_identity(rs[0].get("engine_version"),
-                                             rs[0].get("engine_commit")),
+            "version_name": (_engine_identity(rs[0].get("engine_version"),
+                                              rs[0].get("engine_commit")) if _ours
+                             else _engine_version(f"{engine} ({_mode})",
+                                                  _row_engine_string(rs[0]))),
             "host": rs[0].get("host"),
             "metrics": {},
         }
@@ -2217,6 +2241,20 @@ def _lifecycle_table(all_rows):
 
     if not entries:
         return None
+    # The declared situations, one sentence each, in the row's own words
+    # (the reason carries the documentation cited and the engine's exact
+    # error), and the same fact as data for the coverage gate.
+    declared_notes = []
+    for (engine, situation), why in sorted({
+            (_engine_of(r), r.get("workload")): str(r.get("lifecycle_situation_unexpressible"))
+            for r in declared}.items()):
+        _label = f"{engine} (embedded)"
+        _sit = LIFECYCLE_SITUATION_LABELS.get(situation, situation)
+        note = _gen(f"{_label} has no {_sit} row: the situation cannot be built in "
+                    f"the engine's own language, declared by the adapter rather than "
+                    f"left blank ({why}).", _label, _sit, why)
+        declared_notes.append(note)
+        _declare_absence("lifecycle", _label, None, "unexpressible", note)
     return {
         "id": "lifecycle",
         "title": "Session cost, open to close",
@@ -2235,7 +2273,8 @@ def _lifecycle_table(all_rows):
             "Server rows have no JVM start, first open, or cold process: the server is "
             "already running when the probe connects, so those three columns describe "
             "the embedded process only. The session columns are measured for both.",
-        ]) + [_gen(f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}", v) for k, v in sorted(LIFECYCLE_WITHHELD.items())],
+        ]) + [_gen(f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}", v) for k, v in sorted(LIFECYCLE_WITHHELD.items())]
+           + declared_notes,
         "columns": ["JVM start ms", "first open ms", "cold process ms"]
                    + [LIFECYCLE_SCENARIO_LABELS[k] for k in LIFECYCLE_PAGE_SCENARIOS],
         "withheld_scales": [],
@@ -2441,12 +2480,19 @@ def engine_family(backend, is_arcadedb=False):
     return re.sub(r"\s*\(.*$", "", str(backend)).strip()
 
 
+def entry_engine(e):
+    """The engine an entry belongs to. A lifecycle comparator row is labelled
+    by its situation ("Documents (SurrealDB, embedded)") and carries the
+    engine explicitly, derived from the row's backend by the table builder;
+    every other entry reads it off the label."""
+    return e.get("engine") or engine_family(e.get("backend"), e.get("is_arcadedb"))
+
+
 def multimodel_cell(table, engine):
     """(cell text, declared kinds) for one engine on one finished table, by
     the coverage gate's own reading of declared_absences: a whole-row absence
     or a per-cell one, either naming any arm of the engine."""
-    rows = [e for e in table.get("entries", [])
-            if engine_family(e.get("backend"), e.get("is_arcadedb")) == engine]
+    rows = [e for e in table.get("entries", []) if entry_engine(e) == engine]
     if rows:
         return MULTIMODEL_CELLS["measured"], []
     kinds = sorted({str(a.get("kind")) for a in table.get("declared_absences") or []
@@ -2495,8 +2541,7 @@ def _multimodel_table(finished):
     for engine in MULTIMODEL_ENGINES:
         modes = sorted({str(e.get("deployment")) for t in sources
                         for e in t.get("entries", [])
-                        if engine_family(e.get("backend"), e.get("is_arcadedb")) == engine
-                        and e.get("deployment")})
+                        if entry_engine(e) == engine and e.get("deployment")})
         metrics = {}
         for t, col in zip(sources, columns):
             text, kinds = multimodel_cell(t, engine)
@@ -3053,6 +3098,41 @@ OCT_PROSE = {
         "es_pruning": ("Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.", []),
         "second_pass": (L3S_SECOND_PASS, []),
         "second_pass_100k": (L3S_SECOND_PASS_100K, []),
+        # THE THREE MULTI-MODEL ENGINES WITH NO SPARSE ARM, declared with the
+        # reason (DECISIONS #92: an engine is left off a table only when its
+        # documentation shows the query cannot be expressed, and then the
+        # absence is declared, never left blank). Facts about documentation,
+        # read 2026-09-16, with no number in them, so no pin. _oct_conditions
+        # prints them under the sparse table and registers each as a
+        # whole-row absence the coverage gate and the four-engine table read.
+        "no_sparse_arangodb": (
+            "ArangoDB has no row on this table. Its index types are the primary, edge, vertex-centric, "
+            "persistent, inverted, TTL, geo, and vector indexes and the deprecated fulltext index "
+            "(https://docs.arango.ai/arangodb/stable/indexes-and-search/indexing/basics/), and the "
+            "vector index is FAISS IVF over one attribute that holds an array of numbers of a fixed "
+            "dimension (https://docs.arango.ai/arangodb/stable/indexes-and-search/indexing/working-with-indexes/vector-indexes/); "
+            "its sparse option means an index that skips documents missing the attribute. Nothing "
+            "indexes a sparse vector, so the sparse nearest-neighbour search this table times cannot "
+            "be expressed.", []),
+        "no_sparse_mongodb": (
+            "MongoDB has no row on this table. Its index types are single field, compound, multikey, "
+            "wildcard, geospatial, hashed, text, clustered, and unique "
+            "(https://www.mongodb.com/docs/manual/indexes/), and a Vector Search index's vector field "
+            "must hold an array of numbers, as doubles or as a BinData vector of floats or small "
+            "integers, with a fixed number of dimensions "
+            "(https://www.mongodb.com/docs/vector-search/indexes/vector-search-type/); the field types "
+            "an index accepts are vector, filter, and autoEmbed, and none is a sparse or "
+            "token-and-weight form. Nothing indexes a sparse vector, so the sparse nearest-neighbour "
+            "search this table times cannot be expressed.", []),
+        "no_sparse_surrealdb": (
+            "SurrealDB has no row on this table. Its index types are the standard, unique, composite, "
+            "count, full-text, HNSW, and DISKANN indexes, with brute force for an unindexed field and "
+            "the MTREE index the embedded core also accepts, and every vector form is declared with a "
+            "DIMENSION over one field that holds an array of numbers "
+            "(https://surrealdb.com/docs/surrealql/statements/define/indexes); the nearest-neighbour "
+            "operator takes one dense array (https://surrealdb.com/docs/surrealql/operators). Nothing "
+            "indexes a sparse vector, so the sparse nearest-neighbour search this table times cannot "
+            "be expressed.", []),
         "ingest": ("Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load); pgvector COPY FROM STDIN in sparsevec text form, then CREATE INDEX.",
                    [(r"in (\d+)-record transactions", lambda P, rows: _const("l3_sparse", "INGEST_BATCH"), "const")]),
     },
@@ -3100,6 +3180,9 @@ OCT_PROSE = {
         "cold_start": ("Cold start is measured in a fresh subprocess and reported beside every session number, because a millisecond open inside a process that takes half a second to reach its first database call is not a millisecond to whoever launched it.", []),
         "clean_close": ("A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k documents and 10M.", []),
         "server_rows": ("Server rows have no JVM start, first open, or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.", []),
+        # The SurrealDB embedded arm (2026-09-16, DECISIONS #95a): a fact about
+        # the engine, not a number, so it carries no pin.
+        "surreal_rows": ("SurrealDB rows have no JVM start: the SurrealDB core is a compiled extension that the Python import loads, so there is no runtime to start apart from the import. Their first open is the first open with the SDK already imported, and their cold process is interpreter start, import, open, and close, the same span the ArcadeDB embedded rows time. SurrealDB's time-series row is a plain table of timestamped records, the footing its time-series rows elsewhere on this page run on, because the engine has no time-series type.", []),
     },
     "durability": {
         "pairs": ("Each row is one engine running ONE operation twice: once where a commit returns without waiting for the disk, which is the setting every other table on this page reports, and once where the commit waits for the log to be flushed and synced. Nothing else about the cell changes.", []),
@@ -3359,6 +3442,22 @@ def _oct_conditions(table):
             tail.append(_R("l3d", "arango_ivf"))
         if any(n.startswith("Milvus") for n in names):
             tail.append(_R("l3d", "milvus"))
+    if tid == "l3s":
+        # The three multi-model engines with no sparse index type (DECISIONS
+        # #92, #95): printed under the table and registered as whole-row
+        # absences, so the coverage gate counts them declared and the
+        # four-engine table reads "declared, cannot express" rather than
+        # "no arm". October only, which is where this function runs.
+        for engine, key in (("ArangoDB", "no_sparse_arangodb"),
+                            ("MongoDB", "no_sparse_mongodb"),
+                            ("SurrealDB", "no_sparse_surrealdb")):
+            if any(n.startswith(engine) for n in names):
+                continue      # an arm arrived; the declaration would be false
+            why = _R("l3s", key)
+            tail.append(why)
+            _declare_absence("l3s", engine, None, "unexpressible", why)
+    if tid == "lifecycle" and any("SurrealDB" in n for n in names):
+        tail.append(_R("lifecycle", "surreal_rows"))
     if tid == "l2olap":
         pair = _gav_pair_note(table)
         if pair:

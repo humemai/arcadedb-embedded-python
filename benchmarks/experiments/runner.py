@@ -781,6 +781,9 @@ BACKENDS = {
         "ready_regex": r"Started web server",
     },
     "surrealdb_dense": {"topology": "embedded", "image": "dbbench:client"},
+    # The lifecycle comparator (2026-09-16): SurrealDB embedded through its SDK
+    # on SurrealKV, under the lane's /lcdb bind mount like the ArcadeDB arm.
+    "surrealdb_lifecycle": {"topology": "embedded", "image": "dbbench:client"},
     "surrealdb_dense_server": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1346,11 +1349,13 @@ LANES = {
            ["hybrid", "atomicity"]),
     # L5 measures OPEN and CLOSE, which every embedded deployment does and no
     # benchmark measures. Situations ride the WORKLOAD axis, so each is its own
-    # cell and a slow one cannot hide inside a mean. One backend: this lane
-    # compares ArcadeDB against ITSELF across what a database contains, so a
-    # comparator column would be meaningless.
+    # cell and a slow one cannot hide inside a mean. The lane compares
+    # ArcadeDB against ITSELF across what a database contains, and since
+    # 2026-09-16 (DECISIONS #95a) against the one other engine on the page
+    # that a process can open and close in-process: SurrealDB embedded, whose
+    # situations it cannot build are declared on the row (l5_lifecycle_surreal).
     "lifecycle": ("l5_lifecycle.py",
-                  ["arcadedb_embedded", "arcadedb_server"],
+                  ["arcadedb_embedded", "arcadedb_server", "surrealdb_lifecycle"],
                   ["empty", "doc", "doc_idx10", "graph", "graph_gav",
                    "vector", "sparse", "ts"]),
     "l3s": ("l3_sparse.py",
