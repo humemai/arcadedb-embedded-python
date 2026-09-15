@@ -403,6 +403,7 @@ DISPLAY_NAMES = {
     # Served only, so bare, like MongoDB and Neo4j; "(server)" marks an engine
     # that also has an embedded row.
     "arangodb_tpc": "ArangoDB", "arangodb_graph": "ArangoDB", "arangodb_dense": "ArangoDB", "arangodb_e2": "ArangoDB",
+    "mongodb_graph": "MongoDB", "mongodb_dense": "MongoDB", "mongodb_e2": "MongoDB",
     "arcadedb": "ArcadeDB",
     "sqlite": "SQLite", "chroma": "Chroma", "ladybug": "LadybugDB",
 }
@@ -503,6 +504,9 @@ DENSE_PRECISION = {
     "pgvector_dense": "fp32",   # vector(96/128), no quantization used
     "surrealdb_dense": "fp32", "surrealdb_dense_server": "fp32",   # HNSW TYPE F32
     "arangodb_dense": "fp32",   # FAISS IVF over the raw float array
+    # mongot's vectorSearch index with "quantization": "none", read back off
+    # the created index and recorded on the row as mongot_quantization.
+    "mongodb_dense": "fp32",
     "neo4j_dense": "fp32",      # float property list, no quantization option
     "qdrant_dense": "fp32",
     "milvus_dense": "fp32",
@@ -701,6 +705,7 @@ DENSE_10M_ARMS = [
     ("surreal", "surrealdb_dense", "SurrealDB (embedded, fp32)", False),
     ("surrealsrv", "surrealdb_dense_server", "SurrealDB (server, fp32)", False),
     ("arango", "arangodb_dense", "ArangoDB (fp32)", False),
+    ("mongo", "mongodb_dense", "MongoDB (fp32)", False),
 ]
 
 
@@ -1073,18 +1078,6 @@ OCT_TABLE_METRICS = {
         ("mutate_insert_query_p50_ms", "after insert p50 ms"),
         ("mutate_delete_query_p50_ms", "after delete p50 ms"),
         ("recall_at_10", "recall@10"),
-        # WHAT THE MAINTENANCE ITSELF COSTS, not only what a search costs
-        # afterwards. The two search columns above went up while the two
-        # operations that produce them stayed off the page, so the table
-        # showed the consequence of a mutation and not the mutation. These
-        # four are the measurement nothing else on this page publishes: an
-        # index that is fast only until it is written to is a different
-        # product from one that stays fast, and recall after each says whether
-        # the index absorbed the change or merely survived it.
-        ("mutate_insert_per_op_ms", "insert into index ms/vector"),
-        ("mutate_insert_recall_at_10", "recall@10 after insert"),
-        ("mutate_delete_per_op_ms", "delete from index ms/vector"),
-        ("mutate_delete_recall_at_10", "recall@10 after delete"),
         # #66/#74: two timers where the engine has the boundary, not one.
         ("ingest_s", "ingest s"), ("index_s", "index s"),
         ("build_docs_per_s", "ingest+index vectors/s"),
@@ -1177,28 +1170,6 @@ WITHHELD_CELLS = {
 }
 
 
-# EVERY ABSENCE ON A TABLE, AS DATA RATHER THAN AS PROSE.
-#
-# The conditions already tell a READER why a cell is blank -- a censored cell,
-# a withheld answer, a query the engine cannot ask. Nothing told a GATE, so
-# page_check could not tell a declared absence from a column that had silently
-# stopped being measured, which is the failure it now has to catch
-# (page_check.OPERATION_MANIFEST). Both surfaces come from the same call: the
-# sentence goes in conditions, the structure goes here.
-#
-#   table id -> [{"backend": display name, "column": label or None,
-#                 "kind": "censored"|"withheld"|"unexpressible", "why": text}]
-#
-# column None means the whole row is absent, which is what a censored cell is.
-_DECLARED_ABSENCES = collections.defaultdict(list)
-
-
-def _declare_absence(table_id, backend, column, kind, why):
-    rec = {"backend": backend, "column": column, "kind": kind, "why": why}
-    if rec not in _DECLARED_ABSENCES[table_id]:
-        _DECLARED_ABSENCES[table_id].append(rec)
-
-
 def _withhold_cells(tables):
     """Take out the cells whose answer was wrong, and say so on the table."""
     notes = collections.defaultdict(list)
@@ -1210,7 +1181,6 @@ def _withhold_cells(tables):
                 if str(e.get("backend")) == backend and column in (e.get("metrics") or {}):
                     e["metrics"].pop(column)
                     notes[tid].append(why)
-                    _declare_absence(tid, backend, column, "withheld", why)
     for t in tables:
         for why in dict.fromkeys(notes.get(t.get("id"), [])):
             t.setdefault("conditions", [])
@@ -2211,41 +2181,12 @@ def _lifecycle_table(all_rows):
 # both as rows this table owes a number. So the operation rides the Size axis,
 # which is also what makes the renderer's per-size bolding correct: the fastest
 # engine is picked within one operation and never across two.
-#
-# EVERY TIMED WRITE, not one representative per lane. The table showed three
-# operations while the rows held ten, and the three it showed were the three
-# that argue the point least well. Reading all of them together is what makes
-# the finding legible: whatever an operation costs when the commit does not
-# wait, it converges on roughly the same number when it does, because each one
-# pays a single flush -- so a multi-statement transaction pays the same tax as
-# a one-record insert, and the ratio is large exactly where the relaxed path
-# was fast.
-#
-# AND THE READ, WHICH IS THE CONTROL. It is the sixth document operation
-# (#90), it is not a write, and it is on the table for the reason a control is
-# ever on a table: five writes converging while the read does not move is the
-# proof that the tax is per commit rather than per operation. Its label says
-# so, and the conditions say so again.
 DURABILITY_WRITES = [
     # (lane, workload, p50 field, operation key, operation label)
-    ("l1tpc", "oltp", "neworder_p50_ms", "doc_neworder",
-     "TPC-C new-order, one transaction (documents)"),
-    ("l1tpc", "oltp", "payment_p50_ms", "doc_payment",
-     "TPC-C payment, one transaction (documents)"),
     ("l1tpc", "oltp", "crud_insert_p50_ms", "doc_insert",
      "one record inserted (documents)"),
-    ("l1tpc", "oltp", "crud_update_p50_ms", "doc_update",
-     "one record updated (documents)"),
-    ("l1tpc", "oltp", "crud_delete_p50_ms", "doc_delete",
-     "one record deleted (documents)"),
-    ("l1tpc", "oltp", "crud_read_p50_ms", "doc_read",
-     "one record read (documents) -- the control: a read commits nothing"),
     ("l2", "oltp", "write_p50_ms", "graph_insert",
      "one person and one edge inserted (graph)"),
-    ("l2", "oltp", "update_p50_ms", "graph_update",
-     "one person's property updated (graph)"),
-    ("l2", "oltp", "delete_p50_ms", "graph_delete",
-     "one person and its edges deleted (graph)"),
     ("e2", "hybrid", "hybrid_p50_ms", "crossmodel_txn",
      "one transaction across three models (cross-model)"),
 ]
@@ -2341,22 +2282,13 @@ def _durability_table(all_rows):
     return {
         "id": "durability",
         "title": "What waiting for the disk costs",
-        "dataset": "Every timed write, run twice, once at each durability setting",
+        "dataset": "The same write, run twice, once at each durability setting",
         "conditions": [
-            "Each row is one engine running ONE operation twice: once where a "
-            "commit returns without waiting for the disk, which is the setting "
-            "every other table on this page reports, and once where the commit "
-            "waits for the log to be flushed and synced. Nothing else about the "
-            "cell changes.",
-            "Every timed write on the page is here: the six document "
-            "operations, the three graph writes, and the cross-model "
-            "transaction. Read down the operations for one engine rather than "
-            "across the engines for one operation, because what the setting "
-            "costs is a property of the engine's commit and the rest of the "
-            "page already compares the engines.",
-            "The read is the control, and it is the row that makes the rest "
-            "readable: it runs in both cells like everything else and commits "
-            "nothing, so it is what the writes are moving against.",
+            "Each row is one engine running ONE write twice: once where a commit "
+            "returns without waiting for the disk, which is the setting every "
+            "other table on this page reports, and once where the commit waits "
+            "for the log to be flushed and synced. Nothing else about the cell "
+            "changes.",
             "The Size column names the operation rather than a corpus size: the "
             "three lanes that time a write do not write the same thing, so each "
             "engine is compared only against the engines running its own "
@@ -2377,9 +2309,7 @@ def _durability_table(all_rows):
                f"unknown, and this line is why it is there."] if _unverified else []),
             "The ratio is what the strict setting costs on that engine, at this "
             "corpus size and this operation count. It is not a claim about any "
-            "other write. A large ratio is not a slow engine: it is an engine "
-            "whose relaxed path was fast, measured against a flush that costs "
-            "what a flush costs.",
+            "other write.",
         ],
         "columns": ["no wait ms", "waits for the disk ms", "cost of waiting"],
         "withheld_scales": [],
@@ -2776,10 +2706,6 @@ _TABLE_LANE = {
     "l2": ("l2", "oltp"), "l2olap": ("l2", "olap"),
     "l3d": ("l3d", None), "l3s": ("l3s", None), "l4": ("l4", None),
     "e2": ("e2", "hybrid"), "e2atom": ("e2", "atomicity"),
-    # The lifecycle table was not here, so a lifecycle cell that exceeded its
-    # budget would have left an engine off the table with no note, and the
-    # coverage gate had no lane to read its fields from.
-    "lifecycle": ("lifecycle", None),
 }
 _CENSORED_CACHE = None
 
@@ -2834,104 +2760,9 @@ def _censored_notes(table_id):
         budget = f"{secs / 3600:g} hour" if secs else "its"
         what = {"oltp": "transaction", "olap": "analytics", "hybrid": "transaction",
                 "atomicity": "atomicity", "search": "search", "ingest": "ingest"}.get(w, w or "the")
-        why = (f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell exceeded "
-               f"its {budget} budget, the same budget every engine on this table had, on its first "
-               f"attempt and was not retried; there is no row.")
-        notes.append(why)
-        _declare_absence(table_id, display_name(backend), None, "censored", why)
-    return notes
-
-
-def _mutation_note(rows):
-    """Which dense tiers ran the two maintenance operations, and which did not.
-
-    #82d runs them at one tier, so on any other tier the four maintenance
-    columns are blank. A blank with no sentence beside it is what #89 forbids,
-    and it is also how a reader concludes an engine failed the operation when
-    the operation was never asked for. Read from the rows' own mutate_ran and
-    mutate_reason rather than from the tier list here, so a forced run
-    (BENCH_DENSE_MUTATE=1) describes itself.
-    """
-    ran, skipped = {}, {}
-    for r in rows:
-        if r.get("lane") != "l3d":
-            continue
-        sc = str(r.get("scale"))
-        flag = str(r.get("mutate_ran")).lower() in ("true", "1")
-        why = str(r.get("mutate_reason") or "").strip()
-        (ran if flag else skipped)[sc] = why
-    if not ran and not skipped:
-        return None
-    parts = []
-    if ran:
-        parts.append("The insert and delete into a built index, and the recall "
-                     "after each, run at " + ", ".join(scale_label("l3d", s) for s in sorted(ran))
-                     + " (" + "; ".join(sorted(set(ran.values()))) + ").")
-    if skipped:
-        parts.append("They do not run at " + ", ".join(scale_label("l3d", s) for s in sorted(skipped))
-                     + ", where those four columns are blank because the pass was "
-                       "not asked for rather than because an engine failed it ("
-                     + "; ".join(sorted(set(w for w in skipped.values() if w))) + ").")
-    return " ".join(parts)
-
-
-_UNEXPRESSIBLE_CACHE = None
-
-
-def _unexpressible_cells():
-    """(lane, workload, backend) -> {query key: reason}, from the rows.
-
-    DECISIONS #88 makes an adapter DECLARE a query it cannot ask rather than
-    skip it, and the declaration lands on the row as
-    `res_<query>_digest = unexpressible:<reason>`. The page has always shown
-    the sentence; this is the same fact as data, so the coverage gate can tell
-    a declared absence from a column nobody noticed had stopped being
-    measured. Reads the log the publish is built from, like _censored_cells.
-    """
-    global _UNEXPRESSIBLE_CACHE
-    if _UNEXPRESSIBLE_CACHE is not None:
-        return _UNEXPRESSIBLE_CACHE
-    import bench_common
-    out = collections.defaultdict(dict)
-    path = HERE / "results" / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
-    if path.exists():
-        with open(path) as fh:
-            for line in fh:
-                if not line.strip():
-                    continue
-                r = json.loads(line)
-                for field, value in r.items():
-                    m = re.match(r"^res_(.+)_digest$", str(field))
-                    if m and bench_common.is_unexpressible(value):
-                        key = (r.get("lane"), r.get("workload"), str(r.get("backend")))
-                        out[key][m.group(1)] = str(value).split(":", 1)[-1].strip()
-    _UNEXPRESSIBLE_CACHE = out
-    return out
-
-
-def _unexpressible_notes(table_id, entries):
-    """One sentence per engine that declared it cannot ask a query here, and
-    the same fact registered as a structured absence."""
-    lane_wl = _TABLE_LANE.get(table_id)
-    if not lane_wl:
-        return []
-    lane, wl = lane_wl
-    notes = []
-    for (l, w, backend), queries in sorted(_unexpressible_cells().items(), key=str):
-        if l != lane or (wl and w != wl):
-            continue
-        name = display_name(backend)
-        if not any(str(e.get("backend")) == name for e in entries):
-            continue
-        for query, reason in sorted(queries.items()):
-            why = (f"{name} does not answer {query} on this table: the engine's "
-                   f"own language cannot express it, declared by the adapter "
-                   f"rather than left blank ({reason}).")
-            notes.append(why)
-            rec = {"backend": name, "column": None, "kind": "unexpressible",
-                   "query": query, "why": why}
-            if rec not in _DECLARED_ABSENCES[table_id]:
-                _DECLARED_ABSENCES[table_id].append(rec)
+        notes.append(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell exceeded "
+                     f"its {budget} budget, the same budget every engine on this table had, on its first "
+                     f"attempt and was not retried; there is no row.")
     return notes
 
 
@@ -2971,10 +2802,7 @@ def _counts_note(table_id, entries):
 
 
 def _finish_table(table: dict) -> dict:
-    table["conditions"] = (list(table.get("conditions") or [])
-                           + _counts_note(table.get("id"), table.get("entries", []))
-                           + _censored_notes(table.get("id"))
-                           + _unexpressible_notes(table.get("id"), table.get("entries", [])))
+    table["conditions"] = list(table.get("conditions") or []) + _counts_note(table.get("id"), table.get("entries", [])) + _censored_notes(table.get("id"))
     entries = table["entries"]
     seen = []
     for e in entries:
@@ -3038,10 +2866,6 @@ def _finish_table(table: dict) -> dict:
         elif c.endswith(" ms") or c.endswith(" s") or c.endswith(" GiB") or c in ("torn results", "vs Java"):
             dirs[c] = "down"
     table["directions"] = dirs
-    # Every absence this table declares, as data (page_check.OPERATION_MANIFEST
-    # reads it). Written after the notes above, because the notes are what
-    # register them.
-    table["declared_absences"] = list(_DECLARED_ABSENCES.get(table["id"], []))
     return table
 
 
@@ -3584,14 +3408,6 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if _cold not in _t["conditions"]:
                 _t["conditions"].append(_cold)
-    for _t in tables:
-        if _t.get("id") != "l3d":
-            continue
-        _mut = _mutation_note(rows)
-        if _mut:
-            _t.setdefault("conditions", [])
-            if _mut not in _t["conditions"]:
-                _t["conditions"].append(_mut)
     for _t in tables:
         # NOT on the durability table itself. That note reads the engine's own
         # durability string to decide which engines are stuck at the strict end,
