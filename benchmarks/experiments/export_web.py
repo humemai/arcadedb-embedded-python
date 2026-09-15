@@ -3051,6 +3051,55 @@ def _unexpressible_notes(table_id, entries):
     return notes
 
 
+def _zero_growth_notes(table_id):
+    """One sentence per served row whose server container did not grow at all.
+
+    A served row's disk cell is the server container's growth over its empty
+    footprint (_disk_data). A growth of exactly zero after a corpus was loaded
+    is not a size, it is a floor: verified 2026-09-15 on SurrealDB 3.2.4, whose
+    RocksDB store preallocates a write-ahead log of about 70 MB at start (the
+    74.4 MB baseline is that log plus its manifest files), so 100,000 inserted
+    rows changed the container's SizeRw by zero bytes and only the tiers whose
+    corpus exceeds the memtable flush to segment files that count. Printing
+    0.0 GiB with no sentence would read as "stores nothing".
+    """
+    lane_wl = _TABLE_LANE.get(table_id)
+    if not lane_wl:
+        return []
+    lane_of_table, wl = lane_wl
+    hits = []
+    for r in _FROZEN_ROWS:
+        if not r.get("server_image") or r.get("lane") != lane_of_table:
+            continue
+        if wl and r.get("workload") != wl:
+            continue
+        try:
+            sv = float(r.get("server_disk_mb") or "")
+            sb = float(r.get("server_disk_baseline_mb") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if abs(sv - sb) >= 0.05:
+            continue
+        label = _row_label_for(table_id, r)
+        if label is None:
+            continue
+        key = (label, str(r.get("scale")), r.get("lane"))
+        if key not in hits:
+            hits.append(key)
+    notes = []
+    for label, scale, lane in sorted(hits, key=str):
+        try:
+            sl = scale_label(lane, scale)
+        except Exception:  # noqa: BLE001 - a lane whose tier the map does not name
+            continue
+        notes.append(
+            f"{label} at {sl}: its disk cell is 0.0 because the server container did not "
+            f"grow over its empty footprint during the run, which for SurrealDB's server "
+            f"includes a preallocated write-ahead log of about 70 MB that the whole corpus "
+            f"fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.")
+    return notes
+
+
 def _counts_note(table_id, entries):
     """How many operations stand behind one cell, read from the lane's own
     constants and the rows (user, 2026-09-13: the page said n=5 but not what
@@ -3091,6 +3140,7 @@ def _finish_table(table: dict) -> dict:
                            + _counts_note(table.get("id"), table.get("entries", []))
                            + _censored_notes(table.get("id"))
                            + _query_budget_notes(table.get("id"))
+                           + _zero_growth_notes(table.get("id"))
                            + _unexpressible_notes(table.get("id"), table.get("entries", [])))
     entries = table["entries"]
     seen = []
