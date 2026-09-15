@@ -1,34 +1,52 @@
 # ArcadeDB benchmarks: harnesses and results
 
-Two suites, split by what they compare. Both run on one otherwise idle host,
-report N=5 as median [min-max], and publish the rows their numbers are
-computed from.
+Two suites, split by what they compare. Both run every backend in Docker under
+the same CPU and memory caps, report five repetitions per cell, and publish
+the rows their numbers are computed from.
 
-- `experiments/` — **engine vs engine.** ArcadeDB's multi-model engine against
-  specialist and embedded systems (Kim, Franchini, Himpe, Garulli): docker,
-  pinned image digests, identical cpuset and memory caps per cell. Every
-  number that reaches the paper comes from a serial re-run.
-- `python-bindings/` — **binding vs binding, and Python vs Java.** The same
-  engine reached through the Python package: document, graph, and vector lanes
-  against SQLite, DuckDB, LadybugDB and Chroma, plus `jpype_overhead/`, which
-  times the binding against Java-native execution on identical JARs to show
-  what crossing the CPython-JVM boundary costs.
-  history (`40bc98c843`), kept verbatim as source material.
+- `experiments/` is **engine versus engine**: ArcadeDB's multi-model engine
+  against specialist and multi-model systems, each pinned by image digest, on
+  documents, graph, dense and sparse vectors, time series, and cross-model
+  queries. Its results are the project page at
+  <https://humem.ai/projects/arcadedb>. There is no paper; the page is the
+  only artifact, and every number on it is generated from the frozen rows by
+  the exporter and checked by gates before it can be published.
+- `python-bindings/` is **binding versus binding, and Python versus Java**:
+  the same engine reached through the Python package against SQLite, DuckDB,
+  LadybugDB, and Chroma, plus `jpype_overhead/`, which times the binding
+  against Java-native execution on identical jars. This is the suite behind
+  the SciPy 2026 paper, and its own README carries the versions and layout.
 
-**What is tracked.** Append logs and regenerable inputs (corpora, databases,
-per-run time-series) are gitignored; the frozen rows the papers' numbers are
-computed from, and the generated tables, are committed. The rules live in the
-repository-root `.gitignore` for both suites rather than in per-directory
-files, so one suite's `results/` convention cannot silently govern the other.
+## Where to start in `experiments/`
 
-Thesis (evidence-audited): multi-model unification over one page/WAL/MVCC
-transaction pipeline — documents, graph, vectors, and time series (key-value is not measured), with
-every index type committing in the same transaction and Raft replicating
-model-agnostic WAL page diffs. No individual mechanism is claimed as novel.
+`CAMPAIGN.md` is the operating manual. Its first section is the whole routine
+end to end, from settling the instrument to switching the page and pruning
+what a campaign made obsolete, and every step names the document that holds
+its detail. Read it first; the rest are the references it points to.
 
-Read `experiments/FAIRNESS.md` before adding a lane or trusting a number. It
-lists the invariants a comparison has to satisfy to be worth reporting, and the
-overrides we apply deliberately, and disclose, to put engines at matched
-operating points.
+| Document | What it settles |
+|---|---|
+| `CAMPAIGN.md` | The routine: how a campaign is staged, queued, landed, frozen, and switched onto the page |
+| `PROTOCOL.md` | How a row is produced, and what enforces each rule (a gate, a check, or a person) |
+| `FAIRNESS.md` | When two numbers may be compared: the invariants and the disclosed overrides |
+| `COMPARATORS.md` | What every comparator is pinned to, and why it runs the way it does |
+| `PAGE-SPEC.md` | What the page contains: tables, rows, columns, and what each cell must satisfy |
+| `PUBLISHING.md` | How the numbers get from the frozen rows onto the page, the preview route, and the results asset |
+| `READING-RESULTS.md` | How to read what came out without misreading it |
+| `RESULTS-MAP.md` | What is in `results/` on the bench host, and which script reads each file |
 
-The paper source and submission notes are kept outside this repository.
+If two of them disagree, PROTOCOL wins on how a number is produced, FAIRNESS
+wins on whether it may be compared, and PAGE-SPEC wins on what is shown.
+
+The Python package's own documentation has a benchmarks section that explains
+the method without repeating any number, and links to the page for the
+numbers: `bindings/python/docs/benchmarks/`.
+
+## What is tracked
+
+Append logs and regenerable inputs (corpora, databases, per-run time series)
+are gitignored; the frozen rows the page is computed from and the generated
+tables are committed. The rules live in the repository-root `.gitignore` for
+both suites rather than in per-directory files, so one suite's `results/`
+convention cannot silently govern the other. `RESULTS-MAP.md` says which files
+exist only on the bench host.
