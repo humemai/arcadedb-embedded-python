@@ -26,6 +26,10 @@ dependencies = [
 ]
 
 [dependency-groups]
+bench = [
+    "h5py>=3.16.0",
+    "matplotlib>=3.11.2",
+]
 dev = [
     "black",
     "isort",
@@ -57,7 +61,7 @@ package = false
 # requested groups). Skip it on a constrained machine with:
 #   uv sync --no-group examples
 # docs is default too so plain `uv run mkdocs serve` works without --group.
-default-groups = ["dev", "examples", "docs"]
+default-groups = ["dev", "examples", "docs", "bench"]
 
 # The locally built wheel is resolved from dist/ (find-links style), so the
 # version bumps with every upstream sync without editing this file.
