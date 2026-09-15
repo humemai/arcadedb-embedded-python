@@ -38,6 +38,8 @@ def entries(T, tid, scale=None):
 
 
 def cell(e, col):
+    if e is None:
+        return None
     m = e["metrics"].get(col)
     return None if not m or m.get("median") is None else float(m["median"])
 
@@ -46,6 +48,12 @@ def find(T, tid, backend, scale=None):
     for e in entries(T, tid, scale):
         if e["backend"] == backend:
             return e
+    # A table may carry no ArcadeDB row by declaration (the docs analytics
+    # table since F42: its cells are withdrawn until the engine fix is on the
+    # pin, and the table says so). The memo prints that rather than refusing.
+    conds = " ".join(str(c) for c in T[tid].get("conditions", []))
+    if "ArcadeDB has no row on this table" in conds and backend.startswith("ArcadeDB"):
+        return None
     raise SystemExit(f"memo: no row {backend!r} in {tid} at {scale!r}; the page changed under the memo")
 
 
@@ -124,6 +132,8 @@ def row(cls, model, op, size, ours, theirs, ratio):
 def compare_row(T, model, op, size, tid, ours_backend, col, scale, direction, fmt, unit=None,
                 recall_floor=False, warm_col=None, top=1, skip=()):
     ours = find(T, tid, ours_backend, scale)
+    if ours is None:
+        return row("withheld", model, op, size, "withdrawn", "", "no ArcadeDB row on this table by declaration; see the table's conditions"), "withheld"
     ov = cell(ours, col)
     floor = cell(ours, "recall@10") if recall_floor else None
     # `skip`: comparator labels that do not do the operation the row names
@@ -144,7 +154,11 @@ def compare_row(T, model, op, size, tid, ours_backend, col, scale, direction, fm
 
 
 def wire_row(T, model, op, tid, emb, srv, col, scale, direction, fmt, unit=None):
-    a, b = cell(find(T, tid, emb, scale), col), cell(find(T, tid, srv, scale), col)
+    ea, eb = find(T, tid, emb, scale), find(T, tid, srv, scale)
+    if ea is None or eb is None:
+        return (f'      <tr class="withheld"><td class="model">{esc(model)}</td><td>{esc(op)}</td>'
+                f'<td class="num" colspan="3">withdrawn: no ArcadeDB row on this table by declaration</td></tr>')
+    a, b = cell(ea, col), cell(eb, col)
     r = (b / a) if direction == "down" else (a / b)
     cls = "behind" if r > 1.15 else ""
     f = (lambda v: fmt(v, unit)) if unit else fmt
@@ -208,7 +222,9 @@ def build():
     q1_us = cell(find(T, "docs_olap", E, "tpch1"), "Q1 p50 ms")
     q6_pg = cell(find(T, "docs_olap", "PostgreSQL", "tpch1"), "Q6 p50 ms")
     q6_us = cell(find(T, "docs_olap", E, "tpch1"), "Q6 p50 ms")
-    pg_scan_ratio = f"{fmt_x(q6_us / q6_pg)} to {fmt_x(q1_us / q1_pg)}"
+    pg_scan_ratio = (f"{fmt_x(q6_us / q6_pg)} to {fmt_x(q1_us / q1_pg)}"
+                     if None not in (q1_pg, q1_us, q6_pg, q6_us)
+                     else "withdrawn on the page (the document analytics ArcadeDB rows are down by declaration until the decimal-literal fix is on the pin, upstream #7609)")
 
     # --- weakness 2: ingest
     w2, cls2 = [], []

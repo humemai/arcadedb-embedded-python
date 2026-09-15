@@ -53,7 +53,7 @@
       <tr class="behind"><td class="model">Graph</td><td>One-hop traversal from a person over KNOWS edges</td><td>SF10, 73k people</td><td class="num">0.614 ms</td><td class="num">SurrealDB (server) 0.432 ms</td><td class="ratio">1.4x behind</td></tr>
       <tr class="behind"><td class="model">Graph</td><td>Two-hop traversal from a person</td><td>SF10, 73k people</td><td class="num">1.67 ms</td><td class="num">SurrealDB (server) 1.24 ms</td><td class="ratio">1.3x behind</td></tr>
       <tr class="ahead"><td class="model">Cross-model</td><td>Vector search hit, expand over graph edges, update a document, one transaction</td><td>50k products</td><td class="num">2.03 ms</td><td class="num">SurrealDB (embedded) 8.29 ms</td><td class="ratio">4.1x ahead</td></tr>
-      <tr class="even"><td class="model">Time series</td><td>Ingest through the native time-series type, embedded</td><td>2.59M points</td><td class="num">1.86M points/s</td><td class="num">DuckDB 1.88M points/s</td><td class="ratio">parity</td></tr>
+      <tr class="even"><td class="model">Time series</td><td>Ingest through the native time-series type, embedded</td><td>2.59M points</td><td class="num">1.96M points/s</td><td class="num">DuckDB 1.88M points/s</td><td class="ratio">parity</td></tr>
     </tbody>
   </table></div>
   <h3>How it was run</h3>
@@ -75,11 +75,11 @@
     <colgroup><col class="c-model"><col class="c-op"><col class="c-size"><col class="c-a"><col class="c-b"><col class="c-r"></colgroup>
     <thead><tr><th>Model</th><th>Operation</th><th>Size</th><th class="num">ArcadeDB</th><th class="num">Best other engine</th><th>Ratio</th></tr></thead>
     <tbody>
-      <tr class="behind"><td class="model">Documents</td><td>TPC-H Q1: scan every line item, group, and sum</td><td>6.0M line items</td><td class="num">10.2 s</td><td class="num">DuckDB 15.5 ms, PostgreSQL 331 ms</td><td class="ratio">660x behind</td></tr>
-      <tr class="behind"><td class="model">Documents</td><td>TPC-H Q6: filter a date range, sum one column</td><td>6.0M line items</td><td class="num">767 ms</td><td class="num">DuckDB 7.23 ms, PostgreSQL 106 ms</td><td class="ratio">106x behind</td></tr>
+      <tr class="withheld"><td class="model">Documents</td><td>TPC-H Q1: scan every line item, group, and sum</td><td>6.0M line items</td><td class="num">withdrawn</td><td class="num"></td><td class="ratio">no ArcadeDB row on this table by declaration; see the table's conditions</td></tr>
+      <tr class="withheld"><td class="model">Documents</td><td>TPC-H Q6: filter a date range, sum one column</td><td>6.0M line items</td><td class="num">withdrawn</td><td class="num"></td><td class="ratio">no ArcadeDB row on this table by declaration; see the table's conditions</td></tr>
       <tr class="behind"><td class="model">Graph</td><td>Whole-graph analytics, most friends: every person's degree, top ten</td><td>SF10, 73k people</td><td class="num">362 ms</td><td class="num">LadybugDB 2.69 ms</td><td class="ratio">135x behind</td></tr>
       <tr class="behind"><td class="model">Graph</td><td>The same query with the graph analytical view built beforehand</td><td>SF10, 73k people</td><td class="num">52.4 ms</td><td class="num">LadybugDB 2.69 ms</td><td class="ratio">19x behind</td></tr>
-      <tr class="behind"><td class="model">Time series</td><td>Twelve-hour aggregate over all series, native type</td><td>2.59M points</td><td class="num">30.5 ms</td><td class="num">QuestDB 1.81 ms</td><td class="ratio">17x behind</td></tr>
+      <tr class="behind"><td class="model">Time series</td><td>Twelve-hour aggregate over all series, native type</td><td>2.59M points</td><td class="num">30.4 ms</td><td class="num">QuestDB 1.81 ms</td><td class="ratio">17x behind</td></tr>
     </tbody>
   </table></div>
   <h3>How it was run</h3>
@@ -92,7 +92,7 @@
       <tr><td class="model">Time-series 12h aggregate</td><td class="how"><code>SELECT ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point WHERE ts &gt;= a AND ts &lt; b GROUP BY h ORDER BY h</code> on the native TIMESERIES type. 100 runs per rep. (Until 2026-09-12 the embedded arm wrote <code>BETWEEN a AND b-1</code>, which the engine answers about 3x slower; the row is re-run with the half-open form.)</td><td class="how">QuestDB: the same window with <code>SAMPLE BY 1h</code>. DuckDB and SQLite: an hourly bucket over the same rows.</td></tr>
     </tbody>
   </table></div>
-  <p class="note"><strong>Our reading.</strong> One thread walks the records, materialises each document, and evaluates the expression per record: no column pruning, no batching, no parallel scan. PostgreSQL is also a row store on page-at-a-time storage and is 7.2x to 31x faster on the same two scans, so this is the executor, not the page layout.</p>
+  <p class="note"><strong>Our reading.</strong> One thread walks the records, materialises each document, and evaluates the expression per record: no column pruning, no batching, no parallel scan. PostgreSQL is also a row store on page-at-a-time storage and is withdrawn on the page (the document analytics ArcadeDB rows are down by declaration until the decimal-literal fix is on the pin, upstream #7609) faster on the same two scans, so this is the executor, not the page layout.</p>
 
   <h2>Weakness 2: bulk ingest <span class="tag behind">behind</span></h2>
   <div class="tablewrap"><table>
@@ -101,7 +101,7 @@
     <tbody>
       <tr class="behind"><td class="model">Documents</td><td>Load the line items, batched inserts, embedded</td><td>6.0M line items</td><td class="num">41k documents/s</td><td class="num">DuckDB 2.46M documents/s, PostgreSQL 364k documents/s</td><td class="ratio">60x behind</td></tr>
       <tr class="behind"><td class="model">Time series</td><td>The same points stored as ordinary documents</td><td>2.59M points</td><td class="num">41k points/s</td><td class="num">DuckDB 1.88M points/s</td><td class="ratio">46x behind</td></tr>
-      <tr class="even"><td class="model">Time series</td><td>The same points through the native time-series type</td><td>2.59M points</td><td class="num">1.86M points/s</td><td class="num">DuckDB 1.88M points/s</td><td class="ratio">parity</td></tr>
+      <tr class="even"><td class="model">Time series</td><td>The same points through the native time-series type</td><td>2.59M points</td><td class="num">1.96M points/s</td><td class="num">DuckDB 1.88M points/s</td><td class="ratio">parity</td></tr>
       <tr class="behind"><td class="model">Dense vectors</td><td>Ingest and build the index, 96 dimensions, fp32</td><td>9.99M vectors</td><td class="num">2,321 s</td><td class="num">LanceDB (int8) 226 s, Qdrant (int8) 461 s</td><td class="ratio">10x behind</td></tr>
     </tbody>
   </table></div>
@@ -115,7 +115,7 @@
       <tr><td class="model">Dense index build</td><td class="how"><code>INSERT INTO Article SET vid = :v, embedding = :e</code> in 10,000-row transactions, then <code>CREATE INDEX ON Article (embedding) LSM_VECTOR METADATA {dimensions: 96, similarity: EUCLIDEAN, maxConnections: 32, beamWidth: 100, quantization: ..., storeVectorsInGraph: false, addHierarchy: true}</code>; ingest and build are one timer on every engine. maxConnections 32 is the per-layer bound equal to the comparators' M = 16.</td><td class="how">Qdrant: upsert in batches, HNSW m = 16, ef_construct = 100. LanceDB: IVF_HNSW_SQ (int8). Chroma, DuckDB VSS, Milvus: HNSW at the same M and ef_construction.</td></tr>
     </tbody>
   </table></div>
-  <p class="note"><strong>Our reading.</strong> Single writes are fast (the graph edge row above), so this is throughput under a stream, not per-record cost. The native time-series type shows the engine can fill pages in batches, 45x the rate of the document path on the same points; the document path does not. A bulk document loader that batched page fills the same way would close most of the gap.</p>
+  <p class="note"><strong>Our reading.</strong> Single writes are fast (the graph edge row above), so this is throughput under a stream, not per-record cost. The native time-series type shows the engine can fill pages in batches, 48x the rate of the document path on the same points; the document path does not. A bulk document loader that batched page fills the same way would close most of the gap.</p>
 
   <h2>Weakness 3: the server wire on ingest <span class="tag behind">costs on every lane</span></h2>
   <div class="tablewrap"><table class="wire">
@@ -123,7 +123,7 @@
     <thead><tr><th>Model</th><th>Operation</th><th class="num">Embedded</th><th class="num">Served</th><th>Cost</th></tr></thead>
     <tbody>
       <tr class="behind"><td class="model">Sparse vectors</td><td>Ingest and build the index over 8.84M documents</td><td class="num">920 s</td><td class="num">2,311 s</td><td class="ratio">2.5x</td></tr>
-      <tr class="behind"><td class="model">Time series</td><td>Native-type ingest</td><td class="num">1.86M points/s</td><td class="num">582k points/s</td><td class="ratio">3.2x</td></tr>
+      <tr class="behind"><td class="model">Time series</td><td>Native-type ingest</td><td class="num">1.96M points/s</td><td class="num">582k points/s</td><td class="ratio">3.4x</td></tr>
       <tr class="behind"><td class="model">Documents</td><td>Batched inserts of the line items</td><td class="num">41k documents/s</td><td class="num">32k documents/s</td><td class="ratio">1.3x</td></tr>
     </tbody>
   </table></div>
