@@ -598,6 +598,9 @@ def main() -> int:
     ap.add_argument("--json", default=str(DEFAULT_JSON))
     ap.add_argument("--preview", action="store_true",
                     help="check the preview page's prose and payload instead of the live page's")
+    ap.add_argument("--rows", default=None,
+                    help="the frozen CSV the condition pins are evaluated against "
+                         "(default: results/runs_paper.csv, or the skeleton's own file)")
     ap.add_argument("--skeleton", action="store_true",
                     help="the payload is the laptop placeholder run (DECISIONS #86): pinned "
                          "prose sentences must still be present, their values are not compared, "
@@ -650,8 +653,18 @@ def main() -> int:
     u_ok = _check_disk_units(payload)
     if u_ok:
         print("  no disk cell above 200 GiB")
+    print("\nconditions: every sentence under every table has a source for its numbers"
+          " (October: for itself)")
+    import csv as _csv
+    rows_path = Path(args.rows) if args.rows else HERE / "results" / (
+        "runs_skeleton_laptop.csv" if SKELETON else "runs_paper.csv")
+    rows = list(_csv.DictReader(rows_path.open())) if rows_path.exists() else []
+    if not rows:
+        print(f"  (no frozen rows at {rows_path}; row-derived pins will read as STALE)")
+    k_bad = _check_conditions(payload, rows)
+    print(f"\n{k_bad} condition finding(s)")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
-                 or not u_ok) else 0
+                 or not u_ok or k_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -937,6 +950,319 @@ def _check_coverage(payload):
         else:
             print(f"  ok     {lane}: every measured field printed or declared")
     return bad, (expected, present, declared, undeclared)
+
+
+
+
+# --------------------------------------------------------------------------
+# CONDITION SENTENCES: every number under every table has a source
+#
+# BUGS F52 (2026-09-16): a condition sentence on every October table named
+# every engine as one "with no setting to relax". Reading all 74 distinct
+# sentences on the preview found more of the class: a PostgreSQL memory split
+# typed in August under a cell that had since moved, a "three questions"
+# sentence under a five-query table, a 2.0 s view build over a 2.058 s cell,
+# two ablation results quoted as if they were rows. Cells are produced from
+# the rows and pinned; the sentences under them were the one surface with
+# nothing behind them. Now:
+#
+#   - The exporter records which sentences a GENERATOR produced, with the
+#     strings the generator inserted (payload["condition_provenance"]).
+#     Every numeric token in a generated sentence must be one of those strings
+#     or a non-measurement token (CONDITION_ALLOWED), so a generator that
+#     types a number beside the ones it computes fails here.
+#   - Under the 2026-10 instrument (table["instrument"]) a sentence that is
+#     not generated must be REGISTERED in export_web.OCT_PROSE for that table,
+#     and each number it carries must sit inside one of that entry's pins,
+#     which are evaluated against the page cells and the frozen rows. Anything
+#     else on an October table is refused: the September lists are not a
+#     source for the October page.
+#   - On a September table (the live page) a sentence that is not generated
+#     is typed, and each number in it must sit inside a pin from
+#     SEPT_CONDITION_PINS, a CONDITION_ALLOWED token, or a SEPT_QUOTED span
+#     (text the September exporter quoted from a row before it had a
+#     registry). An unaccounted number fails the publish.
+#
+# The rule in two sentences: a number in a condition sentence is either
+# inserted by a registered generator, matched by a pin the gate evaluates
+# against the rows, or one of the listed non-measurement tokens; and under the
+# October instrument the sentence itself must additionally come from a
+# registered generator or the exporter's October prose registry.
+CONDITION_TOKEN = re.compile(r"\d(?:[\d,]*\d)?(?:\.\d+)?")
+
+# Non-measurement tokens, each with the reason it is not a claim about a row.
+CONDITION_ALLOWED = [
+    (r"#\d+[a-z]?\b", "a decision or issue number"),
+    (r"\b\d{4}-\d{2}-\d{2}\b", "a date"),
+    (r"\b\d+\.\d+\.\d+(?:-dev)?\b", "a release version"),
+    (r"\b\d+\.x\b", "a major version line"),
+    (r"(?<![\w.])(?=[0-9a-f]*[a-f])[0-9a-f]{7,12}\b", "an engine commit id"),
+    (r"\bQ\d+\b", "a TPC-H query number"),
+    (r"\b[EL]\d\b", "an experiment or lane name (E2, L4)"),
+    (r"\bSF\d+(?:\.\d+)?\b", "a TPC-H scale factor"),
+    (r"\bF\d+\b", "a BUGS entry"),
+    (r"\b\d+(?:\.\d+)?[kM]\b", "a tier name (10k, 1M, 9.99M)"),
+    (r"\b\d-hop\b", "a traversal depth in a column name"),
+    (r"\bp(?:50|95|99)\b", "a percentile name"),
+    (r"@10\b", "recall@10"),
+    (r"\b(?:int|fp)(?:8|16|32)\b", "a precision name"),
+    (r"\b\d+h\b", "an hour window in a query name (12h aggregate)"),
+    (r"\bv\d+\b", "an API path version"),
+    (r"\bsha256\b", "the digest algorithm"),
+    (r"\bNeo4j\b", "an engine name"),
+    (r"\b[A-Za-z_]+=\d+\b", "a configuration assignment (txWalFlush=0)"),
+    (r"\bcpuset \d+(?:-\d+)?\b", "the cpuset, checked by the setup section"),
+    (r"\bTPC-[CH]\b", "a benchmark name"),
+    (r"\b(?:PostgreSQL|Cypher|SurrealDB|ArangoDB|MongoDB|Milvus|Qdrant|Elasticsearch|DuckDB|"
+     r"QuestDB|TimescaleDB|LadybugDB|Chroma|LanceDB|pgvector|core|SDK|server) \d+(?:\.\d+)*\b",
+     "an engine version named in prose"),
+]
+
+# Literal facts that are neither a row nor a lane constant, each with why.
+CONDITION_EXEMPT = [
+    (r"preallocates in 256 MiB steps", "Neo4j's documented transaction-log rotation size"),
+    (r"INT8 rows run this engine's default of 100,000",
+     "the engine's graphBuildCacheSize default (vector-build-cache-defaults note); September only"),
+]
+
+# September-only: text the September exporter quoted from a row's own
+# record (a timeout budget, an error message, a query literal) on a payload
+# that carries no generated-sentence registry. An October payload registers
+# these through the generator, so nothing here applies to it.
+SEPT_QUOTED = [
+    (r"exceeded its \d+(?:\.\d+)? hour budget", "the cell's budget, from the row's timeout record"),
+    (r"exceeded its \d+(?:\.\d+)? s budget", "the query's budget, from the row"),
+    (r"after \d+(?: to \d+)?(?: of \d+)? iterations(?:, reaching \d+(?: to \d+)? s)?", "the row's iteration count"),
+    (r"What it reported: .*$", "the row's error text"),
+    (r"`[^`]*`", "a quoted query literal"),
+]
+
+
+def _rows_median(rows, lane, backend, field, scale=None, workload=None):
+    import statistics as _st
+    vals = []
+    for r in rows:
+        if r.get("lane") != lane or str(r.get("backend")) != backend:
+            continue
+        if scale is not None and str(r.get("scale")) != scale:
+            continue
+        if workload is not None and r.get("workload") != workload:
+            continue
+        try:
+            vals.append(float(r.get(field)))
+        except (TypeError, ValueError):
+            continue
+    if not vals:
+        raise KeyError((lane, backend, field, scale, workload))
+    return _st.median(vals)
+
+
+def _l3d_max_comparator_move(P, rows):
+    """ceil of the largest |cold - warm| / warm, in percent, over the dense
+    table's comparators: what "within N% of itself" claims."""
+    import math
+    best = 0.0
+    for e in P.t["l3d"]["entries"]:
+        m = e.get("metrics") or {}
+        if e.get("is_arcadedb") or "cold p50 ms" not in m or "warm p50 ms" not in m:
+            continue
+        c, w = float(m["cold p50 ms"]["median"]), float(m["warm p50 ms"]["median"])
+        best = max(best, abs(c - w) / w * 100)
+    return math.ceil(best)
+
+
+def _e4_meta():
+    import export_web as EW
+    reps = sorted(EW.E4_DIR.glob("decomp3m_*_rep*.json"))
+    if not reps:
+        raise KeyError("no e4 artifact")
+    return json.loads(reps[0].read_text(encoding="utf-8"))["meta"]
+
+
+def _most_common_n(P, rows):
+    import collections as _c
+    ns = _c.Counter(int(stat.get("n") or 0) for t in P.t.values() for e in t.get("entries", [])
+                    for stat in (e.get("metrics") or {}).values() if isinstance(stat, dict))
+    return ns.most_common(1)[0][0]
+
+
+def _const(module, name):
+    import importlib
+    sys.path.insert(0, str(HERE))
+    return getattr(importlib.import_module(module), name)
+
+
+def _oltp_queries(scale):
+    def fn(P, rows):
+        import graph_common
+        n = graph_common.SCALE_OLTP_QUERIES.get(scale)
+        if n is None:
+            import ldbc_snb
+            n = ldbc_snb.SCALE_OLTP_QUERIES[scale]
+        return n
+    return fn
+
+
+# (table id or "*", regex with one capture, fn(P, rows) -> number[, "const"]).
+# A "const" pin is compared on a skeleton too; a row-derived one is
+# presence-only there, like PROSE. A number typed on the live page that no
+# entry here reaches is a finding, and the exporter on the october-instrument
+# branch already dropped or generates each of those (the ablation results).
+SEPT_CONDITION_PINS = [
+    ("*", r"agree within (\d+)%", lambda P, rows: _const("runner", "DISK_SETTLE_TOL") * 100, "const"),
+    ("GLOBAL", r"median of (\d+) repetitions", _most_common_n),
+    ("l3s", r"in (\d+)-record transactions", lambda P, rows: _const("l3_sparse", "INGEST_BATCH"), "const"),
+    ("l3s", r"answers ([\d,]+) queries", lambda P, rows: _const("l3d_dense", "N_QUERIES"), "const"),
+    ("l3smp", r"same ([\d,]+) dev queries", lambda P, rows: _const("l3d_dense", "N_QUERIES"), "const"),
+    ("l3d", r"answers ([\d,]+) queries", lambda P, rows: _const("l3d_dense", "N_QUERIES"), "const"),
+    ("l3d", r"within (\d+)% of itself", _l3d_max_comparator_move),
+    ("l3d", r"sealed at (\d+)%", lambda P, rows: _const("export_web", "_milvus_seal_proportion")() * 100, "const"),
+    ("l3d", r"image default is (\d+)%", lambda P, rows: _const("runner", "MILVUS_IMAGE_SEAL_PROPORTION") * 100, "const"),
+    ("l3d", r"in ([\d,]+)-row transactions", lambda P, rows: _const("l3d_dense", "BATCH"), "const"),
+    ("l3d", r"sends (\d+)-statement", lambda P, rows: _const("l3d_dense", "SERVER_BATCH"), "const"),
+    ("l3d", r"batches of ([\d,]+); LanceDB", lambda P, rows: _const("l3d_dense", "CHROMA_BATCH"), "const"),
+    ("l3d", r"corpus size \(([\d,]+)\)", lambda P, rows: _const("l3d_dense", "SCALE_DOCS")["deep10m"], "const"),
+    ("l2", r"SF1 \(11k people\): (\d+)", _oltp_queries("sf1"), "const"),
+    ("l2", r"SF10 \(73k people\): (\d+)", _oltp_queries("sf10"), "const"),
+    ("l2", r"commits up to ([\d,]+) writes", lambda P, rows: _const("l2_graph", "CRUD_OPS"), "const"),
+    ("l2", r"in ([\d,]+)-record transactions", lambda P, rows: _const("l2_graph", "INGEST_BATCH"), "const"),
+    ("l2olap", r"in ([\d,]+)-record transactions", lambda P, rows: _const("l2_graph", "INGEST_BATCH"), "const"),
+    ("l2olap", r"took (\d+\.\d) seconds here", lambda P, rows: P("l2olap", "ArcadeDB (embedded, GAV)", "sf10", "view build s")),
+    ("l2olap", r"runs every query (\d+) times", lambda P, rows: _const("graph_common", "OLAP_ITERATIONS"), "const"),
+    ("l4", r"runs every query (\d+) times", lambda P, rows: _const("l4_tsbs", "QITER"), "const"),
+    ("l4", r"slower, (\d+\.\d+) ms against", lambda P, rows: _rows_median(rows, "l4", "arcadedb_ts_native", "q_last_windowed_ms")),
+    ("l4", r"ms against (\d+\.\d+), because", lambda P, rows: _rows_median(rows, "l4", "arcadedb_ts_native", "q_last_ms")),
+    ("docs_olap", r"runs every query (\d+) times", lambda P, rows: _const("l1_tpc", "OLAP_ITER"), "const"),
+    ("docs_oltp", r"runs ([\d,]+) new-order", lambda P, rows: _const("l1_tpc", "OLTP_OPS"), "const"),
+    ("docs_oltp", r"in ([\d,]+)-row batches", lambda P, rows: _const("l1_tpc", "BATCH"), "const"),
+    ("docs_olap", r"in ([\d,]+)-row batches", lambda P, rows: _const("l1_tpc", "BATCH"), "const"),
+    ("docs_oltp", r"the (\d+\.\d+) GiB shown is", lambda P, rows: P("docs_oltp", "PostgreSQL", "tpch1", "peak memory GiB")),
+    ("docs_oltp", r"is (\d+\.\d+) of Python client", lambda P, rows: _rows_median(rows, "l1tpc", "postgres", "client_peak_anon_mib", "tpch1", "oltp") / 1024),
+    ("docs_oltp", r"and (\d+\.\d+) of database", lambda P, rows: _rows_median(rows, "l1tpc", "postgres", "server_peak_anon_mib", "tpch1", "oltp") / 1024),
+    ("docs_olap", r"the (\d+\.\d+) GiB shown is", lambda P, rows: P("docs_olap", "PostgreSQL", "tpch1", "peak memory GiB")),
+    ("docs_olap", r"is (\d+\.\d+) of Python client", lambda P, rows: _rows_median(rows, "l1tpc", "postgres", "client_peak_anon_mib", "tpch1", "oltp") / 1024),
+    ("docs_olap", r"and (\d+\.\d+) of database", lambda P, rows: _rows_median(rows, "l1tpc", "postgres", "server_peak_anon_mib", "tpch1", "oltp") / 1024),
+    ("e2", r"the transaction (\d+) times", lambda P, rows: _const("e2_hybrid", "OPS"), "const"),
+    ("e2", r"graph_batch \(([\d,]+) records", lambda P, rows: _const("e2_hybrid", "BATCH"), "const"),
+    ("lifecycle", r"\((\d+) ms at 10k", lambda P, rows: _rows_median(rows, "lifecycle", "arcadedb_embedded", "clean_session_ms", "lc10k", "vector")),
+    ("lifecycle", r", (\d+) ms at 1M", lambda P, rows: _rows_median(rows, "lifecycle", "arcadedb_embedded", "clean_session_ms", "lc1m", "vector")),
+    ("lifecycle", r"(\d+\.\d) s at 10M\)", lambda P, rows: _rows_median(rows, "lifecycle", "arcadedb_embedded", "clean_session_ms", "lc10m", "vector") / 1000),
+    ("lifecycle", r"at 10M is (\d+\.\d) s", lambda P, rows: _rows_median(rows, "lifecycle", "arcadedb_embedded", "read_session_ms", "lc10m", "vector") / 1000),
+    ("e4", r"(\d+) repetitions after", lambda P, rows: _e4_meta()["reps"]),
+    ("e4", r"after (\d+) warmup", lambda P, rows: _e4_meta()["warmup"]),
+    ("e4", r"memory cap (\d+)g", lambda P, rows: int(str(_e4_meta()["mem_cap"]).rstrip("g"))),
+    ("e4", r"heap (\d+)g", lambda P, rows: int(str(_e4_meta()["heap"]).rstrip("g"))),
+    ("pycost", r"vector search costs (\d+\.\d+)x", lambda P, rows: P("pycost", "Python", "vector search", "vs Java")),
+    ("pycost", r"the scan (\d+\.\d+)x", lambda P, rows: P("pycost", "Python, to_columns", "100k-document scan", "vs Java")),
+    ("pycost", r"record objects is (\d+\.\d+)x slower", lambda P, rows: P("pycost", "Python, to_list", "100k-document scan", "time ms") / P("pycost", "Python, to_columns", "100k-document scan", "time ms")),
+]
+
+
+def _spans(patterns, text):
+    out = []
+    for pat in patterns:
+        for m in re.finditer(pat, text, flags=re.M):
+            out.append(m.span())
+    return out
+
+
+def _covered(span, spans):
+    s, e = span
+    return any(a <= s and e <= b for a, b in spans)
+
+
+def _pin_check(pid, pattern, fn, kind, text, P, rows):
+    """Evaluate one pin against one sentence. Returns (spans it accounts for,
+    finding or None). A regex that does not match its own sentence is a
+    broken pin, which is a finding."""
+    ms = list(re.finditer(pattern, text))
+    if not ms:
+        return [], None
+    spans = [m.span(1) for m in ms]
+    if SKELETON and kind != "const":
+        return spans, None
+    try:
+        want = float(fn(P, rows))
+    except (KeyError, ZeroDivisionError, TypeError, ValueError, IndexError,
+            FileNotFoundError, AttributeError, ImportError) as exc:
+        return spans, f"STALE  {pid}: the pin cannot be evaluated ({exc!r})"
+    for m in ms:
+        raw = m.group(1)
+        try:
+            printed = float(raw.replace(",", ""))
+        except ValueError:
+            return spans, f"REGEX  {pid}: captured {raw!r}, not a number"
+        decimals = len(raw.split(".")[1]) if "." in raw else 0
+        if abs(printed - want) > 0.5 * 10 ** -decimals + 1e-9:
+            return spans, f"DIFFER {pid}: sentence says {raw}, the rows/cells say {want:.6g}"
+    return spans, None
+
+
+def _check_conditions(payload, rows):
+    """Every condition sentence under every table (and the page's global
+    ones) has a source for each number it carries; under the October
+    instrument, for the sentence itself. Returns bad count."""
+    import export_web as EW
+    generated = {}
+    for g in (payload.get("condition_provenance") or {}).get("generated", []):
+        generated.setdefault(g["text"], set()).update(g.get("values") or [])
+    scale_strings = sorted({str(x) for t in payload.get("tables", []) for e in t.get("entries", [])
+                            for x in (e.get("scale"), e.get("scale_label")) if x}, key=len, reverse=True)
+    allowed_pats = [p for p, _ in CONDITION_ALLOWED] + [p for p, _ in CONDITION_EXEMPT] + [re.escape(s) for s in scale_strings]
+    quoted_pats = [p for p, _ in SEPT_QUOTED]
+    bad = 0
+    groups = [("GLOBAL", payload.get("instrument"), payload.get("conditions") or [])]
+    groups += [(t["id"], t.get("instrument"), t.get("conditions") or []) for t in payload.get("tables", [])]
+    for tid, instrument, conds in groups:
+        october = instrument == "2026-10"
+        registry = EW._oct_entries(tid)
+        n_gen = n_reg = n_typed = 0
+        findings = []
+        for text in conds:
+            tokens = [m.span() for m in CONDITION_TOKEN.finditer(text)]
+            spans = _spans(allowed_pats, text)
+            if text in generated:
+                n_gen += 1
+                for v in generated[text]:
+                    if v:
+                        spans += [(m.start(), m.end()) for m in re.finditer(re.escape(v), text)]
+                source = "generated"
+            elif text in registry:
+                n_reg += 1
+                for pin in registry[text]:
+                    pat, fn, kind = pin[0], pin[1], (pin[2] if len(pin) > 2 else "cell")
+                    got, finding = _pin_check(f"{tid}:{pat}", pat, fn, kind, text, P=_PAGE, rows=rows)
+                    if not got:
+                        findings.append(f"REGEX  {tid}: a registered pin /{pat}/ matches nothing in its own sentence")
+                    spans += got
+                    if finding:
+                        findings.append(finding)
+                source = "registered"
+            elif october:
+                findings.append(f"UNREGISTERED {tid}: an October sentence that is neither generated nor in OCT_PROSE: {text[:90]!r}")
+                continue
+            else:
+                n_typed += 1
+                spans += _spans(quoted_pats, text)
+                for pin in SEPT_CONDITION_PINS:
+                    scope, pat, fn = pin[0], pin[1], pin[2]
+                    kind = pin[3] if len(pin) > 3 else "cell"
+                    if scope not in ("*", tid):
+                        continue
+                    got, finding = _pin_check(f"{tid}:{pat}", pat, fn, kind, text, P=_PAGE, rows=rows)
+                    spans += got
+                    if finding:
+                        findings.append(finding)
+                source = "typed"
+            loose = [text[s:e] for s, e in tokens if not _covered((s, e), spans)]
+            if loose:
+                findings.append(f"UNPINNED {tid} ({source}): {loose} in {text[:100]!r}")
+        label = "October" if october else "September"
+        print(f"  {tid:<10} {n_gen} generated, {n_reg} registered, {n_typed} typed ({label})")
+        for f in findings:
+            print(f"    {f}")
+        bad += len(findings)
+    return bad
 
 
 def _check_setup_prose(payload):

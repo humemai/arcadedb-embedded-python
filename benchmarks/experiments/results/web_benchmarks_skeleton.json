@@ -165,13 +165,13 @@
     "arcadedb 26.8.1 \u00b7 727aa4568"
   ],
   "arcadedb_commits": [],
+  "instrument": "2026-10",
   "conditions": [
     "Every engine ran in Docker under the same memory cap, one cell at a time, on one laptop. The laptop was not doing only this: a browser, an editor, and the rest of a working machine kept running beside every cell, so no cell had cores of its own and the times below are not comparable between engines.",
     "Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it leaves out the file cache the kernel keeps on the engine's behalf. That is the right number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.",
     "Each printed cell here is ONE run, not the median of five, and the min and max beside it are that same single sample. The campaign runs five and prints the median; this page does not.",
     "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
-    "Comparators are pinned by sha256 image digest, not by a floating tag.",
-    "Durability is at each engine's default, and the defaults differ: ArcadeDB does not flush its write-ahead log at commit (txWalFlush=0), PostgreSQL and Neo4j fsync at every commit, and SQLite is the one comparator not at its default: it runs in WAL mode with synchronous=NORMAL, the common production setting, because its default rollback journal fsyncs twice per commit. On the write rows (document OLTP, TPC-C new-order, graph writes, the cross-model transaction) ArcadeDB's lead over the fsyncing servers is largely this default plus the absence of a network hop, not the engine. The next campaign matches every engine at the relaxed end instead: each one commits without waiting for the disk, which is what SQLite's setting above already means, and Neo4j is named on its tables as the one engine with no way to turn that off."
+    "Comparators are pinned by sha256 image digest, not by a floating tag."
   ],
   "provenance_note": "Host identity is recorded on the sparse and dense lanes only; the remaining lanes record the container but not the machine. Every lane ran on the same benchmark host, but this file reports only what the frozen rows can prove.",
   "hosts_recorded": [
@@ -278,16 +278,14 @@
       "dataset": "Big-ANN'23 Sparse (real SPLADE over MS MARCO)",
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
-        "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
-        "ingest+index total s is one timer around inserting the documents and building the index; the two are not timed separately (Qdrant builds its index while ingesting, so the split is not defined there). ingest+index vectors/s divides the document count by it.",
-        "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
-        "Cold is the first timed pass after the index is built; warm is the same engine run again over an index it has already read, and gain is cold over warm. Here a second pass changes little and the order of the table is the same either way. The dense table below is not like this: there ArcadeDB gains the most on a second pass and the order depends on which pass you time.",
-        "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split on this row: the lane warms before it times, so every timed query here is warm. The sparse table's cold and warm columns come from the multipass driver (DECISIONS #89)",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`.",
-        "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
-        "Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load)."
+        "Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.",
+        "ingest+index total s is one timer around inserting the documents and building the index; on this lane every engine builds its sparse index as it ingests, so there is no boundary to time separately. ingest+index vectors/s divides the document count by it.",
+        "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
+        "Each timed pass answers 1,000 queries.",
+        "Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load); pgvector COPY FROM STDIN in sparsevec text form, then CREATE INDEX."
       ],
       "columns": [
         "p50 ms",
@@ -758,6 +756,7 @@
           }
         }
       ],
+      "instrument": "2026-10",
       "directions": {
         "p50 ms": "down",
         "p99 ms": "down",
@@ -783,18 +782,17 @@
       "dataset": "DEEP-10M (deep-image-96-angular) and SIFT-1M",
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
-        "ingest+index total s is one timer around inserting the vectors and building the index; the two are not timed separately (Qdrant and Chroma build the index while ingesting, so the split is not defined there). ingest+index vectors/s divides the vector count by it.",
+        "ingest s and index s are two timers where the engine has the boundary: inserting the vectors, then building the index. ArangoDB (fp32), Chroma (fp32), DuckDB VSS (fp32), Qdrant (fp32), Qdrant (int8), SurrealDB (embedded, fp32), SurrealDB (server, fp32), sqlite-vec (fp32), sqlite-vec (int8) record one timer only, because the index is built while ingesting or the adapter times no boundary, so their ingest s and index s are blank. ingest+index total s is one timer around both, and ingest+index vectors/s divides the vector count by it.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
+        "The insert and delete into a built index, and the recall after each, run at 5k vectors (skeleton) (forced on by BENCH_DENSE_MUTATE=1).",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, DuckDB VSS, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that.",
+        "Cold p50 and p99 are the first timed pass over the query set after the index is built; the lane runs a short untimed warm-up on held-out queries before it, so cold means an index that has not yet answered the timed queries, not a process that has done nothing. Warm columns, where present, are the passes after it from the multipass driver.",
         "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
         "ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not HNSW, so the degree match above does not apply to it; its rows record nLists (about the square root of the corpus) and nProbe (an eighth of the lists) instead.",
-        "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
-        "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried 26 to 28 small segments and read 2.3x slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
-        "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split on this row: the lane warms on a held-out query slice before it times anything, so every timed query here is warm. The dense table's cold and warm columns come from the multipass driver, whose pass 0 is the cold pass and whose passes 1 to 5 are the warm ones (DECISIONS #89)",
-        "The insert and delete into a built index, and the recall after each, run at 5k vectors (skeleton) (forced on by BENCH_DENSE_MUTATE=1).",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, DuckDB VSS, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that.",
-        "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
-        "SurrealDB (server) at 5k vectors (skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 70 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
-        "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
+        "Milvus's dense rows run with segments sealed at 50% of the maximum segment size, where the image default is 12%, so a large ingest lands in the few-large-segments layout that Milvus's own compaction otherwise reaches at an unpredictable moment. One line changed from the image's configuration; sparse rows are at the default.",
+        "Each timed pass answers 1,000 queries.",
+        "SurrealDB (server) at 5k vectors (skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany; pgvector COPY FROM STDIN then CREATE INDEX; Neo4j loads then builds its vector index; MongoDB insert_many then its vector search index; ArangoDB import_bulk then its FAISS IVF index; SurrealDB inserts through its Python SDK."
       ],
       "columns": [
         "cold p50 ms",
@@ -2704,6 +2702,7 @@
           }
         }
       ],
+      "instrument": "2026-10",
       "directions": {
         "cold p50 ms": "down",
         "cold p99 ms": "down",
@@ -2735,13 +2734,13 @@
       "dataset": "LDBC-SNB Interactive (SF1, SF10)",
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
-        "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
-        "Each repetition runs every read against a fresh set of start persons (2k people (synthetic, skeleton): 50) and commits up to 1,000 writes; the p50 and p99 are over those.",
-        "SurrealDB (server) at 2k people (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 70 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
-        "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
+        "Each repetition runs every read against a fresh set of start persons (2k people (synthetic, skeleton): 50) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
+        "SurrealDB (server) at 2k people (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts."
       ],
       "columns": [
         "point p50 ms",
@@ -3457,6 +3456,7 @@
           }
         }
       ],
+      "instrument": "2026-10",
       "directions": {
         "point p50 ms": "down",
         "point p99 ms": "down",
@@ -3487,20 +3487,18 @@
       "dataset": "LDBC-SNB, SF10",
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
-        "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
-        "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
-        "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
-        "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "Five questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. Degree distribution: how many people have each number of friends, counted over every edge in the graph. Triangle count: how many sets of three people are all friends with one another, each triangle counted once. All times are milliseconds.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
         "The cold column is the very first query of a session, most friends, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Rows labelled GAV ran with it built, once, before any query was timed, and the view build column is what that took.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at 2k people (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "ArangoDB at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
         "ArcadeDB (embedded, GAV) at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 18 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
         "ArcadeDB (server, GAV) at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 16 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
-        "SurrealDB (server) at 2k people (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 70 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
-        "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
+        "SurrealDB (server) at 2k people (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts."
       ],
       "columns": [
         "average friend age p50 ms",
@@ -4099,6 +4097,7 @@
           }
         }
       ],
+      "instrument": "2026-10",
       "directions": {
         "average friend age p50 ms": "down",
         "average friend age p99 ms": "down",
@@ -4136,8 +4135,7 @@
       "dataset": "The same vector-graph-document operation, killed mid-way, then inspected",
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
-        "A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one."
+        "A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these."
       ],
       "columns": [
         "trials",
@@ -4390,6 +4388,7 @@
           }
         }
       ],
+      "instrument": "2026-10",
       "directions": {
         "torn results": "down"
       },
@@ -4409,15 +4408,15 @@
       "dataset": "Vector hit to graph traversal to document update, in one transaction",
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
+        "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
         "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
-        "Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:) until its own re-run, so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
+        "Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:), so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
         "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
-        "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
-        "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB inserts through its Python client into an in-memory database; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
+        "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; Neo4j and the composed stack load the graph with UNWIND over bolt, and the composed stack upserts its vectors into Qdrant; PostgreSQL + pgvector + AGE loads the products with COPY under a pgvector HNSW index and creates the graph with UNWIND inside Cypher; ArangoDB import_bulk; MongoDB insert_many."
       ],
       "columns": [
         "transaction p50 ms",
@@ -5110,6 +5109,7 @@
           }
         }
       ],
+      "instrument": "2026-10",
       "directions": {
         "transaction p50 ms": "down",
         "transaction p99 ms": "down",
@@ -5137,14 +5137,14 @@
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
         "No engine settles inside the ingest timer. QuestDB's WAL apply runs after the clock stops, and the newest-reading query is asked unbounded on every engine, so the unsealed tail a scan walks costs the same everywhere. Sealing the write buffer makes the aggregation faster and the last-point query slower, and settling only ours would have been a one-sided advantage. Rows that record a settle time did that settling after the timer stopped.",
-        "One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark. A matched one-tag/ten-tag run prices the schema at 2.0x on ingest and 2.6x faster on last-point.",
-        "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound: telling the engine to look only at the past hour made it slower, 0.860 ms against 0.720, because evaluating the time filter costs more than the scan it saves.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark.",
+        "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound; the same query bounded to the past hour is measured beside it and kept on the row rather than printed.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
         "ArcadeDB's served arm is not shown for the per-host hourly query: on the server's SQL path that query returns one bucket per host instead of one per host and hour, which the answer check caught by comparing its result against the other engines'. Its embedded twin, on the same build, returns the same answer as everyone else, and the single-key form of the same query agrees on both. A latency for an answer that differs from every other engine's is not a measurement of this query, so the cell is withheld rather than printed.",
         "The cold column is the very first query of a session, the newest reading, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
-        "Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP."
+        "Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP; SQLite executemany in batched transactions; MongoDB insert_many in batches into a time-series collection; TimescaleDB COPY; ArangoDB import_bulk; SurrealDB inserts through its Python SDK."
       ],
       "columns": [
         "newest reading p50 ms",
@@ -6117,6 +6117,7 @@
           }
         }
       ],
+      "instrument": "2026-10",
       "directions": {
         "newest reading p50 ms": "down",
         "newest reading p99 ms": "down",
@@ -6155,7 +6156,6 @@
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
         "The SESSION is open + action + close. Reporting open and close alone hides work triggered between them.",
         "Cold start is measured in a fresh subprocess and reported beside every session number, because a millisecond open inside a process that takes half a second to reach its first database call is not a millisecond to whoever launched it.",
-        "Known at this engine build: a vector database's no-op session close grows with the index (1.5 s at 10k), because the first search after a write started a full asynchronous graph rebuild and close() waited on it. Filed as #7183, fixed upstream in #7191 for 26.10.1; the October re-pin re-measures it.",
         "A clean close should be O(what was written), not O(what is stored): write nothing and closing should cost the same at 10k documents and 10M.",
         "Server rows have no JVM start, first open, or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.",
         "Graph with the analytical view is withheld: its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October",
@@ -6925,6 +6925,7 @@
       ],
       "source_path": "benchmarks/experiments/results/runs_skeleton_laptop.csv",
       "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_skeleton_laptop.csv",
+      "instrument": "2026-10",
       "directions": {
         "JVM start ms": "down",
         "first open ms": "down",
@@ -9459,6 +9460,7 @@
       ],
       "source_paths": [],
       "source_path": null,
+      "instrument": "2026-10",
       "directions": {
         "no wait ms": "down",
         "waits for the disk ms": "down"
@@ -9473,14 +9475,14 @@
       "dataset": "TPC-C new-order on the TPC-H SF1 tables",
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
-        "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
-        "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
-        "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "Six transactional operations. New-order: TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction. Payment: TPC-C's payment against one of the orders new-order just placed, chosen at random: the order is read, marked paid, and the payment inserted, in one transaction. Insert: one record inserted by key. Read: one record read back by key. Update: one record's quantity updated by key. Delete: one record deleted by key. OLTP ops/s is the rate of the two TPC-C transactions together; the four single-record operations are timed one at a time.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
-        "Each repetition runs 1,000 new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate.",
-        "SurrealDB (server) at TPC-H SF0.01 (60k line items, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 70 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size."
+        "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF0.01 (60k line items, skeleton), of the 0.15 GiB shown, 0.139 GiB is our Python client and 0.006 GiB is the database.",
+        "Each repetition runs 1,000 new-order transactions and 1,000 payments, then 1,000 each of the single-record insert, read, update, and delete; the p50 and p99 are over those, and OLTP ops/s is the rate of the two transactions together.",
+        "SurrealDB (server) at TPC-H SF0.01 (60k line items, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "Ingest paths: ArcadeDB embedded loads through the Python package's insert_many in 10,000-row batches, one JSON payload per batch; served sends INSERT statements as sqlscript batches over HTTP; PostgreSQL COPY FROM STDIN; DuckDB CREATE TABLE AS SELECT from in-memory frames; SQLite executemany; MongoDB insert_many; ArangoDB import_bulk; SurrealDB inserts through its Python SDK."
       ],
       "columns": [
         "new-order p50 ms",
@@ -10289,6 +10291,7 @@
       "source_urls": [
         "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_skeleton_laptop.csv"
       ],
+      "instrument": "2026-10",
       "directions": {
         "new-order p50 ms": "down",
         "new-order p99 ms": "down",
@@ -10313,15 +10316,15 @@
       "dataset": "TPC-H Q1 and Q6 at SF1",
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
-        "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
-        "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
-        "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "Five analytical queries, each over the whole line-item table. Q1: TPC-H's own Q1, the pricing summary: it groups and aggregates every line item, so it measures a full scan. Q6: TPC-H's own Q6, the forecasting revenue change: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need. Top parts: the ten parts with the highest revenue, a group-by over every line item with a sort and a limit. Ship mode: how many line items went by each ship mode, a group-by over the whole table. By month: revenue by month of shipment, a group-by on a date expression. All times are milliseconds.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
         "The cold column is the very first query of a session, TPC-H Q1, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF0.01 (60k line items, skeleton), of the 0.15 GiB shown, 0.139 GiB is our Python client and 0.006 GiB is the database.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at TPC-H SF0.01 (60k line items, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "SurrealDB (server) at TPC-H SF0.01 (60k line items, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 70 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size."
+        "SurrealDB (server) at TPC-H SF0.01 (60k line items, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "Ingest paths: ArcadeDB embedded loads through the Python package's insert_many in 10,000-row batches, one JSON payload per batch; served sends INSERT statements as sqlscript batches over HTTP; PostgreSQL COPY FROM STDIN; DuckDB CREATE TABLE AS SELECT from in-memory frames; SQLite executemany; MongoDB insert_many; ArangoDB import_bulk; SurrealDB inserts through its Python SDK."
       ],
       "columns": [
         "Q1 p50 ms",
@@ -11039,6 +11042,7 @@
       "source_urls": [
         "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_skeleton_laptop.csv"
       ],
+      "instrument": "2026-10",
       "directions": {
         "Q1 p50 ms": "down",
         "Q1 p99 ms": "down",
@@ -11063,5 +11067,261 @@
       "source_path": "benchmarks/experiments/results/runs_skeleton_laptop.csv",
       "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_skeleton_laptop.csv"
     }
-  ]
+  ],
+  "condition_provenance": {
+    "generated": [
+      {
+        "text": "Graph with the analytical view is withheld: its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October",
+        "values": [
+          "its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October"
+        ]
+      },
+      {
+        "text": "DuckDB, LadybugDB, Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
+        "values": [
+          "DuckDB",
+          "LadybugDB",
+          "Neo4j",
+          "Neo4j (vector index)",
+          "Qdrant + Neo4j (no shared transaction)"
+        ]
+      },
+      {
+        "text": "SurrealDB (server) has no durability setting to read and what it does at commit could not be established from the engine, so the one number printed is in neither class. It is placed in the waiting column because that is the safer reading of an unknown, and this line is why it is there.",
+        "values": [
+          "SurrealDB (server)"
+        ]
+      },
+      {
+        "text": "Every deterministic answer on this table is hashed and compared across the engines before anything is published, and a publish is refused when two of them disagree. What that comparison could not cover, declared rather than skipped: ArcadeDB (embedded) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; ArcadeDB (embedded) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; ArcadeDB (server) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran; ArcadeDB (server) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest; lifecycle_read: not compared across arms, because the embedded and served lifecycle arms run different mode sets, so their post-state record counts differ by construction.",
+        "values": [
+          "ArcadeDB (embedded) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran",
+          "ArcadeDB (embedded) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest",
+          "ArcadeDB (server) cannot express lifecycle_read: situation 'empty' issues no read in the modes this cell ran",
+          "ArcadeDB (server) cannot express lifecycle_read: the vector situation's read goes through an approximate index; it is checked by recall on the dense lane, not by an exact digest",
+          "lifecycle_read: not compared across arms, because the embedded and served lifecycle arms run different mode sets, so their post-state record counts differ by construction"
+        ]
+      },
+      {
+        "text": "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split on this row: the lane warms before it times, so every timed query here is warm. The sparse table's cold and warm columns come from the multipass driver (DECISIONS #89)",
+        "values": [
+          "no cold/warm split on this row: the lane warms before it times, so every timed query here is warm. The sparse table's cold and warm columns come from the multipass driver (DECISIONS #89)"
+        ]
+      },
+      {
+        "text": "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
+        "values": [
+          "no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)"
+        ]
+      },
+      {
+        "text": "The cold column is the very first query of a session, most friends, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
+        "values": [
+          "most friends"
+        ]
+      },
+      {
+        "text": "The cold column is the very first query of a session, the newest reading, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
+        "values": [
+          "the newest reading"
+        ]
+      },
+      {
+        "text": "The cold column is the very first query of a session, TPC-H Q1, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
+        "values": [
+          "TPC-H Q1"
+        ]
+      },
+      {
+        "text": "The insert and delete into a built index, and the recall after each, run at 5k vectors (skeleton) (forced on by BENCH_DENSE_MUTATE=1).",
+        "values": [
+          "5k vectors (skeleton)",
+          "forced on by BENCH_DENSE_MUTATE=1"
+        ]
+      },
+      {
+        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`.",
+        "values": []
+      },
+      {
+        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, DuckDB VSS, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that.",
+        "values": [
+          "DuckDB",
+          "DuckDB VSS",
+          "Neo4j"
+        ]
+      },
+      {
+        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "values": [
+          "LadybugDB",
+          "Neo4j",
+          "SurrealDB (server)"
+        ]
+      },
+      {
+        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "values": [
+          "Neo4j",
+          "Neo4j (vector index)",
+          "Qdrant + Neo4j (no shared transaction)",
+          "SurrealDB (server)"
+        ]
+      },
+      {
+        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "values": [
+          "DuckDB",
+          "SurrealDB (server)"
+        ]
+      },
+      {
+        "text": "Each printed cell here is ONE run, not the median of five, and the min and max beside it are that same single sample. The campaign runs five and prints the median; this page does not.",
+        "values": []
+      },
+      {
+        "text": "Each timed pass answers 1,000 queries.",
+        "values": [
+          "1,000"
+        ]
+      },
+      {
+        "text": "ingest s and index s are two timers where the engine has the boundary: inserting the vectors, then building the index. ArangoDB (fp32), Chroma (fp32), DuckDB VSS (fp32), Qdrant (fp32), Qdrant (int8), SurrealDB (embedded, fp32), SurrealDB (server, fp32), sqlite-vec (fp32), sqlite-vec (int8) record one timer only, because the index is built while ingesting or the adapter times no boundary, so their ingest s and index s are blank. ingest+index total s is one timer around both, and ingest+index vectors/s divides the vector count by it.",
+        "values": [
+          "ArangoDB (fp32)",
+          "Chroma (fp32)",
+          "DuckDB VSS (fp32)",
+          "Qdrant (fp32)",
+          "Qdrant (int8)",
+          "SurrealDB (embedded, fp32)",
+          "SurrealDB (server, fp32)",
+          "sqlite-vec (fp32)",
+          "sqlite-vec (int8)"
+        ]
+      },
+      {
+        "text": "SurrealDB (server) at 5k vectors (skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "values": [
+          "SurrealDB (server)",
+          "5k vectors (skeleton)",
+          "0.0",
+          "74",
+          "0.07"
+        ]
+      },
+      {
+        "text": "Each repetition runs every read against a fresh set of start persons (2k people (synthetic, skeleton): 50) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
+        "values": [
+          "2k people (synthetic, skeleton): 50",
+          "1,000"
+        ]
+      },
+      {
+        "text": "SurrealDB (server) at 2k people (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "values": [
+          "SurrealDB (server)",
+          "2k people (synthetic, skeleton)",
+          "0.0",
+          "74",
+          "0.07"
+        ]
+      },
+      {
+        "text": "Five questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. Degree distribution: how many people have each number of friends, counted over every edge in the graph. Triangle count: how many sets of three people are all friends with one another, each triangle counted once. All times are milliseconds.",
+        "values": []
+      },
+      {
+        "text": "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
+        "values": [
+          "100"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people (synthetic, skeleton)",
+          "0.25 hour"
+        ]
+      },
+      {
+        "text": "ArangoDB at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArangoDB",
+          "2k people (synthetic, skeleton)",
+          "triangle count",
+          "300 s budget",
+          "after 5 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArcadeDB (embedded, GAV) at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 18 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArcadeDB (embedded, GAV)",
+          "2k people (synthetic, skeleton)",
+          "triangle count",
+          "300 s budget",
+          "after 18 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArcadeDB (server, GAV) at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 16 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArcadeDB (server, GAV)",
+          "2k people (synthetic, skeleton)",
+          "triangle count",
+          "300 s budget",
+          "after 16 of 100 iterations"
+        ]
+      },
+      {
+        "text": "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
+        "values": [
+          "300"
+        ]
+      },
+      {
+        "text": "Six transactional operations. New-order: TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction. Payment: TPC-C's payment against one of the orders new-order just placed, chosen at random: the order is read, marked paid, and the payment inserted, in one transaction. Insert: one record inserted by key. Read: one record read back by key. Update: one record's quantity updated by key. Delete: one record deleted by key. OLTP ops/s is the rate of the two TPC-C transactions together; the four single-record operations are timed one at a time.",
+        "values": []
+      },
+      {
+        "text": "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF0.01 (60k line items, skeleton), of the 0.15 GiB shown, 0.139 GiB is our Python client and 0.006 GiB is the database.",
+        "values": [
+          "0.15",
+          "0.139",
+          "0.006",
+          "TPC-H SF0.01 (60k line items, skeleton)"
+        ]
+      },
+      {
+        "text": "Each repetition runs 1,000 new-order transactions and 1,000 payments, then 1,000 each of the single-record insert, read, update, and delete; the p50 and p99 are over those, and OLTP ops/s is the rate of the two transactions together.",
+        "values": [
+          "1,000",
+          "1,000"
+        ]
+      },
+      {
+        "text": "SurrealDB (server) at TPC-H SF0.01 (60k line items, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "values": [
+          "SurrealDB (server)",
+          "TPC-H SF0.01 (60k line items, skeleton)",
+          "0.0",
+          "74",
+          "0.07"
+        ]
+      },
+      {
+        "text": "Five analytical queries, each over the whole line-item table. Q1: TPC-H's own Q1, the pricing summary: it groups and aggregates every line item, so it measures a full scan. Q6: TPC-H's own Q6, the forecasting revenue change: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need. Top parts: the ten parts with the highest revenue, a group-by over every line item with a sort and a limit. Ship mode: how many line items went by each ship mode, a group-by over the whole table. By month: revenue by month of shipment, a group-by on a date expression. All times are milliseconds.",
+        "values": []
+      },
+      {
+        "text": "SurrealDB (embedded) at TPC-H SF0.01 (60k line items, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "values": [
+          "SurrealDB (embedded)",
+          "TPC-H SF0.01 (60k line items, skeleton)",
+          "0.25 hour"
+        ]
+      }
+    ]
+  }
 }

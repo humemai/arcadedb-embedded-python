@@ -43,6 +43,13 @@ SAMPLE_INTERVAL = 0.25
 
 # P-core threads on the i9-12900HK bench host; override for other hosts.
 CPUSET = os.environ.get("BENCH_CPUSET", "0-11")
+# Two numbers the page's condition sentences quote and page_check pins here
+# rather than letting them be typed (2026-09-16): the disk reading settles
+# when two samples agree within this fraction (_disk_reading below), and
+# the Milvus image's own segment seal proportion, which docker-conf/
+# milvus-dense.yaml overrides (BUGS F8; the override is read from the yaml).
+DISK_SETTLE_TOL = 0.01
+MILVUS_IMAGE_SEAL_PROPORTION = 0.12
 MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 "large": "48g",
                 # Lifecycle tiers (l5). Small caps on purpose: this lane
@@ -1786,7 +1793,7 @@ def container_disk(cid, settle_s=3.0, tries=3):
             round(total, 1), round(rw, 1), round(vol, 1))
         if prev is not None:
             spread = abs(total - prev) / max(total, prev, 1e-9)
-            if spread <= 0.01:
+            if spread <= DISK_SETTLE_TOL:
                 out["disk_settled"] = True
                 return out
             note = f"still moving after {i + 1} samples: {prev:.1f} -> {total:.1f} MiB"

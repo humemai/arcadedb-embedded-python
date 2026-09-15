@@ -79,6 +79,11 @@ SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000,
               "deep10m": 9_990_000}
 N_QUERIES = 1_000
 BATCH = 10_000
+# The served build's sqlscript batch and Chroma's add() batch, named so the
+# page's ingest-path sentence can pin its numbers to these rather than type
+# them (page_check, condition pins, 2026-09-16). Behaviour unchanged.
+SERVER_BATCH = 500
+CHROMA_BATCH = 5_000
 # What an IVF arm records instead of a degree (arango_common); the lane and
 # the multipass driver read the same tuple so they cannot disagree.
 IVF_FIELDS = ("ivf_nlists", "ivf_nprobe", "ivf_recall_target", "ivf_recall_target_source",
@@ -675,7 +680,7 @@ class ArcadeServer(Base):
             # rightly ask. Not tested at 10M, where neighbour gaps are tighter.
             w = ", ".join("%.9g" % x for x in vecs[vid])
             buf.append(f"INSERT INTO Article SET vid = {vid}, embedding = [{w}]")
-            if len(buf) >= 500:
+            if len(buf) >= SERVER_BATCH:
                 self._cmd("sqlscript", ";".join(buf))
                 buf = []
         if buf:
@@ -750,9 +755,9 @@ class Chroma(Base):
 
     def build(self, vecs):
         ids = [str(i) for i in range(len(vecs))]
-        for i in range(0, len(vecs), 5000):
-            self.col.add(ids=ids[i:i + 5000],
-                         embeddings=vecs[i:i + 5000].tolist())
+        for i in range(0, len(vecs), CHROMA_BATCH):
+            self.col.add(ids=ids[i:i + CHROMA_BATCH],
+                         embeddings=vecs[i:i + CHROMA_BATCH].tolist())
 
     def search(self, qvec, k):
         res = self.col.query(query_embeddings=[qvec.tolist()], n_results=k)
