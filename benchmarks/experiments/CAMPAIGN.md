@@ -6,7 +6,7 @@ Two loops, one inside the other. This is the whole procedure in order; each step
 
 Per campaign, once:
 
-1. Settle the instrument before any cell runs: the query set, the measurement set, the durability rule, the fairness invariants, and the answer checking. A change mid-campaign splits the rows, so this is the only free moment (DECISIONS #82d, #88, #89, #90; PROTOCOL.md).
+1. Settle the instrument before any cell runs: the query set, the measurement set, the durability rule, the fairness invariants, and the answer checking. A change mid-campaign splits the rows, so this is the only free moment (DECISIONS #82d, #88, #89, #90; PROTOCOL.md). The method pages in the package documentation (`bindings/python/docs/benchmarks/`) describe the same instrument without numbers, so they change in this step too, never later.
 2. Smoke every adapter on the laptop, one cell per engine per lane, and keep the evidence table (section 2 below).
 3. Re-pin every comparator to its latest stable release, smoking the risky jumps on their own (COMPARATORS.md, DECISIONS #87).
 4. Publish a skeleton to the preview route from laptop data, so the page's shape can be reviewed before the numbers exist (DECISIONS #86, PUBLISHING.md).
@@ -14,7 +14,7 @@ Per campaign, once:
 6. Freeze, run every gate including the manifest coverage check, and publish the results asset (`publish_results_asset.py`, PUBLISHING.md).
 7. Switch: copy the preview payload, images, and prose over the live ones in one commit, and delete the preview route (`campaign_switch_check.py`, PUBLISHING.md).
 8. Prune what the campaign made obsolete: superseded decisions, bugs that retired with it, retired markers, and any withheld cell whose upstream issue has closed (step 4 of the switch check).
-9. Re-read every document the pruning touched, then rebuild both sites and check the links between them resolve.
+9. Re-read every document the pruning touched, then rebuild both sites, the project page and the package documentation, and check the links between them resolve in both directions (`uv run mkdocs build --strict -f bindings/python/mkdocs.yml` from the repository root).
 
 Per stage, repeated inside step 5:
 

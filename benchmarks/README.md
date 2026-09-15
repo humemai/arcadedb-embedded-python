@@ -1,21 +1,24 @@
 # ArcadeDB benchmarks: harnesses and results
 
-Two suites, split by what they compare. Both run every backend in Docker under
-the same CPU and memory caps, report five repetitions per cell, and publish
-the rows their numbers are computed from.
+Two suites. Both reach ArcadeDB through the Python package, run every
+backend in Docker under the same CPU and memory caps, report five repetitions
+per cell, and publish the rows their numbers are computed from. They differ
+in scope and in where they publish, not in the kind of thing they measure.
 
-- `experiments/` is **engine versus engine**: ArcadeDB's multi-model engine
-  against specialist and multi-model systems, each pinned by image digest, on
-  documents, graph, dense and sparse vectors, time series, and cross-model
-  queries. Its results are the project page at
+- `experiments/` is the **live harness**: ArcadeDB, embedded and served,
+  against more than twenty specialist and multi-model engines on documents,
+  graph, dense and sparse vectors, time series, and cross-model queries. It
+  is what every campaign runs, and its results are the project page at
   <https://humem.ai/projects/arcadedb>. There is no paper; the page is the
   only artifact, and every number on it is generated from the frozen rows by
   the exporter and checked by gates before it can be published.
-- `python-bindings/` is **binding versus binding, and Python versus Java**:
-  the same engine reached through the Python package against SQLite, DuckDB,
-  LadybugDB, and Chroma, plus `jpype_overhead/`, which times the binding
-  against Java-native execution on identical jars. This is the suite behind
-  the SciPy 2026 paper, and its own README carries the versions and layout.
+- `python-bindings/` is the **SciPy 2026 paper's artifact**, frozen with the
+  paper: the package as published on PyPI against four embedded Python
+  specialists on one corpus, plus `jpype_overhead/`, which times the binding
+  against Java-native execution on identical jars. It predates the live
+  harness, is kept so the paper's numbers stay reproducible, and is not
+  extended; new work goes in `experiments/`. Its own README carries its
+  versions and layout.
 
 ## Where to start in `experiments/`
 
