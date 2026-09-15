@@ -7,7 +7,7 @@
       "1.5.9"
     ],
     "composed_qdrant_neo4j": [
-      "qdrant-local:1.19.0+neo4j:5.26.28"
+      "qdrant-local:1.19.0+neo4j:2026.07.1"
     ],
     "duckdb": [
       "(no version recorded)",
@@ -50,6 +50,12 @@
     "pg_age_e2": [
       "PostgreSQL 17.11 + pgvector:0.8.6 + age:1.7.0"
     ],
+    "pgvector_dense": [
+      "pgvector:0.8.6 on PostgreSQL 17.11"
+    ],
+    "pgvector_sparse": [
+      "pgvector:0.8.6 on PostgreSQL 17.11"
+    ],
     "postgres": [
       "17.10 (Debian 17.10-1.pgdg13+1)",
       "PostgreSQL 17.10"
@@ -84,13 +90,13 @@
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
     "surrealdb_e2": [
-      "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
+      "surrealdb-embedded:2.0.0"
     ],
     "surrealdb_e2_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
     "surrealdb_graph": [
-      "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
+      "surrealdb-embedded:2.0.0"
     ],
     "surrealdb_graph_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
@@ -133,9 +139,11 @@
     "container:02e5f67c3cd1 (host unknown)",
     "container:032ef161c942 (host unknown)",
     "container:03f5c353112a (host unknown)",
+    "container:0568d1d5fba1 (host unknown)",
     "container:066ef9a8bacb (host unknown)",
     "container:0730b83ae518 (host unknown)",
     "container:0870a624fbf7 (host unknown)",
+    "container:089a96be52f2 (host unknown)",
     "container:0905c1476afa (host unknown)",
     "container:091b3036fd20 (host unknown)",
     "container:0a4c7067512f (host unknown)",
@@ -151,6 +159,7 @@
     "container:0ff5a6f02422 (host unknown)",
     "container:1014a3225250 (host unknown)",
     "container:10b45b6b828e (host unknown)",
+    "container:10cea4e62f69 (host unknown)",
     "container:1126c9b5816b (host unknown)",
     "container:11b6065da920 (host unknown)",
     "container:12a3b92cac96 (host unknown)",
@@ -159,7 +168,10 @@
     "container:139d3c8f1bd8 (host unknown)",
     "container:13afa66012d2 (host unknown)",
     "container:13ba82b65cf8 (host unknown)",
+    "container:14004ff8a5b0 (host unknown)",
+    "container:146b15005e87 (host unknown)",
     "container:148c80348eeb (host unknown)",
+    "container:14cafd67c55c (host unknown)",
     "container:155b5c187b88 (host unknown)",
     "container:166ad4fcd6ea (host unknown)",
     "container:188a19504c20 (host unknown)",
@@ -172,10 +184,13 @@
     "container:1bdf52ac9a13 (host unknown)",
     "container:1c760263f74e (host unknown)",
     "container:1cb88b5f0687 (host unknown)",
+    "container:1cd36eb6081e (host unknown)",
     "container:1f574fa5772d (host unknown)",
     "container:1fd99dfdede3 (host unknown)",
     "container:210f14f81f4d (host unknown)",
-    "container:232de6b56afe (host unknown)",
+    "container:214da995b02f (host unknown)",
+    "container:226563f84880 (host unknown)",
+    "container:22ffd02441c4 (host unknown)",
     "container:23e2c7a02c1d (host unknown)",
     "container:24021d5788d5 (host unknown)",
     "container:246aaf7f2354 (host unknown)",
@@ -184,6 +199,9 @@
     "container:24dc1c976a55 (host unknown)",
     "container:2596e52f1a5d (host unknown)",
     "container:25ece5b76009 (host unknown)",
+    "container:26a0dab9119b (host unknown)",
+    "container:27567522f3c4 (host unknown)",
+    "container:2848632295a7 (host unknown)",
     "container:2925b9b26111 (host unknown)",
     "container:295b760908a6 (host unknown)",
     "container:2be385c774d1 (host unknown)",
@@ -239,6 +257,7 @@
     "container:492d5bb0aa56 (host unknown)",
     "container:493ddb5e1020 (host unknown)",
     "container:495f3112c14f (host unknown)",
+    "container:49944f25cb1e (host unknown)",
     "container:49a9959fc31d (host unknown)",
     "container:49ecc7f3fa00 (host unknown)",
     "container:4a0dae2f3a30 (host unknown)",
@@ -254,6 +273,7 @@
     "container:4fde7e147ff7 (host unknown)",
     "container:502f9ba282e5 (host unknown)",
     "container:505ec3b6a081 (host unknown)",
+    "container:50b5255f3b4b (host unknown)",
     "container:50ca4c00c4d4 (host unknown)",
     "container:540e6dc1d521 (host unknown)",
     "container:542b48ee6d8c (host unknown)",
@@ -268,8 +288,8 @@
     "container:59fbd8c227d0 (host unknown)",
     "container:5a11f76f1f5b (host unknown)",
     "container:5b3db757207d (host unknown)",
+    "container:5bff444b0cab (host unknown)",
     "container:5c2e53311ad7 (host unknown)",
-    "container:5c9fd34b62a8 (host unknown)",
     "container:5d15c68cfbf4 (host unknown)",
     "container:5dc396e140fa (host unknown)",
     "container:5de28d5d5957 (host unknown)",
@@ -277,7 +297,9 @@
     "container:5eb42d466fd2 (host unknown)",
     "container:5fb8048b7b2f (host unknown)",
     "container:60e01057275a (host unknown)",
+    "container:6154f709ae9c (host unknown)",
     "container:62c4cc638f62 (host unknown)",
+    "container:6314a1a87417 (host unknown)",
     "container:63e3e1a15f4c (host unknown)",
     "container:63ec69b9e5db (host unknown)",
     "container:63f25cb3afb9 (host unknown)",
@@ -317,7 +339,6 @@
     "container:77d0d0c52b8e (host unknown)",
     "container:77dd8173d40b (host unknown)",
     "container:793c4f17e248 (host unknown)",
-    "container:79cf279810aa (host unknown)",
     "container:7b2de57e8af2 (host unknown)",
     "container:7b47b18f14ac (host unknown)",
     "container:7b830271fdbd (host unknown)",
@@ -335,14 +356,17 @@
     "container:81fd3427ba4c (host unknown)",
     "container:822825b1bd5f (host unknown)",
     "container:824308314c1a (host unknown)",
+    "container:8418561e40e9 (host unknown)",
     "container:8508eaf43bdc (host unknown)",
-    "container:85deb37be0ef (host unknown)",
     "container:8677db61bd70 (host unknown)",
     "container:86a99d9e9c43 (host unknown)",
+    "container:87665b7c8c8c (host unknown)",
     "container:885cf3283205 (host unknown)",
     "container:894d6dbf295e (host unknown)",
     "container:8a02a7b3b96b (host unknown)",
     "container:8a32e3fc7cf7 (host unknown)",
+    "container:8a5ee99eaff1 (host unknown)",
+    "container:8aa98bfbfe14 (host unknown)",
     "container:8aeaffff4e7a (host unknown)",
     "container:8b60b7498aa1 (host unknown)",
     "container:8b7296de5613 (host unknown)",
@@ -357,6 +381,7 @@
     "container:8ddead54ad9e (host unknown)",
     "container:9013cbd81dc0 (host unknown)",
     "container:912560b6ca76 (host unknown)",
+    "container:923c9fd86a8d (host unknown)",
     "container:927dbd968242 (host unknown)",
     "container:937495f67303 (host unknown)",
     "container:93b3e34780b3 (host unknown)",
@@ -401,6 +426,7 @@
     "container:aefa8e29018e (host unknown)",
     "container:afc5ef3b5655 (host unknown)",
     "container:b0287b1862a0 (host unknown)",
+    "container:b04dd10d8d95 (host unknown)",
     "container:b0aadec24409 (host unknown)",
     "container:b17fb9ccc77b (host unknown)",
     "container:b1d6190c72b5 (host unknown)",
@@ -442,6 +468,7 @@
     "container:c142f2b7ae40 (host unknown)",
     "container:c1c94238b8c9 (host unknown)",
     "container:c1f7ea0ea226 (host unknown)",
+    "container:c21777e9b4c5 (host unknown)",
     "container:c2a19dd0a573 (host unknown)",
     "container:c2c737a2ac4c (host unknown)",
     "container:c45476600d0e (host unknown)",
@@ -456,10 +483,12 @@
     "container:c9f35452bde2 (host unknown)",
     "container:cbb92a326aed (host unknown)",
     "container:cc1f2b2b6e22 (host unknown)",
+    "container:cdda81ac28e3 (host unknown)",
     "container:cdf80a395ddf (host unknown)",
     "container:ceda8119abc2 (host unknown)",
     "container:cf22f75007e0 (host unknown)",
     "container:cf8f271444a5 (host unknown)",
+    "container:cfbf4e1bf664 (host unknown)",
     "container:cfc7312c5a11 (host unknown)",
     "container:cfca663a6b98 (host unknown)",
     "container:d01151c71c5c (host unknown)",
@@ -480,6 +509,7 @@
     "container:d79362bb599f (host unknown)",
     "container:d7e9f41bc9b8 (host unknown)",
     "container:d809d6e8e463 (host unknown)",
+    "container:d9300d92f761 (host unknown)",
     "container:da09b997ec24 (host unknown)",
     "container:da59c049ebd0 (host unknown)",
     "container:da8555a4594a (host unknown)",
@@ -512,6 +542,7 @@
     "container:ec46de835386 (host unknown)",
     "container:ec618a5434ed (host unknown)",
     "container:eda734f67bbd (host unknown)",
+    "container:edd68e5f6a61 (host unknown)",
     "container:ede5e1c69813 (host unknown)",
     "container:eefc88bae1ac (host unknown)",
     "container:f0057886a455 (host unknown)",
@@ -519,6 +550,7 @@
     "container:f1b05e64fca8 (host unknown)",
     "container:f1dc4891f5a1 (host unknown)",
     "container:f1e870385350 (host unknown)",
+    "container:f32f06f7c937 (host unknown)",
     "container:f531e124ab98 (host unknown)",
     "container:f5a0c9ec6ce5 (host unknown)",
     "container:f5a700cd60ab (host unknown)",
@@ -534,7 +566,6 @@
     "container:fdf655eba421 (host unknown)",
     "container:fe46884b2388 (host unknown)",
     "container:fea4c18c8c86 (host unknown)",
-    "container:fed84432241c (host unknown)",
     "container:ff8851d9e598 (host unknown)",
     "container:ff9179584a3a (host unknown)"
   ],
@@ -595,13 +626,10 @@
         "ingest+index total s is one timer around inserting the documents and building the index; the two are not timed separately (Qdrant builds its index while ingesting, so the split is not defined there). ingest+index vectors/s divides the document count by it.",
         "Elasticsearch runs with index-time token pruning disabled. Its 9.x default prunes on thresholds tuned for a different model's vectors and costs recall on this corpus, which would have printed a quality gap belonging to that default rather than to the engine, and printed it in our favour.",
         "Cold is the first timed pass after the index is built; warm is the same engine run again over an index it has already read, and gain is cold over warm. Here a second pass changes little and the order of the table is the same either way. The dense table below is not like this: there ArcadeDB gains the most on a second pass and the order depends on which pass you time.",
-        "ArcadeDB's server takes roughly twice as long to build as its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "ArcadeDB's server takes longer to build than its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: a document here has about 127 non-zero weights, so each one arrives as roughly 254 numbers spelled out as text, which the server then has to read back into numbers.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "Cold p50 and p99 are the first timed pass after the build, median of five builds. Warm and gain come from a separate run of the same arms: one build per engine, then five more passes over a different half of the query set, so a warm number cannot be explained by the engine having already answered that exact query; gain is that run's cold over its warm.",
         "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
-        "pgvector at 8.84M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: psycopg.errors.DiskFull: could not resize shared memory segment \"/PostgreSQL.1259691622\" t",
-        "pgvector at 1M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: psycopg.errors.DiskFull: could not resize shared memory segment \"/PostgreSQL.378133466\" to",
-        "pgvector at 100k vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: psycopg.errors.DiskFull: could not resize shared memory segment \"/PostgreSQL.3871279714\" t",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load)."
       ],
       "columns": [
@@ -1065,6 +1093,81 @@
               "median": 1.03,
               "min": 1.03,
               "max": 1.03,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "pgvector",
+          "is_arcadedb": false,
+          "precision": "fp32",
+          "scale": "tiny",
+          "scale_label": "100k vectors",
+          "workload": "search",
+          "n_docs": "100000",
+          "deployment": "server",
+          "image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",
+          "version_name": "pgvector 0.8.6",
+          "host": "container:5bff444b0cab (host unknown)",
+          "metrics": {
+            "recall@10": {
+              "median": 0.8206,
+              "min": 0.8185,
+              "max": 0.8256,
+              "n": 5
+            },
+            "ingest+index vectors/s": {
+              "median": 1519.0,
+              "min": 1516.6,
+              "max": 1528.5,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 65.83,
+              "min": 65.43,
+              "max": 65.94,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.1381,
+              "min": 0.1376,
+              "max": 0.1396,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.46,
+              "min": 0.4599,
+              "max": 0.4601,
+              "n": 5
+            },
+            "cold p50 ms": {
+              "median": 1.009,
+              "min": 0.912,
+              "max": 1.031,
+              "n": 5
+            },
+            "cold p99 ms": {
+              "median": 1.8,
+              "min": 1.691,
+              "max": 1.877,
+              "n": 5
+            },
+            "warm p50 ms": {
+              "median": 0.843,
+              "min": 0.843,
+              "max": 0.843,
+              "n": 5
+            },
+            "warm p99 ms": {
+              "median": 1.587,
+              "min": 1.587,
+              "max": 1.587,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.2,
+              "min": 1.2,
+              "max": 1.2,
               "n": 1
             }
           }
@@ -1595,6 +1698,81 @@
           }
         },
         {
+          "backend": "pgvector",
+          "is_arcadedb": false,
+          "precision": "fp32",
+          "scale": "small",
+          "scale_label": "1M vectors",
+          "workload": "search",
+          "n_docs": "1000000",
+          "deployment": "server",
+          "image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",
+          "version_name": "pgvector 0.8.6",
+          "host": "container:1cd36eb6081e (host unknown)",
+          "metrics": {
+            "recall@10": {
+              "median": 0.7651,
+              "min": 0.7637,
+              "max": 0.7721,
+              "n": 5
+            },
+            "ingest+index vectors/s": {
+              "median": 1498.1,
+              "min": 1497.6,
+              "max": 1502.0,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 667.53,
+              "min": 665.8,
+              "max": 667.72,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.31,
+              "min": 0.2404,
+              "max": 0.3265,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 3.6229,
+              "min": 3.6229,
+              "max": 3.6229,
+              "n": 5
+            },
+            "cold p50 ms": {
+              "median": 1.302,
+              "min": 1.295,
+              "max": 1.348,
+              "n": 5
+            },
+            "cold p99 ms": {
+              "median": 2.587,
+              "min": 2.368,
+              "max": 2.694,
+              "n": 5
+            },
+            "warm p50 ms": {
+              "median": 1.255,
+              "min": 1.255,
+              "max": 1.255,
+              "n": 5
+            },
+            "warm p99 ms": {
+              "median": 2.547,
+              "min": 2.547,
+              "max": 2.547,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.06,
+              "min": 1.06,
+              "max": 1.06,
+              "n": 1
+            }
+          }
+        },
+        {
           "backend": "Qdrant",
           "is_arcadedb": false,
           "precision": "fp32",
@@ -2120,6 +2298,81 @@
           }
         },
         {
+          "backend": "pgvector",
+          "is_arcadedb": false,
+          "precision": "fp32",
+          "scale": "medium",
+          "scale_label": "8.84M vectors",
+          "workload": "search",
+          "n_docs": "8841823",
+          "deployment": "server",
+          "image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",
+          "version_name": "pgvector 0.8.6",
+          "host": "container:26a0dab9119b (host unknown)",
+          "metrics": {
+            "recall@10": {
+              "median": 0.7216,
+              "min": 0.7137,
+              "max": 0.744,
+              "n": 5
+            },
+            "ingest+index vectors/s": {
+              "median": 1502.0,
+              "min": 1498.0,
+              "max": 1507.0,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 5886.57,
+              "min": 5867.34,
+              "max": 5902.53,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.3896,
+              "min": 0.3677,
+              "max": 0.402,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 29.1664,
+              "min": 29.1659,
+              "max": 29.167,
+              "n": 5
+            },
+            "cold p50 ms": {
+              "median": 2.536,
+              "min": 2.411,
+              "max": 2.604,
+              "n": 5
+            },
+            "cold p99 ms": {
+              "median": 4.993,
+              "min": 4.658,
+              "max": 5.138,
+              "n": 5
+            },
+            "warm p50 ms": {
+              "median": 1.284,
+              "min": 1.284,
+              "max": 1.284,
+              "n": 5
+            },
+            "warm p99 ms": {
+              "median": 2.937,
+              "min": 2.937,
+              "max": 2.937,
+              "n": 5
+            },
+            "gain": {
+              "median": 1.83,
+              "min": 1.83,
+              "max": 1.83,
+              "n": 1
+            }
+          }
+        },
+        {
           "backend": "Qdrant",
           "is_arcadedb": false,
           "precision": "fp32",
@@ -2223,15 +2476,13 @@
       "conditions": [
         "ingest+index total s is one timer around inserting the vectors and building the index; the two are not timed separately (Qdrant and Chroma build the index while ingesting, so the split is not defined there). ingest+index vectors/s divides the vector count by it.",
         "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
-        "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. Only ArcadeDB moves between them, because it pages its index off disk while the others are resident from build. Every comparator here is within 3% of itself.",
-        "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried 26 to 28 small segments and read 2.3x slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
+        "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. ArcadeDB pages its index off disk while most comparators are resident from build, so read the two columns against each other rather than either alone.",
+        "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, runs landed on many small segments and read slower with higher recall, at a moment the engine chose. One line changed from the image's configuration; sparse rows are at the default.",
         "ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
-        "pgvector at 9.99M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: psycopg.errors.DiskFull: could not resize shared memory segment \"/PostgreSQL.2258273060\" t",
         "SurrealDB (embedded) at 9.99M vectors: the search cell exceeded its 8 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (server) at 9.99M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent",
-        "pgvector at 1M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: psycopg.errors.DiskFull: could not resize shared memory segment \"/PostgreSQL.138564018\" to",
         "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
       ],
@@ -2866,6 +3117,75 @@
               "median": 3.1017,
               "min": 3.1016,
               "max": 3.1017,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "pgvector (fp32)",
+          "is_arcadedb": false,
+          "precision": "fp32",
+          "scale": "small",
+          "scale_label": "1M vectors",
+          "workload": "search",
+          "n_docs": "1,000,000",
+          "deployment": "server",
+          "image": null,
+          "version_name": "pgvector 26.9.1",
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 1.818,
+              "min": 1.783,
+              "max": 1.827,
+              "n": 5
+            },
+            "cold p99 ms": {
+              "median": 2.221,
+              "min": 2.212,
+              "max": 2.245,
+              "n": 5
+            },
+            "warm p50 ms": {
+              "median": 1.795,
+              "min": 1.663,
+              "max": 1.819,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 2.188,
+              "min": 2.147,
+              "max": 2.242,
+              "n": 20
+            },
+            "recall@10": {
+              "median": 0.9851,
+              "min": 0.9849,
+              "max": 0.9859,
+              "n": 20
+            },
+            "ingest+index total s": {
+              "median": 153.81,
+              "min": 153.72,
+              "max": 154.64,
+              "n": 5
+            },
+            "ingest+index vectors/s": {
+              "median": 6501.5,
+              "min": 6466.6,
+              "max": 6505.3,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.052,
+              "min": 0.0508,
+              "max": 0.0527,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 2.5605,
+              "min": 2.5604,
+              "max": 2.5605,
               "n": 5
             }
           }
@@ -3768,6 +4088,75 @@
           }
         },
         {
+          "backend": "pgvector (fp32)",
+          "is_arcadedb": false,
+          "precision": "fp32",
+          "scale": "deep10m",
+          "scale_label": "9.99M vectors",
+          "workload": "search",
+          "n_docs": "9,990,000",
+          "deployment": "server",
+          "image": null,
+          "version_name": "pgvector 26.9.1",
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 2.781,
+              "min": 2.52,
+              "max": 2.828,
+              "n": 5
+            },
+            "cold p99 ms": {
+              "median": 3.654,
+              "min": 3.42,
+              "max": 3.748,
+              "n": 5
+            },
+            "warm p50 ms": {
+              "median": 2.582,
+              "min": 1.963,
+              "max": 2.618,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 3.295,
+              "min": 3.119,
+              "max": 3.434,
+              "n": 20
+            },
+            "recall@10": {
+              "median": 0.9535,
+              "min": 0.9534,
+              "max": 0.9549,
+              "n": 20
+            },
+            "ingest+index total s": {
+              "median": 1953.24,
+              "min": 1944.51,
+              "max": 1964.07,
+              "n": 5
+            },
+            "ingest+index vectors/s": {
+              "median": 5114.6,
+              "min": 5086.4,
+              "max": 5137.5,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 3.623,
+              "min": 3.6217,
+              "max": 3.7853,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 16.8307,
+              "min": 16.8306,
+              "max": 16.8311,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "Qdrant (int8)",
           "is_arcadedb": false,
           "precision": "int8",
@@ -4072,7 +4461,7 @@
       "dataset": "LDBC-SNB Interactive (SF1, SF10)",
       "conditions": [
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "Each repetition runs every read against a fresh set of start persons (SF1 (11k people): 500, SF10 (73k people): 200) and commits up to 1,000 writes; the p50 and p99 are over those.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
       ],
@@ -4451,7 +4840,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.3.10",
+          "version_name": "surrealdb 2.0.0",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -4967,7 +5356,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.3.10",
+          "version_name": "surrealdb 2.0.0",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -5155,10 +5544,10 @@
       "dataset": "LDBC-SNB, SF10",
       "conditions": [
         "Three questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. All three times are milliseconds.",
-        "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.0 seconds here, once, before any query was timed.",
+        "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. It is built once, before any query is timed, and the view build column is what that took.",
         "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
         "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at SF10 (73k people): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
@@ -5651,7 +6040,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.3.10",
+          "version_name": "surrealdb 2.0.0",
           "host": null,
           "metrics": {
             "ingest vertices+edges/s": {
@@ -6470,8 +6859,8 @@
           "workload": "atomicity",
           "n_docs": null,
           "deployment": "server",
-          "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5.26.28",
+          "image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",
+          "version_name": "neo4j 2026.07.1",
           "host": null,
           "metrics": {
             "trials": {
@@ -6498,7 +6887,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.3.10",
+          "version_name": "surrealdb 2.0.0",
           "host": null,
           "metrics": {
             "trials": {
@@ -6564,7 +6953,7 @@
         "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
         "Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:) until its own re-run, so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
         "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
         "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB inserts through its Python client into an in-memory database; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
       ],
@@ -6792,44 +7181,44 @@
           "workload": "hybrid",
           "n_docs": null,
           "deployment": "server",
-          "image": "neo4j@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca",
-          "version_name": "neo4j 5.26.28",
+          "image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",
+          "version_name": "neo4j 2026.07.1",
           "host": null,
           "metrics": {
             "p50 ms": {
-              "median": 20.061,
-              "min": 19.561,
-              "max": 21.344,
+              "median": 20.654,
+              "min": 18.694,
+              "max": 24.894,
               "n": 5
             },
             "p99 ms": {
-              "median": 33.927,
-              "min": 30.286,
-              "max": 34.988,
+              "median": 36.015,
+              "min": 27.834,
+              "max": 38.185,
               "n": 5
             },
             "ingest+index vertices+edges/s": {
-              "median": 34541.9689,
-              "min": 33955.5178,
-              "max": 34964.6853,
+              "median": 33726.4755,
+              "min": 33556.7114,
+              "max": 34363.9175,
               "n": 5
             },
             "ingest+index total s": {
-              "median": 5.79,
-              "min": 5.72,
-              "max": 5.89,
+              "median": 5.93,
+              "min": 5.82,
+              "max": 5.96,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 6.8004,
-              "min": 6.7968,
-              "max": 6.8143,
+              "median": 6.8135,
+              "min": 6.8021,
+              "max": 6.8161,
               "n": 5
             },
             "disk GiB": {
-              "median": 0.0097,
-              "min": 0.0097,
-              "max": 0.0097,
+              "median": 0.0098,
+              "min": 0.0098,
+              "max": 0.0098,
               "n": 5
             }
           }
@@ -6844,7 +7233,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.3.10",
+          "version_name": "surrealdb 2.0.0",
           "host": null,
           "metrics": {
             "p50 ms": {
@@ -6954,9 +7343,9 @@
       "dataset": "TSBS cpu-only, 2,592,000 points",
       "conditions": [
         "No engine settles inside the ingest timer. QuestDB's WAL apply runs after the clock stops, and the newest-reading query is asked unbounded on every engine, so the unsealed tail a scan walks costs the same everywhere. Sealing the write buffer makes the aggregation faster and the last-point query slower, and settling only ours would have been a one-sided advantage. Rows that record a settle time did that settling after the timer stopped.",
-        "One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark. A matched one-tag/ten-tag run prices the schema at 2.0x on ingest and 2.6x faster on last-point.",
-        "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound: telling the engine to look only at the past hour made it slower, 0.860 ms against 0.720, because evaluating the time filter costs more than the scan it saves.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark; a matched full-schema run costs more on ingest and answers the newest reading faster.",
+        "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound on every engine.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP."
       ],
@@ -7409,48 +7798,48 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "sqlite 3.46.1",
-          "host": "container:79cf279810aa (host unknown)",
+          "host": "container:089a96be52f2 (host unknown)",
           "metrics": {
             "ingest points/s": {
-              "median": 1033680.5,
-              "min": 1015117.3,
-              "max": 1056063.5,
+              "median": 1033287.8,
+              "min": 995163.5,
+              "max": 1055208.3,
               "n": 5
             },
             "ingest total s": {
               "median": 2.51,
-              "min": 2.45,
-              "max": 2.55,
+              "min": 2.46,
+              "max": 2.6,
               "n": 5
             },
             "newest reading p50 ms": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 0.0022,
+              "min": 0.0022,
+              "max": 0.0022,
               "n": 5
             },
             "newest reading p99 ms": {
-              "median": 0.01,
-              "min": 0.01,
-              "max": 0.01,
+              "median": 0.008,
+              "min": 0.0057,
+              "max": 0.0097,
               "n": 5
             },
             "12h aggregate p50 ms": {
-              "median": 152.06,
-              "min": 145.17,
-              "max": 153.13,
+              "median": 146.0967,
+              "min": 144.8544,
+              "max": 149.4135,
               "n": 5
             },
             "12h aggregate p99 ms": {
-              "median": 156.27,
-              "min": 150.31,
-              "max": 161.44,
+              "median": 150.769,
+              "min": 147.2658,
+              "max": 158.3142,
               "n": 5
             },
             "peak memory GiB": {
               "median": 0.6904,
               "min": 0.6904,
-              "max": 0.6906,
+              "max": 0.6905,
               "n": 5
             },
             "disk GiB": {
@@ -10536,8 +10925,8 @@
       "conditions": [
         "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
         "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
-        "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme: nearly all of the figure shown is the Python client and almost none of it is the database.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "Each repetition runs 1,000 new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate.",
         "SurrealDB (embedded) at TPC-H SF1 (6.0M line items): the transaction cell failed inside its budget and was not retried, so there is no row. What it reported: surrealdb.errors.InternalError: The query was not executed due to a failed transaction. Th"
       ],
@@ -10972,8 +11361,8 @@
       "conditions": [
         "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
         "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
-        "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
-        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
+        "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme: nearly all of the figure shown is the Python client and almost none of it is the database.",
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at TPC-H SF1 (6.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: surrealdb.errors.InternalError: The query was not executed due to a failed transaction. Th"
