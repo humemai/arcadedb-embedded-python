@@ -252,8 +252,10 @@ def main() -> int:
 
     if not args.no_build:
         step(6, "Build the site")
-        run(["npm", "run", "build"], cwd=site,
-            stdout=subprocess.DEVNULL)
+        # Own dist directory (next.config.ts distDir), so the gate build never
+        # replaces the .next a running dev server in the checkout serves from.
+        run(["npm", "run", "build"], cwd=site, stdout=subprocess.DEVNULL,
+            env=dict(os.environ, NEXT_DIST_DIR=".next-gate"))
         print("  build ok")
 
     step(7, "Review and commit, by hand, on purpose")

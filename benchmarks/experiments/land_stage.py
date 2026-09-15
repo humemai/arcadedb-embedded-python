@@ -59,10 +59,10 @@ TRAILER = ("\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n"
            "Claude-Session: https://claude.ai/code/session_01JB6Hg77dQVqABoTJmiUnV2")
 
 
-def sh(cmd, cwd=None, check=True, capture=False):
+def sh(cmd, cwd=None, check=True, capture=False, env=None):
     print("  $ " + " ".join(str(c) for c in cmd), flush=True)
     return subprocess.run(cmd, cwd=cwd, check=check, text=True,
-                          capture_output=capture)
+                          capture_output=capture, env=env)
 
 
 def step(n, title):
@@ -168,7 +168,9 @@ def main():
         return 0
 
     step(6, "build the site, commit both repos, push")
-    sh(["npm", "run", "build"], cwd=SITE)
+    # The gate build writes to its own dist directory (next.config.ts distDir),
+    # so it never replaces what a running dev server in the checkout serves from.
+    sh(["npm", "run", "build"], cwd=SITE, env=dict(os.environ, NEXT_DIST_DIR=".next-gate"))
     sh(["git", "add"] + site_files, cwd=SITE)
     sh(["git", "commit", "-q", "-m", f"arcadedb{' preview' if args.preview else ''}: {args.message}{TRAILER}"], cwd=SITE, check=False)
     sh(["git", "push", "-q", "origin", "main"], cwd=SITE)
