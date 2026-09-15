@@ -65,6 +65,34 @@ OLTP_OPS = 1_000
 # count lands on the row as `olap_iters`, so a cell that ran fewer says so
 # instead of looking like a campaign cell.
 OLAP_ITER = int(os.environ.get("BENCH_OLAP_ITER") or 100)
+# THE PER-QUERY BUDGET (DECISIONS #100, third lane): the graph lane's mechanism
+# (graph_common.OLAP_BUDGET_S, #82b) as the time-series lane took it
+# (l4_tsbs.QUERY_BUDGET_S). A property of the lane and the same for every
+# engine on the table, so it moves no comparison by itself. The clock starts
+# before the cold pass, the cold pass always runs, the loop stops at the first
+# iteration that would start after the budget is spent, and the row records
+# <q>_budget_s, <q>_iters, <q>_elapsed_s and <q>_censored; the table names a
+# censored query with its iteration count and the time it reached while the
+# cell's other queries keep their numbers. Why this lane: the laptop skeleton's
+# embedded SurrealDB analytics cell at 60k line items exceeded the whole-cell
+# 0.25 h budget and left no row, and at SF1 that engine scans about 35 us per
+# row, so a hundred iterations of Q1 alone is hours against the cell timeout.
+#
+# WHY 1,800 s. Two constraints, and the cell timeout binds first. (1) The
+# tpch1 cell timeout is 3 h (runner.TIMEOUT_BY_SCALE), and a censored cell
+# costs five budgets plus its build, so 5 x B + 1,280 s (embedded SurrealDB's
+# SF1 build, BUGS F41) must stay under 10,800 s: B <= about 1,900 s. (2) The
+# slowest legitimate served engines on mini in September (results/runs_paper.csv,
+# tpch1, five reps each): ArcadeDB server Q1 10.20-10.35 s and MongoDB Q1
+# 9.76-10.08 s, so about 1,035 s for a hundred iterations; 1,800 s is 1.74x
+# that, and the three October queries on those engines are cheaper than Q1
+# (0.5-0.6x on the laptop skeleton). The SurrealDB 3.2.4 server's Q1 at
+# 40.9-41.2 s (4,120 s for a hundred) is the one served number the budget
+# cannot cover: covering it needs B >= 6,000 s and a 9 h cell, so it will be
+# censored at about 43 of 100 iterations, which leaves a 41 s p50 a 41 s
+# p50 and is named on the table. The override exists for a laptop probe of
+# the mechanism and never for a campaign.
+OLAP_BUDGET_S = float(os.environ.get("BENCH_DOCS_OLAP_BUDGET_S") or 1800.0)
 SEED = 20260722
 BATCH = 10_000
 
@@ -1251,14 +1279,31 @@ def main():
         for which in OLAP_QUERIES:
             times = []
             ref = None
-            _beat.mark(f"query-{which}-start", iters=OLAP_ITER)
+            _beat.mark(f"query-{which}-start", iters=OLAP_ITER, budget_s=OLAP_BUDGET_S)
+            # THE BUDGET STARTS BEFORE THE COLD PASS (#82b, #100): the first
+            # iteration IS the cold pass and always runs, so a censored query
+            # still carries a measurement and its answer digest.
+            _budget_t0 = time.perf_counter()
+            _ran = 0
             for _ in range(OLAP_ITER):
+                if _ran and time.perf_counter() - _budget_t0 > OLAP_BUDGET_S:
+                    break
                 t = time.perf_counter()
                 r = b.olap(which)
+                _ran += 1
                 # The sample is dropped when the connection broke while it was
                 # being taken (DECISIONS #91); every other engine keeps it.
                 surreal_common.keep(b, times, (time.perf_counter() - t) * 1000)
                 ref = r
+            # Censored is counted on iterations RUN, not samples KEPT, so a
+            # sample #91 dropped cannot read as a budget the engine did not hit.
+            out[f"{which}_budget_s"] = OLAP_BUDGET_S
+            out[f"{which}_iters"] = len(times)
+            out[f"{which}_elapsed_s"] = round(time.perf_counter() - _budget_t0, 2)
+            out[f"{which}_censored"] = _ran < OLAP_ITER
+            if out[f"{which}_censored"]:
+                _beat.mark(f"query-{which}-censored", iters=_ran, budget_s=OLAP_BUDGET_S,
+                           elapsed_s=out[f"{which}_elapsed_s"])
             out[f"{which}_ms"] = round(statistics.median(times), 2)
             _s = sorted(times)
             out[f"{which}_p99_ms"] = round(_s[max(0, int(0.99 * (len(_s) - 1)))], 2)

@@ -2893,6 +2893,10 @@ def _censored_notes(table_id):
 # to say which, or "5 of 100" reads as five warm samples on one lane and four
 # on the other.
 _QUERY_BUDGET_TABLES = {
+    "docs_olap": ("l1tpc", "olap", {
+        "q1": "Q1", "q6": "Q6", "top_parts": "top parts", "ship_mode": "ship mode",
+        "by_month": "by month"}, ("l1_tpc", "OLAP_ITER"),
+        "iterations, the first of which is the cold pass"),
     "l2olap": ("l2", "olap", {
         "friend_age_by_city": "average friend age", "same_city_edges": "friends in same city",
         "top_degree": "most friends", "degree_dist": "degree distribution",

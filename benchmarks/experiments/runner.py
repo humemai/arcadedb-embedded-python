@@ -2143,6 +2143,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # The time-series lane's per-query budget (#100), the same
                    # mechanism; the override is for a laptop probe of it.
                    "BENCH_TS_QUERY_BUDGET_S",
+                   # The document OLAP budget (#100, third lane), same mechanism.
+                   "BENCH_DOCS_OLAP_BUDGET_S",
                    # The durability class (DECISIONS #90). Client-side engines
                    # read it here: ArcadeDB embedded turns it into a JVM system
                    # property, SQLite into a PRAGMA, MongoDB into j=true,
