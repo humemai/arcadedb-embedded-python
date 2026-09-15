@@ -37,8 +37,9 @@ Logical parity:
 Recommended path:
 GraphBatch is the recommended bulk graph ingest path here. The async SQL arm is kept
 for comparison only and is pinned to one worker: above parallel level 1 the async
-executor silently discards a share of the commands submitted to it
-(ArcadeData/arcadedb#7615), so `--async-parallel` accepts only 1. That arm now counts
+executor silently discarded a share of the commands submitted to it before 26.10.1
+(ArcadeData/arcadedb#7615, fixed in #7625), so `--async-parallel` accepts only 1. That
+arm now counts
 what landed against what it submitted and fails rather than reporting a time for work
 it did not do.
 
@@ -513,8 +514,9 @@ def run_async_sql_graph_load(
     """Comparison arm: async SQL INSERT/CREATE EDGE through the async executor.
 
     This arm exists to measure the async executor, so it keeps using it. It is
-    pinned to one worker: above parallel level 1 the executor silently discards
-    a share of the commands submitted to it (ArcadeData/arcadedb#7615), and a
+    pinned to one worker: above parallel level 1 the executor silently discarded
+    a share of the commands submitted to it before 26.10.1
+    (ArcadeData/arcadedb#7615, fixed in #7625), and a
     benchmark that reports the time for work it did not do is worse than no
     number. GraphBatch is the recommended bulk graph path and has its own arm
     below. The submitted-versus-stored checks are what make the pin

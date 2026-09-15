@@ -249,8 +249,8 @@ COPY "{table_name}" ("col1", "col2", ...) FROM STDIN WITH (FORMAT CSV, HEADER TR
 Each backend now preloads through the bulk path its driver provides: `insert_many` for
 ArcadeDB, batched inserts for SQLite, and `COPY` for DuckDB and PostgreSQL. The ArcadeDB
 preload submitted one async `INSERT INTO ... SET ...` per row until 2026-09-15. That was
-changed because the async executor's SQL command path discards records above parallel
-level 1 (`ArcadeData/arcadedb#7615`).
+changed because the async executor's SQL command path discarded records above parallel
+level 1 before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625).
 
 Those load-path differences matter for ingest timing, but they do not change the
 OLTP CRUD statements listed above.

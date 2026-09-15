@@ -800,9 +800,10 @@ class Database:
         every other caller too.
 
         Not the recommended bulk-write path:
-            ``AsyncExecutor.command`` silently discards records above
-            parallel level 1 (ArcadeData/arcadedb#7615; the measurement is
-            in the ``async_executor`` module docstring). Bulk graph loads
+            ``AsyncExecutor.command`` silently discarded records above
+            parallel level 1 before 26.10.1 (ArcadeData/arcadedb#7615, fixed
+            in #7625; the measurement is in the ``async_executor`` module
+            docstring). Bulk graph loads
             belong in ``graph_batch()``; bulk document loads belong in
             ``insert_many()`` or a batched transaction. ``create_record``,
             ``append_samples``, and ``insert_many(parallel=True)`` do run
@@ -859,8 +860,9 @@ class Database:
 
         This is the recommended path for bulk graph loading, and the reason is
         not only throughput: the alternative of submitting per-record SQL
-        through ``async_executor().command(...)`` loses records above parallel
-        level 1 (ArcadeData/arcadedb#7615). ``graph_batch`` dispatches its edge
+        through ``async_executor().command(...)`` lost records above parallel
+        level 1 before 26.10.1 (ArcadeData/arcadedb#7615, fixed in #7625).
+        ``graph_batch`` dispatches its edge
         flush through the same executor and is measured exact, 20,000 vertices
         and 40,000 edges with and without ``parallel_flush``.
 

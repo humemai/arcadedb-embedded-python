@@ -648,8 +648,9 @@ def configure_arcadedb_bulk_loader(db):
     """Put the database into bulk-load mode for the preload phase.
 
     This preload used to submit one INSERT per row through
-    `async_executor().command(...)`. That path silently discards records above
-    parallel level 1 (ArcadeData/arcadedb#7615), so the rows now go through
+    `async_executor().command(...)`. That path silently discarded records above
+    parallel level 1 before 26.10.1 (ArcadeData/arcadedb#7615, fixed in #7625),
+    so the rows now go through
     `db.insert_many(...)`, which loops Java-side inside one transaction per
     batch and returns the number written.
     """

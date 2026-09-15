@@ -12,10 +12,12 @@ loading vertices and edges. Prefer its bulk methods — `create_vertices()` and
 `new_edges()` — over per-record calls: they cost one JVM crossing per batch and
 run at or near Java speed (see the [Performance guide](performance.md)).
 
-Async SQL graph insert is not a bulk graph ingest path at all. Above parallel level 1
-the async executor silently discards a share of the commands submitted to it, with no
-error on the per-command callback, nothing logged, and a normal return from
-`wait_completion()` (`ArcadeData/arcadedb#7615`). Example 16 keeps it as a comparison
+Async SQL graph insert is not a bulk graph ingest path at all. Before 26.10.1, above
+parallel level 1 the async executor silently discarded a share of the commands submitted
+to it, with no error on the per-command callback, nothing logged, and a normal return
+from `wait_completion()` (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic
+commit is now retried and otherwise reported through the error callback). Example 16
+keeps it as a comparison
 arm, pinned to one worker and checked against what it submitted. `GraphBatch` flushes
 its edges through that same executor and is measured exact.
 

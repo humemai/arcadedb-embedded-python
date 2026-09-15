@@ -219,8 +219,9 @@ Synthetic multi-table ingest comparison harness:
   be trusted
 - Current outcome is workload-dependent; SQL import can win on some table-heavy shapes
 - The async SQL arm is a comparison arm, not a recommendation, and `--async-parallel`
-  accepts only 1: above parallel level 1 the async executor silently discards records
-  (ArcadeData/arcadedb#7615). For bulk document ingest use `db.insert_many(...)`
+  accepts only 1: above parallel level 1 the async executor silently discarded records
+  before 26.10.1 (ArcadeData/arcadedb#7615, fixed in #7625). For bulk document ingest
+  use `db.insert_many(...)`
 
 **Learn:** Table-ingest tradeoffs for embedded Python workloads
 
@@ -236,7 +237,8 @@ Synthetic graph ingest comparison harness:
 - On the recorded 5M/5M run, async SQL was the slowest arm at 701s against 359s for
   GraphBatch and 275s for SQL import, both at four threads
 - The async SQL arm is pinned to `--async-parallel 1`: above parallel level 1 the async
-  executor silently discards records (#7615). GraphBatch is the recommended bulk graph
+  executor silently discarded records before 26.10.1 (#7615, fixed in #7625). GraphBatch
+  is the recommended bulk graph
   ingest path
 
 **Learn:** Graph-ingest tradeoffs for embedded Python workloads

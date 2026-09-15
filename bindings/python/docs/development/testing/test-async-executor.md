@@ -18,16 +18,18 @@ AsyncExecutor tests cover:
 - ✅ **Callbacks** – per-operation `error_callback` plus global `on_ok()` / `on_error()`
 - ✅ **Lifecycle** – idempotent `close()` and owned-executor shutdown on `db.close()`
 
-!!! warning "Async SQL commands silently lose records above parallel level 1"
+!!! warning "Async SQL commands silently lost records above parallel level 1 before 26.10.1"
 
-    `async_exec.command(...)` discards records once the parallel level is above 1.
-    Observed on arcadedb-engine 26.9.1 and 26.6.1, measured 2026-09-15. How much is lost
-    varies by run and by workload shape: 9,742 single-record `INSERT` commands submitted
+    `async_exec.command(...)` discarded records once the parallel level was above 1,
+    before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic commit
+    is now retried and otherwise reported through the error callback).
+    Observed on arcadedb-engine 26.9.1 and 26.6.1, measured 2026-09-15. How much was lost
+    varied by run and by workload shape: 9,742 single-record `INSERT` commands submitted
     at parallel level 4 stored 2,436, 5,742, and 7,742 rows across runs. No error
-    reaches the per-command callback, nothing is logged, and `wait_completion()`
-    returns normally. Only the
-    executor-wide `on_error` handler sees anything, one `ConcurrentModificationException`
-    per rolled-back batch. At parallel level 1 nothing is lost. Filed upstream as
+    reached the per-command callback, nothing was logged, and `wait_completion()`
+    returned normally. Only the
+    executor-wide `on_error` handler saw anything, one `ConcurrentModificationException`
+    per rolled-back batch. At parallel level 1 nothing was lost. Filed upstream as
     `ArcadeData/arcadedb#7615`.
 
     Every write test in this file therefore runs at parallel level 1, apart from the one
@@ -43,7 +45,7 @@ AsyncExecutor tests cover:
 
 Configures `set_parallel_level(1).set_commit_every(1)`, issues 200 async `INSERT INTO Item` commands (positional `args`, a no-op `callback`), then `wait_completion()` and asserts the stored count is exactly 200.
 
-Until 2026-09-15 this test ran at parallel level 4 and asserted `count > 0`. That is the assertion shape that let #7615 through: at level 4 the executor stores a fraction of what it is given, and `count > 0` still passes.
+Until 2026-09-15 this test ran at parallel level 4 and asserted `count > 0`. That is the assertion shape that let #7615 through: at level 4 the executor stored a fraction of what it was given, and `count > 0` still passed.
 
 #### test_async_executor_bulk_command_is_exact_at_parallel_one
 
@@ -51,7 +53,7 @@ Submits `LOSS_REPRO_ROWS` (9,742) single-record `INSERT INTO Bulk` commands at `
 
 #### test_async_executor_bulk_command_is_exact_at_parallel_four
 
-The same 9,742-row load at `set_parallel_level(4)`, asserting the same exact count. Marked `@pytest.mark.skip` with the issue number, so it is a statement of the behavior the engine should have rather than an assertion of the behavior it has, and it starts passing when upstream fixes #7615.
+The same 9,742-row load at `set_parallel_level(4)` with an `on_error` collector attached, asserting the same exact count and no error. It was marked `@pytest.mark.skip` with the issue number until the fix (#7625, 26.10.1) landed, and it fails on 26.9.1 with 2,436 to 7,742 of 9,742 stored, so it is the regression test for #7615.
 
 #### test_async_executor_query_callback_collects_rows
 
@@ -117,9 +119,9 @@ Two things carry the test: the parallel level is 1, and the assertion is an equa
 ## Key Takeaways
 
 1. Call `wait_completion()` before `close()` to flush worker threads.
-2. Keep `set_parallel_level()` at 1 whenever the executor runs SQL commands that write; above 1 the submissions are partly discarded (#7615). Levels above 1 are safe for `create_record`, `append_samples`, `Database.insert_many`, and `Database.graph_batch`.
+2. Keep `set_parallel_level()` at 1 whenever the executor runs SQL commands that write; above 1 the submissions were partly discarded before 26.10.1 (#7615, fixed in #7625). Levels above 1 are safe for `create_record`, `append_samples`, `Database.insert_many`, and `Database.graph_batch`.
 3. Assert an exact count against what was submitted. A `count > 0` assertion passes on a load that lost three quarters of its rows.
-4. Use per-operation `error_callback` or global `on_ok()` / `on_error()` handlers to observe outcomes. The per-command callback reports no error when records are discarded; only the executor-wide `on_error` handler does.
+4. Use per-operation `error_callback` or global `on_ok()` / `on_error()` handlers to observe outcomes. Before 26.10.1 the per-command callback reported no error when records were discarded; only the executor-wide `on_error` handler did (#7625 reports a failed batch through the command's error callback as well).
 5. `is_pending()` / `is_processing()` track queue state; `is_pending()` is `False` after completion. Both are non-blocking polls of the engine's `isProcessing()`: `waitCompletion(0)` is not a poll, the engine reads a zero timeout as "wait forever" (#7107).
 6. Closing the owning database also closes its owned async executor; `close()` is idempotent.
 

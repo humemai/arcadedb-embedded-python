@@ -18,8 +18,9 @@ reliability issues on larger real workloads, including memory pressure and possi
 failures.
 
 The async SQL arm is pinned to one worker and is not a recommendation. Above parallel
-level 1 the async executor silently discards a share of the commands submitted to it
-(ArcadeData/arcadedb#7615), so `--async-parallel` accepts only 1.
+level 1 the async executor silently discarded a share of the commands submitted to it
+before 26.10.1 (ArcadeData/arcadedb#7615, fixed in #7625), so `--async-parallel`
+accepts only 1.
 
 Observed benchmark result (2026-03-19, before `db.import_documents(...)` was added):
 For:
@@ -404,8 +405,9 @@ def run_async_sql_load(
     """Comparison arm: async SQL INSERT through the async executor.
 
     This arm exists to measure the async executor, so it keeps using it. It is
-    pinned to one worker: above parallel level 1 the executor silently discards
-    a share of the commands submitted to it (ArcadeData/arcadedb#7615), and a
+    pinned to one worker: above parallel level 1 the executor silently discarded
+    a share of the commands submitted to it before 26.10.1
+    (ArcadeData/arcadedb#7615, fixed in #7625), and a
     benchmark that reports the time for work it did not do is worse than no
     number. The submitted-versus-stored check below is what makes that pin
     falsifiable rather than a comment.

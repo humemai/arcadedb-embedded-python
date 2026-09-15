@@ -187,8 +187,9 @@ throughout, and nothing here goes through the async executor.
     Those settings apply only to work submitted to the executor, and this ingest never
     submitted any, so they changed nothing: the load always ran in batched
     transactions with WAL enabled. They were deleted rather than made real, because
-    the executor's SQL command path silently discards records above parallel level 1
-    (`ArcadeData/arcadedb#7615`). For bulk document loading use `db.insert_many(...)`
+    the executor's SQL command path silently discarded records above parallel level 1
+    before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625). For bulk document
+    loading use `db.insert_many(...)`
     or a plain batched transaction, as this example does.
 
 ### Import CSV files with bulk INSERT

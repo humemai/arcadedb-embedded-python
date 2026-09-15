@@ -8,13 +8,15 @@ optimized WAL settings.
 Known defect -- do not use :meth:`AsyncExecutor.command` for bulk writes
 =======================================================================
 At a parallel level above 1, SQL commands submitted through this executor
-are silently discarded: ArcadeData/arcadedb#7615. Observed on
-arcadedb-engine 26.9.1 and 26.6.1, measured 2026-09-15. How much is lost
-varies by run and by workload shape: 9,742 single-record ``INSERT``
+were silently discarded before 26.10.1: ArcadeData/arcadedb#7615, fixed in
+#7625 (a failed periodic commit is now retried and otherwise reported
+through the command's error callback). Observed on
+arcadedb-engine 26.9.1 and 26.6.1, measured 2026-09-15. How much was lost
+varied by run and by workload shape: 9,742 single-record ``INSERT``
 commands at parallel level 4 stored 2,436, 5,742, and 7,742 rows across
-runs. No error reaches the per-command callback, nothing is logged, and
-``wait_completion()`` returns normally. Only the executor-wide
-:meth:`AsyncExecutor.on_error` handler sees anything, one
+runs. No error reached the per-command callback, nothing was logged, and
+``wait_completion()`` returned normally. Only the executor-wide
+:meth:`AsyncExecutor.on_error` handler saw anything, one
 ``ConcurrentModificationException`` per rolled-back batch.
 
 Use instead:
@@ -92,8 +94,9 @@ class AsyncExecutor:
 
     Bulk writes:
         Do not drive bulk ingest through :meth:`command`. Above parallel
-        level 1 it silently drops records (ArcadeData/arcadedb#7615; see
-        the module docstring for the measurement and the safe paths).
+        level 1 it silently dropped records before 26.10.1
+        (ArcadeData/arcadedb#7615, fixed in #7625; see the module docstring
+        for the measurement and the safe paths).
 
     Example:
         >>> # a one-off async command, not a bulk load
@@ -640,11 +643,12 @@ class AsyncExecutor:
             **params: Command parameters
 
         Not a bulk-write path:
-            Above parallel level 1 the engine silently discards a share of
-            the commands submitted here (ArcadeData/arcadedb#7615; the
-            module docstring carries the measurement). Nothing is raised,
-            nothing is logged, and ``wait_completion()`` returns normally,
-            so a short load looks like a fast one. For bulk ingest use
+            Before 26.10.1, above parallel level 1 the engine silently
+            discarded a share of the commands submitted here
+            (ArcadeData/arcadedb#7615, fixed in #7625; the module docstring
+            carries the measurement). Nothing was raised, nothing was logged,
+            and ``wait_completion()`` returned normally, so a short load
+            looked like a fast one. For bulk ingest use
             ``Database.graph_batch(...)`` for graphs and
             ``Database.insert_many(...)`` or a batched transaction for
             documents.
@@ -852,11 +856,13 @@ class AsyncExecutor:
         This callback is called for every failed operation if no
         per-operation error callback was provided.
 
-        It is also the only place the ArcadeData/arcadedb#7615 record loss
-        becomes visible: when the executor rolls back a batch, the
-        per-command callbacks report nothing, but this handler receives one
-        ``ConcurrentModificationException`` per rolled-back batch. Attach it
-        before any load you cannot afford to lose silently.
+        Before 26.10.1 it was also the only place the ArcadeData/arcadedb#7615
+        record loss became visible: when the executor rolled back a batch, the
+        per-command callbacks reported nothing, but this handler received one
+        ``ConcurrentModificationException`` per rolled-back batch (fixed in
+        #7625: a failed periodic commit is now retried and otherwise reported
+        through the command's error callback). Attach it before any load you
+        cannot afford to lose silently.
 
         Args:
             callback: Error callback, receives exception

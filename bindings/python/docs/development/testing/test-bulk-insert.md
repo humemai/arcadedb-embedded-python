@@ -13,7 +13,8 @@ parametrized.
 and counts what was stored against what was submitted.
 
 These tests exist because `ArcadeData/arcadedb#7615` went unnoticed: the async
-executor's SQL command path discards records above parallel level 1, and no test
+executor's SQL command path discarded records above parallel level 1 before 26.10.1
+(fixed in #7625), and no test
 compared submitted rows with stored rows at a size where the loss shows. The sizes below
 come from the original report.
 

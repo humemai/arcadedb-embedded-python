@@ -40,10 +40,12 @@ importer-based paths as the default choice.
     Python/Java boundary once per batch and returns the number of rows written.
 - For bulk graph ingest, prefer `GraphBatch`.
 - Do not use the async executor's SQL command path
-    (`db.async_executor().command(...)`) for bulk writes at any parallel level. Above
-    parallel level 1 it silently discards records: no error reaches the per-command
-    callback, nothing is logged, and `wait_completion()` returns normally. Filed
-    upstream as `ArcadeData/arcadedb#7615`. `create_record`, `append_samples`,
+    (`db.async_executor().command(...)`) for bulk writes at any parallel level. Before
+    26.10.1, above parallel level 1 it silently discarded records: no error reached the
+    per-command callback, nothing was logged, and `wait_completion()` returned normally.
+    Filed upstream as `ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic
+    commit is now retried and otherwise reported through the error callback.
+    `create_record`, `append_samples`,
     `db.insert_many(...)`, and `db.graph_batch(...)` are unaffected.
 
 More broadly, this repository does not currently encourage `IMPORT DATABASE` as the main

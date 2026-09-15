@@ -6,16 +6,18 @@
     available for lower-level workflows and tests. For bulk ingest, see the warning
     below.
 
-!!! warning "Async SQL commands silently lose records above parallel level 1"
-    The async executor's SQL command path, `async_exec.command(...)`, discards records
-    once the parallel level is above 1. Observed on arcadedb-engine 26.9.1 and 26.6.1,
-    measured 2026-09-15. How much is lost varies by run and by workload shape: 9,742
+!!! warning "Async SQL commands silently lost records above parallel level 1 before 26.10.1"
+    The async executor's SQL command path, `async_exec.command(...)`, discarded records
+    once the parallel level was above 1, before 26.10.1 (`ArcadeData/arcadedb#7615`,
+    fixed in #7625: a failed periodic commit is now retried and otherwise reported
+    through the error callback). Observed on arcadedb-engine 26.9.1 and 26.6.1,
+    measured 2026-09-15. How much was lost varied by run and by workload shape: 9,742
     single-record `INSERT` commands submitted at parallel level 4 stored 2,436, 5,742,
-    and 7,742 rows across runs. Nothing is raised and nothing is logged: the
-    per-command callback reports no error, and `wait_completion()` returns normally.
-    Only the executor-wide `on_error` handler sees anything, one
+    and 7,742 rows across runs. Nothing was raised and nothing was logged: the
+    per-command callback reported no error, and `wait_completion()` returned normally.
+    Only the executor-wide `on_error` handler saw anything, one
     `ConcurrentModificationException` per rolled-back batch. At parallel level 1 no
-    records are lost. Filed upstream as `ArcadeData/arcadedb#7615`.
+    records were lost. Filed upstream as `ArcadeData/arcadedb#7615`.
 
     Treat `command()` as a way to run individual statements asynchronously, not as a
     bulk-write path, at any parallel level. For bulk graph loading use
@@ -43,7 +45,8 @@ automatic batching, and optimized WAL operations.
 The `AsyncExecutor` class enables:
 
 - **Parallel Execution**: 1-16 worker threads for concurrent operations (a level above 1
-  loses records submitted through `command()`, see the warning above and #7615)
+  lost records submitted through `command()` before 26.10.1, see the warning above and
+  #7615)
 - **Automatic Batching**: Auto-commit every N operations
 - **Optimized WAL**: Configurable Write-Ahead Log settings
 - **High Performance**: for measured bulk throughput paths, see `Database.insert_many` (documents), `Database.graph_batch` (graphs), and [`append_samples`](#append_samples) (time series)
@@ -105,8 +108,9 @@ Set number of parallel worker threads (1-16).
 
 - **Default**: Number of CPU cores
 - Raises `ValueError` if `level` is not between 1 and 16
-- Any level above 1 is what triggers the record loss described in the warning at the top
-  of this page (#7615) for work submitted through `command()`. Keep the level at 1 when
+- Any level above 1 is what triggered the record loss described in the warning at the top
+  of this page (#7615, fixed in #7625) for work submitted through `command()`. Keep the
+  level at 1 when
   the executor runs SQL commands that write.
 - `create_record`, `append_samples`, `Database.insert_many`, and `Database.graph_batch`
   are unaffected and can run above level 1.
@@ -319,8 +323,9 @@ Execute an async command (INSERT/UPDATE/DELETE/DDL). The callback is optional.
     `ValueError`.
 
 !!! note "One statement at a time, not a bulk loader"
-    Submitting a `command()` per row loses records above parallel level 1 (#7615, see the
-    warning at the top of this page). Load many rows with `db.insert_many(...)` or
+    Submitting a `command()` per row lost records above parallel level 1 before 26.10.1
+    (#7615, fixed in #7625, see the warning at the top of this page). Load many rows with
+    `db.insert_many(...)` or
     `db.graph_batch(...)` instead.
 
 **Example:**
@@ -874,8 +879,9 @@ async_exec.set_commit_every(20000)
 async_exec.set_transaction_use_wal(False)
 ```
 
-Raising `set_parallel_level` is not the fix here: above 1 it loses records submitted
-through `command()` (#7615). If the slow workload is a bulk load, move it to
+Raising `set_parallel_level` is not the fix here: above 1 it lost records submitted
+through `command()` before 26.10.1 (#7615, fixed in #7625). If the slow workload is a
+bulk load, move it to
 `db.insert_many(...)` or `db.graph_batch(...)`.
 
 ### Operations Not Completing

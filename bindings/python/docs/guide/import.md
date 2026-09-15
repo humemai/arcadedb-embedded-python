@@ -45,13 +45,15 @@ not something we currently encourage as the default Python import story.
     `parallel=True`) is the recommended default: it batches rows across the FFI
     boundary; see Example 22.
 + The async executor's SQL command path (`db.async_executor().command(...)`) is not a
-    bulk-write path at any parallel level. Above parallel level 1 it silently discards
-    records. Observed on arcadedb-engine 26.9.1 and 26.6.1, measured 2026-09-15: how
-    much is lost varies by run and by workload shape, and 9,742 single-record `INSERT`
+    bulk-write path at any parallel level. Above parallel level 1 it silently discarded
+    records before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed
+    periodic commit is now retried and otherwise reported through the error callback).
+    Observed on arcadedb-engine 26.9.1 and 26.6.1, measured 2026-09-15: how
+    much was lost varied by run and by workload shape, and 9,742 single-record `INSERT`
     commands submitted at parallel level 4 stored 2,436, 5,742, and 7,742 rows across
-    runs. No error reaches the per-command callback,
-    nothing is logged, and `wait_completion()` returns normally. Only the executor-wide
-    `on_error` handler sees anything, one `ConcurrentModificationException` per
+    runs. No error reached the per-command callback,
+    nothing was logged, and `wait_completion()` returned normally. Only the executor-wide
+    `on_error` handler saw anything, one `ConcurrentModificationException` per
     rolled-back batch. Filed upstream as `ArcadeData/arcadedb#7615`. `create_record`,
     `append_samples`, `db.insert_many(...)`, and `db.graph_batch(...)` are unaffected.
 + `db.import_documents(...)` exists for document-shaped file import convenience, but in

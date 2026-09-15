@@ -7,10 +7,11 @@ the test harness.
 > recommendation is `db.insert_many(...)`, which batches rows across the FFI boundary.
 > Use explicit chunked transactions when you need tight manual control, but do not
 > treat them as the default bulk-ingest recommendation here. The async executor's SQL
-> command path (`db.async_executor().command(...)`) is not a bulk-ingest path: above
-> parallel level 1 it silently discards records, with no error on the per-command
-> callback and a normal return from `wait_completion()`. See
-> `ArcadeData/arcadedb#7615`.
+> command path (`db.async_executor().command(...)`) is not a bulk-ingest path: before
+> 26.10.1, above parallel level 1 it silently discarded records, with no error on the
+> per-command callback and a normal return from `wait_completion()`. See
+> `ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic commit is now retried
+> and otherwise reported through the error callback.
 
 ## Basic commit and rollback
 

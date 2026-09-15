@@ -37,8 +37,9 @@ Bulk vertex path:
 - The `--no-async` flag has no effect on SQL (always synchronous)
 
 Note: vertex creation here used to submit one INSERT per row through
-`async_executor().command(...)`. That path silently drops records above
-parallel level 1 (ArcadeData/arcadedb#7615), so it is gone from this example.
+`async_executor().command(...)`. That path silently dropped records above
+parallel level 1 before 26.10.1 (ArcadeData/arcadedb#7615, fixed in #7625), so
+it is gone from this example.
 GraphBatch drives the same executor for its edge flush and is measured exact.
 
 Proper Database-Level Streaming:

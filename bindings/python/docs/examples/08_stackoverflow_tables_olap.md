@@ -190,8 +190,9 @@ The benchmark measures query execution, but the setup path still matters for con
   path skips manual secondary indexes for this benchmark.
 
 The ArcadeDB load submitted one async SQL `INSERT` per row until 2026-09-15. That was
-changed because the async executor's SQL command path discards records above parallel
-level 1 (`ArcadeData/arcadedb#7615`). Any ArcadeDB load time you recorded from an
+changed because the async executor's SQL command path discarded records above parallel
+level 1 before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625). Any ArcadeDB load
+time you recorded from an
 earlier run of this script came from the async path, not from `insert_many`.
 
 ## Result Notes

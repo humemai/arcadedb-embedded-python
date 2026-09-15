@@ -33,14 +33,16 @@ Example 16 is the graph-ingest comparison harness for embedded Python.
 !!! warning "Why the async arm accepts only `--async-parallel 1`"
 
     The async executor's SQL command path, `db.async_executor().command(...)`, silently
-    discards records once the parallel level is above 1. Observed on arcadedb-engine
-    26.9.1 and 26.6.1, measured 2026-09-15. How much is lost varies by run and by
+    discarded records once the parallel level was above 1, before 26.10.1
+    (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic commit is now retried
+    and otherwise reported through the error callback). Observed on arcadedb-engine
+    26.9.1 and 26.6.1, measured 2026-09-15. How much was lost varied by run and by
     workload shape: 9,742 single-record `INSERT` commands submitted at parallel level 4
-    stored 2,436, 5,742, and 7,742 rows across runs. No error reaches the per-command
-    callback, nothing is
-    logged, and `wait_completion()` returns normally. Only the executor-wide `on_error`
-    handler sees anything, one `ConcurrentModificationException` per rolled-back batch.
-    At parallel level 1 nothing is lost. Filed upstream as `ArcadeData/arcadedb#7615`.
+    stored 2,436, 5,742, and 7,742 rows across runs. No error reached the per-command
+    callback, nothing was
+    logged, and `wait_completion()` returned normally. Only the executor-wide `on_error`
+    handler saw anything, one `ConcurrentModificationException` per rolled-back batch.
+    At parallel level 1 nothing was lost. Filed upstream as `ArcadeData/arcadedb#7615`.
 
     `run_async_sql_graph_load(...)` therefore raises `ValueError` for any
     `--async-parallel` other than 1, and counts stored vertices and edges against

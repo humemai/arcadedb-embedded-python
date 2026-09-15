@@ -691,8 +691,9 @@ db.async_executor() -> AsyncExecutor
 synchronous workflows.
 
 The executor runs individual statements, queries, and record operations off the calling
-thread. It is not a bulk-ingest path: its SQL `command(...)` submissions lose records
-above one worker (`ArcadeData/arcadedb#7615`). Use [`insert_many`](#insert_many) or
+thread. It is not a bulk-ingest path: its SQL `command(...)` submissions lost records
+above one worker before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625). Use
+[`insert_many`](#insert_many) or
 [`graph_batch`](#graph_batch) for bulk loads, and see the
 [AsyncExecutor API](async_executor.md) for the measured detail.
 
@@ -764,8 +765,8 @@ db.import_documents("./movies.csv", document_type="Movie", file_type="csv")
 ```
 
 For bulk ingest from Python, prefer [`insert_many`](#insert_many) for documents and
-[`graph_batch`](#graph_batch) for graphs: the async SQL command path silently loses
-records above one async worker (#7615).
+[`graph_batch`](#graph_batch) for graphs: the async SQL command path silently lost
+records above one async worker before 26.10.1 (#7615, fixed in #7625).
 
 ---
 

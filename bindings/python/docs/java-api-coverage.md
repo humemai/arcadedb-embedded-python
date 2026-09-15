@@ -223,7 +223,7 @@ index = index_builder.withUnique(true).create()
 | Vector similarity search | ✅ Excellent | JVector + NumPy integration |
 | Development with Studio UI | ✅ Excellent | Server mode included |
 | Data migration (CSV/XML/JSONL import) | ✅ Good | SQL import workflows exercised by tests |
-| Async bulk ingestion | ❌ Not recommended | `AsyncExecutor.command()` silently drops records above parallel level 1 (`ArcadeData/arcadedb#7615`); use `insert_many()` or `GraphBatch` |
+| Async bulk ingestion | ❌ Not recommended | `AsyncExecutor.command()` silently dropped records above parallel level 1 before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625); use `insert_many()` or `GraphBatch` |
 | Multi-master replication | ❌ Not supported | Java server only |
 | Custom query language | ❌ Not supported | Use built-in languages |
 

@@ -134,7 +134,8 @@ NULLs is what that example demonstrates.
 
     Until 2026-09-15, `--method java` built vertices by submitting one
     `INSERT` per row through `db.async_executor().command(...)`. That path
-    silently discards records above parallel level 1: measured on 26.9.1,
+    silently discarded records above parallel level 1 before 26.10.1 (fixed in
+    #7625): measured on 26.9.1,
     9,742 Movie vertices submitted and 2,436 stored, with nothing raised,
     nothing logged, and `wait_completion()` returning normally. Filed upstream
     as `ArcadeData/arcadedb#7615`. The vertex path now uses
@@ -224,8 +225,9 @@ Vertex Creation:
    Async executor:                 2,469 vertices/sec
 ```
 
-Two cautions before reusing them. The async executor's SQL command path loses records
-above parallel level 1 (#7615), so the async rows may describe a run that did less work
+Two cautions before reusing them. The async executor's SQL command path lost records
+above parallel level 1 before 26.10.1 (#7615, fixed in #7625), so the async rows may
+describe a run that did less work
 than its row count implies. And the edge rates cannot be attributed to the async
 executor at all, for the reason given in insight 1.
 

@@ -14,10 +14,11 @@ class TestRecommendedBulkPathsLandEveryRow:
     """A bulk load through each recommended path, counted against what it was given.
 
     ArcadeData/arcadedb#7615 went unnoticed because no test compared rows
-    submitted with rows stored at a size where the loss shows. The async
-    command path drops roughly three quarters of a 9,742-row load at parallel
-    level 4 while raising nothing, logging nothing, and returning normally from
-    `wait_completion()`, so only a count catches it. These are the counts, on
+    submitted with rows stored at a size where the loss shows. Before 26.10.1
+    (fixed in #7625) the async command path dropped roughly three quarters of a
+    9,742-row load at parallel level 4 while raising nothing, logging nothing,
+    and returning normally from `wait_completion()`, so only a count caught it.
+    These are the counts, on
     the paths the documentation now recommends instead.
     """
 

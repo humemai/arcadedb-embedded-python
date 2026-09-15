@@ -1199,8 +1199,8 @@ step_start = time.time()
 # db.async_executor() with commitEvery and WAL off, which read as if the load
 # were async when it never was: those settings only apply to work submitted to
 # the executor. They are gone rather than made real, because the executor's SQL
-# command path silently discards records above parallel level 1
-# (ArcadeData/arcadedb#7615).
+# command path silently discarded records above parallel level 1 before 26.10.1
+# (ArcadeData/arcadedb#7615, fixed in #7625).
 db.set_read_your_writes(False)
 
 movies_csv = str(data_dir / "movies.csv")

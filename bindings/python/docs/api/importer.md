@@ -51,8 +51,8 @@ default Python-side ingest path right now.
 - Treat `db.import_documents(...)` as a narrow convenience wrapper, not as the default
     ingest story for Python.
 - Do not use the async executor's SQL `command(...)` as an ingest path. Above one async
-    worker it silently discards records, with nothing raised or logged
-    (`ArcadeData/arcadedb#7615`).
+    worker it silently discarded records before 26.10.1, with nothing raised or logged
+    (`ArcadeData/arcadedb#7615`, fixed in #7625).
 - For bulk graph ingest, prefer `GraphBatch` (`db.graph_batch(...)`) rather than
     importer-based graph loading or async SQL.
 - Use SQL `IMPORT DATABASE` mainly when you specifically need one of the supported file

@@ -110,8 +110,9 @@ are doing.
 - For bulk document ingest from Python, prefer `db.insert_many(...)` (optionally with
     `parallel=True`), which crosses the FFI boundary once per batch.
 - The async executor's SQL command path (`db.async_executor().command(...)`) is not a
-    bulk-ingest path: above parallel level 1 it silently discards records
-    (`ArcadeData/arcadedb#7615`).
+    bulk-ingest path: above parallel level 1 it silently discarded records before
+    26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic commit is now
+    retried and otherwise reported through the error callback).
 - For bulk graph ingest from Python, prefer `GraphBatch`.
 
 ## Features
