@@ -24,7 +24,7 @@ There is deliberately **no Docker image of the whole harness**. The corpora cann
 inside an image, the runner starts comparator servers as sibling containers so such an image
 would need the host's Docker socket, and an image pinned to twenty engine digests is stale
 at the next re-pin, which means a stranger would run it and get numbers that do not match
-the page. The frozen rows and the page payload are published as a release asset instead, so
+the page. At each campaign freeze the frozen rows and the page payload are published as a release asset instead, so
 the tables can be checked against the data without running anything, which is the
 verification most readers actually want.
 

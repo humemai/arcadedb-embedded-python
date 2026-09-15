@@ -9,3 +9,6 @@ results/delta_scan_*/
 results/verify_*/
 results/ablation_cache_*.jsonl
 results/mp_rows_*.jsonl
+# the release bundle and its manifest, rebuilt by publish_results_asset.py at each freeze
+results/generated/results_manifest.json
+results/generated/benchmark-results-*.tar.gz
