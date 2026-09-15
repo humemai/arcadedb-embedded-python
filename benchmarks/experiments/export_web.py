@@ -4516,7 +4516,12 @@ def main() -> int:
     _mm = _multimodel_table(payload["tables"]) if _october else None
     if _mm:
         if SKELETON:
-            _mm["conditions"].insert(0, SKELETON_TABLE_NOTE)
+            # The every-table skeleton banner speaks of timings; this table has
+            # none, so it says what a skeleton means for a coverage table.
+            _mm["conditions"].insert(0, _gen(
+                "This table carries no number. On the skeleton it is derived "
+                "from placeholder tables, so it shows which engines the October "
+                "page will compare on each workload, not anything measured yet."))
         tables.append(_mm)
         payload["tables"].append(_mm)
 

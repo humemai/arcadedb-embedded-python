@@ -11073,7 +11073,7 @@
       "dataset": "Every October table on this page, read for which engine has a row",
       "instrument": "2026-10",
       "conditions": [
-        "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
+        "This table carries no number. On the skeleton it is derived from placeholder tables, so it shows which engines the October page will compare on each workload, not anything measured yet.",
         "This table is derived from the eleven tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there; no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page."
       ],
       "columns": [
@@ -11556,6 +11556,10 @@
         "values": [
           "eleven"
         ]
+      },
+      {
+        "text": "This table carries no number. On the skeleton it is derived from placeholder tables, so it shows which engines the October page will compare on each workload, not anything measured yet.",
+        "values": []
       }
     ]
   }
