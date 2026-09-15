@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_async_executor.py){ .md-button }
 
-The file contains **10 tests** (one of them skipped) covering asynchronous SQL command/query execution and executor configuration.
+The file contains **11 tests** (one of them skipped) covering asynchronous SQL command/query execution and executor configuration.
 
 ## Overview
 
@@ -73,6 +73,10 @@ Calls `close()` twice and asserts `is_closed()` is `True` with no error.
 
 Uses `set_parallel_level(1).set_commit_every(100)`, asserts `is_pending()` is initially `False`, queues 1000 commands, observes `is_processing()` during the in-flight phase, then after `wait_completion()` asserts `is_pending()` is `False`. The parallel level is pinned to 1 so the queue-state assertions are not mixed with discarded submissions.
 
+#### test_async_executor_is_pending_true_while_queued
+
+Queues work and asserts `is_pending()` answers `True` while it is still queued, without blocking (#7107). It used to call `waitCompletion(0)`, which the engine clamps to an infinite wait, so it blocked until the queue drained and then answered `False` - never `True`, no matter how much work was outstanding.
+
 #### test_async_executor_getters_and_sync_modes
 
 Sets `set_parallel_level(3)`, `set_commit_every(123)`, `set_back_pressure(40)`, `set_transaction_use_wal(False)`, `set_transaction_sync("yes_nometadata")`, then asserts the corresponding getters (`get_parallel_level()`, `get_commit_every()`, `get_back_pressure()`, `is_transaction_use_wal()`, `get_transaction_sync()`, `get_thread_count()`).
@@ -116,7 +120,7 @@ Two things carry the test: the parallel level is 1, and the assertion is an equa
 2. Keep `set_parallel_level()` at 1 whenever the executor runs SQL commands that write; above 1 the submissions are partly discarded (#7615). Levels above 1 are safe for `create_record`, `append_samples`, `Database.insert_many`, and `Database.graph_batch`.
 3. Assert an exact count against what was submitted. A `count > 0` assertion passes on a load that lost three quarters of its rows.
 4. Use per-operation `error_callback` or global `on_ok()` / `on_error()` handlers to observe outcomes. The per-command callback reports no error when records are discarded; only the executor-wide `on_error` handler does.
-5. `is_pending()` / `is_processing()` track queue state; `is_pending()` is `False` after completion.
+5. `is_pending()` / `is_processing()` track queue state; `is_pending()` is `False` after completion. Both are non-blocking polls of the engine's `isProcessing()`: `waitCompletion(0)` is not a poll, the engine reads a zero timeout as "wait forever" (#7107).
 6. Closing the owning database also closes its owned async executor; `close()` is idempotent.
 
 ## See Also

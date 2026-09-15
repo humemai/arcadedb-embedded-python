@@ -4,7 +4,7 @@
 
 Tests for ResultSet.to_arrow().
 
-There are 7 tests.
+There are 10 tests.
 
 ## Test Cases
 
@@ -28,11 +28,28 @@ Strings are wrapped from the offsets+blob buffer, nulls included.
 
 More rows than one batch: chunks must concatenate, not truncate.
 
-### 6) to arrow empty
+### 6) to arrow multi batch int then float column
+
+A column that is int in one batch and float in the next is a legal result set, since
+ArcadeDB is schemaless per document, and each batch's type is inferred on its own. The
+chunks are widened to float64 so they concatenate (#7108).
+
+### 7) to arrow multi batch mixed type degrades to string
+
+Numeric in one batch and a string in another has no common numeric type, so the column
+degrades to string rather than raising at concatenation.
+
+### 8) to arrow multi batch non representable int forces string fallback
+
+int64 values outside float64's exact ±2^53 range next to a batch of floats: pyarrow's
+cast is safe by default and refuses the lossy widening, so the column falls back to
+string instead of raising.
+
+### 9) to arrow empty
 
 An empty result is an empty table, not None and not an error.
 
-### 7) to arrow matches to columns when not null
+### 10) to arrow matches to columns when not null
 
 With no nulls the two paths must agree; only null handling differs.
 

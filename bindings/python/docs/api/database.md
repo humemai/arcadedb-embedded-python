@@ -345,6 +345,11 @@ and `fn` is re-executed, with linear backoff. The `with db.transaction():` conte
 manager cannot retry (a `with` block can't be re-entered), so use this for contended
 multi-threaded writes.
 
+Any other way out of `fn` rolls back too, and then propagates: a plain bug
+(`TypeError`, `KeyError`) and `KeyboardInterrupt` / `SystemExit` included, matching the
+Java side's `catch (final Throwable e)`. Nothing leaves an open transaction behind for
+the next caller to inherit.
+
 **Parameters:**
 
 - `fn`: Zero-argument callable executed inside the transaction
@@ -358,6 +363,7 @@ multi-threaded writes.
 **Raises:**
 
 - `ArcadeDBError`: If `fn` fails with a non-retryable error, or retries are exhausted
+- Anything else `fn` raises, re-raised unchanged after the rollback
 
 **Example:**
 

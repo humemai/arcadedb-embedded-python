@@ -659,6 +659,10 @@ async_exec.is_pending() -> bool
 
 Check if operations are still pending.
 
+A non-blocking poll, delegating to `is_processing()`. It does not call the engine's
+`waitCompletion(0)`: a timeout of zero is clamped to an infinite wait rather than read
+as "poll", so using it here would block until the queue drained.
+
 **Returns:**
 
 - `bool`: True if operations in progress
@@ -679,9 +683,9 @@ while async_exec.is_pending():
 async_exec.is_processing() -> bool
 ```
 
-Check whether the executor is currently processing queued operations. Similar to
-`is_pending()`, but also falls back to a zero-timeout `waitCompletion(0)` probe when
-the engine's `isProcessing()` call is unavailable.
+Check whether the executor is currently processing queued operations. Reports the
+engine's own `isProcessing()` state, and `False` if that call raises. `is_pending()`
+is the same answer under another name.
 
 **Returns:**
 

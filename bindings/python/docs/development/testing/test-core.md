@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_core.py){ .md-button }
 
-There are **34 tests** covering fundamental database operations.
+There are **37 tests** covering fundamental database operations.
 
 ## Overview
 
@@ -23,6 +23,8 @@ Tests validate:
 - Large result sets (1000+ records)
 - Type conversions (Python ↔ Java)
 - RID lookup via `lookup_by_rid()`
+- `run_in_transaction()` commit, retry, and rollback on any exception
+- Bulk materialization (`to_json_list()`, `to_columns()`, `to_dataframe()`)
 
 ## Test Cases
 
@@ -36,13 +38,18 @@ Tests validate:
 - **test_rich_data_types**: Defines a `Task` type with STRING/BOOLEAN/INTEGER/FLOAT/DECIMAL/DATE/DATETIME properties, uses built-in functions (`uuid()`, `date()`, `sysdate()`), then exercises insert, aggregation, filtering, UPDATE, and DELETE
 - **test_arcadedb_sql_features**: Tests built-in SQL functions and JSON-like embedded document properties on `TestEntity` (metadata returns a Java map-like object)
 - **test_transactions**: Tests successful commit and automatic rollback on exception
+- **test_run_in_transaction_commits_and_returns**: `run_in_transaction()` runs `fn` transactionally and hands back its return value
+- **test_run_in_transaction_rolls_back_on_non_arcadedb_error**: A plain `KeyError` from `fn` still rolls back and leaves no open transaction (#7108); it used to escape through the `except ArcadeDBError` handler
+- **test_run_in_transaction_rolls_back_on_base_exception**: `SystemExit` and `KeyboardInterrupt` are `BaseException`, so `except Exception` let them skip the rollback; they now roll back too
 - **test_result_methods**: Tests `Result` methods: `has_property()`, `get()`, `get_property_names()`, `to_dict()`, `to_json()`
 - **test_property_type_conversions**: Tests Python ↔ Java type mapping (str, int, long, float, double, bool, None, date)
+- **test_single_list_arg_is_positional_param_array**: A single list argument binds one element per `?` placeholder, the idiom example 04's CSV ingest uses
 
 ### Full-text Search
 
 - **test_fulltext_search_with_score**: Creates a `FULL_TEXT` index on `Article.content` and verifies `SEARCH_INDEX(...)` results expose `$score`
 - **test_fulltext_search_preserves_wildcards**: Verifies wildcard queries (`Hel*`) reach the full-text index unchanged
+- **test_fulltext_search_bm25_term_boosts**: BM25 scoring honours per-term caret boosts (`term^weight`) in the query string
 
 ### SQL Statement Coverage
 
@@ -65,9 +72,19 @@ Tests validate:
 
 - **test_opencypher_queries**: Tests OpenCypher `CREATE` and `MATCH` queries (skips if the opencypher engine is unavailable)
 
+### Result Materialization
+
+- **test_to_json_list_bulk_materialization**: `to_json_list()` returns every row with JSON-native types, across the bridge in one crossing
+- **test_to_json_list_empty_result**: `to_json_list()` on an empty result is an empty list
+- **test_to_columns_typed_bulk_materialization**: `to_columns()` returns typed numpy columns with pandas-convention nulls
+- **test_to_columns_survives_json_metacharacters_in_aliases**: A projection alias is arbitrary text, so the columnar header has to be real JSON (#6758): a quote used to kill the decode of the whole batch, a semicolon the column spec
+- **test_to_dataframe_fast_path**: `to_dataframe()` takes the columnar path and yields typed dtypes
+- **test_resultset_close_and_context_manager**: `ResultSet` supports `close()` and the context-manager protocol
+
 ### Other Features
 
 - **test_error_handling**: `arcadedb.open_database()` on an invalid path raises `ArcadeDBError`
+- **test_failed_open_does_not_hang_process_exit**: A failed `open_database()` must leave the process able to exit; the engine's non-daemon AsyncFlush thread used to leak on a failed open
 - **test_unicode_support**: Tests UTF-8 international characters (Spanish, Chinese, Japanese, Arabic) and emoji
 - **test_schema_queries**: Tests schema metadata via `SELECT FROM schema:types`, `schema:indexes`, and `schema:database`
 - **test_large_result_set_handling**: Bulk-inserts 1000 records and tests ordered iteration, filtering, and aggregation
