@@ -10,7 +10,7 @@ relies on memory.
 
     python campaign_switch_check.py --new-pin <commit-or-version> [--old-pin 8d6af9475]
 
-It answers three questions:
+It answers four questions:
   1. Are the preconditions met: does the new campaign's payload exist, do the
      gates pass on it, and does the preview route render it.
   2. What still names the OLD campaign: every tracked file outside results/
@@ -19,6 +19,11 @@ It answers three questions:
   3. What the docs site says that a new campaign can invalidate: the pages that
      name a version, a date, a query set, or an instrument, listed with the
      lines, because those are prose a generator cannot keep current.
+  4. What should be REMOVED rather than carried: decisions already superseded,
+     bugs fixed in the campaign that is ending, retired markers whose subject is
+     gone, and withheld cells whose upstream issue has closed. A switch is when
+     pruning is cheapest, and the reason this step exists is that we have twice
+     confused ourselves by piling entries up instead.
 
 Nothing is changed. The output is a checklist to work through.
 """
@@ -97,7 +102,45 @@ def main() -> int:
             if len(hits) > 6:
                 print(f"    ... and {len(hits) - 6} more")
 
-    step(4, "the switch itself, in order")
+    step(4, "what to remove, because a switch is when pruning is cheapest")
+    notes = REPO / ".notes" / "bench"
+    dec = notes / "DECISIONS.md"
+    bugs = notes / "BUGS.md"
+    if dec.exists():
+        stat = re.findall(r"(?m)^## (#\d+\w*) .*?\n> Status: (.+?)\.?$", dec.read_text(encoding="utf-8"))
+        if stat:
+            print(f"  {len(stat)} decision(s) already carry a status; a switch is when a superseded one moves to the archive:")
+            for num, why in stat[:8]:
+                print(f"    {num}: {why[:80]}")
+    if bugs.exists():
+        fixed = re.findall(r"(?m)^### (\w+)\. .*?\n\nStatus: (fixed[^\n]*)", bugs.read_text(encoding="utf-8"))
+        old = [(n, w) for n, w in fixed if args.old_pin[:7] in w or "re-run" in w]
+        print(f"  {len(fixed)} bug(s) recorded as fixed; {len(old)} name the campaign that is ending and can be archived with it")
+    # Prose markers that outlive their subject.
+    for path, pat, what in (
+        (HERE / "PAGE-SPEC.md", r"(?i)retired|no longer (run|published)", "retired-table markers"),
+        (HERE / "COMPARATORS.md", r"(?i)retired|replaced by", "retired comparator pins"),
+        (HERE / "export_web.py", r"KNOWN_DISAGREEMENTS|WITHHELD_CELLS", "withheld cells and known disagreements"),
+    ):
+        if not path.exists():
+            continue
+        n = len(re.findall(pat, path.read_text(encoding="utf-8")))
+        if n:
+            print(f"  {path.name}: {n} mention(s) of {what}; each one outlives its subject at a re-pin and should be re-read")
+    # A withheld cell exists because an upstream defect does. If the issue closed, the entry goes.
+    issues = sorted(set(re.findall(r"#(7\d{3})", (HERE / "export_web.py").read_text(encoding="utf-8"))))
+    for num in issues:
+        r = sh(["gh", "issue", "view", num, "--repo", "ArcadeData/arcadedb", "--json", "state,title"])
+        if r.returncode == 0:
+            try:
+                d = json.loads(r.stdout)
+                mark = "CLOSED, so the entry that cites it should go" if d.get("state") == "CLOSED" else "still open, so the entry stays"
+                print(f"  upstream #{num}: {mark}  ({d.get('title','')[:60]})")
+            except json.JSONDecodeError:
+                pass
+    print("  the preview route, its payload, its images, and its prose file are deleted by the switch itself")
+
+    step(5, "the switch itself, in order")
     for i, line in enumerate([
         "land the final stage and freeze the campaign (land_stage.py --apply)",
         "run every gate on the new payload, including the manifest coverage check",
@@ -106,6 +149,8 @@ def main() -> int:
         "delete the preview route and its payload, so nothing stale is reachable",
         "update every file listed in step 2 that is not a historical mention",
         "update every documentation line listed in step 3 that the new campaign changes",
+        "archive what step 4 listed: superseded decisions, bugs fixed in the campaign that ended, retired markers, and any withheld cell whose upstream issue has closed",
+        "re-read every doc the pruning touched: removing a rule leaves sentences that referred to it, and a document describing a thing that no longer exists is worse than no document",
         "rebuild the documentation site and the page, and check both links still resolve",
     ], 1):
         print(f"  {i}. {line}")
