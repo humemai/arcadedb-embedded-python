@@ -1704,11 +1704,16 @@ def _durability_note(entries, rows, table_lane=None):
     if not seen:
         return None
     parts = [OCT_DURABILITY_CONDITION]
-    if seen.get("strict"):
-        names = ", ".join(sorted(seen["strict"]))
-        parts.append(f"The exception on this table is {names}, which has no setting "
-                     f"to relax and waits for the disk at every commit; its write and "
-                     f"transaction cells are paying for that.")
+    # An engine that has a knob has rows in both classes in the frozen set; the
+    # exception is the engine with strict rows and no relaxed row (BUGS F52).
+    _strict_only = seen.get("strict", set()) - seen.get("relaxed", set())
+    if _strict_only:
+        names = ", ".join(sorted(_strict_only))
+        _one = len(_strict_only) == 1
+        parts.append(f"The exception on this table is {names}, which "
+                     f"{'has' if _one else 'have'} no setting to relax and "
+                     f"{'waits' if _one else 'wait'} for the disk at every commit; "
+                     f"{'its' if _one else 'their'} write and transaction cells are paying for that.")
     if seen.get("unverified"):
         names = ", ".join(sorted(seen["unverified"]))
         parts.append(f"{names} exposes no durability setting at all and what it does at "
@@ -3414,6 +3419,22 @@ def main() -> int:
             print(f"    {lane:<10}{ev:<42}n={n}")
         print("    -> re-run these lanes at the pin; they are the cheap ones")
         rows = [r for r in rows if r not in _unusable]
+
+    # ONE SETTING PER TABLE. The 2026-10 instrument runs every timed write
+    # twice, once at each durability setting (DECISIONS #90), and the frozen
+    # set holds both. Every table except the durability table reports the
+    # relaxed setting, as its condition says, so a strict row is dropped here
+    # whenever a relaxed row of the same cell exists. Without this the
+    # skeleton's write cells were medians over one relaxed and one strict run
+    # (BUGS F52). An engine with no setting has strict rows only and keeps them.
+    _all_rows = list(rows)
+    _has_relaxed = {(r.get("lane"), r.get("workload"), r.get("backend"), str(r.get("scale")))
+                    for r in rows if str(r.get("durability_class")) == "relaxed"}
+    _dropped = [r for r in rows if str(r.get("durability_class")) == "strict"
+                and (r.get("lane"), r.get("workload"), r.get("backend"), str(r.get("scale"))) in _has_relaxed]
+    if _dropped:
+        print(f"  one setting per table: {len(_dropped)} strict rows set aside for the durability table only")
+        rows = [r for r in rows if r not in _dropped]
     names = _image_version_names()
 
     # The tabular lanes run OLTP and OLAP as separate workloads over ONE corpus
@@ -3703,7 +3724,7 @@ def main() -> int:
     # and is built from the same 2026-10 rows the write tables are; a September
     # payload has no cell that ran twice, so it returns None and the page does
     # not carry it.
-    _extras = [_l4_table(rows), _lifecycle_table(rows), _durability_table(rows)]
+    _extras = [_l4_table(rows), _lifecycle_table(rows), _durability_table(_all_rows)]
     if not SKELETON:
         _extras = [_sparse_multipass_table()] + _extras + [_e4_table(), _python_cost_table()]
     for extra in _extras:

@@ -791,7 +791,7 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split on this row: the lane warms on a held-out query slice before it times anything, so every timed query here is warm. The dense table's cold and warm columns come from the multipass driver, whose pass 0 is the cold pass and whose passes 1 to 5 are the warm ones (DECISIONS #89)",
         "The insert and delete into a built index, and the recall after each, run at 5k vectors (skeleton) (forced on by BENCH_DENSE_MUTATE=1).",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, DuckDB, DuckDB VSS, MongoDB, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, DuckDB VSS, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that.",
         "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
         "SurrealDB (server) at 5k vectors (skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 70 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
         "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
@@ -2738,7 +2738,7 @@
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (embedded), ArcadeDB (server), LadybugDB, MongoDB, Neo4j, SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Each repetition runs every read against a fresh set of start persons (2k people (synthetic, skeleton): 50) and commits up to 1,000 writes; the p50 and p99 are over those.",
         "SurrealDB (server) at 2k people (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 70 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
@@ -2774,76 +2774,76 @@
           "host": null,
           "metrics": {
             "point p50 ms": {
-              "median": 2.175,
-              "min": 2.078,
+              "median": 2.272,
+              "min": 2.272,
               "max": 2.272,
-              "n": 2
+              "n": 1
             },
             "point p99 ms": {
-              "median": 2.9695,
+              "median": 2.875,
               "min": 2.875,
-              "max": 3.064,
-              "n": 2
+              "max": 2.875,
+              "n": 1
             },
             "1-hop p50 ms": {
-              "median": 2.647,
+              "median": 2.323,
               "min": 2.323,
-              "max": 2.971,
-              "n": 2
+              "max": 2.323,
+              "n": 1
             },
             "2-hop p50 ms": {
-              "median": 5.4635,
+              "median": 5.244,
               "min": 5.244,
-              "max": 5.683,
-              "n": 2
+              "max": 5.244,
+              "n": 1
             },
             "3-hop filtered p50 ms": {
-              "median": 32.6175,
-              "min": 29.979,
+              "median": 35.256,
+              "min": 35.256,
               "max": 35.256,
-              "n": 2
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 4.7845,
+              "median": 1.681,
               "min": 1.681,
-              "max": 7.888,
-              "n": 2
+              "max": 1.681,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 3.8085,
+              "median": 0.622,
               "min": 0.622,
-              "max": 6.995,
-              "n": 2
+              "max": 0.622,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 4.663,
+              "median": 1.288,
               "min": 1.288,
-              "max": 8.038,
-              "n": 2
+              "max": 1.288,
+              "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 24411.2213,
-              "min": 24063.4831,
+              "median": 24758.9595,
+              "min": 24758.9595,
               "max": 24758.9595,
-              "n": 2
+              "n": 1
             },
             "ingest total s": {
-              "median": 1.755,
+              "median": 1.73,
               "min": 1.73,
-              "max": 1.78,
-              "n": 2
+              "max": 1.73,
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 1.8896,
+              "median": 1.8656,
               "min": 1.8656,
-              "max": 1.9135,
-              "n": 2
+              "max": 1.8656,
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0032,
               "min": 0.0032,
               "max": 0.0032,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -2861,76 +2861,76 @@
           "host": null,
           "metrics": {
             "point p50 ms": {
-              "median": 5.1475,
-              "min": 4.781,
+              "median": 5.514,
+              "min": 5.514,
               "max": 5.514,
-              "n": 2
+              "n": 1
             },
             "point p99 ms": {
-              "median": 7.97,
-              "min": 5.807,
+              "median": 10.133,
+              "min": 10.133,
               "max": 10.133,
-              "n": 2
+              "n": 1
             },
             "1-hop p50 ms": {
-              "median": 5.0415,
+              "median": 5.04,
               "min": 5.04,
-              "max": 5.043,
-              "n": 2
+              "max": 5.04,
+              "n": 1
             },
             "2-hop p50 ms": {
-              "median": 7.673,
-              "min": 7.237,
+              "median": 8.109,
+              "min": 8.109,
               "max": 8.109,
-              "n": 2
+              "n": 1
             },
             "3-hop filtered p50 ms": {
-              "median": 39.862,
+              "median": 37.41,
               "min": 37.41,
-              "max": 42.314,
-              "n": 2
+              "max": 37.41,
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 8.3565,
+              "median": 4.994,
               "min": 4.994,
-              "max": 11.719,
-              "n": 2
+              "max": 4.994,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 6.072,
+              "median": 2.785,
               "min": 2.785,
-              "max": 9.359,
-              "n": 2
+              "max": 2.785,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 7.0725,
+              "median": 3.646,
               "min": 3.646,
-              "max": 10.499,
-              "n": 2
+              "max": 3.646,
+              "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 6129.5203,
+              "median": 5875.583,
               "min": 5875.583,
-              "max": 6383.4575,
-              "n": 2
+              "max": 5875.583,
+              "n": 1
             },
             "ingest total s": {
-              "median": 7.0,
-              "min": 6.71,
+              "median": 7.29,
+              "min": 7.29,
               "max": 7.29,
-              "n": 2
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 2.9211,
-              "min": 2.9095,
+              "median": 2.9328,
+              "min": 2.9328,
               "max": 2.9328,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
-              "median": 0.0346,
-              "min": 0.0186,
+              "median": 0.0507,
+              "min": 0.0507,
               "max": 0.0507,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -2948,76 +2948,76 @@
           "host": null,
           "metrics": {
             "point p50 ms": {
-              "median": 2.5435,
+              "median": 2.446,
               "min": 2.446,
-              "max": 2.641,
-              "n": 2
+              "max": 2.446,
+              "n": 1
             },
             "point p99 ms": {
-              "median": 2.977,
+              "median": 2.937,
               "min": 2.937,
-              "max": 3.017,
-              "n": 2
+              "max": 2.937,
+              "n": 1
             },
             "1-hop p50 ms": {
-              "median": 2.881,
-              "min": 2.849,
+              "median": 2.913,
+              "min": 2.913,
               "max": 2.913,
-              "n": 2
+              "n": 1
             },
             "2-hop p50 ms": {
-              "median": 5.9425,
+              "median": 5.882,
               "min": 5.882,
-              "max": 6.003,
-              "n": 2
+              "max": 5.882,
+              "n": 1
             },
             "3-hop filtered p50 ms": {
-              "median": 114.6475,
-              "min": 109.272,
+              "median": 120.023,
+              "min": 120.023,
               "max": 120.023,
-              "n": 2
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 5.836,
+              "median": 2.47,
               "min": 2.47,
-              "max": 9.202,
-              "n": 2
+              "max": 2.47,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 5.684,
+              "median": 2.39,
               "min": 2.39,
-              "max": 8.978,
-              "n": 2
+              "max": 2.39,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 6.0765,
+              "median": 2.849,
               "min": 2.849,
-              "max": 9.304,
-              "n": 2
+              "max": 2.849,
+              "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 34099.6904,
-              "min": 32205.2632,
+              "median": 35994.1176,
+              "min": 35994.1176,
               "max": 35994.1176,
-              "n": 2
+              "n": 1
             },
             "ingest total s": {
-              "median": 1.26,
+              "median": 1.19,
               "min": 1.19,
-              "max": 1.33,
-              "n": 2
+              "max": 1.19,
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 0.2575,
+              "median": 0.2543,
               "min": 0.2543,
-              "max": 0.2607,
-              "n": 2
+              "max": 0.2543,
+              "n": 1
             },
             "disk GiB": {
-              "median": 0.0094,
+              "median": 0.0093,
               "min": 0.0093,
-              "max": 0.0095,
-              "n": 2
+              "max": 0.0093,
+              "n": 1
             }
           }
         },
@@ -3035,76 +3035,76 @@
           "host": null,
           "metrics": {
             "point p50 ms": {
-              "median": 0.715,
+              "median": 0.71,
               "min": 0.71,
-              "max": 0.72,
-              "n": 2
+              "max": 0.71,
+              "n": 1
             },
             "point p99 ms": {
-              "median": 1.223,
+              "median": 0.934,
               "min": 0.934,
-              "max": 1.512,
-              "n": 2
+              "max": 0.934,
+              "n": 1
             },
             "1-hop p50 ms": {
-              "median": 3.2975,
-              "min": 3.087,
+              "median": 3.508,
+              "min": 3.508,
               "max": 3.508,
-              "n": 2
+              "n": 1
             },
             "2-hop p50 ms": {
-              "median": 5.758,
+              "median": 5.739,
               "min": 5.739,
-              "max": 5.777,
-              "n": 2
+              "max": 5.739,
+              "n": 1
             },
             "3-hop filtered p50 ms": {
-              "median": 13.785,
-              "min": 13.688,
+              "median": 13.882,
+              "min": 13.882,
               "max": 13.882,
-              "n": 2
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 8.395,
+              "median": 8.338,
               "min": 8.338,
-              "max": 8.452,
-              "n": 2
+              "max": 8.338,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 7.695,
-              "min": 7.656,
+              "median": 7.734,
+              "min": 7.734,
               "max": 7.734,
-              "n": 2
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 7.7135,
-              "min": 7.604,
+              "median": 7.823,
+              "min": 7.823,
               "max": 7.823,
-              "n": 2
+              "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 124179.7059,
+              "median": 122380.0,
               "min": 122380.0,
-              "max": 125979.4118,
-              "n": 2
+              "max": 122380.0,
+              "n": 1
             },
             "ingest total s": {
-              "median": 0.345,
-              "min": 0.34,
+              "median": 0.35,
+              "min": 0.35,
               "max": 0.35,
-              "n": 2
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 0.1606,
-              "min": 0.1588,
+              "median": 0.1625,
+              "min": 0.1625,
               "max": 0.1625,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
               "median": 0.003,
               "min": 0.003,
               "max": 0.003,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -3122,76 +3122,76 @@
           "host": null,
           "metrics": {
             "point p50 ms": {
-              "median": 0.57,
-              "min": 0.509,
+              "median": 0.631,
+              "min": 0.631,
               "max": 0.631,
-              "n": 2
+              "n": 1
             },
             "point p99 ms": {
-              "median": 2.1605,
+              "median": 1.501,
               "min": 1.501,
-              "max": 2.82,
-              "n": 2
+              "max": 1.501,
+              "n": 1
             },
             "1-hop p50 ms": {
-              "median": 1.812,
-              "min": 1.723,
+              "median": 1.901,
+              "min": 1.901,
               "max": 1.901,
-              "n": 2
+              "n": 1
             },
             "2-hop p50 ms": {
-              "median": 3.4125,
+              "median": 3.125,
               "min": 3.125,
-              "max": 3.7,
-              "n": 2
+              "max": 3.125,
+              "n": 1
             },
             "3-hop filtered p50 ms": {
-              "median": 460.244,
-              "min": 457.966,
+              "median": 462.522,
+              "min": 462.522,
               "max": 462.522,
-              "n": 2
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 3.6925,
+              "median": 1.345,
               "min": 1.345,
-              "max": 6.04,
-              "n": 2
+              "max": 1.345,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 2.7535,
+              "median": 0.581,
               "min": 0.581,
-              "max": 4.926,
-              "n": 2
+              "max": 0.581,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 3.9665,
+              "median": 1.956,
               "min": 1.956,
-              "max": 5.977,
-              "n": 2
+              "max": 1.956,
+              "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 34936.7308,
-              "min": 32948.4615,
+              "median": 36925.0,
+              "min": 36925.0,
               "max": 36925.0,
-              "n": 2
+              "n": 1
             },
             "ingest total s": {
-              "median": 1.23,
+              "median": 1.16,
               "min": 1.16,
-              "max": 1.3,
-              "n": 2
+              "max": 1.16,
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 0.1704,
+              "median": 0.1692,
               "min": 0.1692,
-              "max": 0.1715,
-              "n": 2
+              "max": 0.1692,
+              "n": 1
             },
             "disk GiB": {
-              "median": 0.0029,
+              "median": 0.001,
               "min": 0.001,
-              "max": 0.0049,
-              "n": 2
+              "max": 0.001,
+              "n": 1
             }
           }
         },
@@ -3209,76 +3209,76 @@
           "host": null,
           "metrics": {
             "point p50 ms": {
-              "median": 31.743,
-              "min": 31.014,
+              "median": 32.472,
+              "min": 32.472,
               "max": 32.472,
-              "n": 2
+              "n": 1
             },
             "point p99 ms": {
-              "median": 77.6145,
-              "min": 72.049,
+              "median": 83.18,
+              "min": 83.18,
               "max": 83.18,
-              "n": 2
+              "n": 1
             },
             "1-hop p50 ms": {
-              "median": 29.333,
+              "median": 26.116,
               "min": 26.116,
-              "max": 32.55,
-              "n": 2
+              "max": 26.116,
+              "n": 1
             },
             "2-hop p50 ms": {
-              "median": 26.7425,
+              "median": 26.658,
               "min": 26.658,
-              "max": 26.827,
-              "n": 2
+              "max": 26.658,
+              "n": 1
             },
             "3-hop filtered p50 ms": {
-              "median": 35.4835,
-              "min": 33.947,
+              "median": 37.02,
+              "min": 37.02,
               "max": 37.02,
-              "n": 2
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 18.7275,
-              "min": 18.609,
+              "median": 18.846,
+              "min": 18.846,
               "max": 18.846,
-              "n": 2
+              "n": 1
             },
             "update p50 ms": {
-              "median": 11.1715,
-              "min": 11.063,
+              "median": 11.28,
+              "min": 11.28,
               "max": 11.28,
-              "n": 2
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 11.053,
-              "min": 10.952,
+              "median": 11.154,
+              "min": 11.154,
               "max": 11.154,
-              "n": 2
+              "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 8108.475,
-              "min": 7932.037,
+              "median": 8284.913,
+              "min": 8284.913,
               "max": 8284.913,
-              "n": 2
+              "n": 1
             },
             "ingest total s": {
-              "median": 5.285,
+              "median": 5.17,
               "min": 5.17,
-              "max": 5.4,
-              "n": 2
+              "max": 5.17,
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 4.701,
+              "median": 4.6996,
               "min": 4.6996,
-              "max": 4.7023,
-              "n": 2
+              "max": 4.6996,
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0037,
               "min": 0.0037,
               "max": 0.0037,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -3296,76 +3296,76 @@
           "host": null,
           "metrics": {
             "point p50 ms": {
-              "median": 0.1835,
-              "min": 0.121,
+              "median": 0.246,
+              "min": 0.246,
               "max": 0.246,
-              "n": 2
+              "n": 1
             },
             "point p99 ms": {
-              "median": 0.257,
-              "min": 0.14,
+              "median": 0.374,
+              "min": 0.374,
               "max": 0.374,
-              "n": 2
+              "n": 1
             },
             "1-hop p50 ms": {
-              "median": 7.55,
-              "min": 7.076,
+              "median": 8.024,
+              "min": 8.024,
               "max": 8.024,
-              "n": 2
+              "n": 1
             },
             "2-hop p50 ms": {
-              "median": 96.6785,
+              "median": 89.247,
               "min": 89.247,
-              "max": 104.11,
-              "n": 2
+              "max": 89.247,
+              "n": 1
             },
             "3-hop filtered p50 ms": {
-              "median": 1724.9125,
-              "min": 1696.033,
+              "median": 1753.792,
+              "min": 1753.792,
               "max": 1753.792,
-              "n": 2
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 7.383,
+              "median": 1.278,
               "min": 1.278,
-              "max": 13.488,
-              "n": 2
+              "max": 1.278,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 3.795,
+              "median": 0.643,
               "min": 0.643,
-              "max": 6.947,
-              "n": 2
+              "max": 0.643,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 4.5655,
+              "median": 1.534,
               "min": 1.534,
-              "max": 7.597,
-              "n": 2
+              "max": 1.534,
+              "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 5334.5274,
-              "min": 5288.0247,
+              "median": 5381.0302,
+              "min": 5381.0302,
               "max": 5381.0302,
-              "n": 2
+              "n": 1
             },
             "ingest total s": {
-              "median": 8.03,
+              "median": 7.96,
               "min": 7.96,
-              "max": 8.1,
-              "n": 2
+              "max": 7.96,
+              "n": 1
             },
             "peak memory GiB": {
               "median": 0.1879,
               "min": 0.1879,
-              "max": 0.188,
-              "n": 2
+              "max": 0.1879,
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0246,
               "min": 0.0246,
               "max": 0.0246,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -3383,76 +3383,76 @@
           "host": null,
           "metrics": {
             "point p50 ms": {
-              "median": 0.9795,
-              "min": 0.847,
+              "median": 1.112,
+              "min": 1.112,
               "max": 1.112,
-              "n": 2
+              "n": 1
             },
             "point p99 ms": {
-              "median": 1.5115,
+              "median": 1.287,
               "min": 1.287,
-              "max": 1.736,
-              "n": 2
+              "max": 1.287,
+              "n": 1
             },
             "1-hop p50 ms": {
-              "median": 1.1955,
-              "min": 1.17,
+              "median": 1.221,
+              "min": 1.221,
               "max": 1.221,
-              "n": 2
+              "n": 1
             },
             "2-hop p50 ms": {
-              "median": 1.536,
-              "min": 1.504,
+              "median": 1.568,
+              "min": 1.568,
               "max": 1.568,
-              "n": 2
+              "n": 1
             },
             "3-hop filtered p50 ms": {
-              "median": 111.934,
+              "median": 110.267,
               "min": 110.267,
-              "max": 113.601,
-              "n": 2
+              "max": 110.267,
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 14.5675,
-              "min": 14.473,
+              "median": 14.662,
+              "min": 14.662,
               "max": 14.662,
-              "n": 2
+              "n": 1
             },
             "update p50 ms": {
-              "median": 7.6935,
-              "min": 7.666,
+              "median": 7.721,
+              "min": 7.721,
               "max": 7.721,
-              "n": 2
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 8.653,
-              "min": 8.452,
+              "median": 8.854,
+              "min": 8.854,
               "max": 8.854,
-              "n": 2
+              "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 7873.9527,
+              "median": 7830.5302,
               "min": 7830.5302,
-              "max": 7917.3752,
-              "n": 2
+              "max": 7830.5302,
+              "n": 1
             },
             "ingest total s": {
-              "median": 5.44,
-              "min": 5.41,
+              "median": 5.47,
+              "min": 5.47,
               "max": 5.47,
-              "n": 2
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 0.2057,
+              "median": 0.1998,
               "min": 0.1998,
-              "max": 0.2116,
-              "n": 2
+              "max": 0.1998,
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0,
               "min": 0.0,
               "max": 0.0,
-              "n": 2
+              "n": 1
             }
           }
         }
@@ -3493,7 +3493,7 @@
         "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "The cold column is the very first query of a session, most friends, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, LadybugDB, MongoDB, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at 2k people (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "ArangoDB at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
@@ -4137,7 +4137,7 @@
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
         "A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j, Neo4j (vector index), PostgreSQL, PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one."
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one."
       ],
       "columns": [
         "trials",
@@ -4415,7 +4415,7 @@
         "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j, Neo4j (vector index), PostgreSQL, PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
         "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB inserts through its Python client into an in-memory database; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
       ],
@@ -4448,64 +4448,64 @@
           "host": null,
           "metrics": {
             "transaction p50 ms": {
-              "median": 3.6225,
-              "min": 3.396,
+              "median": 3.849,
+              "min": 3.849,
               "max": 3.849,
-              "n": 2
+              "n": 1
             },
             "transaction p99 ms": {
-              "median": 35.3325,
-              "min": 6.968,
+              "median": 63.697,
+              "min": 63.697,
               "max": 63.697,
-              "n": 2
+              "n": 1
             },
             "retrieval p50 ms": {
-              "median": 6.1455,
-              "min": 6.013,
+              "median": 6.278,
+              "min": 6.278,
               "max": 6.278,
-              "n": 2
+              "n": 1
             },
             "graph-filtered search p50 ms": {
-              "median": 21.5765,
-              "min": 20.7,
+              "median": 22.453,
+              "min": 22.453,
               "max": 22.453,
-              "n": 2
+              "n": 1
             },
             "retrieval recall@10": {
-              "median": 0.7735,
-              "min": 0.7725,
+              "median": 0.7745,
+              "min": 0.7745,
               "max": 0.7745,
-              "n": 2
+              "n": 1
             },
             "filtered recall@10": {
               "median": 0.068,
               "min": 0.068,
               "max": 0.068,
-              "n": 2
+              "n": 1
             },
             "ingest+index vertices+edges/s": {
-              "median": 7440.8137,
+              "median": 7385.4505,
               "min": 7385.4505,
-              "max": 7496.1769,
-              "n": 2
+              "max": 7385.4505,
+              "n": 1
             },
             "ingest+index total s": {
-              "median": 26.88,
-              "min": 26.68,
+              "median": 27.08,
+              "min": 27.08,
               "max": 27.08,
-              "n": 2
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 3.5977,
+              "median": 3.5424,
               "min": 3.5424,
-              "max": 3.6529,
-              "n": 2
+              "max": 3.5424,
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0384,
               "min": 0.0384,
               "max": 0.0384,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -4523,64 +4523,64 @@
           "host": null,
           "metrics": {
             "transaction p50 ms": {
-              "median": 28.9195,
+              "median": 25.71,
               "min": 25.71,
-              "max": 32.129,
-              "n": 2
+              "max": 25.71,
+              "n": 1
             },
             "transaction p99 ms": {
-              "median": 34.7805,
+              "median": 31.135,
               "min": 31.135,
-              "max": 38.426,
-              "n": 2
+              "max": 31.135,
+              "n": 1
             },
             "retrieval p50 ms": {
-              "median": 13.5915,
-              "min": 13.152,
+              "median": 14.031,
+              "min": 14.031,
               "max": 14.031,
-              "n": 2
+              "n": 1
             },
             "graph-filtered search p50 ms": {
-              "median": 31.719,
-              "min": 28.725,
+              "median": 34.713,
+              "min": 34.713,
               "max": 34.713,
-              "n": 2
+              "n": 1
             },
             "retrieval recall@10": {
-              "median": 0.78,
+              "median": 0.7755,
               "min": 0.7755,
-              "max": 0.7845,
-              "n": 2
+              "max": 0.7755,
+              "n": 1
             },
             "filtered recall@10": {
-              "median": 0.0685,
-              "min": 0.0675,
+              "median": 0.0695,
+              "min": 0.0695,
               "max": 0.0695,
-              "n": 2
+              "n": 1
             },
             "ingest+index vertices+edges/s": {
-              "median": 4531.4202,
-              "min": 4414.9669,
+              "median": 4647.8736,
+              "min": 4647.8736,
               "max": 4647.8736,
-              "n": 2
+              "n": 1
             },
             "ingest+index total s": {
-              "median": 44.165,
+              "median": 43.03,
               "min": 43.03,
-              "max": 45.3,
-              "n": 2
+              "max": 43.03,
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 4.1529,
-              "min": 4.1208,
+              "median": 4.1851,
+              "min": 4.1851,
               "max": 4.1851,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
-              "median": 0.0442,
-              "min": 0.0414,
+              "median": 0.0471,
+              "min": 0.0471,
               "max": 0.0471,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -4598,64 +4598,64 @@
           "host": null,
           "metrics": {
             "transaction p50 ms": {
-              "median": 20.468,
+              "median": 16.902,
               "min": 16.902,
-              "max": 24.034,
-              "n": 2
+              "max": 16.902,
+              "n": 1
             },
             "transaction p99 ms": {
-              "median": 26.1325,
+              "median": 22.484,
               "min": 22.484,
-              "max": 29.781,
-              "n": 2
+              "max": 22.484,
+              "n": 1
             },
             "retrieval p50 ms": {
-              "median": 36.042,
-              "min": 33.469,
+              "median": 38.615,
+              "min": 38.615,
               "max": 38.615,
-              "n": 2
+              "n": 1
             },
             "graph-filtered search p50 ms": {
-              "median": 45.915,
+              "median": 45.817,
               "min": 45.817,
-              "max": 46.013,
-              "n": 2
+              "max": 45.817,
+              "n": 1
             },
             "retrieval recall@10": {
               "median": 0.7335,
               "min": 0.7335,
               "max": 0.7335,
-              "n": 2
+              "n": 1
             },
             "filtered recall@10": {
               "median": 1.0,
               "min": 1.0,
               "max": 1.0,
-              "n": 2
+              "n": 1
             },
             "ingest+index vertices+edges/s": {
-              "median": 17907.3495,
-              "min": 17698.9381,
+              "median": 18115.7609,
+              "min": 18115.7609,
               "max": 18115.7609,
-              "n": 2
+              "n": 1
             },
             "ingest+index total s": {
-              "median": 11.17,
+              "median": 11.04,
               "min": 11.04,
-              "max": 11.3,
-              "n": 2
+              "max": 11.04,
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 0.5562,
-              "min": 0.5273,
+              "median": 0.5851,
+              "min": 0.5851,
               "max": 0.5851,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
               "median": 0.1403,
               "min": 0.1403,
               "max": 0.1403,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -4673,64 +4673,64 @@
           "host": null,
           "metrics": {
             "transaction p50 ms": {
-              "median": 13.626,
+              "median": 12.353,
               "min": 12.353,
-              "max": 14.899,
-              "n": 2
+              "max": 12.353,
+              "n": 1
             },
             "transaction p99 ms": {
-              "median": 20.5655,
+              "median": 16.454,
               "min": 16.454,
-              "max": 24.677,
-              "n": 2
+              "max": 16.454,
+              "n": 1
             },
             "retrieval p50 ms": {
-              "median": 13.5685,
-              "min": 13.527,
+              "median": 13.61,
+              "min": 13.61,
               "max": 13.61,
-              "n": 2
+              "n": 1
             },
             "graph-filtered search p50 ms": {
-              "median": 13.5945,
+              "median": 13.374,
               "min": 13.374,
-              "max": 13.815,
-              "n": 2
+              "max": 13.374,
+              "n": 1
             },
             "retrieval recall@10": {
-              "median": 0.851,
+              "median": 0.844,
               "min": 0.844,
-              "max": 0.858,
-              "n": 2
+              "max": 0.844,
+              "n": 1
             },
             "filtered recall@10": {
               "median": 1.0,
               "min": 1.0,
               "max": 1.0,
-              "n": 2
+              "n": 1
             },
             "ingest+index vertices+edges/s": {
-              "median": 7395.4332,
+              "median": 7339.3761,
               "min": 7339.3761,
-              "max": 7451.4903,
-              "n": 2
+              "max": 7339.3761,
+              "n": 1
             },
             "ingest+index total s": {
-              "median": 27.045,
-              "min": 26.84,
+              "median": 27.25,
+              "min": 27.25,
               "max": 27.25,
-              "n": 2
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 1.1612,
+              "median": 1.0922,
               "min": 1.0922,
-              "max": 1.2302,
-              "n": 2
+              "max": 1.0922,
+              "n": 1
             },
             "disk GiB": {
-              "median": 0.0649,
+              "median": 0.0605,
               "min": 0.0605,
-              "max": 0.0692,
-              "n": 2
+              "max": 0.0605,
+              "n": 1
             }
           }
         },
@@ -4748,64 +4748,64 @@
           "host": null,
           "metrics": {
             "transaction p50 ms": {
-              "median": 24.844,
-              "min": 24.58,
+              "median": 25.108,
+              "min": 25.108,
               "max": 25.108,
-              "n": 2
+              "n": 1
             },
             "transaction p99 ms": {
-              "median": 39.3925,
-              "min": 35.002,
+              "median": 43.783,
+              "min": 43.783,
               "max": 43.783,
-              "n": 2
+              "n": 1
             },
             "retrieval p50 ms": {
-              "median": 24.4415,
-              "min": 24.01,
+              "median": 24.873,
+              "min": 24.873,
               "max": 24.873,
-              "n": 2
+              "n": 1
             },
             "graph-filtered search p50 ms": {
-              "median": 16.634,
-              "min": 16.615,
+              "median": 16.653,
+              "min": 16.653,
               "max": 16.653,
-              "n": 2
+              "n": 1
             },
             "retrieval recall@10": {
               "median": 0.9785,
               "min": 0.9785,
               "max": 0.9785,
-              "n": 2
+              "n": 1
             },
             "filtered recall@10": {
               "median": 1.0,
               "min": 1.0,
               "max": 1.0,
-              "n": 2
+              "n": 1
             },
             "ingest+index vertices+edges/s": {
-              "median": 5217.8154,
+              "median": 5157.246,
               "min": 5157.246,
-              "max": 5278.3848,
-              "n": 2
+              "max": 5157.246,
+              "n": 1
             },
             "ingest+index total s": {
-              "median": 38.335,
-              "min": 37.89,
+              "median": 38.78,
+              "min": 38.78,
               "max": 38.78,
-              "n": 2
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 6.8299,
-              "min": 6.8127,
+              "median": 6.8471,
+              "min": 6.8471,
               "max": 6.8471,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0187,
               "min": 0.0187,
               "max": 0.0187,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -4823,64 +4823,64 @@
           "host": null,
           "metrics": {
             "transaction p50 ms": {
-              "median": 17.723,
+              "median": 16.662,
               "min": 16.662,
-              "max": 18.784,
-              "n": 2
+              "max": 16.662,
+              "n": 1
             },
             "transaction p99 ms": {
-              "median": 26.147,
+              "median": 24.977,
               "min": 24.977,
-              "max": 27.317,
-              "n": 2
+              "max": 24.977,
+              "n": 1
             },
             "retrieval p50 ms": {
-              "median": 10.558,
-              "min": 10.307,
+              "median": 10.809,
+              "min": 10.809,
               "max": 10.809,
-              "n": 2
+              "n": 1
             },
             "graph-filtered search p50 ms": {
-              "median": 7.39,
+              "median": 6.771,
               "min": 6.771,
-              "max": 8.009,
-              "n": 2
+              "max": 6.771,
+              "n": 1
             },
             "retrieval recall@10": {
-              "median": 0.7908,
+              "median": 0.788,
               "min": 0.788,
-              "max": 0.7935,
-              "n": 2
+              "max": 0.788,
+              "n": 1
             },
             "filtered recall@10": {
               "median": 1.0,
               "min": 1.0,
               "max": 1.0,
-              "n": 2
+              "n": 1
             },
             "ingest+index vertices+edges/s": {
-              "median": 898.7451,
+              "median": 894.6055,
               "min": 894.6055,
-              "max": 902.8847,
-              "n": 2
+              "max": 894.6055,
+              "n": 1
             },
             "ingest+index total s": {
-              "median": 222.535,
-              "min": 221.51,
+              "median": 223.56,
+              "min": 223.56,
               "max": 223.56,
-              "n": 2
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 0.1213,
+              "median": 0.1208,
               "min": 0.1208,
-              "max": 0.1218,
-              "n": 2
+              "max": 0.1208,
+              "n": 1
             },
             "disk GiB": {
               "median": 0.1599,
               "min": 0.1599,
               "max": 0.1599,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -4898,64 +4898,64 @@
           "host": null,
           "metrics": {
             "transaction p50 ms": {
-              "median": 41.836,
+              "median": 41.312,
               "min": 41.312,
-              "max": 42.36,
-              "n": 2
+              "max": 41.312,
+              "n": 1
             },
             "transaction p99 ms": {
-              "median": 61.01,
-              "min": 60.137,
+              "median": 61.883,
+              "min": 61.883,
               "max": 61.883,
-              "n": 2
+              "n": 1
             },
             "retrieval p50 ms": {
-              "median": 42.8075,
-              "min": 41.847,
+              "median": 43.768,
+              "min": 43.768,
               "max": 43.768,
-              "n": 2
+              "n": 1
             },
             "graph-filtered search p50 ms": {
-              "median": 1335.87,
-              "min": 1311.932,
+              "median": 1359.808,
+              "min": 1359.808,
               "max": 1359.808,
-              "n": 2
+              "n": 1
             },
             "retrieval recall@10": {
               "median": 1.0,
               "min": 1.0,
               "max": 1.0,
-              "n": 2
+              "n": 1
             },
             "filtered recall@10": {
               "median": 1.0,
               "min": 1.0,
               "max": 1.0,
-              "n": 2
+              "n": 1
             },
             "ingest+index vertices+edges/s": {
-              "median": 12751.9983,
-              "min": 12634.1124,
+              "median": 12869.8842,
+              "min": 12869.8842,
               "max": 12869.8842,
-              "n": 2
+              "n": 1
             },
             "ingest+index total s": {
-              "median": 15.685,
+              "median": 15.54,
               "min": 15.54,
-              "max": 15.83,
-              "n": 2
+              "max": 15.54,
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 6.8684,
+              "median": 6.8647,
               "min": 6.8647,
-              "max": 6.8721,
-              "n": 2
+              "max": 6.8647,
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0098,
               "min": 0.0098,
               "max": 0.0098,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -4973,64 +4973,64 @@
           "host": null,
           "metrics": {
             "transaction p50 ms": {
-              "median": 30.082,
+              "median": 27.3,
               "min": 27.3,
-              "max": 32.864,
-              "n": 2
+              "max": 27.3,
+              "n": 1
             },
             "transaction p99 ms": {
-              "median": 40.446,
+              "median": 36.521,
               "min": 36.521,
-              "max": 44.371,
-              "n": 2
+              "max": 36.521,
+              "n": 1
             },
             "retrieval p50 ms": {
-              "median": 25.7885,
+              "median": 25.563,
               "min": 25.563,
-              "max": 26.014,
-              "n": 2
+              "max": 25.563,
+              "n": 1
             },
             "graph-filtered search p50 ms": {
-              "median": 1540.8255,
-              "min": 1539.151,
+              "median": 1542.5,
+              "min": 1542.5,
               "max": 1542.5,
-              "n": 2
+              "n": 1
             },
             "retrieval recall@10": {
               "median": 0.697,
               "min": 0.697,
               "max": 0.697,
-              "n": 2
+              "n": 1
             },
             "filtered recall@10": {
               "median": 1.0,
               "min": 1.0,
               "max": 1.0,
-              "n": 2
+              "n": 1
             },
             "ingest+index vertices+edges/s": {
-              "median": 204.824,
+              "median": 204.5367,
               "min": 204.5367,
-              "max": 205.1114,
-              "n": 2
+              "max": 204.5367,
+              "n": 1
             },
             "ingest+index total s": {
-              "median": 976.44,
-              "min": 975.07,
+              "median": 977.81,
+              "min": 977.81,
               "max": 977.81,
-              "n": 2
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 0.8361,
-              "min": 0.8352,
+              "median": 0.8371,
+              "min": 0.8371,
               "max": 0.8371,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
               "median": 0.2435,
               "min": 0.2435,
               "max": 0.2435,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -5048,64 +5048,64 @@
           "host": null,
           "metrics": {
             "transaction p50 ms": {
-              "median": 18.1735,
+              "median": 18.105,
               "min": 18.105,
-              "max": 18.242,
-              "n": 2
+              "max": 18.105,
+              "n": 1
             },
             "transaction p99 ms": {
-              "median": 26.9545,
-              "min": 21.514,
+              "median": 32.395,
+              "min": 32.395,
               "max": 32.395,
-              "n": 2
+              "n": 1
             },
             "retrieval p50 ms": {
-              "median": 11.788,
+              "median": 11.543,
               "min": 11.543,
-              "max": 12.033,
-              "n": 2
+              "max": 11.543,
+              "n": 1
             },
             "graph-filtered search p50 ms": {
-              "median": 40.931,
-              "min": 39.195,
+              "median": 42.667,
+              "min": 42.667,
               "max": 42.667,
-              "n": 2
+              "n": 1
             },
             "retrieval recall@10": {
-              "median": 0.7167,
+              "median": 0.713,
               "min": 0.713,
-              "max": 0.7205,
-              "n": 2
+              "max": 0.713,
+              "n": 1
             },
             "filtered recall@10": {
               "median": 1.0,
               "min": 1.0,
               "max": 1.0,
-              "n": 2
+              "n": 1
             },
             "ingest+index vertices+edges/s": {
-              "median": 6292.905,
+              "median": 6163.2666,
               "min": 6163.2666,
-              "max": 6422.5434,
-              "n": 2
+              "max": 6163.2666,
+              "n": 1
             },
             "ingest+index total s": {
-              "median": 31.795,
-              "min": 31.14,
+              "median": 32.45,
+              "min": 32.45,
               "max": 32.45,
-              "n": 2
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 0.9984,
+              "median": 0.9962,
               "min": 0.9962,
-              "max": 1.0007,
-              "n": 2
+              "max": 0.9962,
+              "n": 1
             },
             "disk GiB": {
-              "median": 0.4809,
-              "min": 0.4809,
+              "median": 0.481,
+              "min": 0.481,
               "max": 0.481,
-              "n": 2
+              "n": 1
             }
           }
         }
@@ -5142,7 +5142,7 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "ArcadeDB's served arm is not shown for the per-host hourly query: on the server's SQL path that query returns one bucket per host instead of one per host and hour, which the answer check caught by comparing its result against the other engines'. Its embedded twin, on the same build, returns the same answer as everyone else, and the single-key form of the same query agrees on both. A latency for an answer that differs from every other engine's is not a measurement of this query, so the cell is withheld rather than printed.",
         "The cold column is the very first query of a session, the newest reading, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, DuckDB, MongoDB, SQLite, SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP."
       ],
@@ -9478,7 +9478,7 @@
         "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (embedded), ArcadeDB (server), DuckDB, MongoDB, PostgreSQL, SQLite, SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Each repetition runs 1,000 new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate.",
         "SurrealDB (server) at TPC-H SF0.01 (60k line items, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 70 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size."
       ],
@@ -9511,76 +9511,76 @@
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 4.878,
+              "median": 1.603,
               "min": 1.603,
-              "max": 8.153,
-              "n": 2
+              "max": 1.603,
+              "n": 1
             },
             "new-order p99 ms": {
-              "median": 6.7145,
+              "median": 2.839,
               "min": 2.839,
-              "max": 10.59,
-              "n": 2
+              "max": 2.839,
+              "n": 1
             },
             "payment p50 ms": {
-              "median": 3.9865,
+              "median": 0.46,
               "min": 0.46,
-              "max": 7.513,
-              "n": 2
+              "max": 0.46,
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 3.8115,
+              "median": 0.235,
               "min": 0.235,
-              "max": 7.388,
-              "n": 2
+              "max": 0.235,
+              "n": 1
             },
             "read p50 ms": {
-              "median": 0.089,
+              "median": 0.085,
               "min": 0.085,
-              "max": 0.093,
-              "n": 2
+              "max": 0.085,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 3.6675,
+              "median": 0.394,
               "min": 0.394,
-              "max": 6.941,
-              "n": 2
+              "max": 0.394,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 4.1535,
+              "median": 0.491,
               "min": 0.491,
-              "max": 7.816,
-              "n": 2
+              "max": 0.491,
+              "n": 1
             },
             "OLTP ops/s": {
-              "median": 524.1,
-              "min": 127.1,
+              "median": 921.1,
+              "min": 921.1,
               "max": 921.1,
-              "n": 2
+              "n": 1
             },
             "ingest documents/s": {
-              "median": 17367.3184,
-              "min": 16191.4062,
+              "median": 17935.8914,
+              "min": 17367.3184,
               "max": 18504.4643,
-              "n": 3
-            },
-            "ingest total s": {
-              "median": 3.58,
-              "min": 3.36,
-              "max": 3.84,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 2.017,
-              "min": 1.2734,
-              "max": 2.7606,
               "n": 2
             },
+            "ingest total s": {
+              "median": 3.47,
+              "min": 3.36,
+              "max": 3.58,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 1.2734,
+              "min": 1.2734,
+              "max": 1.2734,
+              "n": 1
+            },
             "disk GiB": {
-              "median": 0.0079,
+              "median": 0.0078,
               "min": 0.0077,
               "max": 0.0079,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -9598,76 +9598,76 @@
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 8.0085,
+              "median": 4.148,
               "min": 4.148,
-              "max": 11.869,
-              "n": 2
+              "max": 4.148,
+              "n": 1
             },
             "new-order p99 ms": {
-              "median": 11.095,
+              "median": 7.121,
               "min": 7.121,
-              "max": 15.069,
-              "n": 2
+              "max": 7.121,
+              "n": 1
             },
             "payment p50 ms": {
-              "median": 6.3305,
+              "median": 2.897,
               "min": 2.897,
-              "max": 9.764,
-              "n": 2
+              "max": 2.897,
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 6.143,
+              "median": 3.046,
               "min": 3.046,
-              "max": 9.24,
-              "n": 2
+              "max": 3.046,
+              "n": 1
             },
             "read p50 ms": {
-              "median": 2.3095,
-              "min": 2.262,
+              "median": 2.357,
+              "min": 2.357,
               "max": 2.357,
-              "n": 2
+              "n": 1
             },
             "update p50 ms": {
-              "median": 5.7325,
+              "median": 2.562,
               "min": 2.562,
-              "max": 8.903,
-              "n": 2
+              "max": 2.562,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 6.093,
+              "median": 2.759,
               "min": 2.759,
-              "max": 9.427,
-              "n": 2
+              "max": 2.759,
+              "n": 1
             },
             "OLTP ops/s": {
-              "median": 181.15,
-              "min": 91.9,
+              "median": 270.4,
+              "min": 270.4,
               "max": 270.4,
-              "n": 2
+              "n": 1
             },
             "ingest documents/s": {
-              "median": 9377.8281,
+              "median": 9671.8203,
               "min": 9363.7048,
               "max": 9979.9358,
-              "n": 3
-            },
-            "ingest total s": {
-              "median": 6.63,
-              "min": 6.23,
-              "max": 6.64,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 2.8038,
-              "min": 2.8026,
-              "max": 2.8049,
               "n": 2
             },
+            "ingest total s": {
+              "median": 6.435,
+              "min": 6.23,
+              "max": 6.64,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 2.8026,
+              "min": 2.8026,
+              "max": 2.8026,
+              "n": 1
+            },
             "disk GiB": {
-              "median": 0.0131,
-              "min": 0.0118,
+              "median": 0.0146,
+              "min": 0.0131,
               "max": 0.0161,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -9685,76 +9685,76 @@
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 13.973,
+              "median": 10.377,
               "min": 10.377,
-              "max": 17.569,
-              "n": 2
+              "max": 10.377,
+              "n": 1
             },
             "new-order p99 ms": {
-              "median": 18.6695,
+              "median": 13.98,
               "min": 13.98,
-              "max": 23.359,
-              "n": 2
+              "max": 13.98,
+              "n": 1
             },
             "payment p50 ms": {
-              "median": 13.979,
+              "median": 10.442,
               "min": 10.442,
-              "max": 17.516,
-              "n": 2
+              "max": 10.442,
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 5.3095,
+              "median": 2.141,
               "min": 2.141,
-              "max": 8.478,
-              "n": 2
+              "max": 2.141,
+              "n": 1
             },
             "read p50 ms": {
-              "median": 1.9255,
-              "min": 1.902,
+              "median": 1.949,
+              "min": 1.949,
               "max": 1.949,
-              "n": 2
+              "n": 1
             },
             "update p50 ms": {
-              "median": 5.5475,
+              "median": 2.245,
               "min": 2.245,
-              "max": 8.85,
-              "n": 2
+              "max": 2.245,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 5.431,
+              "median": 2.105,
               "min": 2.105,
-              "max": 8.757,
-              "n": 2
+              "max": 2.105,
+              "n": 1
             },
             "OLTP ops/s": {
-              "median": 76.4,
-              "min": 56.6,
+              "median": 96.2,
+              "min": 96.2,
               "max": 96.2,
-              "n": 2
+              "n": 1
             },
             "ingest documents/s": {
-              "median": 34734.6369,
+              "median": 33741.0657,
               "min": 32552.356,
               "max": 34929.7753,
-              "n": 3
-            },
-            "ingest total s": {
-              "median": 1.79,
-              "min": 1.78,
-              "max": 1.91,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 0.4551,
-              "min": 0.4544,
-              "max": 0.4558,
               "n": 2
             },
+            "ingest total s": {
+              "median": 1.845,
+              "min": 1.78,
+              "max": 1.91,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 0.4544,
+              "min": 0.4544,
+              "max": 0.4544,
+              "n": 1
+            },
             "disk GiB": {
-              "median": 0.0177,
+              "median": 0.0172,
               "min": 0.0167,
-              "max": 0.0178,
-              "n": 3
+              "max": 0.0177,
+              "n": 2
             }
           }
         },
@@ -9772,76 +9772,76 @@
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 9.512,
-              "min": 9.508,
+              "median": 9.516,
+              "min": 9.516,
               "max": 9.516,
-              "n": 2
+              "n": 1
             },
             "new-order p99 ms": {
-              "median": 12.0135,
+              "median": 11.981,
               "min": 11.981,
-              "max": 12.046,
-              "n": 2
+              "max": 11.981,
+              "n": 1
             },
             "payment p50 ms": {
-              "median": 9.248,
-              "min": 9.215,
+              "median": 9.281,
+              "min": 9.281,
               "max": 9.281,
-              "n": 2
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 7.9855,
-              "min": 7.949,
+              "median": 8.022,
+              "min": 8.022,
               "max": 8.022,
-              "n": 2
+              "n": 1
             },
             "read p50 ms": {
-              "median": 0.4385,
-              "min": 0.377,
+              "median": 0.5,
+              "min": 0.5,
               "max": 0.5,
-              "n": 2
+              "n": 1
             },
             "update p50 ms": {
-              "median": 7.5995,
+              "median": 7.57,
               "min": 7.57,
-              "max": 7.629,
-              "n": 2
+              "max": 7.57,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 7.7185,
+              "median": 7.7,
               "min": 7.7,
-              "max": 7.737,
-              "n": 2
+              "max": 7.7,
+              "n": 1
             },
             "OLTP ops/s": {
-              "median": 106.35,
+              "median": 106.2,
               "min": 106.2,
-              "max": 106.5,
-              "n": 2
+              "max": 106.2,
+              "n": 1
             },
             "ingest documents/s": {
-              "median": 327236.8421,
-              "min": 310875.0,
+              "median": 336326.7544,
+              "min": 327236.8421,
               "max": 345416.6667,
-              "n": 3
-            },
-            "ingest total s": {
-              "median": 0.19,
-              "min": 0.18,
-              "max": 0.2,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 0.166,
-              "min": 0.165,
-              "max": 0.1669,
               "n": 2
             },
+            "ingest total s": {
+              "median": 0.185,
+              "min": 0.18,
+              "max": 0.19,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 0.165,
+              "min": 0.165,
+              "max": 0.165,
+              "n": 1
+            },
             "disk GiB": {
-              "median": 0.0023,
+              "median": 0.002,
               "min": 0.0016,
               "max": 0.0023,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -9859,76 +9859,76 @@
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 4.422,
+              "median": 2.973,
               "min": 2.973,
-              "max": 5.871,
-              "n": 2
+              "max": 2.973,
+              "n": 1
             },
             "new-order p99 ms": {
-              "median": 7.795,
+              "median": 4.23,
               "min": 4.23,
-              "max": 11.36,
-              "n": 2
+              "max": 4.23,
+              "n": 1
             },
             "payment p50 ms": {
-              "median": 4.444,
+              "median": 3.059,
               "min": 3.059,
-              "max": 5.829,
-              "n": 2
+              "max": 3.059,
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 1.793,
+              "median": 0.75,
               "min": 0.75,
-              "max": 2.836,
-              "n": 2
+              "max": 0.75,
+              "n": 1
             },
             "read p50 ms": {
-              "median": 0.8215,
+              "median": 0.696,
               "min": 0.696,
-              "max": 0.947,
-              "n": 2
+              "max": 0.696,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 1.951,
+              "median": 0.79,
               "min": 0.79,
-              "max": 3.112,
-              "n": 2
+              "max": 0.79,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 2.001,
+              "median": 0.788,
               "min": 0.788,
-              "max": 3.214,
-              "n": 2
+              "max": 0.788,
+              "n": 1
             },
             "OLTP ops/s": {
-              "median": 237.9,
-              "min": 153.3,
+              "median": 322.5,
+              "min": 322.5,
               "max": 322.5,
-              "n": 2
+              "n": 1
             },
             "ingest documents/s": {
-              "median": 31560.9137,
-              "min": 31401.5152,
+              "median": 32316.3611,
+              "min": 31560.9137,
               "max": 33071.8085,
-              "n": 3
+              "n": 2
             },
             "ingest total s": {
-              "median": 1.97,
+              "median": 1.925,
               "min": 1.88,
-              "max": 1.98,
-              "n": 3
+              "max": 1.97,
+              "n": 2
             },
             "peak memory GiB": {
-              "median": 0.3564,
-              "min": 0.3535,
+              "median": 0.3593,
+              "min": 0.3593,
               "max": 0.3593,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0013,
               "min": 0.0013,
               "max": 0.0013,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -9946,76 +9946,76 @@
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 1.6815,
+              "median": 0.185,
               "min": 0.185,
-              "max": 3.178,
-              "n": 2
+              "max": 0.185,
+              "n": 1
             },
             "new-order p99 ms": {
-              "median": 3.008,
+              "median": 1.235,
               "min": 1.235,
-              "max": 4.781,
-              "n": 2
+              "max": 1.235,
+              "n": 1
             },
             "payment p50 ms": {
-              "median": 1.8745,
+              "median": 0.276,
               "min": 0.276,
-              "max": 3.473,
-              "n": 2
+              "max": 0.276,
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 1.332,
+              "median": 0.101,
               "min": 0.101,
-              "max": 2.563,
-              "n": 2
+              "max": 0.101,
+              "n": 1
             },
             "read p50 ms": {
-              "median": 0.1325,
+              "median": 0.108,
               "min": 0.108,
-              "max": 0.157,
-              "n": 2
+              "max": 0.108,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 1.3105,
+              "median": 0.107,
               "min": 0.107,
-              "max": 2.514,
-              "n": 2
+              "max": 0.107,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 1.337,
+              "median": 0.142,
               "min": 0.142,
-              "max": 2.532,
-              "n": 2
+              "max": 0.142,
+              "n": 1
             },
             "OLTP ops/s": {
-              "median": 2102.4,
-              "min": 294.0,
+              "median": 3910.8,
+              "min": 3910.8,
               "max": 3910.8,
-              "n": 2
+              "n": 1
             },
             "ingest documents/s": {
-              "median": 129531.25,
-              "min": 126887.7551,
+              "median": 130909.242,
+              "min": 129531.25,
               "max": 132287.234,
-              "n": 3
-            },
-            "ingest total s": {
-              "median": 0.48,
-              "min": 0.47,
-              "max": 0.49,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 0.1447,
-              "min": 0.1398,
-              "max": 0.1496,
               "n": 2
             },
+            "ingest total s": {
+              "median": 0.475,
+              "min": 0.47,
+              "max": 0.48,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 0.1496,
+              "min": 0.1496,
+              "max": 0.1496,
+              "n": 1
+            },
             "disk GiB": {
-              "median": 0.0058,
+              "median": 0.0056,
               "min": 0.0055,
               "max": 0.0058,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -10033,76 +10033,76 @@
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 0.8035,
+              "median": 0.028,
               "min": 0.028,
-              "max": 1.579,
-              "n": 2
+              "max": 0.028,
+              "n": 1
             },
             "new-order p99 ms": {
-              "median": 1.3835,
+              "median": 0.046,
               "min": 0.046,
-              "max": 2.721,
-              "n": 2
+              "max": 0.046,
+              "n": 1
             },
             "payment p50 ms": {
-              "median": 0.8155,
+              "median": 0.03,
               "min": 0.03,
-              "max": 1.601,
-              "n": 2
+              "max": 0.03,
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 0.762,
+              "median": 0.021,
               "min": 0.021,
-              "max": 1.503,
-              "n": 2
+              "max": 0.021,
+              "n": 1
             },
             "read p50 ms": {
-              "median": 0.0095,
+              "median": 0.008,
               "min": 0.008,
-              "max": 0.011,
-              "n": 2
+              "max": 0.008,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 0.7545,
+              "median": 0.02,
               "min": 0.02,
-              "max": 1.489,
-              "n": 2
+              "max": 0.02,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 0.7615,
+              "median": 0.019,
               "min": 0.019,
-              "max": 1.504,
-              "n": 2
+              "max": 0.019,
+              "n": 1
             },
             "OLTP ops/s": {
-              "median": 11066.35,
-              "min": 555.5,
+              "median": 21577.2,
+              "min": 21577.2,
               "max": 21577.2,
-              "n": 2
+              "n": 1
             },
             "ingest documents/s": {
-              "median": 115138.8889,
-              "min": 105381.3559,
+              "median": 119744.4444,
+              "min": 115138.8889,
               "max": 124350.0,
-              "n": 3
+              "n": 2
             },
             "ingest total s": {
-              "median": 0.54,
+              "median": 0.52,
               "min": 0.5,
-              "max": 0.59,
-              "n": 3
+              "max": 0.54,
+              "n": 2
             },
             "peak memory GiB": {
-              "median": 0.1464,
-              "min": 0.1413,
+              "median": 0.1516,
+              "min": 0.1516,
               "max": 0.1516,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0045,
               "min": 0.0045,
               "max": 0.0045,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -10120,76 +10120,76 @@
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 4.109,
+              "median": 0.878,
               "min": 0.878,
-              "max": 7.34,
-              "n": 2
+              "max": 0.878,
+              "n": 1
             },
             "new-order p99 ms": {
-              "median": 4.9185,
+              "median": 1.082,
               "min": 1.082,
-              "max": 8.755,
-              "n": 2
+              "max": 1.082,
+              "n": 1
             },
             "payment p50 ms": {
-              "median": 4.131,
+              "median": 0.834,
               "min": 0.834,
-              "max": 7.428,
-              "n": 2
+              "max": 0.834,
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 3.8775,
+              "median": 0.622,
               "min": 0.622,
-              "max": 7.133,
-              "n": 2
+              "max": 0.622,
+              "n": 1
             },
             "read p50 ms": {
-              "median": 0.1855,
+              "median": 0.175,
               "min": 0.175,
-              "max": 0.196,
-              "n": 2
+              "max": 0.175,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 3.737,
+              "median": 0.2,
               "min": 0.2,
-              "max": 7.274,
-              "n": 2
+              "max": 0.2,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 3.857,
+              "median": 0.536,
               "min": 0.536,
-              "max": 7.178,
-              "n": 2
+              "max": 0.536,
+              "n": 1
             },
             "OLTP ops/s": {
-              "median": 667.6,
-              "min": 135.8,
+              "median": 1199.4,
+              "min": 1199.4,
               "max": 1199.4,
-              "n": 2
+              "n": 1
             },
             "ingest documents/s": {
-              "median": 6043.0959,
-              "min": 5972.6225,
+              "median": 6113.5693,
+              "min": 6113.5693,
               "max": 6113.5693,
-              "n": 2
+              "n": 1
             },
             "ingest total s": {
-              "median": 10.29,
+              "median": 10.17,
               "min": 10.17,
-              "max": 10.41,
-              "n": 2
+              "max": 10.17,
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 0.2942,
+              "median": 0.2905,
               "min": 0.2905,
-              "max": 0.2979,
-              "n": 2
+              "max": 0.2905,
+              "n": 1
             },
             "disk GiB": {
               "median": 0.028,
               "min": 0.028,
               "max": 0.028,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -10207,76 +10207,76 @@
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 8.3605,
-              "min": 8.237,
+              "median": 8.484,
+              "min": 8.484,
               "max": 8.484,
-              "n": 2
+              "n": 1
             },
             "new-order p99 ms": {
-              "median": 10.746,
+              "median": 10.685,
               "min": 10.685,
-              "max": 10.807,
-              "n": 2
+              "max": 10.685,
+              "n": 1
             },
             "payment p50 ms": {
-              "median": 8.3725,
+              "median": 8.332,
               "min": 8.332,
-              "max": 8.413,
-              "n": 2
+              "max": 8.332,
+              "n": 1
             },
             "insert p50 ms": {
-              "median": 7.8595,
-              "min": 7.825,
+              "median": 7.894,
+              "min": 7.894,
               "max": 7.894,
-              "n": 2
+              "n": 1
             },
             "read p50 ms": {
-              "median": 1.016,
+              "median": 1.008,
               "min": 1.008,
-              "max": 1.024,
-              "n": 2
+              "max": 1.008,
+              "n": 1
             },
             "update p50 ms": {
-              "median": 7.8605,
+              "median": 7.79,
               "min": 7.79,
-              "max": 7.931,
-              "n": 2
+              "max": 7.79,
+              "n": 1
             },
             "delete p50 ms": {
-              "median": 8.9865,
-              "min": 8.896,
+              "median": 9.077,
+              "min": 9.077,
               "max": 9.077,
-              "n": 2
+              "n": 1
             },
             "OLTP ops/s": {
-              "median": 118.8,
+              "median": 118.4,
               "min": 118.4,
-              "max": 119.2,
-              "n": 2
+              "max": 118.4,
+              "n": 1
             },
             "ingest documents/s": {
-              "median": 9103.2211,
+              "median": 8988.5056,
               "min": 8806.6572,
               "max": 9170.354,
-              "n": 3
+              "n": 2
             },
             "ingest total s": {
-              "median": 6.83,
+              "median": 6.92,
               "min": 6.78,
               "max": 7.06,
-              "n": 3
+              "n": 2
             },
             "peak memory GiB": {
-              "median": 0.4541,
-              "min": 0.4421,
+              "median": 0.466,
+              "min": 0.466,
               "max": 0.466,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0,
               "min": 0.0,
               "max": 0.0,
-              "n": 3
+              "n": 2
             }
           }
         }
@@ -10318,7 +10318,7 @@
         "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "The cold column is the very first query of a session, TPC-H Q1, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (embedded), ArcadeDB (server), DuckDB, MongoDB, PostgreSQL, SQLite, SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at TPC-H SF0.01 (60k line items, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (server) at TPC-H SF0.01 (60k line items, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 70 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size."
@@ -10387,34 +10387,34 @@
               "n": 1
             },
             "cold first query ms": {
-              "median": 482.2792,
+              "median": 668.5791,
               "min": 352.7363,
               "max": 984.4218,
-              "n": 3
-            },
-            "ingest documents/s": {
-              "median": 17367.3184,
-              "min": 16191.4062,
-              "max": 18504.4643,
-              "n": 3
-            },
-            "ingest total s": {
-              "median": 3.58,
-              "min": 3.36,
-              "max": 3.84,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 2.017,
-              "min": 1.2734,
-              "max": 2.7606,
               "n": 2
             },
+            "ingest documents/s": {
+              "median": 17935.8914,
+              "min": 17367.3184,
+              "max": 18504.4643,
+              "n": 2
+            },
+            "ingest total s": {
+              "median": 3.47,
+              "min": 3.36,
+              "max": 3.58,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 1.2734,
+              "min": 1.2734,
+              "max": 1.2734,
+              "n": 1
+            },
             "disk GiB": {
-              "median": 0.0079,
+              "median": 0.0078,
               "min": 0.0077,
               "max": 0.0079,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -10468,34 +10468,34 @@
               "n": 1
             },
             "cold first query ms": {
-              "median": 141.6759,
+              "median": 546.1292,
               "min": 110.43,
               "max": 981.8285,
-              "n": 3
-            },
-            "ingest documents/s": {
-              "median": 9377.8281,
-              "min": 9363.7048,
-              "max": 9979.9358,
-              "n": 3
-            },
-            "ingest total s": {
-              "median": 6.63,
-              "min": 6.23,
-              "max": 6.64,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 2.8038,
-              "min": 2.8026,
-              "max": 2.8049,
               "n": 2
             },
+            "ingest documents/s": {
+              "median": 9671.8203,
+              "min": 9363.7048,
+              "max": 9979.9358,
+              "n": 2
+            },
+            "ingest total s": {
+              "median": 6.435,
+              "min": 6.23,
+              "max": 6.64,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 2.8026,
+              "min": 2.8026,
+              "max": 2.8026,
+              "n": 1
+            },
             "disk GiB": {
-              "median": 0.0131,
-              "min": 0.0118,
+              "median": 0.0146,
+              "min": 0.0131,
               "max": 0.0161,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -10549,34 +10549,34 @@
               "n": 1
             },
             "cold first query ms": {
-              "median": 18.393,
+              "median": 107.2992,
               "min": 10.5568,
               "max": 204.0416,
-              "n": 3
-            },
-            "ingest documents/s": {
-              "median": 34734.6369,
-              "min": 32552.356,
-              "max": 34929.7753,
-              "n": 3
-            },
-            "ingest total s": {
-              "median": 1.79,
-              "min": 1.78,
-              "max": 1.91,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 0.4551,
-              "min": 0.4544,
-              "max": 0.4558,
               "n": 2
             },
+            "ingest documents/s": {
+              "median": 33741.0657,
+              "min": 32552.356,
+              "max": 34929.7753,
+              "n": 2
+            },
+            "ingest total s": {
+              "median": 1.845,
+              "min": 1.78,
+              "max": 1.91,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 0.4544,
+              "min": 0.4544,
+              "max": 0.4544,
+              "n": 1
+            },
             "disk GiB": {
-              "median": 0.0177,
+              "median": 0.0172,
               "min": 0.0167,
-              "max": 0.0178,
-              "n": 3
+              "max": 0.0177,
+              "n": 2
             }
           }
         },
@@ -10630,34 +10630,34 @@
               "n": 1
             },
             "cold first query ms": {
-              "median": 10.0847,
+              "median": 10.7472,
               "min": 7.3242,
               "max": 14.1702,
-              "n": 3
-            },
-            "ingest documents/s": {
-              "median": 327236.8421,
-              "min": 310875.0,
-              "max": 345416.6667,
-              "n": 3
-            },
-            "ingest total s": {
-              "median": 0.19,
-              "min": 0.18,
-              "max": 0.2,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 0.166,
-              "min": 0.165,
-              "max": 0.1669,
               "n": 2
             },
+            "ingest documents/s": {
+              "median": 336326.7544,
+              "min": 327236.8421,
+              "max": 345416.6667,
+              "n": 2
+            },
+            "ingest total s": {
+              "median": 0.185,
+              "min": 0.18,
+              "max": 0.19,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 0.165,
+              "min": 0.165,
+              "max": 0.165,
+              "n": 1
+            },
             "disk GiB": {
-              "median": 0.0023,
+              "median": 0.002,
               "min": 0.0016,
               "max": 0.0023,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -10711,34 +10711,34 @@
               "n": 1
             },
             "cold first query ms": {
-              "median": 9.4167,
+              "median": 74.737,
               "min": 6.2666,
               "max": 143.2074,
-              "n": 3
+              "n": 2
             },
             "ingest documents/s": {
-              "median": 31560.9137,
-              "min": 31401.5152,
+              "median": 32316.3611,
+              "min": 31560.9137,
               "max": 33071.8085,
-              "n": 3
+              "n": 2
             },
             "ingest total s": {
-              "median": 1.97,
+              "median": 1.925,
               "min": 1.88,
-              "max": 1.98,
-              "n": 3
+              "max": 1.97,
+              "n": 2
             },
             "peak memory GiB": {
-              "median": 0.3564,
-              "min": 0.3535,
+              "median": 0.3593,
+              "min": 0.3593,
               "max": 0.3593,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0013,
               "min": 0.0013,
               "max": 0.0013,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -10792,34 +10792,34 @@
               "n": 1
             },
             "cold first query ms": {
-              "median": 4.9372,
+              "median": 14.0121,
               "min": 3.6079,
               "max": 24.4162,
-              "n": 3
-            },
-            "ingest documents/s": {
-              "median": 129531.25,
-              "min": 126887.7551,
-              "max": 132287.234,
-              "n": 3
-            },
-            "ingest total s": {
-              "median": 0.48,
-              "min": 0.47,
-              "max": 0.49,
-              "n": 3
-            },
-            "peak memory GiB": {
-              "median": 0.1447,
-              "min": 0.1398,
-              "max": 0.1496,
               "n": 2
             },
+            "ingest documents/s": {
+              "median": 130909.242,
+              "min": 129531.25,
+              "max": 132287.234,
+              "n": 2
+            },
+            "ingest total s": {
+              "median": 0.475,
+              "min": 0.47,
+              "max": 0.48,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 0.1496,
+              "min": 0.1496,
+              "max": 0.1496,
+              "n": 1
+            },
             "disk GiB": {
-              "median": 0.0058,
+              "median": 0.0056,
               "min": 0.0055,
               "max": 0.0058,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -10873,34 +10873,34 @@
               "n": 1
             },
             "cold first query ms": {
-              "median": 3.9702,
+              "median": 48.7952,
               "min": 1.6837,
               "max": 95.9067,
-              "n": 3
+              "n": 2
             },
             "ingest documents/s": {
-              "median": 115138.8889,
-              "min": 105381.3559,
+              "median": 119744.4444,
+              "min": 115138.8889,
               "max": 124350.0,
-              "n": 3
+              "n": 2
             },
             "ingest total s": {
-              "median": 0.54,
+              "median": 0.52,
               "min": 0.5,
-              "max": 0.59,
-              "n": 3
+              "max": 0.54,
+              "n": 2
             },
             "peak memory GiB": {
-              "median": 0.1464,
-              "min": 0.1413,
+              "median": 0.1516,
+              "min": 0.1516,
               "max": 0.1516,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0045,
               "min": 0.0045,
               "max": 0.0045,
-              "n": 3
+              "n": 2
             }
           }
         },
@@ -10918,34 +10918,34 @@
           "host": null,
           "metrics": {
             "cold first query ms": {
-              "median": 6.4425,
+              "median": 3.1072,
               "min": 3.1072,
-              "max": 9.7778,
-              "n": 2
+              "max": 3.1072,
+              "n": 1
             },
             "ingest documents/s": {
-              "median": 6043.0959,
-              "min": 5972.6225,
+              "median": 6113.5693,
+              "min": 6113.5693,
               "max": 6113.5693,
-              "n": 2
+              "n": 1
             },
             "ingest total s": {
-              "median": 10.29,
+              "median": 10.17,
               "min": 10.17,
-              "max": 10.41,
-              "n": 2
+              "max": 10.17,
+              "n": 1
             },
             "peak memory GiB": {
-              "median": 0.2942,
+              "median": 0.2905,
               "min": 0.2905,
-              "max": 0.2979,
-              "n": 2
+              "max": 0.2905,
+              "n": 1
             },
             "disk GiB": {
               "median": 0.028,
               "min": 0.028,
               "max": 0.028,
-              "n": 2
+              "n": 1
             }
           }
         },
@@ -10999,34 +10999,34 @@
               "n": 1
             },
             "cold first query ms": {
-              "median": 22.2557,
-              "min": 17.5859,
+              "median": 233.349,
+              "min": 22.2557,
               "max": 444.4422,
-              "n": 3
+              "n": 2
             },
             "ingest documents/s": {
-              "median": 9103.2211,
+              "median": 8988.5056,
               "min": 8806.6572,
               "max": 9170.354,
-              "n": 3
+              "n": 2
             },
             "ingest total s": {
-              "median": 6.83,
+              "median": 6.92,
               "min": 6.78,
               "max": 7.06,
-              "n": 3
+              "n": 2
             },
             "peak memory GiB": {
-              "median": 0.4541,
-              "min": 0.4421,
+              "median": 0.466,
+              "min": 0.466,
               "max": 0.466,
-              "n": 2
+              "n": 1
             },
             "disk GiB": {
               "median": 0.0,
               "min": 0.0,
               "max": 0.0,
-              "n": 3
+              "n": 2
             }
           }
         }
