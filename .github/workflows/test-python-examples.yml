@@ -1,8 +1,12 @@
 name: Test Python Examples
 
 on:
-  # Run on push to bindings/python/ directory
+  # Run on push to bindings/python/ directory, on main only: the upstream-main
+  # mirror branch that sync-upstream.sh pushes is upstream's tree without our
+  # fixes, and running our checks on it only produces red runs nobody acts on.
   push:
+    branches:
+      - main
     paths:
       - 'bindings/python/**'
       - '.github/workflows/test-python-examples.yml'
