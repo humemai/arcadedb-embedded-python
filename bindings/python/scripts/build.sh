@@ -443,6 +443,21 @@ fi
 echo ""
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+# SUPERSEDED WHEELS ARE DELETED, NOT KEPT. A wheel left in dist/ from an
+# earlier build was read as evidence of the engine inside a newer one
+# (2026-09-15: a 26.10.1.dev0 label beside a 26.6.1 jar, from a build days
+# apart), which is exactly the confusion a stale artifact produces. Only the
+# wheel this build wrote survives for its python/platform tag; wheels for
+# other tags are someone else's build and are left alone.
+NEWEST_WHEEL=$(ls -t dist/*.whl | head -n1)
+NEWEST_TAG=$(basename "$NEWEST_WHEEL" | sed -E 's/^[^-]+-[^-]+-//')
+for old in dist/*.whl; do
+    if [[ "$old" != "$NEWEST_WHEEL" && "$(basename "$old" | sed -E 's/^[^-]+-[^-]+-//')" == "$NEWEST_TAG" ]]; then
+        rm -f "$old"
+        echo -e "${YELLOW}🗑  Removed superseded wheel $(basename "$old")${NC}"
+    fi
+done
+
 echo -e "${GREEN}🎉 Build completed successfully!${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
