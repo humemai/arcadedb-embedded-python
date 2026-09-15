@@ -63,6 +63,15 @@
       "(no version recorded)",
       "mongodb 8.2.12"
     ],
+    "mongodb_dense": [
+      "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4 at localhost:27028"
+    ],
+    "mongodb_e2": [
+      "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4 at localhost:27028"
+    ],
+    "mongodb_graph": [
+      "mongodb 8.2.12"
+    ],
     "neo4j_dense": [
       "neo4j:2026.07.1"
     ],
@@ -181,6 +190,7 @@
     "container:8ecfdf1cc94e (host unknown)",
     "container:a638e1dee200 (host unknown)",
     "container:a6eb5444b414 (host unknown)",
+    "container:b1abaaf31ae7 (host unknown)",
     "container:b7571df5e813 (host unknown)",
     "container:b9248b48398f (host unknown)",
     "container:c2376a13587c (host unknown)",
@@ -264,6 +274,7 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split on this row: the lane warms before it times, so every timed query here is warm. The sparse table's cold and warm columns come from the multipass driver (DECISIONS #89)",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`.",
+        "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load)."
       ],
       "columns": [
@@ -768,7 +779,8 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split on this row: the lane warms on a held-out query slice before it times anything, so every timed query here is warm. The dense table's cold and warm columns come from the multipass driver, whose pass 0 is the cold pass and whose passes 1 to 5 are the warm ones (DECISIONS #89)",
         "The insert and delete into a built index, and the recall after each, run at 5k vectors (skeleton) (forced on by BENCH_DENSE_MUTATE=1).",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, DuckDB, DuckDB VSS, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, DuckDB, DuckDB VSS, MongoDB, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that.",
+        "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
         "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
       ],
       "columns": [
@@ -1806,6 +1818,111 @@
           }
         },
         {
+          "backend": "MongoDB (fp32)",
+          "is_arcadedb": false,
+          "precision": "fp32",
+          "scale": "micro",
+          "scale_label": "5k vectors (skeleton)",
+          "workload": "search",
+          "n_docs": "5000",
+          "deployment": "server",
+          "image": "dbbench:mongo-search",
+          "version_name": "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4 at localhost 27028",
+          "host": "container:b1abaaf31ae7 (host unknown)",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 8.957,
+              "min": 8.957,
+              "max": 8.957,
+              "n": 1
+            },
+            "cold p99 ms": {
+              "median": 12.571,
+              "min": 12.571,
+              "max": 12.571,
+              "n": 1
+            },
+            "after insert p50 ms": {
+              "median": 7.231,
+              "min": 7.231,
+              "max": 7.231,
+              "n": 1
+            },
+            "after delete p50 ms": {
+              "median": 7.761,
+              "min": 7.761,
+              "max": 7.761,
+              "n": 1
+            },
+            "recall@10": {
+              "median": 0.9948,
+              "min": 0.9948,
+              "max": 0.9948,
+              "n": 1
+            },
+            "insert into index ms/vector": {
+              "median": 1.374,
+              "min": 1.374,
+              "max": 1.374,
+              "n": 1
+            },
+            "recall@10 after insert": {
+              "median": 0.9984,
+              "min": 0.9984,
+              "max": 0.9984,
+              "n": 1
+            },
+            "delete from index ms/vector": {
+              "median": 0.032,
+              "min": 0.032,
+              "max": 0.032,
+              "n": 1
+            },
+            "recall@10 after delete": {
+              "median": 0.9973,
+              "min": 0.9973,
+              "max": 0.9973,
+              "n": 1
+            },
+            "ingest s": {
+              "median": 0.29,
+              "min": 0.29,
+              "max": 0.29,
+              "n": 1
+            },
+            "index s": {
+              "median": 27.03,
+              "min": 27.03,
+              "max": 27.03,
+              "n": 1
+            },
+            "ingest+index vectors/s": {
+              "median": 183.0,
+              "min": 183.0,
+              "max": 183.0,
+              "n": 1
+            },
+            "ingest+index total s": {
+              "median": 27.33,
+              "min": 27.33,
+              "max": 27.33,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.8347,
+              "min": 0.8347,
+              "max": 0.8347,
+              "n": 1
+            },
+            "disk GiB": {
+              "median": 0.0136,
+              "min": 0.0136,
+              "max": 0.0136,
+              "n": 1
+            }
+          }
+        },
+        {
           "backend": "Neo4j (fp32)",
           "is_arcadedb": false,
           "precision": "fp32",
@@ -2608,7 +2725,8 @@
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (embedded), ArcadeDB (server), LadybugDB, Neo4j, SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (embedded), ArcadeDB (server), LadybugDB, MongoDB, Neo4j, SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Each repetition runs every read against a fresh set of start persons (2k people (synthetic, skeleton): 50) and commits up to 1,000 writes; the p50 and p99 are over those.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
       ],
       "columns": [
@@ -2977,6 +3095,93 @@
           }
         },
         {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "micro",
+          "scale_label": "2k people (synthetic, skeleton)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",
+          "version_name": "mongo 8.2.12",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.57,
+              "min": 0.509,
+              "max": 0.631,
+              "n": 2
+            },
+            "point p99 ms": {
+              "median": 2.1605,
+              "min": 1.501,
+              "max": 2.82,
+              "n": 2
+            },
+            "1-hop p50 ms": {
+              "median": 1.812,
+              "min": 1.723,
+              "max": 1.901,
+              "n": 2
+            },
+            "2-hop p50 ms": {
+              "median": 3.4125,
+              "min": 3.125,
+              "max": 3.7,
+              "n": 2
+            },
+            "3-hop filtered p50 ms": {
+              "median": 460.244,
+              "min": 457.966,
+              "max": 462.522,
+              "n": 2
+            },
+            "insert p50 ms": {
+              "median": 3.6925,
+              "min": 1.345,
+              "max": 6.04,
+              "n": 2
+            },
+            "update p50 ms": {
+              "median": 2.7535,
+              "min": 0.581,
+              "max": 4.926,
+              "n": 2
+            },
+            "delete p50 ms": {
+              "median": 3.9665,
+              "min": 1.956,
+              "max": 5.977,
+              "n": 2
+            },
+            "ingest vertices+edges/s": {
+              "median": 34936.7308,
+              "min": 32948.4615,
+              "max": 36925.0,
+              "n": 2
+            },
+            "ingest total s": {
+              "median": 1.23,
+              "min": 1.16,
+              "max": 1.3,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 0.1704,
+              "min": 0.1692,
+              "max": 0.1715,
+              "n": 2
+            },
+            "disk GiB": {
+              "median": 0.0029,
+              "min": 0.001,
+              "max": 0.0049,
+              "n": 2
+            }
+          }
+        },
+        {
           "backend": "Neo4j",
           "is_arcadedb": false,
           "precision": null,
@@ -3274,7 +3479,8 @@
         "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "The cold column is the very first query of a session, most friends, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, LadybugDB, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, LadybugDB, MongoDB, Neo4j, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at 2k people (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
       ],
@@ -3632,6 +3838,87 @@
           }
         },
         {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "micro",
+          "scale_label": "2k people (synthetic, skeleton)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",
+          "version_name": "mongo 8.2.12",
+          "host": null,
+          "metrics": {
+            "average friend age p50 ms": {
+              "median": 1651.17,
+              "min": 1651.17,
+              "max": 1651.17,
+              "n": 1
+            },
+            "average friend age p99 ms": {
+              "median": 1926.33,
+              "min": 1926.33,
+              "max": 1926.33,
+              "n": 1
+            },
+            "friends in same city p50 ms": {
+              "median": 1929.88,
+              "min": 1929.88,
+              "max": 1929.88,
+              "n": 1
+            },
+            "most friends p50 ms": {
+              "median": 24.13,
+              "min": 24.13,
+              "max": 24.13,
+              "n": 1
+            },
+            "degree distribution p50 ms": {
+              "median": 14.06,
+              "min": 14.06,
+              "max": 14.06,
+              "n": 1
+            },
+            "triangle count p50 ms": {
+              "median": 1838.38,
+              "min": 1838.38,
+              "max": 1838.38,
+              "n": 1
+            },
+            "cold first query ms": {
+              "median": 36.28,
+              "min": 36.28,
+              "max": 36.28,
+              "n": 1
+            },
+            "ingest vertices+edges/s": {
+              "median": 33203.876,
+              "min": 33203.876,
+              "max": 33203.876,
+              "n": 1
+            },
+            "ingest total s": {
+              "median": 1.29,
+              "min": 1.29,
+              "max": 1.29,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.1857,
+              "min": 0.1857,
+              "max": 0.1857,
+              "n": 1
+            },
+            "disk GiB": {
+              "median": 0.006,
+              "min": 0.006,
+              "max": 0.006,
+              "n": 1
+            }
+          }
+        },
+        {
           "backend": "Neo4j",
           "is_arcadedb": false,
           "precision": null,
@@ -3832,7 +4119,7 @@
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
         "A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Neo4j, Neo4j (vector index), PostgreSQL, PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one."
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j, Neo4j (vector index), PostgreSQL, PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one."
       ],
       "columns": [
         "trials",
@@ -3906,6 +4193,33 @@
           "deployment": "server",
           "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
           "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 1
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products (skeleton)",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:mongo-search",
+          "version_name": "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4 at localhost 27028",
           "host": null,
           "metrics": {
             "trials": {
@@ -4083,7 +4397,8 @@
         "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Neo4j, Neo4j (vector index), PostgreSQL, PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j, Neo4j (vector index), PostgreSQL, PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
         "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB inserts through its Python client into an in-memory database; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
       ],
       "columns": [
@@ -4322,6 +4637,81 @@
               "median": 0.1403,
               "min": 0.1403,
               "max": 0.1403,
+              "n": 2
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products (skeleton)",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:mongo-search",
+          "version_name": "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4 at localhost 27028",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 13.626,
+              "min": 12.353,
+              "max": 14.899,
+              "n": 2
+            },
+            "transaction p99 ms": {
+              "median": 20.5655,
+              "min": 16.454,
+              "max": 24.677,
+              "n": 2
+            },
+            "retrieval p50 ms": {
+              "median": 13.5685,
+              "min": 13.527,
+              "max": 13.61,
+              "n": 2
+            },
+            "graph-filtered search p50 ms": {
+              "median": 13.5945,
+              "min": 13.374,
+              "max": 13.815,
+              "n": 2
+            },
+            "retrieval recall@10": {
+              "median": 0.851,
+              "min": 0.844,
+              "max": 0.858,
+              "n": 2
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 2
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 7395.4332,
+              "min": 7339.3761,
+              "max": 7451.4903,
+              "n": 2
+            },
+            "ingest+index total s": {
+              "median": 27.045,
+              "min": 26.84,
+              "max": 27.25,
+              "n": 2
+            },
+            "peak memory GiB": {
+              "median": 1.1612,
+              "min": 1.0922,
+              "max": 1.2302,
+              "n": 2
+            },
+            "disk GiB": {
+              "median": 0.0649,
+              "min": 0.0605,
+              "max": 0.0692,
               "n": 2
             }
           }
@@ -4735,6 +5125,7 @@
         "ArcadeDB's served arm is not shown for the per-host hourly query: on the server's SQL path that query returns one bucket per host instead of one per host and hour, which the answer check caught by comparing its result against the other engines'. Its embedded twin, on the same build, returns the same answer as everyone else, and the single-key form of the same query agrees on both. A latency for an answer that differs from every other engine's is not a measurement of this query, so the cell is withheld rather than printed.",
         "The cold column is the very first query of a session, the newest reading, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, MongoDB, SQLite, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that.",
+        "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP."
       ],
       "columns": [
@@ -8012,6 +8403,38 @@
           }
         },
         {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "",
+          "version_name": "arcadedb mongodb 8.2.12",
+          "host": "",
+          "metrics": {
+            "no wait ms": {
+              "median": 1.345,
+              "min": 1.345,
+              "max": 1.345,
+              "n": 1
+            },
+            "waits for the disk ms": {
+              "median": 6.04,
+              "min": 6.04,
+              "max": 6.04,
+              "n": 1
+            },
+            "cost of waiting": {
+              "median": 4.49,
+              "min": 4.49,
+              "max": 4.49,
+              "n": 1
+            }
+          }
+        },
+        {
           "backend": "Neo4j",
           "is_arcadedb": false,
           "scale": "graph_insert",
@@ -8196,6 +8619,38 @@
               "min": 7.656,
               "max": 7.734,
               "n": 2
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "",
+          "version_name": "arcadedb mongodb 8.2.12",
+          "host": "",
+          "metrics": {
+            "no wait ms": {
+              "median": 0.581,
+              "min": 0.581,
+              "max": 0.581,
+              "n": 1
+            },
+            "waits for the disk ms": {
+              "median": 4.926,
+              "min": 4.926,
+              "max": 4.926,
+              "n": 1
+            },
+            "cost of waiting": {
+              "median": 8.48,
+              "min": 8.48,
+              "max": 8.48,
+              "n": 1
             }
           }
         },
@@ -8388,6 +8843,38 @@
           }
         },
         {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "",
+          "version_name": "arcadedb mongodb 8.2.12",
+          "host": "",
+          "metrics": {
+            "no wait ms": {
+              "median": 1.956,
+              "min": 1.956,
+              "max": 1.956,
+              "n": 1
+            },
+            "waits for the disk ms": {
+              "median": 5.977,
+              "min": 5.977,
+              "max": 5.977,
+              "n": 1
+            },
+            "cost of waiting": {
+              "median": 3.06,
+              "min": 3.06,
+              "max": 3.06,
+              "n": 1
+            }
+          }
+        },
+        {
           "backend": "Neo4j",
           "is_arcadedb": false,
           "scale": "graph_delete",
@@ -8556,6 +9043,38 @@
           }
         },
         {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "scale": "crossmodel_txn",
+          "scale_label": "one transaction across three models (cross-model)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "",
+          "version_name": "arcadedb mongodb 8.2.12 + MongoDb Search Community Version 1.70.4 at localhost:27028",
+          "host": "",
+          "metrics": {
+            "no wait ms": {
+              "median": 12.353,
+              "min": 12.353,
+              "max": 12.353,
+              "n": 1
+            },
+            "waits for the disk ms": {
+              "median": 14.899,
+              "min": 14.899,
+              "max": 14.899,
+              "n": 1
+            },
+            "cost of waiting": {
+              "median": 1.21,
+              "min": 1.21,
+              "max": 1.21,
+              "n": 1
+            }
+          }
+        },
+        {
           "backend": "Neo4j (vector index)",
           "is_arcadedb": false,
           "scale": "crossmodel_txn",
@@ -8701,7 +9220,8 @@
         "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme, because the 1.58 GiB shown is 1.578 of Python client and 0.006 of database.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (embedded), ArcadeDB (server), DuckDB, MongoDB, PostgreSQL, SQLite, SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one."
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (embedded), ArcadeDB (server), DuckDB, MongoDB, PostgreSQL, SQLite, SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Each repetition runs 1,000 new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate."
       ],
       "columns": [
         "new-order p50 ms",
@@ -9540,6 +10060,7 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "The cold column is the very first query of a session, TPC-H Q1, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, ArcadeDB (embedded), ArcadeDB (server), DuckDB, MongoDB, PostgreSQL, SQLite, SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at TPC-H SF0.01 (60k line items, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
       ],
       "columns": [
