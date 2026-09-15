@@ -49,6 +49,7 @@ import com.univocity.parsers.tsv.TsvParserSettings;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.Reader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -96,17 +97,15 @@ public class CSVImporterFormat extends AbstractImporterFormat {
       final ImporterContext context,
       final ImporterSettings settings) throws ImportException {
 
-    context.parsed.set(0);
-
     switch (entityType) {
-    case DOCUMENT, DATABASE -> loadDocuments(sourceSchema, parser, database, context, settings);
+    case DOCUMENT, DATABASE -> loadDocuments(sourceSchema, entityType, parser, database, context, settings);
     case VERTEX -> loadVertices(sourceSchema, parser, database, context, settings);
     case EDGE -> loadEdges(sourceSchema, parser, database, context, settings);
     }
   }
 
-  private void loadDocuments(final SourceSchema sourceSchema, final Parser parser, final Database database,
-      final ImporterContext context, final ImporterSettings settings) throws ImportException {
+  private void loadDocuments(final SourceSchema sourceSchema, final AnalyzedEntity.EntityType entityType, final Parser parser,
+      final Database database, final ImporterContext context, final ImporterSettings settings) throws ImportException {
     final AbstractParser<?> csvParser = createCSVParser(settings);
 
     LogManager.instance().log(this, Level.INFO, "Started importing documents from CSV source");
@@ -125,18 +124,15 @@ public class CSVImporterFormat extends AbstractImporterFormat {
     if (skipOnError && context.callerTransactionActiveOnEntry)
       throw ImporterSettings.newExclusiveTransactionRequiredException();
 
-    long skipEntries = settings.documentsSkipEntries != null ? settings.documentsSkipEntries : 0;
-    if (settings.documentsHeader == null && settings.documentsSkipEntries == null)
-      // by default skip the first line as header
-      skipEntries = 1l;
+    final long skipEntries = skipEntries(entityType, settings);
+    long skipped = 0;
 
     // Captured before the try below so both are also visible in the catch blocks.
     final TransactionOwnership ownership = computeTransactionOwnership(database, context);
     final boolean transactionActiveOnEntry = ownership.transactionActiveOnEntry();
     final boolean ownsTransaction = ownership.ownsTransaction();
 
-    try (final InputStreamReader inputFileReader = new InputStreamReader(parser.getInputStream(),
-        DatabaseFactory.getDefaultCharset())) {
+    try (final Reader inputFileReader = sourceReader(parser)) {
       csvParser.beginParsing(inputFileReader);
 
       // Unlike loadVertices(), called unconditionally regardless of skipOnError: loadDocuments() needs an active
@@ -175,9 +171,18 @@ public class CSVImporterFormat extends AbstractImporterFormat {
       for (long line = 0; (row = csvParser.parseNext()) != null; ++line) {
         context.parsed.incrementAndGet();
 
-        if (skipEntries > 0 && line < skipEntries)
+        // CHECKED BEFORE THE SKIP-ROW 'continue' BELOW, NOT ONLY AFTER A ROW IS ACTUALLY PROCESSED: A SKIPPED
+        // ROW (e.g. A LARGE -documentsSkipEntries HEADER BLOCK) NEVER REACHES THE POST-PROCESSING CHECK AT THE
+        // BOTTOM OF THIS LOOP, SO parsingLimitBytes WOULD OTHERWISE GO ON READING PAST ITS BUDGET FOR AS LONG AS
+        // ROWS KEEP BEING SKIPPED. parsingLimitEntries STAYS A POST-PROCESSING CHECK ON PURPOSE (SEE BELOW).
+        if (settings.parsingLimitBytes > 0 && parser.getPosition() > settings.parsingLimitBytes)
+          break;
+
+        if (skipEntries > 0 && line < skipEntries) {
           // SKIP IT
+          ++skipped;
           continue;
+        }
 
         try {
           final MutableDocument document = database.newDocument(settings.documentTypeName);
@@ -208,6 +213,13 @@ public class CSVImporterFormat extends AbstractImporterFormat {
           context.errors.incrementAndGet();
           database.begin();
         }
+
+        // SAME CAP AND SAME '>=' AS XMLImporterFormat.load() (ISSUE #7341): context.parsed IS INCREMENTED ONCE PER
+        // ROW, SO STOPPING ONCE IT REACHES THE LIMIT IMPORTS EXACTLY -parsingLimitEntries ROWS, NOT ONE MORE (#7482).
+        // KEPT AS A POST-PROCESSING CHECK, UNLIKE parsingLimitBytes ABOVE: THE ROW THAT TRIPS THIS CAP IS MEANT TO
+        // STILL LAND, THE SAME WAY XML's DOES.
+        if (settings.parsingLimitEntries > 0 && context.parsed.get() >= settings.parsingLimitEntries)
+          break;
       }
 
       // Same ownsTransaction gate as the rollback paths below: don't commit the caller's unrelated pending work as
@@ -231,7 +243,8 @@ public class CSVImporterFormat extends AbstractImporterFormat {
               elapsedInSecs > 0 ? context.createdDocuments.get() / elapsedInSecs : context.createdDocuments.get());
       LogManager.instance().log(this, Level.INFO, "- Parsed lines...: %d", null, context.parsed.get());
       LogManager.instance().log(this, Level.INFO, "- Total documents: %d", null, context.createdDocuments.get());
-      LogManager.instance().log(this, Level.INFO, "- Skipped rows...: %d", null, context.errors.get() - errorsBefore);
+      LogManager.instance().log(this, Level.INFO, "- Failed rows....: %d", null, context.errors.get() - errorsBefore);
+      reportSkippedEntries(entityType, context, skipped);
 
       stopParsingQuietly(csvParser);
     }
@@ -308,13 +321,16 @@ public class CSVImporterFormat extends AbstractImporterFormat {
   /**
    * {@code transactionActiveOnEntry}: the live transaction state, used by {@link #beginRowTransaction} to decide
    * whether to begin, reuse, or replace it. {@code ownsTransaction}: see
-   * {@link ImporterContext#callerTransactionActiveOnEntry}.
+   * {@link ImporterContext#importOwnsTransaction}.
    */
   private record TransactionOwnership(boolean transactionActiveOnEntry, boolean ownsTransaction) {
   }
 
   private TransactionOwnership computeTransactionOwnership(final Database database, final ImporterContext context) {
-    return new TransactionOwnership(database.isTransactionActive(), !context.callerTransactionActiveOnEntry);
+    // importOwnsTransaction() rather than the raw flag: a caller transaction recorded on entry that is no longer
+    // live leaves nothing for beginRowTransaction() to reuse, so the transaction it pushes instead is the import's
+    // own and has to be gated as such, or it stays on the stack with nothing allowed to resolve it (issue #7328).
+    return new TransactionOwnership(database.isTransactionActive(), context.importOwnsTransaction(database));
   }
 
   private void loadVertices(final SourceSchema sourceSchema, final Parser parser, final Database database,
@@ -388,16 +404,14 @@ public class CSVImporterFormat extends AbstractImporterFormat {
         firstAsyncError.compareAndSet(null, exception);
       });
 
-    long skipEntries = settings.verticesSkipEntries != null ? settings.verticesSkipEntries : 0;
-    if (settings.verticesSkipEntries == null)
-      skipEntries = 1L;
+    final long skipEntries = skipEntries(AnalyzedEntity.EntityType.VERTEX, settings);
+    long skipped = 0;
 
     final TransactionOwnership ownership = computeTransactionOwnership(database, context);
     final boolean transactionActiveOnEntry = ownership.transactionActiveOnEntry();
     final boolean ownsTransaction = ownership.ownsTransaction();
 
-    try (final InputStreamReader inputFileReader = new InputStreamReader(parser.getInputStream(),
-        DatabaseFactory.getDefaultCharset())) {
+    try (final Reader inputFileReader = sourceReader(parser)) {
       csvParser.beginParsing(inputFileReader);
 
       // Unlike loadDocuments(), gated on skipOnError: in "abort" mode vertices persist via database.async() instead
@@ -422,8 +436,15 @@ public class CSVImporterFormat extends AbstractImporterFormat {
       for (long line = 0; (row = csvParser.parseNext()) != null; ++line) {
         context.parsed.incrementAndGet();
 
-        if (skipEntries > 0 && line < skipEntries)
+        // SAME REASONING AS loadDocuments() ABOVE: CHECKED BEFORE EITHER 'continue' BELOW, SO A LONG RUN OF SKIPPED
+        // OR ID-LESS ROWS CANNOT KEEP READING PAST THE BYTE BUDGET.
+        if (settings.parsingLimitBytes > 0 && parser.getPosition() > settings.parsingLimitBytes)
+          break;
+
+        if (skipEntries > 0 && line < skipEntries) {
+          ++skipped;
           continue;
+        }
 
         if (idIndex >= 0 && idIndex >= row.length) {
           LogManager.instance()
@@ -461,6 +482,13 @@ public class CSVImporterFormat extends AbstractImporterFormat {
           context.errors.incrementAndGet();
           database.begin();
         }
+
+        // SAME CAP AND SAME '>=' AS XMLImporterFormat.load() (ISSUE #7341): context.parsed IS INCREMENTED ONCE PER
+        // ROW, SO STOPPING ONCE IT REACHES THE LIMIT IMPORTS EXACTLY -parsingLimitEntries ROWS, NOT ONE MORE (#7482).
+        // KEPT AS A POST-PROCESSING CHECK, UNLIKE parsingLimitBytes ABOVE: THE ROW THAT TRIPS THIS CAP IS MEANT TO
+        // STILL LAND, THE SAME WAY XML's DOES.
+        if (settings.parsingLimitEntries > 0 && context.parsed.get() >= settings.parsingLimitEntries)
+          break;
       }
 
       if (skipOnError) {
@@ -506,7 +534,8 @@ public class CSVImporterFormat extends AbstractImporterFormat {
               elapsedInSecs > 0 ? context.createdVertices.get() / elapsedInSecs : context.createdVertices.get());
       LogManager.instance().log(this, Level.INFO, "- Parsed lines...: %d", null, context.parsed.get());
       LogManager.instance().log(this, Level.INFO, "- Total vertices.: %d", null, context.createdVertices.get());
-      LogManager.instance().log(this, Level.INFO, "- Skipped rows...: %d", null, context.errors.get() - errorsBefore);
+      LogManager.instance().log(this, Level.INFO, "- Failed rows....: %d", null, context.errors.get() - errorsBefore);
+      reportSkippedEntries(AnalyzedEntity.EntityType.VERTEX, context, skipped);
 
       stopParsingQuietly(csvParser);
     }
@@ -556,13 +585,10 @@ public class CSVImporterFormat extends AbstractImporterFormat {
 
     database.async().onError(exception -> LogManager.instance().log(this, Level.SEVERE, "Error on inserting edges", exception));
 
-    long skipEntries = settings.edgesSkipEntries != null ? settings.edgesSkipEntries : 0;
-    if (settings.edgesSkipEntries == null)
-      // BY DEFAULT SKIP THE FIRST LINE AS HEADER
-      skipEntries = 1l;
+    final long skipEntries = skipEntries(AnalyzedEntity.EntityType.EDGE, settings);
+    long skipped = 0;
 
-    try (final InputStreamReader inputFileReader = new InputStreamReader(parser.getInputStream(),
-        DatabaseFactory.getDefaultCharset())) {
+    try (final Reader inputFileReader = sourceReader(parser)) {
       csvParser.beginParsing(inputFileReader);
 
       final List<AnalyzedProperty> properties = new ArrayList<>();
@@ -588,29 +614,97 @@ public class CSVImporterFormat extends AbstractImporterFormat {
       // database.begin() nests rather than reusing an already-active transaction (see LocalDatabase#begin()), so a
       // caller's own pre-existing transaction is never touched by this method's own commits below.
       database.begin();
+      // Whether the transaction just opened (or the one begun after a periodic commit below) is still the current
+      // one. Cleared right before every commit - which pops it in a finally even if it throws - so a rollback below
+      // can never pop a transaction this method has already committed away, let alone the caller's own (issue #7272).
+      boolean txOpen = true;
+      // Edges an intermediate commit already made durable. context.createdEdges counts every edge
+      // createEdgeFromRow() creates, the ones still inside the transaction a failure rolls back included.
+      long committedEdges = context.createdEdges.get();
+      // Whether the loop ran to its own trailing commit. Distinct from txOpen: a commit() that throws pops the
+      // transaction in its own finally, so txOpen is already false there, yet the batch it failed to make
+      // durable still has to come back off the counter.
+      boolean completed = false;
       int txCount = 0;
-      for (long line = 0; (row = csvParser.parseNext()) != null; ++line) {
-        context.parsed.incrementAndGet();
+      try {
+        for (long line = 0; (row = csvParser.parseNext()) != null; ++line) {
+          context.parsed.incrementAndGet();
 
-        if (skipEntries > 0 && line < skipEntries)
-          continue;
+          // SAME REASONING AS loadDocuments()/loadVertices() ABOVE: CHECKED BEFORE THE SKIP-ROW 'continue', SO A
+          // LONG RUN OF SKIPPED ROWS CANNOT KEEP READING PAST THE BYTE BUDGET.
+          if (settings.parsingLimitBytes > 0 && parser.getPosition() > settings.parsingLimitBytes)
+            break;
 
-        try {
-          createEdgeFromRow(database, row, properties, from, to, context, settings);
-          txCount++;
+          if (skipEntries > 0 && line < skipEntries) {
+            ++skipped;
+            continue;
+          }
+
+          try {
+            createEdgeFromRow(database, row, properties, from, to, context, settings);
+            txCount++;
+          } catch (final Exception e) {
+            // Unlike loadDocuments/loadVertices, edge rows are always skipped-and-logged regardless of -onRowError:
+            // a "bad" edge row here is typically just an unresolved from/to vertex reference, expected during graph
+            // imports rather than a data-corruption case.
+            LogManager.instance().log(this, Level.SEVERE, "Error on parsing line %d", e, line);
+          }
+
+          // Deliberately outside the per-row catch above: a commit failure is not a row error. Caught there it
+          // would be logged under a "parsing line N" message, and the loop would carry on with no transaction
+          // active - LocalDatabase#commit() pops in its own finally and the begin() below never runs - turning
+          // one failure into one more for every remaining row. Left to escape, it reaches the finally below,
+          // which corrects the counter and lets the real cause propagate.
           if (txCount >= settings.commitEvery) {
+            txOpen = false;
             database.commit();
+            committedEdges = context.createdEdges.get();
             database.begin();
+            txOpen = true;
             txCount = 0;
           }
-        } catch (final Exception e) {
-          // Unlike loadDocuments/loadVertices, edge rows are always skipped-and-logged regardless of -onRowError: a
-          // "bad" edge row here is typically just an unresolved from/to vertex reference, expected during graph
-          // imports rather than a data-corruption case.
-          LogManager.instance().log(this, Level.SEVERE, "Error on parsing line %d", e, line);
+
+          // SAME CAP AND SAME '>=' AS XMLImporterFormat.load() (ISSUE #7341): context.parsed IS INCREMENTED ONCE PER
+          // ROW, SO STOPPING ONCE IT REACHES THE LIMIT IMPORTS EXACTLY -parsingLimitEntries ROWS, NOT ONE MORE (#7482).
+          // KEPT AS A POST-PROCESSING CHECK, UNLIKE parsingLimitBytes ABOVE: THE ROW THAT TRIPS THIS CAP IS MEANT TO
+          // STILL LAND, THE SAME WAY XML's DOES.
+          if (settings.parsingLimitEntries > 0 && context.parsed.get() >= settings.parsingLimitEntries)
+            break;
+        }
+        txOpen = false;
+        database.commit();
+        completed = true;
+      } finally {
+        // A row-content failure is already caught and logged above without escaping; what reaches here is a
+        // source-level failure - typically csvParser.parseNext() itself throwing on a malformed row - that the loop
+        // never had a chance to catch.
+        if (txOpen && database.isTransactionActive()) {
+          try {
+            database.rollback();
+          } catch (final Exception rollbackFailure) {
+            // Swallowed: a throw here would replace the failure the caller can actually act on with one about the
+            // cleanup, and would skip the counter correction below.
+            LogManager.instance().log(this, Level.SEVERE,
+                "Could not roll back after the edge import failed: the transaction it opened may still be on the stack",
+                rollbackFailure);
+          }
+        }
+
+        // Outside the txOpen branch above, because a commit() that threw has already popped its own transaction
+        // and would otherwise leave the batch it failed to write counted as if it had survived.
+        if (!completed) {
+          // What the report calls "created" has to be what survived: leaving the counter at the number of edges
+          // read would credit the import with the ones the rollback just took away.
+          final long readEdges = context.createdEdges.get();
+          context.createdEdges.set(committedEdges);
+
+          if (committedEdges > 0)
+            LogManager.instance().log(this, Level.WARNING,
+                "Edge import failed after %,d edges: the import is PARTIAL - %,d of them an earlier batch commit made "
+                    + "durable and they stay on the disk, the other %,d were rolled back", null, readEdges,
+                committedEdges, readEdges - committedEdges);
         }
       }
-      database.commit();
 
     } catch (final IOException e) {
       throw new ImportException("Error on importing CSV", e);
@@ -627,7 +721,8 @@ public class CSVImporterFormat extends AbstractImporterFormat {
       LogManager.instance().log(this, Level.INFO, "- Parsed lines......: %d", null, context.parsed.get());
       LogManager.instance().log(this, Level.INFO, "- Total edges.......: %d", null, context.createdEdges.get());
       LogManager.instance().log(this, Level.INFO, "- Total linked Edges: %d", null, context.linkedEdges.get());
-      LogManager.instance().log(this, Level.INFO, "- Skipped edges.....: %d", null, context.skippedEdges.get());
+      LogManager.instance().log(this, Level.INFO, "- Unresolved edges..: %d", null, context.skippedEdges.get());
+      reportSkippedEntries(AnalyzedEntity.EntityType.EDGE, context, skipped);
 
       stopParsingQuietly(csvParser);
     }
@@ -718,6 +813,104 @@ public class CSVImporterFormat extends AbstractImporterFormat {
     };
   }
 
+  /**
+   * The source's character stream. The leading comment block ({@code #} and {@code //} lines) is already gone from
+   * it: {@link Parser} drops it, once, for every format at once.
+   * <p>
+   * This used to strip the block here, which fixed the two delimited-text formats and left XML, JSON and JSONL
+   * receiving the very comment lines content sniffing had skipped to recognise them - so a {@code #}-commented
+   * N-Triples file imported and a {@code #}-commented XML file died on {@code ImportException} (issue #7490).
+   */
+  protected static Reader sourceReader(final Parser parser) {
+    return new InputStreamReader(parser.getInputStream(), DatabaseFactory.getDefaultCharset());
+  }
+
+  /**
+   * How many leading rows to skip for {@code entityType}, from the one option that governs that route:
+   * {@code -verticesSkipEntries}, {@code -edgesSkipEntries} or {@code -documentsSkipEntries}, falling back to
+   * {@link #defaultHeaderSkipEntries()}.
+   * <p>
+   * ONE function, because the answer used to be spelled out at each of the sites that needed it and they did not
+   * all spell it the same way. {@code RDFImporterFormat.load()} read {@code -edgesSkipEntries} whichever entity the
+   * source had arrived as, so on the {@code -vertices} and {@code -documents} routes {@code -verticesSkipEntries}
+   * was silently inert while {@code -edgesSkipEntries} - the option a user on that route has no reason to reach
+   * for - was the one that worked (issue #7487). {@link #analyze} and the delimited-text row loops disagreed about
+   * a {@code -documentsHeader} source: the analysis skipped its first row as a header even though the caller had
+   * supplied the header and the load imported that row.
+   * <p>
+   * {@code DATABASE} - the {@code -url} route with neither {@code -vertexType} nor {@code -edgeType} set - is the
+   * documents route, which is where {@link #load} sends it.
+   */
+  protected long skipEntries(final AnalyzedEntity.EntityType entityType, final ImporterSettings settings) {
+    return switch (entityType) {
+      case VERTEX -> settings.verticesSkipEntries != null ? settings.verticesSkipEntries : defaultHeaderSkipEntries();
+      case EDGE -> settings.edgesSkipEntries != null ? settings.edgesSkipEntries : defaultHeaderSkipEntries();
+      // A SUPPLIED HEADER MEANS THE FILE HAS NO HEADER LINE, SO THERE IS NOTHING TO SKIP. THE DOCUMENTS ROUTE ONLY:
+      // -verticesHeader AND -edgesHeader HAVE NEVER SUPPRESSED THE DEFAULT SKIP AND STILL DO NOT, WHICH IS ISSUE
+      // #7499 - CHANGING IT IS A BEHAVIOUR CHANGE FOR ANYONE PASSING A HEADER AND RELYING ON THE SKIP, SO IT IS NOT
+      // FOLDED INTO A HELPER WHOSE POINT IS TO PRESERVE WHAT EACH ROUTE ALREADY DID
+      case DOCUMENT, DATABASE -> settings.documentsSkipEntries != null ?
+          settings.documentsSkipEntries :
+          settings.documentsHeader == null ? defaultHeaderSkipEntries() : 0L;
+    };
+  }
+
+  /**
+   * The name of the option {@link #skipEntries} read, for the notice that names it. The silent case - rows missing
+   * from the report because a setting said to drop them - is the one that costs an afternoon (issue #7488).
+   * <p>
+   * It fires on the DEFAULT header skip too, which is the common case and therefore most of the lines this adds.
+   * That is deliberate: #7345 was a default skip, not an explicit one, and it ate the first triple of every RDF
+   * source in silence. The notice joins a per-phase summary block that already logs its parsed, created and failed
+   * counts unconditionally, so it is one more line in a block the import was printing anyway - which is why it is
+   * kept short.
+   */
+  protected static String skipEntriesOption(final AnalyzedEntity.EntityType entityType) {
+    return switch (entityType) {
+      case VERTEX -> "-verticesSkipEntries";
+      case EDGE -> "-edgesSkipEntries";
+      case DOCUMENT, DATABASE -> "-documentsSkipEntries";
+    };
+  }
+
+  /**
+   * Records the rows a phase skipped on purpose and, when there were any, says so once with the setting responsible.
+   * <p>
+   * They are counted APART from {@link ImporterContext#errors}, which covers the failure half: a report of
+   * {@code parsedRecords=4, createdEdges=3} used to read the same whether the missing row was a header the caller
+   * asked to skip, an edge whose endpoints did not resolve or a row {@code -onRowError skip} dropped, and the usual
+   * guess - "my file has a bad row" - is wrong for the first (issue #7488).
+   *
+   * @param skipped how many rows the loop actually skipped, which is the smaller of the setting and the number of
+   *                rows the source turned out to have
+   */
+  protected void reportSkippedEntries(final AnalyzedEntity.EntityType entityType, final ImporterContext context,
+      final long skipped) {
+    if (skipped <= 0)
+      return;
+
+    context.skippedRecords.addAndGet(skipped);
+    LogManager.instance().log(this, Level.INFO,
+        "- Skipped rows.....: %d (dropped by %s, counted as skippedRecords and not as errors)", null, skipped,
+        skipEntriesOption(entityType));
+  }
+
+  /**
+   * How many leading rows a source of this format is assumed to spend on a header when the caller set no explicit
+   * {@code -documentsSkipEntries} / {@code -verticesSkipEntries} / {@code -edgesSkipEntries}.
+   * <p>
+   * One for delimited text, where a header line is the convention. Overridden to zero by
+   * {@link RDFImporterFormat}: N-Triples, N-Quads and Turtle have no header row - every line is a statement - and
+   * the format is selected by sniffing the first line AS a statement, so the one line the importer is certain
+   * carries data was the one it threw away, silently, on every RDF import (issue #7345).
+   * <p>
+   * The default only: an explicit {@code -edgesSkipEntries 1} still skips one, for the users who have been passing
+   * nothing and relying on the skip.
+   */
+  protected long defaultHeaderSkipEntries() {
+    return 1L;
+  }
+
   @Override
   public SourceSchema analyze(final AnalyzedEntity.EntityType entityType, final Parser parser, final ImporterSettings settings,
       final AnalyzedSchema analyzedSchema) throws IOException {
@@ -765,37 +958,14 @@ public class CSVImporterFormat extends AbstractImporterFormat {
         settings.vertexTypeName :
         entityType == AnalyzedEntity.EntityType.EDGE ? settings.edgeTypeName : settings.documentTypeName;
 
-    long skipEntries = 0;
-    final String header;
-
-    switch (entityType) {
-    case VERTEX:
-      header = settings.verticesHeader;
-      skipEntries = settings.verticesSkipEntries != null ? settings.verticesSkipEntries : 0;
-      if (settings.verticesSkipEntries == null)
-        // BY DEFAULT SKIP THE FIRST LINE AS HEADER
-        skipEntries = 1l;
-      break;
-
-    case EDGE:
-      header = settings.edgesHeader;
-      skipEntries = settings.edgesSkipEntries != null ? settings.edgesSkipEntries : 0;
-      if (settings.edgesSkipEntries == null)
-        // BY DEFAULT SKIP THE FIRST LINE AS HEADER
-        skipEntries = 1l;
-      break;
-
-    case DOCUMENT:
-      header = settings.documentsHeader;
-      skipEntries = settings.documentsSkipEntries != null ? settings.documentsSkipEntries : 0;
-      if (settings.documentsSkipEntries == null)
-        // BY DEFAULT SKIP THE FIRST LINE AS HEADER
-        skipEntries = 1l;
-      break;
-
-    default:
-      header = null;
-    }
+    // ONE FUNCTION WITH THE ROW LOOPS, SO THE ANALYSIS AND THE LOAD CANNOT DISAGREE ABOUT THE SAME FILE (ISSUE #7487)
+    final long skipEntries = skipEntries(entityType, settings);
+    final String header = switch (entityType) {
+      case VERTEX -> settings.verticesHeader;
+      case EDGE -> settings.edgesHeader;
+      // DATABASE IS THE DOCUMENTS ROUTE, WHICH IS WHERE load() SENDS IT
+      case DOCUMENT, DATABASE -> settings.documentsHeader;
+    };
 
     if (header != null) {
       if (delimiter == null)
@@ -807,8 +977,7 @@ public class CSVImporterFormat extends AbstractImporterFormat {
       LogManager.instance().log(this, Level.INFO, "Parsing with custom header: %s", null, fieldNames);
     }
 
-    try (final InputStreamReader inputFileReader = new InputStreamReader(parser.getInputStream(),
-        DatabaseFactory.getDefaultCharset())) {
+    try (final Reader inputFileReader = sourceReader(parser)) {
       csvParser.beginParsing(inputFileReader);
 
       String[] row;

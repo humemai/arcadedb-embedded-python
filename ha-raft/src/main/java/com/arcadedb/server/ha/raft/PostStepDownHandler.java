@@ -35,6 +35,14 @@ public class PostStepDownHandler extends AbstractServerHttpHandler {
   }
 
   @Override
+  protected boolean mustExecuteOnWorkerThread() {
+    // stepDown() can block for tens of seconds (up to 3 targeted leadership transfers at 10s each, plus the
+    // no-target Ratis transfer). Running that on the Undertow IO thread stalls every other connection on the
+    // same selector, including kubelet readiness/liveness probes (issue #7133).
+    return true;
+  }
+
+  @Override
   public ExecutionResponse execute(final HttpServerExchange exchange, final ServerSecurityUser user,
       final JSONObject payload) {
     checkRootUser(user);
@@ -51,6 +59,13 @@ public class PostStepDownHandler extends AbstractServerHttpHandler {
       // Service across every ready endpoint does. 409 names the leader so the caller can reissue there,
       // instead of a 200 for an effect that landed on another node (issue #7134).
       return ClusterLeadershipResponses.notTheLeader(e);
+    } catch (final ReplicationException e) {
+      // This node is still the leader and every transfer failed, so nothing stepped down (issue #7127). Before
+      // stepDown() reported that terminal case at all, this endpoint answered 200 "Leadership step-down
+      // initiated" for it. 503 - not the generic 500 the central mapper would give a Raft type it cannot
+      // reference - because the condition is transient by construction and the same request can succeed as
+      // issued once a peer catches up or comes back.
+      return ClusterLeadershipResponses.stepDownFailed(e);
     }
     return new ExecutionResponse(200,
         new JSONObject().put("result", "Leadership step-down initiated").toString());

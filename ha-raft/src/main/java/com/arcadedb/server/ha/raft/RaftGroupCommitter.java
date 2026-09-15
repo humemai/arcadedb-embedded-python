@@ -18,10 +18,12 @@
  */
 package com.arcadedb.server.ha.raft;
 
+import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.QuorumNotReachedException;
 import com.arcadedb.network.binary.ReplicatedEntryTooLargeException;
 import com.arcadedb.network.binary.ReplicationQueueFullException;
+import com.arcadedb.server.ha.raft.ratis.RatisRefusedEntryErrorFilter;
 import org.apache.ratis.client.RaftClient;
 import org.apache.ratis.proto.RaftProtos;
 import org.apache.ratis.protocol.Message;
@@ -172,6 +174,18 @@ class RaftGroupCommitter {
    * machine) wait for this index; see {@code RaftReplicatedDatabase} and issue #5503.
    */
   long submitAndWait(final byte[] entry) {
+    return submitAndWaitForEntry(entry).logIndex;
+  }
+
+  /**
+   * {@link #submitAndWait(byte[])}, returning what the LEADER's state machine answered for the entry instead of
+   * the log index (issue #7509). Null when the reply carried no message.
+   */
+  String submitAndWaitForReply(final byte[] entry) {
+    return submitAndWaitForEntry(entry).applyReply;
+  }
+
+  private CancellablePendingEntry submitAndWaitForEntry(final byte[] entry) {
     // Pre-check the entry against the maximum size the cluster can actually replicate - the SMALLER
     // of arcadedb.ha.grpcMessageSizeMax and arcadedb.ha.appendBufferSize (see
     // RaftPropertiesBuilder.maxReplicatedEntrySize). Dispatching an oversized entry is far worse than
@@ -288,7 +302,7 @@ class RaftGroupCommitter {
       throw dispatchAware(pending, "Group commit failed: " + e.getMessage());
     }
 
-    return pending.logIndex;
+    return pending;
   }
 
   /**
@@ -506,6 +520,15 @@ class RaftGroupCommitter {
         final long remainingNanos = deadlineNanos - System.nanoTime();
         final RaftClientReply reply = futures[i].get(remainingNanos, TimeUnit.NANOSECONDS);
         if (!reply.isSuccess()) {
+          // The leader refused the entry BEFORE appending it (a page-version conflict detected in
+          // ArcadeStateMachine.preAppendTransaction, issue #6965): a definite outcome, and a retryable one. Ratis
+          // rebuilds the cause on the client side from its class name and message, so it arrives as the same
+          // ConcurrentModificationException the leader threw.
+          final NeedRetryException refused = refusedBeforeAppend(reply.getException());
+          if (refused != null) {
+            batch.get(i).future.complete(refused);
+            continue;
+          }
           final String err = reply.getException() != null ? reply.getException().getMessage() : "replication failed";
           if (isClientClosed(reply.getException()))
             clientClosedDetected = true;
@@ -552,6 +575,17 @@ class RaftGroupCommitter {
         }
 
         batch.get(i).logIndex = reply.getLogIndex();
+        // What the LEADER's state machine answered for this entry. Normally "OK"; a security entry whose
+        // compare-and-set precondition no longer held answers SECURITY_ENTRY_SUPERSEDED, and the submitter
+        // retries against the fresh document rather than believing its change landed (issue #7509).
+        //
+        // Decoded for EVERY entry rather than only for the three security types, which this class cannot tell
+        // apart without parsing the payload it is deliberately opaque to. The reply content is a short constant
+        // - "OK" today - so the cost is one small String per committed entry, against a per-type dispatch that
+        // would push entry-format knowledge down into the committer.
+        batch.get(i).applyReply = reply.getMessage() != null ?
+            reply.getMessage().getContent().toStringUtf8() :
+            null;
         batch.get(i).future.complete(null); // success - after ALL check
       } catch (final InterruptedException ie) {
         // The flusher was interrupted (client refresh after leader churn, or shutdown) while
@@ -565,6 +599,13 @@ class RaftGroupCommitter {
                 "Group commit interrupted while awaiting quorum result (entry was dispatched to Raft; outcome unknown)"));
         break;
       } catch (final Exception e) {
+        // The Ratis client turns a refusal reply into an exceptional completion rather than a failed reply
+        // (RaftClientImpl.handleRaftException), so the leader's pre-append refusal (issue #6965) arrives here.
+        final NeedRetryException refused = refusedBeforeAppend(e);
+        if (refused != null) {
+          batch.get(i).future.complete(refused);
+          continue;
+        }
         if (isClientClosed(e))
           clientClosedDetected = true;
         final String detail = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
@@ -591,6 +632,16 @@ class RaftGroupCommitter {
         }
       });
     }
+  }
+
+  /**
+   * The retryable conflict the leader refused the entry with BEFORE appending it (issue #6965), or {@code null} when
+   * the failure is something else. Such an entry never reached the log, so its outcome is definite: the caller rolls
+   * back and retries, exactly as for a single-node conflict. One walk, shared with the log filter that mutes the same
+   * refusal.
+   */
+  static NeedRetryException refusedBeforeAppend(final Throwable thrown) {
+    return RatisRefusedEntryErrorFilter.refusedBeforeAppend(thrown);
   }
 
   /**
@@ -626,6 +677,10 @@ class RaftGroupCommitter {
     // the submitting thread can wait for its OWN entry to be applied locally (#5503). Stays -1 on every
     // failure path, where there is no committed index to wait for.
     volatile long logIndex = -1;
+
+    // The leader state machine's reply for this entry, published beside logIndex (issue #7509). Null on
+    // every failure path and on any Ratis reply that carried no message.
+    volatile String applyReply = null;
 
     CancellablePendingEntry(final byte[] entry) {
       this.entry = entry;

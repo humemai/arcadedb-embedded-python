@@ -18,12 +18,15 @@
  */
 package com.arcadedb.server.ha.raft;
 
+import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.engine.TransactionManager;
 import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.PageSnapshot;
+import com.arcadedb.engine.timeseries.TimeSeriesCompactionPause;
+import com.arcadedb.engine.timeseries.TimeSeriesSealedStore;
 import com.arcadedb.exception.PageSnapshotException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.utility.CodeUtils;
@@ -83,8 +86,22 @@ import java.util.zip.ZipOutputStream;
  */
 public class SnapshotHttpHandler implements HttpHandler {
 
-  private static final Semaphore CONCURRENCY_SEMAPHORE =
-      new Semaphore(GlobalConfiguration.HA_SNAPSHOT_MAX_CONCURRENT.getValueAsInteger(), true);
+  /**
+   * How many snapshots this server serves at once, and the permits enforcing it.
+   * <p>
+   * Both used to be {@code static final}, sized at class-initialisation from the {@link GlobalConfiguration} enum -
+   * which is populated by a system property or an environment variable and by nothing else, and which at that
+   * moment has not seen a line of the server's configuration anyway. A cluster that set
+   * {@code arcadedb.ha.snapshotMaxConcurrent} in its server configuration file therefore ran on the compiled-in
+   * default, and the rejection message below read the enum a SECOND time, so it would have misreported even a
+   * value that had reached the semaphore (issue #7233). Per-instance also makes the cap what it says it is - a
+   * bound on THIS server - rather than one shared by every server in the JVM.
+   */
+  private final int       maxConcurrentSnapshots;
+  private final Semaphore concurrencySemaphore;
+
+  /** Bounds the misconfiguration warning in {@link #sanitizedMaxConcurrent} to once per JVM. */
+  private static final AtomicBoolean WARNED_MISCONFIGURED_LIMIT = new AtomicBoolean();
 
   /** Sub-path selecting the checksums view of a database instead of its snapshot ZIP. */
   static final String CHECKSUMS_SUFFIX = "/checksums";
@@ -100,6 +117,14 @@ public class SnapshotHttpHandler implements HttpHandler {
   /** How far {@link #rootCauseMessage} walks a cause chain before giving up. Real ones are two or three links. */
   private static final int MAX_CAUSE_DEPTH = 20;
 
+  /**
+   * Budget for pausing TimeSeries compaction before the page window opens (issue #7337). The same 60s
+   * FullBackupFormat uses, and for the same reason: the only holders of the write half are a compaction phase or
+   * a follower's sealed-store install, both of which are bounded, so a longer wait means something is stuck and
+   * failing the ship is better than shipping an archive that restores with duplicated samples.
+   */
+  private static final long COMPACTION_PAUSE_TIMEOUT_MS = 60_000L;
+
   // #5063 (review round 5) introduced this per-database lock because PageManagerFlushThread.setSuspended
   // was ownership-based (putIfAbsent): only the FIRST caller owned the suspend flag, so a second thread
   // streaming the same database could observe a resumed flush mid-read. Issue #5068 made the suspension
@@ -111,7 +136,7 @@ public class SnapshotHttpHandler implements HttpHandler {
   // double the read I/O and, with refcounted suspension, keep flushing suspended for the UNION of both
   // windows, growing the deferred-page backlog toward the #4728 backpressure cap and throttling commits
   // for longer. Serializing keeps each suspension window as short as possible. Requests beyond the
-  // CONCURRENCY_SEMAPHORE limit (HA_SNAPSHOT_MAX_CONCURRENT, default 2) still get a fast 503.
+  // concurrencySemaphore limit (HA_SNAPSHOT_MAX_CONCURRENT, default 2) still get a fast 503.
   // Entries are never pruned by design: one small ReentrantLock per database NAME ever snapshotted, bounded
   // by the server's database count (a dropped-and-recreated database safely reuses its lock). Pruning on
   // drop would need lifecycle callbacks this handler does not have, for negligible memory.
@@ -130,6 +155,34 @@ public class SnapshotHttpHandler implements HttpHandler {
 
   public SnapshotHttpHandler(final HttpServer httpServer) {
     this.httpServer = httpServer;
+    // The tests build a handler with no server; an empty overlay reads through to the setting's default.
+    final ContextConfiguration configuration =
+        httpServer != null ? httpServer.getServer().getConfiguration() : new ContextConfiguration();
+    this.maxConcurrentSnapshots = sanitizedMaxConcurrent(configuration);
+    this.concurrencySemaphore = new Semaphore(maxConcurrentSnapshots, true);
+  }
+
+  /**
+   * The configured snapshot concurrency, floored at 1.
+   * <p>
+   * {@code new Semaphore(n)} accepts a negative {@code n} - it simply means every {@code tryAcquire} fails - so a
+   * limit of 0 or below does not fail loudly, it silently answers every snapshot request with 503 and leaves a
+   * follower that has fallen behind the compacted log unable to resync at all. That was only reachable through a
+   * {@code -D} before; since #7233 read this from the server configuration it is reachable from the configuration
+   * file too, which is where a typo actually happens. Treated as a misconfiguration rather than an intentional
+   * (if impractical) lockdown, and reported once, the same way the Redis and BOLT protocol limits are.
+   */
+  private static int sanitizedMaxConcurrent(final ContextConfiguration configuration) {
+    final int configured = configuration.getValueAsInteger(GlobalConfiguration.HA_SNAPSHOT_MAX_CONCURRENT);
+    if (configured >= 1)
+      return configured;
+
+    final int fallback = ((Number) GlobalConfiguration.HA_SNAPSHOT_MAX_CONCURRENT.getDefValue()).intValue();
+    if (WARNED_MISCONFIGURED_LIMIT.compareAndSet(false, true))
+      LogManager.instance().log(SnapshotHttpHandler.class, Level.WARNING,
+          "'%s' is set to %d, below the minimum usable value (1); falling back to the default (%d)",
+          GlobalConfiguration.HA_SNAPSHOT_MAX_CONCURRENT.getKey(), configured, fallback);
+    return fallback;
   }
 
   /**
@@ -202,9 +255,9 @@ public class SnapshotHttpHandler implements HttpHandler {
           "Serving database snapshots over plain HTTP. Consider enabling SSL for production clusters.");
     }
 
-    if (!CONCURRENCY_SEMAPHORE.tryAcquire()) {
+    if (!concurrencySemaphore.tryAcquire()) {
       LogManager.instance().log(this, Level.WARNING, "Snapshot rejected: concurrency limit of %d reached",
-          GlobalConfiguration.HA_SNAPSHOT_MAX_CONCURRENT.getValueAsInteger());
+          maxConcurrentSnapshots);
       exchange.setStatusCode(503);
       exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
       exchange.getResponseSender().send("{\"error\":\"Too many concurrent snapshots\"}");
@@ -233,6 +286,35 @@ public class SnapshotHttpHandler implements HttpHandler {
 
       LogManager.instance().log(this, Level.INFO, "Serving database snapshot for '%s'...", databaseName);
 
+      final DatabaseInternal db = server.getDatabase(databaseName);
+
+      final ReentrantLock dbSuspendLock = suspendLockFor(databaseName);
+      dbSuspendLock.lock();
+      // Hold TimeSeries compaction back while the sealed stores are paired with the page image (issue #7337),
+      // the same guard FullBackupFormat takes for the same reason (issue #7280) - a snapshot ship is a copy of
+      // the database, and it reads .ts.sealed outside every window the page files get. Taken HERE, outside
+      // executeInReadLock and outside the flush suspension, because both of those are lock orders a compaction
+      // takes the other way round: see FullBackupFormat.pauseCompaction for the cycle each one would close.
+      // Released as soon as the sealed bytes are on the wire (see serveSnapshotZip), so the pause spans the
+      // pairing and not the transfer.
+      //
+      // Also BEFORE the response headers are set: a pause that cannot be taken is a refusal, and a refusal has
+      // to be answerable. Once the zip headers are out and the exchange is blocking, the only way left to say
+      // "no" is to drop the connection, which the follower reads as a transfer that died rather than as one
+      // that never started.
+      final TimeSeriesCompactionPause pause;
+      try {
+        pause = TimeSeriesCompactionPause.acquire(db, COMPACTION_PAUSE_TIMEOUT_MS);
+      } catch (final RuntimeException e) {
+        dbSuspendLock.unlock();
+        LogManager.instance().log(this, Level.WARNING,
+            "Snapshot of '%s' refused: TimeSeries compaction could not be paused (%s)", databaseName, e.getMessage());
+        exchange.setStatusCode(503);
+        exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+        exchange.getResponseSender().send("{\"error\":\"TimeSeries compaction could not be paused for the snapshot\"}");
+        return;
+      }
+
       final String safeName = databaseName.replaceAll("[^a-zA-Z0-9._-]", "_");
       exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/zip");
       exchange.getResponseHeaders().put(Headers.CONTENT_DISPOSITION,
@@ -242,11 +324,12 @@ public class SnapshotHttpHandler implements HttpHandler {
       exchange.getResponseHeaders().put(new HttpString(SnapshotManager.MANIFEST_HEADER), "1");
       exchange.startBlocking();
 
-      final DatabaseInternal db = server.getDatabase(databaseName);
-
-      final ReentrantLock dbSuspendLock = suspendLockFor(databaseName);
-      dbSuspendLock.lock();
-      try {
+      // CLOSED TWICE ON THE WINDOW PATH, DELIBERATELY: serveSnapshotZip releases the pause the moment the last
+      // sealed byte is read, and this is the safety net for every other way out - a throw, a client disconnect,
+      // the frozen-files path that never releases early. TimeSeriesCompactionPause.close() is idempotent, so the
+      // second close is a no-op rather than an unlock of a lock this thread no longer holds (claude-review on
+      // PR #7474).
+      try (pause) {
         db.executeInReadLock(() -> {
           // #6075: stream the page files through a point-in-time snapshot. Shipping a multi-GB snapshot used to
           // park the flush thread for the whole transfer, which is the longest-lived suspension in the product:
@@ -272,7 +355,7 @@ public class SnapshotHttpHandler implements HttpHandler {
               // SWALLOWS. MATCHING THAT HERE KEEPS THE HANDLER'S CONTRACT IDENTICAL ON BOTH PATHS: A TRANSFER THAT
               // DIES MID-STREAM HAS ALREADY COMMITTED ITS RESPONSE, SO THERE IS NOTHING USEFUL TO TURN THE THROW
               // INTO - THE FOLLOWER DETECTS THE MISSING MANIFEST (#4831) AND RETRIES
-              CodeUtils.executeIgnoringExceptions(() -> serveSnapshotZip(exchange, db, databaseName, openWindow),
+              CodeUtils.executeIgnoringExceptions(() -> serveSnapshotZip(exchange, db, databaseName, openWindow, pause),
                   "Error serving the snapshot of database '" + databaseName + "'", true);
             } finally {
               openWindow.close();
@@ -280,14 +363,17 @@ public class SnapshotHttpHandler implements HttpHandler {
           } else
             // The refcounted suspension (#5068) guarantees the flush thread is parked for this whole read;
             // perDatabaseSuspendLock additionally serializes same-database zip streams (see its comment).
-            db.getPageManager().suspendFlushAndExecute(db, () -> serveSnapshotZip(exchange, db, databaseName, null));
+            // The pause is NOT released early on this path: here the page image is the on-disk one the
+            // suspension is freezing, so it is only fixed for as long as the suspension lasts and the pause has
+            // to span the whole callback - the same asymmetry FullBackupFormat's two paths carry.
+            db.getPageManager().suspendFlushAndExecute(db, () -> serveSnapshotZip(exchange, db, databaseName, null, null));
           return null;
         });
       } finally {
         dbSuspendLock.unlock();
       }
     } finally {
-      CONCURRENCY_SEMAPHORE.release();
+      concurrencySemaphore.release();
     }
   }
 
@@ -444,7 +530,7 @@ public class SnapshotHttpHandler implements HttpHandler {
   }
 
   private void serveSnapshotZip(final HttpServerExchange exchange, final DatabaseInternal db, final String databaseName,
-      final PageSnapshot snapshot) {
+      final PageSnapshot snapshot, final TimeSeriesCompactionPause pause) {
     final long writeTimeoutMs = httpServer.getServer().getConfiguration().getValueAsLong(GlobalConfiguration.HA_SNAPSHOT_WRITE_TIMEOUT);
     final AtomicBoolean completed = new AtomicBoolean(false);
 
@@ -487,6 +573,24 @@ public class SnapshotHttpHandler implements HttpHandler {
       if (schemaFile.exists())
         addFileToZip(zipOut, schemaFile, manifest);
 
+      // TimeSeries sealed-store files (.ts.sealed) use raw FileChannel I/O and are NOT registered with
+      // the FileManager, so they are absent from getFiles(). Add them explicitly so a snapshot-syncing
+      // follower also receives the compacted time-series data instead of only the mutable buckets
+      // (issue #4382).
+      //
+      // STREAMED BEFORE THE PAGE FILES, which is what lets the compaction pause be released early on the window
+      // path (issue #7337): the page image is already fixed at the window's t0 no matter when its bytes go out,
+      // so the span that must exclude a compaction - or, on a follower, a shipped sealed blob - ends with the
+      // last sealed byte read. Ordering within the archive is free: the installer extracts by entry name, and
+      // only the manifest has to be last.
+      for (final File sealedFile : TimeSeriesSealedStore.listSealedFiles(new File(db.getDatabasePath())))
+        addFileToZip(zipOut, sealedFile, manifest);
+
+      // addFileToZip reads its input to the end before returning, so nothing is still reading a sealed file
+      // here. Null on the frozen-files path, which holds the pause for the whole callback instead.
+      if (pause != null)
+        pause.close();
+
       if (snapshot != null)
         for (final PageSnapshot.SnapshotFile file : snapshot.getFiles())
           addStreamToZip(zipOut, file.fileName(), snapshot.newInputStream(file.fileId()), manifest);
@@ -496,16 +600,6 @@ public class SnapshotHttpHandler implements HttpHandler {
           if (file != null)
             addFileToZip(zipOut, file.getOSFile(), manifest);
       }
-
-      // TimeSeries sealed-store files (.ts.sealed) use raw FileChannel I/O and are NOT registered with
-      // the FileManager, so they are absent from getFiles(). Add them explicitly so a snapshot-syncing
-      // follower also receives the compacted time-series data instead of only the mutable buckets
-      // (issue #4382).
-      final File dbDir = new File(db.getDatabasePath());
-      final File[] sealedFiles = dbDir.listFiles((d, name) -> name.endsWith(".ts.sealed"));
-      if (sealedFiles != null)
-        for (final File sealedFile : sealedFiles)
-          addFileToZip(zipOut, sealedFile, manifest);
 
       // Ship the recency marker (issue #5277). last-tx-id.bin is written on a clean close and on WAL
       // rotation, but a follower that receives this database via snapshot and is later force-killed
@@ -606,10 +700,8 @@ public class SnapshotHttpHandler implements HttpHandler {
         if (file != null)
           total += file.getOSFile().length();
 
-    final File[] sealedFiles = new File(db.getDatabasePath()).listFiles((d, name) -> name.endsWith(".ts.sealed"));
-    if (sealedFiles != null)
-      for (final File sealedFile : sealedFiles)
-        total += sealedFile.length();
+    for (final File sealedFile : TimeSeriesSealedStore.listSealedFiles(new File(db.getDatabasePath())))
+      total += sealedFile.length();
 
     return total + Long.BYTES; // the last-tx-id marker
   }

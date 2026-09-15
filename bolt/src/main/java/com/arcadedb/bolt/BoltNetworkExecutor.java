@@ -44,7 +44,9 @@ import com.arcadedb.exception.CauseChain;
 import com.arcadedb.exception.CommandParameterMissingException;
 import com.arcadedb.exception.CommandParsingException;
 import com.arcadedb.exception.CommandSemanticException;
+import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.exception.NeedRetryException;
+import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.index.Index;
 import com.arcadedb.index.TypeIndex;
 import com.arcadedb.log.LogManager;
@@ -187,7 +189,10 @@ public class BoltNetworkExecutor extends Thread {
     this.listener = listener;
     this.sslHelper = sslHelper;
     this.preAuthTicket = preAuthTicket;
-    this.debug = GlobalConfiguration.BOLT_DEBUG.getValueAsBoolean();
+    // Through the SERVER's configuration, here and at every other read below: these settings are SCOPE.SERVER,
+    // and the GlobalConfiguration enum holds only what a system property or an environment variable put there, so
+    // a server configuration file or a SET SERVER SETTING used to be ignored without a word (issue #7233).
+    this.debug = server.getConfiguration().getValueAsBoolean(GlobalConfiguration.BOLT_DEBUG);
     // NOTE: transport (TLS) negotiation and the socket I/O streams are intentionally set up in run(), on this
     // per-connection thread, so a slow/failed/hostile TLS handshake can never block the shared accept thread.
   }
@@ -224,7 +229,7 @@ public class BoltNetworkExecutor extends Thread {
             continue;
           }
 
-          final PackStreamReader reader = new PackStreamReader(messageData);
+          final PackStreamReader reader = new PackStreamReader(messageData, server.getConfiguration());
           final Object value = reader.readValue();
 
           if (!(value instanceof PackStreamReader.StructureValue structure)) {
@@ -306,7 +311,7 @@ public class BoltNetworkExecutor extends Thread {
       // read timeout (issue #5978, mirroring RedisNetworkExecutor's #5912 fix), so a stalled/hostile client
       // cannot hold this connection thread (and its file descriptors) open forever. Lifted to infinite once
       // authentication succeeds - see markAuthenticated() - and re-armed on LOGOFF - see markUnauthenticated().
-      final int handshakeTimeout = GlobalConfiguration.NETWORK_SOCKET_TIMEOUT.getValueAsInteger();
+      final int handshakeTimeout = server.getConfiguration().getValueAsInteger(GlobalConfiguration.NETWORK_SOCKET_TIMEOUT);
       if (handshakeTimeout > 0)
         socket.setSoTimeout(handshakeTimeout);
 
@@ -353,7 +358,7 @@ public class BoltNetworkExecutor extends Thread {
       final InputStream inputStream = preReadBytes != null
           ? new SequenceInputStream(new ByteArrayInputStream(preReadBytes), connectionSocket.getInputStream())
           : connectionSocket.getInputStream();
-      this.input = new BoltChunkedInput(inputStream);
+      this.input = new BoltChunkedInput(inputStream, server.getConfiguration());
       this.output = new BoltChunkedOutput(connectionSocket.getOutputStream());
       return true;
 
@@ -385,7 +390,9 @@ public class BoltNetworkExecutor extends Thread {
 
         // Reinitialize I/O with WebSocket framing and read Bolt magic from WebSocket stream
         input = new BoltChunkedInput(
-            new BoltWebSocketInputStream(socket.getInputStream(), GlobalConfiguration.BOLT_WEBSOCKET_MAX_FRAME_SIZE.getValueAsInteger()));
+            new BoltWebSocketInputStream(socket.getInputStream(),
+                server.getConfiguration().getValueAsInteger(GlobalConfiguration.BOLT_WEBSOCKET_MAX_FRAME_SIZE)),
+            server.getConfiguration());
         output = new BoltChunkedOutput(new BoltWebSocketOutputStream(socket.getOutputStream()));
         try {
           magic = input.readRaw(4);
@@ -767,7 +774,8 @@ public class BoltNetworkExecutor extends Thread {
     // single authenticated session could drive. Read per RUN, like the other BOLT protocol limits, so a runtime
     // change to the setting takes effect on the next message; floored at 1 since a ceiling of 0 would reject
     // every query outright rather than lock anything down.
-    final int maxOpenStreams = Math.max(1, GlobalConfiguration.BOLT_MAX_OPEN_STREAMS.getValueAsInteger());
+    final int maxOpenStreams = Math.max(1,
+        server.getConfiguration().getValueAsInteger(GlobalConfiguration.BOLT_MAX_OPEN_STREAMS));
     if (openStreams.size() >= maxOpenStreams) {
       sendFailure(BoltException.PROTOCOL_ERROR,
           "Too many result streams open at once (max " + maxOpenStreams + "): consume or discard one first");
@@ -1177,7 +1185,7 @@ public class BoltNetworkExecutor extends Thread {
     }
 
     final Map<String, Object> rt = new LinkedHashMap<>();
-    rt.put("ttl", GlobalConfiguration.BOLT_ROUTING_TTL.getValueAsLong());
+    rt.put("ttl", server.getConfiguration().getValueAsLong(GlobalConfiguration.BOLT_ROUTING_TTL));
     rt.put("db", message.getDatabase() != null ? message.getDatabase() : databaseName);
 
     final List<Map<String, Object>> servers = new ArrayList<>();
@@ -1277,7 +1285,7 @@ public class BoltNetworkExecutor extends Thread {
     String targetName = databaseName;
     if (targetName == null || targetName.isEmpty() || "system".equals(targetName) || "neo4j".equals(targetName)) {
       // "system" and "neo4j" are Neo4j virtual databases; map to default ArcadeDB database
-      targetName = GlobalConfiguration.BOLT_DEFAULT_DATABASE.getValueAsString();
+      targetName = server.getConfiguration().getValueAsString(GlobalConfiguration.BOLT_DEFAULT_DATABASE);
 
       if (targetName == null || targetName.isEmpty()) {
         // If no default configured, use the first available database
@@ -1337,13 +1345,13 @@ public class BoltNetworkExecutor extends Thread {
       stream.syntheticResults = new ArrayList<>();
       for (final String dbName : server.getDatabaseNames()) {
         stream.syntheticResults.add(List.of(dbName, "standard", List.of(), "read-write",
-            getBoltAddress(GlobalConfiguration.BOLT_PORT.getValueAsInteger()), "primary",
+            getBoltAddress(server.getConfiguration().getValueAsInteger(GlobalConfiguration.BOLT_PORT)), "primary",
             true, "online", "online", "", dbName.equals(database != null ? database.getName() : ""), false,
             List.of()));
       }
       // Also add the virtual "system" database entry
       stream.syntheticResults.add(List.of("system", "system", List.of(), "read-write",
-          getBoltAddress(GlobalConfiguration.BOLT_PORT.getValueAsInteger()), "primary",
+          getBoltAddress(server.getConfiguration().getValueAsInteger(GlobalConfiguration.BOLT_PORT)), "primary",
           false, "online", "online", "", false, false, List.of()));
       return true;
 
@@ -1885,7 +1893,7 @@ public class BoltNetworkExecutor extends Thread {
    * "unauthenticated" always implies the bounded handshake timeout applies.
    */
   private void markUnauthenticated() {
-    final int handshakeTimeout = GlobalConfiguration.NETWORK_SOCKET_TIMEOUT.getValueAsInteger();
+    final int handshakeTimeout = server.getConfiguration().getValueAsInteger(GlobalConfiguration.NETWORK_SOCKET_TIMEOUT);
     try {
       socket.setSoTimeout(Math.max(handshakeTimeout, 0));
     } catch (final SocketException e) {
@@ -1917,12 +1925,27 @@ public class BoltNetworkExecutor extends Thread {
    * {@code ConcurrentModificationException} or a {@code LockTimeoutException}) map to a Neo4j
    * transient status so managed-transaction drivers auto-retry; an {@link ArithmeticErrorException}
    * (64-bit overflow, division by zero) maps to Neo4j's ArithmeticError so a driver reports the caller's
-   * values rather than a server fault (issue #5602); anything else keeps the given default.
+   * values rather than a server fault (issue #5602); a {@link DuplicatedKeyException} (unique-index
+   * violation) and a {@link SecurityException} (permission denial) are both permanent client errors,
+   * so they must not fall into DatabaseError, which a driver's retry policy reads as "safe to retry";
+   * a {@link TimeoutException} (a query/statement deadline, not the retryable
+   * {@code LockTimeoutException} contention {@link #isRetryableConflict} already handles) maps to
+   * Neo4j's own TransactionTimedOut - not Transaction.Terminated, which means "explicitly killed by
+   * the user" and is excluded from driver retry predicates for exactly that reason (issue #7123).
+   * Anything else keeps the given default.
    */
   static String classifyExecutionError(final Throwable error, final String defaultCode) {
     if (isRetryableConflict(error))
       return BoltErrorCodes.TRANSIENT_CONFLICT_ERROR;
-    return isArithmeticError(error) ? BoltErrorCodes.ARITHMETIC_ERROR : defaultCode;
+    if (isArithmeticError(error))
+      return BoltErrorCodes.ARITHMETIC_ERROR;
+    if (CauseChain.contains(error, DuplicatedKeyException.class))
+      return BoltErrorCodes.CONSTRAINT_VIOLATION_ERROR;
+    if (CauseChain.contains(error, SecurityException.class))
+      return BoltErrorCodes.FORBIDDEN_ERROR;
+    if (CauseChain.contains(error, TimeoutException.class))
+      return BoltErrorCodes.TRANSACTION_TIMED_OUT_ERROR;
+    return defaultCode;
   }
 
   /**

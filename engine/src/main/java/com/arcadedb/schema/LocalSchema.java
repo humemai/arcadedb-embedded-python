@@ -109,7 +109,7 @@ public class LocalSchema implements Schema {
       "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9");
 
   /**
-   * Components whose load has a side effect on ANOTHER component, so they cannot be added to an already-loaded
+   * Components whose load has a side effect on ANOTHER component, so they cannot be ADDED to an already-loaded
    * schema in isolation (issue #6988):
    * <ul>
    *   <li>the dictionary is what every component resolves property names through;</li>
@@ -119,9 +119,34 @@ public class LocalSchema implements Schema {
    * </ul>
    * An entry carrying one of these falls back to the full rebuild, where every component is re-instantiated and
    * every claim is re-established in one pass.
+   * <p>
+   * This set governs the FIRST pass of {@link #loadIncremental} only - files with no component yet. A file that
+   * already has one and was merely written into is a different question, and
+   * {@link #NON_INCREMENTAL_TOUCHED_COMPONENT_EXTENSIONS} answers it.
    */
   private static final Set<String> NON_INCREMENTAL_COMPONENT_EXTENSIONS = Set.of(//
       Dictionary.DICT_EXT, //
+      LSMTreeIndexCompacted.UNIQUE_INDEX_EXT, //
+      LSMTreeIndexCompacted.NOTUNIQUE_INDEX_EXT, //
+      LSMTreeIndexBloomFilter.FILE_EXT);
+
+  /**
+   * Components whose already-registered instance cannot be refreshed in isolation when an entry writes pages INTO
+   * it, so the second pass of {@link #loadIncremental} hands the caller back to the full rebuild (issue #7266).
+   * <ul>
+   *   <li>a compacted index is claimed by the mutable index holding it as its sub-index, so handing the file id a
+   *       new instance would leave that claim pointing at the old one;</li>
+   *   <li>a bloom filter reads its directory into RAM once, in {@code loadDirectory()} by way of
+   *       {@link #attachBloomFilters}, and no load hook re-reads it - so pages appended to the file leave the
+   *       in-RAM directory describing the file as it was before the entry.</li>
+   * </ul>
+   * <b>Deliberately NOT the same set as {@link #NON_INCREMENTAL_COMPONENT_EXTENSIONS}: the dictionary is absent.</b>
+   * A dictionary that ARRIVES has to be adopted by the full load, but a dictionary merely written into needs
+   * nothing here - {@code TransactionManager.applyChanges} reloads it itself - and every DDL entry that adds a type
+   * or a property name writes dictionary pages. Refusing on those would send the common case straight back to the
+   * O(total files) rebuild issue #6988 removed, which is the cost this whole method exists to avoid.
+   */
+  private static final Set<String> NON_INCREMENTAL_TOUCHED_COMPONENT_EXTENSIONS = Set.of(//
       LSMTreeIndexCompacted.UNIQUE_INDEX_EXT, //
       LSMTreeIndexCompacted.NOTUNIQUE_INDEX_EXT, //
       LSMTreeIndexBloomFilter.FILE_EXT);
@@ -174,6 +199,8 @@ public class LocalSchema implements Schema {
    * suppression has to cross that public-API boundary; save/restore around the cascade, matching {@link #multipleUpdate}.
    */
   private             String                                 typeBeingDropped              = null;
+  /** Nesting depth of {@link #recordFileChanges} frames. Read and written under the database write lock only. */
+  private             int                                    recordingDepth                = 0;
   private final       AtomicLong                             versionSerial                 = new AtomicLong();
   private final       Map<String, FunctionLibraryDefinition> functionLibraries             = new ConcurrentHashMap<>();
   private final       Map<Integer, Integer>                  migratedFileIds               = new ConcurrentHashMap<>();
@@ -234,7 +261,7 @@ public class LocalSchema implements Schema {
     loadInRamCompleted = true;
     database.begin();
     try {
-      dictionary = new Dictionary(database, "dictionary", databasePath + "/dictionary", mode, Dictionary.DEF_PAGE_SIZE);
+      dictionary = new Dictionary(database, "dictionary", databasePath + File.separator + "dictionary", mode, Dictionary.DEF_PAGE_SIZE);
       files.add(dictionary);
 
       database.commit();
@@ -376,8 +403,9 @@ public class LocalSchema implements Schema {
    * @param mode           open mode for the newly instantiated components
    * @param removedFileIds file ids retired by this entry; any removal forces the full rebuild (see below)
    * @param touchedFileIds file ids this entry wrote pages into; an already-registered index component among them is
-   *                       rebuilt from its file rather than refreshed in place (see the second pass). May be
-   *                       {@code null}
+   *                       rebuilt from its file rather than refreshed in place (see the second pass), and one
+   *                       carrying a {@link #NON_INCREMENTAL_TOUCHED_COMPONENT_EXTENSIONS} extension forces the
+   *                       full rebuild instead. May be {@code null}
    *
    * @return {@code true} when the schema was refreshed incrementally, {@code false} when the caller must fall back
    * to {@link #load(ComponentFile.MODE, boolean)}. When {@code false} is returned nothing has been modified.
@@ -420,17 +448,25 @@ public class LocalSchema implements Schema {
     if (touchedFileIds != null)
       for (final Integer fileId : touchedFileIds) {
         final Component current = getFileByIdIfExists(fileId);
-        if (current == null || !(current.getMainComponent() instanceof IndexInternal))
+        if (current == null)
           continue;
 
         if (!database.getFileManager().existsFile(fileId))
           return false;
 
         final ComponentFile file = database.getFileManager().getFile(fileId);
-        // A compacted index is claimed by the mutable index holding it as its sub-index, so handing the file id a
-        // new instance would leave that claim pointing at the old one. Only the full rebuild re-establishes it.
-        if (NON_INCREMENTAL_COMPONENT_EXTENSIONS.contains(file.getFileExtension()))
+
+        // Issue #7266: the extension check comes BEFORE the instanceof narrowing below, and not after it as it
+        // used to. Neither component this set names answers an IndexInternal from getMainComponent() by its own
+        // construction - a bloom filter answers ITSELF, and a compacted index answers the mutable index only once
+        // that mutable's onAfterLoad() wired the field, which a factory-built instance starts with null - so the
+        // narrowing dropped a touched bloom filter out of the loop before the guard could refuse the entry, and
+        // left the compacted index refusing by accident rather than by rule.
+        if (NON_INCREMENTAL_TOUCHED_COMPONENT_EXTENSIONS.contains(file.getFileExtension()))
           return false;
+
+        if (!(current.getMainComponent() instanceof IndexInternal))
+          continue;
 
         toReplace.add(file);
       }
@@ -478,8 +514,8 @@ public class LocalSchema implements Schema {
       component.onAfterSchemaLoad();
 
     // attachBloomFilters() is not called: it acts only on LSMTreeIndexCompacted, and a compacted index can never be
-    // in `loaded` - NON_INCREMENTAL_COMPONENT_EXTENSIONS refuses the entry instead, in both passes above. Relaxing
-    // that set means restoring the call.
+    // in `loaded` - the entry is refused instead, by NON_INCREMENTAL_COMPONENT_EXTENSIONS in the first pass and by
+    // NON_INCREMENTAL_TOUCHED_COMPONENT_EXTENSIONS in the second. Relaxing either set means restoring the call.
     //
     // sweepOrphanCompactedIndexFiles() is deliberately NOT run here either. It proves a compacted file is an orphan
     // by observing that no mutable index claimed it during the load - a proof that only holds when EVERY mutable
@@ -1243,26 +1279,40 @@ public class LocalSchema implements Schema {
   }
 
   @Override
-  public synchronized void dropMaterializedView(final String viewName) {
+  public void dropMaterializedView(final String viewName) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
 
-    final MaterializedViewImpl view = materializedViews.get(viewName);
-    if (view == null)
-      throw new SchemaException("Materialized view '" + viewName + "' not found");
-
-    // Cancel periodic scheduler if active
-    if (materializedViewScheduler != null)
-      materializedViewScheduler.cancel(viewName);
-
-    // Unregister incremental listeners from source types
-    if (view.getRefreshMode() == MaterializedViewRefreshMode.INCREMENTAL)
-      MaterializedViewBuilder.unregisterListeners(this, view);
+    // #7457: THE MONITOR IS NEVER HELD ACROSS THE recordFileChanges CALL. That call waits for the database write lock,
+    // and every schema save runs under that lock and takes this monitor (saveConfiguration is synchronized): a thread
+    // holding the monitor while waiting for the write lock is the reverse order, and it deadlocks against any
+    // concurrent DDL that is saving. The same shape is kept by alterMaterializedView and dropContinuousAggregate.
+    synchronized (this) {
+      if (!materializedViews.containsKey(viewName))
+        throw new SchemaException("Materialized view '" + viewName + "' not found");
+    }
 
     // Wrap in recordFileChanges so that the MV metadata removal and backing type
-    // drop are replicated atomically to HA replicas
+    // drop are replicated atomically to HA replicas. THE WHOLE LIFECYCLE TRANSITION - REMOVAL, SCHEDULER, LISTENERS,
+    // BACKING TYPE - RUNS UNDER THE WRITE LOCK, SO IT CANNOT INTERLEAVE WITH A CREATE OR AN ALTER OF THE SAME VIEW
+    // THAT IS STILL INSTALLING ITS REFRESH RESOURCES: WHAT IS TORN DOWN HERE IS WHAT THE VIEW REMOVED HERE OWNED
     recordFileChanges(() -> {
-      // Remove the view definition
-      materializedViews.remove(viewName);
+      final MaterializedViewImpl view;
+      final MaterializedViewScheduler scheduler;
+      synchronized (this) {
+        // Two drops of the same view can both pass the check above: the second loses here
+        view = materializedViews.remove(viewName);
+        if (view == null)
+          throw new SchemaException("Materialized view '" + viewName + "' not found");
+        scheduler = materializedViewScheduler;
+      }
+
+      // Cancel periodic scheduler if active
+      if (scheduler != null)
+        scheduler.cancel(viewName);
+
+      // Unregister incremental listeners from source types
+      if (view.getRefreshMode() == MaterializedViewRefreshMode.INCREMENTAL)
+        MaterializedViewBuilder.unregisterListeners(this, view);
 
       // Drop the backing type (which drops buckets and indexes)
       if (existsType(view.getBackingTypeName()))
@@ -1274,24 +1324,37 @@ public class LocalSchema implements Schema {
   }
 
   @Override
-  public synchronized void alterMaterializedView(final String viewName, final MaterializedViewRefreshMode newMode,
+  public void alterMaterializedView(final String viewName, final MaterializedViewRefreshMode newMode,
       final long newIntervalMs) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
 
-    final MaterializedViewImpl oldView = materializedViews.get(viewName);
-    if (oldView == null)
-      throw new SchemaException("Materialized view '" + viewName + "' not found");
-
-    // Tear down old refresh infrastructure
-    if (oldView.getRefreshMode() == MaterializedViewRefreshMode.INCREMENTAL)
-      MaterializedViewBuilder.unregisterListeners(this, oldView);
-    if (materializedViewScheduler != null)
-      materializedViewScheduler.cancel(viewName);
+    // See dropMaterializedView for why the monitor is not held across recordFileChanges, and why the teardown of the
+    // old refresh resources and the setup of the new ones both run inside it (#7457)
+    synchronized (this) {
+      if (!materializedViews.containsKey(viewName))
+        throw new SchemaException("Materialized view '" + viewName + "' not found");
+    }
 
     recordFileChanges(() -> {
-      // Create new view instance with updated refresh mode
-      final MaterializedViewImpl newView = oldView.copyWithRefreshMode(newMode, newIntervalMs);
-      materializedViews.put(viewName, newView);
+      final MaterializedViewImpl oldView;
+      final MaterializedViewImpl newView;
+      final MaterializedViewScheduler scheduler;
+      synchronized (this) {
+        oldView = materializedViews.get(viewName);
+        if (oldView == null)
+          throw new SchemaException("Materialized view '" + viewName + "' not found");
+        // Create new view instance with updated refresh mode
+        newView = oldView.copyWithRefreshMode(newMode, newIntervalMs);
+        materializedViews.put(viewName, newView);
+        scheduler = materializedViewScheduler;
+      }
+
+      // Tear down old refresh infrastructure
+      if (oldView.getRefreshMode() == MaterializedViewRefreshMode.INCREMENTAL)
+        MaterializedViewBuilder.unregisterListeners(this, oldView);
+      if (scheduler != null)
+        scheduler.cancel(viewName);
+
       saveConfiguration();
 
       // Set up new refresh infrastructure
@@ -1330,15 +1393,22 @@ public class LocalSchema implements Schema {
   }
 
   @Override
-  public synchronized void dropContinuousAggregate(final String name) {
+  public void dropContinuousAggregate(final String name) {
     database.checkPermissionsOnDatabase(SecurityDatabaseUser.DATABASE_ACCESS.UPDATE_SCHEMA);
 
-    final ContinuousAggregateImpl ca = continuousAggregates.get(name);
-    if (ca == null)
-      throw new SchemaException("Continuous aggregate '" + name + "' not found");
+    // See dropMaterializedView for why the monitor is not held across recordFileChanges (#7457)
+    final ContinuousAggregateImpl ca;
+    synchronized (this) {
+      ca = continuousAggregates.get(name);
+      if (ca == null)
+        throw new SchemaException("Continuous aggregate '" + name + "' not found");
+    }
 
     recordFileChanges(() -> {
-      continuousAggregates.remove(name);
+      synchronized (this) {
+        if (continuousAggregates.remove(name) == null)
+          throw new SchemaException("Continuous aggregate '" + name + "' not found");
+      }
 
       if (existsType(ca.getBackingTypeName()))
         dropType(ca.getBackingTypeName());
@@ -2801,24 +2871,40 @@ public class LocalSchema implements Schema {
   }
 
   public synchronized void update(final JSONObject newSchema) throws IOException {
-    if (newSchema.has("schemaVersion"))
-      versionSerial.set(newSchema.getLong("schemaVersion"));
-
+    // Validate before touching either file: getLong() throws on a non-numeric or explicitly null value, and a
+    // rejected schema must leave both generations exactly as they were. An ABSENT version keeps the current one,
+    // which is why the default-value getter cannot be used here - it treats an explicit null as absent too.
+    final long newVersion = newSchema.has("schemaVersion") ? newSchema.getLong("schemaVersion") : versionSerial.get();
     final String latestSchema = newSchema.toString();
 
     if (configurationFile.exists()) {
+      // #6114: A COPY, NOT A RENAME. The rename this replaces moved schema.json out of the way and only then wrote
+      // the new one, so between the two statements schema.json DID NOT EXIST and while the writer ran it was
+      // truncated. A crash in that window left a database whose schema file was missing - recoverable only from
+      // schema.prev.json - and any concurrent reader (the backup's lock-free t0 configuration capture, the HA
+      // snapshot ship) could observe nothing, or half a JSON document. The copy is published as a hard link where
+      // the file store allows it, so it costs an inode operation rather than a re-read of the whole schema, and it
+      // is atomic on the target either way: schema.prev.json is what readConfiguration() falls back TO, so it can
+      // never be half-written. It is also byte-identical by construction - literally the same bytes, so no charset
+      // from setEncoding() is applied to it on the way out.
       final File copy = new File(databasePath + File.separator + SCHEMA_PREV_FILE_NAME);
-      if (copy.exists())
-        if (!copy.delete())
-          LogManager.instance().log(this, Level.WARNING, "Error on deleting previous schema file '%s'", null, copy);
-
-      if (!configurationFile.renameTo(copy))
-        LogManager.instance().log(this, Level.WARNING, "Error on renaming previous schema file '%s'", null, copy);
+      FileUtils.atomicCopyFile(configurationFile, copy);
     }
 
-    try (final FileWriter file = new FileWriter(databasePath + File.separator + SCHEMA_FILE_NAME)) {
-      file.write(latestSchema);
-    }
+    // The primary is replaced by an atomic rename, so a reader sees either this generation or the previous one.
+    //
+    // UTF-8 UNCONDITIONALLY, NOT `encoding`. readConfiguration() reads this file back with `encoding`, but that field
+    // is a transient per-instance setting that is never persisted and starts every open at DEFAULT_ENCODING: a file
+    // written in anything else would be unreadable on the next open unless the caller happened to re-apply
+    // setEncoding() first. So `encoding` is a READ-side compatibility knob for a legacy file, and every write
+    // normalises the primary back onto UTF-8 - which is also what makes the recovery in readConfiguration() self-heal
+    // a legacy database instead of perpetuating its charset. This replaces a FileWriter that used the JVM's DEFAULT
+    // charset, which was asymmetric with the reader on any platform whose default is not UTF-8 (issue #6114).
+    FileUtils.atomicWriteFile(configurationFile, latestSchema);
+
+    // Only after the bytes are on disk: a failed publication must not leave the in-memory version claiming a
+    // generation that no file holds.
+    versionSerial.set(newVersion);
 
     database.getExecutionPlanCache().invalidate();
     // The OpenCypher plan cache embeds schema-derived physical operators (index-seek vs scan, bucket
@@ -2888,14 +2974,43 @@ public class LocalSchema implements Schema {
     if (suspendIntermediateSaves)
       multipleUpdate = true;
 
-    boolean executed = false;
+    final boolean[] executed = new boolean[1];
     try {
-      final RET result = database.getWrappedDatabaseInstance().recordFileChanges(callback);
-      executed = true;
+      final RET result = database.getWrappedDatabaseInstance().recordFileChanges(() -> {
+        // UNDER THE WRITE LOCK, SO THE DEPTH IS CONSISTENT: A NESTED FRAME (A TYPE CREATION AND THE BUCKET CREATIONS
+        // INSIDE IT) SEES THE FRAME ENCLOSING IT
+        final boolean outermost = recordingDepth++ == 0;
+        try {
+          final Object callbackResult = callback.call();
+          executed[0] = true;
 
-      if (suspendIntermediateSaves)
-        multipleUpdate = false;
-      saveConfiguration();
+          // #7457: SAVE schema.json BEFORE THE WRITE LOCK IS RELEASED, NOT AFTER. The callback registered or dropped
+          // files in the FileManager, and until the schema file names exactly those files an observer that lists
+          // the files and then reads the schema - a backup - archives a schema naming buckets it did not copy. The
+          // database write lock is what excludes such an observer, so the save has to happen under it. Taking this
+          // schema's monitor under the write lock is the order every DDL that saves from inside its own callback
+          // (dropType, dropBucket, the materialized view ones) had already established; the reverse order - the
+          // monitor held while waiting for the write lock - is the one no method may take, see dropMaterializedView.
+          if (suspendIntermediateSaves)
+            multipleUpdate = false;
+          // UNCONDITIONAL, AS IT WAS OUTSIDE THE LOCK: NOT EVERY IN-MEMORY MUTATION MARKS A GENERATION DIRTY (A TYPE
+          // INDEX REGISTERING ITS BUCKET SUB-INDEXES AFTER THEIR OWN SAVES DOES NOT), SO "NOTHING TO SAVE" CANNOT BE
+          // READ OFF isDirty() HERE. AND AT EVERY NESTING LEVEL, ALSO AS BEFORE: A NESTED FRAME SAVES UNLESS
+          // multipleUpdate POSTPONES IT (bulkChange, dropType), SO A DDL OVER N BUCKETS STILL WRITES THE FILE N TIMES
+          saveConfiguration();
+
+          // THE LAST STEP UNDER THE WRITE LOCK OF THE OUTERMOST FRAME: THE CHANGE IS APPLIED, ITS FILES REGISTERED OR
+          // DROPPED AND schema.json SAVED, AND NOTHING ELSE HAPPENS BEFORE THE LOCK IS RELEASED. A TEST ASSERTING
+          // HERE THAT THE SCHEMA FILE AGREES WITH THE FILE SET PROVES THE SAVE RUNS UNDER THE LOCK (#7457) - MOVED
+          // AFTER THE RELEASE, IT WOULD ALSO BE AFTER THIS HOOK. A NESTED FRAME HAD ITS SAVE POSTPONED TO THE FRAME
+          // ENCLOSING IT, SO IT DOES NOT FIRE
+          if (outermost)
+            database.executeCallbacks(DatabaseInternal.CALLBACK_EVENT.SCHEMA_AFTER_FILE_CHANGES);
+          return callbackResult;
+        } finally {
+          --recordingDepth;
+        }
+      });
 
       // INVALIDATE EXECUTION PLAN IN CASE TYPE OR INDEX CONCUR IN THE GENERATED PLANS
       database.getExecutionPlanCache().invalidate();
@@ -2910,7 +3025,7 @@ public class LocalSchema implements Schema {
     } finally {
       if (suspendIntermediateSaves)
         multipleUpdate = false;
-      if (!executed && prevGeneration <= savedGeneration)
+      if (!executed[0] && prevGeneration <= savedGeneration)
         // ROLLBACK THE DIRTY STATUS - restore only if we were the ones who made it dirty
         savedGeneration = dirtyGeneration.get();
     }

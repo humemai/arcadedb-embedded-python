@@ -29,12 +29,14 @@ import com.arcadedb.server.monitor.HAReplicationStatsProvider;
 import com.arcadedb.server.http.HttpServer;
 
 import io.undertow.server.handlers.PathHandler;
+import org.apache.ratis.protocol.RaftPeerId;
 
 import com.arcadedb.database.DatabaseInternal;
 
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
@@ -60,6 +62,12 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   // database per plugin lifetime instead of on every (re)wrap.
   private final Set<String> warnedSingleBucketDatabases = ConcurrentHashMap.newKeySet();
 
+  /** How often a cluster that cannot use the #7509 compare-and-set may say so. */
+  private static final long SECURITY_PRECONDITION_WITHHELD_LOG_THROTTLE_MS = 5 * 60_000L;
+
+  // When the "security changes are replicating without the concurrency check" line was last logged.
+  private volatile long lastSecurityPreconditionWithheldLog;
+
   // Handlers registered by registerAPI() that own a background executor. A fresh RaftHAPlugin
   // instance (and thus fresh handler instances) is created by PluginManager on every server
   // start, so stopService() must close the ones THIS instance created rather than relying on any
@@ -76,6 +84,24 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   public void configure(final ArcadeDBServer arcadeDBServer, final ContextConfiguration configuration) {
     this.server = arcadeDBServer;
     this.configuration = configuration;
+    // The HA verbose level is SCOPE.SERVER and HALog caches it in a static, so it has to be handed the server's
+    // configuration here - otherwise the first log call caches whatever a -D happened to say (issue #7233).
+    HALog.configure(configuration);
+  }
+
+  /**
+   * Installs the Raft server this plugin delegates to, without going through {@code startService()} and a real
+   * Ratis cluster.
+   * <p>
+   * Package-private and test-only, the same seam {@code RaftHAServer.setCapabilityProber} is. It exists so the
+   * #7511 interlock can be driven through the method an operator's request actually reaches - the HTTP and gRPC
+   * control planes both end at {@code replicateSecurityGroups} / {@code replicateSecurityApiTokens} - rather than
+   * only through the gate helper those two call. A gate nothing calls is a gate that is not there, and only a test
+   * of the caller can tell the difference.
+   */
+  // @VisibleForTesting
+  void setRaftHAServer(final RaftHAServer raftHAServer) {
+    this.raftHAServer = raftHAServer;
   }
 
   @Override
@@ -198,17 +224,184 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
 
   @Override
   public void replicateSecurityUsers(final String usersJsonArray) {
+    // Overridden alongside the two-argument form because the interface's default for THIS one is the no-op:
+    // inheriting it would make the seed paths - PostAddPeerHandler, ServerControlPlane.connectCluster - stop
+    // replicating altogether.
+    replicateSecurityUsers(usersJsonArray, null);
+  }
+
+  @Override
+  public boolean replicateSecurityUsers(final String usersJsonArray, final String expectedFingerprint) {
     if (raftHAServer == null)
       throw new TransactionException("Raft HA server not started");
 
+    final boolean applied;
     try {
-      raftHAServer.getTransactionBroker().replicateSecurityUsers(usersJsonArray);
+      applied = raftHAServer.getTransactionBroker()
+          .replicateSecurityUsers(usersJsonArray, preconditionEveryPeerCanRead(expectedFingerprint));
     } catch (final TransactionException e) {
       throw e;
     } catch (final Exception e) {
       throw new TransactionException("Error sending security-users entry via Raft", e);
     }
-    LogManager.instance().log(this, Level.INFO, "Security users entry committed via Raft");
+    return reportSecurityOutcome("users", applied);
+  }
+
+  /**
+   * {@inheritDoc}
+   * <p>
+   * Gated on every peer having proved it can decode a {@code SECURITY_GROUPS_ENTRY} (issue #7511). The entry type
+   * is new in 26.10.1 and a peer that cannot decode it HALTS rather than skips it, so during a rolling upgrade an
+   * ungated group change turned a routine admin action into a partial outage. The gate runs before the broker is
+   * handed anything, so a refusal submits nothing.
+   */
+  @Override
+  public void replicateSecurityGroups(final String groupsJson) {
+    replicateSecurityGroups(groupsJson, null);
+  }
+
+  @Override
+  public boolean replicateSecurityGroups(final String groupsJson, final String expectedFingerprint) {
+    if (raftHAServer == null)
+      throw new TransactionException("Raft HA server not started");
+
+    SecurityEntryCapabilityGate.requireEveryPeerCanDecode(server, raftHAServer, RaftLogEntryType.SECURITY_GROUPS_ENTRY,
+        "group document");
+
+    final boolean applied;
+    try {
+      applied = raftHAServer.getTransactionBroker()
+          .replicateSecurityGroups(groupsJson, preconditionEveryPeerCanRead(expectedFingerprint));
+    } catch (final TransactionException e) {
+      throw e;
+    } catch (final Exception e) {
+      throw new TransactionException("Error sending security-groups entry via Raft", e);
+    }
+    return reportSecurityOutcome("groups", applied);
+  }
+
+  /**
+   * {@inheritDoc}
+   * <p>
+   * Gated the same way {@link #replicateSecurityGroups} is, and for the same reason (issue #7511). Worth being
+   * explicit that this covers a REVOCATION as well as a mint: a revoked token is not revoked anywhere if the entry
+   * carrying it halts the nodes that were still serving it.
+   */
+  @Override
+  public void replicateSecurityApiTokens(final String apiTokensJson) {
+    replicateSecurityApiTokens(apiTokensJson, null);
+  }
+
+  @Override
+  public boolean replicateSecurityApiTokens(final String apiTokensJson, final String expectedFingerprint) {
+    if (raftHAServer == null)
+      throw new TransactionException("Raft HA server not started");
+
+    SecurityEntryCapabilityGate.requireEveryPeerCanDecode(server, raftHAServer,
+        RaftLogEntryType.SECURITY_API_TOKENS_ENTRY, "API-token document");
+
+    final boolean applied;
+    try {
+      applied = raftHAServer.getTransactionBroker()
+          .replicateSecurityApiTokens(apiTokensJson, preconditionEveryPeerCanRead(expectedFingerprint));
+    } catch (final TransactionException e) {
+      throw e;
+    } catch (final Exception e) {
+      throw new TransactionException("Error sending security-api-tokens entry via Raft", e);
+    }
+    return reportSecurityOutcome("API-tokens", applied);
+  }
+
+  /**
+   * The precondition to actually write, which is {@code expectedFingerprint} only while EVERY peer has advertised
+   * that it can read one (issue #7509), and null otherwise.
+   * <p>
+   * This is the gate {@code RaftLogEntryCodec}'s own javadoc demands of any new optional section, and it is not a
+   * formality here. A peer that predates the section skips it and installs the document unconditionally, so an
+   * ungated precondition during a rolling upgrade would have the losing entry REFUSED on the upgraded nodes and
+   * APPLIED on the older one - the security state of the cluster diverging, which is worse than the lost update
+   * #7509 is about, because the same credentials then resolve differently depending on which node answers.
+   * Withholding the precondition instead keeps the pre-#7509 behaviour uniformly until the last node is upgraded,
+   * at which point the compare-and-set starts working on its own with no operator step.
+   * <p>
+   * Read per submission rather than cached, exactly as {@code RaftReplicatedDatabase.schemaDeltaEnabled} reads it:
+   * a peer that stops answering stops receiving preconditions from the next mutation on, and one that finishes
+   * upgrading starts receiving them without a leader restart.
+   */
+  private String preconditionEveryPeerCanRead(final String expectedFingerprint) {
+    return expectedFingerprint == null ?
+        null :
+        preconditionForPeers(expectedFingerprint,
+            raftHAServer.peersMissingCapability(PeerCapabilities.SECURITY_PRECONDITION));
+  }
+
+  /**
+   * The decision {@link #preconditionEveryPeerCanRead} makes, separated from the peer lookup it makes it on so it
+   * can be driven directly: a precondition is written only when NO peer is missing the capability.
+   * Package-private for tests.
+   */
+  String preconditionForPeers(final String expectedFingerprint, final List<String> peersMissingTheCapability) {
+    if (expectedFingerprint == null)
+      return null;
+    if (peersMissingTheCapability.isEmpty())
+      return expectedFingerprint;
+
+    logSecurityPreconditionWithheld(peersMissingTheCapability);
+    return null;
+  }
+
+  /**
+   * Reports, at most once per {@link #SECURITY_PRECONDITION_WITHHELD_LOG_THROTTLE_MS}, that the compare-and-set is
+   * not engaged and WHICH peers are the reason.
+   * <p>
+   * Silence would put an operator back where issue #7509 found them: believing concurrent security changes are safe
+   * while they are not. Throttled because a cluster left half-upgraded is a steady state, not an event.
+   */
+  private void logSecurityPreconditionWithheld(final List<String> peersMissingTheCapability) {
+    final long now = System.currentTimeMillis();
+    if (now - lastSecurityPreconditionWithheldLog < SECURITY_PRECONDITION_WITHHELD_LOG_THROTTLE_MS)
+      return;
+    // Racy by design: two administrators crossing the window at the same instant cost one duplicate line.
+    lastSecurityPreconditionWithheldLog = now;
+    LogManager.instance().log(this, Level.INFO,
+        "Security changes are replicating WITHOUT the concurrency check of issue #7509: peer(s) %s have not "
+            + "advertised the '%s' capability, so a precondition could not be read there. Until they are upgraded "
+            + "or reachable again, two security changes made on two nodes at the same time can still lose one of "
+            + "them - the pre-#7509 behaviour. Nothing has to be turned on afterwards; the check resumes by itself.",
+        peersMissingTheCapability, PeerCapabilities.SECURITY_PRECONDITION);
+  }
+
+  /**
+   * Logs the outcome of a security entry (issue #7509).
+   * <p>
+   * The catch-up wait a refused submitter needs before it retries is deliberately NOT done here: this method runs
+   * with the caller's {@code ServerSecurity} monitor held, and that monitor is shared by every cluster-wide
+   * security mutation on the node. {@link #awaitLocalApply()} is called instead by
+   * {@code ServerSecurity.awaitSupersededChange}, outside the monitor.
+   */
+  private boolean reportSecurityOutcome(final String document, final boolean applied) {
+    if (applied) {
+      LogManager.instance().log(this, Level.INFO, "Security %s entry committed via Raft", document);
+      return true;
+    }
+
+    LogManager.instance().log(this, Level.INFO,
+        "Security %s entry was refused: the document changed between this node's read and the apply, so the "
+            + "caller retries against the current document", document);
+    return false;
+  }
+
+  /**
+   * Waits, bounded by {@code arcadedb.ha.quorumTimeout}, for this node's state machine to catch up with the
+   * committed log (issue #7509). Best-effort: {@code waitForLocalApply()} returns rather than failing when the
+   * deadline passes. Safe to block in, because the state-machine apply thread never takes the
+   * {@code ServerSecurity} monitor - and the caller does not hold it here anyway.
+   */
+  @Override
+  public void awaitLocalApply() {
+    final RaftHAServer raft = raftHAServer;
+    if (raft != null)
+      raft.waitForLocalApply();
   }
 
   @Override
@@ -241,6 +434,10 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
     // Issue #4147: pre-bootstrap state RPC, used by the bootstrap leader at first cluster
     // formation to collect each peer's (fingerprint, lastTxId) per database.
     routes.addExactPath("/api/v1/cluster/bootstrap-state", new PostBootstrapStateHandler(httpServer, this));
+    // Issue #7219: peer-capability advertisement RPC, polled by the leader so it can decide for itself whether
+    // an optional wire-format section is safe to write. A node predating this route answers 404, and that 404 is
+    // the answer - see PostCapabilitiesHandler.
+    routes.addExactPath("/api/v1/cluster/capabilities", new PostCapabilitiesHandler(httpServer, this));
     LogManager.instance().log(this, Level.INFO, "Raft cluster management endpoints registered");
   }
 
@@ -310,6 +507,35 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   }
 
   @Override
+  public HAServerPlugin.PeerAuthSession lookupAuthSession(final String issuerServerName, final String token)
+      throws IOException {
+    final RaftHAServer raft = raftHAServer;
+    if (raft == null)
+      throw new IOException("Raft HA is not started");
+    final RaftPeerId issuer = raft.resolvePeerIdByServerName(issuerServerName);
+    // Not a member, or this node itself (which does not hold the token, or it would not be asking): definitive.
+    if (issuer == null || issuer.equals(raft.getLocalPeerId()))
+      return null;
+    return PeerAuthSessionQuery.validate(raft, issuer, token, authSessionRpcTimeoutMs());
+  }
+
+  @Override
+  public void revokeAuthSession(final String token) {
+    final RaftHAServer raft = raftHAServer;
+    if (raft == null)
+      return;
+    PeerAuthSessionQuery.revokeEverywhere(raft, token, authSessionRpcTimeoutMs());
+  }
+
+  /**
+   * Budget for one authentication-session RPC to a peer: the leader proxy's connect timeout, because the RPC is
+   * one small request on a LAN and the caller is a client waiting on a 401-or-200 decision.
+   */
+  private long authSessionRpcTimeoutMs() {
+    return server.getConfiguration().getValueAsLong(GlobalConfiguration.HA_PROXY_CONNECT_TIMEOUT);
+  }
+
+  @Override
   public Map<String, Object> getStats() {
     return raftHAServer != null ? raftHAServer.getStats() : Collections.emptyMap();
   }
@@ -322,6 +548,27 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   @Override
   public String getLeaderAddress() {
     return raftHAServer != null ? raftHAServer.getLeaderHttpAddress() : null;
+  }
+
+  /**
+   * The HTTPS endpoint a forward to the leader should prefer, or {@code null} when the plain-HTTP one is what
+   * there is (issue #7508). The policy - SSL on, an HTTPS endpoint that resolves, and not this node's own - lives
+   * in {@link RaftHAServer#getLeaderHttpsAddress()}, next to the resolver it reads.
+   */
+  @Override
+  public String getLeaderHttpsAddress() {
+    return raftHAServer != null ? raftHAServer.getLeaderHttpsAddress() : null;
+  }
+
+  /**
+   * The HTTPS client a forward to {@link #getLeaderHttpsAddress()} is sent on: this node's truststore, so the
+   * leader's certificate is validated against the cluster's trust anchors and not against this node's own key
+   * material - the same context {@code SnapshotInstaller}, the capability probe and the bootstrap-state query
+   * already use (issue #4470).
+   */
+  @Override
+  public HttpClient getPeerHttpsClient() throws IOException {
+    return raftHAServer != null ? raftHAServer.getForwardHttpsClient() : null;
   }
 
   @Override
@@ -378,6 +625,48 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   public void disconnectCluster() {
     if (raftHAServer != null)
       raftHAServer.stop();
+  }
+
+  /**
+   * Joins the server named by {@code serverAddress} to this cluster (issue #7401).
+   * <p>
+   * The whole of it is {@code RaftClusterManager.addPeer} with the peer derived from one
+   * {@code arcadedb.ha.serverList} entry, which is what makes the verb a thin alias for
+   * {@code POST /api/v1/cluster/peer} rather than a second way to grow a cluster: the membership change
+   * is the same atomic {@code Mode.ADD}, issued by the same {@code RaftClusterManager}, with the same
+   * retry and the same idempotence when the peer is already a member.
+   * <p>
+   * It carries one thing that route cannot: the leader-election <b>priority</b>, which the object form
+   * and the four-field positional form of a server-list entry can declare and the add-peer payload has
+   * no field for. That is why the parsed {@link org.apache.ratis.protocol.RaftPeer} is handed over
+   * whole rather than as an id and an address.
+   * <p>
+   * Not leader-routed, matching the add-peer route and {@code PostServerCommandHandler}, which forwards
+   * neither half of the cluster pair: the Ratis client underneath {@code addPeer} sends the
+   * configuration change to the leader itself.
+   */
+  @Override
+  public void connectCluster(final String serverAddress) {
+    final RaftHAServer raft = raftHAServer;
+    if (raft == null)
+      throw new ServerException("Raft HA server not started");
+
+    final RaftPeerAddressResolver.JoinTarget target = RaftPeerAddressResolver.parseJoinTarget(serverAddress,
+        configuration.getValueAsInteger(GlobalConfiguration.HA_RAFT_PORT),
+        configuration.getValueAsBoolean(GlobalConfiguration.HA_K8S)
+            ? configuration.getValueAsString(GlobalConfiguration.HA_K8S_DNS_SUFFIX)
+            : "");
+
+    // The peer goes in whole, not as an id and an address: it also carries the leader-election
+    // priority the entry may have declared, and rebuilding it from parts is how that gets lost.
+    final RaftPeerId peerId = target.peer().getId();
+    raft.addPeer(target.peer(), target.name());
+
+    // After addPeer, not before: RaftClusterManager.addPeer derives an HTTP address from the Raft port
+    // plus THIS node's HTTP offset, which is right only for a homogeneous cluster. An entry that
+    // declared its own HTTP port said so, and that answer wins over the derived one.
+    if (target.httpAddress() != null)
+      raft.getHttpAddresses().put(peerId, target.httpAddress());
   }
 
   @Override

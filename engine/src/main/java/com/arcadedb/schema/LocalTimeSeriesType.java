@@ -249,6 +249,45 @@ public class LocalTimeSeriesType extends LocalDocumentType {
     tsColumns.add(column);
   }
 
+  /**
+   * The declared time-series column named {@code columnName} - the TIMESTAMP, a TAG or a FIELD named in
+   * {@code CREATE TIMESERIES TYPE} - or {@code null} when the type declares no such column.
+   * <p>
+   * This list is the only thing the write path consults: {@code SaveElementStep#saveToTimeSeries} walks
+   * {@link #getTsColumns()} and reads the document under each column's name, so a value arriving under any other
+   * name is discarded without a word (issue #7567). The list is filled once, by {@link TimeSeriesTypeBuilder#create()}
+   * or by {@link #fromJSON(JSONObject)}, and there is no supported way to extend it afterwards.
+   */
+  public ColumnDefinition getTsColumn(final String columnName) {
+    // Indexed over the ArrayList rather than an enhanced for: this runs on the DDL path for every property
+    // validation and a column list is a handful of entries, so the iterator allocation buys nothing.
+    for (int i = 0; i < tsColumns.size(); i++) {
+      final ColumnDefinition col = tsColumns.get(i);
+      if (col.getName().equals(columnName))
+        return col;
+    }
+    return null;
+  }
+
+  /**
+   * Whether {@code columnName} is one of this type's declared time-series columns. See {@link #getTsColumn(String)}
+   * for why a schema property outside that set can never hold a value.
+   */
+  public boolean isDeclaredColumn(final String columnName) {
+    return getTsColumn(columnName) != null;
+  }
+
+  /**
+   * The declared column names, in declaration order, for error messages that have to tell the user what the type
+   * actually accepts.
+   */
+  public List<String> getTsColumnNames() {
+    final List<String> names = new ArrayList<>(tsColumns.size());
+    for (int i = 0; i < tsColumns.size(); i++)
+      names.add(tsColumns.get(i).getName());
+    return names;
+  }
+
   public List<DownsamplingTier> getDownsamplingTiers() {
     return downsamplingTiers;
   }
@@ -315,9 +354,11 @@ public class LocalTimeSeriesType extends LocalDocumentType {
     retentionMs = json.getLong("retentionMs", 0L);
     compactionBucketIntervalMs = json.getLong("compactionBucketIntervalMs", 0L);
     sealedFormatVersion = json.getInt("sealedFormatVersion", 0);
-    if (sealedFormatVersion != TimeSeriesSealedStore.CURRENT_VERSION)
+    // Older sealed formats are read as they stand (issue #7089 added a statistic without dropping the previous
+    // layout); only a NEWER one, which this build cannot know how to read, is refused - as the mutable check below.
+    if (sealedFormatVersion > TimeSeriesSealedStore.CURRENT_VERSION)
       throw new IllegalStateException(
-          "Unsupported sealed store format version " + sealedFormatVersion + " (expected " +
+          "Unsupported sealed store format version " + sealedFormatVersion + " (this build supports up to " +
               TimeSeriesSealedStore.CURRENT_VERSION + ") for TimeSeries type '" + name + "'");
     // Older mutable formats stay readable: the version selects the row layout rather than gating the
     // open, so a type written before the tag dictionary (issue #5519) keeps its inline tag columns.

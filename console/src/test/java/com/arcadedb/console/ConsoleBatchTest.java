@@ -41,6 +41,7 @@ class ConsoleBatchTest {
     final Database db = new DatabaseFactory("./target/databases/console").open();
     assertThat(db.getSchema().existsType("ConsoleOnlyVertex")).isTrue();
     db.drop();
+    assertThat(Console.isErrored()).isFalse();
   }
 
   @Test
@@ -105,6 +106,106 @@ class ConsoleBatchTest {
     final Database db = new DatabaseFactory("./target/databases/console").open();
     // the ConsoleOnlyVertex is created
     assertThat(db.getSchema().existsType("ConsoleOnlyVertex")).isTrue();
+    db.drop();
+    assertThat(Console.isErrored()).isTrue();
+  }
+
+  /**
+   * Issue https://github.com/ArcadeData/arcadedb/issues/7115: in asyncMode a failed statement is reported by the async callback
+   * on a worker thread. It must mark the run as errored exactly like the synchronous path does, otherwise the process exits 0.
+   */
+  @Test
+  void batchModeWithErrorInAsyncMode() throws Exception {
+    Console.execute(new String[] { "-b", """
+        create database console;
+        set asyncMode = true;
+        insert into NoSuchType set a = 1;
+        """ });
+    assertThat(Console.isErrored()).isTrue();
+  }
+
+  /**
+   * The other half of the same contract: a script that succeeds in asyncMode must NOT be marked errored. A false
+   * positive here is worse than the bug, because it fails every green script in CI rather than passing a red one.
+   */
+  @Test
+  void batchModeInAsyncModeIsNotErroredWhenEveryStatementSucceeds() throws Exception {
+    // THE TYPE IS CREATED BEFORE asyncMode IS TURNED ON, ON PURPOSE: THE ASYNC EXECUTOR HAS SEVERAL WORKERS AND DOES
+    // NOT ORDER THE STATEMENTS IT IS HANDED, SO AN async INSERT THAT DEPENDS ON AN async DDL RACES IT AND FAILS WITH
+    // "type not found" ON A LOADED MACHINE - WHICH WOULD MAKE THIS TEST RED FOR A REASON THAT IS NOT ITS SUBJECT
+    Console.execute(new String[] { "-b", """
+        create database console;
+        create vertex type ConsoleOnlyVertex;
+        set asyncMode = true;
+        insert into ConsoleOnlyVertex set a = 1;
+        """ });
+    assertThat(Console.isErrored()).isFalse();
+
+    final Database db = new DatabaseFactory("./target/databases/console").open();
+    assertThat(db.getSchema().existsType("ConsoleOnlyVertex")).isTrue();
+    // THE async INSERT ITSELF LANDED, NOT JUST THE SYNCHRONOUS DDL BEFORE IT: WITHOUT THIS THE TEST WOULD STILL BE
+    // GREEN IF THE STATEMENT HAD NEVER RUN, AND "NOT ERRORED" WOULD MEAN NOTHING. IT ALSO PINS THE DRAIN THE FLAG
+    // DEPENDS ON - LocalDatabase.close() WAITS ON async.waitCompletion() BEFORE execute() RETURNS
+    assertThat(db.countType("ConsoleOnlyVertex", false)).isEqualTo(1);
+    db.drop();
+  }
+
+  /**
+   * Issue https://github.com/ArcadeData/arcadedb/issues/7300, follow-up to #7115: the OTHER async error channel.
+   * <p>
+   * Turning {@code asyncMode} on forces {@code ASYNC_TX_BATCH_SIZE = 1}, so the worker commits from its own run loop
+   * OUTSIDE {@code DatabaseAsyncCommand.execute} - a failure raised by that commit therefore never reaches the
+   * per-statement callback #7115 fixed, it goes to the executor-wide {@code async().onError()} handler the console
+   * registers here. That handler printed and returned, so a unique-index violation surfaced at commit, a full volume
+   * or a WAL write failure all printed their error and still exited 0: in a CI pipeline, indistinguishable from
+   * success, which is the harm #7115 was filed about.
+   * <p>
+   * The duplicate is inserted AFTER the index and the first row exist and are committed, so the only thing that can
+   * fail is the async worker's own commit of the second row.
+   */
+  @Test
+  void batchModeWithCommitFailureInAsyncMode() throws Exception {
+    Console.execute(new String[] { "-b", """
+        create database console;
+        create vertex type ConsoleOnlyVertex;
+        create property ConsoleOnlyVertex.id integer;
+        create index on ConsoleOnlyVertex (id) unique;
+        insert into ConsoleOnlyVertex set id = 1;
+        set asyncMode = true;
+        insert into ConsoleOnlyVertex set id = 1;
+        """ });
+    assertThat(Console.isErrored())
+        .as("a commit-time failure in asyncMode must decide the exit code like every other failed write")
+        .isTrue();
+
+    final Database db = new DatabaseFactory("./target/databases/console").open();
+    // THE VIOLATION REALLY WAS REFUSED: WITHOUT THIS THE FLAG COULD BE TRUE FOR ANY OTHER REASON AND THE TEST WOULD
+    // STILL BE GREEN
+    assertThat(db.countType("ConsoleOnlyVertex", false)).isEqualTo(1);
+    db.drop();
+  }
+
+  /**
+   * The flag is static, so a failed run must not decide the exit code of the next one in the same JVM - which is what
+   * an embedder calling {@link Console#execute(String[])} twice, and this very test class, both do.
+   */
+  @Test
+  void aFailedRunDoesNotLeaveTheNextRunErrored() throws Exception {
+    Console.execute(new String[] { "-b", """
+        create database console;
+        set asyncMode = true;
+        insert into NoSuchType set a = 1;
+        """ });
+    assertThat(Console.isErrored()).isTrue();
+
+    FileUtils.deleteRecursively(new File("./target/databases"));
+
+    Console.execute(new String[] { "-b", "create database console; create vertex type ConsoleOnlyVertex;" });
+    assertThat(Console.isErrored())
+        .as("execute() starts every run clean, so the previous failure cannot decide this run's exit code")
+        .isFalse();
+
+    final Database db = new DatabaseFactory("./target/databases/console").open();
     db.drop();
   }
 

@@ -22,6 +22,7 @@ import com.arcadedb.compression.CompressionFactory;
 import com.arcadedb.network.binary.ReplicatedEntryTooLargeException;
 import org.apache.ratis.thirdparty.com.google.protobuf.ByteString;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -133,6 +134,12 @@ public final class RaftLogEntryCodec {
 
   /** Bytes one extension frame spends on its header ({@link #EXTENSION_MAGIC} + length). */
   private static final int EXTENSION_HEADER_BYTES = 8;
+
+  /**
+   * Name of the extension section carrying a security entry's compare-and-set precondition (issue #7509). Every
+   * section starts with its own name so sections added later to the same entry type stay distinguishable.
+   */
+  static final String SECURITY_PRECONDITION_SECTION = "security-precondition";
 
   /**
    * Appends one self-describing extension section to an entry being encoded. Call this AFTER the type's own
@@ -289,6 +296,12 @@ public final class RaftLogEntryCodec {
       Map<Integer, String> filesToRemove,
       List<byte[]> walEntries,
       List<Map<Integer, Integer>> bucketDeltas,
+      /**
+       * The JSON document of a node-scoped security entry: the user list of a {@code SECURITY_USERS_ENTRY}, the
+       * group document of a {@code SECURITY_GROUPS_ENTRY}, or the API-token document of a
+       * {@code SECURITY_API_TOKENS_ENTRY} (issue #7373). Which one it is comes from {@link #type()}; the slot is
+       * shared because the three have the identical wire shape. Null for every other entry type.
+       */
       String usersJson,
       boolean forceSnapshot,
       // BOOTSTRAP_FINGERPRINT_ENTRY fields (issue #4147). Hex-encoded SHA-256 of the bootstrap
@@ -319,8 +332,24 @@ public final class RaftLogEntryCodec {
        * predates this section, and every entry produced with {@code arcadedb.ha.schemaDelta} off. When it is
        * set, {@code schemaJson} is empty and the applier merges the delta into its own schema instead.
        */
-      SchemaDelta.Payload schemaDelta
+      SchemaDelta.Payload schemaDelta,
+      /**
+       * The compare-and-set precondition of a node-scoped security entry: the fingerprint of the document its
+       * submitter READ, as {@code SecurityDocumentFingerprint} computes it (issue #7509). Null on every other
+       * entry type, on a seed - which must overwrite whatever the joining peer holds - and on a security entry
+       * written by a node that predates the section, all three of which apply unconditionally as before.
+       */
+      String securityPrecondition
   ) {
+
+    /** The same entry with {@code securityPrecondition} replaced; the decoder reads the section after the body. */
+    DecodedEntry withSecurityPrecondition(final String precondition) {
+      return precondition == null ?
+          this :
+          new DecodedEntry(type, databaseName, walData, bucketRecordDelta, schemaJson, filesToAdd, filesToRemove,
+              walEntries, bucketDeltas, usersJson, forceSnapshot, bootstrapFingerprint, bootstrapLastTxId,
+              sealedFileBlobs, moreChunksFollow, sealedFileChunks, schemaDelta, precondition);
+    }
   }
 
   /**
@@ -496,11 +525,13 @@ public final class RaftLogEntryCodec {
    *                    rule as every section before it. That makes it invisible to a node running an older
    *                    codec - which stops after the slices - and such a node would therefore see a
    *                    {@code SCHEMA_ENTRY} with an EMPTY schema JSON and apply NOTHING, diverging silently.
-   *                    <b>That is why emitting a delta is gated on {@code arcadedb.ha.schemaDelta}, which is
-   *                    off by default</b>: the leader keeps shipping whole documents until an operator turns
-   *                    deltas on, which is safe only once every peer understands them. Decoding is
+   *                    <b>That is why the leader asks before it emits one</b>: since issue #7219 it polls every
+   *                    peer in its Raft configuration over {@code POST /api/v1/cluster/capabilities} and ships
+   *                    the whole document unless all of them advertise {@link PeerCapabilities#SCHEMA_DELTA}. A
+   *                    node predating that endpoint answers 404, which is the answer. Decoding stays
    *                    unconditional, so the upgrade is a one-way ratchet - every node can read a delta before
-   *                    any node is allowed to write one.
+   *                    any node is allowed to write one - and {@code arcadedb.ha.schemaDelta} is now a kill
+   *                    switch on top of that rather than the interlock itself.
    */
   public static ByteString encodeSchemaEntry(final String databaseName, final String schemaJson,
       final Map<Integer, String> filesToAdd, final Map<Integer, String> filesToRemove,
@@ -657,27 +688,89 @@ public final class RaftLogEntryCodec {
   }
 
   /**
-   * Encodes a security-users entry into a ByteString.
+   * Encodes a security-users entry into a ByteString. See {@link #encodeSecurityEntry} for the wire format the
+   * three security entries share.
+   */
+  public static ByteString encodeSecurityUsersEntry(final String usersJson) {
+    return encodeSecurityUsersEntry(usersJson, null);
+  }
+
+  /**
+   * Encodes a security-users entry that installs {@code usersJson} only while the document in force still
+   * fingerprints to {@code expectedFingerprint} (issue #7509). A null fingerprint means "install
+   * unconditionally", which is what a seed wants and what every entry written before this section carried.
+   */
+  public static ByteString encodeSecurityUsersEntry(final String usersJson, final String expectedFingerprint) {
+    return encodeSecurityEntry(RaftLogEntryType.SECURITY_USERS_ENTRY, usersJson, expectedFingerprint);
+  }
+
+  /**
+   * Encodes the whole {@code server-groups.json} document as a {@code SECURITY_GROUPS_ENTRY} (issue #7373).
+   * Same wire shape as {@link #encodeSecurityUsersEntry}; the type byte is what tells the two apart.
+   */
+  public static ByteString encodeSecurityGroupsEntry(final String groupsJson) {
+    return encodeSecurityGroupsEntry(groupsJson, null);
+  }
+
+  /** {@link #encodeSecurityUsersEntry(String, String)} for the group document (issue #7509). */
+  public static ByteString encodeSecurityGroupsEntry(final String groupsJson, final String expectedFingerprint) {
+    return encodeSecurityEntry(RaftLogEntryType.SECURITY_GROUPS_ENTRY, groupsJson, expectedFingerprint);
+  }
+
+  /**
+   * Encodes the whole {@code server-api-tokens.json} document as a {@code SECURITY_API_TOKENS_ENTRY}
+   * (issue #7373). The document carries token hashes, never token material.
+   */
+  public static ByteString encodeSecurityApiTokensEntry(final String apiTokensJson) {
+    return encodeSecurityApiTokensEntry(apiTokensJson, null);
+  }
+
+  /** {@link #encodeSecurityUsersEntry(String, String)} for the API-token document (issue #7509). */
+  public static ByteString encodeSecurityApiTokensEntry(final String apiTokensJson, final String expectedFingerprint) {
+    return encodeSecurityEntry(RaftLogEntryType.SECURITY_API_TOKENS_ENTRY, apiTokensJson, expectedFingerprint);
+  }
+
+  /**
+   * The shared body of every node-scoped security entry.
    * <p>
    * Binary format: type byte, empty databaseName (UTF), jsonLength (int), UTF-8 bytes.
    * The empty databaseName slot keeps the decoder symmetric with other entry types.
    */
-  public static ByteString encodeSecurityUsersEntry(final String usersJson) {
+  private static ByteString encodeSecurityEntry(final RaftLogEntryType type, final String json,
+      final String expectedFingerprint) {
     try {
       final ByteArrayOutputStream baos = new ByteArrayOutputStream();
       final DataOutputStream dos = new DataOutputStream(baos);
 
-      dos.writeByte(RaftLogEntryType.SECURITY_USERS_ENTRY.getId());
+      dos.writeByte(type.getId());
       dos.writeUTF("");
-      final byte[] bytes = usersJson.getBytes(StandardCharsets.UTF_8);
+      final byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
       dos.writeInt(bytes.length);
       dos.write(bytes);
+
+      // Written as an EXTENSION SECTION rather than as a field, so a peer that predates issue #7509 skips it
+      // and applies the document unconditionally instead of failing to decode the entry (issue #7138).
+      if (expectedFingerprint != null)
+        writeExtensionSection(dos, securityPreconditionSection(expectedFingerprint));
 
       dos.flush();
       return ByteString.copyFrom(baos.toByteArray());
     } catch (final IOException e) {
-      throw new IllegalStateException("Failed to encode SECURITY_USERS entry", e);
+      throw new IllegalStateException("Failed to encode " + type + " entry", e);
     }
+  }
+
+  /**
+   * The body of the security compare-and-set extension section: its own name, then the fingerprint. The name is
+   * what lets a later reader tell this section apart from another one added to the same entry type.
+   */
+  private static byte[] securityPreconditionSection(final String expectedFingerprint) throws IOException {
+    final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    final DataOutputStream dos = new DataOutputStream(baos);
+    dos.writeUTF(SECURITY_PRECONDITION_SECTION);
+    dos.writeUTF(expectedFingerprint);
+    dos.flush();
+    return baos.toByteArray();
   }
 
   /**
@@ -744,7 +837,7 @@ public final class RaftLogEntryCodec {
       final RaftLogEntryType type = RaftLogEntryType.fromId(typeByte);
       if (type == null)
         return new DecodedEntry(null, null, null, null, null, null, null, null, null, null, false, null, -1L,
-            Collections.emptyList(), false, Collections.emptyList(), null);
+            Collections.emptyList(), false, Collections.emptyList(), null, null);
       final String databaseName = dis.readUTF();
 
       try {
@@ -779,14 +872,12 @@ public final class RaftLogEntryCodec {
       case INSTALL_DATABASE_ENTRY -> decodeInstallDatabaseEntry(dis, databaseName);
       case DROP_DATABASE_ENTRY -> new DecodedEntry(RaftLogEntryType.DROP_DATABASE_ENTRY, databaseName,
           null, null, null, null, null, null, null, null, false, null, -1L, Collections.emptyList(), false,
-          Collections.emptyList(), null);
-      case SECURITY_USERS_ENTRY -> decodeSecurityUsersEntry(dis);
+          Collections.emptyList(), null, null);
+      case SECURITY_USERS_ENTRY, SECURITY_GROUPS_ENTRY, SECURITY_API_TOKENS_ENTRY -> decodeSecurityEntry(dis, type);
       case BOOTSTRAP_FINGERPRINT_ENTRY -> decodeBootstrapFingerprintEntry(dis, databaseName);
     };
 
-    skipTrailingExtensionSections(dis, type);
-
-    return result;
+    return result.withSecurityPrecondition(readTrailingExtensionSections(dis, type));
   }
 
   /**
@@ -803,11 +894,12 @@ public final class RaftLogEntryCodec {
    * of those sections, so there is nothing left here to frame. It extends through its own mechanism instead; see
    * {@link #EXTENSION_MAGIC}.
    */
-  private static void skipTrailingExtensionSections(final DataInputStream dis, final RaftLogEntryType type)
+  private static String readTrailingExtensionSections(final DataInputStream dis, final RaftLogEntryType type)
       throws IOException {
     if (type == RaftLogEntryType.SCHEMA_ENTRY)
-      return;
+      return null;
 
+    String securityPrecondition = null;
     while (dis.available() > 0) {
       if (dis.available() < EXTENSION_HEADER_BYTES)
         throw new IllegalStateException("Corrupted Raft log entry: " + dis.available()
@@ -821,7 +913,46 @@ public final class RaftLogEntryCodec {
 
       final int length = dis.readInt();
       checkByteLength(length, dis.available(), type + " extension section");
-      dis.skipNBytes(length);
+      final byte[] section = new byte[length];
+      dis.readFully(section);
+
+      final String precondition = readSecurityPrecondition(section);
+      if (precondition != null)
+        securityPrecondition = precondition;
+    }
+    return securityPrecondition;
+  }
+
+  /**
+   * Reads the security compare-and-set precondition out of one extension section, or returns null when the
+   * section is something else - a section this version does not recognise is skipped, which is the whole point
+   * of the framing (issue #7138).
+   * <p>
+   * <b>The two reads are deliberately not in one {@code try}.</b> Failing to read the section NAME means this is
+   * not our section, and skipping it is correct. Failing to read the fingerprint AFTER the name matched means our
+   * section is corrupt - and returning null for that would quietly demote the entry to "no precondition, install
+   * unconditionally", which is the one default this field must never fall back to: it is the guard that stops a
+   * stale document from reverting a committed change. A corrupt one is reported as corruption, like every other
+   * malformed payload in this class, and reaches the caller as a {@code RaftLogEntryDecodeException}.
+   */
+  private static String readSecurityPrecondition(final byte[] section) {
+    final DataInputStream dis = new DataInputStream(new ByteArrayInputStream(section));
+    try {
+      if (!SECURITY_PRECONDITION_SECTION.equals(dis.readUTF()))
+        return null;
+    } catch (final IOException e) {
+      // A section whose first field is not a readable UTF string is not one of ours; treat it as unrecognised
+      // rather than failing the entry, exactly as an unknown section name is treated.
+      return null;
+    }
+
+    try {
+      return dis.readUTF();
+    } catch (final IOException e) {
+      throw new IllegalStateException(
+          "Corrupted Raft log entry: the '" + SECURITY_PRECONDITION_SECTION + "' extension section carries no "
+              + "readable fingerprint. Refusing the entry rather than applying its document unconditionally, "
+              + "which would let a stale security document revert a committed change", e);
     }
   }
 
@@ -845,7 +976,7 @@ public final class RaftLogEntryCodec {
 
     return new DecodedEntry(RaftLogEntryType.TX_ENTRY, databaseName, walData, bucketRecordDelta,
         null, null, null, null, null, null, false, null, -1L, Collections.emptyList(), false, Collections.emptyList(),
-        null);
+        null, null);
   }
 
   private static DecodedEntry decodeSchemaEntry(final DataInputStream dis, final String databaseName) throws IOException {
@@ -981,9 +1112,26 @@ public final class RaftLogEntryCodec {
       schemaDelta = new SchemaDelta.Payload(baseVersion, new String(raw, StandardCharsets.UTF_8));
     }
 
+    // Nothing is written after the delta section by any producer in this codec, so bytes left here belong to a
+    // section a NEWER node added. Refusing beats accepting (issue #7219): every other section of this entry has
+    // already been read, so accepting would apply a change this node can only see part of - and the part it
+    // cannot see is, by construction, the part that carries meaning. A refusal is a RaftLogEntryDecodeException
+    // naming this database, which quarantines and resyncs that one database (#7138) - loud, scoped and
+    // self-healing, where the alternative is a schema that quietly stopped matching the leader's.
+    //
+    // A node predating the section it does not understand cannot be given this check retroactively, which is why
+    // it is only the backstop: the guarantee is peer-capability negotiation on the LEADER, which does not write a
+    // section until every peer has advertised it. This is what catches the release that forgets to declare one.
+    if (dis.available() > 0)
+      throw new IllegalStateException("SCHEMA_ENTRY for database '" + databaseName + "' carries " + dis.available()
+          + " trailing bytes after every section this version knows about; they belong to a section written by a "
+          + "newer node. Refusing the entry rather than applying the part that could be read. Whoever added that "
+          + "section must gate emitting it on a PeerCapabilities token (issue #7219), so a leader never writes it "
+          + "to a peer that cannot read it");
+
     return new DecodedEntry(RaftLogEntryType.SCHEMA_ENTRY, databaseName, null, null,
         schemaJson, filesToAdd, filesToRemove, walEntries, bucketDeltas, null, false, null, -1L, sealedFileBlobs,
-        moreChunksFollow, sealedFileChunks, schemaDelta);
+        moreChunksFollow, sealedFileChunks, schemaDelta, null);
   }
 
   private static DecodedEntry decodeInstallDatabaseEntry(final DataInputStream dis, final String databaseName) throws IOException {
@@ -995,7 +1143,7 @@ public final class RaftLogEntryCodec {
     }
     return new DecodedEntry(RaftLogEntryType.INSTALL_DATABASE_ENTRY, databaseName,
         null, null, null, null, null, null, null, null, forceSnapshot, null, -1L, Collections.emptyList(), false,
-        Collections.emptyList(), null);
+        Collections.emptyList(), null, null);
   }
 
   private static DecodedEntry decodeBootstrapFingerprintEntry(final DataInputStream dis, final String databaseName)
@@ -1008,18 +1156,24 @@ public final class RaftLogEntryCodec {
     final long lastTxId = dis.readLong();
     return new DecodedEntry(RaftLogEntryType.BOOTSTRAP_FINGERPRINT_ENTRY, databaseName,
         null, null, null, null, null, null, null, null, false, fingerprint, lastTxId, Collections.emptyList(), false,
-        Collections.emptyList(), null);
+        Collections.emptyList(), null, null);
   }
 
-  private static DecodedEntry decodeSecurityUsersEntry(final DataInputStream dis) throws IOException {
+  /**
+   * Decodes any of the three node-scoped security entries (users, groups, API tokens - issue #7373). The JSON
+   * document rides in the {@code usersJson} slot for all of them; {@link DecodedEntry#type()} says which
+   * document it is, and the applier dispatches on that.
+   */
+  private static DecodedEntry decodeSecurityEntry(final DataInputStream dis, final RaftLogEntryType type)
+      throws IOException {
     final int length = dis.readInt();
-    checkByteLength(length, dis.available(), "SECURITY_USERS_ENTRY");
+    checkByteLength(length, dis.available(), type.name());
     final byte[] bytes = new byte[length];
     dis.readFully(bytes);
-    final String usersJson = new String(bytes, StandardCharsets.UTF_8);
-    return new DecodedEntry(RaftLogEntryType.SECURITY_USERS_ENTRY, "",
-        null, null, null, null, null, null, null, usersJson, false, null, -1L, Collections.emptyList(), false,
-        Collections.emptyList(), null);
+    final String json = new String(bytes, StandardCharsets.UTF_8);
+    return new DecodedEntry(type, "",
+        null, null, null, null, null, null, null, json, false, null, -1L, Collections.emptyList(), false,
+        Collections.emptyList(), null, null);
   }
 
   private static void writeFileMap(final DataOutputStream dos, final Map<Integer, String> fileMap) throws IOException {

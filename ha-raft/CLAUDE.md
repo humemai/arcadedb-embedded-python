@@ -85,3 +85,63 @@ Two constraints that are easy to miss:
 `SCHEMA_ENTRY` is **excluded**, not merely exempt, and the distinction matters: its optional sections are unframed and positional, so a decoder that has consumed the file maps reads whatever comes next as the #4382 WAL section's count. Append a frame to one and it is not skipped - the magic is read as that count and the entry is rejected as corrupt. Extend `SCHEMA_ENTRY` by adding another section to its own mechanism in `decodeSchemaEntry`, exactly as #5443 and #4416 did.
 
 The same issue moved decode failures off the node-halt path: a `RaftLogEntryDecodeException` naming a database quarantines that one database and resyncs it, and only a failure with no database name still halts the node. An *unknown type* is a different failure and still halts - skipping a committed mutation nobody can read is a silent divergence (#4798).
+
+## A new optional wire-format section needs a capability, not a setting
+
+`SCHEMA_ENTRY` is the one entry type that can be extended with unframed trailing sections (see above), and #6989 used that to append a schema delta. That is safe to *read* on any build that has the decoder, and unsafe to *write* to any build that does not: a peer that predates the section stops decoding before it, sees an entry with an empty `schemaJson`, applies nothing, logs nothing, and diverges. The divergence surfaces much later, as a WAL version gap or a `checkDatabase`.
+
+The first answer was a setting - `arcadedb.ha.schemaDelta`, off by default, with "upgrade every node first, then turn it on" in its javadoc. That is an operator instruction enforced by nothing, which is #7219.
+
+**Do not add another one.** Since #7219 a node publishes what it can decode at `POST /api/v1/cluster/capabilities`, the leader polls every peer in its Raft configuration every `PeerCapabilityRegistry.REFRESH_PERIOD_MS`, and an optional section is written only when every peer has answered that it understands it. To add a section:
+
+1. add a token to `PeerCapabilities` (permanent spelling - renaming one makes every older peer read as incapable, which is safe but silently turns the feature off cluster-wide) and put it in `PeerCapabilities.LOCAL`;
+2. gate the *emission* on `RaftHAServer.peersMissingCapability(token).isEmpty()`, the way `RaftReplicatedDatabase.schemaDeltaEnabled()` does;
+3. leave decoding unconditional, so the upgrade stays a one-way ratchet - every node reads the section before any node writes one.
+
+Three things about that mechanism that are easy to get wrong:
+
+- **A 404 is the answer, not an error.** A peer running a build with no capability route replies 404, which `PeerCapabilityQuery` raises as an `IOException` exactly like an unreachable peer, and the refresh *forgets* that peer. Forgetting rather than keeping matters: the peer may have been replaced by an older build, and believing its last answer until the TTL expires would be believing it for a reason that has gone away. Every unknown - never probed, unreachable, unidentifiable, stale - is a "no", and the reason is kept beside it so `GET /api/v1/cluster` can report `capabilitiesUnknownReason` rather than leaving an absent `capabilities` field to mean two unrelated things (#7256).
+- **It cannot ride the Raft log.** The obvious design, a `PEER_CAPABILITIES_ENTRY` every node applies, halts every not-yet-upgraded peer: an unrecognised type byte is a deliberate `triggerCriticalHalt()` in `ArcadeStateMachine.applyTransaction` (#4798), not a skip. HTTP is the module's other node-to-node transport for exactly this reason.
+- **The answer is bound to the peer that gave it.** `PeerDialAddress` withholds an address that identifies no single peer, and `PeerCapabilityQuery.parse` independently refuses an advertisement whose `peerId` is not the peer being probed. On a cluster that declares no `http` ports, several peers derive onto one address (#6202, #6267), and crediting one peer's answer to another is how a capability gets believed for a node that never claimed it.
+
+  That binding is also why the withheld address is dialled anyway. #7256: on such a cluster the probe never ran, so the negotiated feature was permanently unreachable there - it failed the safe way and said nothing. The capability probe is the one peer RPC that may dial an ambiguous address, because it is read-only and its reply names its own author: `refreshPeerCapabilities` asks each distinct withheld address ONCE (`PeerDialAddress.sharedEndpoint()`, `PeerCapabilityQuery.fetchFromSharedEndpoint`) and credits the answer to whichever *configured* peer actually answered - never to this node, never to a stranger, never to a peer that already answered for itself. Anything that acts on the peer it addressed - a resync, a verify, a forwarded write - must keep treating that refusal as a refusal.
+
+  **A collapsed address that is *this node's own* still needs a candidate (#7332).** Two peers sharing a host that is not ours collapse onto an address one of them is really listening on, and that is the case #7256 recovers. Push the same shape to its limit - every node on ONE host, differing only by port - and the derived address is `<our host>:<our HTTP port>` for every peer, so `sharedEndpointOf` withheld it every time and the second pass never had an endpoint at all: the recovery was dead on the shape it was written for. `RaftHAServer.getPortOffsetPeerHttpAddress` supplies the only signal left, `localHttpPort + (peerRaftPort - localRaftPort)`, which names the peer's listener whenever the cluster moves both ports in step (`2424/2480`, `2425/2481`, ...) and names nothing when it does not. It is a guess, and it is confined to `sharedEndpoint()` for that reason - the second pass is the one caller that does not care who it addressed, only who answered.
+
+The cost of getting it wrong is asymmetric and worth restating: withholding a section that a peer could actually have read costs one larger Raft entry. Writing one a peer cannot read costs a silent schema divergence. Every arm of `PeerCapabilityRegistry` is written to fail the cheap way.
+
+### A new entry TYPE needs a capability too, and its "no" is a refusal
+
+The three steps above describe an optional *section*. A new `RaftLogEntryType` is the same negotiation with one
+difference that changes what step 2 can do: an unknown section is invisible to an old peer, while an unknown type
+byte is a deliberate `triggerCriticalHalt()` (#4798). There is nothing to degrade to. `SCHEMA_ENTRY` can ship the
+whole document instead of a delta; a `SECURITY_GROUPS_ENTRY` either is written, and halts the peer, or is not
+written and the operation is refused.
+
+So #7511 gates the two types #7373 added - `SECURITY_GROUPS_ENTRY` (7) and `SECURITY_API_TOKENS_ENTRY` (8) - and
+refuses: `ClusterCapabilityNotReadyException`, HTTP 409 / gRPC `FAILED_PRECONDITION`, naming the peer and the
+reason its answer is missing. `SecurityEntryCapabilityGate.capabilityFor` is an exhaustive `switch` over
+`RaftLogEntryType` with no `default`, so **adding a ninth constant does not compile** until you decide whether it
+needs a token. That is the mechanism, not a reminder.
+
+Two things that are specific to a refusal and do not apply to a withheld section:
+
+- **It must not read a stale cache.** The background capability monitor runs on the LEADER only, because #7219's
+  only consumer was leader-side. A refusal is not: the group and API-token REST routes do not forward, so
+  `ServerSecurity.saveGroupClusterWide` runs on whichever node the client hit and submits through a Raft client
+  that routes to the leader. `peersMissingCapability` alone would therefore refuse every group change ever made on
+  a FOLLOWER, on a healthy single-version cluster. Gate on **`peersMissingCapabilityNow`**, which reads the cache
+  first and runs one synchronous round only when that is not already a full "yes".
+- **Strictness costs availability, so it needs an escape hatch.** "Every unknown is a no" turns an unreachable node
+  into a refusal, and for `SECURITY_API_TOKENS_ENTRY` that includes a REVOCATION during an incident.
+  `arcadedb.ha.securityEntryCapabilityGate` (default true) is how an operator who knows the unreachable node
+  understands the entry submits anyway; the refusal message names it. Do not remove it in the name of safety -
+  without it the only way past a down node is to remove it from the cluster.
+
+### Negotiation governs what is written next, never what is already committed
+
+This is the boundary of the mechanism, and it is a **downgrade boundary rather than a code one** (#7255). The Raft log is durable: a delta entry committed while every peer was capable stays in it. A node restarted onto a build that predates #7211 replays it through the old `applySchemaEntry`, sees an empty `schemaJson`, applies nothing, logs nothing, and diverges - exactly the failure #6989 and #7219 exist to prevent, arriving from the one direction neither can reach. A node *joining* on an older build installs a snapshot rather than replaying the whole log, so its exposure is narrower: only the entries committed between that snapshot and the leader's next capability round.
+
+Nothing in the tree can catch it, and it is worth being precise about why, because every proposal for catching it founders on the same fact. Any receiver-side check - the trailing-bytes refusal #7219 added to `decodeSchemaEntry`, a schema fingerprint on the entry, a boot-time refusal to start on a log carrying shapes this build cannot read - lives in a build that HAS the decoder. The node in trouble is the one that does not, and it will not run a check that shipped after it.
+
+**So the rule is operational: a cluster whose Raft log has ever carried a schema-delta entry cannot be rolled back past #7211.** A node that must go back that far is rebuilt from a snapshot (its databases reinstalled from a current leader, its Raft storage discarded) rather than restarted on its retained log. The same reasoning covers every optional section added after this one, which is the general form worth remembering: **the capability ratchet makes an upgrade safe and says nothing about a downgrade.**

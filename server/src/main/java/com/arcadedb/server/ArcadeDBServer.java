@@ -26,6 +26,8 @@ import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.engine.ComponentFile;
+import com.arcadedb.engine.OperationProgress;
+import com.arcadedb.engine.OperationProgressRegistry;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.ConfigurationException;
 import com.arcadedb.exception.DatabaseNotAvailableException;
@@ -48,6 +50,7 @@ import com.arcadedb.server.monitor.MicrometerQueryMetricsRecorder;
 import com.arcadedb.server.monitor.MicrometerQueryTracer;
 import com.arcadedb.server.monitor.HAReplicationMetrics;
 import com.arcadedb.server.monitor.PoolMetrics;
+import com.arcadedb.server.monitor.ServerMonitor;
 import com.arcadedb.server.monitor.ServerQueryProfiler;
 import com.arcadedb.server.plugin.PluginManager;
 import com.arcadedb.server.security.ServerSecurity;
@@ -107,6 +110,28 @@ public class ArcadeDBServer {
   public static final String                                RESERVED_DATABASE_PREFIX             = ".";
 
   /**
+   * Marker file the HA snapshot installer writes into {@code databases/<name>/} before it touches a single file
+   * and clears only once the swapped-in copy has been reopened. While it exists the directory holds a mix of the
+   * previous database and the incoming snapshot - it is neither - so nothing may open it except the installer
+   * that owns the marker (issue #7129). Declared here, rather than in {@code ha-raft}, because the server's own
+   * boot scan and database registry are the paths that have to honour it.
+   */
+  public static final String                                SNAPSHOT_PENDING_FILE                = ".snapshot-pending";
+
+  /**
+   * The two steps the startup {@code restore:} command publishes - {@link RestoreProgress#STEP_EXTRACT} then
+   * {@link RestoreProgress#STEP_ACTIVATE}. One fewer than {@code ServerControlPlane.performRestore}'s three:
+   * this command restores straight into the final directory, so there is no temporary directory to swap in, and
+   * it forces no cluster snapshot (issue #7440).
+   */
+  private static final int    STARTUP_RESTORE_STEPS     = 2;
+  /**
+   * The label the startup restore is published under. The same one the HTTP/gRPC {@code restore database} verb
+   * uses, because it is the same operation seen from a different transport.
+   */
+  private static final String STARTUP_RESTORE_OPERATION = "restore database";
+
+  /**
    * How long the shutdown hook waits for the lifecycle lock when the server is still {@code STARTING} and has not
    * opened any database yet (issues #5418, #7025). Short on purpose: with no database open there is nothing worth
    * flushing, so the wait only has to be long enough to lose a benign race with a start that is about to complete.
@@ -164,6 +189,13 @@ public class ArcadeDBServer {
   // half-swapped directory or reopens it from disk mid-swap (issue #4832). Kept distinct from the map so it can be
   // exposed via getDatabasesLock() without leaking the registry itself.
   private final       Object                                databasesLock                        = new Object();
+  // Database names an in-flight restore has claimed, guarded by databasesLock (issue #7441). A restore checks its
+  // target up front and replaces it minutes later, in swapRestoredDatabase; without a claim held across that window
+  // a database created inside it was dropped and overwritten with no error reported to either caller. Sampling the
+  // name a second time would not have helped - the two samples are not atomic with each other either - so the name
+  // is reserved in the same databasesLock section as the pre-check and released when the restore ends. Creators are
+  // refused, not parked: waiting here would block a create behind a multi-GB download.
+  private final       Set<String>                           restoringDatabaseNames               = new HashSet<>();
   // Serialises start() and stop(). Deliberately an explicit lock rather than `synchronized` on the
   // instance: the JVM shutdown hook must be able to give up on it (see stopFromShutdownHook), because a
   // startup failure that calls System.exit() from inside start() would otherwise deadlock the JVM
@@ -197,12 +229,12 @@ public class ArcadeDBServer {
   // Holds the per-follower gauge refresh scheduler open; must be closed on stop or the daemon
   // thread it starts leaks one instance per restart (issue #5850).
   private              HAReplicationMetrics haReplicationMetrics;
-  // The server-health monitor (low disk, heap pressure, JVM safepoint spikes) is NOT started: nothing constructs
-  // ServerMonitor, so none of its checks run. Issue #7124 fixed two defects in it - the low-disk warning measured
-  // the JVM working directory rather than the configured database directory, and the safepoint "spike" check
-  // compared two lifetime cumulative averages - which means the class is now correct but still inert. Re-enabling it
-  // is a separate decision: it starts one more daemon thread and begins writing WARNING events to the event log.
-//  private             ServerMonitor                         serverMonitor;
+  // The server-health monitor (low disk, heap pressure, JVM safepoint spikes). Issue #7124 fixed two defects in
+  // it - the low-disk warning measured the JVM working directory rather than the configured database directory,
+  // and the safepoint "spike" check compared two lifetime cumulative averages - on a class nothing constructed:
+  // the field used to be commented out here, so none of its checks ran. Issue #7160 turned it back on, behind
+  // arcadedb.server.healthCheck.enabled. Written under the lifecycle lock, read by stopInternal.
+  private volatile    ServerMonitor                         serverMonitor;
 
   static {
     // must be called before any Logger method is used.
@@ -234,6 +266,14 @@ public class ArcadeDBServer {
 
   public ContextConfiguration getConfiguration() {
     return configuration;
+  }
+
+  /**
+   * The server-health monitor, or {@code null} when the server is not running or
+   * {@code arcadedb.server.healthCheck.enabled} is false (issue #7160).
+   */
+  public ServerMonitor getServerMonitor() {
+    return serverMonitor;
   }
 
   /**
@@ -303,19 +343,24 @@ public class ArcadeDBServer {
     try {
       lifecycleEvent(ReplicationCallback.TYPE.SERVER_STARTING, null);
     } catch (final Exception e) {
-      throw new ServerException("Error on starting the server '" + serverName + "'");
+      throw new ServerException("Error on starting the server '" + serverName + "'", e);
     }
 
     // Discover plugins from lib/plugins directory
     pluginManager.discoverPlugins();
 
     LogManager.instance().log(this, Level.INFO, "Starting ArcadeDB Server in %s mode with plugins %s ...",
-        GlobalConfiguration.SERVER_MODE.getValueAsString(),
+        configuration.getValueAsString(GlobalConfiguration.SERVER_MODE),
         pluginManager != null && !pluginManager.getPluginNames().isEmpty() ?
             pluginManager.getPluginNames() : getAllPluginNames());
 
-    // IN PRODUCTION MODE, APPLY SAFE DEFAULTS
-    if ("production".equals(GlobalConfiguration.SERVER_MODE.getValueAsString())) {
+    // IN PRODUCTION MODE, APPLY SAFE DEFAULTS.
+    // arcadedb.server.mode is SCOPE.SERVER, so it is authoritative in THIS server's configuration and only
+    // incidentally in the process-wide enum, which nothing but a -D or an environment variable ever writes: a
+    // server configuration file naming production mode used to leave every default below unapplied (issue #7233).
+    // The two defaults themselves are SCOPE.DATABASE and stay on the enum on purpose - that is what a database
+    // opened by this server inherits, since DatabaseFactory is handed a path and no ContextConfiguration.
+    if ("production".equals(configuration.getValueAsString(GlobalConfiguration.SERVER_MODE))) {
       // WAL FLUSH: DEFAULT TO 1 FOR DURABILITY
       if (!GlobalConfiguration.TX_WAL_FLUSH.isChanged()) {
         GlobalConfiguration.TX_WAL_FLUSH.setValue(1);
@@ -356,7 +401,7 @@ public class ArcadeDBServer {
 
     createDirectories();
 
-    loadDatabases();
+    loadDatabases(false);
 
     security.loadUsers();
 
@@ -391,10 +436,25 @@ public class ArcadeDBServer {
       getEventLog().reportEvent(ServerEventLog.EVENT_TYPE.WARNING, "HA", null, haWarning);
     }
 
-    loadDefaultDatabases();
+    // RELOAD DATABASES: A PLUGIN MAY HAVE REGISTERED A NEW ONE (LIKE THE GREMLIN SERVER), AND HA SNAPSHOT
+    // RECOVERY MAY HAVE JUST RECONCILED A DIRECTORY THE FIRST PASS DEFERRED. THIS RUNS BEFORE THE DEFAULT
+    // DATABASES SO A RECOVERED ONE IS REGISTERED RATHER THAN MISTAKEN FOR ABSENT AND RECREATED (ISSUE #7129).
+    loadDatabases(true);
 
-    // RELOAD DATABASE IF A PLUGIN REGISTERED A NEW DATABASE (LIKE THE GREMLIN SERVER)
-    loadDatabases();
+    try {
+      loadDefaultDatabases();
+    } catch (final Exception e) {
+      // Security, the HTTP service and every BEFORE_HTTP_ON/AFTER_HTTP_ON plugin are already up at this point,
+      // and a failing 'restore:' or 'import:' default-database command (issue #7484) can leave one created and
+      // half-initialized. status is still STARTING here - it is only set to ONLINE below - so leaving the
+      // exception to propagate on its own, the way it used to, left every one of those resources running with
+      // no stop() ever called and no path back to OFFLINE: main() has already discarded this ArcadeDBServer
+      // instance by the time the exception reaches it. stop() before rethrowing is the same recovery
+      // lifecycleEvent(SERVER_UP)'s own failure handler below already uses, and it is reentrant with the lock
+      // start() is still holding (see the field comment on lifecycleLock).
+      stop();
+      throw e;
+    }
 
     pluginManager.startPlugins(ServerPlugin.PluginInstallationPriority.AFTER_DATABASES_OPEN);
 
@@ -403,7 +463,7 @@ public class ArcadeDBServer {
     LogManager.instance().log(this, Level.INFO, "Available query languages: %s",
         QueryEngineManager.getInstance().getAvailableLanguages());
 
-    final String mode = GlobalConfiguration.SERVER_MODE.getValueAsString();
+    final String mode = configuration.getValueAsString(GlobalConfiguration.SERVER_MODE);
 
     final String msg = "ArcadeDB Server started in '%s' mode (CPUs=%d MAXRAM=%s)".formatted(mode,
         Runtime.getRuntime().availableProcessors(), FileUtils.getSizeAsString(Runtime.getRuntime().maxMemory()));
@@ -416,7 +476,7 @@ public class ArcadeDBServer {
     if ("production".equals(mode))
       logProductionChecklist();
 
-    if (!"production".equals(mode) || GlobalConfiguration.STUDIO_ENABLED.getValueAsBoolean()) {
+    if (!"production".equals(mode) || configuration.getValueAsBoolean(GlobalConfiguration.STUDIO_ENABLED)) {
       final InputStream file = getClass().getClassLoader().getResourceAsStream("static/index.html");
       if (file != null) {
         final String studioHost = getStudioDisplayHost();
@@ -425,12 +485,31 @@ public class ArcadeDBServer {
       }
     }
 
+    startHealthCheck();
+
     try {
       lifecycleEvent(ReplicationCallback.TYPE.SERVER_UP, null);
     } catch (final Exception e) {
       stop();
-      throw new ServerException("Error on starting the server '" + serverName + "'");
+      throw new ServerException("Error on starting the server '" + serverName + "'", e);
     }
+  }
+
+  /**
+   * Starts the server-health monitor (issue #7160), unless {@code arcadedb.server.healthCheck.enabled} is false.
+   * <p>
+   * Last in the startup sequence, after the databases are open: the low-disk check measures the filesystem the
+   * CONFIGURED database directory sits on, and the whole point of the warning is that it precedes a database
+   * that can no longer write. Its thread is a daemon, so a monitor left running cannot hold the JVM up; it is
+   * stopped explicitly in {@link #stopInternal()} all the same, because an embedded start/stop cycle would
+   * otherwise leak one thread per restart.
+   */
+  private void startHealthCheck() {
+    if (!configuration.getValueAsBoolean(GlobalConfiguration.SERVER_HEALTH_CHECK_ENABLED))
+      return;
+
+    serverMonitor = new ServerMonitor(this);
+    serverMonitor.start();
   }
 
   private void logProductionChecklist() {
@@ -481,7 +560,7 @@ public class ArcadeDBServer {
           "  - Root password: set via configuration [WARNING]. Consider using server-users.json instead");
 
     // STUDIO
-    if (GlobalConfiguration.STUDIO_ENABLED.getValueAsBoolean())
+    if (configuration.getValueAsBoolean(GlobalConfiguration.STUDIO_ENABLED))
       LogManager.instance().log(this, Level.WARNING,
           "  - Studio web tool: force-enabled (arcadedb.studio.enabled=true) [WARNING]. Restrict network access to it");
     else
@@ -872,10 +951,17 @@ public class ArcadeDBServer {
     try {
       lifecycleEvent(ReplicationCallback.TYPE.SERVER_SHUTTING_DOWN, null);
     } catch (final Exception e) {
-      throw new ServerException("Error on stopping the server '" + serverName + "'");
+      throw new ServerException("Error on stopping the server '" + serverName + "'", e);
     }
 
     status = STATUS.SHUTTING_DOWN;
+
+    // Before anything it reports on goes away: the monitor reads the event log and the configured database
+    // directory, and one restart per leaked daemon thread is what an embedded start/stop cycle would cost.
+    if (serverMonitor != null) {
+      CodeUtils.executeIgnoringExceptions(serverMonitor::stop, "Error on stopping the server health monitor", false);
+      serverMonitor = null;
+    }
 
     // Stop plugins managed by PluginManager first
     if (pluginManager != null)
@@ -905,7 +991,7 @@ public class ArcadeDBServer {
     try {
       lifecycleEvent(ReplicationCallback.TYPE.SERVER_DOWN, null);
     } catch (final Exception e) {
-      throw new ServerException("Error on stopping the server '" + serverName + "'");
+      throw new ServerException("Error on stopping the server '" + serverName + "'", e);
     }
 
     LogManager.instance().setContext(null);
@@ -955,18 +1041,97 @@ public class ArcadeDBServer {
     return databasesLock;
   }
 
+  /**
+   * Claims {@code databaseName} for a restore that is about to start, so that no database can be created under that
+   * name until the restore has swapped its result into place (issue #7441).
+   * <p>
+   * The caller takes this in the same {@link #getDatabasesLock()} section as its own "does the target already exist"
+   * check and releases it from a {@code finally} around the whole restore - {@link ServerControlPlane#restoreDatabase}
+   * and {@link ServerControlPlane#restoreBackup} are the two that do. Taking it separately would leave the same
+   * window the claim exists to close, only narrower.
+   * <p>
+   * The caller's existence check runs inside that same lock section, which puts a {@code File.exists()} stat under
+   * the monitor every open and create on this server contends on. That is deliberate - sampling the name outside the
+   * lock is the bug - and it is one stat on a path taken once per restore, against a lock that
+   * {@link #createDatabase} already holds across the creation of a whole database.
+   * <p>
+   * A claim is not a lock a creator waits on. {@link #createDatabase} is refused immediately with
+   * {@link ServerControlPlane.OperationInProgressException}, which HTTP answers with a 409 and gRPC with
+   * {@code ABORTED}: parking a create behind a multi-GB download would be a worse answer than telling the caller to
+   * retry. It is also per server instance rather than per JVM, matching {@link BackupCoordinator}: an HA test and a
+   * co-located pair of nodes run several servers with the same database names in one process.
+   * <p>
+   * Re-claiming a name already claimed is not rejected here. Two restores of one database cannot get this far - the
+   * {@link BackupCoordinator} slot refuses the second one before it reaches the pre-check (issue #7384) - so a
+   * rejection would be unreachable code standing in for an invariant that is enforced elsewhere.
+   */
+  public void reserveDatabaseNameForRestore(final String databaseName) {
+    synchronized (databasesLock) {
+      restoringDatabaseNames.add(databaseName);
+    }
+  }
+
+  /**
+   * Releases the claim {@link #reserveDatabaseNameForRestore} took. Always call it from a {@code finally}: a claim
+   * leaked by a failed restore would refuse every later create of that name until the server restarts, turning one
+   * bad URL into an outage.
+   */
+  public void releaseDatabaseNameReservedForRestore(final String databaseName) {
+    synchronized (databasesLock) {
+      restoringDatabaseNames.remove(databaseName);
+    }
+  }
+
+  /** Whether a restore on this server currently holds {@code databaseName}. */
+  public boolean isDatabaseNameReservedForRestore(final String databaseName) {
+    synchronized (databasesLock) {
+      return restoringDatabaseNames.contains(databaseName);
+    }
+  }
+
+  /**
+   * Refuses to bring a database into existence under a name an in-flight restore has claimed. Called from the two
+   * places in this class that reach {@code DatabaseFactory.create()}, both already holding {@link #databasesLock},
+   * which is what makes the refusal atomic with the claim rather than another unsynchronised sample.
+   * <p>
+   * The exception type is {@link ServerControlPlane.OperationInProgressException} rather than a new one of this
+   * class's own because it is what the transports already translate - {@code AbstractServerHttpHandler} answers it
+   * with a 409 and {@code ArcadeDbGrpcAdminService} with {@code ABORTED} - and because it is the same answer a
+   * caller gets when the {@link BackupCoordinator} slot refuses them: "well formed, and it will work once the other
+   * operation finishes". Naming the outer class here reads as this class reaching up into the one that wraps it, and
+   * it is: hoisting the type out of {@code ServerControlPlane} would be the tidier arrangement, but it is public API
+   * that {@code BackupInProgressException} extends and that handlers and tests across three modules already catch by
+   * that name, so moving it belongs in its own change rather than riding along with a bug fix.
+   */
+  private void checkDatabaseNameIsNotBeingRestored(final String databaseName) {
+    if (restoringDatabaseNames.contains(databaseName))
+      throw new ServerControlPlane.OperationInProgressException(
+          "Cannot create database '" + databaseName + "': a restore of it is already in progress");
+  }
+
   public ServerDatabase createDatabase(final String databaseName, final ComponentFile.MODE mode) {
     checkDatabaseNameIsValid(databaseName);
 
     ServerDatabase serverDatabase;
     synchronized (databasesLock) {
+      checkDatabaseNameIsNotBeingRestored(databaseName);
+
       serverDatabase = databases.get(databaseName);
       if (serverDatabase != null)
         throw new IllegalArgumentException("Database '" + databaseName + "' already exists");
 
-      final DatabaseFactory factory = new DatabaseFactory(
-          configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY) + File.separator
-              + databaseName).setAutoTransaction(true);
+      final String databasePath =
+          configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY) + File.separator + databaseName;
+
+      // A directory mid-snapshot-install can look "absent" to factory.exists() precisely because the swap took
+      // its schema away, and creating a fresh database on top of it would destroy the one state snapshot
+      // recovery reads to decide between completing the swap and rolling it back (issue #7129).
+      if (isAwaitingSnapshotRecovery(new File(databasePath)))
+        throw new DatabaseNotAvailableException("Cannot create database '" + databaseName + "': an interrupted "
+            + "HA snapshot install left '" + SNAPSHOT_PENDING_FILE + "' in its directory. Snapshot recovery must "
+            + "reconcile it first");
+
+      final DatabaseFactory factory = new DatabaseFactory(databasePath).setAutoTransaction(true);
 
       factory.setSecurity(getSecurity());
 
@@ -1003,6 +1168,16 @@ public class ArcadeDBServer {
    */
   public static boolean isReservedDatabaseName(final String databaseName) {
     return databaseName != null && databaseName.startsWith(RESERVED_DATABASE_PREFIX);
+  }
+
+  /**
+   * Returns {@code true} when {@code databaseDirectory} carries the {@link #SNAPSHOT_PENDING_FILE} marker, i.e.
+   * an HA snapshot install started writing into it and has not finished. Every path that would open or create a
+   * database goes through this check: the boot scan, the default-database pass, {@link #getDatabase} and
+   * {@link #createDatabase} (issue #7129).
+   */
+  private static boolean isAwaitingSnapshotRecovery(final File databaseDirectory) {
+    return new File(databaseDirectory, SNAPSHOT_PENDING_FILE).exists();
   }
 
   /**
@@ -1070,8 +1245,9 @@ public class ArcadeDBServer {
    * skipped: the mutation has already happened and cannot be undone by a failing listener.
    * <p>
    * Only the plugins that have been configured are notified. Discovery installs every plugin instance up front, but
-   * {@link #loadDatabases()} runs before {@code startPlugins(AFTER_DATABASES_OPEN)}, so a plugin of that priority was
-   * being handed a registration per pre-existing database before it had even been given this server (issue #6852).
+   * {@link #loadDatabases(boolean)} runs before {@code startPlugins(AFTER_DATABASES_OPEN)}, so a plugin of that
+   * priority was being handed a registration per pre-existing database before it had even been given this server
+   * (issue #6852).
    */
   private void notifyPlugins(final String databaseName, final boolean registered) {
     if (pluginManager == null)
@@ -1196,6 +1372,28 @@ public class ArcadeDBServer {
 
   public ServerDatabase getDatabase(final String databaseName, final boolean createIfNotExists,
       final boolean allowLoad) {
+    return getDatabase(databaseName, createIfNotExists, allowLoad, false);
+  }
+
+  /**
+   * Opens and registers a database whose {@link #SNAPSHOT_PENDING_FILE} marker is still on disk, for the only
+   * caller entitled to look past it: the HA snapshot installer reopening the copy it has just swapped in, or the
+   * previous copy it has just restored, while holding {@link #getDatabasesLock()} (issue #7129).
+   * <p>
+   * The exemption is granted to that <i>call</i>, not to a phase of the server lifecycle: the installer writes the
+   * marker before the download starts and clears it only after this reopen has proved the new files load, so a
+   * gate keyed on {@code STATUS.STARTING} would both refuse the installer's own reopen during a startup-time
+   * bootstrap install - which {@code swapAndReopen} reads as "the snapshot will not open" and answers by rolling a
+   * perfectly good snapshot back - and stop protecting anything the moment the server turns {@code ONLINE}, which
+   * is precisely when a directory whose recovery deliberately retained its marker (issue #7139) would be opened
+   * and served torn by the first request that names it.
+   */
+  public ServerDatabase reopenDatabaseUnderSnapshotRecovery(final String databaseName) {
+    return getDatabase(databaseName, false, true, true);
+  }
+
+  private ServerDatabase getDatabase(final String databaseName, final boolean createIfNotExists,
+      final boolean allowLoad, final boolean underSnapshotRecovery) {
     if (databaseName == null || databaseName.trim().isEmpty())
       throw new IllegalArgumentException("Invalid database name " + databaseName);
 
@@ -1233,6 +1431,15 @@ public class ArcadeDBServer {
         final String path =
             configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY) + File.separator + databaseName;
 
+        // An interrupted HA snapshot install left this directory mid-swap: its files are neither the previous
+        // database nor the new one, so opening it would register - and serve - a torn mix (issue #7129). The
+        // refusal is unconditional in time and bypassed only by the installer's own reopen, which passes
+        // underSnapshotRecovery through reopenDatabaseUnderSnapshotRecovery.
+        if (!underSnapshotRecovery && isAwaitingSnapshotRecovery(new File(path)))
+          throw new DatabaseNotAvailableException("Database '" + databaseName + "' is not available: an interrupted "
+              + "HA snapshot install left '" + SNAPSHOT_PENDING_FILE + "' in its directory, so its files are "
+              + "neither the previous database nor the new one. Snapshot recovery must reconcile it first");
+
         final DatabaseFactory factory = new DatabaseFactory(path).setAutoTransaction(true);
 
         factory.setSecurity(getSecurity());
@@ -1244,9 +1451,18 @@ public class ArcadeDBServer {
           defaultDbMode = READ_WRITE;
 
         DatabaseInternal embDatabase;
-        if (createIfNotExists)
-          embDatabase = (DatabaseInternal) (factory.exists() ? factory.open(defaultDbMode) : factory.create());
-        else {
+        if (createIfNotExists) {
+          if (factory.exists())
+            embDatabase = (DatabaseInternal) factory.open(defaultDbMode);
+          else {
+            // The second of the two places a database comes into existence on a server - createDatabase above is the
+            // other - so the restore claim has to be honoured here too (issue #7441). Only the create arm asks: an
+            // OPEN of a directory that is already there is what 'restore backup ... overwrite' means to replace, and
+            // refusing it would take a live database away from its readers for the duration of the restore.
+            checkDatabaseNameIsNotBeingRestored(databaseName);
+            embDatabase = (DatabaseInternal) factory.create();
+          }
+        } else {
           final Collection<Database> activeDatabases = DatabaseFactory.getActiveDatabaseInstances();
           if (!activeDatabases.isEmpty()) {
             embDatabase = null;
@@ -1282,7 +1498,17 @@ public class ArcadeDBServer {
     return db;
   }
 
-  private void loadDatabases() {
+  /**
+   * Opens and registers every database directory under {@link GlobalConfiguration#SERVER_DATABASE_DIRECTORY}.
+   * Runs twice during startup: once before the plugins, and once after {@code AFTER_HTTP_ON} so a database the HA
+   * plugin recovered, acquired or registered is picked up.
+   *
+   * @param afterSnapshotRecovery {@code true} on the second pass, i.e. after HA snapshot recovery has had its
+   *                              chance. A directory still carrying {@link #SNAPSHOT_PENDING_FILE} is deferred on
+   *                              both passes, but only on the second one is that a problem worth a SEVERE: on the
+   *                              first it is the expected, self-healing state of a node that crashed mid-install.
+   */
+  private void loadDatabases(final boolean afterSnapshotRecovery) {
     final File databaseDir = new File(configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY));
     if (!databaseDir.exists()) {
       databaseDir.mkdirs();
@@ -1296,8 +1522,26 @@ public class ArcadeDBServer {
         for (final File f : databaseDirectories)
           // Skip reserved internal databases (e.g. the Raft control directory '.raft'): they are not
           // user databases and must not be registered nor leak into the server/cluster status APIs.
-          if (!isReservedDatabaseName(f.getName()))
+          if (!isReservedDatabaseName(f.getName())) {
+            // HA snapshot recovery runs between the two passes. Never open a half-swapped directory, and never
+            // leave open handles on files recovery is about to move: the recovery pass holds no registry lock and
+            // would rename them out from under a registered instance (issue #7129).
+            if (isAwaitingSnapshotRecovery(f)) {
+              if (afterSnapshotRecovery)
+                LogManager.instance().log(this, Level.SEVERE,
+                    "Database '%s' was NOT opened: snapshot recovery did not clear its '%s' marker, so its directory "
+                        + "is still neither the previous database nor the installed snapshot. It stays unavailable "
+                        + "until an HA snapshot install reconciles it or an operator removes the directory", null,
+                    f.getName(), SNAPSHOT_PENDING_FILE);
+              else
+                LogManager.instance().log(this, Level.INFO,
+                    "Deferring database '%s': an interrupted HA snapshot install left its '%s' marker. It is opened "
+                        + "once snapshot recovery has completed or rolled back the install", null, f.getName(),
+                    SNAPSHOT_PENDING_FILE);
+              continue;
+            }
             getDatabase(f.getName());
+          }
       }
     }
   }
@@ -1320,6 +1564,18 @@ public class ArcadeDBServer {
         }
 
         final String dbName = db.substring(0, credentialBegin);
+
+        // Without this the deferred directory reads as an absent database and the branch below creates one over
+        // it. The boot scan has already reported the skip at SEVERE, so this only says what it means for the
+        // default-database configuration (issue #7129).
+        if (isAwaitingSnapshotRecovery(
+            new File(configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY), dbName))) {
+          LogManager.instance().log(this, Level.WARNING,
+              "Default database '%s' is awaiting snapshot recovery: not opened, and NOT recreated - the directory on "
+                  + "disk still holds the interrupted install", null, dbName);
+          continue;
+        }
+
         final int credentialEnd = db.indexOf(']', credentialBegin);
         final String credentials = db.substring(credentialBegin + 1, credentialEnd);
 
@@ -1359,27 +1615,8 @@ public class ArcadeDBServer {
                 // to keep than to reason about the exception).
                 removeDatabase(dbName);
               }
-              final String dbPath =
-                  configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY) + File.separator + dbName;
-//              new Restore(commandParams, dbPath).restoreDatabase();
-
-              try {
-                final Class<?> clazz = Class.forName("com.arcadedb.integration.restore.Restore");
-                final Object restorer = clazz.getConstructor(String.class, String.class).newInstance(commandParams,
-                    dbPath);
-
-                clazz.getMethod("restoreDatabase").invoke(restorer);
-
-              } catch (final ClassNotFoundException | NoSuchMethodException | IllegalAccessException |
-                             InstantiationException e) {
-                throw new CommandExecutionException("""
-                    Error on restoring database, restore libs not found in \
-                    classpath""", e);
-              } catch (final InvocationTargetException e) {
-                throw new CommandExecutionException("Error on restoring database", e.getTargetException());
-              }
-
-              getDatabase(dbName);
+              restoreDatabaseFromStartupCommand(dbName, commandParams,
+                  configuration.getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY) + File.separator + dbName);
               break;
 
             case "import":
@@ -1389,8 +1626,22 @@ public class ArcadeDBServer {
                 database = createDatabase(dbName, defaultDbMode);
               }
               try (final var rs = database.command("sql", "import database " + commandParams)) {
-                // drain not needed: the import command produces no rows we consume here.
-                // try-with-resources ensures the result set / execution plan is released.
+                // ImportDatabaseStatement REPORTS EXACTLY ONE CLASS OF FAILURE IN-BAND RATHER THAN BY THROWING: A
+                // FAILED probeOnly PROBE, AND (SINCE ISSUE #7461) A 'WITH ...' SETTING VALUE THE IMPORTER REFUSES,
+                // BOTH AS THE SINGLE ROW {"result":"FAIL","reason":...}. DISCARDING THAT ROW USED TO LEAVE dbName
+                // CREATED AND EMPTY WITH NOTHING IN THE LOG SAYING WHY (ISSUE #7484). TREATED THE SAME AS A FAILED
+                // 'restore:' ABOVE - LOUD AND FATAL TO STARTUP - RATHER THAN LOGGED AND IGNORED: A STARTUP
+                // MISCONFIGURATION THAT SILENTLY LEAVES A DEFAULT DATABASE EMPTY IS WORSE THAN ONE THAT REFUSES TO
+                // START, AND THE TWO STARTUP COMMANDS NOW ANSWER A BAD SOURCE THE SAME WAY.
+                if (rs.hasNext()) {
+                  final var row = rs.next();
+                  final String outcome = row.getProperty("result");
+                  if (!"OK".equals(outcome)) {
+                    final String reason = row.getProperty("reason");
+                    throw new CommandExecutionException(
+                        "Startup 'import:' command failed to import default database '" + dbName + "': " + reason);
+                  }
+                }
               }
               break;
 
@@ -1407,6 +1658,59 @@ public class ArcadeDBServer {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Executes the {@code restore:} startup command of {@link GlobalConfiguration#SERVER_DEFAULT_DATABASES}:
+   * restores {@code url} into {@code databasePath}, opens the result, and publishes an {@link OperationProgress}
+   * for the whole of it (issue #7440).
+   * <p>
+   * Issue #7385 gave that publication to the four transports that reach
+   * {@code ServerControlPlane.performRestore} - HTTP {@code restore database}, HTTP {@code restore backup} and
+   * the two matching gRPC RPCs. This command does not go through the control plane and was the one left silent,
+   * although it is at least as worth watching: {@link #start()} calls {@code httpServer.startService()} before
+   * {@code loadDefaultDatabases()}, and {@code GetProgressHandler} reads only the lock-free registry snapshot
+   * (no database access), so a poll of {@code GET /api/v1/progress/&#123;database&#125;} that lands while a
+   * container is restoring a large archive at boot is served - and used to answer "nothing running" about the
+   * very database being built. Always retired in the {@code finally}, on failure as on success.
+   * <p>
+   * Two steps rather than {@code performRestore}'s three: this command restores straight into the final
+   * directory, so there is no temporary directory to swap in, and it does not force a cluster snapshot.
+   * <p>
+   * Package-private rather than private so a test can drive it with a real archive: the alternative is racing a
+   * full server boot, which is not a way to observe anything mid-flight.
+   *
+   * @param databaseName the database being restored, and the key the progress is published under
+   * @param url          the archive URL exactly as the operator wrote it after {@code restore:}
+   * @param databasePath the directory the archive is restored into
+   */
+  void restoreDatabaseFromStartupCommand(final String databaseName, final String url, final String databasePath) {
+    final OperationProgress progress = OperationProgressRegistry.instance()
+        .register(databaseName, STARTUP_RESTORE_OPERATION);
+    progress.onProgress(RestoreProgress.STEP_EXTRACT, 1, STARTUP_RESTORE_STEPS, 0, -1);
+    try {
+      final Class<?> clazz = Class.forName("com.arcadedb.integration.restore.Restore");
+      final Object restorer = clazz.getConstructor(String.class, String.class).newInstance(url, databasePath);
+      RestoreProgress.installCallback(clazz, restorer, progress, STARTUP_RESTORE_STEPS);
+
+      clazz.getMethod("restoreDatabase").invoke(restorer);
+
+      progress.onProgress(RestoreProgress.STEP_ACTIVATE, 2, STARTUP_RESTORE_STEPS, 0, -1);
+      getDatabase(databaseName);
+    } catch (final InvocationTargetException e) {
+      throw new CommandExecutionException("Error on restoring database", e.getTargetException());
+    } catch (final ReflectiveOperationException e) {
+      // Everything the block above can throw that is NOT an InvocationTargetException means the optional
+      // arcadedb-integration module is absent or does not match: ClassNotFoundException, NoSuchMethodException,
+      // IllegalAccessException, InstantiationException. Caught by their common supertype so this arm reads the
+      // same as ServerControlPlane.performRestore's; the block reflects on no field, so NoSuchFieldException -
+      // the only other subtype - cannot arise here and nothing new is swallowed.
+      throw new CommandExecutionException("""
+          Error on restoring database, restore libs not found in \
+          classpath""", e);
+    } finally {
+      OperationProgressRegistry.instance().unregister(progress);
     }
   }
 

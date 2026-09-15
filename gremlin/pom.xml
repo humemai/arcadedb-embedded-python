@@ -37,7 +37,7 @@
         <!-- gremlin.version is defined in the parent pom so arcadedb-gremlin-it can share it -->
         <translation.version>1.0.4</translation.version>
         <snakeyaml.version>2.7</snakeyaml.version>
-        <netty.version>4.2.17.Final</netty.version>
+        <netty.version>4.2.18.Final</netty.version>
         <commons-configuration2.version>2.15.1</commons-configuration2.version>
         <commons-beanutils.version>1.11.0</commons-beanutils.version>
         <commons-lang3.version>3.20.0</commons-lang3.version>
@@ -518,4 +518,26 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- This module runs no tests (see the surefire/failsafe skips above), so its JaCoCo
+             report is a phantom 0% over every class in src/main/java, and codecov publishes it
+             as the module's coverage. The classes are really exercised in arcadedb-gremlin-it,
+             which reports them from the shaded jar under the same profile id. Skip the agent and
+             the report here so the two do not contradict each other. -->
+        <profile>
+            <id>coverage</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jacoco</groupId>
+                        <artifactId>jacoco-maven-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

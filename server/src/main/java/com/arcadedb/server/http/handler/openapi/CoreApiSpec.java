@@ -22,7 +22,9 @@ import com.arcadedb.server.http.HttpSessionManager;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
 import io.swagger.v3.oas.models.PathItem;
+import io.swagger.v3.oas.models.headers.Header;
 import io.swagger.v3.oas.models.media.Content;
+import io.swagger.v3.oas.models.media.Discriminator;
 import io.swagger.v3.oas.models.media.MediaType;
 import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.parameters.Parameter;
@@ -31,6 +33,8 @@ import io.swagger.v3.oas.models.responses.ApiResponse;
 import io.swagger.v3.oas.models.responses.ApiResponses;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Documents the endpoints every deployment exposes: server information and administration, the
@@ -38,8 +42,15 @@ import java.util.List;
  * lifecycle.
  */
 public class CoreApiSpec implements OpenApiContributor {
-
+  /** Media type of the streaming query encoding (issue #7306). */
+  private static final String NDJSON = "application/x-ndjson";
   private static final String SESSION_HEADER = HttpSessionManager.ARCADEDB_SESSION_ID;
+  private static final String COMMIT_INDEX_HEADER = "X-ArcadeDB-Commit-Index";
+  /**
+   * The statuses of the query and command operations that are decided BEFORE the read-your-writes bookmark
+   * exists, so they can never carry it. See {@link #addCommitIndexBookmarkHeader}.
+   */
+  private static final Set<String> BOOKMARKLESS_STATUSES = Set.of("401", "404");
 
   private static final String SESSION_REQUEST_DESCRIPTION = """
       Session id returned by 'beginTransaction'. Present it on every call that must run inside that \
@@ -69,6 +80,24 @@ public class CoreApiSpec implements OpenApiContributor {
       "Database not found, or the session id header names a transaction that no longer resolves "
           + "(\"Remote transaction session not found or expired\")";
 
+  // Shared by all three operations that advertise 'application/x-ndjson' under their 200. PostQueryHandler
+  // extends PostCommandHandler and overrides only executeCommand(), and GetQueryHandler - a sibling under
+  // AbstractQueryHandler, not a subclass - calls the same relocated requireStreamableStatement() before its own
+  // query runs, so the three reach one gate. Held in one place so they cannot describe it differently
+  // (issue #7569 documented it for the two POST operations, issue #7571 brought GET under the same gate and the
+  // same words).
+  //
+  // BACKUP DATABASE is named explicitly because it is the one statement a reader would otherwise expect to
+  // stream: it is idempotent, it mutates no record, and it reads as a query everywhere else in the SQL
+  // reference - it is refused here because its declared operation types report the archive it writes to the
+  // server filesystem.
+  private static final String NDJSON_READ_ONLY_DESCRIPTION = """
+      When 'Accept' requests the ndjson encoding, only a statement provably read-only may stream: one that \
+      writes - INSERT, UPDATE, DELETE, DDL, BACKUP DATABASE, or one this analysis cannot classify - is refused \
+      with 400 before it runs, because a streamed response puts its status code on the wire ahead of the rows \
+      and so cannot report a statement that fails half-way through. Request the buffered 'application/json' \
+      encoding for it instead.""";
+
   @Override
   public void contribute(final OpenAPI openAPI) {
     openAPI.getPaths().addPathItem("/api/v1/server", createServerPath());
@@ -87,6 +116,7 @@ public class CoreApiSpec implements OpenApiContributor {
 
     openAPI.getComponents().addSchemas("QueryRequest", createQueryRequestSchema());
     openAPI.getComponents().addSchemas("QueryResponse", createQueryResponseSchema());
+    openAPI.getComponents().addSchemas("NdJsonQueryEvent", createNdJsonQueryEventSchema());
     openAPI.getComponents().addSchemas("CommandRequest", createCommandRequestSchema());
     openAPI.getComponents().addSchemas("ErrorResponse", createErrorResponseSchema());
     openAPI.getComponents().addSchemas("ServerInfo", createServerInfoSchema());
@@ -95,6 +125,10 @@ public class CoreApiSpec implements OpenApiContributor {
     openAPI.getComponents().addSchemas("BatchResponse", createBatchResponseSchema());
     openAPI.getComponents().addSchemas("BatchError", createBatchErrorSchema());
     openAPI.getComponents().addSchemas("ProgressResponse", createProgressResponseSchema());
+    openAPI.getComponents().addSchemas("NdJsonBatchEvent", createNdJsonBatchEventSchema());
+    openAPI.getComponents().addSchemas("BatchLine", createBatchLineSchema());
+    openAPI.getComponents().addSchemas("BatchVertexLine", createBatchVertexLineSchema());
+    openAPI.getComponents().addSchemas("BatchEdgeLine", createBatchEdgeLineSchema());
   }
 
   private PathItem createServerPath() {
@@ -116,12 +150,21 @@ public class CoreApiSpec implements OpenApiContributor {
         Executes administrative commands on the server (root user only). \
         Available commands: create database, drop database, open database, close database, \
         restore database <name> <url>, import database <name> <url>, \
-        create user, drop user, shutdown, set server setting, get server events, align database. \
-        Both restore and import support SSE progress streaming via Accept: text/event-stream header""");
+        create user, drop user, shutdown, set server setting, get server events, align database, \
+        connect cluster <address>, disconnect cluster. \
+        Both restore and import support SSE progress streaming via Accept: text/event-stream header. \
+        connect cluster <address> adds the server at <address> to this server's cluster - the operator \
+        alias of POST /api/v1/cluster/peer - where <address> is one entry of arcadedb.ha.serverList \
+        ([name@]host[:raftPort[:httpPort]] or the host:{raft:..,http:..} object form). It answers 400 \
+        for a blank or malformed address and 500 when this server is not running an HA implementation \
+        that supports runtime membership""");
     postOp.setOperationId("executeServerCommand");
     postOp.addTagsItem("Server");
     postOp.setRequestBody(SpecBuilders.jsonBody("Command request with command and optional parameters", "CommandRequest", true));
     postOp.setResponses(createCommandResponses());
+    // Only this operation forwards to the HA leader, so the 504 is added here rather than in the shared
+    // createCommandResponses() that POST /api/v1/command/{database} also uses (issue #7507).
+    postOp.getResponses().addApiResponse("504", SpecBuilders.errorResponse(SpecBuilders.LEADER_FORWARD_TIMEOUT_DESCRIPTION));
     pathItem.setPost(postOp);
 
     return pathItem;
@@ -203,7 +246,7 @@ public class CoreApiSpec implements OpenApiContributor {
 
     final Operation getOp = new Operation();
     getOp.setSummary("Execute query via GET");
-    getOp.setDescription("Executes a query using GET method with parameters in URL");
+    getOp.setDescription("Executes a query using GET method with parameters in URL. " + NDJSON_READ_ONLY_DESCRIPTION);
     getOp.setOperationId("executeQueryGet");
     getOp.addTagsItem("Query");
     getOp.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
@@ -211,7 +254,10 @@ public class CoreApiSpec implements OpenApiContributor {
         List.of("sql", "cypher", "gremlin", "graphql", "mongo")));
     getOp.addParametersItem(SpecBuilders.pathParam("command", "Query or command to execute"));
     getOp.addParametersItem(SpecBuilders.headerParam(SESSION_HEADER, SESSION_REQUEST_DESCRIPTION, false));
+    getOp.addParametersItem(ndJsonAcceptParam());
     getOp.setResponses(createGetQueryResponses());
+    addNdJsonAlternative(getOp.getResponses());
+    addCommitIndexBookmarkHeader(getOp.getResponses());
     pathItem.setGet(getOp);
 
     return pathItem;
@@ -222,13 +268,16 @@ public class CoreApiSpec implements OpenApiContributor {
 
     final Operation postOp = new Operation();
     postOp.setSummary("Execute query via POST");
-    postOp.setDescription("Executes a query using POST method with query in request body");
+    postOp.setDescription("Executes a query using POST method with query in request body. " + NDJSON_READ_ONLY_DESCRIPTION);
     postOp.setOperationId("executeQueryPost");
     postOp.addTagsItem("Query");
     postOp.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
     postOp.addParametersItem(SpecBuilders.headerParam(SESSION_HEADER, SESSION_REQUEST_DESCRIPTION, false));
+    postOp.addParametersItem(ndJsonAcceptParam());
     postOp.setRequestBody(SpecBuilders.jsonBody("Query request with command and optional parameters", "QueryRequest", true));
     postOp.setResponses(createQueryResponses());
+    addNdJsonAlternative(postOp.getResponses());
+    addCommitIndexBookmarkHeader(postOp.getResponses());
     pathItem.setPost(postOp);
 
     return pathItem;
@@ -239,13 +288,16 @@ public class CoreApiSpec implements OpenApiContributor {
 
     final Operation postOp = new Operation();
     postOp.setSummary("Execute command");
-    postOp.setDescription("Executes a database command");
+    postOp.setDescription("Executes a database command. " + NDJSON_READ_ONLY_DESCRIPTION);
     postOp.setOperationId("executeCommand");
     postOp.addTagsItem("Command");
     postOp.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
     postOp.addParametersItem(SpecBuilders.headerParam(SESSION_HEADER, SESSION_REQUEST_DESCRIPTION, false));
+    postOp.addParametersItem(ndJsonAcceptParam());
     postOp.setRequestBody(SpecBuilders.jsonBody("Command request with command and optional parameters", "CommandRequest", true));
     postOp.setResponses(createCommandResponses());
+    addNdJsonAlternative(postOp.getResponses());
+    addCommitIndexBookmarkHeader(postOp.getResponses());
     pathItem.setPost(postOp);
 
     return pathItem;
@@ -316,9 +368,23 @@ public class CoreApiSpec implements OpenApiContributor {
 
             A body that ends before its announced length answers 408 with the same partial-commit \
             counts, never a 200 with a truncated count. Compare the returned 'bytesRead' against the \
-            bytes sent to verify a chunked upload arrived whole.""");
+            bytes sent to verify a chunked upload arrived whole.
+
+            Send 'Accept: application/x-ndjson' to be acknowledged while you are still uploading. The \
+            answer is then a newline-delimited stream: a 'progress' line at every vertex commit and \
+            every 'commitEvery' edges, then exactly one 'summary' or 'error' line carrying the same \
+            object this endpoint would otherwise have returned. That is the HTTP counterpart of the \
+            per-chunk acknowledgement of the gRPC InsertBidirectional RPC. A progress line counts \
+            records attempted, the same upper bound the partial-commit counters carry. Anything else \
+            in Accept, including an absent header, returns the buffered object unchanged.
+
+            A load that fails before it has acknowledged anything still answers with its real status \
+            code and the buffered error body, because the status line has not been sent yet: the 400 \
+            and 408 below apply to a streaming request too. Only a failure raised after the first \
+            progress line is reported in band under a 200.""");
 
     post.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
+    post.addParametersItem(batchNdJsonAcceptParam());
     post.addParametersItem(SpecBuilders.queryParam("batchSize",
         "Records buffered per GraphBatch flush. Default 100000.", false, "integer"));
     post.addParametersItem(SpecBuilders.queryParam("lightEdges",
@@ -386,31 +452,22 @@ public class CoreApiSpec implements OpenApiContributor {
     refMode.getSchema().setEnum(List.of("id", "ordinal"));
     post.addParametersItem(refMode);
 
-    final RequestBody body = new RequestBody();
-    body.setDescription("""
-        Vertices first, then edges. JSONL sends one JSON record per line; CSV sends a header row \
-        followed by data rows. Vertices may declare a temporary '@id' that edges reference through \
-        '@from' and '@to', or be referenced by position when refMode=ordinal. Edges may also \
-        reference existing RIDs in #bucket:position form.""");
-    body.setRequired(true);
-    final Content content = new Content();
-    final MediaType jsonl = new MediaType();
-    jsonl.setSchema(new Schema<>().type("string").description("One JSON object per line"));
-    content.addMediaType("application/x-ndjson", jsonl);
-    content.addMediaType("application/jsonl", jsonl);
-    final MediaType csv = new MediaType();
-    csv.setSchema(new Schema<>().type("string").description("Header row followed by data rows"));
-    content.addMediaType("text/csv", csv);
-    body.setContent(content);
-    post.setRequestBody(body);
+    post.setRequestBody(createBatchRequestBody());
 
     // 400 and 408 carry the partial-commit counts rather than the generic error body: a batch is
     // not atomic, so a client that cannot read how much was committed cannot reconcile before
     // retrying. Every other failure keeps the base handler's standard error shape.
     final ApiResponses responses = new ApiResponses();
     responses.addApiResponse("200", SpecBuilders.jsonResponse("Load completed", "BatchResponse"));
-    responses.addApiResponse("400", SpecBuilders.jsonResponse(
-        "Client-input failure, with the counts attempted before it", "BatchError"));
+    // The streaming encoding answers 200 for a FAILED load too: by the time the verdict is reached the status
+    // line is already sent, so the failure is the terminal 'error' line and its 'status' field instead.
+    final MediaType ndjsonBatch = new MediaType();
+    ndjsonBatch.setSchema(SpecBuilders.ref("NdJsonBatchEvent"));
+    responses.get("200").getContent().addMediaType(NDJSON, ndjsonBatch);
+    responses.addApiResponse("400", SpecBuilders.jsonResponse("""
+        Client-input failure, with the counts attempted before it. Also the answer to a line that used a reserved \
+        key: an '@'-prefixed key outside the five control keys, or a 'properties' key carrying an object.""",
+        "BatchError"));
     responses.addApiResponse("408", SpecBuilders.jsonResponse(
         "The body ended before it was fully consumed, with the counts attempted before that", "BatchError"));
     responses.addApiResponse("401", SpecBuilders.errorResponse("Unauthorized"));
@@ -629,6 +686,102 @@ public class CoreApiSpec implements OpenApiContributor {
     return schema;
   }
 
+  /**
+   * One line of the {@code application/x-ndjson} streaming encoding (issue #7306). Every line is an object with
+   * exactly one key naming the kind of event, which is what makes the stream self-delimiting: a consumer can
+   * tell a row from the trailer without guessing, and a stream that ends with no {@code stats} line is one that
+   * did not complete.
+   */
+  private Schema<?> createNdJsonQueryEventSchema() {
+    final Schema<Object> schema = SpecBuilders.object("""
+        One line of a newline-delimited streaming response. Exactly one of 'record', 'stats' or 'error' is \
+        present.""");
+    schema.addProperty("record", SpecBuilders.object("""
+        One result row, identical to an element of the 'result' array of the buffered application/json \
+        response."""));
+
+    final Schema<Object> stats = SpecBuilders.object("""
+        Trailer, always the last line of a complete stream. Carries the same three numbers the buffered \
+        response reports at top level.""");
+    stats.addProperty("limit", SpecBuilders.integer("Effective row cap applied while streaming, -1 when uncapped"));
+    stats.addProperty("returned", SpecBuilders.integer("Number of rows that reached the client"));
+    stats.addProperty("truncated", SpecBuilders.bool(
+        "True when the cap stopped the stream with rows still pending, so the result is incomplete"));
+    schema.addProperty("stats", stats);
+
+    final Schema<Object> error = SpecBuilders.object("""
+        A failure raised after the 200 had already been sent. The status code cannot be taken back at that \
+        point, so the failure is reported in band and no 'stats' line follows.""");
+    error.addProperty("message", SpecBuilders.string("Why the stream failed"));
+    schema.addProperty("error", error);
+    return schema;
+  }
+
+  /**
+   * Adds the streaming encoding to a 200 that already documents the buffered one. Negotiated by {@code Accept}
+   * rather than routed, so the buffered body every existing client parses is what a request that does not ask
+   * for the stream still receives (issue #7306).
+   */
+  private static void addNdJsonAlternative(final ApiResponses responses) {
+    final MediaType ndjson = new MediaType();
+    ndjson.setSchema(SpecBuilders.ref("NdJsonQueryEvent"));
+    responses.get("200").getContent().addMediaType(NDJSON, ndjson);
+  }
+
+  /**
+   * Declares the read-your-writes bookmark on the responses that can actually carry it, which is more than the
+   * 200 and less than all of them.
+   * <p>
+   * It is emitted on both encodings - on the streamed one before the first row, since a header cannot be set
+   * once the body has started (issue #7351) - so it is a property of the response rather than of either media
+   * type. And it is emitted whatever the outcome, because the value means the same thing on a refused request:
+   * what this server had applied when it answered is a valid barrier for the client's next read either way.
+   * <p>
+   * The boundary is <b>where the bookmark starts existing</b>, not the status code.
+   * {@link AbstractServerHttpHandler#emitCommitIndexBookmarkOnResponseCommit} is registered partway through
+   * {@link DatabaseAbstractHandler#execute}, once the request has been authenticated and its database
+   * resolved - deliberately, since registering it earlier would hand a Raft index to a caller who has not
+   * authenticated. So a failure raised before that point carries no bookmark and never can:
+   * <ul>
+   * <li>{@code 401} is produced by {@code handleRequest} before the request is dispatched at all;</li>
+   * <li>{@code 404} on these operations means "database not found" or a stale session id, both of which are
+   *     resolved before the registration.</li>
+   * </ul>
+   * Those two are therefore left undeclared rather than promised and not delivered - the same mismatch, only
+   * pointing the other way (#7425 review). The rest - {@code 200}, {@code 413}, {@code 500}, and the
+   * {@code 400} raised by the bookmark-header parsing itself - are answered from inside the request, so the
+   * header rides along.
+   */
+  private static void addCommitIndexBookmarkHeader(final ApiResponses responses) {
+    for (final Map.Entry<String, ApiResponse> entry : responses.entrySet()) {
+      if (BOOKMARKLESS_STATUSES.contains(entry.getKey()))
+        continue;
+      // A new Header per response rather than one shared instance: aliasing them would make a later per-status
+      // tweak to one silently rewrite the others (#7425 review).
+      entry.getValue().addHeaderObject(COMMIT_INDEX_HEADER, SpecBuilders.stringHeader("""
+          On a replicated (HA) database, the last Raft index this server had applied when it answered. Feed it \
+          back as 'X-ArcadeDB-Read-After' on the next request to get read-your-writes consistency from a \
+          follower. Sent on an error response too, once the request reached the database: it bookmarks what the \
+          server had applied when it refused, which is still a valid barrier for the next read. Absent on a \
+          standalone database, on a replicated one that has applied nothing yet, and on a failure that happens \
+          before the request reaches the database at all.\
+          """));
+    }
+  }
+
+  /**
+   * The {@code Accept} header that selects the streaming encoding. Declared as an explicit parameter as well as
+   * a response content type because a generated client otherwise has no way to ask for it.
+   */
+  private static Parameter ndJsonAcceptParam() {
+    final Parameter accept = SpecBuilders.headerParam("Accept", """
+        Send 'application/x-ndjson' to receive the result as a stream of newline-delimited JSON events, one row \
+        per line, flushed as the engine produces them instead of buffered in full server-side. Anything else - \
+        including an absent header - returns the buffered application/json body unchanged.""", false);
+    accept.getSchema().setEnum(List.of(SpecBuilders.JSON, NDJSON));
+    return accept;
+  }
+
   private Schema<?> createErrorResponseSchema() {
     final Schema<Object> schema = SpecBuilders.object("Error response object");
     schema.addProperty("error", SpecBuilders.string("Error message"));
@@ -663,6 +816,146 @@ public class CoreApiSpec implements OpenApiContributor {
     return schema;
   }
 
+  /**
+   * The payload of a bulk load (issue #7570). All three media types used to be declared as a bare {@code string}, so
+   * none of the five control keys appeared anywhere in the contract and every client in every language had to
+   * reverse-engineer the encoding - while the gRPC sibling {@code GraphBatchRecord} had been schematized since it
+   * shipped.
+   * <p>
+   * The JSON line encodings name the line schema rather than a string, which is the same convention this spec
+   * already uses for its NDJSON <em>responses</em> ({@code NdJsonQueryEvent}, {@code NdJsonBatchEvent}): OpenAPI 3.0
+   * cannot say "newline-delimited instances of this schema" for a body, so the media-type schema is the schema of one
+   * line and the description carries the line orientation.
+   */
+  private RequestBody createBatchRequestBody() {
+    final RequestBody body = new RequestBody();
+    body.setDescription("""
+        Vertices first, then edges. JSONL sends one JSON record per line; CSV sends a header row \
+        followed by data rows. Vertices may declare a temporary '@id' that edges reference through \
+        '@from' and '@to', or be referenced by position when refMode=ordinal. Edges may also \
+        reference existing RIDs in #bucket:position form.
+
+        The JSON schema below describes ONE LINE: the body is a sequence of them separated by newlines, not a JSON \
+        array, and a line that is an array is refused as such.
+
+        Properties sit FLAT beside the control keys - {"@type":"vertex","@class":"Person","name":"Alice"} - and are \
+        NOT nested under a 'properties' object. The '@' prefix is reserved: a key starting with '@' that is not one \
+        of @type, @class, @id, @from or @to is refused with a 400 naming the line, and so is a 'properties' key \
+        carrying an object, because both can only ever be a misread of this encoding.
+
+        The control keys and the '@type' values are matched case-sensitively: '@Type' is not '@type' and is refused \
+        as an unknown control key, and 'Vertex' is not 'vertex'. Only the CSV boolean literals 'true' and 'false' \
+        are matched ignoring case.
+
+        A temporary id is resolved only within the request that declared it, and only if the vertex appeared \
+        earlier in the same payload: a vertex loaded by an EARLIER request has to be referenced by RID \
+        (#bucket:position). Under refMode=ordinal, use 'ordinalBase' to keep one position counter across a load \
+        split into several requests.""");
+    body.setRequired(true);
+
+    final Content content = new Content();
+    for (final String jsonLineMediaType : List.of(NDJSON, "application/jsonl")) {
+      final MediaType jsonl = new MediaType();
+      jsonl.setSchema(SpecBuilders.ref("BatchLine"));
+      jsonl.setExample("""
+          {"@type":"vertex","@class":"Person","@id":"p1","name":"Alice"}
+          {"@type":"vertex","@class":"Person","@id":"p2","name":"Bob"}
+          {"@type":"edge","@class":"Knows","@from":"p1","@to":"p2","since":2020}""");
+      content.addMediaType(jsonLineMediaType, jsonl);
+    }
+
+    final MediaType csv = new MediaType();
+    csv.setSchema(new Schema<>().type("string").description("""
+        A header row naming the columns, then one data row per record. The control keys are column names: @type and \
+        @class are required, @id names a vertex's temporary id, and @from and @to name an edge's endpoints. Every \
+        other column is a property, and the '@' prefix is reserved there too - an unrecognised '@' column is refused \
+        with a 400. A '---' row separates the vertex section from the edge section, and a new header row follows it. \
+        Values are typed by inspection: 'true'/'false' become booleans, numeric text becomes a number, an empty \
+        field sets no property at all. Quoting follows RFC 4180, single-line fields only."""));
+    csv.setExample("""
+        @type,@class,@id,name
+        vertex,Person,p1,Alice
+        vertex,Person,p2,Bob
+        ---
+        @type,@class,@from,@to,since
+        edge,Knows,p1,p2,2020""");
+    content.addMediaType("text/csv", csv);
+
+    body.setContent(content);
+    return body;
+  }
+
+  /**
+   * One line of the JSON batch encoding: a vertex or an edge, told apart by {@code @type}. The discriminator maps the
+   * short spellings as well, because the parsers accept {@code v} and {@code e} and a generated client that only knew
+   * the long ones would reject its own valid payloads.
+   */
+  private Schema<?> createBatchLineSchema() {
+    final Schema<Object> schema = SpecBuilders.object("""
+        One line of the JSON batch encoding. Vertices must appear before the edges that reference them.""");
+    schema.setType(null);
+    schema.setOneOf(List.of(SpecBuilders.ref("BatchVertexLine"), SpecBuilders.ref("BatchEdgeLine")));
+
+    final Discriminator discriminator = new Discriminator();
+    discriminator.setPropertyName("@type");
+    discriminator.mapping("vertex", "#/components/schemas/BatchVertexLine");
+    discriminator.mapping("v", "#/components/schemas/BatchVertexLine");
+    discriminator.mapping("edge", "#/components/schemas/BatchEdgeLine");
+    discriminator.mapping("e", "#/components/schemas/BatchEdgeLine");
+    schema.setDiscriminator(discriminator);
+    return schema;
+  }
+
+  private Schema<?> createBatchVertexLineSchema() {
+    final Schema<Object> schema = SpecBuilders.object("""
+        A vertex line. Its properties are the keys of this same object, flat beside the control keys below - they are \
+        NOT nested under a 'properties' key, and sending one carrying an object is refused with a 400.""");
+    schema.addProperty("@type", SpecBuilders.string("Discriminator. 'v' is accepted as a synonym of 'vertex'")
+        ._enum(List.of("vertex", "v")));
+    schema.addProperty("@class", SpecBuilders.string("""
+        Vertex type to create the record in. The type must already exist: a bulk load creates records, never \
+        types."""));
+    schema.addProperty("@id", SpecBuilders.string("""
+        Temporary id, resolved only against the edges of THIS request. Optional - a vertex needs one only if an edge \
+        in the same payload references it, and one that declares none is counted in 'verticesWithoutId'. Ignored \
+        under refMode=ordinal, where an edge names a vertex by its 0-based position instead."""));
+    schema.setRequired(List.of("@type", "@class"));
+    addFlatPropertyPolicy(schema);
+    return schema;
+  }
+
+  private Schema<?> createBatchEdgeLineSchema() {
+    final Schema<Object> schema = SpecBuilders.object("""
+        An edge line. Its properties are the keys of this same object, flat beside the control keys below - they are \
+        NOT nested under a 'properties' key, and sending one carrying an object is refused with a 400.""");
+    schema.addProperty("@type", SpecBuilders.string("Discriminator. 'e' is accepted as a synonym of 'edge'")
+        ._enum(List.of("edge", "e")));
+    schema.addProperty("@class", SpecBuilders.string("""
+        Edge type to create the record in. The type must already exist: a bulk load creates records, never \
+        types."""));
+    schema.addProperty("@from", SpecBuilders.string("""
+        Source vertex. Under refMode=id (the default) this is the '@id' a vertex declared EARLIER IN THIS PAYLOAD, \
+        or an existing RID in #bucket:position form; each request resolves only the ids of its own payload. Under \
+        refMode=ordinal it is the vertex's 0-based position, offset by 'ordinalBase'."""));
+    schema.addProperty("@to", SpecBuilders.string("Destination vertex, named the same way as '@from'"));
+    schema.setRequired(List.of("@type", "@class", "@from", "@to"));
+    addFlatPropertyPolicy(schema);
+    return schema;
+  }
+
+  /**
+   * Declares that any other key of the line is a property. This is what makes the encoding schemaless, and it is also
+   * what made the reserved-key refusals necessary: without a rule, a control key the loader does not understand is
+   * indistinguishable from a property whose name happens to start with '@' (issue #7570).
+   */
+  private void addFlatPropertyPolicy(final Schema<Object> schema) {
+    schema.setAdditionalProperties(SpecBuilders.object("""
+        One property of the record, keyed by its name. Any JSON scalar, array or nested object; a nested object is \
+        stored as an embedded document. The name may not start with '@' - that prefix is reserved for the control \
+        keys - and a property named 'properties' may not carry an object, because that is the nested-form misreading \
+        rather than data.""").type(null));
+  }
+
   private Schema<?> createBatchResponseSchema() {
     final Schema<Object> schema = SpecBuilders.object("Result of a bulk load");
     schema.addProperty("verticesCreated", SpecBuilders.integer("Vertices created"));
@@ -675,6 +968,86 @@ public class CoreApiSpec implements OpenApiContributor {
         "True when the mapping was too large to return"));
     schema.addProperty("idMappingSize", SpecBuilders.integer(
         "Number of entries in the omitted mapping"));
+    return schema;
+  }
+
+  /**
+   * The {@code Accept} header that selects the streaming batch encoding (issue #7311). Declared as an explicit
+   * parameter as well as a response content type because a generated client otherwise has no way to ask for it.
+   */
+  private static Parameter batchNdJsonAcceptParam() {
+    final Parameter accept = SpecBuilders.headerParam("Accept", """
+        Send 'application/x-ndjson' to receive per-chunk acknowledgements while the request body is still being \
+        uploaded, instead of one object after the whole load. Anything else - including an absent header - \
+        returns the buffered application/json body unchanged.""", false);
+    accept.getSchema().setEnum(List.of(SpecBuilders.JSON, NDJSON));
+    return accept;
+  }
+
+  /**
+   * One line of the streaming batch encoding (issue #7311). Same self-delimiting discipline as the streaming
+   * query: exactly one key per line naming the event, and a stream that ends with neither {@code summary} nor
+   * {@code error} is one that did not arrive whole.
+   */
+  private Schema<?> createNdJsonBatchEventSchema() {
+    final Schema<Object> schema = SpecBuilders.object("""
+        One line of a streamed bulk load. Exactly one of 'progress', 'summary' or 'error' is present.""");
+
+    final Schema<Object> progress = SpecBuilders.object("""
+        A chunk acknowledgement, written while the request body is still being read. Emitted at every vertex \
+        commit and every 'commitEvery' edges. The counters are records ATTEMPTED, the same upper bound on what \
+        is durable that the partial-commit counters carry: vertices are committed at each flush, while edges are \
+        buffered and written when the load ends.""");
+    progress.addProperty("phase", SpecBuilders.string("'vertices' or 'edges'"));
+    progress.addProperty("verticesCreated", SpecBuilders.integer("Vertices attempted so far"));
+    progress.addProperty("edgesCreated", SpecBuilders.integer("Edges attempted so far"));
+    progress.addProperty("idMapping", SpecBuilders.object("""
+        Temporary id to RID mapping of the vertices this chunk resolved, and only of those: the mapping is \
+        handed back one committed chunk at a time so neither end ever holds the whole load's worth of it \
+        (issue #7353). Concatenate the 'idMapping' of every line, in order, to obtain what the buffered \
+        encoding returns in one object, and check the total against 'idMappingSize' on the terminal line. \
+        Absent on an edge-phase acknowledgement, on a chunk whose vertices declared no @id under \
+        refMode=tempId, and when the request sent idMapping=false."""));
+    addLoadAccounting(progress);
+    schema.addProperty("progress", progress);
+
+    final Schema<Object> summary = SpecBuilders.object("""
+        Terminal line of a successful load: the same object the buffered application/json response carries, \
+        plus 'commitIndex' on a replicated database - the read-your-writes bookmark, which cannot be a response \
+        header here because the response has already started when its value becomes known.""");
+    summary.addProperty("commitIndex", SpecBuilders.integer(
+        "Last applied Raft index, the value the X-ArcadeDB-Commit-Index header carries on the buffered encoding"));
+    summary.addProperty("idMappingStreamed", SpecBuilders.bool("""
+        Always true on this encoding when the load resolved any temporary id: the mapping travelled in the \
+        'idMapping' of the progress lines rather than in this object, so 'idMapping' here is only whatever the \
+        last chunk resolved after the final acknowledgement - usually nothing. 'idMappingOmitted' is never sent \
+        on this encoding: the size cap it reports exists because the buffered encoding has to build the whole \
+        mapping before it can send anything, which streaming removes (issue #7353)."""));
+    summary.addProperty("idMappingSize", SpecBuilders.integer("""
+        Total number of temporary ids the load resolved. Check the number of mapping entries received across \
+        all the lines against it: a mapping that arrives in pieces can lose one to a truncated response \
+        without any single piece looking wrong."""));
+    schema.addProperty("summary", summary);
+
+    final Schema<Object> error = SpecBuilders.object("""
+        Terminal line of a failed load: the same object the buffered encoding carries, plus the 'status' it \
+        would have been sent under. The status line cannot be taken back once the stream has started, so the \
+        status travels in band.""");
+    error.addProperty("status", SpecBuilders.integer(
+        "HTTP status the buffered encoding would have used: 400, 408 or 500"));
+    error.addProperty("statusMapped", SpecBuilders.bool("""
+        Present and false when 'status' is the unclassified 500 fallback rather than the status the buffered \
+        encoding would have chosen - the case of an engine failure raised after the stream had already \
+        started. Key on 'exception' there, not on 'status'. Absent whenever 'status' is exact."""));
+    // Carried on a FAILED load too, and not by accident: a batch is not atomic, so a load that failed
+    // mid-stream still committed the chunks before the failure, and a READ_YOUR_WRITES client has to be able
+    // to read them back. That is the same rule the buffered encoding follows by emitting the header on its
+    // 400/408 answers (issue #5862), and a client generated from a document that declared the bookmark only
+    // on 'summary' would not know to look for it where it matters most.
+    error.addProperty("commitIndex", SpecBuilders.integer(
+        "Last applied Raft index, present on a replicated database. On a failed load it bookmarks the chunks "
+            + "that were committed before the failure"));
+    schema.addProperty("error", error);
     return schema;
   }
 

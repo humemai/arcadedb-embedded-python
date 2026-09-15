@@ -23,6 +23,7 @@ import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.BasicDatabase;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.exception.ConcurrentModificationException;
 import com.arcadedb.exception.ConfigurationException;
 import com.arcadedb.exception.DatabaseIsClosedException;
@@ -30,6 +31,7 @@ import com.arcadedb.exception.DatabaseMetadataException;
 import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.exception.PageSnapshotException;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.schema.LocalSchema;
 import com.arcadedb.utility.CallableNoReturn;
 import com.arcadedb.utility.CodeUtils;
 import com.arcadedb.utility.ExcludeFromJacocoGeneratedReport;
@@ -37,9 +39,12 @@ import com.arcadedb.utility.FileUtils;
 import com.arcadedb.utility.LockContext;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -67,7 +72,7 @@ import java.util.function.BiFunction;
  * {@link #openSnapshot} walks 1 to 5 in that order; {@link FileManager#dropFile} takes 4 then 5, which agrees. No
  * path takes the FileManager monitor and then this manager's lock, and none takes the registry lock and then
  * anything else - {@code PageSnapshot.close()} unregisters (5) and only then drops its retained files, holding
- * nothing.
+ * nothing. {@link #beginDatabaseClose} waits on (5) holding nothing else (#7458).
  */
 public class PageManager extends LockContext {
   public static final PageManager INSTANCE = new PageManager();
@@ -147,6 +152,23 @@ public class PageManager extends LockContext {
    */
   private volatile PageSnapshot[] activeSnapshots = null;
   private final    Object         snapshotRegistryLock = new Object();
+  /**
+   * Databases whose close is in progress (#7458), with the number of closers in flight: no snapshot window may open
+   * on them, and {@link #beginDatabaseClose} waits until the ones already open are released. Counted rather than a
+   * set, so two concurrent closers of the same database (a shutdown hook racing an explicit drop) keep the mark up
+   * until the LAST of them has finished, not the first. Guarded by {@link #snapshotRegistryLock}, keyed like
+   * {@code LocalDatabase.equals} - by path - so a wrapper and the embedded instance it wraps mark the same database.
+   */
+  private final    Map<Database, Integer> closingDatabases = new HashMap<>();
+  /**
+   * Windows that have left {@link #activeSnapshots} but whose {@code close()} has not finished releasing them: the
+   * shadow may still be open and the files whose deletion they deferred may still be on disk. {@link #beginDatabaseClose}
+   * counts these with the active ones, so a close never proceeds under a release still in progress - the registry
+   * array alone would read zero from the first step of the window's close on. Guarded by {@link #snapshotRegistryLock}.
+   */
+  private final    Set<PageSnapshot> releasingSnapshots = new HashSet<>();
+  /** How long {@link #beginDatabaseClose} waits between re-checks of the open windows; also its logging cadence. */
+  private static final long CLOSE_WAIT_POLL_MILLIS = 10_000L;
   /** Serializes the t0 barrier per database (NOT the windows themselves, which may overlap freely). */
   private final ConcurrentHashMap<Database, Object>              snapshotBarrierLocks = new ConcurrentHashMap<>();
   /**
@@ -624,10 +646,20 @@ public class PageManager extends LockContext {
   }
 
   private PageSnapshot openSnapshotInternal(final DatabaseInternal database) throws IOException, InterruptedException {
+    if (!database.isOpen() || isDatabaseClosing(database))
+      // NOT TIMED AND NOT COUNTED: NOTHING OF THE BARRIER RAN, AND A CALL THAT REFUSED INSTANTLY WOULD OTHERWISE PULL
+      // THE AVERAGE THIS METRIC EXISTS TO REPORT TOWARDS ZERO. ASKED BEFORE THE FLUSH THREAD, WHICH THE LAST CLOSE
+      // TAKES DOWN WITH IT: "THE DATABASE IS CLOSED" IS THE ANSWER THE CALLER CAN ACT ON. THE RACE WITH A CLOSE IN
+      // PROGRESS IS SETTLED BY registerSnapshot, UNDER THE MONITOR THE CLOSE MARKS ITSELF ON - THIS IS ONLY THE
+      // CHEAP EARLY ANSWER (#7458), SO THAT A BACKUP ASKING WHILE A CLOSE IS ALREADY WAITING DOES NOT DRAIN AND
+      // SUSPEND THE FLUSH PIPELINE OF EVERY DATABASE IN THE JVM ONLY TO BE REFUSED AT THE LAST STEP
+      throw new PageSnapshotException(
+          "Cannot open a snapshot of database '" + database.getName() + "': the database is closed or closing",
+          PageSnapshotException.Reason.CLOSING);
+
     final PageManagerFlushThread thread = flushThread;
     if (thread == null)
-      // NOT TIMED AND NOT COUNTED: NOTHING OF THE BARRIER RAN, AND A CALL THAT REFUSED INSTANTLY WOULD OTHERWISE PULL
-      // THE AVERAGE THIS METRIC EXISTS TO REPORT TOWARDS ZERO
+      // NOT TIMED AND NOT COUNTED FOR THE SAME REASON
       throw new PageSnapshotException(
           "Cannot open a snapshot of database '" + database.getName() + "': the page manager is not running",
           PageSnapshotException.Reason.NOT_RUNNING);
@@ -856,7 +888,68 @@ public class PageManager extends LockContext {
     final long maxSize = snapshotMaxShadowSize(configuration, files, spillVolumeUsableSpace);
 
     return new PageSnapshot(database, this, database.getTransactionManager().getLastTransactionId(), files,
-        new PageShadow(spillFile, maxRAM, maxSize));
+        captureConfigurationFiles(database), new PageShadow(spillFile, maxRAM, maxSize));
+  }
+
+  /**
+   * Reads {@code configuration.json} and {@code schema.json} whole, as the last step of the t0 barrier (#6114).
+   * <p>
+   * WHY INSIDE THE BARRIER. The two files describe the page set this window is about to serve: which buckets and
+   * indexes exist, and which file backs each of them. Read afterwards - which is what every consumer did before
+   * this - they are "the page files, plus whatever the configuration looked like shortly after", and the only thing
+   * that made that safe was the database read lock the consumer held for its WHOLE operation, excluding DDL. Read
+   * here, they belong to the same observation as the file list: this runs inside
+   * {@code FileManager.executeWithFileSetLocked}, so no file can be created or dropped between the listing above
+   * and these two reads, and a backup no longer has to block DDL for its duration.
+   * <p>
+   * WHAT THAT DOES NOT BUY. The file-set lock orders this against file creation and file drop, not against the
+   * schema SAVE. #7457 has since moved {@code LocalSchema.recordFileChanges}'s save inside the write-locked DDL
+   * callback, so the file set and {@code schema.json} now advance within one write-lock frame; but this barrier
+   * takes no DATABASE lock, only the file-set monitor, which the DDL releases between registering a file and
+   * saving the schema. A window landing in that gap can still observe a DDL half-applied. It is microseconds wide,
+   * it predates this change, and the read lock this path used to hold did not close it either - a DDL already past
+   * the write lock was never excluded by a reader.
+   * <p>
+   * WHY IT IS AFFORDABLE. The rest of this barrier works hard to avoid filesystem calls under the JVM-wide lock -
+   * see {@code PageSnapshot.SnapshotFile.lastModified()} and the note on the t0 page count, both of which were
+   * moved out or made lock-free for exactly that reason. This is two small sequential reads of a few KB with a
+   * fixed count, not one per bucket and index, and there is no later point at which the content would still be the
+   * t0 one. It is the deliberate exception, not a precedent.
+   * <p>
+   * A read that fails aborts the window rather than producing one with a missing or stale configuration: an archive
+   * whose {@code schema.json} does not match its pages is the failure mode a backup exists to avoid, and the
+   * consumers all fall back to the suspend-and-freeze path, which reads these files under a lock as before.
+   */
+  private List<PageSnapshot.SnapshotConfigFile> captureConfigurationFiles(final DatabaseInternal database)
+      throws IOException {
+    final List<PageSnapshot.SnapshotConfigFile> captured = new ArrayList<>(2);
+    final File databaseDirectory = new File(database.getDatabasePath());
+
+    for (final String fileName : new String[] { LocalDatabase.CONFIGURATION_FILE_NAME, LocalSchema.SCHEMA_FILE_NAME }) {
+      final File file = new File(databaseDirectory, fileName);
+      try {
+        // TIMESTAMP FIRST, BYTES SECOND. Both writers of these files publish by rename, so a rename landing
+        // between the two calls would otherwise stamp the archive entry with a version NEWER than the bytes next
+        // to it. Read in this order the mismatch can only go the other way - a stamp slightly behind its content,
+        // which is the harmless direction for a zip entry header
+        final long lastModified = file.lastModified();
+        captured.add(new PageSnapshot.SnapshotConfigFile(fileName, Files.readAllBytes(file.toPath()), lastModified));
+      } catch (final NoSuchFileException e) {
+        // ABSENT IS A LEGITIMATE STATE, NOT AN ERROR: configuration.json only exists once a setting has been
+        // persisted, and schema.json only once the schema has been saved. The consumers already treated a missing
+        // file as "nothing to archive", so the entry is simply left out - no entry rather than an empty one, which
+        // a restore would extract as a zero-length file where none belongs.
+        //
+        // LOGGED HERE AND NOT AT THE CONSUMER. The backup used to print "- File 'configuration.json'... not found"
+        // because it was the one naming the two files; now that it archives whatever the window carries, only this
+        // method knows which file was expected and was not there. Saying so here keeps that line's information
+        // without handing the filenames back to every consumer
+        LogManager.instance().log(this, Level.FINE,
+            "Snapshot of database '%s': configuration file '%s' did not exist at t0, so it is not part of the window",
+            null, database.getName(), fileName);
+      }
+    }
+    return captured;
   }
 
   /**
@@ -955,14 +1048,118 @@ public class PageManager extends LockContext {
   }
 
   private PageSnapshot registerSnapshot(final PageSnapshot snapshot) {
+    final Database database = snapshot.getDatabase();
+    final boolean refused;
     synchronized (snapshotRegistryLock) {
-      final PageSnapshot[] current = activeSnapshots;
-      final PageSnapshot[] updated = current == null ? new PageSnapshot[1] : Arrays.copyOf(current, current.length + 1);
-      updated[updated.length - 1] = snapshot;
-      activeSnapshots = updated;
+      // #7458: DECIDED UNDER THE SAME MONITOR beginDatabaseClose MARKS AND WAITS UNDER, SO A WINDOW IS EITHER SEEN BY
+      // THE WAITING CLOSE OR REFUSED HERE - NEVER NEITHER. A CLOSE THAT IS WAITING FOR THE OPEN WINDOWS TO DRAIN MUST
+      // NOT BE POSTPONED BY NEW ONES, AND A WINDOW MUST NOT OPEN ON FILES A CLOSE IS ABOUT TO SHUT
+      refused = closingDatabases.containsKey(database) || !database.isOpen();
+      if (!refused) {
+        final PageSnapshot[] current = activeSnapshots;
+        final PageSnapshot[] updated = current == null ? new PageSnapshot[1] : Arrays.copyOf(current, current.length + 1);
+        updated[updated.length - 1] = snapshot;
+        activeSnapshots = updated;
+      }
     }
+
+    if (refused) {
+      // NOTHING WAS PUBLISHED AND THE SHADOW HAS NOT TOUCHED THE DISK YET: CLOSING THE WINDOW ONLY RELEASES THE
+      // OBJECT, AND IT IS DONE OUTSIDE THE REGISTRY MONITOR LIKE EVERY OTHER WINDOW CLOSE
+      snapshot.close();
+      throw new PageSnapshotException("Cannot open a snapshot of database '" + database.getName()
+          + "': the database is closed or closing", PageSnapshotException.Reason.CLOSING);
+    }
+
     totalSnapshotWindowsOpened.incrementAndGet();
     return snapshot;
+  }
+
+  /**
+   * Marks {@code database} as closing and waits until every snapshot window open on it has been released (#7458).
+   * <p>
+   * A window is a backup reading the page files without holding the database lock, so a close that went ahead would
+   * shut the files underneath it: the window failed, the backup fell back to the frozen-files path against a closed
+   * database and failed loudly. That was the safe direction, but the database read lock the snapshot path used to
+   * hold made the close simply WAIT for the backup, and this restores that - better than before, in fact, because
+   * the wait holds no database lock, so the database keeps serving while the backup finishes. From this call on and
+   * until {@link #endDatabaseClose}, {@link #openSnapshot} refuses the database, so a stream of backups cannot
+   * postpone the close indefinitely.
+   * <p>
+   * The wait is unbounded and NOT cut short by an interrupt, exactly like the write lock acquisition it replaces
+   * ({@code ReentrantReadWriteLock.lock()} is uninterruptible), and like the durable part of the close that follows it,
+   * which runs with the interrupt flag cleared on purpose: an interrupt that let the close go ahead would shut the
+   * files under the backups still reading them, which is the failure this method exists to prevent. The interrupt is
+   * remembered and restored on the way out, so the caller still sees it. Called holding no lock of this manager - it
+   * waits on the registry monitor, which is last in the lock order.
+   */
+  public void beginDatabaseClose(final Database database) {
+    boolean interrupted = false;
+    synchronized (snapshotRegistryLock) {
+      closingDatabases.merge(database, 1, Integer::sum);
+
+      boolean logged = false;
+      for (int open; (open = countSnapshotWindows(database)) > 0; ) {
+        LogManager.instance().log(this, logged ? Level.FINE : Level.INFO,
+            "Close of database '%s' is waiting for %d open snapshot window(s) to be released (a backup is reading them)",
+            null, database.getName(), open);
+        logged = true;
+        try {
+          snapshotRegistryLock.wait(CLOSE_WAIT_POLL_MILLIS);
+        } catch (final InterruptedException e) {
+          if (!interrupted)
+            LogManager.instance().log(this, Level.WARNING,
+                "Close of database '%s' interrupted while waiting for %d open snapshot window(s): the wait goes on until they are released, the interrupt is restored afterwards",
+                null, database.getName(), open);
+          interrupted = true;
+        }
+      }
+    }
+    if (interrupted)
+      Thread.currentThread().interrupt();
+  }
+
+  private boolean isDatabaseClosing(final Database database) {
+    synchronized (snapshotRegistryLock) {
+      return closingDatabases.containsKey(database);
+    }
+  }
+
+  /**
+   * Releases one closer's mark set by {@link #beginDatabaseClose}; the last one lifts it. Called once the close has
+   * completed, whatever its outcome.
+   */
+  public void endDatabaseClose(final Database database) {
+    synchronized (snapshotRegistryLock) {
+      closingDatabases.computeIfPresent(database, (k, closers) -> closers > 1 ? closers - 1 : null);
+    }
+  }
+
+  /**
+   * The window's {@code close()} is done: the shadow is closed and the files it retained are released. Wakes a
+   * {@link #beginDatabaseClose} waiting for it. A window that was never registered (refused) is not being tracked and
+   * this is a no-op for it.
+   */
+  void snapshotReleased(final PageSnapshot snapshot) {
+    synchronized (snapshotRegistryLock) {
+      // ONLY A CLOSE OF THIS WINDOW'S DATABASE CAN BE WAITING FOR IT: A RELEASE ON ANOTHER DATABASE WAKES NOBODY
+      if (releasingSnapshots.remove(snapshot) && closingDatabases.containsKey(snapshot.getDatabase()))
+        snapshotRegistryLock.notifyAll();
+    }
+  }
+
+  /** Windows still open on the database, plus the ones whose release is in progress. Under the registry lock. */
+  private int countSnapshotWindows(final Database database) {
+    int count = 0;
+    final PageSnapshot[] snapshots = activeSnapshots;
+    if (snapshots != null)
+      for (final PageSnapshot snapshot : snapshots)
+        if (snapshot.isFor(database))
+          ++count;
+    for (final PageSnapshot snapshot : releasingSnapshots)
+      if (snapshot.isFor(database))
+        ++count;
+    return count;
   }
 
   void unregisterSnapshot(final PageSnapshot snapshot) {
@@ -978,6 +1175,8 @@ public class PageManager extends LockContext {
         }
       if (found < 0)
         return;
+      // FROM HERE UNTIL snapshotReleased THE WINDOW IS RELEASING: STILL COUNTED BY A WAITING CLOSE (#7458)
+      releasingSnapshots.add(snapshot);
       if (current.length == 1) {
         activeSnapshots = null;
         return;
@@ -1124,7 +1323,11 @@ public class PageManager extends LockContext {
     return flushThread;
   }
 
-  private int getMostRecentVersionOfPage(final PageId pageId, final int pageSize) throws IOException {
+  /**
+   * The version of the most recent committed copy of a page this node holds: the read cache, the flush pipeline or the
+   * file, in that order. {@code 0} for a page that does not exist yet.
+   */
+  public int getMostRecentVersionOfPage(final PageId pageId, final int pageSize) throws IOException {
     CachedPage page = readCache.get(pageId);
     if (page == null)
       page = loadPage(pageId, pageSize, false, true);
@@ -1226,14 +1429,30 @@ public class PageManager extends LockContext {
   public void checkPageVersion(final MutablePage page, final boolean isNew) throws IOException {
     final PageId pageId = page.getPageId();
 
-    final FileManager fileManager = ((DatabaseInternal) pageId.getDatabase()).getFileManager();
+    final DatabaseInternal database = (DatabaseInternal) pageId.getDatabase();
+    final FileManager fileManager = database.getFileManager();
 
     if (!fileManager.existsFile(pageId.getFileId()))
       throw new ConcurrentModificationException(
           "Concurrent modification on page " + pageId + ". The file with id " + pageId.getFileId()
               + " does not exist anymore. Please retry the operation (threadId=" + Thread.currentThread().threadId() + ")");
 
-    final int mostRecentPageVersion = getMostRecentVersionOfPage(pageId, page.getPhysicalSize());
+    int mostRecentPageVersion = getMostRecentVersionOfPage(pageId, page.getPhysicalSize());
+
+    // #6965: a version the replication log has already assigned to this page, but that this node has not applied yet,
+    // IS the most recent one. Validating against the stale local copy would let the transaction ship a delta computed
+    // on a superseded image, and the leader would refuse it at append time anyway - refuse it here, before the round
+    // trip. Null on a standalone database and on replicas, so the common path pays one volatile read. Only phase 1
+    // consults it: the phase-2 bump in updatePageVersion runs at the entry's log position, where the reservation
+    // it would find is the entry's own.
+    if (database.getEmbedded() instanceof LocalDatabase localDatabase) {
+      final PageVersionReservations reservations = localDatabase.getPageVersionReservations();
+      if (reservations != null) {
+        final int reserved = reservations.reservedVersion(pageId);
+        if (reserved > mostRecentPageVersion)
+          mostRecentPageVersion = reserved;
+      }
+    }
 
     if (mostRecentPageVersion != page.getVersion()) {
       totalConcurrentModificationExceptions.incrementAndGet();
@@ -1368,6 +1587,15 @@ public class PageManager extends LockContext {
     }
   }
 
+  /**
+   * The phase-2 half of the version check: validates against the local copy only, by design. On a replicated leader
+   * this runs on the Raft apply thread at the entry's own log position, where the only reservation
+   * {@link #checkPageVersion} could find for the page (#6965) is this very entry's, so consulting the reservations
+   * here would refuse every replicated commit. The direct writers that also come through here (index compaction,
+   * bloom filters, vector graphs) are therefore NOT checked against in-flight replicated entries: they run under the
+   * database write lock, which excludes local committers but not replica entries, and closing that window is the
+   * cluster-wide DDL exclusion tracked as #7438.
+   */
   public MutablePage updatePageVersion(final MutablePage page, final boolean isNew) throws IOException, InterruptedException {
     final PageId pageId = page.getPageId();
 
@@ -1732,19 +1960,55 @@ public class PageManager extends LockContext {
     final FileManager fileManager = database.getFileManager();
     final int fileId = page.pageId.getFileId();
 
-    if (fileManager.existsFile(fileId)) {
-      final PaginatedComponentFile file = (PaginatedComponentFile) fileManager.getFile(fileId);
-      if (!file.isOpen())
+    // ONE lookup, not an existsFile() followed by a get: they hit the same map, and the second answering null is
+    // the same "the file is gone" the first one used to report - now handled here rather than twice.
+    final PaginatedComponentFile file = (PaginatedComponentFile) fileManager.getFileIfExists(fileId);
+    if (file != null) {
+      if (file.isDropped() || !file.isOpen()) {
+        // ONE decision point for both facts, and isDropped() is what it turns on. Asking them separately - "is it
+        // dropped?" then, a few lines later, "is it closed?" - leaves a window in which a drop landing between the
+        // two reports a superseded page as a live file's failed write, which is the WARNI half of issue #7363.
+        // There is no such window here: drop() raises `dropped` BEFORE close() clears `open`, and both are
+        // volatile, so whichever of the two this thread observes first it sees a consistent pair.
+        if (file.isDropped()) {
+          discardPageOfDroppedFile(page, file, null);
+          return;
+        }
         throw new DatabaseMetadataException("Cannot flush pages on disk because file '" + file.getFileName() + "' is closed");
+      }
 
       LogManager.instance()
           .log(this, Level.FINE, "Flushing page %s to disk (threadId=%d)...", null, page, Thread.currentThread().threadId());
 
-      // ACQUIRE A LOCK ON THE I/O OPERATION TO AVOID PARTIAL READS/WRITES
-      concurrentPageAccess(page.pageId, true, () -> {
-        final int written = file.write(page);
-        totalPagesWrittenSize.addAndGet(written);
-      });
+      try {
+        // ACQUIRE A LOCK ON THE I/O OPERATION TO AVOID PARTIAL READS/WRITES
+        concurrentPageAccess(page.pageId, true, () -> {
+          final int written = file.write(page);
+          totalPagesWrittenSize.addAndGet(written);
+        });
+      } catch (final IllegalArgumentException | FileNotFoundException e) {
+        // The two - and only two - ways PaginatedComponentFile.write() reports "the file went away under me",
+        // caught by type rather than by catching everything and letting isDropped() decide: a coincidentally
+        // dropped file must not turn some unrelated failure into a FINE line and a released WAL ack.
+        //   IllegalArgumentException: an index compaction drops the sub-index file it replaced while this thread
+        // is between the isOpen() check above and the write, so close() has nulled the channel under its own
+        // write lock. Unchecked, so it used to escape every catch in PageManagerFlushThread and land on its
+        // top-level handler as "Error on processing page flush requests" at SEVERE (issue #7363).
+        //   FileNotFoundException: the same event a moment later. A write already inside the channel gets
+        // ClosedChannelException, and the reopen that correctly handles an ACCIDENTAL close refuses to re-create
+        // a file that was closed on purpose or already deleted, reporting it as this.
+        // Loud either way, and about a page that is superseded by construction - the file it belongs to has been
+        // deleted, so there is nowhere for it to go and nothing to lose. Re-checking isDropped() - raised BEFORE
+        // the close, see ComponentFile - is what separates that from a live file whose write genuinely failed,
+        // which still propagates with its own reporting intact.
+        // getPageNumber() >= 0 as well as isDropped(): write() raises IllegalArgumentException for an invalid
+        // page number too, which says nothing about the file and must not be absorbed just because the file
+        // happens to have been dropped at that instant.
+        if (!file.isDropped() || page.pageId.getPageNumber() < 0)
+          throw e;
+        discardPageOfDroppedFile(page, file, e);
+        return;
+      }
 
       try {
         final PaginatedComponent component = (PaginatedComponent) database.getSchema().getFileByIdIfExists(fileId);
@@ -1777,18 +2041,34 @@ public class PageManager extends LockContext {
           walFile.notifyPageFlushed();
       }
 
-    } else {
-      LogManager.instance()
-          .log(this, Level.FINE, "Cannot flush page %s because the file has been dropped (threadId=%d)...", null, page,
-              Thread.currentThread().threadId());
-      // The page will never be flushed and its content is irrelevant (the file is gone): release its WAL
-      // ack, or the stale pending count would make every later clean close preserve the WAL for nothing
-      // (the close-time ack gate, #4928). takeWALFile makes the release exactly-once against the racing
-      // dropped-file batch purge.
-      final WALFile walFile = page.takeWALFile();
-      if (walFile != null)
-        walFile.notifyPageFlushed();
-    }
+    } else
+      discardPageOfDroppedFile(page, null, null);
+  }
+
+  /**
+   * Quietly retires a page queued against a file that has been dropped - an index compaction replacing a
+   * sub-index, a bucket or index drop. The page will never be flushed and its content is irrelevant (the file is
+   * gone), so this is FINE and not a failure: the alternative, logging at SEVERE/WARNI on a path an operator
+   * watches for real corruption, is exactly what issue #7363 is about.
+   * <p>
+   * Its WAL ack is still released, or the stale pending count would make every later clean close preserve the WAL
+   * for nothing (the close-time ack gate, #4928). {@code takeWALFile} makes the release exactly-once against the
+   * racing dropped-file batch purge.
+   *
+   * @param file  the file the page was addressed to, or {@code null} when it has already left the file manager
+   * @param cause  what the write failed with, when the drop was observed by a failed write rather than up front;
+   *               reported so the FINE line still names it and this can never hide an unexpected failure silently
+   */
+  private void discardPageOfDroppedFile(final MutablePage page, final PaginatedComponentFile file,
+      final Exception cause) {
+    LogManager.instance()
+        .log(this, Level.FINE, "Cannot flush page %s because the file %shas been dropped (threadId=%d)%s", null, page,
+            file != null ? "'" + file.getFileName() + "' " : "", Thread.currentThread().threadId(),
+            cause != null ? ": " + cause.getClass().getSimpleName() + " - " + cause.getMessage() : "...");
+
+    final WALFile walFile = page.takeWALFile();
+    if (walFile != null)
+      walFile.notifyPageFlushed();
   }
 
   private CachedPage loadPage(final PageId pageId, final int size, final boolean createIfNotExists, final boolean cache)

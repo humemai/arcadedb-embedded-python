@@ -25,6 +25,9 @@ import com.arcadedb.graph.GraphBatch;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.olap.GraphAnalyticalView;
 import com.arcadedb.graph.olap.GraphAnalyticalViewRegistry;
+import com.arcadedb.index.Index;
+import com.arcadedb.index.IndexMaintenanceSuspension;
+import com.arcadedb.index.vector.LSMVectorIndex;
 import com.arcadedb.index.vector.VectorUtils;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.serializer.json.JSONArray;
@@ -43,10 +46,13 @@ import java.time.temporal.ChronoField;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.logging.Level;
@@ -58,7 +64,28 @@ import java.util.logging.Level;
  *       collect graph topology as compressed int arrays (~300 MB for 8M vertices / 15M edges).</li>
  *   <li><b>Pass 2</b> — Create all edges from the in-memory topology, one batch per edge type
  *       with bidirectional=true for full IN+OUT traversal.</li>
+ *   <li><b>Vector graphs</b> — Build the graph of every LSM vector index on a type the import wrote to,
+ *       synchronously, so the index is queryable at index speed when {@link #run()} returns. Opt out with
+ *       {@link Builder#withVectorGraphBuild(boolean)} to leave it to the index's own background rebuild.</li>
  * </ol>
+ * <p>
+ * The speculative background maintenance of the database's indexes (the vector index's inactivity rebuild) is
+ * suspended for the whole of {@link #run()}, not only while one of its batches is open: the gap between the two
+ * passes is where it used to fire and then run alongside the whole edge pass (issue #7432). The suspension covers
+ * EVERY index of the database, as a {@link GraphBatch}'s does, and lasts for the load plus the graph build at the
+ * end of it - half an hour at a few million vectors. An unrelated writer sharing the same open database has that
+ * index's automatic rebuild deferred for that long; its writes stay searchable through the delta scan meanwhile.
+ * The importer is meant for a database being loaded, not one serving other writers at the same time.
+ * <p>
+ * <b>Never point this at a database directory a running ArcadeDB Server (or any other process/JVM) already has
+ * open</b> (issue #7479). {@code DatabaseFactory} opens the raw database files directly - the same files the
+ * server's own embedded engine has open - and while the per-process lock file is meant to refuse that, it is
+ * only as reliable as the filesystem's advisory locking: a Docker Desktop bind mount (Windows/macOS) does not
+ * enforce {@code FileChannel.tryLock()} across the host/container boundary, so a second process can open the
+ * same files anyway. Two independent, uncoordinated engine instances writing to one set of files is unsafe
+ * regardless of that particular gap - one instance's own clean {@code close()} can remove WAL files the other
+ * still has open, corrupting it. To bulk-load into a database a server is serving, use the server's own remote
+ * protocol instead of an embedded {@code DatabaseFactory}, or stop the server for the duration of the import.
  * <p>
  * Usage:
  * <pre>
@@ -83,23 +110,43 @@ import java.util.logging.Level;
  */
 public class GraphImporter implements AutoCloseable {
 
+  /**
+   * A key that is not the canonical decimal text of a {@code long}, and the empty slot marker of
+   * {@link LongIntMap}. {@code Long.MIN_VALUE} therefore never reaches the primitive maps: a key
+   * spelled {@code "-9223372036854775808"} is kept with the textual keys, which resolve it the
+   * same way, only boxed.
+   *
+   * @see #canonicalLong(String)
+   */
+  static final long NOT_CANONICAL_LONG = Long.MIN_VALUE;
+
+  /**
+   * Rows the vertex pass buffers before committing. The commit is what bounds the transaction's
+   * memory on a large source, and it is also what makes a failed import PARTIAL rather than atomic:
+   * everything up to the last multiple of this stays on the disk when a later row throws, which is
+   * why {@link #processVertexSource} reports the committed count rather than the count read.
+   */
+  private static final int COMMIT_EVERY_ROWS = 50_000;
+
   private final Database                            database;
   private final List<VertexSourceDef>               vertexSources;
   private final List<EdgeSourceDef>                 edgeSources;
   private final long                                limit;
+  private final boolean                             vectorGraphBuild;
   private final Map<String, TypeState>              typeStates     = new LinkedHashMap<>();
   private final Map<String, EdgeCollector>          edgeCollectors = new LinkedHashMap<>();
-  private final Map<String, List<DeferredEdgePair>> deferredEdges  = new HashMap<>();
 
   private long totalVertices;
   private long totalEdges;
+  private long unresolvedEdges;
 
   private GraphImporter(final Database database, final List<VertexSourceDef> vertexSources,
-                        final List<EdgeSourceDef> edgeSources, final long limit) {
+                        final List<EdgeSourceDef> edgeSources, final long limit, final boolean vectorGraphBuild) {
     this.database = database;
     this.vertexSources = vertexSources;
     this.edgeSources = edgeSources;
     this.limit = limit;
+    this.vectorGraphBuild = vectorGraphBuild;
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -145,20 +192,28 @@ public class GraphImporter implements AutoCloseable {
     }
   }
 
-  /** Creates vertex and edge types declared in the JSON config (if they don't already exist). */
+  /**
+   * Creates vertex and edge types declared in the JSON config (if they don't already exist).
+   * <p>
+   * Reads its keys through {@link #required} for the same reason {@link #fromJSON} does, and because it runs
+   * FIRST on the command-line path ({@code main} calls it before {@code fromJSON}): a config with no
+   * {@code "type"} would otherwise be answered by the bare {@code JSONException} here and never reach the
+   * sentence written for it (issue #7302, PR #7314 review).
+   */
   public static void createSchemaFromConfig(final Database database, final JSONObject config) {
     database.transaction(() -> {
       if (config.has("vertices")) {
         final JSONArray vertices = config.getJSONArray("vertices");
         for (int i = 0; i < vertices.length(); i++) {
           final JSONObject vj = vertices.getJSONObject(i);
-          final String typeName = vj.getString("type");
+          final String typeName = required(vj, "type", "a vertex source", "the vertex type the rows are imported into");
           if (!database.getSchema().existsType(typeName))
             database.getSchema().createVertexType(typeName);
           if (vj.has("edges")) {
             final JSONArray edges = vj.getJSONArray("edges");
             for (int j = 0; j < edges.length(); j++) {
-              final String edgeType = edges.getJSONObject(j).getString("edge");
+              final String edgeType = required(edges.getJSONObject(j), "edge",
+                  "an \"edges\" entry of vertex source '" + typeName + "'", "the edge type to create");
               if (!database.getSchema().existsType(edgeType))
                 database.getSchema().createEdgeType(edgeType);
             }
@@ -168,7 +223,8 @@ public class GraphImporter implements AutoCloseable {
       if (config.has("edgeSources")) {
         final JSONArray edgeSources = config.getJSONArray("edgeSources");
         for (int i = 0; i < edgeSources.length(); i++) {
-          final String edgeType = edgeSources.getJSONObject(i).getString("edge");
+          final String edgeType = required(edgeSources.getJSONObject(i), "edge", "an edge source",
+              "the edge type the rows are imported into");
           if (!database.getSchema().existsType(edgeType))
             database.getSchema().createEdgeType(edgeType);
         }
@@ -247,7 +303,8 @@ public class GraphImporter implements AutoCloseable {
    * and {@code "list:SourceAttr"} (generic list). The same prefixes apply to a vertex's {@code "properties"} and to an
    * {@code "edgeSources"} entry's {@code "properties"}.
    * File format auto-detected from extension (.xml, .csv, .jsonl). XML defaults to attribute-based {@code <row/>};
-   * add {@code "element": "book"} to read child elements as fields.
+   * add {@code "element": "book"} to read child elements as fields. A CSV source takes {@code "delimiter"}, which is
+   * a single character; an edge's {@code "split"} is a whole string and may be longer, e.g. {@code "split": ", "}.
    *
    * @param database the target database (schema must be pre-created)
    * @param json     the JSON configuration string
@@ -263,6 +320,8 @@ public class GraphImporter implements AutoCloseable {
 
     if (config.has("limit"))
       b.limit(config.getLong("limit"));
+    if (config.has("vectorGraphBuild"))
+      b.withVectorGraphBuild(config.getBoolean("vectorGraphBuild"));
 
     // Vertex sources
     if (config.has("vertices")) {
@@ -282,8 +341,8 @@ public class GraphImporter implements AutoCloseable {
   }
 
   private static void parseVertexSource(final Builder b, final JSONObject vj, final String baseDir) {
-    final String typeName = vj.getString("type");
-    final RecordSource source = createRecordSource(vj, baseDir);
+    final String typeName = required(vj, "type", "a vertex source", "the vertex type the rows are imported into");
+    final RecordSource source = createRecordSource(vj, baseDir, "vertex source '" + typeName + "'");
 
     b.vertex(typeName, source, v -> {
       if (vj.has("id"))
@@ -291,7 +350,21 @@ public class GraphImporter implements AutoCloseable {
       if (vj.has("nameId"))
         v.idByName(vj.getString("nameId"));
       if (vj.has("filter")) {
-        final String[] parts = vj.getString("filter").split("=", 2);
+        final String spec = vj.getString("filter");
+        final String[] parts = spec.split("=", 2);
+        // Issue #7266: the same unguarded [1] the edge endpoints carried. A filter written without its '=' is a
+        // configuration mistake, and it has to read as one rather than as an array index out of bounds.
+        //
+        // The EMPTY HALF is checked on the attribute only, deliberately, and not on both sides as
+        // splitEdgeSourceEndpoint checks them: "attr=" filters for rows whose attribute IS empty, which two of the
+        // three record sources can actually answer - XmlRowSource returns the raw attribute value, so attr="" is a
+        // match, and JsonlRowSource returns "" for an explicit empty string. Only CsvRowSource folds empty to null
+        // (CsvRowSource:98-101), where such a filter selects nothing. Rejecting it here would refuse a config that
+        // is meaningful for the other two.
+        if (parts.length != 2 || parts[0].isEmpty())
+          throw new IllegalArgumentException("Vertex source '" + typeName + "' declares its filter as '" + spec
+              + "': the form is \"filter\": \"attribute=value\", naming the attribute to test and the value that "
+              + "selects the rows to import");
         v.filter(parts[0], parts[1]);
       }
       if (vj.getBoolean("deduplicate", false))
@@ -311,9 +384,10 @@ public class GraphImporter implements AutoCloseable {
         final JSONArray edges = vj.getJSONArray("edges");
         for (int j = 0; j < edges.length(); j++) {
           final JSONObject ej = edges.getJSONObject(j);
-          final String attr = ej.getString("attribute");
-          final String edgeType = ej.getString("edge");
-          final String target = ej.getString("target");
+          final String where = "an \"edges\" entry of vertex source '" + typeName + "'";
+          final String attr = required(ej, "attribute", where, "the attribute holding the key of the vertex to link");
+          final String edgeType = required(ej, "edge", where, "the edge type to create");
+          final String target = required(ej, "target", where, "the vertex type the key resolves against");
 
           final boolean byName = ej.getBoolean("byName", false);
           if (ej.has("split"))
@@ -332,14 +406,14 @@ public class GraphImporter implements AutoCloseable {
   }
 
   private static void parseEdgeSource(final Builder b, final JSONObject ej, final String baseDir) {
-    final String edgeType = ej.getString("edge");
-    final RecordSource source = createRecordSource(ej, baseDir);
+    final String edgeType = required(ej, "edge", "an edge source", "the edge type the rows are imported into");
+    final RecordSource source = createRecordSource(ej, baseDir, "edge source '" + edgeType + "'");
 
     b.edgeSource(edgeType, source, e -> {
       // "from": "PostId:Post" → attribute:vertexType
-      final String[] fromParts = ej.getString("from").split(":");
+      final String[] fromParts = splitEdgeSourceEndpoint(edgeType, "from", ej.getString("from", null));
       e.from(fromParts[0], fromParts[1]);
-      final String[] toParts = ej.getString("to").split(":");
+      final String[] toParts = splitEdgeSourceEndpoint(edgeType, "to", ej.getString("to", null));
       e.to(toParts[0], toParts[1]);
 
       if (ej.has("properties")) {
@@ -350,23 +424,103 @@ public class GraphImporter implements AutoCloseable {
     });
   }
 
+  /**
+   * Splits an edge source's {@code "from"} / {@code "to"} value, whose form is {@code attribute:VertexType}.
+   * <p>
+   * Issue #7266: this used to be a bare {@code split(":")} followed by {@code [1]}. A value that forgot the
+   * {@code :VertexType} half - precisely the mistake {@link #checkEdgeSourceEndpoint} was added to describe in a
+   * sentence - answered one element and threw {@code ArrayIndexOutOfBoundsException} here, inside the consumer
+   * {@link Builder#edgeSource} runs eagerly, so the validation never got the chance to report it. The two other
+   * mis-shapes were worse than a crash because they were silent: a third colon was dropped on the floor, and an
+   * empty half became an attribute or a vertex type that matches nothing, row after row.
+   * <p>
+   * An ABSENT key is the same mistake one step earlier, and reaches the reader the same way {@code
+   * checkEdgeSourceEndpoint} phrases it: {@code getString(key)} throws a {@code JSONException} naming the key and
+   * nothing else, so the value is read with a {@code null} default and answered here instead.
+   */
+  private static String[] splitEdgeSourceEndpoint(final String edgeType, final String endpoint, final String value) {
+    if (value == null)
+      throw new IllegalArgumentException("Edge source '" + edgeType + "' declares no '" + endpoint
+          + "' endpoint: add \"" + endpoint + "\": \"attribute:VertexType\" to it, naming the attribute that holds "
+          + "the key and the vertex type it resolves against");
+
+    final String[] parts = value.split(":");
+    if (parts.length != 2 || parts[0].isEmpty() || parts[1].isEmpty())
+      throw new IllegalArgumentException("Edge source '" + edgeType + "' declares its '" + endpoint
+          + "' endpoint as '" + value + "': the form is \"" + endpoint + "\": \"attribute:VertexType\", naming the "
+          + "attribute that holds the key and the vertex type it resolves against");
+
+    return parts;
+  }
+
+  /**
+   * Reads a mandatory string key, naming what is missing and what it is for when it is absent (issue #7302).
+   * <p>
+   * {@code getString(key)} throws a {@code JSONException} that names the key and nothing else - true, and no help
+   * to someone holding a configuration file that has to say something they were never told. Every other mistake
+   * this parser can catch answers with the form the value takes and why; an absent key is the same mistake one
+   * step earlier and now reads the same way, as {@link #splitEdgeSourceEndpoint} already made it for the edge
+   * endpoints.
+   *
+   * @param where   what carries the key, in the words the configuration uses ("a vertex source").
+   * @param purpose what the value is for, so the message says what to write and not only that something is
+   *                missing.
+   */
+  private static String required(final JSONObject config, final String key, final String where,
+      final String purpose) {
+    final String value = config.getString(key, null);
+    if (value == null)
+      throw new IllegalArgumentException(capitalize(where) + " declares no \"" + key + "\": add \"" + key
+          + "\": \"...\" to it, naming " + purpose);
+    if (value.isBlank())
+      throw new IllegalArgumentException(capitalize(where) + " declares \"" + key + "\" as an empty value: it names "
+          + purpose + ", so it cannot be blank");
+    return value;
+  }
+
+  private static String capitalize(final String text) {
+    return text.isEmpty() ? text : Character.toUpperCase(text.charAt(0)) + text.substring(1);
+  }
+
+  /**
+   * Splits a property spec into its type prefix and the source attribute it reads, and applies it.
+   * <p>
+   * Issue #7302: a prefix with nothing after it - {@code "int:"} - used to produce a property bound to an
+   * attribute named the empty string, which matches nothing in any of the three record sources. Silent, row after
+   * row, and indistinguishable in the result from a source file that simply has no such column. It is the same
+   * class of configuration mistake #7266 gave a named error to everywhere else in this parser.
+   */
   private static void parsePropertySpec(final PropertyConfig v, final String propName, final String spec) {
     if (spec.startsWith("int:"))
-      v.intProperty(propName, spec.substring(4));
+      v.intProperty(propName, attributeOf(propName, spec, 4));
     else if (spec.startsWith("long:"))
-      v.longProperty(propName, spec.substring(5));
+      v.longProperty(propName, attributeOf(propName, spec, 5));
     else if (spec.startsWith("double:"))
-      v.doubleProperty(propName, spec.substring(7));
+      v.doubleProperty(propName, attributeOf(propName, spec, 7));
     else if (spec.startsWith("bool:"))
-      v.boolProperty(propName, spec.substring(5));
+      v.boolProperty(propName, attributeOf(propName, spec, 5));
     else if (spec.startsWith("vector:"))
-      v.floatArrayProperty(propName, spec.substring(7));
+      v.floatArrayProperty(propName, attributeOf(propName, spec, 7));
     else if (spec.startsWith("list:"))
-      v.listProperty(propName, spec.substring(5));
+      v.listProperty(propName, attributeOf(propName, spec, 5));
     else if (spec.startsWith("datetime:"))
-      parseDatetimeSpec(v, propName, spec.substring(9));
+      parseDatetimeSpec(v, propName, attributeOf(propName, spec, 9));
+    else if (spec.isEmpty())
+      throw new IllegalArgumentException("Property '" + propName + "' declares an empty source attribute: the "
+          + "value names the attribute the property is read from, optionally prefixed with its type, as in "
+          + "\"int:Score\"");
     else
       v.property(propName, spec);
+  }
+
+  /** The source attribute a typed spec reads, refusing the prefix with nothing after it. */
+  private static String attributeOf(final String propName, final String spec, final int prefixLength) {
+    final String attribute = spec.substring(prefixLength);
+    if (attribute.isBlank())
+      throw new IllegalArgumentException("Property '" + propName + "' declares its source as '" + spec
+          + "': the form is \"" + spec.substring(0, prefixLength) + "SourceAttribute\", naming the attribute the "
+          + "property is read from");
+    return attribute;
   }
 
   /**
@@ -382,27 +536,40 @@ public class GraphImporter implements AutoCloseable {
     // Convention: if the rest contains no format separator, it's just the attribute name.
     // To specify a format, use "datetime:FORMAT|attribute" with pipe as separator.
     final int pipe = rest.indexOf('|');
-    if (pipe > 0) {
-      final String format = rest.substring(0, pipe);
-      final String attribute = rest.substring(pipe + 1);
-      v.datetimeProperty(propName, attribute, format);
-    } else {
+    if (pipe < 0) {
       v.datetimeProperty(propName, rest);
+      return;
     }
+
+    // Issue #7302: the separator was tested with `pipe > 0`, so a spec whose format half is missing -
+    // "datetime:|attr" - fell through to the no-format branch and bound the property to an attribute literally
+    // named "|attr", which matches nothing. A pipe that IS there is a request for a custom format, and both
+    // halves of that request have to be there.
+    final String format = rest.substring(0, pipe);
+    final String attribute = rest.substring(pipe + 1);
+    if (format.isBlank() || attribute.isBlank())
+      throw new IllegalArgumentException("Property '" + propName + "' declares its source as 'datetime:" + rest
+          + "': the form is \"datetime:FORMAT|SourceAttribute\", naming the date format and the attribute the "
+          + "property is read from, or \"datetime:SourceAttribute\" for the default format");
+    v.datetimeProperty(propName, attribute, format);
   }
 
   /** Creates the appropriate RecordSource based on file extension or explicit format. */
-  private static RecordSource createRecordSource(final JSONObject config, final String baseDir) {
-    final String fileName = config.getString("file");
+  private static RecordSource createRecordSource(final JSONObject config, final String baseDir, final String where) {
+    final String fileName = required(config, "file", where, "the file the rows are read from");
     final String filePath = new File(baseDir, fileName).getPath();
     final String autoFormat = fileName.endsWith(".csv") ? "csv" : fileName.endsWith(".jsonl") || fileName.endsWith(".ndjson") ? "jsonl" : "xml";
     final String format = config.getString("format", autoFormat);
 
     switch (format) {
     case "csv":
-      final char delimiter = config.getString("delimiter", ",").charAt(0);
+      final String delimiter = config.getString("delimiter", ",");
+      if (delimiter.length() != 1)
+        throw new IllegalArgumentException("Source '" + fileName + "' declares a delimiter of "
+            + delimiter.length() + " characters (\"" + delimiter + "\"): a CSV field separator is a single "
+            + "character, such as \",\" or \";\". Only a split-field edge takes a longer delimiter");
       final int skipLines = config.getInt("skipLines", 0);
-      return new CsvRowSource(filePath, delimiter, skipLines);
+      return new CsvRowSource(filePath, delimiter.charAt(0), skipLines);
     case "jsonl":
       return new JsonlRowSource(filePath);
     default: // xml
@@ -425,6 +592,7 @@ public class GraphImporter implements AutoCloseable {
     private final List<VertexSourceDef> vertexSources = new ArrayList<>();
     private final List<EdgeSourceDef>   edgeSources   = new ArrayList<>();
     private       long                  limit;
+    private       boolean               vectorGraphBuild = true;
 
     Builder(final Database database) {
       this.database = database;
@@ -460,8 +628,21 @@ public class GraphImporter implements AutoCloseable {
       return this;
     }
 
+    /**
+     * Whether {@link #run()} ends by building the graph of every LSM vector index on a type the import wrote to
+     * (the default), so the index answers at graph speed the moment the import returns and a database close that
+     * follows finds nothing left to do. {@code false} leaves the build to the index's own background rebuild, which
+     * starts once the index has been quiet for its inactivity window - only useful when the database stays open
+     * long enough for that build to complete, since a close cancels it (issue #7432). JSON key:
+     * {@code "vectorGraphBuild"}.
+     */
+    public Builder withVectorGraphBuild(final boolean enabled) {
+      this.vectorGraphBuild = enabled;
+      return this;
+    }
+
     public GraphImporter build() {
-      return new GraphImporter(database, vertexSources, edgeSources, limit);
+      return new GraphImporter(database, vertexSources, edgeSources, limit, vectorGraphBuild);
     }
   }
 
@@ -576,6 +757,13 @@ public class GraphImporter implements AutoCloseable {
      * Filter rows: only rows where the attribute equals the given value are imported.
      * Enables splitting one file into multiple vertex types (e.g. Posts.xml → Question + Answer).
      * Format: {@code filter("PostTypeId", "1")} or in JSON: {@code "filter": "PostTypeId=1"}.
+     * <p>
+     * An EMPTY value is accepted and selects the rows that do not set the attribute at all -
+     * {@code "filter": "PostTypeId="} in JSON - on every source alike, because every source reads an empty value
+     * as "not set" ({@link RecordReader#get}). It used to depend on the file format instead: XML and JSONL handed
+     * back the empty string and matched, CSV folded it to null and matched nothing, so one config split one file
+     * two ways depending on what it had been exported to (issue #7332). An empty ATTRIBUTE is still refused,
+     * because there is no row it could ever test.
      */
     public void filter(final String attribute, final String value) {
       this.filterAttribute = attribute;
@@ -583,14 +771,20 @@ public class GraphImporter implements AutoCloseable {
     }
 
     /**
-     * Primary ID attribute (integer-valued, used for edge resolution).
+     * Primary ID attribute, used to resolve edges. The key is the attribute's text exactly as the
+     * source wrote it, so an integer, a value wider than an {@code int} and a string such as
+     * {@code "W13696992"} all work, and two spellings the source kept apart (e.g. {@code "007"}
+     * and {@code "7"}) stay two identities. An empty or absent value registers no key.
      */
     public void id(final String attribute) {
       this.idAttribute = attribute;
     }
 
     /**
-     * Secondary name-based ID (string, for split-field edge resolution like tags).
+     * Secondary ID, matched by {@code edgeOutByName}/{@code edgeInByName} and by
+     * {@code splitEdge}. Declare it when a type is referenced through two different keys - a
+     * numeric id from one file and a name from another; a single string key needs nothing more
+     * than {@link #id(String)}.
      */
     public void idByName(final String attribute) {
       this.nameIdAttribute = attribute;
@@ -628,8 +822,14 @@ public class GraphImporter implements AutoCloseable {
     }
 
     /**
-     * Split-field edge: a delimited field (e.g. "|java|python|") creates one edge per value.
-     * Values are resolved by name against the target type's nameId.
+     * Split-field edge: a delimited field (e.g. {@code "|java|python|"}) creates one edge per
+     * value, resolved by name against the target type's nameId. The wrapping delimiters are
+     * optional on either end, so {@code "java|python"} yields the same two values.
+     * <p>
+     * The delimiter is the whole string, not its first character: {@code ", "} over
+     * {@code "scifi, drama"} yields {@code "scifi"} and {@code "drama"}, with no leading space
+     * left on the second. It may not be null or empty - either is refused when the import starts,
+     * before a file is opened.
      */
     public void splitEdge(final String attribute, final String edgeType, final String targetType,
                           final String delimiter) {
@@ -646,11 +846,18 @@ public class GraphImporter implements AutoCloseable {
       this.edgeType = edgeType;
     }
 
+    /**
+     * Source endpoint: the attribute holding the key of a {@code vertexType} vertex, matched
+     * against that type's {@link VertexConfig#id(String)} attribute by its text, whatever its type.
+     */
     public void from(final String attribute, final String vertexType) {
       this.fromAttribute = attribute;
       this.fromVertexType = vertexType;
     }
 
+    /**
+     * Destination endpoint. See {@link #from(String, String)}.
+     */
     public void to(final String attribute, final String vertexType) {
       this.toAttribute = attribute;
       this.toVertexType = vertexType;
@@ -666,6 +873,18 @@ public class GraphImporter implements AutoCloseable {
    */
   public interface RecordSource {
     void forEach(RecordVisitor visitor) throws Exception;
+
+    /**
+     * The single character this source splits a row into fields on, or {@code null} when the format
+     * has none - JSONL and XML values are already distinct, with nothing cutting a row apart on a
+     * delimiter character. Used only so {@code validateEdgeTargets()} can refuse a split-edge
+     * delimiter that contains it (issue #7268): without this, a delimiter such as {@code ", "} over
+     * a comma-delimited CSV is cut into columns before the split-edge walker ever runs, and the
+     * operator sees only an unresolved-edge count pointing at the data files.
+     */
+    default Character fieldSeparator() {
+      return null;
+    }
   }
 
   @FunctionalInterface
@@ -677,7 +896,28 @@ public class GraphImporter implements AutoCloseable {
    * Read-only access to a record's attributes.
    */
   public interface RecordReader {
+    /**
+     * The attribute's textual value, or {@code null} when the row does not set it.
+     * <p>
+     * <b>Empty means not set, on every source.</b> An implementation must answer {@code null} for a value that is
+     * present but empty, exactly as the typed accessors below do with their {@code !v.isEmpty()} test, as
+     * {@code readProperty} does for a DATETIME (issue #7265) and as the JSONL typed accessors do (issue #7269).
+     * Otherwise the same blank column behaves differently by file format - nothing stored when the row came from
+     * CSV, an empty string stored when it came from JSONL or XML - and a downstream {@code IS NULL} filter or a
+     * mandatory-property check then answers differently for two files carrying the same data (issue #7332).
+     * <p>
+     * {@link #emptyAsNull} is the one-line way to satisfy it. {@code isEmpty()}, never {@code isBlank()}: a
+     * whitespace-only value is a data error rather than a blank cell, which is what every accessor below tests.
+     */
     String get(String attribute);
+
+    /**
+     * {@code value} unless it is empty, in which case {@code null} - the "empty means not set" rule {@link #get}
+     * states, in the one place every source can share it.
+     */
+    static String emptyAsNull(final String value) {
+      return value != null && !value.isEmpty() ? value : null;
+    }
 
     default int getInt(final String attribute) {
       final String v = get(attribute);
@@ -754,42 +994,236 @@ public class GraphImporter implements AutoCloseable {
   public void run() throws Exception {
     final long start = System.currentTimeMillis();
 
-    // ── Pass 1: Create vertices + collect topology ──
-    LogManager.instance().log(this, Level.INFO, "Pass 1: Vertices + Topology");
+    validateEdgeTargets();
 
-    try (final GraphBatch batch = database.batch()
-        .withBidirectional(false)
-        .withWAL(false)
-        .withPreAllocateEdgeChunks(true)
-        .withCommitEvery(0)
-        .build()) {
+    // Held around the WHOLE import, not only while one of the batches below is open. Each GraphBatch suspends the
+    // indexes' speculative maintenance for its own lifetime (issue #7357), but this importer is not one batch: the
+    // vertex batch closes, the edge sources are read for their topology with no batch open at all, then one edge
+    // batch per edge type opens. The first close used to lift the only suspension and arm the vector index's
+    // inactivity timer, which fired in that gap and started a full graph build that then ran alongside the whole
+    // edge pass (issue #7432). The counts compose, so the batches' own suspensions nest inside this one.
+    try (final IndexMaintenanceSuspension maintenance = IndexMaintenanceSuspension.suspend(database, "GraphImporter")) {
+      // ── Pass 1: Create vertices + collect topology ──
+      LogManager.instance().log(this, Level.INFO, "Pass 1: Vertices + Topology");
 
-      for (final VertexSourceDef vsd : vertexSources)
-        processVertexSource(batch, vsd);
+      try (final GraphBatch batch = database.batch()
+          .withBidirectional(false)
+          .withWAL(false)
+          .withPreAllocateEdgeChunks(true)
+          .withCommitEvery(0)
+          .build()) {
+
+        for (final VertexSourceDef vsd : vertexSources)
+          processVertexSource(batch, vsd);
+      }
+
+      // Process edge-only sources
+      for (int i = 0; i < edgeSources.size(); i++)
+        processEdgeSource(edgeSources.get(i), i);
+
+      // Free ID maps (edges now use internal indices)
+      for (final TypeState ts : typeStates.values()) {
+        ts.idToIdx = null;
+        ts.nameToIdx = null;
+      }
+
+      LogManager.instance().log(this, Level.INFO, "  Topology: %,d vertices, %,d edge refs", totalVertices,
+          countEdgeRefs());
+
+      // ── Pass 2: Create edges from topology ──
+      LogManager.instance().log(this, Level.INFO, "Pass 2: Edges (bidirectional)");
+
+      for (final EdgeCollector ec : edgeCollectors.values())
+        flushEdgeType(ec);
+
+      // ── Vector graphs: the part of the index state the load leaves deferred, built before this returns ──
+      // Still under the suspension: a build that ran here with the timer live could race an inactivity rebuild
+      // for the same corpus. Once this has drained the pending count, lifting the suspension arms nothing.
+      if (vectorGraphBuild)
+        buildVectorGraphs();
     }
-
-    // Process edge-only sources
-    for (int i = 0; i < edgeSources.size(); i++)
-      processEdgeSource(edgeSources.get(i), i);
-
-    // Free ID maps (edges now use internal indices)
-    for (final TypeState ts : typeStates.values()) {
-      ts.idToIdx = null;
-      ts.nameToIdx = null;
-    }
-
-    LogManager.instance().log(this, Level.INFO, "  Topology: %,d vertices, %,d edge refs", totalVertices,
-        countEdgeRefs());
-
-    // ── Pass 2: Create edges from topology ──
-    LogManager.instance().log(this, Level.INFO, "Pass 2: Edges (bidirectional)");
-
-    for (final EdgeCollector ec : edgeCollectors.values())
-      flushEdgeType(ec);
 
     final long elapsed = System.currentTimeMillis() - start;
     LogManager.instance().log(this, Level.INFO, "Import complete: %,d vertices, %,d edges in %d.%ds",
         totalVertices, totalEdges, elapsed / 1000, (elapsed % 1000) / 100);
+    if (unresolvedEdges > 0)
+      LogManager.instance().log(this, Level.WARNING,
+          "%,d edges named an identity no vertex carries and were skipped: check that the referenced rows "
+              + "are not filtered out and that both files spell the identity the same way", unresolvedEdges);
+  }
+
+  /**
+   * Builds, synchronously, the graph of every LSM vector index on a type this import wrote to that has vectors its
+   * graph does not cover yet. Indexes on other types are not this import's business, and one whose graph is
+   * already current is skipped by the index itself.
+   * <p>
+   * Synchronous by design: the alternative is the index's own inactivity rebuild, which starts a window after the
+   * load on a background thread, and the database close that follows every completed load cancels it - the
+   * reporter of issue #7432 lost a 20-minute build over 4.2M vectors five seconds after "Import complete". A load
+   * whose index would need another half hour of background work the caller cannot see is not complete.
+   * <p>
+   * A build that fails propagates: the data is on disk, but "Import complete" must not be logged over an index
+   * that is not. It propagates AFTER the other indexes have had their builds (PR #7433 review): one index whose
+   * build fails must not leave the graphs of the others unbuilt as well, or the caller would have to rerun the
+   * whole import to get them. The first failure is what is thrown; the later ones are logged against it.
+   */
+  private void buildVectorGraphs() {
+    RuntimeException firstFailure = null;
+    // Matched on the type each bucket index names. A vector index declared on a parent type covers the buckets
+    // of every subtype through one bucket index per bucket, and each of those names the SUBTYPE that owns the
+    // bucket, so an import that writes only to a subtype matches its bucket index here without walking the
+    // hierarchy (PR #7433 review; pinned by Issue7432GraphImporterVectorGraphTest).
+    //
+    // "Wrote to" is counted, not configured (PR #7433 review): a type is in typeStates as soon as a source names
+    // it, or as soon as an edge points at it, and an edge collector exists for every edge mapping - a source that
+    // was filtered down to nothing, or one that turned out empty, must not have this import rebuild an index it
+    // never touched, over pending work that is somebody else's.
+    final Set<String> touchedTypes = new HashSet<>();
+    for (final Map.Entry<String, TypeState> entry : typeStates.entrySet())
+      if (entry.getValue().count > 0)
+        touchedTypes.add(entry.getKey());
+    for (final EdgeCollector ec : edgeCollectors.values())
+      if (ec.srcIdx.size > 0)
+        touchedTypes.add(ec.edgeTypeName);
+
+    for (final Index index : database.getSchema().getIndexes()) {
+      if (!(index instanceof LSMVectorIndex vectorIndex) || !touchedTypes.contains(vectorIndex.getTypeName()))
+        continue;
+
+      final long t = System.currentTimeMillis();
+      try {
+        if (vectorIndex.buildVectorGraphIfPending(null))
+          LogManager.instance().log(this, Level.INFO, "  Vector graph for index '%s' on type '%s' built in %,d ms",
+              vectorIndex.getName(), vectorIndex.getTypeName(), System.currentTimeMillis() - t);
+        else
+          LogManager.instance().log(this, Level.FINE, "  Vector graph for index '%s' already current, nothing to build",
+              vectorIndex.getName());
+      } catch (final CancellationException e) {
+        // The importer's own thread was interrupted: every later build would see the flag too and fail the same
+        // way, so this is the caller's cancellation to receive now, not a failure to log and carry on from.
+        throw e;
+      } catch (final RuntimeException e) {
+        if (firstFailure == null)
+          firstFailure = e;
+        else
+          firstFailure.addSuppressed(e);
+        LogManager.instance().log(this, Level.SEVERE, "  Vector graph for index '%s' on type '%s' could not be built: %s",
+            e, vectorIndex.getName(), vectorIndex.getTypeName(), e.getMessage());
+      }
+    }
+
+    if (firstFailure != null)
+      throw firstFailure;
+  }
+
+  /**
+   * Every edge names the vertex type at its other end, and an edge whose target type is not there
+   * to resolve against contributes nothing at all - it used to do so silently, leaving a smaller
+   * graph and no diagnostic, which is the same failure a mistyped type name produces. Nothing has
+   * been written when this runs, so the name is reported as the configuration mistake it is.
+   * <p>
+   * A vertex source resolves a reference against the types imported so far, so naming another
+   * vertex source only works when that source is declared first; a self-reference is resolved once
+   * the source has been read to the end and needs no such ordering. A standalone edge source runs
+   * after every vertex source and can name any of them.
+   * <p>
+   * Passing this is what lets {@link #collectEdge} and {@link #processEdgeSource} read a
+   * {@link TypeState} without testing it for null: every type an edge names has one by the time
+   * they run, and a name that could not is an error here rather than an edge quietly dropped.
+   */
+  private void validateEdgeTargets() {
+    // One source per vertex type: processVertexSource() replaces the type's TypeState rather than
+    // appending to it, so a second source for a name already taken leaves pass 2 resolving edges
+    // collected against the first source's row indices into the second source's row arrays - an
+    // out-of-bounds read, or worse an edge silently pointing at an unrelated vertex. Splitting one
+    // type across files is a plausible thing to try, so it is refused rather than left to corrupt
+    final Set<String> allTypes = new HashSet<>(vertexSources.size());
+    final Set<String> typesWithId = new HashSet<>(vertexSources.size());
+    final Set<String> typesWithNameId = new HashSet<>(vertexSources.size());
+    for (final VertexSourceDef vsd : vertexSources) {
+      if (!allTypes.add(vsd.typeName))
+        throw new IllegalArgumentException("Vertex type '" + vsd.typeName + "' is declared by more than one "
+            + "vertex source, which is not supported: one source imports a type. Give the sources distinct "
+            + "type names, or read the files through a single source");
+      if (vsd.config.idAttribute != null)
+        typesWithId.add(vsd.typeName);
+      if (vsd.config.nameIdAttribute != null)
+        typesWithNameId.add(vsd.typeName);
+    }
+
+    final Set<String> importedSoFar = new HashSet<>(vertexSources.size());
+    for (final VertexSourceDef vsd : vertexSources) {
+      for (final EdgeDef ed : vsd.config.edges) {
+        if (!ed.targetType.equals(vsd.typeName) && !importedSoFar.contains(ed.targetType))
+          throw new IllegalArgumentException("Edge '" + ed.edgeType + "' declared on vertex source '"
+              + vsd.typeName + "' targets vertex type '" + ed.targetType + "', which "
+              + (allTypes.contains(ed.targetType) ?
+              "is imported after it: declare the vertex source of '" + ed.targetType + "' before '" + vsd.typeName
+                  + "', because a vertex source resolves references against the types already imported" :
+              "no vertex source imports. Declared vertex types: " + allTypes));
+
+        // A split walker advances by the delimiter's length, so an empty delimiter would never
+        // advance and a null one throws. Both used to surface from inside the pass-1 row loop -
+        // after vertices had been committed - as a StringIndexOutOfBoundsException or an NPE
+        // naming nothing. They are configuration mistakes, reported here before a file is opened
+        if (ed.isSplit && (ed.delimiter == null || ed.delimiter.isEmpty()))
+          throw new IllegalArgumentException("Split edge '" + ed.edgeType + "' declared on vertex source '"
+              + vsd.typeName + "' for attribute '" + ed.fkAttribute + "' declares "
+              + (ed.delimiter == null ? "no delimiter" : "an empty delimiter")
+              + ": give it the text that separates the field's values, such as \"|\" or \", \"");
+
+        // A delimited source (CsvRowSource) cuts a row into fields on its own field separator before
+        // any GraphImporter code sees it. A split delimiter that contains that character is therefore
+        // cut apart the same way checkNotSplit() diagnoses for an array-valued property: only the
+        // fragment up to the separator survives, and the rest is gone before the split-edge walker
+        // ever runs. Sources with no field-separator concept (XML, JSONL) answer null and are exempt
+        // (issue #7268)
+        if (ed.isSplit) {
+          final Character separator = vsd.source.fieldSeparator();
+          if (separator != null && ed.delimiter.indexOf(separator) >= 0)
+            throw new IllegalArgumentException("Split edge '" + ed.edgeType + "' declared on vertex source '"
+                + vsd.typeName + "' for attribute '" + ed.fkAttribute + "' uses delimiter \"" + ed.delimiter
+                + "\", which contains the source's own field separator '" + separator
+                + "': the source already cut the field into columns using that character, so the split-edge "
+                + "walker never sees the values it is supposed to split. Use a delimiter the field separator "
+                + "does not contain, such as ';'");
+        }
+
+        final boolean resolvesByName = ed.byName || ed.isSplit;
+        if (!(resolvesByName ? typesWithNameId : typesWithId).contains(ed.targetType))
+          throw new IllegalArgumentException("Edge '" + ed.edgeType + "' declared on vertex source '"
+              + vsd.typeName + "' resolves against the " + (resolvesByName ? "idByName()" : "id()")
+              + " of vertex type '" + ed.targetType + "', which declares none");
+      }
+      importedSoFar.add(vsd.typeName);
+    }
+
+    for (final EdgeSourceDef esd : edgeSources) {
+      checkEdgeSourceEndpoint(esd, esd.config.fromVertexType, "from", allTypes, typesWithId);
+      checkEdgeSourceEndpoint(esd, esd.config.toVertexType, "to", allTypes, typesWithId);
+    }
+  }
+
+  /**
+   * A standalone edge source resolves both endpoints through {@link VertexConfig#id(String)} - a
+   * type that declares only {@code idByName()} would match nothing, row after row. Since the
+   * unified index takes a string key, such a type wants {@code id()} on that same attribute;
+   * {@code idByName()} is for a type referenced through two different keys.
+   */
+  private static void checkEdgeSourceEndpoint(final EdgeSourceDef esd, final String vertexType,
+                                              final String endpoint, final Set<String> allTypes,
+                                              final Set<String> typesWithId) {
+    if (vertexType == null)
+      throw new IllegalArgumentException("Edge source '" + esd.edgeType + "' declares no '" + endpoint
+          + "' endpoint: call " + endpoint + "(attribute, vertexType) on it");
+    if (!allTypes.contains(vertexType))
+      throw new IllegalArgumentException("Edge source '" + esd.edgeType + "' resolves its '" + endpoint
+          + "' endpoint against vertex type '" + vertexType + "', which no vertex source imports. "
+          + "Declared vertex types: " + allTypes);
+    if (!typesWithId.contains(vertexType))
+      throw new IllegalArgumentException("Edge source '" + esd.edgeType + "' resolves its '" + endpoint
+          + "' endpoint against the id() of vertex type '" + vertexType + "', which declares none: an edge "
+          + "source matches id(), not idByName(), and id() takes a string key just as well");
   }
 
   public long getVertexCount() {
@@ -800,11 +1234,23 @@ public class GraphImporter implements AutoCloseable {
     return totalEdges;
   }
 
+  /**
+   * Edges that could not be created because an endpoint named a key no vertex of the referenced
+   * type carries. One per edge, not per endpoint: a row of an edge source whose {@code from} and
+   * {@code to} both fail to resolve is one edge lost, and counts once - while a split field, where
+   * every value is an edge of its own, counts once per value that resolved to nothing. The edge is
+   * skipped - there is nothing to attach it to - but the count is what tells a caller that the
+   * graph it got is smaller than the file it handed over, rather than leaving the import to look
+   * complete.
+   */
+  public long getUnresolvedEdgeCount() {
+    return unresolvedEdges;
+  }
+
   @Override
   public void close() {
     typeStates.clear();
     edgeCollectors.clear();
-    deferredEdges.clear();
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -830,112 +1276,170 @@ public class GraphImporter implements AutoCloseable {
         getOrCreateEdgeCollector(ed.edgeType, ed.targetType, vc.typeName);
       else
         getOrCreateEdgeCollector(ed.edgeType, vc.typeName, ed.targetType);
-      if (ed.targetType.equals(vc.typeName) && !ed.isSplit)
+      // A self-referencing edge can point at a row further down the same file, so its target key
+      // is resolved after the pass. That includes a split field: resolving it inline would silently
+      // keep only the references that happen to point backwards
+      if (ed.targetType.equals(vc.typeName))
         deferredEdgeDefs.add(ed);
       else
         resolvedEdges.add(ed);
     }
 
-    // Deferred raw soId pairs for self-referencing edges
-    final Map<String, IntList[]> deferredRaw = new HashMap<>();
-    for (final EdgeDef ed : deferredEdgeDefs)
-      deferredRaw.put(ed.edgeType, new IntList[]{new IntList(100_000), new IntList(100_000)});
+    // One buffer of unresolved target keys per deferred definition, positionally aligned with
+    // deferredEdgeDefs: two definitions of the same edge type must not share a buffer
+    final List<DeferredSelfEdges> deferredSelf = new ArrayList<>(deferredEdgeDefs.size());
+    for (int i = 0; i < deferredEdgeDefs.size(); i++)
+      deferredSelf.add(new DeferredSelfEdges());
 
     final int[] count = {0};
+
+    // Rows an intermediate commit already made durable. Counted apart from count[0] because a
+    // failure rolls back the transaction in flight: what the report owes the operator is the number
+    // of vertices that survived, which is what decides whether to resume, truncate or start over
+    final int[] committed = {0};
+
+    // Whether the transaction opened below is still the current one. database.rollback() pops
+    // whatever transaction is on top of the stack, and this one nests inside the caller's when the
+    // caller holds one (see LocalDatabase#begin()), so rolling back after it has already been
+    // committed and popped would discard the CALLER's transaction instead of this method's
+    final boolean[] txOpen = {false};
+
     database.begin();
+    txOpen[0] = true;
 
     final String filterAttr = vc.filterAttribute;
     final String filterVal = vc.filterValue;
 
-    vsd.source.forEach(record -> {
-      if (limit > 0 && count[0] >= limit)
-        return;
-
-      // Apply row filter (e.g. PostTypeId=1 for questions only)
-      if (filterAttr != null) {
-        final String v = record.get(filterAttr);
-        if (v == null || !v.equals(filterVal))
+    try {
+      vsd.source.forEach(record -> {
+        if (limit > 0 && count[0] >= limit)
           return;
-      }
 
-      // Deduplication: skip if this id/nameId was already imported
-      if (vc.deduplicate) {
-        if (vc.idAttribute != null) {
-          final int id = record.getInt(vc.idAttribute);
-          if (ts.idToIdx.get(id, -1) >= 0)
+        // Apply row filter (e.g. PostTypeId=1 for questions only)
+        if (filterAttr != null) {
+          final String v = record.get(filterAttr);
+          // An EMPTY filter value selects the rows that leave the attribute unset, which is the only reading left
+          // now that every source folds an empty value to null (issue #7332). Before that it worked on two sources
+          // of three - XML and JSONL handed back "" and matched, CSV folded to null and matched nothing - so the
+          // same config split one file two ways depending on the format it was exported to.
+          if ((filterVal == null || filterVal.isEmpty()) ? v != null : !filterVal.equals(v))
             return;
         }
-        if (vc.nameIdAttribute != null) {
-          final String name = record.get(vc.nameIdAttribute);
-          if (name != null && ts.nameToIdx.containsKey(name))
-            return;
+
+        // The raw text is the key: an identity is whatever the source wrote, so reading it as an int
+        // would reject a string key and truncate one wider than an int. Read once - deduplication
+        // looks the same key up that registration then stores
+        final String id = vc.idAttribute != null ? identity(record, vc.idAttribute) : null;
+        final String nameId = vc.nameIdAttribute != null ? identity(record, vc.nameIdAttribute) : null;
+
+        // Deduplication: skip if this id/nameId was already imported
+        if (vc.deduplicate && (ts.idToIdx.get(id) >= 0 || ts.nameToIdx.get(nameId) >= 0))
+          return;
+
+        final int idx = count[0];
+        ts.idToIdx.put(id, idx);
+        ts.nameToIdx.put(nameId, idx);
+
+        // Build vertex properties
+        propBuf.clear();
+        for (final PropDef pd : vc.properties) {
+          final Object val = readProperty(record, pd);
+          if (val != null) {
+            propBuf.add(pd.name);
+            propBuf.add(val);
+          }
+        }
+
+        final MutableVertex v = batch.createVertex(vc.typeName, propBuf.toArray());
+        bk.add(v.getIdentity().getBucketId());
+        ps.add(v.getIdentity().getPosition());
+
+        // Collect edges
+        for (final EdgeDef ed : resolvedEdges)
+          collectEdge(record, ed, vc.typeName, idx);
+
+        // Collect deferred (self-referencing) edges: this row's index is already final, only the
+        // target key has to wait for the rest of the file
+        for (int i = 0; i < deferredEdgeDefs.size(); i++) {
+          final EdgeDef ed = deferredEdgeDefs.get(i);
+          final String fieldVal = ed.isSplit ? record.get(ed.fkAttribute) : identity(record, ed.fkAttribute);
+          if (fieldVal == null)
+            continue;
+          final DeferredSelfEdges deferred = deferredSelf.get(i);
+          if (ed.isSplit)
+            collectSplitKeys(fieldVal, ed.delimiter, deferred, idx);
+          else {
+            deferred.srcIdx.add(idx);
+            deferred.targetKeys.add(fieldVal);
+          }
+        }
+
+        count[0]++;
+        if (count[0] % COMMIT_EVERY_ROWS == 0) {
+          // Cleared before the call, not after: LocalDatabase#commit() pops the transaction in a
+          // finally, so a commit that throws still leaves this method's transaction off the stack
+          txOpen[0] = false;
+          database.commit();
+          committed[0] = count[0];
+          database.begin();
+          txOpen[0] = true;
+        }
+      });
+
+      txOpen[0] = false;
+      database.commit();
+      committed[0] = count[0];
+    } catch (final Exception e) {
+      // Only when something was committed: below the first COMMIT_EVERY_ROWS the rollback takes the
+      // whole source with it, so there is no partial import to warn about and the exception on its
+      // own says everything there is to say
+      if (committed[0] > 0)
+        LogManager.instance().log(this, Level.WARNING,
+            "  %-12s failed after importing %,d rows: the import is PARTIAL - %,d of them an earlier batch commit "
+                + "made durable and they stay on the disk, the other %,d were rolled back along with the row that "
+                + "failed. Resume the source after the committed rows, or empty the type before running it again",
+            vc.typeName, count[0], committed[0], count[0] - committed[0]);
+      throw e;
+    } finally {
+      // In the finally rather than in the catch so that an Error - an OutOfMemoryError is the one a
+      // large import can realistically raise - resolves the transaction too. txOpen[0] is false on
+      // every path that already committed, which is what keeps this from rolling back the caller's
+      if (txOpen[0]) {
+        txOpen[0] = false;
+        try {
+          database.rollback();
+        } catch (final Exception rollbackFailure) {
+          // A throw here would replace the exception on its way out with one about the cleanup, and
+          // would skip the counter assignment below - which is this issue's own symptom, reached
+          // through the code that fixes it. Reported and swallowed instead: the caller keeps the
+          // failure it can act on, and this line says the transaction may still be pushed
+          LogManager.instance().log(this, Level.SEVERE,
+              "  %-12s could not roll back after the import failed: the transaction it opened may still be on the "
+                  + "stack", rollbackFailure, vc.typeName);
         }
       }
 
-      // Register ID
-      final int idx = count[0];
-      if (vc.idAttribute != null)
-        ts.idToIdx.put(record.getInt(vc.idAttribute), idx);
-      if (vc.nameIdAttribute != null) {
-        final String name = record.get(vc.nameIdAttribute);
-        if (name != null)
-          ts.nameToIdx.put(name, idx);
-      }
-
-      // Build vertex properties
-      propBuf.clear();
-      for (final PropDef pd : vc.properties) {
-        final Object val = readProperty(record, pd);
-        if (val != null) {
-          propBuf.add(pd.name);
-          propBuf.add(val);
-        }
-      }
-
-      final MutableVertex v = batch.createVertex(vc.typeName, propBuf.toArray());
-      bk.add(v.getIdentity().getBucketId());
-      ps.add(v.getIdentity().getPosition());
-
-      // Collect edges
-      for (final EdgeDef ed : resolvedEdges)
-        collectEdge(record, ed, vc.typeName, idx);
-
-      // Collect deferred (self-referencing) edges as raw soIds
-      for (final EdgeDef ed : deferredEdgeDefs) {
-        final int fk = record.getInt(ed.fkAttribute);
-        if (fk != 0) {
-          final int thisSoId = record.getInt(vc.idAttribute);
-          final IntList[] pair = deferredRaw.get(ed.edgeType);
-          pair[0].add(thisSoId);
-          pair[1].add(fk);
-        }
-      }
-
-      count[0]++;
-      if (count[0] % 50_000 == 0) {
-        database.commit();
-        database.begin();
-      }
-    });
-    database.commit();
-
-    ts.buckets = bk.trim();
-    ts.positions = ps.trim();
-    ts.count = count[0];
-    totalVertices += ts.count;
+      // The counters are assigned whatever happened: the number of vertices actually on the disk is
+      // most valuable precisely when the import failed, and leaving it at zero reads as "nothing was
+      // written" for a source that committed hundreds of thousands of rows.
+      //
+      // On the failure path the two arrays hold every row READ while ts.count names only the
+      // committed prefix, so the tail addresses records the rollback took away. Nothing reads them
+      // there: run() has no per-source catch, so the failure aborts the import before pass 2 and
+      // before the deferred self-edge resolution below, and close() clears typeStates. Give run() a
+      // continue-on-error mode and this has to become a trim to committed[0] on the failure path
+      ts.buckets = bk.trim();
+      ts.positions = ps.trim();
+      ts.count = committed[0];
+      totalVertices += ts.count;
+    }
 
     // Resolve deferred self-referencing edges (srcType == dstType == thisType)
-    for (final Map.Entry<String, IntList[]> entry : deferredRaw.entrySet()) {
-      final IntList[] pair = entry.getValue();
-      final EdgeCollector ec = edgeCollectors.get(entry.getKey() + "|" + vc.typeName + "|" + vc.typeName);
-      for (int i = 0; i < pair[0].size; i++) {
-        final int si = ts.idToIdx.get(pair[0].data[i], -1);
-        final int di = ts.idToIdx.get(pair[1].data[i], -1);
-        if (si >= 0 && di >= 0) {
-          ec.srcIdx.add(si);
-          ec.dstIdx.add(di);
-        }
-      }
+    for (int i = 0; i < deferredEdgeDefs.size(); i++) {
+      final EdgeDef ed = deferredEdgeDefs.get(i);
+      final EdgeCollector ec = edgeCollectors.get(ed.edgeType + "|" + vc.typeName + "|" + vc.typeName);
+      final IdIndex index = ed.byName || ed.isSplit ? ts.nameToIdx : ts.idToIdx;
+      unresolvedEdges += deferredSelf.get(i).resolveInto(index, ec, ed.incoming);
     }
 
     LogManager.instance().log(this, Level.INFO, "  %-12s %,d vertices (%,d ms)", vc.typeName, ts.count,
@@ -950,54 +1454,49 @@ public class GraphImporter implements AutoCloseable {
     final EdgeCollector ec = edgeCollectors.get(ed.edgeType + "|" + srcType + "|" + dstType);
 
     if (ed.isSplit) {
-      // Split field: e.g. "|java|python|css|"
+      // Split field: e.g. "|java|python|css|". Kept in step with collectSplitKeys(), which walks a
+      // field the same way for a self-referencing split - a shared walker would have to hand each
+      // value to a closure, and this runs once per row
       final String fieldVal = record.get(ed.fkAttribute);
-      if (fieldVal == null || fieldVal.length() <= 1)
+      if (fieldVal == null || fieldVal.isEmpty())
         return;
       final TypeState targetTs = typeStates.get(ed.targetType);
-      if (targetTs == null)
-        return;
-      int start = fieldVal.charAt(0) == ed.delimiter.charAt(0) ? 1 : 0;
-      final char delim = ed.delimiter.charAt(0);
+      // the whole delimiter separates the values, not its first character: a ", " reduced to ','
+      // leaves every value but the first carrying the space, resolving against nothing.
+      // validateEdgeTargets() has already refused a null or empty one, which the stride below
+      // could not advance past
+      final String delim = ed.delimiter;
+      final int delimLen = delim.length();
+      int start = fieldVal.startsWith(delim) ? delimLen : 0;
       int pos;
-      while ((pos = fieldVal.indexOf(delim, start)) != -1) {
-        if (pos > start) {
-          final Integer ti = targetTs.nameToIdx.get(fieldVal.substring(start, pos));
-          if (ti != null) {
+      while (start < fieldVal.length()) {
+        pos = fieldVal.indexOf(delim, start);
+        // the convention wraps the field in delimiters, but a last value without a closing one is
+        // still a value: it used to be dropped, and not even counted as an edge lost
+        final int end = pos == -1 ? fieldVal.length() : pos;
+        if (end > start) {
+          final int ti = targetTs.nameToIdx.get(fieldVal.substring(start, end));
+          if (ti >= 0) {
             ec.srcIdx.add(thisIdx);
             ec.dstIdx.add(ti);
-          }
+          } else
+            unresolvedEdges++;
         }
-        start = pos + 1;
-      }
-    } else if (ed.byName) {
-      final String name = record.get(ed.fkAttribute);
-      if (name == null)
-        return;
-      final TypeState targetTs = typeStates.get(ed.targetType);
-      if (targetTs == null)
-        return;
-      final Integer targetIdx = targetTs.nameToIdx.get(name);
-      if (targetIdx == null)
-        return;
-
-      if (ed.incoming) {
-        ec.srcIdx.add(targetIdx);
-        ec.dstIdx.add(thisIdx);
-      } else {
-        ec.srcIdx.add(thisIdx);
-        ec.dstIdx.add(targetIdx);
+        start = end + delimLen;
       }
     } else {
-      final int fk = record.getInt(ed.fkAttribute);
-      if (fk == 0)
+      // An absent or empty attribute means "this row has no such reference" and is not an
+      // unresolved endpoint. It is the only way to say so: 0 used to double as that marker, which
+      // made a vertex whose key really is 0 impossible to point at
+      final String key = identity(record, ed.fkAttribute);
+      if (key == null)
         return;
       final TypeState targetTs = typeStates.get(ed.targetType);
-      if (targetTs == null)
+      final int targetIdx = (ed.byName ? targetTs.nameToIdx : targetTs.idToIdx).get(key);
+      if (targetIdx < 0) {
+        unresolvedEdges++;
         return;
-      final int targetIdx = targetTs.idToIdx.get(fk, -1);
-      if (targetIdx < 0)
-        return;
+      }
 
       if (ed.incoming) {
         ec.srcIdx.add(targetIdx);
@@ -1006,6 +1505,43 @@ public class GraphImporter implements AutoCloseable {
         ec.srcIdx.add(thisIdx);
         ec.dstIdx.add(targetIdx);
       }
+    }
+  }
+
+  /**
+   * Reads an identity attribute, reporting an attribute that is absent or empty as {@code null} -
+   * "this row carries no such key". The readers disagree on which of the two an empty field is:
+   * {@link CsvRowSource} already hands back {@code null}, while {@link JsonlRowSource} and
+   * {@link XmlRowSource} hand back the empty string for {@code "id": ""} and {@code id=""}. Left to
+   * each reader, an empty id would be a key of its own, and every row carrying one would collide on
+   * it - the last silently winning any edge that referenced it.
+   */
+  private static String identity(final RecordReader record, final String attribute) {
+    final String value = record.get(attribute);
+    return value == null || value.isEmpty() ? null : value;
+  }
+
+  /**
+   * Appends one deferred key per value of a delimited field (e.g. {@code "|java|python|"}), all
+   * sharing the same source vertex. Splits on the whole delimiter, exactly as the inline walker in
+   * {@link #collectEdge} does; a null or empty one never gets here, {@link #validateEdgeTargets}
+   * having refused it.
+   */
+  private static void collectSplitKeys(final String fieldVal, final String delimiter,
+                                       final DeferredSelfEdges deferred, final int thisIdx) {
+    if (fieldVal.isEmpty())
+      return;
+    final int delimLen = delimiter.length();
+    int start = fieldVal.startsWith(delimiter) ? delimLen : 0;
+    int pos;
+    while (start < fieldVal.length()) {
+      pos = fieldVal.indexOf(delimiter, start);
+      final int end = pos == -1 ? fieldVal.length() : pos;
+      if (end > start) {
+        deferred.srcIdx.add(thisIdx);
+        deferred.targetKeys.add(fieldVal.substring(start, end));
+      }
+      start = end + delimLen;
     }
   }
 
@@ -1018,8 +1554,6 @@ public class GraphImporter implements AutoCloseable {
     final EdgeSourceConfig cfg = esd.config;
     final TypeState fromTs = typeStates.get(cfg.fromVertexType);
     final TypeState toTs = typeStates.get(cfg.toVertexType);
-    if (fromTs == null || toTs == null)
-      return;
 
     // Own collector per edge source, never the one vertex-derived edges of the same type and
     // endpoints share. A collector's property buffers are indexed by the collector-wide edge index,
@@ -1030,13 +1564,16 @@ public class GraphImporter implements AutoCloseable {
     final EdgeCollector ec = getOrCreateEdgeCollector(cfg.edgeType, cfg.fromVertexType, cfg.toVertexType,
         "src" + sourceIndex);
     final int[] count = {0};
+    final long unresolvedBefore = unresolvedEdges;
 
     esd.source.forEach(record -> {
       if (limit > 0 && count[0] >= limit)
         return;
-      final int si = fromTs.idToIdx.get(record.getInt(cfg.fromAttribute), -1);
-      final int di = toTs.idToIdx.get(record.getInt(cfg.toAttribute), -1);
-      if (si >= 0 && di >= 0) {
+      final int si = fromTs.idToIdx.get(identity(record, cfg.fromAttribute));
+      final int di = toTs.idToIdx.get(identity(record, cfg.toAttribute));
+      if (si < 0 || di < 0)
+        unresolvedEdges++;
+      else {
         ec.srcIdx.add(si);
         ec.dstIdx.add(di);
         for (final PropDef pd : cfg.properties) {
@@ -1069,8 +1606,14 @@ public class GraphImporter implements AutoCloseable {
       count[0]++;
     });
 
+    final long unresolved = unresolvedEdges - unresolvedBefore;
     LogManager.instance().log(this, Level.INFO, "  %-12s %,d edges (%,d ms)",
         cfg.edgeType, ec.srcIdx.size, System.currentTimeMillis() - t);
+    if (unresolved > 0)
+      LogManager.instance().log(this, Level.WARNING,
+          "  %-12s %,d rows name an identity no %s vertex carries: those edges were skipped",
+          cfg.edgeType, unresolved,
+          cfg.fromVertexType.equals(cfg.toVertexType) ? cfg.fromVertexType : cfg.fromVertexType + "/" + cfg.toVertexType);
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -1167,7 +1710,13 @@ public class GraphImporter implements AutoCloseable {
       }
     case DATETIME: {
       final String v = record.get(pd.attribute);
-      if (v == null)
+      // Empty means "not set", as it does in the RecordReader defaults above: getInt/getLong/
+      // getDouble answer 0 and getFloatArray/getList answer null for an empty value, so a blank
+      // cell in an optional datetime column must not abort the import either. null is already this
+      // branch's "not set" answer and both call sites drop it, so returning it needs nothing else.
+      // A value that is present but not whitespace-free is still a data error: isEmpty(), not
+      // isBlank(), is what every accessor above tests (#7265)
+      if (v == null || v.isEmpty())
         return null;
       // DateUtils.getFormatter(), not DateTimeFormatter.ofPattern(): the latter binds the JVM default locale, so the
       // same file imported on two machines would parse a textual month/day name differently, or not at all (#7144)
@@ -1309,11 +1858,11 @@ public class GraphImporter implements AutoCloseable {
   }
 
   static class TypeState {
-    IntIntMap            idToIdx   = new IntIntMap(100_000);
-    Map<String, Integer> nameToIdx = new HashMap<>();
-    int[]                buckets;
-    long[]               positions;
-    int                  count;
+    IdIndex idToIdx   = new IdIndex();
+    IdIndex nameToIdx = new IdIndex();
+    int[]   buckets;
+    long[]  positions;
+    int     count;
   }
 
   static class EdgeCollector {
@@ -1368,40 +1917,329 @@ public class GraphImporter implements AutoCloseable {
     }
   }
 
-  static class DeferredEdgePair {
-    final int srcSoId, dstSoId;
-
-    DeferredEdgePair(final int s, final int d) {
-      this.srcSoId = s;
-      this.dstSoId = d;
-    }
-  }
-
   // ═══════════════════════════════════════════════════════════════════
   //  Primitive collections (zero boxing, minimal GC)
   // ═══════════════════════════════════════════════════════════════════
 
   /**
+   * Reads {@code text} as the canonical decimal form of a {@code long}, returning
+   * {@link #NOT_CANONICAL_LONG} when it is not one. Neither allocates nor throws: an identity
+   * column is read once per row, and {@code Long.parseLong} in a {@code try} block would fill in a
+   * stack trace for every row of a string-keyed file.
+   * <p>
+   * "Canonical" is what keeps the primitive fast path from merging keys the source kept apart:
+   * {@code "007"} and {@code "7"} are two different identities, so only the form
+   * {@code Long.toString} would produce is allowed to become a number. Everything else - leading
+   * zeros, a leading {@code +}, {@code "-0"}, surrounding space, anything non-numeric - stays text.
+   */
+  static long canonicalLong(final String text) {
+    if (text == null)
+      return NOT_CANONICAL_LONG;
+    final int len = text.length();
+    if (len == 0)
+      return NOT_CANONICAL_LONG;
+
+    final boolean negative = text.charAt(0) == '-';
+    final int first = negative ? 1 : 0;
+    if (len - first < 1 || len - first > 19)
+      return NOT_CANONICAL_LONG;
+
+    final char firstDigit = text.charAt(first);
+    if (firstDigit < '0' || firstDigit > '9')
+      return NOT_CANONICAL_LONG;
+    // "0" is canonical, "00" and "007" are not, and "-0" is not the canonical form of zero
+    if (firstDigit == '0' && (len - first > 1 || negative))
+      return NOT_CANONICAL_LONG;
+
+    // Accumulate negatively: the negative range is the wider one, so this overflows only on values
+    // that genuinely do not fit, and Long.MIN_VALUE itself is rejected because it is the sentinel
+    long value = 0;
+    for (int i = first; i < len; i++) {
+      final char c = text.charAt(i);
+      if (c < '0' || c > '9')
+        return NOT_CANONICAL_LONG;
+      if (value < -922337203685477580L)
+        return NOT_CANONICAL_LONG;
+      value *= 10;
+      final int digit = c - '0';
+      if (value < Long.MIN_VALUE + digit)
+        return NOT_CANONICAL_LONG;
+      value -= digit;
+    }
+    if (value == NOT_CANONICAL_LONG)
+      return NOT_CANONICAL_LONG;
+    return negative ? value : -value;
+  }
+
+  /**
+   * Maps a vertex identity, as the source spelled it, to the vertex's index within its type.
+   * <p>
+   * Behaves exactly like a {@code Map<String, Integer>} - two keys are the same identity when their
+   * text is the same - but stores a key that is the canonical decimal form of a {@code long}
+   * unboxed, which is what almost every real import consists of. The numeric side starts as an
+   * {@code int} map and widens to a {@code long} one only when a key that does not fit arrives, so
+   * an import whose keys fit in an {@code int} pays exactly what it paid before; a textual key
+   * lands in a {@link HashMap} that is not allocated at all until one appears.
+   */
+  static final class IdIndex {
+    /**
+     * {@link IntIntMap} reserves {@code Integer.MIN_VALUE} to mark an empty slot, so that one value
+     * goes to the {@code long} map instead of being stored as an {@code int}.
+     */
+    private static final int INT_KEY_MIN = Integer.MIN_VALUE + 1;
+
+    private IntIntMap            intKeys;
+    private LongIntMap           longKeys;
+    private Map<String, Integer> textKeys;
+
+    void put(final String key, final int idx) {
+      if (key == null || key.isEmpty())
+        return;
+      final long numeric = canonicalLong(key);
+      if (numeric == NOT_CANONICAL_LONG) {
+        if (textKeys == null)
+          textKeys = new HashMap<>();
+        textKeys.put(key, idx);
+      } else
+        putNumeric(numeric, idx);
+    }
+
+    /**
+     * @return the vertex index, or -1 when the key is null or empty (the row carries no such
+     * reference) or no vertex was registered under it
+     */
+    int get(final String key) {
+      if (key == null || key.isEmpty())
+        return -1;
+      final long numeric = canonicalLong(key);
+      if (numeric != NOT_CANONICAL_LONG)
+        return getNumeric(numeric);
+      return textKeys == null ? -1 : textKeys.getOrDefault(key, -1);
+    }
+
+    int getNumeric(final long key) {
+      if (longKeys != null)
+        return longKeys.get(key, -1);
+      if (intKeys == null || key < INT_KEY_MIN || key > Integer.MAX_VALUE)
+        return -1;
+      return intKeys.get((int) key, -1);
+    }
+
+    private void putNumeric(final long key, final int idx) {
+      if (longKeys == null && key >= INT_KEY_MIN && key <= Integer.MAX_VALUE) {
+        if (intKeys == null)
+          // Sized like the edge buffers rather than for a large import: the map doubles on growth,
+          // so a big source reaches its size in a handful of rehashes, while a schema with many
+          // small types no longer pays a multi-megabyte table per type for a few hundred keys
+          intKeys = new IntIntMap(BUFFER_INITIAL_CAPACITY);
+        intKeys.put((int) key, idx);
+        return;
+      }
+      if (longKeys == null)
+        widenToLongKeys();
+      longKeys.put(key, idx);
+    }
+
+    /** One-shot, on the first key outside the {@code int} range: rehashes what is already there. */
+    private void widenToLongKeys() {
+      longKeys = new LongIntMap(intKeys == null ? BUFFER_INITIAL_CAPACITY : intKeys.size());
+      if (intKeys != null) {
+        intKeys.copyInto(longKeys);
+        intKeys = null;
+      }
+    }
+  }
+
+  /**
+   * Target keys of self-referencing edges, held until the source has been read to the end because
+   * the row they point at may still be ahead. The source index is already final and stays an
+   * {@code int}; only the key has to survive the pass.
+   */
+  static final class DeferredSelfEdges {
+    final IntList srcIdx     = new IntList(BUFFER_INITIAL_CAPACITY);
+    final KeyList targetKeys = new KeyList(BUFFER_INITIAL_CAPACITY);
+
+    /**
+     * Resolves every buffered key against {@code index} and appends the edges to {@code ec}.
+     *
+     * @return how many keys matched no vertex
+     */
+    int resolveInto(final IdIndex index, final EdgeCollector ec, final boolean incoming) {
+      int unresolved = 0;
+      int textPos = 0;
+      for (int i = 0; i < srcIdx.size; i++) {
+        final long numeric = targetKeys.keys.data[i];
+        final int di = numeric == NOT_CANONICAL_LONG ?
+            index.get(targetKeys.text.get(textPos++)) :
+            index.getNumeric(numeric);
+        if (di < 0) {
+          unresolved++;
+          continue;
+        }
+        if (incoming) {
+          ec.srcIdx.add(di);
+          ec.dstIdx.add(srcIdx.data[i]);
+        } else {
+          ec.srcIdx.add(srcIdx.data[i]);
+          ec.dstIdx.add(di);
+        }
+      }
+      return unresolved;
+    }
+  }
+
+  /**
+   * An append-only list of identity keys that keeps the canonical numeric ones in a primitive
+   * array and boxes only the rest. A textual key is marked in place with
+   * {@link #NOT_CANONICAL_LONG} and appended to {@link #text}, which stays null while there is
+   * none: replaying the list is a single forward walk, so the two run in step without a per-entry
+   * back-reference.
+   */
+  static final class KeyList {
+    final LongList     keys;
+    List<String>       text;
+
+    KeyList(final int cap) {
+      keys = new LongList(cap);
+    }
+
+    void add(final String key) {
+      final long numeric = canonicalLong(key);
+      if (numeric == NOT_CANONICAL_LONG) {
+        if (text == null)
+          text = new ArrayList<>();
+        text.add(key);
+      }
+      keys.add(numeric);
+    }
+  }
+
+  /**
+   * Open-addressing long→int hash map with Fibonacci hashing, the widened twin of
+   * {@link IntIntMap}.
+   */
+  static final class LongIntMap {
+    private static final long   EMPTY = Long.MIN_VALUE;
+    private              long[] keys;
+    private              int[]  values;
+    private int mask;
+    private int shift;
+    private int size;
+    private int threshold;
+
+    LongIntMap(final int expected) {
+      final int cap = Integer.highestOneBit(Math.max(16, (int) (expected / 0.7))) << 1;
+      keys = new long[cap];
+      values = new int[cap];
+      capacity(cap);
+      Arrays.fill(keys, EMPTY);
+    }
+
+    private void capacity(final int cap) {
+      mask = cap - 1;
+      shift = Long.SIZE - Integer.numberOfTrailingZeros(cap);
+      threshold = (int) (cap * 0.7);
+    }
+
+    void put(final long key, final int value) {
+      if (size >= threshold)
+        resize();
+      int i = hash(key);
+      while (keys[i] != EMPTY && keys[i] != key)
+        i = (i + 1) & mask;
+      if (keys[i] == EMPTY)
+        size++;
+      keys[i] = key;
+      values[i] = value;
+    }
+
+    int get(final long key, final int def) {
+      int i = hash(key);
+      while (keys[i] != EMPTY) {
+        if (keys[i] == key)
+          return values[i];
+        i = (i + 1) & mask;
+      }
+      return def;
+    }
+
+    /**
+     * Fibonacci hashing: the top {@code log2(capacity)} bits of the product, which every bit of the
+     * key influences. Any lower window is a trap, because a key can zero it. Masking the low bits
+     * of {@code key * odd} makes the slot a function of the key's low bits alone; a fixed
+     * {@code >>> 32} reads better but still leaves a key with 45 trailing zeros zeroing bits 32
+     * through 44 of the product, sending every such key to slot 0. Ids allocated in blocks or
+     * carrying a fixed stride are ordinary, and either way the map degrades to a linear scan.
+     */
+    int hash(final long key) {
+      return (int) ((key * 0x9E3779B97F4A7C15L) >>> shift);
+    }
+
+    private void resize() {
+      final int newCap = keys.length << 1;
+      final long[] ok = keys;
+      final int[] ov = values;
+      keys = new long[newCap];
+      values = new int[newCap];
+      capacity(newCap);
+      Arrays.fill(keys, EMPTY);
+      for (int i = 0; i < ok.length; i++)
+        if (ok[i] != EMPTY) {
+          int j = hash(ok[i]);
+          while (keys[j] != EMPTY)
+            j = (j + 1) & mask;
+          keys[j] = ok[i];
+          values[j] = ov[i];
+        }
+    }
+  }
+
+  /**
    * Open-addressing int→int hash map with Fibonacci hashing.
    */
   static final class IntIntMap {
+    // see LongIntMap.hash(): the same scramble, and the same reason for taking the high bits
     private static final int   EMPTY = Integer.MIN_VALUE;
-    private              int[] keys, values;
-    private int mask, size, threshold;
+    private              int[] keys;
+    private              int[] values;
+    private int mask;
+    private int shift;
+    private int size;
+    private int threshold;
+
+    int hash(final int key) {
+      return (int) ((key * 0x9E3779B97F4A7C15L) >>> shift);
+    }
+
+    private void capacity(final int cap) {
+      mask = cap - 1;
+      shift = Long.SIZE - Integer.numberOfTrailingZeros(cap);
+      threshold = (int) (cap * 0.7);
+    }
+
+    int size() {
+      return size;
+    }
+
+    /** Rehashes every entry into {@code target}, for {@link IdIndex}'s one-shot widening. */
+    void copyInto(final LongIntMap target) {
+      for (int i = 0; i < keys.length; i++)
+        if (keys[i] != EMPTY)
+          target.put(keys[i], values[i]);
+    }
 
     IntIntMap(final int expected) {
-      int cap = Integer.highestOneBit(Math.max(16, (int) (expected / 0.7))) << 1;
+      final int cap = Integer.highestOneBit(Math.max(16, (int) (expected / 0.7))) << 1;
       keys = new int[cap];
       values = new int[cap];
-      mask = cap - 1;
-      threshold = (int) (cap * 0.7);
+      capacity(cap);
       Arrays.fill(keys, EMPTY);
     }
 
     void put(final int key, final int value) {
       if (size >= threshold)
         resize();
-      int i = (key * 0x9E3779B9) & mask;
+      int i = hash(key);
       while (keys[i] != EMPTY && keys[i] != key)
         i = (i + 1) & mask;
       if (keys[i] == EMPTY)
@@ -1411,7 +2249,7 @@ public class GraphImporter implements AutoCloseable {
     }
 
     int get(final int key, final int def) {
-      int i = (key * 0x9E3779B9) & mask;
+      int i = hash(key);
       while (keys[i] != EMPTY) {
         if (keys[i] == key)
           return values[i];
@@ -1425,12 +2263,11 @@ public class GraphImporter implements AutoCloseable {
       final int[] ok = keys, ov = values;
       keys = new int[newCap];
       values = new int[newCap];
-      mask = newCap - 1;
-      threshold = (int) (newCap * 0.7);
+      capacity(newCap);
       Arrays.fill(keys, EMPTY);
       for (int i = 0; i < ok.length; i++)
         if (ok[i] != EMPTY) {
-          int j = (ok[i] * 0x9E3779B9) & mask;
+          int j = hash(ok[i]);
           while (keys[j] != EMPTY)
             j = (j + 1) & mask;
           keys[j] = ok[i];
@@ -1440,9 +2277,6 @@ public class GraphImporter implements AutoCloseable {
   }
 
   /**
-   * Growable int array.
-   */
-  /**
    * Initial capacity of an {@link EdgeCollector}'s buffers. Each edge source gets a collector of its
    * own, so a file with several small sources of the same edge type holds several sets of these.
    * Every list here doubles on growth: a large source reaches its size in a handful of copies, and
@@ -1450,6 +2284,9 @@ public class GraphImporter implements AutoCloseable {
    */
   static final int BUFFER_INITIAL_CAPACITY = 4_096;
 
+  /**
+   * Growable int array.
+   */
   static final class IntList {
     int[] data;
     int   size;

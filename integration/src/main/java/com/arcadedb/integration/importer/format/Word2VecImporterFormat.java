@@ -44,11 +44,12 @@ public class Word2VecImporterFormat extends AbstractImporterFormat {
   public void load(final SourceSchema sourceSchema, final AnalyzedEntity.EntityType entityType, final Parser parser, final DatabaseInternal database,
       final ImporterContext context, final ImporterSettings settings) throws ImportException {
 
-    context.parsed.set(0);
-
     try {
       settings.documentsSkipEntries = 1L; // SKIP 1ST LINE
-      importer = new TextEmbeddingsImporterLSM(database, parser.getSource().inputStream, settings).setContext(context);
+      // parser.getInputStream() AND NOT parser.getSource().inputStream: THE FORMER IS POSITIONED PAST THE SOURCE'S
+      // LEADING COMMENT BLOCK, WHICH CONTENT SNIFFING SKIPPED BEFORE IT CHOSE THIS FORMAT. READING THE RAW SOURCE
+      // HANDED THE COMMENT BACK AS IF IT WERE THE HEADER LINE THIS FORMAT SKIPS (ISSUE #7490)
+      importer = new TextEmbeddingsImporterLSM(database, parser.getInputStream(), settings).setContext(context);
       importer.run();
 
     } catch (final Exception e) {

@@ -84,9 +84,11 @@ public final class HealthMonitor {
     }
 
     /**
-     * Proactively reconciles the inbound Raft gRPC peer allowlist with current DNS so a peer that
-     * restarted with a new pod IP is admitted without first being rejected (issue #4696). No-op when
-     * the allowlist is disabled; the filter itself throttles the DNS re-resolution.
+     * Reconciles the inbound Raft gRPC peer allowlist with cluster membership and with current DNS. A peer
+     * that restarted with a new pod IP is admitted without first being rejected (issue #4696), a peer that
+     * joined at runtime is admitted at all (issue #7132), and a peer removed from the Raft configuration is
+     * unlearned instead of keeping its access for the life of the process (issue #7225). No-op when the
+     * allowlist is disabled; the filter itself throttles the DNS re-resolution.
      */
     default void refreshPeerAllowlist() {
     }
@@ -322,8 +324,10 @@ public final class HealthMonitor {
   private void handleUnhealthyState(final LifeCycle.State state) {
     crashRestartStreak++;
 
-    // Already escalated and gave up: do not resume the restart churn. The node stays down (readiness
-    // fails) and the SEVERE alert already told the operator; a pod/process restart is the way out.
+    // Already escalated and gave up: do not resume the restart churn. The node stays down: readiness fails
+    // because RaftHAServer.isReadyForTraffic() folds this division's own lifecycle into the gate (issue
+    // #7130), so a CLOSED/EXCEPTION division answers not-ready even though the HTTP listener and getStatus()
+    // stay ONLINE. The SEVERE alert already told the operator; a pod/process restart is the way out.
     if (crashLoopEscalated)
       return;
 

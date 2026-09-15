@@ -22,6 +22,7 @@ import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
 import io.swagger.v3.oas.models.Paths;
+import io.swagger.v3.oas.models.headers.Header;
 import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.parameters.Parameter;
 import org.junit.jupiter.api.BeforeEach;
@@ -286,6 +287,102 @@ class CoreApiSpecTest {
     }
   }
 
+  /**
+   * Issue #7569: both operations declare 'application/x-ndjson' under their 200, but
+   * PostCommandHandler.requireStreamableStatement() refuses to stream a statement that is not
+   * provably read-only with a 400 before it ever runs - and nothing in the contract said so. A
+   * client author reading the contract alone had no way to know the restriction existed short of
+   * sending a mutating statement at a live server and reading the 400.
+   * <p>
+   * Checked on both /command and /query: PostQueryHandler extends PostCommandHandler and overrides
+   * only executeCommand(), so the very same requireStreamableStatement() call at execute() time
+   * guards both operations identically (the same sharing this file already pins down for 'limit'
+   * in commandRequestDeclaresLimitMatchingQueryRequest).
+   */
+  @Test
+  void commandAndQueryDescribeTheReadOnlyStreamingRestriction() {
+    // The literal text CoreApiSpec appends to both operations' description. Duplicated here rather
+    // than referencing the (private) production constant, matching how this file already pins other
+    // shared text verbatim (e.g. STALE_SESSION_404_DESCRIPTION's message in
+    // queryAndCommand404CoversAStaleSessionIdNotOnlyAMissingDatabase).
+    final String restriction = "only a statement provably read-only may stream";
+
+    final Operation command = openAPI.getPaths().get("/api/v1/command/{database}").getPost();
+    final Operation query = openAPI.getPaths().get("/api/v1/query/{database}").getPost();
+
+    for (final Operation operation : List.of(command, query)) {
+      assertThat(operation.getDescription())
+          .as(operation.getOperationId() + " must warn that the ndjson encoding is refused before "
+              + "it runs for a statement that is not provably read-only")
+          .contains(restriction)
+          .contains("400");
+    }
+
+    final String commandSuffix = command.getDescription().substring(command.getDescription().indexOf(restriction));
+    final String querySuffix = query.getDescription().substring(query.getDescription().indexOf(restriction));
+    assertThat(commandSuffix)
+        .as("both operations run through the exact same requireStreamableStatement() check, so the "
+            + "restriction text must not diverge between them and confuse a reader of the generated docs")
+        .isEqualTo(querySuffix);
+  }
+
+  /**
+   * Issue #7571: the read-only streaming restriction #7569 documented reached only the two POST operations,
+   * because only they went through the gate. GET /query advertises the very same 'application/x-ndjson' media
+   * type under its 200 and reached database.query() with nothing but SQLQueryEngine's idempotency check
+   * standing in for it - which admits BACKUP DATABASE, the one statement that answers isIdempotent() true while
+   * declaring a write. The gate now lives on AbstractQueryHandler and all three operations call it, so all
+   * three must describe the same restriction with the same words: a client author generating from the contract
+   * has no other way to learn that the three agree.
+   */
+  @Test
+  void allThreeNdJsonOperationsDescribeTheSameReadOnlyRestriction() {
+    final String restriction = "only a statement provably read-only may stream";
+
+    final Operation getQuery = openAPI.getPaths().get("/api/v1/query/{database}/{language}/{command}").getGet();
+    final Operation postQuery = openAPI.getPaths().get("/api/v1/query/{database}").getPost();
+    final Operation command = openAPI.getPaths().get("/api/v1/command/{database}").getPost();
+
+    for (final Operation operation : List.of(getQuery, postQuery, command)) {
+      assertThat(operation.getResponses().get("200").getContent().keySet())
+          .as(operation.getOperationId() + " is one of the ndjson-capable operations this restriction is about")
+          .contains("application/x-ndjson");
+      assertThat(operation.getDescription())
+          .as(operation.getOperationId() + " must warn that the ndjson encoding is refused before it runs for "
+              + "a statement that is not provably read-only")
+          .contains(restriction)
+          .contains("400");
+    }
+
+    final String getSuffix = suffixFrom(getQuery, restriction);
+    assertThat(getSuffix)
+        .as("GetQueryHandler now calls the very same AbstractQueryHandler.requireStreamableStatement() the two "
+            + "POST operations call, so the three descriptions must not diverge")
+        .isEqualTo(suffixFrom(postQuery, restriction))
+        .isEqualTo(suffixFrom(command, restriction));
+  }
+
+  /**
+   * Issue #7571: BACKUP DATABASE is the single SQL statement that answers isIdempotent() true while
+   * getOperationTypes() declares a write, so it is the one statement a client author would reasonably expect to
+   * stream and cannot. Naming it is the difference between a rule a reader can apply and one they have to
+   * discover by sending it at a live server.
+   */
+  @Test
+  void theReadOnlyStreamingRestrictionNamesBackupDatabase() {
+    final Operation command = openAPI.getPaths().get("/api/v1/command/{database}").getPost();
+
+    assertThat(command.getDescription())
+        .as("BACKUP DATABASE is idempotent and reads as a query to anyone reading the SQL reference, so the "
+            + "contract has to say outright that it cannot stream")
+        .contains("BACKUP DATABASE");
+  }
+
+  private static String suffixFrom(final Operation operation, final String restriction) {
+    final String description = operation.getDescription();
+    return description.substring(description.indexOf(restriction));
+  }
+
   @Test
   void commandRequestDeclaresLanguageAsRequired() {
     final Schema<?> schema = openAPI.getComponents().getSchemas().get("CommandRequest");
@@ -344,6 +441,55 @@ class CoreApiSpecTest {
           .as(path + " has no requiresTransaction() override, so its 404 must still cover the "
               + "stale-session case")
           .contains("Remote transaction session not found or expired");
+    }
+  }
+
+  /**
+   * Issue #7351: the read-your-writes bookmark is emitted on the streamed encoding as well as the buffered one,
+   * so it belongs on the response rather than on either media type - and a generated client has no way to know
+   * it exists unless the document says so.
+   * <p>
+   * Asserted in both directions, because the document can be wrong either way. The response-commit listener is
+   * registered partway through {@code DatabaseAbstractHandler.execute}, once the request has been authenticated
+   * and its database resolved, so a 401 or a 404 for a database that does not exist is decided before the
+   * bookmark exists and can never carry it. Declaring it there would be the same doc/runtime mismatch this test
+   * exists to prevent, only pointing the other way.
+   */
+  @Test
+  void theQueryOperationsDeclareTheBookmarkExactlyWhereItCanBeSent() {
+    final List<Operation> operations = List.of(
+        openAPI.getPaths().get("/api/v1/query/{database}/{language}/{command}").getGet(),
+        openAPI.getPaths().get("/api/v1/query/{database}").getPost(),
+        openAPI.getPaths().get("/api/v1/command/{database}").getPost());
+
+    for (final Operation operation : operations) {
+      assertThat(operation.getResponses().keySet())
+          .as("the statuses below are the ones this assertion is written against")
+          .contains("200", "400", "401", "404", "500");
+
+      for (final String status : operation.getResponses().keySet()) {
+        final Header bookmark = operation.getResponses().get(status).getHeaders() == null
+            ? null
+            : operation.getResponses().get(status).getHeaders().get("X-ArcadeDB-Commit-Index");
+
+        if ("401".equals(status) || "404".equals(status)) {
+          assertThat(bookmark)
+              .as("%s answers %s before the request reaches the database, so it never carries the bookmark and "
+                  + "must not promise it", operation.getOperationId(), status)
+              .isNull();
+          continue;
+        }
+
+        assertThat(bookmark)
+            .as("%s must declare the read-your-writes bookmark on its %s: the listener emits it whatever the "
+                + "outcome once the request is inside the database, and a document that named only the 200 "
+                + "would hide that", operation.getOperationId(), status)
+            .isNotNull();
+        assertThat(bookmark.getDescription())
+            .as("the description has to name the request-side header the value is fed back as, or a client "
+                + "cannot act on it")
+            .contains("X-ArcadeDB-Read-After");
+      }
     }
   }
 }

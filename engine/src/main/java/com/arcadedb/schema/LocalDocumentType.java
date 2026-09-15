@@ -56,11 +56,21 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 
 public class LocalDocumentType implements DocumentType {
-  protected       String                            name;
+  // Reassigned by rename() under the schema write lock (with a rollback assignment on failure) and read lock-free by
+  // getName() and by instanceOf(String), which openCypher's Labels calls during query planning while holding no
+  // database lock. Volatile for the same reason as the copy-on-write members below: without it a planning thread has
+  // no happens-before edge against a concurrent ALTER TYPE ... NAME and can match on either spelling indefinitely
+  // (issues #6678, #7033, #7119, #7299).
+  protected volatile String                         name;
   protected final LocalSchema                       schema;
   protected final List<LocalDocumentType>           superTypes                   = new ArrayList<>();
   protected final List<LocalDocumentType>           subTypes                     = new ArrayList<>();
-  private         Set<String>                       aliases                      = Collections.emptySet();
+  // Sixth member of the copy-on-write family: reassigned by setAliases under the schema mutation lock and read
+  // lock-free by instanceOf(String) from openCypher label resolution during query planning. Volatile for the
+  // publication edge, and always assigned an unmodifiable COPY: setAliases used to store the caller's set by
+  // reference, so a caller that kept its set and mutated it afterwards was editing live schema state that a
+  // lock-free reader is walking (issue #7299).
+  private volatile Set<String>                      aliases                      = Set.of();
   // Mutated by CREATE/DROP PROPERTY under the schema write lock. Record creation reads it under the read lock and is
   // therefore excluded, but two readers are not: query planning, and toJSON() - which LocalSchema.recordFileChanges
   // calls to save schema.json AFTER the write lock is released, so a save running alongside another thread's DDL threw
@@ -80,7 +90,10 @@ public class LocalDocumentType implements DocumentType {
   protected volatile List<Bucket>                   cachedPolymorphicBuckets     = new ArrayList<>(); // PRE COMPILED LIST TO SPEED UP RUN-TIME OPERATIONS
   protected volatile List<Integer>                  bucketIds                    = new ArrayList<>();
   protected volatile List<Integer>                  cachedPolymorphicBucketIds   = new ArrayList<>(); // PRE COMPILED LIST TO SPEED UP RUN-TIME OPERATIONS
-  protected       BucketSelectionStrategy           bucketSelectionStrategy      = new RoundRobinBucketSelectionStrategy();
+  // Fifth member of the same copy-on-write family: reassigned by setBucketSelectionStrategy, read lock-free by
+  // getBucketIdByRecord/getBucketIndexByKeys on the record-write path and by the planner's partition pruning through
+  // getBucketSelectionStrategy(), so it is volatile for the same reason as the four lists above (issue #7119).
+  protected volatile BucketSelectionStrategy        bucketSelectionStrategy      = new RoundRobinBucketSelectionStrategy();
   // Names of the OWN properties that declare a DEFAULT. A cache: the authority is the per-property default value, but
   // record creation would otherwise pay an O(properties) scan to find the (usually empty) subset that has one.
   // Copy-on-write, and read through getPolymorphicPropertiesWithDefaultDefined() by ApplyDefaultsStep (the SQL insert
@@ -432,7 +445,9 @@ public class LocalDocumentType implements DocumentType {
     for (String alias : aliases)
       schema.types.put(alias, this);
 
-    this.aliases = aliases;
+    // A copy, and an unmodifiable one: the parameter belongs to the caller. Published last so a lock-free
+    // instanceOf() either sees the whole previous set or the whole new one.
+    this.aliases = Set.copyOf(aliases);
     schema.saveConfiguration();
     return this;
   }
@@ -522,6 +537,41 @@ public class LocalDocumentType implements DocumentType {
   }
 
   /**
+   * Refuses a property that a TIMESERIES type could never store.
+   * <p>
+   * A TIMESERIES type keeps its columns in {@code LocalTimeSeriesType.tsColumns}, filled once by
+   * {@code CREATE TIMESERIES TYPE}, and the write path reads the document under those names and no others. A
+   * property created afterwards lands in {@link #properties} instead, which is what the schema listing renders: the
+   * column looks declared, every write drops its value and nothing reports it (issue #7567). The declared columns
+   * themselves reach this method too - {@code TimeSeriesTypeBuilder.create()} registers each one as a property right
+   * after filling {@code tsColumns} - and pass, because by then the name is declared.
+   * <p>
+   * A database written before this rule may already carry such a property. Refusing it at schema load would make
+   * that database unopenable, so the load path only warns; {@code DROP PROPERTY} on the stray name is the remedy and
+   * stays allowed.
+   *
+   * @param propertyName the property about to be created
+   */
+  private void checkTimeSeriesColumnDeclared(final String propertyName) {
+    if (!(this instanceof LocalTimeSeriesType tsType) || tsType.isDeclaredColumn(propertyName))
+      return;
+
+    if (schema.isReadingFromFile()) {
+      LogManager.instance().log(this, Level.WARNING,
+          "Property '%s.%s' is not a declared TIMESERIES column (declared: %s): it was added to this database before "
+              + "issue #7567 was fixed and no write will ever populate it. Remove it with DROP PROPERTY `%s`.`%s`",
+          name, propertyName, tsType.getTsColumnNames(), name, propertyName);
+      return;
+    }
+
+    throw new SchemaException("Cannot create the property '" + propertyName + "' in type '" + name
+        + "' because the type is a TIMESERIES type and '" + propertyName + "' is not one of its declared columns "
+        + tsType.getTsColumnNames()
+        + ". A TIMESERIES type stores only the TIMESTAMP, TAGS and FIELDS named in CREATE TIMESERIES TYPE, so a "
+        + "property added afterwards would be silently ignored by every write");
+  }
+
+  /**
    * Creates a new property with type `propertyType`.
    *
    * @param propertyName Property name to remove
@@ -539,6 +589,8 @@ public class LocalDocumentType implements DocumentType {
       // creation path can never satisfy them.
       throw new SchemaException("Cannot create the property '" + propertyName + "' in type '" + name
           + "' because the type is declared LIGHTWEIGHT and its edges cannot have properties");
+
+    checkTimeSeriesColumnDeclared(propertyName);
 
     if (properties.containsKey(propertyName))
       throw new SchemaException(
@@ -635,6 +687,17 @@ public class LocalDocumentType implements DocumentType {
   @Override
   public Property dropProperty(final String propertyName) {
     checkForSchemaMutation();
+
+    if (this instanceof LocalTimeSeriesType tsType && tsType.isDeclaredColumn(propertyName))
+      // The column stays in the type's tsColumns list whatever happens to the schema property - nothing removes an
+      // entry from it - so the engine would keep storing and returning the column while the type stopped declaring
+      // it. Refusing here keeps the two descriptions of a TIMESERIES type from drifting apart (issue #7567). A
+      // property that is NOT a declared column is still droppable, which is how a database written before that
+      // issue gets rid of the stray one it may already carry.
+      throw new SchemaException("Cannot drop the property '" + propertyName + "' from type '" + name
+          + "' because it is a declared TIMESERIES column: the storage engine keeps reading and writing it. Drop the "
+          + "whole type to remove the column");
+
     for (final TypeIndex index : getAllIndexes(true)) {
       if (index.getPropertyNames().contains(propertyName))
         throw new SchemaException(
@@ -883,23 +946,20 @@ public class LocalDocumentType implements DocumentType {
   private DocumentType setBucketSelectionStrategy(final BucketSelectionStrategy selectionStrategy,
       final boolean persistOnItsOwn) {
     checkForSchemaMutation();
+    // Bind and vet the strategy BEFORE publishing it (issue #7119). The field is read lock-free by
+    // getBucketIdByRecord/getBucketIndexByKeys, so assigning first would let a concurrent insert reach a strategy
+    // whose bucket count is still 0 (ThreadBucketSelectionStrategy divides by it) or whose type is still null
+    // (PartitionedBucketSelectionStrategy dereferences it). Binding only reads the bucket lists, never this field,
+    // so nothing here needs the assignment to have happened - and a refusal from the suitability check now leaves
+    // the field untouched instead of needing a rollback. Binding itself no longer validates anything (see
+    // PartitionedBucketSelectionStrategy.setType); every refusal comes out of the suitability check, which is also
+    // what makes the reaction depend on how we got here.
+    selectionStrategy.setType(this);
+    if (selectionStrategy instanceof PartitionedBucketSelectionStrategy partitioned)
+      reportPartitionSuitability(partitioned,
+          schema.isReadingFromFile() ? PartitionReport.RELOAD : PartitionReport.ASSIGNMENT);
     final BucketSelectionStrategy previous = this.bucketSelectionStrategy;
     this.bucketSelectionStrategy = selectionStrategy;
-    try {
-      // The field is assigned before this so the strategy can read back the type it is being bound to, which means
-      // anything thrown from here would otherwise leave the type carrying a strategy the DDL went on to reject.
-      // Binding no longer validates anything (see PartitionedBucketSelectionStrategy.setType); every refusal comes
-      // out of the suitability check below, which is also what makes the reaction depend on how we got here.
-      this.bucketSelectionStrategy.setType(this);
-      if (selectionStrategy instanceof PartitionedBucketSelectionStrategy partitioned)
-        reportPartitionSuitability(partitioned,
-            schema.isReadingFromFile() ? PartitionReport.RELOAD : PartitionReport.ASSIGNMENT);
-    } catch (final RuntimeException e) {
-      // Restoring the reference is the whole rollback: previous was bound to this type when it was assigned, and
-      // nothing here unbinds it, so re-invoking previous.setType(this) would be a no-op.
-      this.bucketSelectionStrategy = previous;
-      throw e;
-    }
     // Strategy-change flag flip (issue #4087). Switching the bucket-selection strategy on a
     // populated type can leave existing records in buckets that no longer match the new
     // strategy's hash. Two cases set the flag:

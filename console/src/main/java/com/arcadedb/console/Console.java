@@ -95,7 +95,8 @@ public class Console {
   private              RemoteServer         remoteServer;
   private              boolean              batchMode                = false;
   private              boolean              failAtEnd                = false;
-  private static       boolean              errored                  = false;
+  // VOLATILE: SET FROM THE ASYNC WORKER THREADS IN asyncMode, READ BY main() TO PICK THE EXIT CODE
+  private static volatile boolean           errored                  = false;
   // BUILT LAZILY AND SHARED BY interactiveMode() AND BY THE MASKED PASSWORD PROMPT, SO A PASSWORD CAN BE ASKED FOR
   // WITHOUT EVER APPEARING ON A LINE THAT GOES TO THE HISTORY FILE (ISSUE #6829)
   private              LineReader           lineReader;
@@ -210,6 +211,8 @@ public class Console {
   }
 
   public static void execute(final String[] args) throws IOException {
+    // THE FLAG IS STATIC: START EVERY RUN CLEAN, SO A PREVIOUS RUN IN THE SAME JVM CANNOT DECIDE THIS ONE'S EXIT CODE
+    errored = false;
     final StringBuilder commands = new StringBuilder();
     boolean batchMode = false;
     boolean failAtEnd = false;
@@ -320,6 +323,13 @@ public class Console {
     this.output = output;
   }
 
+  /**
+   * Whether the last {@link #execute(String[])} run reported a failure, i.e. whether {@link #main(String[])} would exit 1.
+   */
+  static boolean isErrored() {
+    return errored;
+  }
+
   public BasicDatabase getDatabase() {
     return databaseProxy;
   }
@@ -412,7 +422,17 @@ public class Console {
         // AVOID BATCH IN ASYNC MODE BECAUSE IT IS NOT POSSIBLE TO RETRY THE OPERATION
         GlobalConfiguration.ASYNC_TX_BATCH_SIZE.setValue(1);
         if (!isRemoteDatabase())
+          // THE EXECUTOR-WIDE ERROR CHANNEL, WHICH IS NOT THE SAME AS THE PER-STATEMENT CALLBACK IN executeSQL():
+          // THE LINE ABOVE FORCES ASYNC_TX_BATCH_SIZE=1, SO THE WORKER COMMITS OUTSIDE DatabaseAsyncCommand.execute()
+          // AND A FAILURE RAISED BY THAT COMMIT - A UNIQUE-INDEX VIOLATION SURFACED AT COMMIT, A FULL VOLUME, A WAL
+          // WRITE FAILURE - ARRIVES HERE INSTEAD. IT MUST MARK THE RUN AS ERRORED FOR THE SAME REASON THE CALLBACK
+          // DOES: OTHERWISE main() EXITS 0 FOR A SCRIPT WHOSE WRITES NEVER LANDED, WHICH IN A CI PIPELINE IS
+          // INDISTINGUISHABLE FROM SUCCESS (ISSUE #7300, FOLLOW-UP TO #7115).
+          // THE REMOTE CONSOLE NEEDS NO EQUIVALENT: executeSQL() TAKES THE async PATH ONLY WHEN
+          // !isRemoteDatabase(), SO A REMOTE SESSION IN asyncMode RUNS EVERY STATEMENT SYNCHRONOUSLY AND ITS
+          // FAILURES ARE ALREADY CAUGHT - AND FLAGGED - THERE.
           ((Database) databaseProxy).async().onError(e -> {
+            errored = true;
             outputError(e);
           });
       }
@@ -776,7 +796,15 @@ public class Console {
         }
 
         @Override
-        public void onError(Exception exception) {
+        public void onError(final Exception exception) {
+          // FIRED ON A WORKER THREAD: MARK THE RUN AS ERRORED LIKE THE SYNCHRONOUS PATH BELOW DOES, OTHERWISE main() EXITS 0
+          // FOR A SCRIPT THAT FAILED (ISSUE #7115). THE FLAG IS SET BEFORE main() READS IT BECAUSE close() CLOSES THE
+          // DATABASE AND LocalDatabase.close() WAITS ON async.waitCompletion(asyncCloseTimeout) - NOT BECAUSE ANYTHING
+          // IN THIS CLASS WAITS. THAT WAIT IS TIMED, SO AN EXECUTOR STILL BUSY WHEN IT EXPIRES CAN STILL LOSE A LATE
+          // ERROR; THE FIX FOR THAT BELONGS TO THE TIMEOUT, NOT HERE.
+          // NOTE THE EXECUTOR DOES NOT ORDER WHAT IT IS HANDED: A SCRIPT WHOSE STATEMENTS DEPEND ON EACH OTHER CAN FAIL
+          // ON THAT ALONE IN asyncMode, AND THAT FAILURE IS NOW REPORTED IN THE EXIT CODE TOO, WHICH IS THE POINT
+          errored = true;
           outputError(exception);
         }
       });

@@ -27,6 +27,8 @@ import com.arcadedb.exception.RecordNotFoundException;
 import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.OperationType;
+import com.arcadedb.query.QueryEngine;
 import com.arcadedb.query.sql.executor.ExecutionPlan;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.executor.ResultSet;
@@ -38,7 +40,10 @@ import com.arcadedb.serializer.JsonSerializer;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.http.HttpServer;
+import io.undertow.server.HttpServerExchange;
+import io.undertow.util.Headers;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.logging.Level;
 
@@ -254,6 +259,118 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
     if (limit != statedLimit && outcome.truncated())
       throw resultSetTooLarge(maxResultRows);
     return outcome;
+  }
+
+  /**
+   * Resolves the row serializer for the streaming encoding, and refuses the two serializers that have no row
+   * stream to give.
+   * <p>
+   * {@code graph} and {@code studio} do not serialize rows: they accumulate the whole result into one
+   * {@code {vertices, edges[, records]}} document, deduplicating elements across rows and - for {@code studio} -
+   * running an edge-completion pass over the finished vertex set afterwards. Neither is expressible one line at a
+   * time, and emitting the aggregate as a single NDJSON line would stream nothing while claiming to. Refusing
+   * with a 400 that names the alternative is the honest answer; the aggregate shapes stay available, unchanged,
+   * on the buffered encoding.
+   */
+  protected static JsonSerializer ndJsonRowSerializer(final String serializer, final boolean includeTypeHints) {
+    if ("graph".equals(serializer) || "studio".equals(serializer))
+      throw new IllegalArgumentException("Serializer '" + serializer + "' aggregates the whole result into a single "
+          + "graph document and has no row stream: request it with 'Accept: application/json', or stream with "
+          + "serializer 'record'");
+
+    // Same two configurations serializeResultSet uses for its row-oriented branches, so a streamed row is
+    // byte-identical to the row the buffered response would have put in its 'result' array.
+    return JsonSerializer.createJsonSerializer()
+        .setIncludeVertexEdges(!"record".equals(serializer))
+        .setUseCollectionSize(false)
+        .setUseCollectionSizeForEdges(false)
+        .setIncludeTypeHints(includeTypeHints);
+  }
+
+  /**
+   * Streams a result set to the client as newline-delimited JSON. The response is written in full here, so the
+   * caller returns a {@code null} {@link ExecutionResponse}: {@link AbstractServerHttpHandler#handleRequest}
+   * reads null as "the handler sent it itself", the same contract the SSE paths of
+   * {@code PostServerCommandHandler} use.
+   * <p>
+   * Only one row is ever held in memory, which is the whole point: the buffered encoding builds the entire
+   * {@link JSONArray} before the first byte leaves, so a large result is fully resident in the server heap
+   * regardless of whether the client intends to read it all.
+   * <p>
+   * The hard ceiling {@code arcadedb.server.httpQueryMaxResultRows} applies here under exactly the rule
+   * {@link #serializeResultSetBounded} uses: it refuses only when it actually cut the result short, never
+   * merely because the caller stated a cap above it. That distinction matters because {@code statedLimit} is
+   * raised to the query's own plan LIMIT, so {@code SELECT ... LIMIT 1000000} returning five rows states a cap
+   * above the ceiling and is answered in full - and must be answered in full on both encodings. Since a 413
+   * cannot be sent once a 200 is on the wire, the refusal is written in band as an {@code error} line with the
+   * {@code stats} trailer withheld.
+   * <p>
+   * A failure raised after the stream has started cannot change the status code either, so it is reported in
+   * band as an {@code error} line and the {@code stats} trailer is not written - which is how a consumer tells
+   * an incomplete stream from a complete one.
+   *
+   * @param statedLimit the cap the request, the query's own LIMIT or the configured default asked for; {@code <= 0}
+   *                    means unlimited
+   *
+   * @return how many rows reached the client and whether the cap cut the stream short, so the caller can log and
+   *         record it exactly as it does for the buffered encoding
+   */
+  protected SerializationOutcome streamResultSetAsNdJson(final HttpServerExchange exchange, final Database database,
+      final String serializer, final int statedLimit, final int maxResultRows, final ResultSet qResult,
+      final boolean includeTypeHints) throws IOException {
+    final JsonSerializer serializerImpl = ndJsonRowSerializer(serializer, includeTypeHints);
+
+    // Same rule serializeResultSetBounded applies, and deliberately not a stricter one: the ceiling refuses a
+    // request only when it actually cut the result short, never merely because the caller stated a cap above
+    // it. statedLimit is raised to the query's own plan LIMIT, so a 'SELECT ... LIMIT 1000000' that returns
+    // five rows states a cap above the ceiling and is answered in full on the buffered encoding - refusing it
+    // here would have made the two encodings disagree about the same query.
+    final int effectiveLimit = applyMaxResultRows(statedLimit, maxResultRows);
+    final boolean ceilingLowered = effectiveLimit != statedLimit;
+
+    exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, NdJsonResultStream.CONTENT_TYPE);
+    // Proxies that buffer a response would defeat the encoding without saying so; the same header the SSE paths
+    // set tells nginx and friends to pass the bytes straight through.
+    exchange.getResponseHeaders().put(Headers.CACHE_CONTROL, "no-cache");
+    exchange.getResponseHeaders().put(X_ACCEL_BUFFERING, "no");
+    exchange.setStatusCode(200);
+    if (!exchange.isBlocking())
+      exchange.startBlocking();
+
+    int returned = 0;
+    try (final NdJsonResultStream stream = new NdJsonResultStream(exchange.getOutputStream())) {
+      final boolean truncated;
+      try {
+        while (qResult != null && qResult.hasNext()) {
+          stream.writeRecord(serializerImpl.serializeResult(database, qResult.next()));
+          ++returned;
+          if (effectiveLimit > 0 && returned >= effectiveLimit)
+            break;
+        }
+        // Exactly the probe the buffered path uses: the row that did not fit is deliberately left in the result
+        // set, and its presence is what tells a truncated stream from one that ended on its own.
+        truncated = qResult != null && effectiveLimit > 0 && returned >= effectiveLimit && qResult.hasNext();
+      } catch (final RuntimeException e) {
+        LogManager.instance().log(this, Level.WARNING, "Error while streaming the result of a query on database '%s'",
+            e, database != null ? database.getName() : null);
+        stream.writeError(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+        return new SerializationOutcome(returned, false);
+      }
+
+      if (ceilingLowered && truncated) {
+        // What the buffered path answers 413 for. A 200 is already on the wire, so the refusal goes in band and
+        // the stats trailer is withheld - which is exactly how a consumer tells this from a complete stream.
+        stream.writeError(resultSetTooLarge(maxResultRows).getMessage());
+        return new SerializationOutcome(returned, true);
+      }
+
+      // statedLimit, not effectiveLimit: the buffered path reports the cap the caller stated and refuses outright
+      // (413) when the ceiling actually cut the result, which the branch above answers in band. Reporting the
+      // ceiling here made the two encodings disagree about the same untruncated query - 'SELECT ... LIMIT 1000000'
+      // returning five rows said 1000000 buffered and the ceiling streamed (claude-review).
+      stream.writeStats(statedLimit, returned, truncated);
+      return new SerializationOutcome(returned, truncated);
+    }
   }
 
   /**
@@ -749,5 +866,71 @@ public abstract class AbstractQueryHandler extends DatabaseAbstractHandler {
       throw new IllegalArgumentException(
           "Parameter '$int8' element at index " + index + " is out of byte range [-128, 127]: " + v);
     return (byte) v;
+  }
+
+  /**
+   * Refuses to stream a statement that is not provably read-only (issue #7306, extended to
+   * {@code GET /query} by issue #7571).
+   * <p>
+   * The reason that holds for every operation that can answer in the {@code application/x-ndjson} encoding is
+   * the encoding itself: the status code is chosen and written before the first row, so a statement that fails
+   * part-way through can no longer be reported as a failure. {@code streamResultSetAsNdJson} says so in band and
+   * returns normally, which is the best a stream can do. For a statement that only reads, that is a complete
+   * answer - it changed nothing, and the caller sees exactly the rows that were produced. For one that writes,
+   * it is not: the caller is told 200 about work that half happened. Refusing up front, while a refusal can
+   * still be a status code, is what keeps the streaming encoding from being a weaker contract than the buffered
+   * one.
+   * <p>
+   * On the two POST operations - whose {@code requiresTransaction()} is true - it also closes two transactional
+   * hazards that {@code GET /query} does not have, since {@code GetQueryHandler.requiresTransaction()} returns
+   * false:
+   * <ul>
+   * <li>A failure reported in band lets the auto-commit wrapper see a clean return, so it commits whatever the
+   * half-executed statement already wrote. The buffered encoding propagates the exception and rolls back.</li>
+   * <li>{@code database.transaction(..., retries)} re-runs the whole lambda when its own commit throws
+   * {@link com.arcadedb.exception.NeedRetryException} or a duplicated-key conflict. The second attempt would
+   * re-execute the statement and stream into an exchange whose 200, rows and trailer have already been written
+   * and whose output stream is closed.</li>
+   * </ul>
+   * <p>
+   * A statement whose language cannot analyze it is refused too: "not provably read-only" is the safe reading,
+   * and the buffered encoding remains available for every case this turns away.
+   * <p>
+   * Cost, since this analyzes a statement the execution is about to parse again. For {@code sql} and
+   * {@code opencypher} it is free: both resolve through a statement cache ({@code SQLQueryEngine.parse} is a
+   * {@code StatementCache} lookup, {@code OpenCypherQueryEngine.analyze} a {@code CypherStatementCache} one)
+   * that the execution repeats with the same key. {@code mongo}, {@code graphql} and {@code redis} classify
+   * from the command text without parsing. {@code gremlin} and {@code sqlscript} do parse twice -
+   * {@code ArcadeGremlin.parse()} builds the traversal, and {@code SQLScriptQueryEngine} says outright that it
+   * has no script statement cache - which is the price of refusing before the first byte rather than after,
+   * and is the price the two POST operations have already been paying since issue #7306.
+   */
+  protected static void requireStreamableStatement(final Database database, final String language,
+      final String command) {
+    boolean idempotent;
+    try {
+      final QueryEngine.AnalyzedQuery analyzed = database.getQueryEngine(language).analyze(command);
+      // isIdempotent() is not quite "read-only". BACKUP DATABASE answers true - it mutates no record, and takes
+      // the per-database maintenance slot rather than any record or page lock (issue #7443) - while writing a
+      // whole archive to the server filesystem. Among the eight SQL statements that answer isIdempotent() true
+      // it is the only one whose getOperationTypes() declares a write, which is what makes it the statement
+      // that exposed both this gate's absence on GET /query (issue #7571) and the weakness of an idempotency
+      // check on POST /command (issue #7306). So the declared operation types have to agree that nothing is
+      // written, which is a property of the parsed statement rather than of the command text - 'backup
+      // database' in any casing or spacing is caught.
+      final Set<OperationType> operations = analyzed.getOperationTypes();
+      idempotent = analyzed.isIdempotent() && !analyzed.isDDL() && !operations.contains(OperationType.CREATE)
+          && !operations.contains(OperationType.UPDATE) && !operations.contains(OperationType.DELETE)
+          && !operations.contains(OperationType.SCHEMA);
+    } catch (final Exception e) {
+      LogManager.instance().log(AbstractQueryHandler.class, Level.FINE,
+          "Could not analyze a streamed statement in language '%s'; refusing to stream it", e, language);
+      idempotent = false;
+    }
+
+    if (!idempotent)
+      throw new IllegalArgumentException("The streaming encoding is available only for a read-only statement, "
+          + "because its rows reach the client before the statement has finished: run this one with "
+          + "'Accept: application/json'");
   }
 }

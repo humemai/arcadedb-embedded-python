@@ -18,6 +18,10 @@
  */
 package com.arcadedb.server;
 
+import com.arcadedb.GlobalConfiguration;
+
+import java.io.IOException;
+import java.net.http.HttpClient;
 import java.util.List;
 import java.util.Map;
 
@@ -103,9 +107,73 @@ public interface HAServerPlugin extends ServerPlugin {
   }
 
   /**
+   * The token {@code server}'s peers actually accept: the HA plugin's own, and the raw
+   * {@link GlobalConfiguration#HA_CLUSTER_TOKEN} setting only when the plugin has none (HA not active, or a
+   * non-Raft implementation that does not derive one).
+   * <p>
+   * The fallback is not the same value as the plugin's. {@code ClusterTokenProvider} derives the token from
+   * the cluster name and the root password when the setting is left empty, and stores it on itself
+   * <em>without</em> writing it back into the configuration - so on every cluster that did not declare a
+   * token explicitly the raw setting reads empty while the effective token is a real secret. Reading the
+   * setting alone is therefore not a conservative approximation of this: it is a different answer.
+   * <p>
+   * One method rather than one per caller, because the two ends of a forwarded hop reading the resolution
+   * order differently is the defect of issue #7516 - the sender authenticated with the raw setting while the
+   * receiver checked the derived token, so on a default-configured cluster the forward carried no usable
+   * credentials at all.
+   *
+   * @return the effective token, or null/blank when this server has none
+   */
+  static String effectiveClusterToken(final ArcadeDBServer server) {
+    if (server == null)
+      return null;
+    final HAServerPlugin ha = server.getHA();
+    final String fromPlugin = ha != null ? ha.getClusterToken() : null;
+    if (fromPlugin != null && !fromPlugin.isBlank())
+      return fromPlugin;
+    return server.getConfiguration().getValueAsString(GlobalConfiguration.HA_CLUSTER_TOKEN);
+  }
+
+  /**
    * Returns the HTTP address (host:port) of the current leader, or null if unknown.
    */
   String getLeaderAddress();
+
+  /**
+   * The HTTPS endpoint (host:port) a forward to the leader should be dialled on in preference to
+   * {@link #getLeaderAddress()}, or {@code null} when there is none to prefer.
+   * <p>
+   * Answering {@code null} is the ordinary case, not a failure: it is what an implementation says when SSL is off,
+   * when no HTTPS endpoint resolves for the leader, or when the one that does is this node's own. A caller reads
+   * {@code null} as "dial the plain-HTTP address", which is the listener that is always bound
+   * ({@code HttpServer.buildUndertowServer} adds it unconditionally and the HTTPS one only on top). That is the
+   * same withhold-rather-than-refuse rule {@code PeerDialAddress.encryptedEndpointOf} applies to every other
+   * peer-to-peer dial in the cluster (issue #6221).
+   * <p>
+   * <b>An implementation that answers non-null owns the self-address check for that address.</b> Callers apply
+   * {@link #isOwnHttpAddress} to the plain-HTTP address they were handed, and it cannot speak for an HTTPS
+   * endpoint: the two are read from independent fields of {@code arcadedb.ha.serverList} with independent derive
+   * fallbacks, so one can be this node's own while the other is not.
+   *
+   * @see #getPeerHttpsClient()
+   */
+  default String getLeaderHttpsAddress() {
+    return null;
+  }
+
+  /**
+   * An {@link HttpClient} that validates a cluster peer's certificate against this node's truststore, for dialling
+   * the endpoint {@link #getLeaderHttpsAddress()} named. {@code null} when this implementation has none, in which
+   * case the caller falls back to the plain-HTTP address.
+   * <p>
+   * The client is owned by the plugin and must not be closed by the caller: it carries a connection pool and a
+   * selector thread that are shared by every forward and released when the plugin stops.
+   *
+   * @throws IOException when the trust material cannot be read - the caller falls back to plain HTTP.
+   */
+  default HttpClient getPeerHttpsClient() throws IOException {
+    return null;
+  }
 
   /**
    * Returns a comma-separated list of replica HTTP addresses, or empty string if none.
@@ -169,6 +237,21 @@ public interface HAServerPlugin extends ServerPlugin {
    * Disconnects this node from the cluster (closes Raft server and client).
    */
   void disconnectCluster();
+
+  /**
+   * Joins the server named by {@code serverAddress} to this node's cluster, the other half of the
+   * {@code connect cluster} / {@code disconnect cluster} pair (issue #7401).
+   * <p>
+   * {@code serverAddress} is <b>one entry of {@code arcadedb.ha.serverList}</b>, not a bare host and
+   * port: the implementation parses it with the same parser the configured server list goes through, so
+   * an operator types here what they would have written in the configuration and the joining peer gets
+   * the identity it gives itself. An implementation that cannot change membership at runtime keeps the
+   * default below; {@code ServerControlPlane.connectCluster} turns that into the refusal both transports
+   * report, so the verb answers "this HA implementation cannot do it" rather than reading as a fault.
+   */
+  default void connectCluster(final String serverAddress) {
+    throw new UnsupportedOperationException("Dynamic membership not supported by this HA implementation");
+  }
 
   /**
    * Adds a new peer to the cluster at runtime.
@@ -259,7 +342,126 @@ public interface HAServerPlugin extends ServerPlugin {
    *
    * @param usersJsonArray a JSON array string representing the full current users list
    */
+  /**
+   * What the node that issued an authentication token says about it when asked (issue #7424): the principal it
+   * belongs to and when it was created.
+   */
+  record PeerAuthSession(String userName, long createdAt) {
+  }
+
+  /**
+   * Asks the node named {@code issuerServerName} whether it still holds the authentication session {@code token}
+   * (issue #7424). A login token lives on the node that answered {@code /api/v1/login}; behind a load balancer the
+   * next request lands elsewhere, and this is how that node finds out whether the token is good.
+   *
+   * @return the session as the issuer describes it, or {@code null} when the answer is definitive: the issuer is
+   * not a member of this cluster, is this node itself, or does not know the token
+   *
+   * @throws IOException when the issuer could not be asked (unreachable, timed out, no usable address); the caller
+   *                     treats it as "unknown for now", not as a revocation
+   */
+  default PeerAuthSession lookupAuthSession(final String issuerServerName, final String token) throws IOException {
+    return null;
+  }
+
+  /**
+   * Tells every other node of the cluster to drop its copy of the authentication session {@code token} (issue
+   * #7424). Best effort and bounded in time: a peer that cannot be reached drops the copy on its own at its next
+   * renewal with the issuer, which no longer holds it.
+   */
+  default void revokeAuthSession(final String token) {
+  }
+
+  /**
+   * Waits, bounded, for THIS node's state machine to catch up with the committed log (issue #7509).
+   * <p>
+   * A node that lost a security compare-and-set has to see the winning entry before it rebuilds its document, or
+   * the retry is built from the same stale view and loses again. The submitter may be a follower, whose own apply
+   * lags the reply it got back from the leader, so "the submit returned" is not "this node has applied it".
+   * Best-effort by contract: it returns when the deadline passes rather than failing, and the retry then simply
+   * has one more chance to lose. Default is a no-op for non-HA setups.
+   */
+  default void awaitLocalApply() {
+    // No-op by default; Raft implementation overrides.
+  }
+
   default void replicateSecurityUsers(final String usersJsonArray) {
     // No-op by default; Raft implementation overrides.
+  }
+
+  /**
+   * Replicates the full user list, installing it only while the list in force still fingerprints to
+   * {@code expectedFingerprint} (issue #7509).
+   * <p>
+   * The whole document is replicated, built by reading the current one and mutating a copy, and the
+   * read-compute-submit sequence is serialised by a per-NODE monitor. Without a precondition two nodes each
+   * build a document from their own view and the one Raft orders second silently reverts the first. The
+   * precondition moves the decision to the apply, which is the only point ordered across nodes.
+   *
+   * @param expectedFingerprint the fingerprint of the document the submitter read, or null to install
+   *                            unconditionally - which is what a seed of a joining peer wants
+   *
+   * @return true when the entry was applied, false when it was refused because the document had changed since
+   * the submitter read it; the caller re-reads and retries
+   */
+  default boolean replicateSecurityUsers(final String usersJsonArray, final String expectedFingerprint) {
+    // Delegates to the unconditional form, so an implementation that only knows the pre-#7509 signature keeps
+    // replicating - it just installs unconditionally, which is exactly what it did before the precondition
+    // existed. Reporting the entry as applied is the conservative answer: it preserves that behaviour instead
+    // of making every mutation report a phantom conflict.
+    replicateSecurityUsers(usersJsonArray);
+    return true;
+  }
+
+  /**
+   * Replicates the full {@code server-groups.json} document across the cluster (issue #7373). Called by
+   * {@code ServerSecurity.saveGroupClusterWide} / {@code deleteGroupClusterWide}, and by
+   * {@code PostAddPeerHandler} to seed newly-joined peers. Default is a no-op for non-HA setups; the Raft
+   * implementation submits a SECURITY_GROUPS_ENTRY via the group committer.
+   * <p>
+   * The whole document, not a delta: a group is a set of permissions the whole cluster authorizes against, and
+   * a peer that missed one delta would diverge silently rather than converge on the next change.
+   *
+   * @param groupsJson the complete group document, as {@code ServerSecurity.getGroupsJsonPayload} builds it
+   */
+  default void replicateSecurityGroups(final String groupsJson) {
+    // No-op by default; Raft implementation overrides.
+  }
+
+  /**
+   * {@link #replicateSecurityUsers(String, String)} for the group document (issue #7509).
+   *
+   * @return true when the entry was applied, false when the document had changed since the submitter read it
+   */
+  default boolean replicateSecurityGroups(final String groupsJson, final String expectedFingerprint) {
+    // See replicateSecurityUsers(String, String) for why this delegates rather than no-oping.
+    replicateSecurityGroups(groupsJson);
+    return true;
+  }
+
+  /**
+   * Replicates the full {@code server-api-tokens.json} document across the cluster (issue #7373). Called by
+   * {@code ServerSecurity.createApiTokenClusterWide} / {@code deleteApiTokenClusterWide}, and by
+   * {@code PostAddPeerHandler} to seed newly-joined peers. Default is a no-op for non-HA setups; the Raft
+   * implementation submits a SECURITY_API_TOKENS_ENTRY via the group committer.
+   * <p>
+   * The document carries token HASHES, never token material: the plaintext of a minted token exists only in the
+   * one-time response to the caller that minted it.
+   *
+   * @param apiTokensJson the complete token document, as {@code ServerSecurity.getApiTokensJsonPayload} builds it
+   */
+  default void replicateSecurityApiTokens(final String apiTokensJson) {
+    // No-op by default; Raft implementation overrides.
+  }
+
+  /**
+   * {@link #replicateSecurityUsers(String, String)} for the API-token document (issue #7509).
+   *
+   * @return true when the entry was applied, false when the document had changed since the submitter read it
+   */
+  default boolean replicateSecurityApiTokens(final String apiTokensJson, final String expectedFingerprint) {
+    // See replicateSecurityUsers(String, String) for why this delegates rather than no-oping.
+    replicateSecurityApiTokens(apiTokensJson);
+    return true;
   }
 }

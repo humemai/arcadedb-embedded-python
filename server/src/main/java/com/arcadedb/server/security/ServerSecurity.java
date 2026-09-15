@@ -50,7 +50,10 @@ import java.security.SecureRandom;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.KeySpec;
 import java.util.*;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 
 import static com.arcadedb.GlobalConfiguration.SERVER_SECURITY_ALGORITHM;
@@ -77,6 +80,12 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
   private static final SecureRandom                    RANDOM               = new SecureRandom();
   public static final  int                             SALT_SIZE            = 32;
 
+  // Backoff bounds for the seed retry of issue #7521. Short first wait, because the common failure is an
+  // election in flight that settles in well under a second; capped so a longer operator-configured budget
+  // becomes more attempts rather than one very long sleep at the end.
+  static final long SEED_RETRY_INITIAL_BACKOFF_MS = 250L;
+  static final long SEED_RETRY_MAX_BACKOFF_MS     = 1000L;
+
   // Reused per thread so the Basic-auth hot path avoids a getInstance provider lookup on every call.
   private static final ThreadLocal<MessageDigest>      SHA256_DIGEST        = ThreadLocal.withInitial(() -> {
     try {
@@ -95,6 +104,60 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
   private static final long                               PASSWORD_LOCKOUT_MS   = 30_000;
   private final        ConcurrentHashMap<String, long[]>  passwordFailures      = new ConcurrentHashMap<>();
 
+  /**
+   * How many times a cluster-wide security mutation rebuilds its document and resubmits after losing a
+   * compare-and-set race (issue #7509).
+   * <p>
+   * Small on purpose. Every attempt costs a Raft round trip, and a node only loses the race to a security change
+   * committed on ANOTHER node inside that window - which is administration, not traffic, so a handful of retries
+   * covers the concurrency a real cluster produces. Exhausting it reports a conflict the caller can retry, which
+   * is what issue #7509 asks for: never a silent success over a change that was thrown away.
+   */
+  private static final int                                SECURITY_CAS_MAX_ATTEMPTS = 5;
+
+  /**
+   * Single daemon worker that re-derives the cached per-database permissions after a group document has arrived
+   * over HA replication, so a peer converges in milliseconds instead of on the security reload tick (#7510).
+   * <p>
+   * It exists because the install and the refresh cannot share a thread. {@link #applyReplicatedGroups} runs on
+   * the Raft state-machine apply thread, which must never block, while {@link #refreshAllDatabasePermissions}
+   * walks every open database. Until this executor, a peer's only route to the new permissions was
+   * {@link SecurityGroupFileRepository}'s file watcher, up to {@code arcadedb.server.reloadEvery} ms later - so a
+   * permission an operator had just narrowed kept being granted on that node for the length of the interval,
+   * while {@code GET /server/groups} on the very same node already returned the new definition.
+   * <p>
+   * Not one of the JVM-wide {@code DedicatedThreadPool}s and, per the rule those exist to enforce, not the JDK
+   * common {@code ForkJoinPool} either: this is per-server security state rather than engine parallelism, and it
+   * has to stay serialised so two refreshes cannot interleave their publishes. The shape is
+   * {@code ArcadeStateMachine}'s snapshot-install executor - core 0 so an idle server carries no thread, max 1,
+   * daemon - differing only in what happens to a task it will not take.
+   * <p>
+   * <b>A refused refresh is dropped on purpose, and that is coalescing rather than loss.</b> The queue holds one
+   * task, and a task reads the group document when it RUNS instead of being handed a snapshot. Reaching the
+   * rejection handler at all therefore means another refresh is queued and has not started yet - a refresh
+   * already running has released the slot - and {@link #scheduleDatabasePermissionsRefresh}'s only caller,
+   * {@link #applyReplicatedGroups}, submits only after the new document is published in
+   * {@link SecurityGroupFileRepository}'s {@code volatile} field. The queued task consequently reads a document
+   * at least as new as the one whose refresh was dropped.
+   * <p>
+   * The handler's other caller is shutdown: once {@code stopService()} has run, a refresh submitted by a late
+   * apply is dropped as well, which is what stopping means.
+   */
+  private final        ThreadPoolExecutor                 permissionsRefreshExecutor = createPermissionsRefreshExecutor();
+
+  /**
+   * Serialises {@link #updateSchema}, so the document a refresh read and the permissions it publishes cannot be
+   * separated by another refresh. See that method for why an unsynchronised read-then-publish is a lost update on
+   * an authorization decision rather than a benign one.
+   * <p>
+   * <b>Server-wide, not per database.</b> Two databases refreshing concurrently used to be able to run fully in
+   * parallel and now take turns, which is a deliberate trade and a cheap one: a refresh is a walk of cached maps
+   * with no I/O in it, and the things that trigger one - a group edit, a schema change, a database open - are all
+   * rare. A map of per-database locks would buy parallelism nothing measures back, at the price of a second
+   * lifetime to manage for every database name the server has ever seen.
+   */
+  private final        Object                             permissionsPublishLock     = new Object();
+
   public ServerSecurity(final ArcadeDBServer server, final ContextConfiguration configuration, final String configPath) {
     this.server = server;
     this.algorithm = configuration.getValueAsString(SERVER_SECURITY_ALGORITHM);
@@ -108,9 +171,7 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
 
     usersRepository = new SecurityUserFileRepository(configPath);
     groupRepository = new SecurityGroupFileRepository(configPath, checkConfigReloadEveryMs).onReload(latestConfiguration -> {
-      for (final String databaseName : server.getDatabaseNames()) {
-        updateSchema(server.getDatabase(databaseName));
-      }
+      refreshAllDatabasePermissions();
       return null;
     });
 
@@ -210,6 +271,30 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     users = new ConcurrentHashMap<>();
     if (groupRepository != null)
       groupRepository.stop();
+
+    // shutdown() rather than shutdownNow(), with the queue drained by hand, because neither one alone is right
+    // here. shutdownNow() interrupts a walk that may be inside ArcadeDBServer.getDatabase(), turning a normal
+    // shutdown into a spurious SEVERE/WARNING from an interrupted channel; plain shutdown() lets a task that is
+    // still QUEUED start afterwards, and a refresh that begins after the security service has stopped can ask
+    // for a database the server is in the middle of closing. Draining first and then refusing new work leaves
+    // exactly one behaviour: an already-running walk finishes, nothing else starts.
+    permissionsRefreshExecutor.shutdown();
+    permissionsRefreshExecutor.getQueue().clear();
+
+    // And then WAIT for the walk that was already running, briefly. ArcadeDBServer.stopInternal() calls this
+    // method immediately before the loop that closes every ServerDatabase, so without this the worker would still
+    // be resolving names out of server.getDatabaseNames() while the main thread closes those same databases. The
+    // bound is short and the timeout is not an error: a refresh is a traversal of cached maps, and if it somehow
+    // has not finished in two seconds, proceeding is what this method did before - the guards inside the worker
+    // turn whatever it then touches into a log line rather than a failure.
+    try {
+      if (!permissionsRefreshExecutor.awaitTermination(2, TimeUnit.SECONDS))
+        LogManager.instance().log(this, Level.FINE,
+            "A cached-permission refresh was still running when the security service stopped; the databases close "
+                + "under it");
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   public ServerSecurityUser authenticate(final String userName, final String userPassword, final String databaseName) {
@@ -397,15 +482,20 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
    * divergence in by overwriting every peer with the serving node's whole list (issue #6808).
    * <p>
    * The {@code synchronized} block serialises the read-compute-submit sequence against any other user
-   * mutation on this node, so two concurrent calls cannot overwrite each other's in-flight change. It must
-   * NOT be held across anything that can block on the Raft apply thread; {@link #applyReplicatedUsers}, which
-   * unblocks the submit, deliberately does not take this monitor.
+   * mutation on this node. It must NOT be held across anything that can block on the Raft apply thread;
+   * {@link #applyReplicatedUsers(String)}, which unblocks the submit, deliberately does not take this monitor.
    * <p>
-   * Note what that costs, for whoever adds a fourth cluster-wide mutator here by symmetry: the monitor IS
+   * Note what that costs, for whoever adds another cluster-wide mutator here by symmetry: the monitor IS
    * held across the Raft round trip, so every user create/update/drop on this node serialises for the
-   * duration of consensus. That is deliberate - the payload is the whole user list, so two concurrent
-   * submits would otherwise each overwrite the other's change - and it is affordable only because user
-   * administration is rare. Nothing on a request hot path may be put inside this monitor.
+   * duration of consensus. It is affordable only because user administration is rare, and nothing on a request
+   * hot path may be put inside this monitor.
+   * <p>
+   * <b>The monitor is per-NODE, so it is not what makes the payload safe.</b> Two nodes can each build a whole
+   * user list from their own view at the same time, and the entry Raft orders second would silently revert the
+   * first (issue #7509). What prevents that is the COMPARE-AND-SET: the fingerprint of the list this node read
+   * rides along with the entry, the apply refuses to install a list whose fingerprint no longer matches the one
+   * in force, and this loop then re-reads and resubmits - up to {@link #SECURITY_CAS_MAX_ATTEMPTS} times, after
+   * which the caller is told the request changed nothing rather than that it succeeded.
    */
   public void createUserClusterWide(final JSONObject userConfiguration) {
     final HAServerPlugin ha = server != null ? server.getHA() : null;
@@ -415,12 +505,48 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     }
 
     final String name = userConfiguration.getString("name");
-    synchronized (this) {
-      if (users.containsKey(name))
-        throw new ServerSecurityException("User '" + name + "' already exists");
+    for (int attempt = 1; ; attempt++) {
+      final boolean applied;
+      synchronized (this) {
+        // ONE read of the volatile map: the payload and the precondition must describe the same document.
+        final Map<String, ServerSecurityUser> current = this.users;
+        if (current.containsKey(name))
+          throw new ServerSecurityException("User '" + name + "' already exists");
 
-      ha.replicateSecurityUsers(replicationPayloadWith(name, userConfiguration));
+        applied = ha.replicateSecurityUsers(replicationPayloadWith(current, name, userConfiguration),
+            usersFingerprintOf(current));
+      }
+      if (applied)
+        return;
+      awaitSupersededChange(ha, "create user '" + name + "'", "user list", attempt);
     }
+  }
+
+  /**
+   * Prepares the next attempt of a cluster-wide security mutation that lost the compare-and-set race, or fails it
+   * once {@link #SECURITY_CAS_MAX_ATTEMPTS} have gone (issue #7509).
+   * <p>
+   * <b>Called OUTSIDE the monitor, deliberately.</b> The refusal verdict is the LEADER's, and this node may not
+   * have applied the winning entry yet - it can be a follower, whose own apply lags the reply it got back - so
+   * retrying immediately would rebuild the payload from the same stale view and lose again, burning the budget
+   * without ever converging. {@link HAServerPlugin#awaitLocalApply()} waits for this node to catch up, bounded by
+   * the quorum timeout. That wait must not happen inside {@code synchronized (this)}: the monitor is shared by
+   * all seven cluster-wide mutators, so holding it across up to {@link #SECURITY_CAS_MAX_ATTEMPTS} such waits
+   * would queue every unrelated user, group and token change on this node behind one caller's retry storm - a
+   * far worse cost than the race it is recovering from, and it would make the surrounding javadoc's "held across
+   * one Raft round trip" untrue.
+   */
+  private void awaitSupersededChange(final HAServerPlugin ha, final String what, final String document,
+      final int attempt) {
+    if (attempt >= SECURITY_CAS_MAX_ATTEMPTS)
+      throw new ServerSecurityException("Could not " + what + " after " + SECURITY_CAS_MAX_ATTEMPTS
+          + " attempts: the " + document + " keeps being changed concurrently on another node of the cluster. "
+          + "Nothing was changed; retry the request");
+
+    LogManager.instance().log(this, Level.INFO,
+        "Retrying to %s: the %s changed on another node between this node's read and the apply (attempt %d of %d)",
+        what, document, attempt, SECURITY_CAS_MAX_ATTEMPTS);
+    ha.awaitLocalApply();
   }
 
   /**
@@ -437,15 +563,23 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     }
 
     final String name = userConfiguration.getString("name");
-    final boolean passwordChanged;
-    synchronized (this) {
-      final ServerSecurityUser previous = users.get(name);
-      if (previous == null)
-        throw new ServerSecurityException("User '" + name + "' not found");
+    boolean passwordChanged;
+    for (int attempt = 1; ; attempt++) {
+      final boolean applied;
+      synchronized (this) {
+        final Map<String, ServerSecurityUser> current = this.users;
+        final ServerSecurityUser previous = current.get(name);
+        if (previous == null)
+          throw new ServerSecurityException("User '" + name + "' not found");
 
-      passwordChanged = !Objects.equals(previous.getPassword(), userConfiguration.getString("password", null));
+        passwordChanged = !Objects.equals(previous.getPassword(), userConfiguration.getString("password", null));
 
-      ha.replicateSecurityUsers(replicationPayloadWith(name, userConfiguration));
+        applied = ha.replicateSecurityUsers(replicationPayloadWith(current, name, userConfiguration),
+            usersFingerprintOf(current));
+      }
+      if (applied)
+        break;
+      awaitSupersededChange(ha, "update user '" + name + "'", "user list", attempt);
     }
 
     // Applying the replicated list already dropped this principal's LOGIN sessions on every node, this one
@@ -468,11 +602,19 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     if (ha == null)
       return dropUserLocally(userName);
 
-    synchronized (this) {
-      if (!users.containsKey(userName))
-        return false;
+    for (int attempt = 1; ; attempt++) {
+      final boolean applied;
+      synchronized (this) {
+        final Map<String, ServerSecurityUser> current = this.users;
+        if (!current.containsKey(userName))
+          return false;
 
-      ha.replicateSecurityUsers(replicationPayloadWith(userName, null));
+        applied = ha.replicateSecurityUsers(replicationPayloadWith(current, userName, null),
+            usersFingerprintOf(current));
+      }
+      if (applied)
+        break;
+      awaitSupersededChange(ha, "drop user '" + userName + "'", "user list", attempt);
     }
 
     // Same rationale (and the same OUTSIDE-the-monitor placement) as dropUser(): a recreated same-name
@@ -588,12 +730,107 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     if (database == null)
       return;
 
-    // Resolved once for the whole sweep instead of once per user: the lookup merges the wildcard and the
-    // per-database group objects, and the configuration cannot change under a single refresh.
-    final JSONObject groupConfiguration = getDatabaseGroupsConfiguration(database.getName());
+    // The read and the publish are ONE critical section, and that is the whole point of the lock.
+    //
+    // Several threads refresh independently - the group file's watcher timer, ServerControlPlane on an HTTP or
+    // gRPC admin request, LocalDatabase.open(), LocalSchema after a schema change, and now the replicated-apply
+    // worker this class added for issue #7510. Reading the document outside a lock let the slower of two
+    // refreshes publish the OLDER document last: a sweep that had read the previous definitions, preempted
+    // mid-walk, would finish by writing them over a narrowed permission another thread had already published, and
+    // the widened grant then stood until the next refresh. That is a lost update on an authorization decision
+    // (CWE-863), and the comment that used to sit here - "the configuration cannot change under a single refresh"
+    // - asserted the opposite of what the code did.
+    //
+    // Taken per DATABASE rather than around a whole sweep, so it never spans server.getDatabase(), which can open
+    // one. A dedicated monitor and emphatically not this object's: saveGroupClusterWide holds the ServerSecurity
+    // monitor across a Raft round trip, and putting a database open behind that round trip is exactly the kind of
+    // coupling applyReplicatedGroups' invariant exists to prevent.
+    synchronized (permissionsPublishLock) {
+      // Resolved once for the whole sweep instead of once per user: the lookup merges the wildcard and the
+      // per-database group objects, and under this lock it genuinely cannot change while the sweep publishes it.
+      final JSONObject groupConfiguration = getDatabaseGroupsConfiguration(database.getName());
 
-    for (final ServerSecurityUser user : users.values())
-      user.refreshDatabaseConfiguration(database, groupConfiguration);
+      for (final ServerSecurityUser user : users.values())
+        user.refreshDatabaseConfiguration(database, groupConfiguration);
+    }
+  }
+
+  private static ThreadPoolExecutor createPermissionsRefreshExecutor() {
+    return new ThreadPoolExecutor(0, 1, 30L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(1), r -> {
+      final Thread thread = new Thread(r, "arcadedb-security-permissions-refresh");
+      thread.setDaemon(true);
+      return thread;
+    }, (rejected, executor) -> LogManager.instance().log(ServerSecurity.class, Level.FINE,
+        "A cached-permission refresh is already queued or the server is stopping; this one is coalesced into it"));
+  }
+
+  /**
+   * Hands {@link #refreshAllDatabasePermissions} to {@link #permissionsRefreshExecutor}, for callers that may not
+   * block - the Raft state-machine apply thread above all (issue #7510).
+   * <p>
+   * Returns as soon as the task is queued. The group file's watcher is deliberately left in place as the safety
+   * net behind it: if the worker is saturated, stopped, or the refresh throws, the node still converges on the
+   * {@code arcadedb.server.reloadEvery} tick exactly as it did before.
+   */
+  private void scheduleDatabasePermissionsRefresh() {
+    if (server == null)
+      return;
+
+    permissionsRefreshExecutor.execute(this::runDatabasePermissionsRefresh);
+  }
+
+  /** The body run on {@link #permissionsRefreshExecutor}. */
+  private void runDatabasePermissionsRefresh() {
+    try {
+      refreshAllDatabasePermissions();
+    } catch (final Exception e) {
+      // Nothing may escape the worker: a throw here is swallowed by the executor, and the node would then quietly
+      // fall back to converging on the reload tick - the behaviour this executor exists to replace. It has to be
+      // visible rather than silently reverted to.
+      //
+      // Exception and deliberately not Throwable: an Error is not a refresh that failed, it is a JVM that is no
+      // longer able to run one, and logging it here as though the node had merely lost its fast path would be a
+      // lie about the state of the process. Let it kill the worker and reach the default handler.
+      LogManager.instance().log(this, Level.SEVERE,
+          "Error while refreshing the cached database permissions after a replicated group change; this node now "
+              + "converges only on the '%s' reload tick", e, SecurityGroupFileRepository.FILE_NAME);
+    }
+  }
+
+  /**
+   * Re-derives the cached permissions of every database this server currently has open, from the group document
+   * in force right now.
+   * <p>
+   * The body the {@code server-groups.json} watcher has always run, extracted so the HA apply path can run the
+   * same thing instead of a second hand-written copy of it (issue #7510). It reads the current document rather
+   * than a snapshot handed to it, which is what lets a queued refresh stand in for the ones coalesced behind it.
+   * <p>
+   * Blocking, by nature: {@link #updateSchema} walks every user that has cached a
+   * {@link ServerSecurityDatabaseUser} for each open database. Callers on a thread that may not block - the Raft
+   * state-machine apply thread above all - must go through {@link #scheduleDatabasePermissionsRefresh()}.
+   * <p>
+   * Package-private: the two production callers are in this class and the only other caller is the test beside
+   * it. The per-database refresh other packages need is {@link #updateSchema}, which is the {@code SecurityManager}
+   * interface method.
+   */
+  void refreshAllDatabasePermissions() {
+    if (server == null)
+      return;
+
+    for (final String databaseName : server.getDatabaseNames())
+      try {
+        updateSchema(server.getDatabase(databaseName));
+      } catch (final Exception e) {
+        // Guarded PER DATABASE, not once around the loop. server.getDatabase() can refuse a name this iteration
+        // has already seen - it is dropped meanwhile, or its directory still carries the interrupted-snapshot
+        // marker ArcadeDBServer.getDatabase() throws DatabaseNotAvailableException for - and a peer mid-snapshot
+        // install is precisely a node that also receives replicated group entries. One such refusal must cost
+        // that database's refresh only: aborting the sweep would leave every database after it in the iteration
+        // waiting for the reload tick, which is the lag this method exists to remove.
+        LogManager.instance().log(this, Level.WARNING,
+            "Could not refresh the cached permissions of database '%s'; it converges on the '%s' reload tick, or "
+                + "when it is next opened", e, databaseName, SecurityGroupFileRepository.FILE_NAME);
+      }
   }
 
   public String getEncodedHash(final String password, final String salt, final int iterations) {
@@ -756,6 +993,22 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
    * third not.
    */
   private List<JSONObject> snapshotWith(final String name, final JSONObject replacement) {
+    return snapshotWith(this.users, name, replacement);
+  }
+
+  /**
+   * {@link #snapshotWith(String, JSONObject)} against an explicit snapshot of the user map.
+   * <p>
+   * The overload exists because {@code users} is a volatile reference that {@link #applyReplicatedUsers(String)}
+   * swaps <b>without</b> taking this monitor - it must not, or it would deadlock with a submitter blocked on the
+   * very entry it is applying. A cluster-wide mutator that read the field once to build its payload and again to
+   * fingerprint its precondition could therefore be handed two DIFFERENT documents, and would then submit a
+   * payload built from the old one under a precondition describing the new one - a compare-and-set that passes
+   * over a change it is about to revert, which is issue #7509 reopened on a narrower window. Every such caller
+   * reads the field exactly once and derives both halves from that one snapshot.
+   */
+  private static List<JSONObject> snapshotWith(final Map<String, ServerSecurityUser> users, final String name,
+      final JSONObject replacement) {
     final List<JSONObject> snapshot = new ArrayList<>(users.size() + 1);
     boolean found = false;
     for (final ServerSecurityUser user : users.values()) {
@@ -776,10 +1029,19 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
    * takes. Must be called while holding this monitor, so the read-compute-submit sequence is serialised
    * against any other user mutation on this node.
    */
-  private String replicationPayloadWith(final String name, final JSONObject replacement) {
+  private String replicationPayloadWith(final Map<String, ServerSecurityUser> users, final String name,
+      final JSONObject replacement) {
     final JSONArray array = new JSONArray();
-    for (final JSONObject entry : snapshotWith(name, replacement))
+    for (final JSONObject entry : snapshotWith(users, name, replacement))
       array.put(entry);
+    return array.toString();
+  }
+
+  /** The user list of {@code users} in the shape {@link #getUsersJsonPayload} produces for the live map. */
+  private static String usersJsonOf(final Map<String, ServerSecurityUser> users) {
+    final JSONArray array = new JSONArray();
+    for (final ServerSecurityUser user : users.values())
+      array.put(user.toJSON());
     return array.toString();
   }
 
@@ -890,6 +1152,87 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
   }
 
   /**
+   * {@link #applyReplicatedUsers(String)} with the compare-and-set precondition the entry carried (issue #7509):
+   * when {@code expectedFingerprint} is not null and no longer matches the user list in force, the payload was
+   * built from a view the cluster has already moved past and is NOT installed.
+   * <p>
+   * The refusal is deterministic - the payload, the precondition and the state they are compared against are all
+   * replicated, and Raft applies entries in one order on every node - so every node refuses the same entry and
+   * none of them diverges. The submitter learns about it from the reply
+   * {@code ArcadeStateMachine.applyTransaction} sends back, and retries against the current document.
+   * <p>
+   * The install itself stays in {@link #applyReplicatedUsers(String)} rather than being inlined here: that is
+   * the method the fault-injection fixtures of issues #7137, #7227 and #7252 override, and moving the body would
+   * make three regression tests pass against a path they no longer exercise.
+   *
+   * @return true when the list was installed, false when the precondition no longer held
+   */
+  public boolean applyReplicatedUsers(final String usersJsonArray, final String expectedFingerprint) {
+    if (isSuperseded("user list", expectedFingerprint, usersFingerprint()))
+      return false;
+
+    applyReplicatedUsers(usersJsonArray);
+    return true;
+  }
+
+  /**
+   * Whether a replicated security entry must be refused because the document it was built from is no longer the
+   * one in force (issue #7509). A null {@code expected} is an unconditional install - a seed, or an entry from a
+   * node that predates the precondition - and is never refused.
+   */
+  private boolean isSuperseded(final String document, final String expected, final String current) {
+    if (expected == null || expected.equals(current))
+      return false;
+
+    LogManager.instance().log(this, Level.WARNING,
+        "Refusing a replicated %s: it was built from a document that is no longer in force (expected fingerprint "
+            + "%s, current %s). Installing it would revert a change this node has already applied; the node that "
+            + "submitted it retries against the current document",
+        document, expected, current);
+    return true;
+  }
+
+  /**
+   * The compare-and-set fingerprint of the user list currently in force (issue #7509). Non-blocking and free of
+   * the {@code ServerSecurity} monitor, so the Raft apply thread may call it.
+   */
+  public String usersFingerprint() {
+    return SecurityDocumentFingerprint.of(getUsersJsonPayload());
+  }
+
+  /**
+   * {@link #usersFingerprint()} of an explicit snapshot, so a submitter can fingerprint the very map its payload
+   * was built from. See {@link #snapshotWith(Map, String, JSONObject)} for why reading the volatile field twice
+   * is not the same thing.
+   */
+  private static String usersFingerprintOf(final Map<String, ServerSecurityUser> users) {
+    return SecurityDocumentFingerprint.of(usersJsonOf(users));
+  }
+
+  /**
+   * The group document in the shape {@link #getGroupsJsonPayload} produces, built from an explicit read of the
+   * repository's current document rather than from a second one. Same reason as
+   * {@link #snapshotWith(Map, String, JSONObject)}: the repository publishes a new document by swapping a
+   * volatile reference, which the group apply does without this monitor.
+   */
+  private static String groupsJsonOf(final JSONObject currentGroups) {
+    return new JSONObject()
+        .put("databases", currentGroups.getJSONObject("databases"))
+        .put("version", LATEST_VERSION)
+        .toString();
+  }
+
+  /** The compare-and-set fingerprint of the group document currently in force (issue #7509). */
+  public String groupsFingerprint() {
+    return SecurityDocumentFingerprint.of(getGroupsJsonPayload());
+  }
+
+  /** The compare-and-set fingerprint of the API-token document currently in force (issue #7509). */
+  public String apiTokensFingerprint() {
+    return SecurityDocumentFingerprint.of(getApiTokensJsonPayload());
+  }
+
+  /**
    * Writes the users file, returning the failure instead of throwing it so the caller can finish applying the
    * list before reporting (issue #7137). Inlining the try/catch at the call site would force a non-final local:
    * javac treats every statement in a {@code try} as able to throw, so an assignment made after the call is
@@ -921,20 +1264,83 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     }
   }
 
+  /**
+   * Saves a group on THIS node only, with no replication. The local half of {@link #saveGroupClusterWide};
+   * every caller that is not that method wants the cluster-aware one instead (issue #7373).
+   */
   public synchronized void saveGroup(final String database, final String name, final JSONObject groupConfig) {
-    final JSONObject root = groupRepository.getGroups().copy();
+    if (groupConfig == null)
+      // Same guard as saveGroupClusterWide(): groupsDocumentWith() reads a null replacement as a removal, so a
+      // null here would quietly turn a save into a delete. deleteGroup() is the method for that.
+      throw new IllegalArgumentException("Group configuration is required; use deleteGroup() to remove a group");
+
+    persistGroups(groupsDocumentWith(database, name, groupConfig));
+  }
+
+  /**
+   * Deletes a group on THIS node only, with no replication. The local half of
+   * {@link #deleteGroupClusterWide} (issue #7373).
+   */
+  public synchronized boolean deleteGroup(final String database, final String name) {
+    final JSONObject root = groupsDocumentWith(database, name, null);
+    if (root == null)
+      return false;
+    persistGroups(root);
+    return true;
+  }
+
+  /**
+   * Returns the whole group document with {@code name} under {@code database} replaced by {@code groupConfig},
+   * or removed when {@code groupConfig} is {@code null}; {@code null} when a removal found nothing to remove.
+   * Does not mutate anything.
+   * <p>
+   * The single place the save/delete shape is expressed, on both the local and the replicated path - the same
+   * reason {@link #snapshotWith} exists for users: two hand-written copies of this walk are how the local and
+   * the replicated document end up differing in a corner nobody exercises.
+   */
+  private JSONObject groupsDocumentWith(final String database, final String name, final JSONObject groupConfig) {
+    return groupsDocumentWith(groupRepository.getGroups(), database, name, groupConfig);
+  }
+
+  /**
+   * {@link #groupsDocumentWith(String, String, JSONObject)} against an explicit read of the current group
+   * document, so a cluster-wide mutator can fingerprint the same read its payload is derived from
+   * (issue #7509). See {@link #snapshotWith(Map, String, JSONObject)}.
+   */
+  private static JSONObject groupsDocumentWith(final JSONObject currentGroups, final String database,
+      final String name, final JSONObject groupConfig) {
+    final JSONObject root = currentGroups.copy();
     final JSONObject databases = root.getJSONObject("databases");
 
-    if (!databases.has(database))
-      databases.put(database, new JSONObject().put("groups", new JSONObject()));
+    if (groupConfig == null) {
+      if (!databases.has(database))
+        return null;
 
-    final JSONObject dbEntry = databases.getJSONObject(database);
-    if (!dbEntry.has("groups"))
-      dbEntry.put("groups", new JSONObject());
+      final JSONObject dbEntry = databases.getJSONObject(database);
+      if (!dbEntry.has("groups"))
+        return null;
 
-    dbEntry.getJSONObject("groups").put(name, groupConfig);
+      final JSONObject groups = dbEntry.getJSONObject("groups");
+      if (!groups.has(name))
+        return null;
+
+      groups.remove(name);
+    } else {
+      if (!databases.has(database))
+        databases.put(database, new JSONObject().put("groups", new JSONObject()));
+
+      final JSONObject dbEntry = databases.getJSONObject(database);
+      if (!dbEntry.has("groups"))
+        dbEntry.put("groups", new JSONObject());
+
+      dbEntry.getJSONObject("groups").put(name, groupConfig);
+    }
 
     root.put("version", LATEST_VERSION);
+    return root;
+  }
+
+  private void persistGroups(final JSONObject root) {
     try {
       groupRepository.save(root);
     } catch (final IOException e) {
@@ -942,30 +1348,384 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     }
   }
 
-  public synchronized boolean deleteGroup(final String database, final String name) {
-    final JSONObject root = groupRepository.getGroups().copy();
-    final JSONObject databases = root.getJSONObject("databases");
+  /**
+   * Cluster-aware {@link #saveGroup}: submits the resulting group document as a Raft entry when the server is
+   * part of an HA cluster, so every peer applies it, and falls back to the local mutation when it is not.
+   * <p>
+   * Groups were node-local while users were replicated (issue #7373). A user document IS replicated, so the same
+   * credentials authenticated everywhere but resolved to a group that existed on one node only - the same
+   * principal getting different authorization depending on which node the load balancer picked.
+   * <p>
+   * The {@code synchronized} block and its cost are exactly those of {@link #createUserClusterWide}, and so is
+   * the compare-and-set retry around it (issue #7509): the monitor serialises this node's own group changes,
+   * while the fingerprint carried with the entry is what stops a group change committed on ANOTHER node from
+   * being reverted. Holding the monitor across the Raft round trip is affordable only because group
+   * administration is rare; nothing on a request hot path may be put inside it, and
+   * {@link #applyReplicatedGroups(String)} - which unblocks the submit - must never take it.
+   */
+  public void saveGroupClusterWide(final String database, final String name, final JSONObject groupConfig) {
+    if (groupConfig == null)
+      // groupsDocumentWith() reads a null replacement as "remove this group", so a null here would quietly turn
+      // a save into a delete. Deleting is deleteGroupClusterWide()'s job, and it reports "no such group".
+      throw new IllegalArgumentException("Group configuration is required; use deleteGroupClusterWide() to remove a group");
 
-    if (!databases.has(database))
-      return false;
-
-    final JSONObject dbEntry = databases.getJSONObject(database);
-    if (!dbEntry.has("groups"))
-      return false;
-
-    final JSONObject groups = dbEntry.getJSONObject("groups");
-    if (!groups.has(name))
-      return false;
-
-    groups.remove(name);
-
-    root.put("version", LATEST_VERSION);
-    try {
-      groupRepository.save(root);
-    } catch (final IOException e) {
-      throw new ServerSecurityException("Error saving group configuration", e);
+    final HAServerPlugin ha = server != null ? server.getHA() : null;
+    if (ha == null) {
+      saveGroup(database, name, groupConfig);
+      return;
     }
+
+    for (int attempt = 1; ; attempt++) {
+      final boolean applied;
+      synchronized (this) {
+        // ONE read of the repository's current document, for both halves.
+        final JSONObject current = groupRepository.getGroups();
+        applied = ha.replicateSecurityGroups(groupsDocumentWith(current, database, name, groupConfig).toString(),
+            SecurityDocumentFingerprint.of(groupsJsonOf(current)));
+      }
+      if (applied)
+        return;
+      awaitSupersededChange(ha, "save group '" + name + "' of database '" + database + "'", "group document", attempt);
+    }
+  }
+
+  /**
+   * Cluster-aware {@link #deleteGroup}. See {@link #saveGroupClusterWide}.
+   *
+   * @return true if the group existed and the removal was applied/replicated, false if there was no such group
+   */
+  public boolean deleteGroupClusterWide(final String database, final String name) {
+    final HAServerPlugin ha = server != null ? server.getHA() : null;
+    if (ha == null)
+      return deleteGroup(database, name);
+
+    for (int attempt = 1; ; attempt++) {
+      final boolean applied;
+      synchronized (this) {
+        final JSONObject current = groupRepository.getGroups();
+        final JSONObject root = groupsDocumentWith(current, database, name, null);
+        if (root == null)
+          return false;
+
+        applied = ha.replicateSecurityGroups(root.toString(),
+            SecurityDocumentFingerprint.of(groupsJsonOf(current)));
+      }
+      if (applied)
+        return true;
+      awaitSupersededChange(ha, "delete group '" + name + "' of database '" + database + "'", "group document",
+          attempt);
+    }
+  }
+
+  /**
+   * Applies a replicated group document: publishes it in memory and writes {@code server-groups.json}.
+   * Called from the Raft state machine on every peer when a {@code SECURITY_GROUPS_ENTRY} is applied.
+   * <p>
+   * <b>INVARIANT: this method must never take the {@code ServerSecurity} monitor, and must never block.</b> It
+   * runs on the Raft state-machine apply thread, and {@link #saveGroupClusterWide} /
+   * {@link #deleteGroupClusterWide} hold that monitor while blocked waiting for the very entry this method
+   * applies - the same deadlock {@link #applyReplicatedUsers} documents at length.
+   * <p>
+   * The publish-before-persist ordering, and the fact that a write failure is reported only after the document
+   * is in force, are the group half of issue #7137: see
+   * {@link SecurityGroupFileRepository#applyReplicated}.
+   * <p>
+   * The per-database permission caches are not refreshed ON this thread - {@code ServerSecurity.updateSchema}
+   * opens and walks each database, which is blocking work the apply thread may not do - but they are no longer
+   * left to the file watcher either: the refresh is handed to {@link #permissionsRefreshExecutor} before this
+   * method returns (issue #7510), so the peer converges in milliseconds rather than up to one
+   * {@code arcadedb.server.reloadEvery} interval later. The watcher stays as the safety net behind that, and the
+   * node that served the request still refreshes inline, in {@code ServerControlPlane}.
+   */
+  public void applyReplicatedGroups(final String groupsJson) {
+    final JSONObject root = new JSONObject(groupsJson);
+    // Validated BEFORE any mutation: a document this node cannot read is not "the disk is full", it is a
+    // committed entry this node cannot apply, and it must reach the node-wide halt rather than be swallowed
+    // (issue #4798). Both checks below are about what the document does to the node AFTER it is installed:
+    //
+    // - no usable 'databases' section and every authorization lookup - getDatabaseGroupsConfiguration, called
+    //   per request - throws instead of answering;
+    // - no 'version' and the document is written out anyway, but SecurityGroupFileRepository.load() discards a
+    //   versionless file on the next restart and falls back to createDefault(), which is the silent widening
+    //   to the default permissions the repository's own atomic-write comment exists to prevent.
+    if (!root.has("databases") || !(root.get("databases") instanceof JSONObject))
+      throw new ServerSecurityException(
+          "Replicated group document has no usable 'databases' section; refusing to install it over the current "
+              + "groups, because every authorization lookup on this node would then fail");
+    if (!root.has("version"))
+      throw new ServerSecurityException(
+          "Replicated group document carries no 'version'; refusing to install it, because a restart would "
+              + "discard the versionless file and fall back to the DEFAULT group definitions");
+
+    final Exception persistFailure = groupRepository.applyReplicated(root);
+
+    // Scheduled BEFORE the persistence failure is reported, and unconditionally: applyReplicated() publishes the
+    // document in memory first, so this node authorizes against it from now on whether or not the write
+    // succeeded. Scheduling after the throw below would leave the case that needs the refresh most - a narrowed
+    // permission on a node whose configuration volume is full or read-only - waiting for the reload tick.
+    scheduleDatabasePermissionsRefresh();
+
+    if (persistFailure != null) {
+      LogManager.instance().log(this, Level.SEVERE,
+          "Could not write the replicated group document to '%s'. The new groups ARE in effect on this node from "
+              + "now on; what failed is making them durable", persistFailure, SecurityGroupFileRepository.FILE_NAME);
+      throw new ReplicatedSecurityConfigPersistenceException(
+          "Replicated groups applied in memory but could NOT be persisted to '" + SecurityGroupFileRepository.FILE_NAME
+              + "'; this node enforces the new document now, but a restart reverts it to the stale file and the "
+              + "change must then be reissued", persistFailure);
+    }
+  }
+
+  /**
+   * {@link #applyReplicatedGroups(String)} with the compare-and-set precondition the entry carried (issue
+   * #7509). See {@link #applyReplicatedUsers(String, String)} for why the refusal cannot diverge the cluster,
+   * and for why the install stays in the single-argument method.
+   *
+   * @return true when the document was installed, false when the precondition no longer held
+   */
+  public boolean applyReplicatedGroups(final String groupsJson, final String expectedFingerprint) {
+    if (isSuperseded("group document", expectedFingerprint, groupsFingerprint()))
+      return false;
+
+    applyReplicatedGroups(groupsJson);
     return true;
+  }
+
+  /**
+   * The whole group document as the JSON string {@link #applyReplicatedGroups} takes. Intentionally NOT
+   * {@code synchronized}, for the same reason {@link #getUsersJsonPayload} is not: the caller holds this
+   * monitor across the read-compute-submit sequence. To seed a joining peer, call {@link #seedGroupsClusterWide}
+   * rather than pairing this with a bare {@code replicateSecurityGroups}.
+   */
+  public String getGroupsJsonPayload() {
+    return groupsToJSON().toString();
+  }
+
+  /**
+   * Submits the current users, group and API-token documents so a newly-joined peer converges on them, each read
+   * and submitted <b>under this monitor</b> (issue #7373).
+   * <p>
+   * The monitor is the point. Snapshot restores state, so a snapshot taken before a revocation and submitted
+   * after it puts the revoked token - or the deleted group - back on every node in the cluster. Reading outside
+   * the monitor leaves exactly that window open, and it is not hypothetical: {@code addPeer} is precisely the
+   * moment an operator is also likely to be rotating credentials. {@link #getUsersJsonPayload}'s javadoc has
+   * always said the caller must hold this monitor; {@code PostAddPeerHandler} did not, which this closes for the
+   * users seed as well as for the two new ones.
+   * <p>
+   * Each document is seeded under its own acquisition rather than all three under one, so an unrelated user
+   * change is not blocked for three consecutive Raft round trips. Each is best-effort and independent: the
+   * failures are collected and returned rather than thrown, so one failing seed does not skip the other two.
+   * <p>
+   * This form makes one attempt per document. An admission path wants
+   * {@link #seedSecurityStateClusterWide(long)} instead, which retries the ones that failed (issue #7521).
+   *
+   * @return the names of the documents that could not be seeded, empty when all three were submitted
+   */
+  public List<String> seedSecurityStateClusterWide() {
+    return seedSecurityStateClusterWide(0L);
+  }
+
+  /**
+   * {@link #seedSecurityStateClusterWide()} with a time budget for retrying the documents that failed (issue
+   * #7521).
+   * <p>
+   * A single best-effort attempt is the wrong shape for this failure. {@code replicateSecurity*} submits a Raft
+   * entry and waits for it to commit, so the usual way it fails is that there is no quorum <i>at this instant</i>
+   * - which is both transient and exactly the condition that makes an {@code addPeer} interesting in the first
+   * place. Retrying costs one admin call a few seconds; not retrying leaves a peer that is already a cluster
+   * member serving requests against whatever its own config directory holds.
+   * <p>
+   * Only the documents that failed are retried, and each retry re-reads the document under the monitor rather
+   * than resubmitting the payload read on the first attempt: a revocation that commits between two attempts must
+   * not be undone by the next one, which is the whole reason the read happens under the monitor at all.
+   * <p>
+   * Sleeping is done with an exponential backoff capped at {@value #SEED_RETRY_MAX_BACKOFF_MS} ms and never past
+   * the deadline. An interrupt ends the retrying immediately, restores the interrupt flag and reports whatever is
+   * still failing - a caller being torn down must not be held here.
+   *
+   * @param retryBudgetMs how long to keep retrying the failing documents; {@code 0} (or less) is the single
+   *                      best-effort attempt {@link #seedSecurityStateClusterWide()} makes
+   *
+   * @return the names of the documents that could not be seeded, empty when all three were submitted
+   */
+  public List<String> seedSecurityStateClusterWide(final long retryBudgetMs) {
+    final HAServerPlugin ha = server != null ? server.getHA() : null;
+    if (ha == null)
+      return List.of();
+
+    // Insertion-ordered so the reported failures always read users, groups, API tokens, whichever of them failed.
+    final Map<String, Runnable> pending = new LinkedHashMap<>(4);
+    pending.put("users", () -> seedUsersClusterWide(ha));
+    pending.put("groups", () -> seedGroupsClusterWide(ha));
+    pending.put("API tokens", () -> seedApiTokensClusterWide(ha));
+
+    final long deadline = System.currentTimeMillis() + Math.max(0L, retryBudgetMs);
+    long backoffMs = SEED_RETRY_INITIAL_BACKOFF_MS;
+
+    while (true) {
+      final List<String> failed = new ArrayList<>(pending.size());
+      for (final Map.Entry<String, Runnable> document : pending.entrySet())
+        seed(failed, document.getKey(), document.getValue());
+
+      if (failed.isEmpty())
+        return List.of();
+
+      final long remainingMs = deadline - System.currentTimeMillis();
+      if (remainingMs <= 0)
+        return failed;
+
+      // Retry only what failed: a document that committed must not be resubmitted, and resubmitting it would
+      // also re-read it, widening the window in which a concurrent revocation is overwritten by a stale read.
+      pending.keySet().retainAll(failed);
+
+      try {
+        Thread.sleep(Math.min(backoffMs, remainingMs));
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return failed;
+      }
+      backoffMs = Math.min(backoffMs * 2, SEED_RETRY_MAX_BACKOFF_MS);
+    }
+  }
+
+  private void seed(final List<String> failed, final String what, final Runnable seeding) {
+    try {
+      seeding.run();
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.WARNING, "Could not seed the %s document to the cluster: %s", e, what,
+          e.getMessage());
+      failed.add(what);
+    }
+  }
+
+  /** Reads and submits the user list under this monitor. See {@link #seedSecurityStateClusterWide}. */
+  private void seedUsersClusterWide(final HAServerPlugin ha) {
+    synchronized (this) {
+      ha.replicateSecurityUsers(getUsersJsonPayload());
+    }
+  }
+
+  /** Reads and submits the group document under this monitor. See {@link #seedSecurityStateClusterWide}. */
+  private void seedGroupsClusterWide(final HAServerPlugin ha) {
+    synchronized (this) {
+      ha.replicateSecurityGroups(getGroupsJsonPayload());
+    }
+  }
+
+  /** Reads and submits the API-token document under this monitor. See {@link #seedSecurityStateClusterWide}. */
+  private void seedApiTokensClusterWide(final HAServerPlugin ha) {
+    synchronized (this) {
+      ha.replicateSecurityApiTokens(getApiTokensJsonPayload());
+    }
+  }
+
+  /**
+   * Cluster-aware API-token mint. In a cluster the token is generated here but installed only by the replicated
+   * apply, so a token whose Raft entry never commits leaves nothing behind on this node - the ordering
+   * {@link #createUserClusterWide} uses for users.
+   * <p>
+   * An API token minted on one node used to authenticate against that node only (issue #7373); behind a load
+   * balancer that is an intermittent 401 with no pattern the operator can see.
+   *
+   * @return the created token including its plaintext value, which exists nowhere else
+   */
+  public JSONObject createApiTokenClusterWide(final String name, final String database, final long expiresAt,
+      final JSONObject permissions) {
+    final HAServerPlugin ha = server != null ? server.getHA() : null;
+    if (ha == null)
+      return apiTokenConfig.createToken(name, database, expiresAt, permissions);
+
+    for (int attempt = 1; ; attempt++) {
+      final JSONObject response;
+      final boolean applied;
+      synchronized (this) {
+        // Re-minted on every attempt rather than minted once and resubmitted: mintToken() derives the document
+        // from the token set THIS node currently holds, so a document built before a lost race would put back
+        // the very tokens the winning entry revoked. The plaintext of a losing attempt reaches nobody - it is
+        // returned only from the attempt that commits.
+        //
+        // The document it was built FROM comes back with it, read in the same critical section, so the
+        // precondition cannot describe a token set the payload was not derived from (issue #7509).
+        final ApiTokenConfiguration.MintedToken minted = apiTokenConfig.mintToken(name, database, expiresAt, permissions);
+        response = minted.response();
+        applied = ha.replicateSecurityApiTokens(minted.documentJson(),
+            SecurityDocumentFingerprint.of(minted.documentBeforeJson()));
+      }
+      if (applied)
+        return response;
+      awaitSupersededChange(ha, "create API token '" + name + "'", "API-token document", attempt);
+    }
+  }
+
+  /**
+   * Cluster-aware API-token revocation. Deleting a token on one node used to leave it live on the others, which
+   * for a REVOKED credential is a security failure and not just a consistency one (issue #7373).
+   *
+   * @return true if a token had that hash and the revocation was replicated, false if there was no such token
+   */
+  public boolean deleteApiTokenClusterWide(final String tokenHash) {
+    final HAServerPlugin ha = server != null ? server.getHA() : null;
+    if (ha == null)
+      return apiTokenConfig.deleteToken(tokenHash);
+
+    for (int attempt = 1; ; attempt++) {
+      final boolean applied;
+      synchronized (this) {
+        final ApiTokenConfiguration.DocumentChange revocation = apiTokenConfig.documentWithout(tokenHash);
+        if (revocation == null)
+          return false;
+
+        applied = ha.replicateSecurityApiTokens(revocation.after(),
+            SecurityDocumentFingerprint.of(revocation.before()));
+      }
+      if (applied)
+        return true;
+      awaitSupersededChange(ha, "delete the API token", "API-token document", attempt);
+    }
+  }
+
+  /**
+   * Applies a replicated API-token document. Called from the Raft state machine on every peer when a
+   * {@code SECURITY_API_TOKENS_ENTRY} is applied.
+   * <p>
+   * Same invariant as {@link #applyReplicatedGroups}: never takes the {@code ServerSecurity} monitor and never
+   * blocks, because the submitting thread holds that monitor while waiting for this entry.
+   */
+  public void applyReplicatedApiTokens(final String apiTokensJson) {
+    final Exception persistFailure = apiTokenConfig.applyReplicated(apiTokensJson);
+    if (persistFailure != null) {
+      LogManager.instance().log(this, Level.SEVERE,
+          "Could not write the replicated API-token document to '%s'. The new token set IS in effect on this node "
+              + "from now on; what failed is making it durable", persistFailure, ApiTokenConfiguration.FILE_NAME);
+      throw new ReplicatedSecurityConfigPersistenceException(
+          "Replicated API tokens applied in memory but could NOT be persisted to '" + ApiTokenConfiguration.FILE_NAME
+              + "'; this node enforces the new set now, but a restart reverts it to the stale file and the change "
+              + "must then be reissued", persistFailure);
+    }
+  }
+
+  /**
+   * {@link #applyReplicatedApiTokens(String)} with the compare-and-set precondition the entry carried (issue
+   * #7509). See {@link #applyReplicatedUsers(String, String)} for why the refusal cannot diverge the cluster,
+   * and for why the install stays in the single-argument method.
+   *
+   * @return true when the document was installed, false when the precondition no longer held
+   */
+  public boolean applyReplicatedApiTokens(final String apiTokensJson, final String expectedFingerprint) {
+    if (isSuperseded("API-token document", expectedFingerprint, apiTokensFingerprint()))
+      return false;
+
+    applyReplicatedApiTokens(apiTokensJson);
+    return true;
+  }
+
+  /**
+   * The whole API-token document as the JSON string {@link #applyReplicatedApiTokens} takes. It carries token
+   * hashes, never token material. As with {@link #getGroupsJsonPayload}, seeding a joining peer goes through
+   * {@link #seedApiTokensClusterWide} so the read and the submit happen under this monitor.
+   */
+  public String getApiTokensJsonPayload() {
+    return apiTokenConfig.toJsonPayload();
   }
 
   /**

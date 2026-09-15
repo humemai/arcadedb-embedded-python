@@ -18,12 +18,32 @@
  */
 package com.arcadedb.integration.importer;
 
+import com.arcadedb.database.Database;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class ImporterContext {
+  /**
+   * The rows the CURRENT phase has parsed. One {@link ImporterContext} serves every phase of an import -
+   * {@link Importer#load()} calls {@code loadFromSource()} for the url, documents, vertices and edges sources
+   * against the same context - and {@link Importer#loadFromSource} zeroes this counter on entry to each of them
+   * (issue #7342), so a format reading it back is always reading its own phase's count. It used to be each
+   * format's job to remember to zero it, which two of the eleven did not, and the two that took a decision off the
+   * value truncated or skipped a whole phase when they inherited a non-zero one (issues #7288, #7313).
+   * <p>
+   * What the import as a whole parsed is {@link #getParsedTotal()}, which is what the returned report carries.
+   */
   public final AtomicLong parsed                     = new AtomicLong();
+  /**
+   * The rows every phase BEFORE the current one parsed, accumulated by {@link #beginPhase()} as each phase ends.
+   * Added to {@link #parsed} by {@link #getParsedTotal()}, because per-phase and import-wide are two different
+   * questions and one counter can only answer one of them: {@code parsedRecords} used to mean "the last phase's
+   * count" for ten formats and "the last phase plus whatever preceded it" for {@code JSONImporterFormat}, so two
+   * adjacent invocations of the same CLI reported the same quantity two different ways (issue #7342).
+   */
+  private final AtomicLong parsedInPreviousPhases    = new AtomicLong();
   public final AtomicLong parsedDocumentAndVertices  = new AtomicLong();
   public final AtomicLong createdDocuments           = new AtomicLong();
   public final AtomicLong createdVertices            = new AtomicLong();
@@ -37,7 +57,28 @@ public class ImporterContext {
   public final AtomicLong linkedEdges                = new AtomicLong();
   public final AtomicLong updatedDocuments           = new AtomicLong();
   public final AtomicLong documentsWithLinksToUpdate = new AtomicLong();
+  /**
+   * Rows a row loop DECLINED because their from/to reference resolved to no vertex - the failure half of the
+   * shortfall between {@code parsedRecords} and {@code createdEdges}. Counted since long before it was reported;
+   * {@link #toMap()} now carries it, because a report that shows only the two totals leaves the user to guess which
+   * of three unrelated causes ate the difference (issue #7488).
+   */
   public final AtomicLong skippedEdges               = new AtomicLong();
+  /**
+   * Rows a row loop skipped ON PURPOSE, because {@code -documentsSkipEntries} / {@code -verticesSkipEntries} /
+   * {@code -edgesSkipEntries} (or the header-row default behind them) told it to.
+   * <p>
+   * The third cause of a short count, and the one that is not a defect in the source at all - which is exactly why
+   * it needs its own number. {@code parsedRecords=4, createdEdges=3} used to read identically whether the missing
+   * row was a header the user asked to skip, an edge whose endpoints did not resolve, or a row
+   * {@code -onRowError skip} dropped after a save failure, and the usual guess - "my file has a bad row" - is wrong
+   * for the first of those (issue #7488). Deliberately NOT folded into {@link #errors}: a skip is not an error.
+   * <p>
+   * Import-wide, like {@link #skippedEdges} and unlike {@link #parsed}: it is reported next to
+   * {@link #getParsedTotal()}, and the identity that makes the report add up - every source row is created, skipped,
+   * declined or counted as an error - is a statement about the whole run.
+   */
+  public final AtomicLong skippedRecords             = new AtomicLong();
   public final AtomicLong errors                     = new AtomicLong();
   public final AtomicLong warnings                   = new AtomicLong();
   /**
@@ -61,11 +102,79 @@ public class ImporterContext {
   public       long          lastEdges;
   public       long          lastLinkedEdges;
 
+  /**
+   * Whether the transaction the row loop about to run will use belongs to the import, as opposed to predating it -
+   * and therefore whether that loop may commit it, roll it back, and correct its own counters against it.
+   * <p>
+   * The single place this decision is made, so the five row loops that gate on it cannot each answer it slightly
+   * differently. The last time the answer was hand-applied per loop, one of the four operations in
+   * {@code RDFImporterFormat.load()} came apart from its siblings and committed the caller's transaction
+   * (issues #7272, #7328).
+   * <p>
+   * Two conditions, both meaning "not the caller's":
+   * <ul>
+   *   <li>{@link #callerTransactionActiveOnEntry} is false - nothing predating the import was ever there;</li>
+   *   <li>or it is true but no transaction is active any more. A caller transaction that has since been resolved
+   *   is not a caller transaction: the loop's own {@code begin()} pushes a fresh one, and calling that fresh one
+   *   the caller's would leave it on the stack with nothing allowed to resolve it - not the loop's gates, and not
+   *   {@code Importer.load()}'s own cleanup, which is gated on the same flag.</li>
+   * </ul>
+   * Call it once, immediately before the loop's {@code begin()}, and keep the answer in a local: after that
+   * {@code begin()} a transaction is always active, so asking again would always say "the caller's".
+   */
+  public boolean importOwnsTransaction(final Database database) {
+    return !callerTransactionActiveOnEntry || !database.isTransactionActive();
+  }
+
+  /**
+   * Closes the phase that has just finished and opens the next one: the phase's row count is folded into the
+   * import-wide total and the per-phase counter zeroed, so the format about to run measures {@code -parsingLimitEntries}
+   * and its own commit cadence against its own rows and reports its own count.
+   * <p>
+   * Called by {@link Importer#loadFromSource} immediately before handing the source to the format, rather than by
+   * each format on entry to its own {@code load()}: a format could forget, two of them had, and a format added
+   * later inherits the reset instead of having to know about it (issue #7342).
+   * <p>
+   * {@code lastParsed} - the value {@code FormatImporter#printProgress} subtracts from {@link #getParsedTotal()} to
+   * turn the counter into a rate - is rebased to {@link #parsedInPreviousPhases}, NOT zeroed, for the same reason:
+   * {@code printProgress} reads the CUMULATIVE total (issue #7483), so zeroing this baseline at a phase boundary
+   * made the very next progress line compute {@code (wholeImportSoFar - 0) / oneSecond} - a rate spike as visible
+   * as the negative-rate bug zeroing used to fix, just inflated instead of negative. Rebasing to the cumulative
+   * total AS OF this boundary keeps the subtraction measuring only what the new phase parses after it.
+   * <p>
+   * {@code synchronized}, with {@link #getParsedTotal()}: {@code parsed.getAndSet(0)} and
+   * {@code parsedInPreviousPhases.addAndGet(...)} are each individually atomic but not atomic AS A PAIR, so a
+   * concurrent reader - {@code ServerControlPlane}'s progress-polling {@code Timer} thread runs on a different
+   * thread than the import itself - could land between the two: {@code parsed} already zeroed,
+   * {@code parsedInPreviousPhases} not yet credited with what it held. That reads as a total LOWER than the one
+   * reported a moment before, the exact symptom this issue (#7483) exists to eliminate, just from a race instead
+   * of from the reset this method already fixed.
+   */
+  public synchronized void beginPhase() {
+    parsedInPreviousPhases.addAndGet(parsed.getAndSet(0));
+    lastParsed = parsedInPreviousPhases.get();
+    lastLapOn = System.currentTimeMillis();
+  }
+
+  /**
+   * The rows this IMPORT parsed: the phases already finished plus the one still running. This is what
+   * {@code parsedRecords} reports (issue #7342). {@code synchronized} with {@link #beginPhase()} - see there for
+   * the race it closes.
+   */
+  public synchronized long getParsedTotal() {
+    return parsedInPreviousPhases.get() + parsed.get();
+  }
+
   public Map<String, Object> toMap() {
     final LinkedHashMap<String, Object> map = new LinkedHashMap<>();
 
-    if (parsed.get() > 0)
-      map.put("parsedRecords", parsed.get());
+    final long parsedTotal = getParsedTotal();
+    if (parsedTotal > 0)
+      map.put("parsedRecords", parsedTotal);
+    if (skippedRecords.get() > 0)
+      map.put("skippedRecords", skippedRecords.get());
+    if (skippedEdges.get() > 0)
+      map.put("skippedEdges", skippedEdges.get());
     if (errors.get() > 0)
       map.put("errors", errors.get());
     if (warnings.get() > 0)

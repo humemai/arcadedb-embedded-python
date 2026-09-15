@@ -113,6 +113,13 @@ public class TimeSeriesApiSpec implements OpenApiContributor {
 
     post.setResponses(SpecBuilders.standardResponses("200", success,
         "400", "401", "403", "404", "500"));
+    // The generic "Bad request" text is replaced: the one refusal a caller of this endpoint is most likely to
+    // meet is a mistyped tag name, and until #7334 it was not a refusal at all - the term was dropped and the
+    // query silently widened to the whole range.
+    post.getResponses().addApiResponse("400", SpecBuilders.errorResponse(
+        "Bad request. A name in 'tags' that is no TAG column of the type is refused here, naming it and listing "
+            + "the type's declared TAG columns: dropping it would widen the query to the whole range, which is "
+            + "indistinguishable from a filter that matched everything."));
     // Added explicitly rather than through standardResponses, whose 413 text describes an oversized REQUEST
     // body: here it is the response that would be too large (issue #5719). Both shapes can raise it - the raw
     // one on its rows, the aggregated one on its buckets.
@@ -130,15 +137,27 @@ public class TimeSeriesApiSpec implements OpenApiContributor {
         "Read the most recent sample of a series",
         """
             Returns the most recent sample of a time-series type, optionally narrowed to one series \
-            by tag. 'latest' is null when the type or the selected series holds no sample.""");
+            by tag. Repeat 'tag' once per tag column to name a single series on a type that carries \
+            several. 'latest' is null when the type or the selected series holds no sample.""");
     get.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
     get.addParametersItem(SpecBuilders.queryParam("type", "Time-series type name", true));
-    get.addParametersItem(SpecBuilders.queryParam("tag",
-        "Tag filter in name:value form. Only the first occurrence is honored if the parameter repeats.",
+    // Repeatable since issue #7321: the handler conjoins every occurrence, the way the query endpoint
+    // conjoins the pairs of its 'tags' object, so a plain string parameter would understate the contract
+    // and hold generated clients down to one tag.
+    get.addParametersItem(SpecBuilders.repeatableQueryParam("tag",
+        "Tag filter in name:value form. Repeat the parameter to narrow to one series across several tags: "
+            + "every occurrence must match. An occurrence that carries no ':' separator, or whose name is no "
+            + "TAG column of the type, is refused with 400 rather than ignored.",
         false));
     get.setResponses(SpecBuilders.standardResponses("200",
         SpecBuilders.jsonResponse("Most recent sample", "TimeSeriesLatestResponse"),
         "400", "401", "403", "404", "500"));
+    // See the query endpoint: dropping an unresolvable tag is worse here, because this endpoint answers ONE
+    // row, so the caller gets the newest sample of some other series rather than a widened result set they
+    // could at least inspect (issue #7334).
+    get.getResponses().addApiResponse("400", SpecBuilders.errorResponse(
+        "Bad request. A 'tag' occurrence not in 'name:value' form, or whose name is no TAG column of the type, "
+            + "is refused here, naming it and listing the type's declared TAG columns."));
 
     final PathItem pathItem = new PathItem();
     pathItem.setGet(get);
@@ -149,7 +168,7 @@ public class TimeSeriesApiSpec implements OpenApiContributor {
     final Schema<Object> request = SpecBuilders.object("One aggregation to compute over a bucket");
     request.addProperty("field", SpecBuilders.string("Field name to aggregate"));
     request.addProperty("type", SpecBuilders.string(
-        "Aggregation function, for example AVG, SUM, MIN, MAX, COUNT"));
+        "Aggregation function. Required, one of SUM, AVG, MIN, MAX, COUNT, matched case-insensitively."));
     request.addProperty("alias", SpecBuilders.string(
         "Output name. Defaults to the field name suffixed with the lower-cased aggregation type."));
 
@@ -166,7 +185,8 @@ public class TimeSeriesApiSpec implements OpenApiContributor {
     schema.addProperty("to", SpecBuilders.integer(
         "Inclusive upper bound of the timestamp range. Unbounded when omitted."));
     schema.addProperty("tags", SpecBuilders.object(
-        "Tag filter as name to value pairs. All pairs must match."));
+        "Tag filter as name to value pairs. All pairs must match. A name that is no TAG column of the type is "
+            + "refused with 400 rather than ignored."));
     schema.addProperty("fields", SpecBuilders.arrayOf(
         SpecBuilders.string("Field name"), "Fields to project. All fields when omitted."));
     schema.addProperty("aggregation", aggregation);

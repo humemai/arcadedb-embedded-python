@@ -140,16 +140,52 @@ class TimeSeriesApiSpecTest {
   }
 
   @Test
-  void tagDescriptionPinsTheColonSeparatorAndFirstOccurrenceOnlySemantics() {
-    // GetTimeSeriesLatestHandler.buildTagFilter splits the 'tag' query parameter on the first ':'
-    // (not '='), and getQueryParameter(HttpServerExchange, String) returns only the Deque's first
-    // entry, so a repeated 'tag' query parameter has every occurrence but the first ignored. Pinned
-    // so the wording cannot be reverted to claim '=' or all-occurrences semantics.
+  void tagDescriptionPinsTheColonSeparatorAndAllOccurrencesConjoinedSemantics() {
+    // GetTimeSeriesLatestHandler.buildTagFilter splits each 'tag' query parameter on the first ':'
+    // (not '='), and since issue #7321 reads every occurrence out of the Deque and ANDs them, the way
+    // POST /ts/{database}/query ANDs the pairs of its 'tags' object. Pinned so the wording cannot be
+    // reverted to claim '=' or first-occurrence-only semantics.
+    //
+    // The refusal sentence is issue #7334: an unresolvable or malformed occurrence used to be DROPPED, which
+    // widened the query silently, and a contract change on a documented endpoint has to be documented.
     final Operation get = openAPI.getPaths().get("/api/v1/ts/{database}/latest").getGet();
     final Parameter tag = get.getParameters().stream()
         .filter(p -> "tag".equals(p.getName())).findFirst().orElseThrow();
     assertThat(tag.getDescription()).isEqualTo(
-        "Tag filter in name:value form. Only the first occurrence is honored if the parameter repeats.");
+        "Tag filter in name:value form. Repeat the parameter to narrow to one series across several tags: "
+            + "every occurrence must match. An occurrence that carries no ':' separator, or whose name is no "
+            + "TAG column of the type, is refused with 400 rather than ignored.");
+  }
+
+  /**
+   * Issue #7334: the 400 of both read endpoints says which refusal it is. A generic "Bad request" against an
+   * endpoint whose most likely refusal is a mistyped tag tells the caller nothing, and until this change it
+   * was not a refusal at all - the term was dropped and the query widened.
+   */
+  @Test
+  void bothReadEndpointsDocumentTheUnresolvableTagRefusal() {
+    assertThat(openAPI.getPaths().get("/api/v1/ts/{database}/query").getPost()
+        .getResponses().get("400").getDescription())
+        .contains("TAG column")
+        .contains("declared TAG columns");
+    assertThat(openAPI.getPaths().get("/api/v1/ts/{database}/latest").getGet()
+        .getResponses().get("400").getDescription())
+        .contains("name:value")
+        .contains("TAG column");
+  }
+
+  @Test
+  void tagIsDeclaredAsARepeatableParameterSoGeneratedClientsCanSendMoreThanOne() {
+    // Issue #7321. A plain string parameter makes every generated client take a single tag, which is the
+    // very limitation the handler no longer has. Declared as an array with form style and explode, the
+    // shape that serializes as tag=a:1&tag=b:2 - the same declaration Prometheus 'match[]' already uses.
+    final Operation get = openAPI.getPaths().get("/api/v1/ts/{database}/latest").getGet();
+    final Parameter tag = get.getParameters().stream()
+        .filter(p -> "tag".equals(p.getName())).findFirst().orElseThrow();
+    assertThat(tag.getSchema().getType()).isEqualTo("array");
+    assertThat(tag.getSchema().getItems().getType()).isEqualTo("string");
+    assertThat(tag.getStyle()).isEqualTo(Parameter.StyleEnum.FORM);
+    assertThat(tag.getExplode()).isTrue();
   }
 
   @Test

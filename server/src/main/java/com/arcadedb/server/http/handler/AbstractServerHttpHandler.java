@@ -30,8 +30,11 @@ import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONException;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.ClusterCapabilityNotReadyException;
 import com.arcadedb.server.HAReplicatedDatabase;
+import com.arcadedb.server.HAServerPlugin;
 import com.arcadedb.server.LeaderForwardContext;
+import com.arcadedb.server.http.ClusterAuthSessionResolver;
 import com.arcadedb.server.http.HttpAuthSession;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.http.HttpSessionException;
@@ -39,6 +42,7 @@ import com.arcadedb.server.http.HttpSessionManager;
 import com.arcadedb.server.http.IdempotencyCache;
 import com.arcadedb.server.http.ResultSetTooLargeException;
 import com.arcadedb.server.security.ApiTokenConfiguration;
+import com.arcadedb.server.ServerControlPlane;
 import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.micrometer.core.instrument.Metrics;
@@ -70,6 +74,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 import java.util.logging.Level;
 
 public abstract class AbstractServerHttpHandler implements HttpHandler {
@@ -91,6 +96,9 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   // Response header set by session-establishing routes (e.g. /begin). Its presence means the response
   // is session-scoped and must not be replayed from the idempotency cache (the session id would be lost).
   private static final HttpString SESSION_ID_HEADER = HttpString.tryFromString(HttpSessionManager.ARCADEDB_SESSION_ID);
+  // The read-your-writes bookmark echo, cached for the same reason and because it is now looked up as well as
+  // written: the response-commit listener of issue #7351 has to ask whether the eager emission already set it.
+  private static final HttpString COMMIT_INDEX_HEADER = HttpString.tryFromString("X-ArcadeDB-Commit-Index");
   // Bounded wait for a concurrent identical retry to observe the in-flight winner's result before it
   // gives up and executes on its own. Caps worker-thread blocking so a slow request cannot pile up retries.
   private static final long       IN_FLIGHT_WAIT_MS = 5_000L;
@@ -259,7 +267,7 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
 
   @Override
   public void handleRequest(final HttpServerExchange exchange) {
-    if (mustExecuteOnWorkerThread() && exchange.isInIoThread()) {
+    if (mustExecuteOnWorkerThread(exchange) && exchange.isInIoThread()) {
       exchange.dispatch(this);
       return;
     }
@@ -345,31 +353,60 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
 
       ServerSecurityUser user = null;
 
-      // Cluster-internal forwarded auth: a follower forwarded a request on behalf of an
-      // end user. The original per-node session token (Bearer AU-...) cannot be resolved on
-      // the leader, so the follower substitutes X-ArcadeDB-Cluster-Token plus
-      // X-ArcadeDB-Forwarded-User. Validated before the standard Authorization header check.
+      // Read once and shared by both readers below: the cluster-token branch asks only whether the caller
+      // sent credentials of its own, the standard check below authenticates them.
+      final HeaderValues authorization = exchange.getRequestHeaders().get("Authorization");
+
+      // Cluster-internal headers: a peer relayed this request. X-ArcadeDB-Cluster-Token proves the HOP - it
+      // is the shared secret only cluster members hold - and that is all it proves. Whether it also names
+      // the principal depends on what the relaying node could do with the client's credentials:
+      //
+      //   - a per-node session token (Bearer AU-...) cannot be resolved on the node the request is relayed
+      //     to, so the relaying node substitutes X-ArcadeDB-Forwarded-User and the principal is resolved
+      //     from that name here;
+      //   - Basic auth and API tokens are stateless, so they are relayed unchanged and re-validated by the
+      //     standard Authorization check below. No forwarded user travels with them deliberately: an API
+      //     token carries scopes that resolving the user by name here would silently discard.
+      //
+      // Splitting the two is what lets the second shape carry the one-hop marker as well (issue #7516);
+      // before it, the token could only travel together with a substituted identity, so the branch that had
+      // to relay the caller's own credentials carried no marker and could cycle.
       final HeaderValues clusterTokenHeader = exchange.getRequestHeaders().get("X-ArcadeDB-Cluster-Token");
       if (clusterTokenHeader != null && !clusterTokenHeader.isEmpty()) {
-        user = validateClusterForwardedAuth(exchange,
-            clusterTokenHeader.getFirst(),
-            exchange.getRequestHeaders().get("X-ArcadeDB-Forwarded-User"));
-        if (user == null)
-          return; // 401 already sent
+        if (!isValidClusterToken(clusterTokenHeader.getFirst())) {
+          exchange.setStatusCode(401);
+          sendErrorResponse(exchange, 401, "Invalid cluster token", null, null);
+          return;
+        }
 
         // A peer already redirected this request to the leader, so this node must execute it or refuse it -
         // redirecting it again sends it round the cycle a wrong leader address creates, and nothing else in
         // the exchange says the request has been here before (issue #6191). Published onto a thread-local
         // because one of the redirect decisions is taken deep in the engine, where the exchange is out of
-        // reach. Read only here, inside the cluster-token branch: the marker is a statement one node makes to
-        // another, and honoring it from an ordinary client request would let any caller turn its own
+        // reach. Read only after the cluster token has been validated: the marker is a statement one node
+        // makes to another, and honoring it from an ordinary client request would let any caller turn its own
         // transparent forward into a refusal by copying the header through.
         if (exchange.getRequestHeaders().contains(LeaderForwardContext.FORWARDED_TO_LEADER_HEADER))
           LeaderForwardContext.markAlreadyForwarded();
+
+        final HeaderValues forwardedUserValues = exchange.getRequestHeaders().get("X-ArcadeDB-Forwarded-User");
+        if (forwardedUserValues != null && !forwardedUserValues.isEmpty()) {
+          user = resolveForwardedUser(exchange, forwardedUserValues.getFirst());
+          if (user == null)
+            return; // 401 already sent
+        } else if (authorization == null || authorization.isEmpty()) {
+          // Neither a forwarded identity nor credentials of the caller's own: the cluster token proves a
+          // hop, it has never been a principal. Refused here rather than falling through, so the answer to
+          // this request shape is the one it has always been.
+          exchange.setStatusCode(401);
+          sendErrorResponse(exchange, 401, "Missing forwarded user", null, null);
+          return;
+        }
+        // Otherwise the peer relayed the caller's own credentials: the standard Authorization check below
+        // authenticates them here, exactly as the node the client dialled already did.
       }
 
       if (user == null) {
-        final HeaderValues authorization = exchange.getRequestHeaders().get("Authorization");
         if (isRequireAuthentication() && (authorization == null || authorization.isEmpty())) {
           exchange.setStatusCode(401);
           exchange.getResponseHeaders().put(Headers.WWW_AUTHENTICATE, "Basic");
@@ -395,9 +432,14 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
                   return;
                 }
               } else {
-                // Session token authentication (AU- prefix)
-                final HttpAuthSession authSession = httpServer.getAuthSessionManager().getSessionByToken(token);
-                if (authSession == null) {
+                // Session token authentication (AU- prefix). A token this node has never seen may have been
+                // issued by another node of the cluster - the token names it - and a copy this node holds is
+                // a lease the issuer renews (issue #7424).
+                final ClusterAuthSessionResolver clusterResolver = httpServer.getClusterAuthSessionResolver();
+                HttpAuthSession authSession = httpServer.getAuthSessionManager().getSessionByToken(token);
+                if (authSession == null)
+                  authSession = clusterResolver.resolve(token);
+                if (authSession == null || !clusterResolver.renew(authSession)) {
                   exchange.setStatusCode(401);
                   sendErrorResponse(exchange, 401, "Invalid or expired authentication token", null, null);
                   return;
@@ -421,9 +463,18 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
 
             } else if (auth.startsWith(AUTHORIZATION_BASIC)) {
               // Basic authentication
-              final String authPairCypher = auth.substring(AUTHORIZATION_BASIC.length() + 1);
-
-              final String authPairClear = new String(Base64.getDecoder().decode(authPairCypher), DatabaseFactory.getDefaultCharset());
+              final String authPairClear;
+              try {
+                final String authPairCypher = auth.substring(AUTHORIZATION_BASIC.length() + 1);
+                authPairClear = new String(Base64.getDecoder().decode(authPairCypher), DatabaseFactory.getDefaultCharset());
+              } catch (final IllegalArgumentException | IndexOutOfBoundsException e) {
+                // A header the client mistyped is a CLIENT error, answered exactly as a header that decodes to
+                // something other than user:password already is. Keeping it out of the catch below is what lets
+                // that one log its cause: everything still reaching it is then an internal fault rather than a
+                // string an anonymous caller chose, so its stack trace cannot be used to flood the log (#7247).
+                sendErrorResponse(exchange, 403, "Basic authentication error", null, null);
+                return;
+              }
 
               final String[] authPair = authPairClear.split(":");
 
@@ -443,7 +494,15 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
             // PASS THROUGH
             throw e;
           } catch (Exception e) {
-            throw new ServerSecurityException("Authentication error");
+            // The arm above re-throws every ServerSecurityException unchanged, and the malformed-header cases are
+            // answered where they happen, so this one is reached only by an INTERNAL failure: a crypto provider
+            // problem, an I/O error reading the user store. The client-facing message stays deliberately opaque,
+            // but the cause has to survive into the server log, or the only frame that knew why is the one that
+            // discarded it (issue #7247). Logged HERE rather than left to sendMappedErrorResponse, whose security
+            // arm deliberately prints a message and no stack trace at FINE - the right treatment for a wrong
+            // password, and the wrong one for the failures that reach this line.
+            LogManager.instance().log(this, getInternalErrorLogLevel(), "Error on authenticating the request", e);
+            throw new ServerSecurityException("Authentication error", e);
           }
         }
       }
@@ -482,7 +541,19 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       final String rawRequestId = exchange.getRequestHeaders().getFirst(IdempotencyCache.HEADER_REQUEST_ID);
       final boolean idempotentPost = "POST".equalsIgnoreCase(exchange.getRequestMethod().toString())
           && rawRequestId != null && !rawRequestId.isBlank()
-          && exchange.getRequestHeaders().getFirst(SESSION_ID_HEADER) == null;
+          && exchange.getRequestHeaders().getFirst(SESSION_ID_HEADER) == null
+          // A request that negotiated the streaming encoding stays out of the replay cache entirely. The cache
+          // key is built from method, path, database and body - never from the Accept header - so a hit
+          // recorded by an earlier buffered request would be replayed to this caller as one application/json
+          // object, which is not the encoding it asked for and not a shape its NDJSON reader can parse. It
+          // could not populate the cache either: a streamed handler writes its own response and returns null,
+          // which aborts the reservation. Not reserving says that outright instead of leaving it implicit
+          // (issue #7311).
+          //
+          // Gated on the handler, not on the header alone: a route that cannot stream answers the same body
+          // whatever Accept says, so dropping ITS replay protection because a client sent a header it ignores
+          // would take away a guarantee and give nothing back.
+          && !(supportsNdJsonEncoding() && isNdJsonRequested(exchange));
 
       if (idempotentPost) {
         // Bind the key to method/path/database/body so a reused correlation id cannot replay a different
@@ -700,6 +771,47 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       logUserError(committedRemotely);
       sendErrorResponse(exchange, 409, "Transaction committed cluster-wide but the local apply failed - do not retry",
               committedRemotely, null);
+      return;
+    }
+
+    // 409 Conflict: a member of the cluster has not proved it can decode the replicated entry this operation
+    // would be written as, so nothing was submitted (issue #7511). A conflict rather than a 5xx for the same
+    // reason the two arms below are: the request is well formed and authorized, the server is healthy, and what
+    // has to change before it succeeds is the state of the CLUSTER - finish the rolling upgrade, or restore
+    // contact with the peer the message names - not anything about the request. A 5xx would tell a client or load
+    // balancer to retry it blindly against another node, where it is refused identically.
+    //
+    // Before anything reaches the OperationNotAvailableException it extends: that parent means "this server cannot
+    // do this at all" (HA not enabled), a permanent property of the deployment, while this clears itself the
+    // moment the last node is up.
+    final ClusterCapabilityNotReadyException capabilityNotReady = firstOf(e, cause,
+            ClusterCapabilityNotReadyException.class);
+    if (capabilityNotReady != null) {
+      logUserError(capabilityNotReady);
+      // The peers go in exceptionArgs, not only in the message: 'detail' - where the message lands - is concealed
+      // in production, and a 409 that names no node tells an operator nothing they can act on. Same split
+      // ResultSetTooLargeException makes, and the same reason. The per-peer REASONS stay in the message: they are
+      // free-form probe-failure text that can carry a host, a port or a JDK exception message, which is exactly
+      // what production mode conceals 'detail' for (PR #7555 review).
+      sendErrorResponse(exchange, 409, "Cluster is not ready for this operation", capabilityNotReady,
+              capabilityNotReady.toExceptionArgs());
+      return;
+    }
+
+    // 409 Conflict: a backup, restore or import of this database is already running, and the per-database slot
+    // BackupCoordinator hands out refused this one. The request is well formed and authorized, and retrying once
+    // the other operation finishes is the fix - so it is a conflict, not a 500. 'trigger backup' answered this in
+    // its own handler long before; the arm is here so 'restore database', 'restore backup' and 'import database'
+    // answer it too rather than falling through to the generic internal-error arm (issue #7384).
+    //
+    // It matches the ENGINE's type, which ServerControlPlane.OperationInProgressException extends, so a SQL
+    // 'BACKUP DATABASE' or 'IMPORT DATABASE' refused by the same slot gets the same 409 through
+    // /api/v1/command rather than a 500 - one arm rather than two (issue #7443).
+    final DatabaseOperationInProgressException inProgress = firstOf(e, cause,
+            DatabaseOperationInProgressException.class);
+    if (inProgress != null) {
+      logUserError(inProgress);
+      sendErrorResponse(exchange, 409, "Cannot execute command", inProgress, null);
       return;
     }
 
@@ -1108,36 +1220,26 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   }
 
   /**
-   * Validates cluster-internal forwarded-auth headers. Returns the resolved user on success,
-   * or {@code null} after sending a 401 response.
+   * Whether {@code providedToken} is the shared secret this cluster's members authenticate to each other
+   * with. This is a proof of <em>hop</em>, not of identity: it says a cluster peer sent the request, and
+   * nothing about who the request is for. What the caller does with that answer - resolve a forwarded
+   * identity, honor the one-hop marker, or both - is the caller's decision (issue #7516).
+   * <p>
+   * Resolved through {@link HAServerPlugin#effectiveClusterToken}, the same helper the sending side uses, so
+   * the two ends of a forwarded hop cannot disagree about which token is current.
    */
-  private ServerSecurityUser validateClusterForwardedAuth(final HttpServerExchange exchange,
-      final String providedToken, final HeaderValues forwardedUserValues) {
+  private boolean isValidClusterToken(final String providedToken) {
+    final String clusterToken = HAServerPlugin.effectiveClusterToken(httpServer.getServer());
+    return clusterToken != null && !clusterToken.isBlank() && constantTimeEquals(clusterToken, providedToken);
+  }
 
-    // Prefer the HA plugin's effective token (which may be PBKDF2-derived when not explicitly
-    // configured) over the raw config value. Falls back to the raw config for non-Raft setups.
-    String clusterToken = null;
-    final var ha = httpServer.getServer().getHA();
-    if (ha != null)
-      clusterToken = ha.getClusterToken();
-    if (clusterToken == null || clusterToken.isBlank())
-      clusterToken = httpServer.getServer().getConfiguration().getValueAsString(GlobalConfiguration.HA_CLUSTER_TOKEN);
-
-    if (clusterToken == null || clusterToken.isBlank()
-        || !constantTimeEquals(clusterToken, providedToken)) {
-      exchange.setStatusCode(401);
-      sendErrorResponse(exchange, 401, "Invalid cluster token", null, null);
-      return null;
-    }
-
-    if (forwardedUserValues == null || forwardedUserValues.isEmpty()) {
-      exchange.setStatusCode(401);
-      sendErrorResponse(exchange, 401, "Missing forwarded user", null, null);
-      return null;
-    }
-
-    final ServerSecurityUser forwardedUser = httpServer.getServer().getSecurity()
-        .getUser(forwardedUserValues.getFirst());
+  /**
+   * Resolves the principal a peer named in {@code X-ArcadeDB-Forwarded-User}, answering 401 and returning
+   * null when this node does not know that user. Only ever called after {@link #isValidClusterToken} has
+   * accepted the request's cluster token.
+   */
+  private ServerSecurityUser resolveForwardedUser(final HttpServerExchange exchange, final String userName) {
+    final ServerSecurityUser forwardedUser = httpServer.getServer().getSecurity().getUser(userName);
     if (forwardedUser == null) {
       exchange.setStatusCode(401);
       sendErrorResponse(exchange, 401, "Unknown forwarded user", null, null);
@@ -1217,13 +1319,74 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
    * @return a new set holding the accessible subset, in the iteration order of {@code databaseNames}
    */
   protected Set<String> filterAuthorizedDatabases(final ServerSecurityUser user, final Collection<String> databaseNames) {
-    final Set<String> authorized = new LinkedHashSet<>(databaseNames.size());
-    for (final String databaseName : databaseNames)
-      if (user == null || user.canAccessToDatabase(databaseName))
-        authorized.add(databaseName);
-    return authorized;
+    // The rule lives in ServerControlPlane so gRPC's ListDatabases narrows its answer the same way
+    // (issue #7304); this stays as the handlers' entry point into it.
+    return ServerControlPlane.filterAuthorizedDatabases(user, databaseNames);
   }
 
+
+  /**
+   * Tells a buffering reverse proxy to pass the streamed bytes through instead of accumulating them, which would
+   * silently undo the encoding. Same header the SSE endpoints already set.
+   */
+  protected static final HttpString X_ACCEL_BUFFERING = new HttpString("X-Accel-Buffering");
+
+  /** Precompiled rather than {@code String.split}, which recompiles the pattern on every request. */
+  private static final Pattern ACCEPT_ENTRY     = Pattern.compile(",");
+  private static final Pattern ACCEPT_PARAMETER = Pattern.compile(";");
+
+  /**
+   * True when the caller selected the streaming encoding by sending {@code Accept: application/x-ndjson}.
+   * <p>
+   * Negotiated rather than routed on purpose (issue #7306): the buffered {@code application/json} body is what
+   * every existing client - the Studio webapp included - parses, so streaming had to be reachable without
+   * changing what a request that does not ask for it receives. A caller that sends no {@code Accept}, or one
+   * that names any other type, gets exactly the response it got before.
+   * <p>
+   * Lives here rather than on {@code AbstractQueryHandler}, where #7306 first wrote it, because
+   * {@link PostBatchHandler} negotiates the same encoding for its streaming insert response (issue #7311) and
+   * does not extend that hierarchy. One parser, so the two surfaces cannot drift on what {@code q=0} means.
+   */
+  protected static boolean isNdJsonRequested(final HttpServerExchange exchange) {
+    final HeaderValues accept = exchange.getRequestHeaders().get(Headers.ACCEPT);
+    if (accept == null)
+      return false;
+    for (final String header : accept) {
+      if (header == null)
+        continue;
+      // One Accept header can list several types, each with its own parameters. Splitting them matters for
+      // 'q': 'application/json, application/x-ndjson;q=0' is the standard spelling of "anything but that one",
+      // and a bare contains() over the whole header would read it as a request for the stream.
+      for (final String entry : ACCEPT_ENTRY.split(header)) {
+        final String[] parts = ACCEPT_PARAMETER.split(entry.trim());
+        if (parts[0].trim().equalsIgnoreCase(NdJsonResultStream.CONTENT_TYPE))
+          return !isRejectedByQValue(parts);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * True when an {@code Accept} entry carries {@code q=0}, which RFC 9110 defines as "not acceptable" rather
+   * than as a weak preference. An unparseable q is treated as absent, the same as any other malformed
+   * parameter: the type was still named.
+   */
+  private static boolean isRejectedByQValue(final String[] parts) {
+    for (int i = 1; i < parts.length; i++) {
+      final String parameter = parts[i].trim();
+      if (!parameter.regionMatches(true, 0, "q=", 0, 2))
+        continue;
+      try {
+        // Compared with a tolerance rather than against 0 exactly: q is a decimal with at most three digits,
+        // so anything this small is the "not acceptable" the sender meant, and an exact float comparison on a
+        // parsed decimal is the kind of thing that works until it does not.
+        return Double.parseDouble(parameter.substring(2).trim()) < 0.0001d;
+      } catch (final NumberFormatException ignored) {
+        return false;
+      }
+    }
+    return false;
+  }
   /**
    * Resolves the {@link HAReplicatedDatabase} backing {@code database}, either directly or through
    * {@link DatabaseInternal#getWrappedDatabaseInstance()}, or {@code null} on a standalone (non-HA)
@@ -1252,7 +1415,63 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       return;
     final long lastApplied = haDb.getLastAppliedIndex();
     if (lastApplied >= 0)
-      exchange.getResponseHeaders().put(new HttpString("X-ArcadeDB-Commit-Index"), String.valueOf(lastApplied));
+      exchange.getResponseHeaders().put(COMMIT_INDEX_HEADER, String.valueOf(lastApplied));
+  }
+
+  /**
+   * Guarantees the {@code X-ArcadeDB-Commit-Index} bookmark reaches the client even when the handler writes the
+   * response itself, which the eager {@link #emitCommitIndexBookmark} call in
+   * {@link DatabaseAbstractHandler#execute} cannot do (issue #7351).
+   * <p>
+   * That call runs <b>after</b> the handler body returns. For a buffered response that is before anything has
+   * been written, so the header is serialized with the rest. For a <b>streamed</b> response - the NDJSON query
+   * encoding of issue #7306 - the body has been written and the output stream closed by the time the handler
+   * returns, so the response headers went out long before: the {@code put} lands on a header map nothing will
+   * read again, and the header is dropped with no error and no log line.
+   * <p>
+   * Rather than repeating the emission inside every streaming path - which is a fix that has to be remembered
+   * again the next time one is added - this registers it on the exchange, where Undertow runs it at the one
+   * moment that is correct on both encodings: immediately before the response is committed, i.e. before the
+   * first byte of a streamed body and before the buffered body is written. A response that already carries the
+   * header keeps the value it was given, so the buffered encoding stays byte-identical to what it sent before
+   * and the eager call remains the one that decides its value.
+   * <p>
+   * On a read that value is a lower bound on the state the response reflects, which is exactly what the
+   * bookmark means: a client feeding it back as {@code X-ArcadeDB-Read-After} asks a follower to have applied
+   * at least that much. Emitting it before the rows can therefore only be conservative, never stale.
+   * <p>
+   * Not usable on the streamed <b>write</b> path: {@code PostBatchHandler}'s per-chunk encoding only learns its
+   * commit index after the load has run, by which time the response has started, so it carries the bookmark in
+   * band in its terminal line instead (issue #7311).
+   * <p>
+   * <b>It fires on a failed response too</b>, which the eager call did not: that one sits on the success path,
+   * so a request answered 400 or 500 carried no bookmark. That widening is deliberate and matches what the
+   * write endpoints already do - {@code PostBatchHandler} emits the header on its 400 and 408 answers precisely
+   * because a batch is not atomic and the chunks committed before the failure still have to be readable
+   * (issue #5862). The value means the same thing on either outcome: this server had applied at least that
+   * index when it answered, which is a valid barrier for the client's next read whether or not this request
+   * succeeded. It is registered after the per-database authorization check in
+   * {@link DatabaseAbstractHandler#execute}, so a caller refused access to the database never reaches it.
+   */
+  protected static void emitCommitIndexBookmarkOnResponseCommit(final HttpServerExchange exchange,
+      final HAReplicatedDatabase haDb) {
+    if (haDb == null)
+      return;
+    exchange.addResponseCommitListener(ex -> {
+      if (ex.getResponseHeaders().contains(COMMIT_INDEX_HEADER))
+        return;
+      try {
+        emitCommitIndexBookmark(ex, haDb);
+      } catch (final RuntimeException e) {
+        // This runs from inside Undertow's response-commit path, not from the handler, so it is outside the
+        // exception mapping in handleRequest: letting anything escape here would tear down a response that is
+        // otherwise complete and correct. A missing bookmark costs the client one stale follower read; a torn
+        // response costs it the answer.
+        LogManager.instance().log(AbstractServerHttpHandler.class, Level.FINE,
+            "Cannot read the last applied index while committing the response, the read-your-writes bookmark is "
+                + "not emitted for this request", e);
+      }
+    });
   }
 
   /**
@@ -1284,6 +1503,34 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
    * Returns true if the handler is reading the payload in the request. In this case, the execution is delegated to the worker thread.
    */
   protected boolean mustExecuteOnWorkerThread() {
+    return false;
+  }
+
+  /**
+   * Whether <b>this</b> request must run on a worker thread rather than on the Undertow IO thread. Defaults to
+   * the handler-wide {@link #mustExecuteOnWorkerThread()}; a handler whose answer depends on the request
+   * overrides this one instead - {@code GetQueryHandler} does, because the NDJSON encoding it negotiates per
+   * request writes blocking output, and blocking an IO thread starves the server.
+   */
+  protected boolean mustExecuteOnWorkerThread(final HttpServerExchange exchange) {
+    return mustExecuteOnWorkerThread();
+  }
+
+  /**
+   * Whether this handler can answer in the {@code application/x-ndjson} streaming encoding when the caller
+   * negotiates it. False for every route that always writes the same buffered body.
+   * <p>
+   * Overridden by {@code PostCommandHandler} (issue #7306) and {@link PostBatchHandler} (issue #7311) - and by
+   * those two only, verified with
+   * {@code grep -rn 'protected boolean supportsNdJsonEncoding' server/src/main}. {@code GetQueryHandler}
+   * streams as well but does not override it, and does not need to: the only caller is the idempotency gate,
+   * which applies to POST requests alone.
+   * <p>
+   * That gate is the whole reason this exists: whether a streamed answer can be replayed from the cache is a
+   * property of the handler, and reading it off the request header alone would change the behaviour of routes
+   * that do not stream at all.
+   */
+  protected boolean supportsNdJsonEncoding() {
     return false;
   }
 

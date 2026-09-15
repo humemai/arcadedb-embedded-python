@@ -18,6 +18,8 @@
  */
 package com.arcadedb.server.http.handler.openapi;
 
+import com.arcadedb.GlobalConfiguration;
+
 import io.swagger.v3.oas.models.Operation;
 import io.swagger.v3.oas.models.headers.Header;
 import io.swagger.v3.oas.models.media.Content;
@@ -39,6 +41,16 @@ import java.util.List;
 public final class SpecBuilders {
   public static final String JSON      = "application/json";
   public static final String ERROR_REF = "ErrorResponse";
+
+  /**
+   * The 504 of a route that an HA follower forwards to the leader instead of executing locally (issue #7507).
+   * Shared so the two specs that document such a route cannot drift apart on what it means.
+   */
+  public static final String LEADER_FORWARD_TIMEOUT_DESCRIPTION =
+      "On an HA follower, the command is forwarded to the leader and the leader did not answer within '"
+          + GlobalConfiguration.HA_PROXY_READ_TIMEOUT.getKey() + "' (or '"
+          + GlobalConfiguration.HA_PROXY_LONG_COMMAND_TIMEOUT.getKey() + "' for a restore or an import). It may "
+          + "still be running on the leader: check there before retrying";
 
   private SpecBuilders() {
   }
@@ -132,6 +144,18 @@ public final class SpecBuilders {
     return schema;
   }
 
+  /**
+   * A floating-point property. Distinct from {@link #integer(String)} because a generated client derives the
+   * Java/TypeScript type from it: a vector component or a similarity score documented as {@code integer} tells
+   * a client to round the value it is about to send.
+   */
+  public static Schema<Number> number(final String description) {
+    final Schema<Number> schema = new Schema<>();
+    schema.setType("number");
+    schema.setDescription(description);
+    return schema;
+  }
+
   public static Schema<Boolean> bool(final String description) {
     final Schema<Boolean> schema = new Schema<>();
     schema.setType("boolean");
@@ -141,6 +165,19 @@ public final class SpecBuilders {
 
   public static Schema<?> arrayOf(final Schema<?> items, final String description) {
     return new Schema<>().type("array").items(items).description(description);
+  }
+
+  /**
+   * An object whose keys are not known ahead of time - a record's own properties, a tag map - declared as an
+   * open map. Distinct from {@link #object(String)}, which is the starting point for an object whose properties
+   * are then spelled out: a {@code type: object} left with neither {@code properties} nor
+   * {@code additionalProperties} carries no information at all, so a strict generator emits an empty model and
+   * the real content becomes unreachable through typed access (issue #7568).
+   */
+  public static Schema<Object> freeFormObject(final String description) {
+    final Schema<Object> schema = object(description);
+    schema.setAdditionalProperties(Boolean.TRUE);
+    return schema;
   }
 
   public static Schema<?> ref(final String componentName) {

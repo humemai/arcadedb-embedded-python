@@ -24,6 +24,9 @@ import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Identifiable;
+import com.arcadedb.engine.MaintenanceCoordinator;
+import com.arcadedb.engine.MaintenanceCoordinator.Operation;
+import com.arcadedb.engine.MaintenanceCoordinator.Reservation;
 import com.arcadedb.engine.OperationProgress;
 import com.arcadedb.engine.OperationProgressRegistry;
 import com.arcadedb.exception.CommandExecutionException;
@@ -57,68 +60,98 @@ public class ImportDatabaseStatement extends SimpleExecStatement {
     final ResultInternal result = new ResultInternal(context.getDatabase());
     result.setProperty("operation", "import database");
 
+    // THE ONE FAILURE THIS STATEMENT REPORTS IN BAND RATHER THAN BY THROWING (SEE THE CATCH BELOW), WHICH MAKES THE
+    // IN-BAND VALUE THE ENTIRE SIGNAL. IT USED TO BE WRITTEN INTO result AND THEN UNCONDITIONALLY OVERWRITTEN WITH
+    // "OK" TWO LINES LATER, SO THE FAIL BRANCH COULD NOT BE OBSERVED BY ANY CALLER: AN IMPORT OF A MALFORMED SOURCE
+    // ANSWERED {"result":"OK"} WITH NO ROWS AND NO STATISTICS, AND ONLY THE SERVER LOG SAID OTHERWISE (ISSUE #7461)
+    String failureReason = null;
+
     if (this.url != null)
       result.setProperty("fromUrl", this.url.getUrlString());
 
-    // PUBLISH LIVE PROGRESS (issue #5376): the importer runs behind a reflective boundary (integration
-    // module) and its record total is unknown upfront, so only the coarse operation is published - visible in
-    // the progress endpoint, console and Studio while it runs. Always retired in the finally.
-    final OperationProgress progress = OperationProgressRegistry.instance()
-        .register(context.getDatabase().getName(), "import database");
-    progress.onProgress("Importing database", 1, 1, 0, -1);
-    try {
-      final Class<?> clazz = Class.forName("com.arcadedb.integration.importer.Importer");
-      // Use the outermost database wrapper (e.g. RaftReplicatedDatabase in HA mode) so that
-      // the importer's commit() calls are intercepted for replication. In non-HA mode,
-      // getWrappedDatabaseInstance() returns the database itself, so there is no change in behaviour.
-      final Database db = context.getDatabase();
-      final Database effectiveDb = db instanceof DatabaseInternal di ? di.getWrappedDatabaseInstance() : db;
-      final Object importer = clazz.getConstructor(Database.class, String.class).newInstance(effectiveDb, url != null ? url.getUrlString() : null);
+    // TAKE THE PER-DATABASE MAINTENANCE SLOT (issue #7443). IMPORT DATABASE loads into this database through the
+    // same importer the server's own 'import database' command drives, but being a SQL statement it is executed by
+    // the ENGINE and so could not reach the server's admission policy at all: a SQL import ran unseen by a
+    // concurrent 'restore database' about to drop and replace the very directory it was loading into, and a second
+    // SQL import of the same database was not refused either.
+    //
+    // An import deliberately does NOT exclude a backup - it is ordinary transactions against a live database, and
+    // backing a live database up is what the auto-backup schedule does all day. On a database with no coordinator
+    // bound - an embedded process with no server in it - this reserves nothing and the statement behaves exactly
+    // as it did before.
+    try (final Reservation slot = MaintenanceCoordinator.reserve(context.getDatabase(), Operation.IMPORT)) {
+      // PUBLISH LIVE PROGRESS (issue #5376): the importer runs behind a reflective boundary (integration
+      // module) and its record total is unknown upfront, so only the coarse operation is published - visible in
+      // the progress endpoint, console and Studio while it runs. Always retired in the finally.
+      final OperationProgress progress = OperationProgressRegistry.instance()
+          .register(context.getDatabase().getName(), "import database");
+      progress.onProgress("Importing database", 1, 1, 0, -1);
+      try {
+        final Class<?> clazz = Class.forName("com.arcadedb.integration.importer.Importer");
+        // Use the outermost database wrapper (e.g. RaftReplicatedDatabase in HA mode) so that
+        // the importer's commit() calls are intercepted for replication. In non-HA mode,
+        // getWrappedDatabaseInstance() returns the database itself, so there is no change in behaviour.
+        final Database db = context.getDatabase();
+        final Database effectiveDb = db instanceof DatabaseInternal di ? di.getWrappedDatabaseInstance() : db;
+        final Object importer = clazz.getConstructor(Database.class, String.class).newInstance(effectiveDb, url != null ? url.getUrlString() : null);
 
-      // Threads this command's resolved SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS through to the importer's deep
-      // fetch explicitly, rather than letting SourceDiscovery re-derive it from the static GlobalConfiguration value
-      // on its own. context.getConfiguration() falls back to that same static value when no caller overrode it (a
-      // client-issued 'IMPORT DATABASE ...' reaches here with no override and sees no behaviour change), but when
-      // PostServerCommandHandler's 'import database' server command already validated the URL against its own,
-      // possibly per-instance-overridden SERVER_RESTORE_IMPORT_ALLOW_LOCAL_URLS, it passes the resolved answer down
-      // via the ContextConfiguration it hands to database.command(...) so the two layers cannot disagree (#6474).
-      // This is NOT settable through the statement's own 'WITH ...' settings map below: those settings map to
-      // ImporterSettings fields one at a time by name, and allowLocalUrls is deliberately not one of them, or any
-      // client able to run IMPORT DATABASE could self-authorize past the SSRF guard from SQL text alone.
-      final boolean blockLocalNetworks = context.getConfiguration().getValue(GlobalConfiguration.SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS);
-      clazz.getMethod("setAllowLocalUrls", boolean.class).invoke(importer, !blockLocalNetworks);
+        // Threads this command's resolved SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS through to the importer's deep
+        // fetch explicitly, rather than letting SourceDiscovery re-derive it from the static GlobalConfiguration value
+        // on its own. context.getConfiguration() falls back to that same static value when no caller overrode it (a
+        // client-issued 'IMPORT DATABASE ...' reaches here with no override and sees no behaviour change), but when
+        // PostServerCommandHandler's 'import database' server command already validated the URL against its own,
+        // possibly per-instance-overridden SERVER_RESTORE_IMPORT_ALLOW_LOCAL_URLS, it passes the resolved answer down
+        // via the ContextConfiguration it hands to database.command(...) so the two layers cannot disagree (#6474).
+        // This is NOT settable through the statement's own 'WITH ...' settings map below: those settings map to
+        // ImporterSettings fields one at a time by name, and allowLocalUrls is deliberately not one of them, or any
+        // client able to run IMPORT DATABASE could self-authorize past the SSRF guard from SQL text alone.
+        final boolean blockLocalNetworks = context.getConfiguration().getValue(GlobalConfiguration.SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS);
+        clazz.getMethod("setAllowLocalUrls", boolean.class).invoke(importer, !blockLocalNetworks);
 
-      // TRANSFORM SETTINGS
-      final Map<String, String> settingsToString = new HashMap<>();
-      for (final Map.Entry<Expression, Expression> entry : settings.entrySet()) {
-        final Object valueResult = entry.getValue().execute((Identifiable) null, context);
-        final String valueStr = valueResult != null ? valueResult.toString() : entry.getValue().toString();
-        settingsToString.put(entry.getKey().toString(), valueStr);
+        // TRANSFORM SETTINGS
+        final Map<String, String> settingsToString = new HashMap<>();
+        for (final Map.Entry<Expression, Expression> entry : settings.entrySet()) {
+          final Object valueResult = entry.getValue().execute((Identifiable) null, context);
+          final String valueStr = valueResult != null ? valueResult.toString() : entry.getValue().toString();
+          settingsToString.put(entry.getKey().toString(), valueStr);
+        }
+
+        clazz.getMethod("setSettings", Map.class).invoke(importer, settingsToString);
+        final Map<String, Object> statistics = (Map<String, Object>) clazz.getMethod("load").invoke(importer);
+
+        if (statistics != null)
+          result.setPropertiesFromMap(statistics);
+
+      } catch (final ClassNotFoundException | NoSuchMethodException | IllegalAccessException | InstantiationException e) {
+        throw new CommandExecutionException("Error on importing database, importer libs not found in classpath", e);
+      } catch (final InvocationTargetException e) {
+        // SURFACE A SECURITY VIOLATION (SSRF/LFI GUARD IN THE IMPORTER) DIRECTLY SO IT MAPS TO HTTP 403 INSTEAD OF 500
+        for (Throwable cause = e.getTargetException(); cause != null; cause = cause.getCause())
+          if (cause instanceof SecurityException se)
+            throw se;
+
+        // AN IllegalArgumentException OUT OF THE IMPORTER IS "THIS SOURCE OR SETTING CANNOT BE USED", NOT "THE
+        // SERVER BROKE": Importer.load() RAISES EXACTLY THAT FOR A PROBE THAT COULD NOT READ ITS SOURCE, AND A
+        // PROBE FAILING IS AN ANSWER RATHER THAN AN ERROR. IT IS REPORTED AS FAIL WITH THE MESSAGE ATTACHED, SO A
+        // CLIENT THAT CHECKS 'result' LEARNS BOTH THAT THE IMPORT FAILED AND WHY. TESTED BY instanceof AND NOT BY
+        // THE CLASS'S SIMPLE NAME, WHICH ALSO LETS A SUBCLASS - A NumberFormatException OUT OF AN UNUSABLE SETTING
+        // VALUE - BE REPORTED WITH ITS REASON INSTEAD OF SURFACING AS AN OPAQUE 500 (ISSUE #7461)
+        final Throwable cause = e.getTargetException();
+        if (cause instanceof IllegalArgumentException) {
+          final String message = cause.getMessage();
+          failureReason = message != null ? message : cause.getClass().getName();
+        } else
+          throw new CommandExecutionException("Error on importing database", cause);
+      } finally {
+        OperationProgressRegistry.instance().unregister(progress);
       }
-
-      clazz.getMethod("setSettings", Map.class).invoke(importer, settingsToString);
-      final Map<String, Object> statistics = (Map<String, Object>) clazz.getMethod("load").invoke(importer);
-
-      if (statistics != null)
-        result.setPropertiesFromMap(statistics);
-
-    } catch (final ClassNotFoundException | NoSuchMethodException | IllegalAccessException | InstantiationException e) {
-      throw new CommandExecutionException("Error on importing database, importer libs not found in classpath", e);
-    } catch (final InvocationTargetException e) {
-      // SURFACE A SECURITY VIOLATION (SSRF/LFI GUARD IN THE IMPORTER) DIRECTLY SO IT MAPS TO HTTP 403 INSTEAD OF 500
-      for (Throwable cause = e.getTargetException(); cause != null; cause = cause.getCause())
-        if (cause instanceof SecurityException se)
-          throw se;
-
-      if ("IllegalArgumentException".equals(e.getCause().getClass().getSimpleName()))
-        result.setProperty("result", "FAIL");
-      else
-        throw new CommandExecutionException("Error on importing database", e.getTargetException());
-    } finally {
-      OperationProgressRegistry.instance().unregister(progress);
     }
 
-    result.setProperty("result", "OK");
+    if (failureReason != null) {
+      result.setProperty("result", "FAIL");
+      result.setProperty("reason", failureReason);
+    } else
+      result.setProperty("result", "OK");
 
     final InternalResultSet rs = new InternalResultSet();
     rs.add(result);

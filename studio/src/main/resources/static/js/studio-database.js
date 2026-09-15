@@ -3379,15 +3379,39 @@ function renderTypeLink(typeName) {
   return "<a class='link' href='#'" + schemaActionAttrs("show-type-detail", typeName) + ">" + escapeHtml(typeName) + "</a>";
 }
 
+// A LIGHTWEIGHT edge type keeps its edges inside the two vertices and allocates no record, so its record count is 0
+// however many edges the graph holds. Showing that 0 as the type's size reads as "nothing was loaded" (issue #7477),
+// so the badge says what the type is instead of counting records it can never have.
+const LIGHTWEIGHT_EDGE_HINT = "LIGHTWEIGHT: edges are stored inside the vertices, so this type keeps no records. "
+  + "Query them with SELECT FROM <type> or by traversing the vertices.";
+
+// A section header sums each type's record count for a rough total. A LIGHTWEIGHT edge type reports 0
+// records by construction (see LIGHTWEIGHT_EDGE_HINT above), so a section that contains one is a lower
+// bound, not the true count - marked with a trailing "+" rather than shown as if it were exact.
+function formatSectionTotal(items) {
+  let total = 0;
+  let hasLightweight = false;
+  for (let j = 0; j < items.length; j++) {
+    total += (items[j].records || 0);
+    if (items[j].lightweight === true) hasLightweight = true;
+  }
+  return total.toLocaleString() + (hasLightweight ? "+" : "");
+}
+
 function renderTypeSidebarBadge(row, color, action) {
   let name = escapeHtml(row.name);
+  let lightweight = row.lightweight === true;
   let records = (row.records || 0).toLocaleString();
+  let count = lightweight ? "lightweight" : records;
+  // Escaped once, off the raw name: building the title from `name` and escaping the result would escape the type
+  // name twice and show a tooltip reading "A&amp;B" for a type called "A&B".
+  let title = escapeHtml(lightweight ? row.name + " - " + LIGHTWEIGHT_EDGE_HINT : row.name + " (" + records + " records)");
   return (
     "<a class='sidebar-badge' href='#' style='background-color: " + color + "'" +
     schemaActionAttrs(action, row.name) +
-    " title='" + name + " (" + records + " records)'>" +
+    " title='" + title + "'>" +
     "<span class='sidebar-badge-name'>" + name + "</span>" +
-    "<span class='sidebar-badge-count'>" + records + "</span>" +
+    "<span class='sidebar-badge-count'>" + count + "</span>" +
     "</a>"
   );
 }
@@ -3503,11 +3527,8 @@ function displaySchema(onReady) {
       let sec = sections[s];
       let items = groups[sec.key];
 
-      let total = 0;
-      for (let j = 0; j < items.length; j++) total += (items[j].records || 0);
-
       html += "<div class='sidebar-section'>";
-      html += "<div class='sidebar-section-header'><i class='fa " + sec.icon + "'></i> " + sec.label + " <span class='sidebar-count'>(" + total.toLocaleString() + ")</span>";
+      html += "<div class='sidebar-section-header'><i class='fa " + sec.icon + "'></i> " + sec.label + " <span class='sidebar-count'>(" + formatSectionTotal(items) + ")</span>";
       if (sec.key == "timeseries")
         html += "<span class='sidebar-section-header-actions'><button onclick='createTimeSeriesType(); return false;' title='Create timeseries type'><i class='fa fa-plus'></i></button></span>";
       else
@@ -3573,7 +3594,10 @@ function showTypeDetail(typeName) {
   html += "<div class='d-flex align-items-center gap-3 mb-3'>";
   html += "<h4 style='margin:0;'>" + escapeHtml(row.name) + "</h4>";
   html += "<span class='db-type-category-badge' style='background-color:" + catColor + ";'>" + catLabel + "</span>";
-  html += "<span style='color:#888; font-size:0.9rem;'>" + (row.records || 0).toLocaleString() + " records</span>";
+  if (row.lightweight === true)
+    html += "<span class='badge bg-warning text-dark' title='" + escapeHtml(LIGHTWEIGHT_EDGE_HINT) + "'>LIGHTWEIGHT</span>";
+  else
+    html += "<span style='color:#888; font-size:0.9rem;'>" + (row.records || 0).toLocaleString() + " records</span>";
   if (row.bucketSelectionStrategy && row.bucketSelectionStrategy != "round-robin") {
     html += "<span class='badge bg-info' title='Bucket selection strategy: " + escapeHtml(row.bucketSelectionStrategy) + "'>"
          + escapeHtml(row.bucketSelectionStrategy) + "</span>";
@@ -3790,13 +3814,11 @@ function populateQuerySidebar() {
   }
 
   let groups = { vertex: [], edge: [], document: [], timeseries: [] };
-  let totals = { vertex: 0, edge: 0, document: 0, timeseries: 0 };
 
   for (let i in globalSchemaTypes) {
     let row = globalSchemaTypes[i];
     let cat = row.type == "vertex" ? "vertex" : (row.type == "edge" ? "edge" : (row.type == "t" ? "timeseries" : "document"));
     groups[cat].push(row);
-    totals[cat] += (row.records || 0);
   }
 
   let html = "";
@@ -3812,7 +3834,7 @@ function populateQuerySidebar() {
     let items = groups[sec.key];
     if (items.length == 0) continue;
 
-    let totalFormatted = totals[sec.key].toLocaleString();
+    let totalFormatted = formatSectionTotal(items);
     html += "<div class='sidebar-section'>";
     html += "<div class='sidebar-section-header'><i class='fa " + sec.icon + "'></i> " + sec.label + " <span class='sidebar-count'>(" + totalFormatted + ")</span></div>";
     html += "<div class='sidebar-badges'>";
@@ -5634,7 +5656,11 @@ function renderFlameRow(steps, rootCost, depth) {
   var html = "<div class='flame-row'>";
   for (var i = 0; i < steps.length; i++) {
     var step = steps[i];
-    var cost = step.cost != null ? step.cost : -1;
+    // A bar spans its whole subtree: "cost" is the step's SELF time since #7329 (-1 for a container that only
+    // dispatches to its children), "totalCost" the roll-up. Sizing by self time drew a container at the minimum
+    // width with its timed children squeezed inside it (issue #7391).
+    var selfCost = step.cost != null ? step.cost : -1;
+    var cost = stepTotalCost(step);
     var pctOfRoot = rootCost > 0 && cost > 0 ? (cost / rootCost * 100) : 0;
     var widthPct = Math.max(pctOfRoot, 1.5); // minimum 1.5% for visibility
     var depthClass = "flame-depth-" + (depth % 5);
@@ -5645,6 +5671,8 @@ function renderFlameRow(steps, rootCost, depth) {
     // Wrapper holds the bar + its children (so children sit below, constrained to parent width)
     html += "<div class='flame-cell' style='width:" + widthPct + "%'>";
     var tipHtml = escapeHtml(name) + " &mdash; " + escapeHtml(costLabel) + " (" + pctOfRoot.toFixed(1) + "% of total)";
+    if (step.subSteps && step.subSteps.length > 0)
+      tipHtml += "<br>self: " + escapeHtml(formatCostNanos(selfCost));
     if (desc) tipHtml += "<br>" + escapeHtml(desc);
     html += "<div class='flame-bar " + depthClass + "'";
     html += flameTipAttr(tipHtml) + ">";
@@ -5687,13 +5715,32 @@ function stepsHaveCost(steps) {
   return false;
 }
 
+/**
+ * The subtree total of one step: the server's "totalCost" roll-up when present, otherwise the sum of the
+ * self costs of the step and everything under it (an older server, or a step serialized without the roll-up).
+ * Both give the same number, and a container's self cost of -1 contributes nothing either way.
+ */
+function stepTotalCost(step) {
+  if (step.totalCost != null && step.totalCost >= 0) return step.totalCost;
+  // The fallback walks the subtree, and renderFlameRow asks for every node on its way down; remember the answer on
+  // the node so a deep plan is summed once rather than once per ancestor.
+  if (step._subtreeCost != null) return step._subtreeCost;
+  var total = step.cost != null && step.cost > 0 ? step.cost : 0;
+  if (step.subSteps)
+    for (var i = 0; i < step.subSteps.length; i++) total += stepTotalCost(step.subSteps[i]);
+  step._subtreeCost = total;
+  return total;
+}
+
+/**
+ * The plan's total: the roll-up of each top-level step. Summing "cost" here read the self time of a container
+ * as the total, so a plain type scan - one container over timed bucket steps - came out as zero and the graph
+ * reported no measurable cost on a plan that had it (issue #7391).
+ */
 function computeTotalCost(steps) {
   var total = 0;
   if (!steps) return 0;
-  for (var i = 0; i < steps.length; i++) {
-    var cost = steps[i].cost;
-    if (cost != null && cost > 0) total += cost;
-  }
+  for (var i = 0; i < steps.length; i++) total += stepTotalCost(steps[i]);
   return total;
 }
 

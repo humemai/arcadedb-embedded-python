@@ -18,6 +18,7 @@
  */
 package com.arcadedb.server.grpc;
 
+import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.query.sql.parser.Identifier;
 import com.arcadedb.query.sql.parser.MatchStatement;
@@ -36,6 +37,16 @@ import com.arcadedb.database.MutableEmbeddedDocument;
 import com.arcadedb.database.RID;
 import com.arcadedb.database.Record;
 import com.arcadedb.engine.ComponentFile;
+import com.arcadedb.engine.timeseries.AggregationType;
+import com.arcadedb.engine.timeseries.ColumnDefinition;
+import com.arcadedb.engine.timeseries.LineProtocolParser.Sample;
+import com.arcadedb.engine.timeseries.MultiColumnAggregationRequest;
+import com.arcadedb.engine.timeseries.MultiColumnAggregationResult;
+import com.arcadedb.engine.timeseries.TagFilter;
+import com.arcadedb.engine.timeseries.TimeSeriesEngine;
+import com.arcadedb.engine.timeseries.TimeSeriesGateway;
+import com.arcadedb.engine.timeseries.TimeSeriesGateway.TypeResolution;
+import com.arcadedb.engine.timeseries.TimeSeriesGateway.WriteReport;
 import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.exception.DuplicatedKeyException;
 import com.arcadedb.exception.RecordNotFoundException;
@@ -77,6 +88,7 @@ import com.google.protobuf.Timestamp;
 import io.grpc.Context;
 import io.grpc.Metadata;
 import io.grpc.Status;
+import io.grpc.StatusException;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
@@ -84,6 +96,7 @@ import org.jspecify.annotations.NonNull;
 
 import com.arcadedb.utility.DateUtils;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -99,6 +112,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -119,12 +133,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.logging.Level;
 
 /**
  * gRPC Service implementation for ArcadeDB
  */
 public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImplBase {
+  /** The {@code protocol} tag every query this service runs is metered under. */
+  private static final String GRPC_PROTOCOL = "grpc";
+
 
   // Pick serializer once
   private static final JsonSerializer FAST = JsonSerializer.createJsonSerializer().setIncludeVertexEdges(false)
@@ -215,6 +233,22 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
   // ArcadeDB server reference (optional, for accessing existing databases)
   private final ArcadeDBServer arcadeServer;
+
+  /** Stands in for a server that was not supplied; reads through to each setting's process-wide value. */
+  private static final ContextConfiguration EMPTY_CONFIGURATION = new ContextConfiguration();
+
+  /**
+   * This server's configuration, or an empty overlay when the service was built without one.
+   * <p>
+   * Every gRPC setting read through here is SCOPE.SERVER, so it is authoritative in the SERVER's own
+   * {@link ContextConfiguration} - which is what the server configuration file, {@code SET SERVER SETTING} and the
+   * MCP {@code set_server_setting} tool all write into. The {@link GlobalConfiguration} enum is populated by
+   * {@code readConfiguration()} alone, i.e. by a system property or an environment variable, so reading the enum
+   * directly ignored every other channel the scope advertises, silently (issue #7233).
+   */
+  ContextConfiguration serverConfiguration() {
+    return arcadeServer != null ? arcadeServer.getConfiguration() : EMPTY_CONFIGURATION;
+  }
 
   // Database directory path
   private final String databasePath;
@@ -1137,17 +1171,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         responded = true;
         resp.onCompleted();
       } catch (Exception e) {
-        final Throwable cause = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
-        if (!responded) {
-          if (cause instanceof RecordNotFoundException)
-            resp.onError(Status.NOT_FOUND.withDescription("LookupByRid: " + cause.getMessage()).asException());
-          else if (cause instanceof StatusRuntimeException sre)
-            // Preserve an explicit gRPC status (e.g. FAILED_PRECONDITION from requireTransactionStillActive)
-            // instead of masking it as INTERNAL, mirroring executeQuery/executeCommand/bulkInsert.
-            resp.onError(sre);
-          else
-            resp.onError(Status.INTERNAL.withDescription("LookupByRid: " + cause.getMessage()).asException());
-        }
+        // GrpcErrorMapper both classifies the failure (RecordNotFoundException -> NOT_FOUND, etc. - issue
+        // #7123) and passes an already-mapped StatusRuntimeException through unchanged (e.g.
+        // FAILED_PRECONDITION from requireTransactionStillActive) instead of masking it as INTERNAL.
+        if (!responded)
+          resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "LookupByRid"));
       }
       return;
     }
@@ -1157,12 +1185,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       resp.onNext(lookupByRidInternal(req, db));
       responded = true;
       resp.onCompleted();
-    } catch (RecordNotFoundException e) {
-      if (!responded)
-        resp.onError(Status.NOT_FOUND.withDescription("LookupByRid: " + e.getMessage()).asException());
     } catch (Exception e) {
       if (!responded)
-        resp.onError(Status.INTERNAL.withDescription("LookupByRid: " + e.getMessage()).asException());
+        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "LookupByRid"));
     }
   }
 
@@ -1208,18 +1233,12 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         responded = true;
         resp.onCompleted();
       } catch (Exception e) {
-        final Throwable cause = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
-        LogManager.instance().log(this, Level.SEVERE, "ERROR in updateRecord (external tx)", cause);
-        if (!responded) {
-          if (cause instanceof RecordNotFoundException)
-            resp.onError(Status.NOT_FOUND.withDescription("Record not found: " + req.getRid()).asException());
-          else if (cause instanceof StatusRuntimeException sre)
-            // Preserve an explicit gRPC status (e.g. FAILED_PRECONDITION from requireTransactionStillActive)
-            // instead of masking it as INTERNAL, mirroring executeQuery/executeCommand/bulkInsert.
-            resp.onError(sre);
-          else
-            resp.onError(Status.INTERNAL.withDescription("UpdateRecord: " + cause.getMessage()).asException());
-        }
+        LogManager.instance().log(this, Level.SEVERE, "ERROR in updateRecord (external tx)", GrpcErrorMapper.unwrap(e));
+        // GrpcErrorMapper both classifies the failure (RecordNotFoundException -> NOT_FOUND, etc. - issue
+        // #7123) and passes an already-mapped StatusRuntimeException through unchanged (e.g.
+        // FAILED_PRECONDITION from requireTransactionStillActive) instead of masking it as INTERNAL.
+        if (!responded)
+          resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "UpdateRecord"));
       }
       return;
     }
@@ -1230,13 +1249,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       resp.onNext(updateRecordInternal(req, db));
       responded = true;
       resp.onCompleted();
-    } catch (RecordNotFoundException e) {
-      if (!responded)
-        resp.onError(Status.NOT_FOUND.withDescription("Record not found: " + req.getRid()).asException());
     } catch (Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "ERROR in updateRecord", e);
       if (!responded)
-        resp.onError(Status.INTERNAL.withDescription("UpdateRecord: " + e.getMessage()).asException());
+        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "UpdateRecord"));
     }
   }
 
@@ -1399,18 +1415,12 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         responded = true;
         resp.onCompleted();
       } catch (Exception e) {
-        final Throwable cause = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
-        LogManager.instance().log(this, Level.SEVERE, "ERROR in deleteRecord (external tx)", cause);
-        if (!responded) {
-          if (cause instanceof RecordNotFoundException)
-            resp.onError(Status.NOT_FOUND.withDescription("Record not found: " + req.getRid()).asException());
-          else if (cause instanceof StatusRuntimeException sre)
-            // Preserve an explicit gRPC status (e.g. FAILED_PRECONDITION from requireTransactionStillActive)
-            // instead of masking it as INTERNAL, mirroring executeQuery/executeCommand/bulkInsert.
-            resp.onError(sre);
-          else
-            resp.onError(Status.INTERNAL.withDescription("DeleteRecord: " + cause.getMessage()).asException());
-        }
+        LogManager.instance().log(this, Level.SEVERE, "ERROR in deleteRecord (external tx)", GrpcErrorMapper.unwrap(e));
+        // GrpcErrorMapper both classifies the failure (RecordNotFoundException -> NOT_FOUND, etc. - issue
+        // #7123) and passes an already-mapped StatusRuntimeException through unchanged (e.g.
+        // FAILED_PRECONDITION from requireTransactionStillActive) instead of masking it as INTERNAL.
+        if (!responded)
+          resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "DeleteRecord"));
       }
       return;
     }
@@ -1421,15 +1431,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       resp.onNext(deleteRecordInternal(req, db));
       responded = true;
       resp.onCompleted();
-    } catch (RecordNotFoundException e) {
-      if (!responded)
-        resp.onError(Status.NOT_FOUND.withDescription("Record not found: " + req.getRid()).asException());
     } catch (Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "ERROR in deleteRecord", e);
       if (!responded)
-        resp.onError(
-            Status.INTERNAL.withDescription("DeleteRecord: " + (e.getMessage() == null ? e.toString() : e.getMessage()))
-                .asException());
+        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "DeleteRecord"));
     }
   }
 
@@ -1523,8 +1528,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         } else {
           LogManager.instance().log(this, Level.SEVERE, "Error executing query: %s", cause, cause.getMessage());
           if (!txResponded)
-            responseObserver.onError(Status.INTERNAL
-                .withDescription("Query execution failed: " + cause.getMessage()).asException());
+            responseObserver.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "Query execution failed"));
         }
       }
       return;
@@ -1551,7 +1555,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     } catch (Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "Error executing query: %s", e, e.getMessage());
       if (!responded)
-        responseObserver.onError(Status.INTERNAL.withDescription("Query execution failed: " + e.getMessage()).asException());
+        responseObserver.onError(GrpcErrorMapper.toStatusRuntimeException(e, "Query execution failed"));
     }
   }
 
@@ -1600,7 +1604,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // fails loudly with RESOURCE_EXHAUSTED - consistent with the MATERIALIZE_ALL stream path - instead of
         // silently truncating and dropping data without telling the caller.
         final int requestedLimit = request.getLimit();
-        final int configuredMax = GlobalConfiguration.SERVER_GRPC_QUERY_MAX_RESULT_ROWS.getValueAsInteger();
+        final int configuredMax = serverConfiguration().getValueAsInteger(
+            GlobalConfiguration.SERVER_GRPC_QUERY_MAX_RESULT_ROWS);
         final boolean capEnabled = configuredMax > 0;
         // The client's explicit limit applies as its own bound only when it does not exceed the hard ceiling.
         final boolean clientLimitWithinCap = requestedLimit > 0 && (!capEnabled || requestedLimit <= configuredMax);
@@ -2079,7 +2084,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
         if (cancelled.get()) {
           if (serverTimedOut.get()) {
-            final long timeoutMs = GlobalConfiguration.SERVER_GRPC_STREAM_WRITE_TIMEOUT_MS.getValueAsLong();
+            final long timeoutMs = serverConfiguration().getValueAsLong(GlobalConfiguration.SERVER_GRPC_STREAM_WRITE_TIMEOUT_MS);
             try {
               scso.onError(Status.DEADLINE_EXCEEDED
                   .withDescription("gRPC stream aborted: client transport not ready within " + timeoutMs
@@ -2115,7 +2120,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // always signaled even if rollback fails) so it fails fast instead of blocking on its own deadline. A
         // genuine client cancel needs no terminal - its transport is already tearing down.
         if (serverTimedOut.get()) {
-          final long timeoutMs = GlobalConfiguration.SERVER_GRPC_STREAM_WRITE_TIMEOUT_MS.getValueAsLong();
+          final long timeoutMs = serverConfiguration().getValueAsLong(GlobalConfiguration.SERVER_GRPC_STREAM_WRITE_TIMEOUT_MS);
           try {
             scso.onError(Status.DEADLINE_EXCEEDED
                 .withDescription("gRPC stream aborted: client transport not ready within " + timeoutMs
@@ -2168,14 +2173,11 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         /* no-op */
       }
 
-      if (!cancelled.get()) {
-        // Preserve an explicit gRPC status (e.g. RESOURCE_EXHAUSTED from the MATERIALIZE_ALL cap) instead of
-        // masking it as INTERNAL; only genuinely unexpected failures are reported as INTERNAL.
-        if (e instanceof StatusRuntimeException sre)
-          responseObserver.onError(sre);
-        else
-          responseObserver.onError(Status.INTERNAL.withDescription("Stream query failed: " + e.getMessage()).asException());
-      }
+      if (!cancelled.get())
+        // GrpcErrorMapper both classifies the failure (a SQL syntax error, a missing type, etc. - issue
+        // #7123) and passes an already-mapped StatusRuntimeException through unchanged (e.g.
+        // RESOURCE_EXHAUSTED from the MATERIALIZE_ALL cap) instead of masking it as INTERNAL.
+        responseObserver.onError(GrpcErrorMapper.toStatusRuntimeException(e, "Stream query failed"));
     } finally {
       // Stream endpoints mix engine iteration and row serialization throughout; expose the
       // total cost as engineNanos so the Server Profiler still captures query-level metrics.
@@ -2295,7 +2297,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // MATERIALIZE_ALL buffers the whole result before emitting, so bound it: a limitless query in this mode
     // would otherwise build an unbounded list and exhaust heap (DoS). Exceeding the cap fails the call with
     // RESOURCE_EXHAUSTED so the client can fall back to CURSOR/PAGED streaming.
-    final int maxMaterializedRows = GlobalConfiguration.SERVER_GRPC_STREAM_MAX_MATERIALIZED_ROWS.getValueAsInteger();
+    final int maxMaterializedRows = serverConfiguration().getValueAsInteger(
+        GlobalConfiguration.SERVER_GRPC_STREAM_MAX_MATERIALIZED_ROWS);
 
     try (ResultSet rs = db.query(language, request.getQuery(),
         GrpcTypeConverter.convertParameters(request.getParametersMap()))) {
@@ -2540,7 +2543,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
   private void waitUntilReady(ServerCallStreamObserver<?> scso, AtomicBoolean cancelled, AtomicBoolean serverTimedOut) {
     // Honor transport readiness, but bound the wait: a slow or abandoned client must not pin this worker
     // thread (and the open ResultSet/transaction) indefinitely.
-    final long timeoutMs = GlobalConfiguration.SERVER_GRPC_STREAM_WRITE_TIMEOUT_MS.getValueAsLong();
+    final long timeoutMs = serverConfiguration().getValueAsLong(GlobalConfiguration.SERVER_GRPC_STREAM_WRITE_TIMEOUT_MS);
     if (!awaitTransportReady(scso::isReady, cancelled, timeoutMs)) {
       // Not ready: either the caller already cancelled, or we hit the deadline / were interrupted. In the
       // latter case mark the stream cancelled so the surrounding loop stops, rolls back, and releases the
@@ -2631,18 +2634,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           responded = true;
           resp.onCompleted();
         } catch (final Exception e) {
-          // Catches both a Future.get() ExecutionException (wrapping a StatusRuntimeException thrown inside
-          // the task) and a bare StatusRuntimeException thrown synchronously by submitToActiveTransaction
-          // when the executor was already shut down (RejectedExecutionException case, issue #6709).
-          final Throwable cause = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
-          if (!responded) {
-            if (cause instanceof StatusRuntimeException sre)
-              // Preserve an explicit gRPC status (e.g. FAILED_PRECONDITION from requireTransactionStillActive)
-              // instead of masking it as INTERNAL, mirroring executeQuery/executeCommand.
-              resp.onError(sre);
-            else
-              resp.onError(Status.INTERNAL.withDescription("bulkInsert: " + cause.getMessage()).asException());
-          }
+          // GrpcErrorMapper unwraps a Future.get() ExecutionException the same way this used to by hand, both
+          // classifies the failure (issue #7123) and passes an already-mapped StatusRuntimeException through
+          // unchanged (e.g. FAILED_PRECONDITION from requireTransactionStillActive, or the bare
+          // StatusRuntimeException submitToActiveTransaction throws synchronously when the executor was
+          // already shut down - RejectedExecutionException case, issue #6709) instead of masking it as INTERNAL.
+          if (!responded)
+            resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "bulkInsert"));
         }
       } else {
         try (InsertContext ctx = new InsertContext(opts)) {
@@ -2655,7 +2653,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       }
     } catch (Exception e) {
       if (!responded)
-        resp.onError(Status.INTERNAL.withDescription("bulkInsert: " + e.getMessage()).asException());
+        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "bulkInsert"));
     } finally {
       ProtocolContext.clear();
     }
@@ -2935,7 +2933,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             out.onCompleted();
           }
         } catch (Exception e) {
-          out.onError(Status.INTERNAL.withDescription("insertStream: " + e.getMessage()).asException());
+          out.onError(GrpcErrorMapper.toStatusRuntimeException(e, "insertStream"));
         } finally {
           InsertContext ctx = ctxRef.get();
           if (ctx != null)
@@ -3154,8 +3152,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // caller can reconcile instead of re-sending a load that is partly in the database already. The
           // abandoned batch is still the one holding the flushed-edge count, and abandon() drops what was
           // buffered without touching what it had already committed.
-          out.onError(Status.INTERNAL.withDescription("graphBatchLoad: " + e.getMessage())
-              .asException(partialCommitTrailer(abandoned, counts, tempIdMap, startedAt)));
+          final Metadata trailers = partialCommitTrailer(abandoned, counts, tempIdMap, startedAt);
+          out.onError(graphBatchLoadError(e, trailers));
           return;
         } finally {
           if (!cancelled.get() && !errorSent[0])
@@ -3212,12 +3210,595 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         } catch (final Exception e) {
           // close() is where the deferred incoming edges are connected, so a failure here can leave edges
           // buffered that the counters must not claim: the batch is asked what it actually flushed.
-          out.onError(Status.INTERNAL.withDescription("graphBatchLoad: " + e.getMessage())
-              .asException(partialCommitTrailer(batchRef.get(), counts, tempIdMap, startedAt)));
+          final Metadata trailers = partialCommitTrailer(batchRef.get(), counts, tempIdMap, startedAt);
+          out.onError(graphBatchLoadError(e, trailers));
           closeQuietly(batchRef.get());
         }
       }
     };
+  }
+
+  /**
+   * Builds the {@code onError} exception for a {@code graphBatchLoad} failure, classifying {@code e} and
+   * layering {@code trailers} (the partial-commit summary) onto it via {@link GrpcErrorMapper#classifyAndAddTrailers}.
+   * <p>
+   * When the cause is already a mapped {@link StatusRuntimeException}/{@link StatusException} - e.g. a
+   * {@code getDatabase()} auth refusal - its own description is kept verbatim instead of being overwritten with
+   * a synthesized {@code "graphBatchLoad: " + message}, matching how {@link GrpcErrorMapper#toStatusRuntimeException}
+   * treats the same pass-through case elsewhere.
+   */
+  private static StatusException graphBatchLoadError(final Throwable e, final Metadata trailers) {
+    final Throwable cause = GrpcErrorMapper.unwrap(e);
+    final Status.Code code = GrpcErrorMapper.classifyAndAddTrailers(cause, trailers);
+    final String description;
+    if (cause instanceof StatusRuntimeException sre)
+      description = sre.getStatus().getDescription();
+    else if (cause instanceof StatusException se)
+      description = se.getStatus().getDescription();
+    else
+      description = "graphBatchLoad: " + cause.getMessage();
+    return code.toStatus().withDescription(description).asException(trailers);
+  }
+
+  // ---------------------------------------------------------------------------------------------------------
+  // Time series API (issue #7305)
+  //
+  // The ingest and read semantics themselves live in TimeSeriesGateway, shared with the HTTP /ts/* handlers,
+  // so the per-type ACL, the measurement grouping and the drop sets are one implementation rather than two
+  // that happen to agree today. What is here is the gRPC shape: precision, streaming, batching, and the status
+  // codes a client can act on.
+  // ---------------------------------------------------------------------------------------------------------
+
+  /** Rows (or buckets) per streamed TimeSeriesQueryResult when the client states no batch size. */
+  private static final int TS_DEFAULT_BATCH_SIZE  = 1_000;
+  /**
+   * Ceiling on a client-stated batch size, so an unbounded batch size cannot ask for an unbounded message.
+   * <p>
+   * This is a row count, and a row count is only a HEURISTIC for message size - it used to be documented as if
+   * it kept a message under {@code maxInboundMessageSize}, which it cannot: a series with many tags or long
+   * string values crosses 4 MiB at a row count well inside this cap, and the failure lands on the client as a
+   * rejected frame rather than as a status it can act on (issue #7394). {@link #TS_MAX_BATCH_BYTES} is the
+   * bound that actually holds; this one keeps the per-message row count sane and bounds the accumulator.
+   */
+  private static final int TS_MAX_BATCH_SIZE      = 10_000;
+  /**
+   * Byte budget for one streamed {@code TimeSeriesQueryResult}, measured on the serialized rows or buckets it
+   * carries. A batch is emitted as soon as either this or the row count is reached.
+   * <p>
+   * Half of gRPC's 4 MiB default inbound limit, which is what a client that has not raised
+   * {@code maxInboundMessageSize} will accept. The margin covers the parts of the message not counted here -
+   * the type name, the column or aggregation names, and the protobuf framing - without needing to model them.
+   * <p>
+   * This bounds a BATCH, not a row: one row larger than the budget is still emitted on its own, because a row
+   * cannot be split. That is the residual the byte budget cannot remove.
+   */
+  private static final int TS_MAX_BATCH_BYTES     = 2 * 1024 * 1024;
+
+  /**
+   * Whether an accumulating batch should be emitted now: it has reached the client's (capped) row count, or it
+   * has reached the byte budget. Package-private so the two bounds can be exercised without streaming a
+   * multi-megabyte answer through a real server.
+   *
+   * @param rows      rows or buckets accumulated so far
+   * @param bytes     sum of their serialized sizes
+   * @param batchSize the effective row bound for this request
+   */
+  static boolean timeSeriesBatchIsFull(final int rows, final int bytes, final int batchSize) {
+    return rows >= batchSize || bytes >= TS_MAX_BATCH_BYTES;
+  }
+
+  @Override
+  public void timeSeriesWrite(final TimeSeriesWriteRequest req, final StreamObserver<TimeSeriesWriteSummary> resp) {
+    final long started = System.currentTimeMillis();
+
+    // Guards the catch below against calling onError once onNext has already handed a response to the
+    // observer - the same double-terminate guard every other handler here carries (issues #6192, #6756).
+    boolean responded = false;
+
+    ProtocolContext.set("grpc");
+    try {
+      final Database db = getDatabase(req.getDatabase(), req.getCredentials());
+      final List<Sample> samples = GrpcTimeSeriesSupport.toSamples(req.getPointsList(), req.getType(),
+          req.getPrecision());
+
+      final WriteReport report = TimeSeriesGateway.write((DatabaseInternal) db, samples);
+
+      resp.onNext(toWriteSummary(report, samples.size(), started));
+      responded = true;
+      resp.onCompleted();
+    } catch (final Exception e) {
+      if (!responded)
+        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "TimeSeriesWrite", ha()));
+    } finally {
+      ProtocolContext.clear();
+    }
+  }
+
+  @Override
+  public StreamObserver<TimeSeriesWriteChunk> timeSeriesWriteStream(final StreamObserver<TimeSeriesWriteSummary> resp) {
+    final ServerCallStreamObserver<TimeSeriesWriteSummary> call = (ServerCallStreamObserver<TimeSeriesWriteSummary>) resp;
+
+    // Pull one chunk at a time: a client that can produce faster than this server can append must be made to
+    // wait on the transport rather than have its chunks queue up in this process' heap.
+    call.disableAutoInboundFlowControl();
+
+    // StreamObserver is not thread-safe. Route every write and terminal call through one serialization point so
+    // a cancellation racing a terminal call cannot interleave terminal calls.
+    final SynchronizedStreamObserver<TimeSeriesWriteSummary> out = new SynchronizedStreamObserver<>(resp);
+
+    final long startedAt = System.currentTimeMillis();
+    final AtomicBoolean cancelled = new AtomicBoolean(false);
+    final AtomicBoolean failed = new AtomicBoolean(false);
+    final AtomicReference<Database> dbRef = new AtomicReference<>();
+
+    // Totals across the whole stream. Each chunk is appended as it arrives and its measurements commit their
+    // own shard transactions, so these are counts of what is already durable, not of what a final commit would
+    // make durable - there is no such commit.
+    final long[] totals = new long[3]; // received, written, dropped
+    final Set<String> unknownTypes = new LinkedHashSet<>();
+    final Set<String> nonTimeSeriesTypes = new LinkedHashSet<>();
+    final Set<String> unavailableTypes = new LinkedHashSet<>();
+
+    call.setOnCancelHandler(() -> {
+      cancelled.set(true);
+      out.markTerminated();
+    });
+
+    call.request(1);
+
+    return new StreamObserver<>() {
+
+      @Override
+      public void onNext(final TimeSeriesWriteChunk chunk) {
+        if (cancelled.get() || failed.get())
+          return;
+
+        ProtocolContext.set("grpc");
+        try {
+          Database db = dbRef.get();
+          if (db == null) {
+            if (chunk.getDatabase().isEmpty())
+              throw Status.INVALID_ARGUMENT
+                  .withDescription("The first TimeSeriesWriteChunk must name the database")
+                  .asRuntimeException();
+            // Resolved once and cached, mirroring graphBatchLoad: authenticating every chunk would put a
+            // security lookup on the per-chunk hot path for no gain, since the stream is one authenticated call.
+            db = getDatabase(chunk.getDatabase(), chunk.getCredentials());
+            dbRef.set(db);
+          }
+
+          final List<Sample> samples = GrpcTimeSeriesSupport.toSamples(chunk.getPointsList(), chunk.getType(),
+              chunk.getPrecision());
+          final WriteReport report = TimeSeriesGateway.write((DatabaseInternal) db, samples);
+
+          totals[0] += samples.size();
+          totals[1] += report.written();
+          totals[2] += report.dropped();
+          unknownTypes.addAll(report.unknownTypes());
+          nonTimeSeriesTypes.addAll(report.nonTimeSeriesTypes());
+          unavailableTypes.addAll(report.unavailableTypes());
+
+          call.request(1);
+        } catch (final Exception e) {
+          // Stop appending and terminate now. Unlike insertStream there is nothing to roll back and nothing to
+          // drain for: every chunk before this one is already durable, so the client's useful next step is the
+          // error, and the counts it can read from a subsequent query.
+          failed.set(true);
+          out.onError(GrpcErrorMapper.toStatusRuntimeException(e, "TimeSeriesWriteStream", ha()));
+        } finally {
+          ProtocolContext.clear();
+        }
+      }
+
+      @Override
+      public void onError(final Throwable t) {
+        cancelled.set(true);
+        LogManager.instance().log(this, Level.FINE, "TimeSeriesWriteStream client error: %s", t.getMessage());
+        out.markTerminated();
+      }
+
+      @Override
+      public void onCompleted() {
+        if (cancelled.get() || failed.get())
+          return;
+        out.onNext(TimeSeriesWriteSummary.newBuilder()
+            .setReceived(totals[0])
+            .setWritten(totals[1])
+            .setDropped(totals[2])
+            .addAllUnknownTypes(unknownTypes)
+            .addAllNonTimeSeriesTypes(nonTimeSeriesTypes)
+            .addAllUnavailableTypes(unavailableTypes)
+            .setExecutionTimeMs(System.currentTimeMillis() - startedAt)
+            .build());
+        out.onCompleted();
+      }
+    };
+  }
+
+  /**
+   * Streams a time-series answer, inside the caller's transaction when the request names one (issue #7370).
+   * <p>
+   * The dispatch is {@code streamQuery}'s rather than {@link #readInTransaction}'s: a server-streaming RPC
+   * produces no single value to hand back, so the whole stream - the row walk, the bounded
+   * {@code waitUntilReady} inside every {@link #emitTimeSeriesBatch}, and the terminal message - runs on the
+   * transaction's single-threaded executor, and this gRPC worker blocks on the future until it finishes. The
+   * refusals are the same as everywhere else: an unknown non-blank id is FAILED_PRECONDITION rather than a
+   * silent read outside the transaction the caller believes it is inside.
+   * <p>
+   * <b>What this does and does not change about what the caller reads.</b> It puts the read on the
+   * transaction's thread and against the transaction's own handle, which is the contract every other
+   * transaction-scoped RPC on this service carries. It does <i>not</i> make time-series samples appear or
+   * disappear with the caller's transaction, because they never did: {@code TimeSeriesShard.appendSamples}
+   * opens its own {@code begin}/{@code commit} around the mutable-bucket write, and an ArcadeDB nested
+   * transaction is an independent transaction rather than a savepoint, so an append made inside a caller's
+   * transaction is already durable and already visible to every other reader. Issue #7410 tracks that.
+   */
+  @Override
+  public void timeSeriesQuery(final TimeSeriesQueryRequest req, final StreamObserver<TimeSeriesQueryResult> resp) {
+    final ServerCallStreamObserver<TimeSeriesQueryResult> call = (ServerCallStreamObserver<TimeSeriesQueryResult>) resp;
+    final AtomicBoolean cancelled = new AtomicBoolean(false);
+    final AtomicBoolean serverTimedOut = new AtomicBoolean(false);
+    call.setOnCancelHandler(() -> cancelled.set(true));
+
+    ProtocolContext.set("grpc");
+    try {
+      final String incomingTxId = req.hasTransaction() ? req.getTransaction().getTransactionId() : null;
+      final TransactionContext txCtx = resolveAuthorizedTransaction(incomingTxId, req.getCredentials());
+      if (isUnknownSuppliedTransaction(incomingTxId, txCtx))
+        throw unknownTransactionStatus(incomingTxId).asRuntimeException();
+
+      if (txCtx == null)
+        streamTimeSeries(call, cancelled, serverTimedOut, req,
+            (DatabaseInternal) getDatabase(req.getDatabase(), req.getCredentials()));
+      else
+        try {
+          submitToActiveTransaction(txCtx, () -> {
+            streamTimeSeries(call, cancelled, serverTimedOut, req, (DatabaseInternal) txCtx.db);
+            return null;
+          }).get();
+        } catch (final ExecutionException e) {
+          // Surface the real failure - the resolution status, the RESOURCE_EXHAUSTED ceiling,
+          // requireTransactionStillActive's FAILED_PRECONDITION - instead of letting the catch below map every
+          // in-transaction stream fault to one opaque status.
+          throw rethrowCauseOf(e);
+        } catch (final InterruptedException e) {
+          Thread.currentThread().interrupt();
+          if (!cancelled.get())
+            resp.onError(Status.CANCELLED
+                .withDescription("TimeSeriesQuery was interrupted while streaming inside the transaction")
+                .asRuntimeException());
+          return;
+        }
+
+      if (serverTimedOut.get()) {
+        // The consumer stopped reading and the bounded wait elapsed. Say so explicitly rather than letting the
+        // stream end as if it were complete, which would look like an empty tail to the client.
+        resp.onError(Status.DEADLINE_EXCEEDED
+            .withDescription("TimeSeriesQuery aborted: the client transport was not ready in time")
+            .asRuntimeException());
+        return;
+      }
+      if (!cancelled.get())
+        resp.onCompleted();
+    } catch (final Exception e) {
+      if (!cancelled.get())
+        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "TimeSeriesQuery", ha()));
+    } finally {
+      ProtocolContext.clear();
+    }
+  }
+
+  /**
+   * Resolves the request against {@code db} and streams either its rows or its aggregation buckets. Split out
+   * of {@link #timeSeriesQuery} so the identical body can run either inline on the gRPC worker or on a
+   * transaction's executor thread, against whichever database handle that choice implies.
+   */
+  private void streamTimeSeries(final ServerCallStreamObserver<TimeSeriesQueryResult> call,
+      final AtomicBoolean cancelled, final AtomicBoolean serverTimedOut, final TimeSeriesQueryRequest req,
+      final DatabaseInternal db) throws Exception {
+
+    final TypeResolution resolved = TimeSeriesGateway.resolveForRead(db, req.getType());
+    if (!resolved.isSuccess())
+      throw GrpcTimeSeriesSupport.resolutionFailure(req.getType(), resolved);
+
+    final TimeSeriesEngine engine = resolved.engine();
+    final List<ColumnDefinition> columns = resolved.columns();
+
+    // Unset means unbounded, which is not the same as 0: 0 is a real epoch timestamp.
+    final long fromTs = req.hasFromTimestamp() ? req.getFromTimestamp() : Long.MIN_VALUE;
+    final long toTs = req.hasToTimestamp() ? req.getToTimestamp() : Long.MAX_VALUE;
+    final TagFilter tagFilter = TimeSeriesGateway.buildTagFilter(GrpcTimeSeriesSupport.toTagMap(req.getTags()),
+        columns);
+
+    final int batchSize = req.getBatchSize() > 0 ? Math.min(req.getBatchSize(), TS_MAX_BATCH_SIZE)
+        : TS_DEFAULT_BATCH_SIZE;
+
+    if (req.hasAggregation())
+      streamTimeSeriesBuckets(call, cancelled, serverTimedOut, req, engine, columns, fromTs, toTs, tagFilter,
+          batchSize);
+    else
+      streamTimeSeriesRows(call, cancelled, serverTimedOut, req, engine, columns, fromTs, toTs, tagFilter,
+          batchSize);
+  }
+
+  /**
+   * Streams the raw rows of a time-series query.
+   * <p>
+   * The rows are pulled through {@link TimeSeriesEngine#iterateQuery}, a lazy merge across shards, so the
+   * server holds one block per shard rather than the whole range: a query whose answer does not fit in memory
+   * is bounded by the client's consumption rather than by this process' heap.
+   */
+  private void streamTimeSeriesRows(final ServerCallStreamObserver<TimeSeriesQueryResult> call,
+      final AtomicBoolean cancelled, final AtomicBoolean serverTimedOut, final TimeSeriesQueryRequest req,
+      final TimeSeriesEngine engine, final List<ColumnDefinition> columns, final long fromTs, final long toTs,
+      final TagFilter tagFilter, final int batchSize) throws Exception {
+
+    final int[] columnIndices = TimeSeriesGateway.resolveColumnIndices(req.getFieldsList(), columns);
+    final List<String> columnNames = TimeSeriesGateway.columnNames(columns, columnIndices);
+
+    // Same bounding contract as executeQuery: an explicit positive limit at or below the configured cap is the
+    // client's own bound and is honoured silently; the cap is otherwise a HARD ceiling a client cannot widen by
+    // asking for more, and exceeding it fails loudly instead of silently dropping rows.
+    //
+    // The ceiling is TimeSeriesQuery's own and not the unary ExecuteQuery one (issue #7390). The unary ceiling's
+    // default is deliberately the low one BECAUSE its response is a single gRPC message - the one property a
+    // server-streaming RPC does not have - so reading it here refused at a tenth of what the HTTP twin serves,
+    // and refused it mid-stream, after the client had already consumed part of the series.
+    final int configuredMax = serverConfiguration().getValueAsInteger(
+        GlobalConfiguration.SERVER_GRPC_TIMESERIES_MAX_RESULT_ROWS);
+    final boolean capEnabled = configuredMax > 0;
+    final int requestedLimit = req.getLimit();
+    // A limit that already exceeds the ceiling is refused HERE, before the first message: the answer is known
+    // without walking a row, and a client told up front can narrow its request, where one told at row
+    // `configuredMax` has already been handed a partial series that looks exactly like a complete one.
+    if (capEnabled && requestedLimit > configuredMax)
+      throw timeSeriesCeilingExceeded(requestedLimit + " rows were requested, more than the maximum of "
+          + configuredMax, TS_ROW_CEILING_REMEDY);
+    final boolean clientLimited = requestedLimit > 0;
+
+    final Iterator<Object[]> rows = engine.iterateQuery(fromTs, toTs, columnIndices, tagFilter);
+
+    final List<TimeSeriesRow> batch = new ArrayList<>(Math.min(batchSize, 1024));
+    // Serialized size of what is in `batch`, so the message can be bounded by bytes and not only by rows.
+    // TimeSeriesRow memoizes its own size, so accumulating it here costs one field read per row.
+    int batchBytes = 0;
+    long emitted = 0;
+    boolean truncated = false;
+
+    while (rows.hasNext()) {
+      if (cancelled.get())
+        return;
+
+      if (clientLimited && emitted >= requestedLimit) {
+        // The loop condition already proved another row exists, so this answer really is cut short.
+        truncated = true;
+        break;
+      }
+      // Reached only by a request that stated NO limit: one that stated a limit was either bounded by it above
+      // or refused before the first message. The lazy walk cannot know the row count in advance, so this is the
+      // one case the ceiling still has to fire mid-stream - which is why `truncated` and `last` exist.
+      if (capEnabled && emitted >= configuredMax)
+        throw timeSeriesCeilingExceeded("the result exceeds the maximum of " + configuredMax + " rows",
+            TS_ROW_CEILING_REMEDY);
+
+      final TimeSeriesRow row = GrpcTimeSeriesSupport.toRow(rows.next());
+      batch.add(row);
+      batchBytes += row.getSerializedSize();
+      emitted++;
+
+      if (timeSeriesBatchIsFull(batch.size(), batchBytes, batchSize)) {
+        emitTimeSeriesBatch(call, cancelled, serverTimedOut, TimeSeriesQueryResult.newBuilder()
+            .setType(req.getType())
+            .addAllColumns(columnNames)
+            .addAllRows(batch)
+            .setRunningTotalEmitted(emitted)
+            .setLast(false));
+        if (cancelled.get())
+          return;
+        batch.clear();
+        batchBytes = 0;
+      }
+    }
+
+    // Always emit a terminal message, even with no rows left over: `last` is what tells the client the stream
+    // ended by exhausting the answer, and `truncated` only means anything on it.
+    emitTimeSeriesBatch(call, cancelled, serverTimedOut, TimeSeriesQueryResult.newBuilder()
+        .setType(req.getType())
+        .addAllColumns(columnNames)
+        .addAllRows(batch)
+        .setRunningTotalEmitted(emitted)
+        .setTruncated(truncated)
+        .setLast(true));
+  }
+
+  /**
+   * The refusal EVERY TimeSeriesQuery ceiling answers with - the two on the raw row path and the one on the
+   * aggregated bucket path - worded the same way and naming the setting that actually applies (issue #7390).
+   * <p>
+   * The remedy is a parameter rather than a constant because the three are not the same advice: a bucket count
+   * is narrowed by widening the interval, which does nothing for a row count. It is carried at all because
+   * RESOURCE_EXHAUSTED on its own tells a client nothing it can act on.
+   */
+  private static StatusRuntimeException timeSeriesCeilingExceeded(final String what, final String remedy) {
+    return Status.RESOURCE_EXHAUSTED
+        .withDescription("TimeSeriesQuery refused: " + what
+            + " (arcadedb.server.grpcTimeSeriesMaxResultRows); " + remedy)
+        .asRuntimeException();
+  }
+
+  /** The row-path remedy, shared by the up-front refusal and the mid-stream one. */
+  private static final String TS_ROW_CEILING_REMEDY =
+      "narrow the time range, add a tag filter, or lower the limit";
+
+  /**
+   * Streams the fixed-interval buckets of an aggregated time-series query. Unlike the raw path this cannot be
+   * lazy - the aggregation is computed across the whole range before any bucket exists - so the ceiling is
+   * checked against the bucket count up front, which is the only bound an aggregated answer has: a small
+   * bucketInterval over a wide range produces one row per bucket.
+   */
+  private void streamTimeSeriesBuckets(final ServerCallStreamObserver<TimeSeriesQueryResult> call,
+      final AtomicBoolean cancelled, final AtomicBoolean serverTimedOut, final TimeSeriesQueryRequest req,
+      final TimeSeriesEngine engine, final List<ColumnDefinition> columns, final long fromTs, final long toTs,
+      final TagFilter tagFilter, final int batchSize) throws Exception {
+
+    final TimeSeriesAggregation aggregation = req.getAggregation();
+    if (aggregation.getBucketIntervalMs() <= 0)
+      throw Status.INVALID_ARGUMENT
+          .withDescription("TimeSeriesAggregation.bucket_interval_ms must be positive").asRuntimeException();
+    if (aggregation.getRequestsCount() == 0)
+      throw Status.INVALID_ARGUMENT
+          .withDescription("TimeSeriesAggregation needs at least one request").asRuntimeException();
+
+    final List<MultiColumnAggregationRequest> requests = new ArrayList<>(aggregation.getRequestsCount());
+    final List<String> aliases = new ArrayList<>(aggregation.getRequestsCount());
+
+    for (final TimeSeriesAggregationRequest request : aggregation.getRequestsList()) {
+      final AggregationType type = GrpcTimeSeriesSupport.toAggregationType(request.getType());
+      final int columnIndex = TimeSeriesGateway.findColumnIndex(request.getField(), columns);
+      if (columnIndex < 0)
+        throw Status.INVALID_ARGUMENT
+            .withDescription("Field '" + request.getField() + "' not found in type").asRuntimeException();
+
+      // Same default alias as the HTTP endpoint, so the two protocols name the same computed column alike.
+      final String alias = request.getAlias().isEmpty()
+          ? request.getField() + "_" + type.name().toLowerCase()
+          : request.getAlias();
+      requests.add(new MultiColumnAggregationRequest(columnIndex, type, alias));
+      aliases.add(alias);
+    }
+
+    final MultiColumnAggregationResult result = engine.aggregateMulti(fromTs, toTs, requests,
+        aggregation.getBucketIntervalMs(), tagFilter);
+    final List<Long> timestamps = result.getBucketTimestamps();
+
+    final int configuredMax = serverConfiguration().getValueAsInteger(
+        GlobalConfiguration.SERVER_GRPC_TIMESERIES_MAX_RESULT_ROWS);
+    if (configuredMax > 0 && timestamps.size() > configuredMax)
+      throw timeSeriesCeilingExceeded("the aggregation produced " + timestamps.size() + " buckets, more than the "
+          + "maximum of " + configuredMax, "widen bucket_interval_ms or narrow the time range");
+
+    final List<TimeSeriesBucket> batch = new ArrayList<>(Math.min(batchSize, 1024));
+    int batchBytes = 0;
+    long emitted = 0;
+
+    for (final long timestamp : timestamps) {
+      if (cancelled.get())
+        return;
+
+      final TimeSeriesBucket.Builder bucket = TimeSeriesBucket.newBuilder().setTimestamp(timestamp);
+      for (int r = 0; r < requests.size(); r++)
+        // NOT setDoubleValue: an absent MIN/MAX answers NaN, which a client would otherwise read as a number.
+        bucket.addValues(GrpcTimeSeriesSupport.toSampleValue(result.getValue(timestamp, r)));
+      final TimeSeriesBucket built = bucket.build();
+      batch.add(built);
+      batchBytes += built.getSerializedSize();
+      emitted++;
+
+      if (timeSeriesBatchIsFull(batch.size(), batchBytes, batchSize)) {
+        emitTimeSeriesBatch(call, cancelled, serverTimedOut, TimeSeriesQueryResult.newBuilder()
+            .setType(req.getType())
+            .addAllAggregations(aliases)
+            .addAllBuckets(batch)
+            .setRunningTotalEmitted(emitted)
+            .setLast(false));
+        if (cancelled.get())
+          return;
+        batch.clear();
+        batchBytes = 0;
+      }
+    }
+
+    emitTimeSeriesBatch(call, cancelled, serverTimedOut, TimeSeriesQueryResult.newBuilder()
+        .setType(req.getType())
+        .addAllAggregations(aliases)
+        .addAllBuckets(batch)
+        .setRunningTotalEmitted(emitted)
+        .setLast(true));
+  }
+
+  /**
+   * Sends one message, first waiting - with a bound - for the transport to be ready, so a slow or abandoned
+   * consumer cannot make this server buffer the whole answer on its behalf. A cancel racing the send is
+   * absorbed into {@code cancelled} rather than escaping as an exception, exactly as {@code safeOnNext} does
+   * for {@code streamQuery}.
+   */
+  private void emitTimeSeriesBatch(final ServerCallStreamObserver<TimeSeriesQueryResult> call,
+      final AtomicBoolean cancelled, final AtomicBoolean serverTimedOut,
+      final TimeSeriesQueryResult.Builder payload) {
+    waitUntilReady(call, cancelled, serverTimedOut);
+    if (cancelled.get())
+      return;
+    try {
+      call.onNext(payload.build());
+    } catch (final StatusRuntimeException e) {
+      if (e.getStatus().getCode() == Status.Code.CANCELLED) {
+        cancelled.set(true);
+        return;
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * The newest sample of a type, inside the caller's transaction when the request names one (issue #7370).
+   * Same contract, and the same caveat about what it does not change, as {@link #timeSeriesQuery}.
+   */
+  @Override
+  public void timeSeriesLatest(final TimeSeriesLatestRequest req,
+      final StreamObserver<TimeSeriesLatestResponse> resp) {
+    boolean responded = false;
+
+    ProtocolContext.set("grpc");
+    try {
+      final TimeSeriesLatestResponse response = readInTransaction(
+          req.hasTransaction() ? req.getTransaction().getTransactionId() : null,
+          req.getDatabase(), req.getCredentials(), db -> latestOf(req, (DatabaseInternal) db));
+
+      resp.onNext(response);
+      responded = true;
+      resp.onCompleted();
+    } catch (final Exception e) {
+      if (!responded)
+        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "TimeSeriesLatest", ha()));
+    } finally {
+      ProtocolContext.clear();
+    }
+  }
+
+  /** Builds the TimeSeriesLatest answer against {@code db}, whichever handle {@link #readInTransaction} chose. */
+  private static TimeSeriesLatestResponse latestOf(final TimeSeriesLatestRequest req, final DatabaseInternal db)
+      throws IOException {
+    final TypeResolution resolved = TimeSeriesGateway.resolveForRead(db, req.getType());
+    if (!resolved.isSuccess())
+      throw GrpcTimeSeriesSupport.resolutionFailure(req.getType(), resolved);
+
+    final List<ColumnDefinition> columns = resolved.columns();
+    final TagFilter tagFilter = TimeSeriesGateway.buildTagFilter(GrpcTimeSeriesSupport.toTagMap(req.getTags()),
+        columns);
+    final Object[] latest = TimeSeriesGateway.latest(resolved.engine(), tagFilter);
+
+    final TimeSeriesLatestResponse.Builder response = TimeSeriesLatestResponse.newBuilder()
+        .setType(req.getType())
+        .addAllColumns(TimeSeriesGateway.columnNames(columns, null))
+        .setFound(latest != null);
+    if (latest != null)
+      response.setLatest(GrpcTimeSeriesSupport.toRow(latest));
+
+    return response.build();
+  }
+
+  /** Renders a gateway write report as the summary the unary write RPC answers with. */
+  private static TimeSeriesWriteSummary toWriteSummary(final WriteReport report, final int received,
+      final long startedAt) {
+    return TimeSeriesWriteSummary.newBuilder()
+        .setReceived(received)
+        .setWritten(report.written())
+        .setDropped(report.dropped())
+        .addAllUnknownTypes(report.unknownTypes())
+        .addAllNonTimeSeriesTypes(report.nonTimeSeriesTypes())
+        .addAllUnavailableTypes(report.unavailableTypes())
+        .setExecutionTimeMs(System.currentTimeMillis() - startedAt)
+        .build();
   }
 
   /**
@@ -3594,7 +4175,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
                   out.onNext(InsertResponse.newBuilder().setCommitted(Committed.newBuilder().setSummary(sum).build()).build());
                   out.onCompleted();
                 } catch (Exception e) {
-                  out.onError(Status.INTERNAL.withDescription("commit: " + e.getMessage()).asException());
+                  out.onError(GrpcErrorMapper.toStatusRuntimeException(e, "commit"));
                 } finally {
                   sessionWatermark.remove(ctx.sessionId);
                   ctx.closeQuietly();
@@ -3612,7 +4193,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             }
           } catch (Exception unexpected) {
             // defensive: fail fast on unexpected exceptions
-            out.onError(Status.INTERNAL.withDescription("insertBidirectional: " + unexpected.getMessage()).asException());
+            out.onError(GrpcErrorMapper.toStatusRuntimeException(unexpected, "insertBidirectional"));
             final InsertContext ctx = ref.getAndSet(null);
             if (ctx != null) {
               sessionWatermark.remove(ctx.sessionId);
@@ -3757,7 +4338,28 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     }
   }
 
+  /**
+   * Runs on whichever thread the caller hands it: {@code bulkInsert}'s own, a transaction's dedicated executor,
+   * or the {@code insertStream} / {@code insertBidirectional} stream executors. The upsert and ignore lookups
+   * inside are real SQL, so the protocol tag is set HERE, around the work, rather than on the RPC's entry thread:
+   * the streaming RPCs do their work from observer callbacks that hop threads, and a tag set in {@code onNext}
+   * never reached the thread the lookup ran on, which metered every conflict probe as {@code internal}
+   * (issue #7407). Left alone when the caller already tagged the thread, so {@code bulkInsert}'s outer
+   * set/clear pair still owns it.
+   */
   private Counts insertRows(InsertContext ctx, Iterator<GrpcRecord> it) {
+    final boolean tagHere = !GRPC_PROTOCOL.equals(ProtocolContext.get());
+    if (tagHere)
+      ProtocolContext.set(GRPC_PROTOCOL);
+    try {
+      return insertRowsTagged(ctx, it);
+    } finally {
+      if (tagHere)
+        ProtocolContext.clear();
+    }
+  }
+
+  private Counts insertRowsTagged(InsertContext ctx, Iterator<GrpcRecord> it) {
 
     Counts c = new Counts();
 
@@ -4613,6 +5215,167 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  //  Vector, hybrid and full-text retrieval (issue #7306)
+  // ═══════════════════════════════════════════════════════════════════
+
+  /**
+   * kNN search over a dense {@code LSM_VECTOR} or sparse {@code LSM_SPARSE_VECTOR} index.
+   * <p>
+   * Vector search had no wire surface at all on either protocol before #7306. These three handlers close that on
+   * the gRPC side, and they close it with the <i>same</i> implementation the HTTP {@code /api/v1/vector/*} routes
+   * and the MCP search tools use - see {@link GrpcVectorSearch} - so the asymmetry the issue is about is not
+   * re-created one protocol lower down.
+   */
+  @Override
+  public void vectorSearch(final VectorSearchRequest request, final StreamObserver<VectorSearchResponse> resp) {
+    GrpcUnaryCall.respond(resp,
+        () -> readInTransaction(request.hasTransaction() ? request.getTransaction().getTransactionId() : null,
+            request.getDatabase(), request.getCredentials(), db -> GrpcVectorSearch.search(db, request)),
+        e -> toSearchStatus("VectorSearch", e));
+  }
+
+  /**
+   * Fused vector + full-text + graph-expansion search. Same sharing as {@link #vectorSearch}.
+   */
+  @Override
+  public void hybridSearch(final HybridSearchRequest request, final StreamObserver<HybridSearchResponse> resp) {
+    GrpcUnaryCall.respond(resp,
+        () -> readInTransaction(request.hasTransaction() ? request.getTransaction().getTransactionId() : null,
+            request.getDatabase(), request.getCredentials(), db -> GrpcVectorSearch.hybridSearch(db, request)),
+        e -> toSearchStatus("HybridSearch", e));
+  }
+
+  /**
+   * Full-text search over a {@code FULL_TEXT} index. Same sharing as {@link #vectorSearch}.
+   */
+  @Override
+  public void fullTextSearch(final FullTextSearchRequest request, final StreamObserver<FullTextSearchResponse> resp) {
+    GrpcUnaryCall.respond(resp,
+        () -> readInTransaction(request.hasTransaction() ? request.getTransaction().getTransactionId() : null,
+            request.getDatabase(), request.getCredentials(), db -> GrpcVectorSearch.fullTextSearch(db, request)),
+        e -> toSearchStatus("FullTextSearch", e));
+  }
+
+  /**
+   * A read body dispatched by {@link #readInTransaction}. Declared instead of {@link Function} so a body may
+   * raise a checked exception - {@code TimeSeriesGateway.latest} throws {@link java.io.IOException} - without
+   * each caller having to wrap and the mapper having to unwrap it again.
+   */
+  @FunctionalInterface
+  private interface DatabaseRead<T> {
+    T apply(Database db) throws Exception;
+  }
+
+  /**
+   * Runs a read body against the database it must actually read (issues #7326, #7370).
+   * <p>
+   * An ArcadeDB transaction is thread-bound: its uncommitted changes are visible only on the thread that owns
+   * it. So when the request names a live transaction the body runs on that transaction's own executor thread
+   * through {@link #submitToActiveTransaction}, against the transaction's own database handle - never against a
+   * handle re-resolved from the request's database name, which {@link #authorizeTransactionAccess} also refuses
+   * to trust. Without a transaction id the body runs inline on the calling gRPC worker against a freshly
+   * authorized handle, exactly as before.
+   * <p>
+   * A non-blank transaction id the server no longer knows (reaped, committed, or invented) is refused with
+   * FAILED_PRECONDITION instead of quietly falling through to a read outside the transaction the caller
+   * believes it is inside - the same contract {@code lookupByRid} and {@code updateRecord} carry. A blank id is
+   * not a supplied one and legitimately means "no external transaction".
+   * <p>
+   * Used by the three search RPCs (#7326) and by {@code TimeSeriesLatest} (#7370). {@code TimeSeriesQuery} is
+   * server-streaming and cannot hand back a single value, so it dispatches the same way inline rather than
+   * through here.
+   * <p>
+   * The {@link ProtocolContext} pair wraps the BODY rather than the RPC method, and that placement is the
+   * point: the context is a thread-local, the vector and hybrid legs execute SQL through
+   * {@code Database.query}, and {@code QueryMetricsRecorder}/{@code QueryTracer} read the protocol off
+   * whichever thread that SQL runs on. In-transaction searches run on the transaction's own executor thread,
+   * not on the calling gRPC worker, so tagging the worker would have left exactly the path #7326 added still
+   * reporting {@code protocol="internal"} (issue #7394). {@code executeCommandInternal} places it the same way
+   * and for the same reason.
+   *
+   * @param incomingTxId the request's transaction id, or null when the request carried no TransactionContext
+   * @param body         the read, which must not retain the database handle beyond the call
+   */
+  private <T> T readInTransaction(final String incomingTxId, final String databaseName,
+      final DatabaseCredentials credentials, final DatabaseRead<T> body) throws Exception {
+    final TransactionContext txCtx = resolveAuthorizedTransaction(incomingTxId, credentials);
+
+    if (isUnknownSuppliedTransaction(incomingTxId, txCtx))
+      throw unknownTransactionStatus(incomingTxId).asRuntimeException();
+
+    if (txCtx == null)
+      return asGrpcProtocol(() -> body.apply(getDatabase(databaseName, credentials)));
+
+    try {
+      return submitToActiveTransaction(txCtx, () -> asGrpcProtocol(() -> body.apply(txCtx.db))).get();
+    } catch (final ExecutionException e) {
+      // Unwrap so the caller's mapper (toSearchStatus, or GrpcErrorMapper for TimeSeriesLatest) sees the real
+      // failure - an explicit gRPC status raised by requireTransactionStillActive, or the
+      // IllegalArgumentException a shared implementation reports a crossed bound with - rather than mapping
+      // every in-transaction read fault to INTERNAL.
+      throw rethrowCauseOf(e);
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw e;
+    }
+  }
+
+  /**
+   * Runs {@code body} with the calling thread tagged as the gRPC protocol, and untags it afterwards.
+   * <p>
+   * The clear is unconditional because both threads this runs on are pooled and reused - the gRPC worker
+   * across unrelated RPCs, a transaction executor across the RPCs of its transaction - and a tag left behind
+   * would attribute the next piece of work on that thread to gRPC whatever it actually was.
+   */
+  private static <T> T asGrpcProtocol(final Callable<T> body) throws Exception {
+    ProtocolContext.set("grpc");
+    try {
+      return body.call();
+    } finally {
+      ProtocolContext.clear();
+    }
+  }
+
+  /**
+   * Rethrows the real failure a transaction executor wrapped in an {@link ExecutionException}, so the RPC's own
+   * error mapper sees the status that was actually raised instead of flattening every in-transaction fault to
+   * INTERNAL. Shared by {@link #readInTransaction} and {@code timeSeriesQuery}'s streaming dispatch, which
+   * cannot use it - a server-streaming RPC hands back no value - but needs the identical unwrapping. The two
+   * differ only in what they do with an {@link InterruptedException}, which is why that is not folded in here.
+   * <p>
+   * Declared as returning what it never returns so a caller can write {@code throw rethrowCauseOf(e)} and keep
+   * definite-assignment analysis happy without a dead {@code return} after it.
+   */
+  private static RuntimeException rethrowCauseOf(final ExecutionException e) throws Exception {
+    final Throwable cause = e.getCause();
+    if (cause instanceof final Error error)
+      throw error;
+    if (cause instanceof final Exception exception)
+      throw exception;
+    throw e;
+  }
+
+  /**
+   * Maps a search failure to the status the client receives. Every bound the shared implementation enforces is
+   * reported as an {@link IllegalArgumentException} naming the offending argument, so it must reach the client as
+   * INVALID_ARGUMENT with that message intact - a caller that crossed a documented limit has to be able to tell
+   * that from a server fault, exactly as the HTTP surface distinguishes 400 from 500.
+   */
+  private static StatusException toSearchStatus(final String operation, final Exception e) {
+    if (e instanceof final StatusException se)
+      return se;
+    if (e instanceof final StatusRuntimeException sre)
+      return new StatusException(sre.getStatus(), sre.getTrailers());
+    // ServerSecurityException does NOT extend java.lang.SecurityException (see GrpcErrorMapper), so it needs
+    // its own arm here; everything else - including IllegalArgumentException, which ErrorCategory's
+    // VALIDATION category already maps to INVALID_ARGUMENT - falls through to the same classification
+    // every other wire protocol uses (issue #7123) instead of collapsing to INTERNAL.
+    if (e instanceof ServerSecurityException)
+      return Status.PERMISSION_DENIED.withDescription(operation + ": " + e.getMessage()).asException();
+    return GrpcErrorMapper.statusCodeFor(e).toStatus().withDescription(operation + ": " + e.getMessage()).asException();
+  }
+
   // Helper methods
 
   private Database getDatabase(String databaseName, DatabaseCredentials credentials) {
@@ -4644,6 +5407,13 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         return db;
       }
     }
+
+    // Below this line the service is running WITHOUT an ArcadeDBServer, which only a standalone or embedded use of
+    // this class does - GrpcServerPlugin, the single production construction site, always passes one. The branch
+    // above returns or throws in that case: ArcadeDBServer.getDatabase(name) opens from disk and raises
+    // DatabaseOperationException("... does not exist") rather than returning null, so `db != null` never falls
+    // through on a real server. That is what keeps the raw DatabaseFactory.create() below outside the set of
+    // database creators the restore name reservation has to bind (issue #7441).
 
     // Check if database is already in the pool
     String poolKey = databaseName;
