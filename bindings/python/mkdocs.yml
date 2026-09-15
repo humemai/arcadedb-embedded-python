@@ -170,6 +170,12 @@ nav:
   - 26 - Cross-Model Transaction Atomicity: examples/26_cross_model_transaction_atomicity.md
   - Data Import Patterns: examples/import.md
   - Vector Search Patterns: examples/vectors.md
+- Benchmarks:
+  - Overview: benchmarks/index.md
+  - Protocol: benchmarks/protocol.md
+  - Answer Checking: benchmarks/equivalence.md
+  - Running a Lane: benchmarks/running.md
+  - Reading the Output: benchmarks/results.md
 - User Guide:
   - Access Methods: api-access-methods.md
   - Core Operations:

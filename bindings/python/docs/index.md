@@ -172,6 +172,15 @@ features most relevant to Python developers:
 
 See [Java API Coverage](java-api-coverage.md) for detailed comparison.
 
+## Benchmarks
+
+ArcadeDB is measured against the engines you would otherwise reach for, on one machine, one
+job at a time, with every timed query's answer compared across engines before any latency is
+published. The results live on the
+[project page](https://humem.ai/projects/arcadedb); the
+[Benchmarks](benchmarks/index.md) section documents the protocol, the answer checking, how
+to run a lane yourself, and how to read the output.
+
 ## Distribution
 
 We provide a **single, self-contained package** that works on all major platforms:
