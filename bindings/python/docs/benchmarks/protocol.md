@@ -125,6 +125,14 @@ apply, the table says so in a clause instead of leaving a blank. A transactional
 against a warm database by construction, and the session-cost table is itself the cold
 measurement.
 
+**A query has a budget, and the cell does not die with it.** On the graph analytics and
+time-series tables each query gets the same time budget on every engine. A query that
+exceeds it stops at the iteration it reached, its numbers are over those iterations, the
+table says so in a sentence naming the budget and the count, and the cell's other queries
+keep theirs. Without this a slow scan on one engine took the whole cell past the timeout
+and left nothing, which is the worse outcome: a censored cell is a measurement, an absent
+one is a story.
+
 **Every table reports the same measurement set**: cold and warm latency at the median and
 the ninety-ninth percentile, throughput where the operation has a natural rate, recall where
 the index is approximate, peak memory, on-disk size after the workload, and, on the vector

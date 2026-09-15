@@ -179,7 +179,11 @@ what does each engine leave behind. Its two read paths carry recall against a br
 answer over the same filtered candidate set, with the graph and document halves digest
 compared exactly, because an engine that filters after the search shows it in the recall and
 not in the latency. See the
-[cross-model table](https://humem.ai/projects/arcadedb#crossmodel).
+[cross-model table](https://humem.ai/projects/arcadedb#crossmodel). A zero torn count
+proves only what the engine's transaction can enclose, so each arm records which of its
+three stages may run inside one: MongoDB's vector stage cannot, so its zero demonstrates
+document atomicity rather than the three-model kind the table exists to test, and the row
+says so.
 
 ## What It Found
 

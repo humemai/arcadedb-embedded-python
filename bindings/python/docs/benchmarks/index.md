@@ -86,14 +86,18 @@ actually reach for on that workload.
 | Where they run | Engines |
 |---|---|
 | Documents and analytics | PostgreSQL (at its image defaults and tuned), DuckDB, SQLite, MongoDB, SurrealDB, ArangoDB |
-| Graph | Neo4j, LadybugDB, SurrealDB, ArangoDB |
-| Dense vectors | Qdrant, Milvus, Chroma, LanceDB, sqlite-vec, DuckDB VSS, pgvector, Neo4j's vector index, SurrealDB, ArangoDB |
+| Graph | Neo4j, LadybugDB, SurrealDB, ArangoDB, MongoDB |
+| Dense vectors | Qdrant, Milvus, Chroma, LanceDB, sqlite-vec, DuckDB VSS, pgvector, Neo4j's vector index, SurrealDB, ArangoDB, MongoDB |
 | Sparse vectors | Elasticsearch, Milvus, Qdrant, pgvector |
-| Time series | QuestDB, TimescaleDB, DuckDB, SQLite, MongoDB |
-| Cross-model | PostgreSQL with pgvector and Apache AGE, Neo4j's vector index, SurrealDB, ArangoDB, and a composed Qdrant plus Neo4j stack |
+| Time series | QuestDB, TimescaleDB, DuckDB, SQLite, MongoDB, SurrealDB, ArangoDB |
+| Cross-model | PostgreSQL with pgvector and Apache AGE, Neo4j's vector index, SurrealDB, ArangoDB, MongoDB, and a composed Qdrant plus Neo4j stack |
 
 Engines that offer both an embedded and a served form get a row for each, which is why
-SurrealDB appears twice. Every comparator version is the latest self-hosted stable release
+SurrealDB appears twice. An engine with no native type for a workload still runs it the
+way its own users would: SQLite, DuckDB, SurrealDB, and ArangoDB answer the time-series
+queries on a plain table with a timestamp column, and MongoDB's graph questions are
+aggregation pipelines. A comparator is left off a table only when its documentation and
+an exact error show the query cannot be expressed. Every comparator version is the latest self-hosted stable release
 at measurement time, re-surveyed at each campaign, and restated at the freeze.
 
 ## What Each Table Argues
