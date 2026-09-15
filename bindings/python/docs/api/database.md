@@ -684,6 +684,12 @@ db.async_executor() -> AsyncExecutor
 **Experimental:** Not advised for production use yet. Prefer standard transactions and
 synchronous workflows.
 
+The executor runs individual statements, queries, and record operations off the calling
+thread. It is not a bulk-ingest path: its SQL `command(...)` submissions lose records
+above one worker (`ArcadeData/arcadedb#7615`). Use [`insert_many`](#insert_many) or
+[`graph_batch`](#graph_batch) for bulk loads, and see the
+[AsyncExecutor API](async_executor.md) for the measured detail.
+
 ---
 
 ### graph_batch
@@ -751,7 +757,9 @@ bulk ingest.
 db.import_documents("./movies.csv", document_type="Movie", file_type="csv")
 ```
 
-For bulk table/document ingest from Python, prefer async SQL with a single async worker.
+For bulk ingest from Python, prefer [`insert_many`](#insert_many) for documents and
+[`graph_batch`](#graph_batch) for graphs: the async SQL command path silently loses
+records above one async worker (#7615).
 
 ---
 

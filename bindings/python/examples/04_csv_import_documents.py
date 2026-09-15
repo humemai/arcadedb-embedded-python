@@ -14,8 +14,8 @@ We use the MovieLens dataset with four CSV files:
 Key Concepts:
 - Bulk INSERT ingest using Python CSV parsing
 - Explicit schema mapping for document types
-- Batch processing with commitEvery parameter
-- WAL disabled during ingest, then re-enabled
+- Batch processing with --batch-size (transaction size for the CSV ingest)
+- Read-your-writes disabled during ingest, then re-enabled
 - Creating indexes AFTER import for performance
 - **Full-text search** with Lucene for text fields
 - Query performance comparison with/without indexes
@@ -924,8 +924,9 @@ Parallel threads:
   Recommendation: 4-8 threads for best performance
   Higher values don't always help due to lock contention
 
-Batch size (commitEvery):
-  Default: 5000 records per commit
+Batch size (--batch-size):
+  Default: 5000 records per commit. Sets the transaction size for the CSV
+  ingest, and commitEvery for the IMPORT DATABASE paths.
   Larger batches = faster imports, more memory usage
   Smaller batches = slower imports, less memory usage
 
@@ -992,7 +993,7 @@ if args.parallel:
     print(f"🔧 Parallel threads: {args.parallel}")
 else:
     print("🔧 Parallel threads: auto-detect (CPU cores / 2 - 1, min 1)")
-print(f"🔧 Batch size (commitEvery): {args.batch_size}")
+print(f"🔧 Batch size: {args.batch_size}")
 if args.export:
     # Determine export filename for display
     if args.export_path:
@@ -1189,15 +1190,18 @@ print()
 print("Step 2: Importing movies.csv → Movie documents...")
 print("   💡 Using bulk insert mode:")
 print("      • Schema is created explicitly before ingest")
-print("      • Batch inserts run with WAL disabled for faster load")
-print("      • WAL is re-enabled after ingest")
+print("      • Reads do not have to see this session's own uncommitted writes")
 print()
 step_start = time.time()
 
+# This ingest runs in batched transactions (import_csv_documents_via_sql), not
+# through the async executor. Until 2026-09-15 these lines also configured
+# db.async_executor() with commitEvery and WAL off, which read as if the load
+# were async when it never was: those settings only apply to work submitted to
+# the executor. They are gone rather than made real, because the executor's SQL
+# command path silently discards records above parallel level 1
+# (ArcadeData/arcadedb#7615).
 db.set_read_your_writes(False)
-async_exec = db.async_executor()
-async_exec.set_commit_every(args.batch_size)
-async_exec.set_transaction_use_wal(False)
 
 movies_csv = str(data_dir / "movies.csv")
 stats = import_csv_documents_via_sql(db, movies_csv, "Movie")
@@ -1289,8 +1293,7 @@ if null_timestamps > 0:
 print()
 
 db.set_read_your_writes(True)
-async_exec.set_transaction_use_wal(True)
-print("   ✅ Ingest mode reset: WAL re-enabled")
+print("   ✅ Ingest mode reset: read-your-writes re-enabled")
 print()
 
 # -----------------------------------------------------------------------------
@@ -2400,8 +2403,8 @@ print()
 print("📚 What you learned:")
 print("   • Importing real-world CSV data into ArcadeDB")
 print("   • Bulk INSERT ingest from CSV with explicit schema")
-print("   • WAL-off ingest mode for faster loading")
-print("   • Batch processing with commitEvery parameter")
+print("   • Batched-transaction ingest mode for faster loading")
+print("   • Batch processing with --batch-size (CSV ingest transaction size)")
 print("   • Creating indexes AFTER import for performance")
 print("   • Full-text search indexes with Lucene")
 print("   • Aggregation queries (count, avg, min, max, group by)")
@@ -2424,13 +2427,13 @@ print("   • Explicit schema maps integer-like fields to LONG")
 print("   • Explicit schema maps decimal fields to DOUBLE")
 print("   • Empty CSV cells → SQL NULL (proper NULL handling)")
 print("   • Indexes should be created AFTER bulk import")
-print("   • commitEvery controls batch size (larger = faster)")
+print("   • commitEvery sets the IMPORT DATABASE batch size (larger = faster)")
 print("   • parallel controls concurrent threads (CSV import and JSONL import)")
 print("   • FULL_TEXT indexes use Lucene for tokenization and search")
 print("   • Text search may use LIKE queries optimized by FULL_TEXT indexes")
 print()
 print("💡 Next steps:")
-print("   • Try modifying commitEvery values to see performance impact")
+print("   • Try modifying --batch-size to see performance impact")
 print("   • Add more complex queries")
 print("   • Explore query performance with different index strategies")
 print("   • Experiment with full-text search on other text fields")

@@ -109,9 +109,9 @@ are doing.
     `db.import_documents(...)` wrapper when you specifically need document-file import.
 - For bulk document ingest from Python, prefer `db.insert_many(...)` (optionally with
     `parallel=True`), which crosses the FFI boundary once per batch.
-- As a secondary option, async SQL insert with a single async worker also works. Do
-    not rely on multi-threaded async SQL insert; it has not been safe or reliable in
-    testing.
+- The async executor's SQL command path (`db.async_executor().command(...)`) is not a
+    bulk-ingest path: above parallel level 1 it silently discards records
+    (`ArcadeData/arcadedb#7615`).
 - For bulk graph ingest from Python, prefer `GraphBatch`.
 
 ## Features

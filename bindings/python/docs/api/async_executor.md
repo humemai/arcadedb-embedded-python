@@ -1,14 +1,26 @@
 # AsyncExecutor API
 
 !!! note "Recommended usage"
-    For application code, prefer async SQL/OpenCypher via `async_exec.command(...)`
-    and `async_exec.query(...)`. Record-level helpers remain available for lower-level
-    workflows and tests.
+    For individual statements in application code, prefer async SQL/OpenCypher via
+    `async_exec.command(...)` and `async_exec.query(...)`. Record-level helpers remain
+    available for lower-level workflows and tests. For bulk ingest, see the warning
+    below.
 
-!!! warning "Bulk ingest guidance"
-    For bulk table/document ingest in this repository, keep async SQL on a single
-    worker unless you have workload-specific evidence to do otherwise. Multi-threaded
-    async insert has not been safe or reliable in the current Python benchmarks.
+!!! warning "Async SQL commands silently lose records above parallel level 1"
+    The async executor's SQL command path, `async_exec.command(...)`, discards records
+    once the parallel level is above 1. Observed on arcadedb-engine 26.9.1 and 26.6.1,
+    measured 2026-09-15. How much is lost varies by run and by workload shape: 9,742
+    single-record `INSERT` commands submitted at parallel level 4 stored 2,436, 5,742,
+    and 7,742 rows across runs. Nothing is raised and nothing is logged: the
+    per-command callback reports no error, and `wait_completion()` returns normally.
+    Only the executor-wide `on_error` handler sees anything, one
+    `ConcurrentModificationException` per rolled-back batch. At parallel level 1 no
+    records are lost. Filed upstream as `ArcadeData/arcadedb#7615`.
+
+    Treat `command()` as a way to run individual statements asynchronously, not as a
+    bulk-write path, at any parallel level. For bulk graph loading use
+    `db.graph_batch(...)`, and for bulk document loading use `db.insert_many(...)` or a
+    plain batched transaction.
 
 The AsyncExecutor provides low-level async operations for parallel processing,
 automatic batching, and optimized WAL operations.
@@ -20,7 +32,7 @@ automatic batching, and optimized WAL operations.
     with arcadedb.create_database("./mydb") as db:
         async_exec = db.async_executor()
         async_exec.set_parallel_level(1)
-        # Use for bulk operations...
+        # Queue async statements, queries, or record operations...
         async_exec.wait_completion()
     # Database automatically closed
     ```
@@ -30,10 +42,11 @@ automatic batching, and optimized WAL operations.
 
 The `AsyncExecutor` class enables:
 
-- **Parallel Execution**: 1-16 worker threads for concurrent operations
+- **Parallel Execution**: 1-16 worker threads for concurrent operations (a level above 1
+  loses records submitted through `command()`, see the warning above and #7615)
 - **Automatic Batching**: Auto-commit every N operations
 - **Optimized WAL**: Configurable Write-Ahead Log settings
-- **High Performance**: for measured bulk throughput paths, see `Database.insert_many` (documents) and [`append_samples`](#append_samples) (time series)
+- **High Performance**: for measured bulk throughput paths, see `Database.insert_many` (documents), `Database.graph_batch` (graphs), and [`append_samples`](#append_samples) (time series)
 - **Fluent Interface**: Method chaining for configuration
 
 ## Getting AsyncExecutor
@@ -47,19 +60,17 @@ db = arcadedb.create_database("./mydb")
 async_exec = db.async_executor()
 
 # Configure (all methods return self for chaining)
-async_exec.set_parallel_level(8)       # 8 worker threads
+async_exec.set_parallel_level(1)       # 1 worker thread; above 1 command() loses records
 async_exec.set_commit_every(5000)      # Auto-commit every 5K ops
 async_exec.set_back_pressure(75)       # Queue back-pressure at 75%
 
-# Use for bulk SQL operations
-for i in range(100000):
-    async_exec.command(
-        "sql",
-        "INSERT INTO User SET userId = :id, name = :name",
-        callback=lambda rs: None,
-        id=i,
-        name=f"User {i}",
-    )
+# Run a statement without blocking the calling thread
+async_exec.command(
+    "sql",
+    "UPDATE User SET active = false WHERE lastLogin < :cutoff",
+    callback=lambda rs: None,
+    cutoff=cutoff_date,
+)
 
 # Wait for completion
 async_exec.wait_completion()
@@ -92,16 +103,19 @@ Set number of parallel worker threads (1-16).
 
 **Guidelines:**
 
-- **CPU-bound**: Match CPU cores (4-8)
-- **I/O-bound**: Can exceed cores (8-16)
 - **Default**: Number of CPU cores
 - Raises `ValueError` if `level` is not between 1 and 16
+- Any level above 1 is what triggers the record loss described in the warning at the top
+  of this page (#7615) for work submitted through `command()`. Keep the level at 1 when
+  the executor runs SQL commands that write.
+- `create_record`, `append_samples`, `Database.insert_many`, and `Database.graph_batch`
+  are unaffected and can run above level 1.
 
 **Example:**
 
 ```python
-# Configure for 8-core CPU
-async_exec = db.async_executor().set_parallel_level(8)
+# Single worker: required for correctness of command() writes
+async_exec = db.async_executor().set_parallel_level(1)
 ```
 
 ---
@@ -124,15 +138,18 @@ Set auto-commit batch size. Commits transaction every N operations.
 
 **Guidelines:**
 
-- **Small datasets** (< 10K): 1000-2000
-- **Medium datasets** (10K-100K): 5000
-- **Large datasets** (> 100K): 10000-20000
+- Set a non-zero value whenever the executor writes, so queued operations are grouped
+  into transactions instead of committing one at a time.
+- A larger value lowers commit overhead and raises the amount of work a single
+  rollback discards; a smaller value does the opposite.
+- This is a commit cadence for queued async work. It does not make `command()` usable as
+  a bulk-ingest path, see the warning at the top of this page.
 
 **Example:**
 
 ```python
-# Auto-commit every 10K operations
-async_exec = db.async_executor().set_commit_every(10000)
+# Auto-commit every 5K operations
+async_exec = db.async_executor().set_commit_every(5000)
 ```
 
 ---
@@ -233,8 +250,8 @@ async_exec = db.async_executor().set_back_pressure(75)
 ```python
 # Chain all configurations
 async_exec = (db.async_executor()
-    .set_parallel_level(8)
-    .set_commit_every(10000)
+    .set_parallel_level(1)
+    .set_commit_every(5000)
     .set_transaction_use_wal(True)
     .set_back_pressure(75)
 )
@@ -269,8 +286,9 @@ print(async_exec.is_transaction_use_wal())  # True
 The async executor schedules SQL/OpenCypher work and a small set of record-level graph
 and time-series operations. Record creation is available via
 [`create_record`](#create_record); updates and deletes go through `command(...)` with
-SQL. For bulk ingest of many uniform documents, prefer
-`Database.insert_many(..., parallel=True)`.
+SQL. For bulk ingest, use `Database.insert_many(..., parallel=True)` for documents and
+`Database.graph_batch(...)` for graphs; `command(...)` is not a bulk-write path (#7615,
+see the warning at the top of this page).
 
 ### command
 
@@ -300,19 +318,18 @@ Execute an async command (INSERT/UPDATE/DELETE/DDL). The callback is optional.
     Pass either positional `args` or named `**params`, not both. Mixing them raises
     `ValueError`.
 
+!!! note "One statement at a time, not a bulk loader"
+    Submitting a `command()` per row loses records above parallel level 1 (#7615, see the
+    warning at the top of this page). Load many rows with `db.insert_many(...)` or
+    `db.graph_batch(...)` instead.
+
 **Example:**
 
 ```python
-async_exec = db.async_executor()
+async_exec = db.async_executor().set_parallel_level(1)
 
-# Async inserts via SQL (see also create_record and db.insert_many for bulk)
-for i in range(10000):
-    async_exec.command(
-        "sql",
-        "INSERT INTO User SET userId = :id, name = :name",
-        id=i,
-        name=f"User {i}",
-    )
+# Async DDL
+async_exec.command("sql", "CREATE INDEX ON User (userId) UNIQUE")
 
 # Async update
 async_exec.command("sql", "UPDATE User SET active = true WHERE active = false")
@@ -617,11 +634,12 @@ Wait for all pending operations to complete.
 **Example:**
 
 ```python
-async_exec = db.async_executor()
+async_exec = db.async_executor().set_parallel_level(1)
 
-# Queue operations via SQL
-for i in range(10000):
-    async_exec.command("sql", "INSERT INTO User SET userId = :id", id=i)
+# Queue operations
+async_exec.command("sql", "DELETE FROM LogEntry WHERE timestamp < :cutoff",
+                   cutoff=cutoff_date)
+async_exec.query("sql", "SELECT FROM User WHERE age > 18", process_row)
 
 # Wait for all to complete (wait forever, or pass milliseconds)
 async_exec.wait_completion()
@@ -722,85 +740,54 @@ complete. Prefer `wait_completion()` followed by `close()` for orderly shutdown;
 
 ```python
 import arcadedb_embedded as arcadedb
-import time
 
 # Create database
 db = arcadedb.create_database("./async_demo")
 
 # Create schema (ArcadeDB SQL DDL)
-db.command("sql", "CREATE VERTEX TYPE Product")
+db.command("sql", "CREATE DOCUMENT TYPE Product")
 db.command("sql", "CREATE PROPERTY Product.productId LONG")
 db.command("sql", "CREATE PROPERTY Product.name STRING")
 db.command("sql", "CREATE PROPERTY Product.price DECIMAL")
 db.command("sql", "CREATE INDEX ON Product (productId) UNIQUE")
 
-# Prepare async executor
+# Load the rows with insert_many, not with the async executor
+inserted = db.insert_many(
+    "Product",
+    (
+        {"productId": i, "name": f"Product {i}", "price": i * 10.5}
+        for i in range(100000)
+    ),
+    commit_every=10000,
+)
+print(f"Inserted {inserted} products")
+
+# Prepare async executor for statements and queries that should not block the caller
 async_exec = (db.async_executor()
-    .set_parallel_level(8)
-    .set_commit_every(10000)
+    .set_parallel_level(1)
+    .set_commit_every(5000)
     .set_back_pressure(75)
 )
+async_exec.on_error(lambda e: print(f"Async error: {e}"))
 
-# Measure performance
-start = time.time()
+# One async statement, not one statement per row
+async_exec.command("sql", "UPDATE Product SET price = price * 1.1 WHERE price < 100")
 
-# Create 100K vertices asynchronously via SQL
-for i in range(100000):
-    async_exec.command(
-        "sql",
-        "INSERT INTO Product SET productId = :id, name = :name, price = :price",
-        id=i,
-        name=f"Product {i}",
-        price=i * 10.5,
-    )
+# Async read with a per-row callback
+cheap = []
+async_exec.query(
+    "sql",
+    "SELECT FROM Product WHERE price < 50",
+    lambda row: cheap.append(row.get("productId")),
+)
 
-# Wait for completion
 async_exec.wait_completion()
-
-elapsed = time.time() - start
-throughput = 100000 / elapsed
-
-print(f"✅ Created 100,000 vertices")
-print(f"⏱️  Time: {elapsed:.2f}s")
-print(f"🚀 Throughput: {throughput:,.0f} records/sec")
+print(f"{len(cheap)} products priced under 50")
 
 # Clean up
 async_exec.close()
 db.close()
 ```
-
-## Performance Comparison
-
-```python
-import time
-
-# Synchronous (baseline)
-start = time.time()
-with db.transaction():
-    for i in range(10000):
-        vertex = db.new_vertex("User")
-        vertex.set("userId", i)
-        vertex.save()
-sync_time = time.time() - start
-
-# Asynchronous
-start = time.time()
-async_exec = db.async_executor().set_parallel_level(8)
-for i in range(10000):
-    async_exec.command("sql", "INSERT INTO User SET userId = :id", id=i)
-async_exec.wait_completion()
-async_exec.close()
-async_time = time.time() - start
-
-print(f"Synchronous: {10000 / sync_time:,.0f} records/sec")
-print(f"Asynchronous: {10000 / async_time:,.0f} records/sec")
-print(f"Speedup: {sync_time / async_time:.1f}x")
-```
-
-**Typical Results:**
-- Synchronous: 15,000-30,000 records/sec
-- Asynchronous: 50,000-200,000 records/sec
-- **Speedup: 3-5x**
 
 ## Best Practices
 
@@ -837,26 +824,28 @@ async_exec.close()
 async_exec.close()  # Operations may be lost!
 ```
 
-### 3. Use Appropriate Batch Size
+### 3. Keep `command()` Submissions on One Worker
 
 ```python
-# ✅ Good: Tune for dataset size
-if record_count < 10000:
-    async_exec.set_commit_every(2000)
-elif record_count < 100000:
-    async_exec.set_commit_every(5000)
-else:
-    async_exec.set_commit_every(20000)
+# ✅ Good: async SQL writes on a single worker (#7615)
+async_exec.set_parallel_level(1)
+async_exec.command("sql", "DELETE FROM LogEntry WHERE timestamp < :cutoff",
+                   cutoff=cutoff_date)
 ```
 
-### 4. Match Parallelism to Hardware
+### 4. Load Bulk Data Outside the Executor
 
 ```python
-import os
+# ✅ Good: documents
+db.insert_many("Event", rows)
 
-# ✅ Good: Match CPU cores
-cpu_count = os.cpu_count() or 4
-async_exec.set_parallel_level(min(cpu_count, 16))
+# ✅ Good: graphs
+with db.graph_batch(expected_edge_count=50000) as batch:
+    ...
+
+# ❌ Bad: one async SQL INSERT per row
+for row in rows:
+    async_exec.command("sql", "INSERT INTO Event SET seq = :seq", seq=row["seq"])
 ```
 
 ## Troubleshooting
@@ -868,21 +857,22 @@ async_exec.set_parallel_level(min(cpu_count, 16))
 async_exec.set_back_pressure(50)  # Slow down enqueue
 
 # Or reduce parallel level
-async_exec.set_parallel_level(4)  # Fewer workers
+async_exec.set_parallel_level(1)  # Fewer workers
 ```
 
 ### Slow Performance
 
 ```python
-# Increase parallelism
-async_exec.set_parallel_level(16)
-
 # Increase batch size
 async_exec.set_commit_every(20000)
 
 # Consider disabling WAL (less durable!)
 async_exec.set_transaction_use_wal(False)
 ```
+
+Raising `set_parallel_level` is not the fix here: above 1 it loses records submitted
+through `command()` (#7615). If the slow workload is a bulk load, move it to
+`db.insert_many(...)` or `db.graph_batch(...)`.
 
 ### Operations Not Completing
 

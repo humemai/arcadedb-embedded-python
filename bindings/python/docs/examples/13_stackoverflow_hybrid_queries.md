@@ -19,9 +19,12 @@ Example 13 runs five phases:
 ## Current Repository Guidance
 
 - The script is intentionally standalone and does not use Docker
-- Phase 1 uses async SQL insert for document-table preload
-- Keep that Phase 1 preload on a single async worker; do not rely on multi-threaded
-  async insert for this workload in the current Python examples
+- Phase 1 uses `db.insert_many(...)` in batches for the document-table preload, and
+  raises if a batch writes fewer rows than it was given
+- `db.insert_many(...)` is the repository's recommended bulk document ingest path from
+  Python. Phase 1 used async SQL insert until 2026-09-15; the async executor's SQL
+  command path discards records above parallel level 1
+  (`ArcadeData/arcadedb#7615`), so it is no longer used for bulk writes here
 - Phase 2 uses `GraphBatch` for the initial graph node and edge load
 - `GraphBatch` is the repository's recommended bulk graph ingest path from Python
 - Graph edge creation uses RID-based directed endpoints

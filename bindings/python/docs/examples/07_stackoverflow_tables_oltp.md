@@ -130,7 +130,9 @@ UPDATE {table_name} SET {update_col} = coalesce({update_col}, 0) + 1 WHERE Id = 
 INSERT INTO {table_name} SET {col1} = ?, {col2} = ?, ...
 ```
 
-The same statement shape is used both for preload batches and OLTP inserts.
+This is the OLTP insert statement, used by `insert_batch_arcadedb(...)` during the
+measured phase. The preload phase does not run it: it passes rows to
+`db.insert_many(...)` instead, as described under Preload Paths.
 
 #### ArcadeDB Delete
 
@@ -229,7 +231,8 @@ DELETE FROM "{table_name}" WHERE "Id" = %s
 
 The benchmark does not use the same preload mechanism for every backend.
 
-- ArcadeDB preload uses async `INSERT INTO ... SET ...` SQL.
+- ArcadeDB preload uses `db.insert_many(...)` in batches of `--batch-size` rows, and
+  compares rows written against rows submitted per table.
 - SQLite preload uses batched `INSERT INTO ... VALUES ...` statements.
 - DuckDB preload uses per-table CSV materialization followed by:
 
@@ -242,6 +245,12 @@ COPY "{table_name}" FROM '{csv_path}' (AUTO_DETECT TRUE, HEADER TRUE)
 ```sql
 COPY "{table_name}" ("col1", "col2", ...) FROM STDIN WITH (FORMAT CSV, HEADER TRUE)
 ```
+
+Each backend now preloads through the bulk path its driver provides: `insert_many` for
+ArcadeDB, batched inserts for SQLite, and `COPY` for DuckDB and PostgreSQL. The ArcadeDB
+preload submitted one async `INSERT INTO ... SET ...` per row until 2026-09-15. That was
+changed because the async executor's SQL command path discards records above parallel
+level 1 (`ArcadeData/arcadedb#7615`).
 
 Those load-path differences matter for ingest timing, but they do not change the
 OLTP CRUD statements listed above.

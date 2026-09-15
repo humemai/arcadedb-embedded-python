@@ -505,56 +505,68 @@ def to_arcadedb_sql_value(value: Any) -> Any:
     return value
 
 
-def configure_arcadedb_async_loader(db, batch_size: int, parallelism: int = 1):
+def configure_arcadedb_bulk_loader(db):
+    """Put the database into bulk-load mode for the Phase 1 preload.
+
+    Phase 1 used to submit one INSERT per row through
+    `async_executor().command(...)`. That path silently discards records above
+    parallel level 1 (ArcadeData/arcadedb#7615), so the rows now go through
+    `db.insert_many(...)`, which loops Java-side inside one transaction per
+    batch and returns the number written.
+    """
     db.set_read_your_writes(False)
-    async_exec = db.async_executor()
-    async_exec.set_parallel_level(max(1, parallelism))
-    async_exec.set_commit_every(batch_size)
-    async_exec.set_transaction_use_wal(False)
-    return async_exec
 
 
-def reset_arcadedb_async_loader(db, async_exec):
-    async_exec.wait_completion()
-    async_exec.close()
+def reset_arcadedb_bulk_loader(db):
     db.set_read_your_writes(True)
-    async_exec.set_transaction_use_wal(True)
 
 
-def load_table_arcadedb_async(
-    async_exec,
-    errors: List[Exception],
+def load_table_arcadedb_bulk(
+    db,
     xml_path: Path,
     table_def: Dict[str, Any],
+    batch_size: int,
 ) -> Dict[str, Any]:
     fields: List[FieldDef] = table_def["fields"]
-    total = 0
+    table_name = table_def["name"]
+    submitted = 0
+    written = 0
     start = time.time()
-    columns = [field_name for field_name, _, _ in fields]
-    assignment_sql = ", ".join(f"{col} = ?" for col in columns)
-    sql = f"INSERT INTO {table_def['name']} SET {assignment_sql}"
-    initial_error_count = len(errors)
+    pending: List[Dict[str, Any]] = []
+
+    def flush() -> None:
+        nonlocal written, pending
+        if not pending:
+            return
+        n = db.insert_many(table_name, pending, commit_every=batch_size)
+        if n != len(pending):
+            raise RuntimeError(
+                f"insert_many wrote {n} of {len(pending)} rows for {table_name}"
+            )
+        written += n
+        pending = []
 
     for attrs in iter_xml_rows(xml_path):
-        payload: List[Any] = []
+        row: Dict[str, Any] = {}
         for field_name, field_type, parser in fields:
             value = parser(attrs.get(field_name))
             if field_type == "BOOLEAN" and value is not None:
                 value = 1 if value else 0
-            payload.append(to_arcadedb_sql_value(value))
-        async_exec.command("sql", sql, args=payload)
-        total += 1
+            row[field_name] = to_arcadedb_sql_value(value)
+        pending.append(row)
+        submitted += 1
+        if len(pending) >= batch_size:
+            flush()
 
-    async_exec.wait_completion()
-    if len(errors) > initial_error_count:
+    flush()
+    if written != submitted:
         raise RuntimeError(
-            f"Async preload failed for {table_def['name']} "
-            f"(first error: {errors[initial_error_count]})"
+            f"Preload wrote {written} of {submitted} rows for {table_name}"
         )
 
     return {
-        "table": table_def["name"],
-        "rows": total,
+        "table": table_name,
+        "rows": written,
         "elapsed_s": time.time() - start,
     }
 
@@ -2010,29 +2022,23 @@ def phase1_tables(
         schema_time = time.time() - schema_start
 
         load_start = time.time()
-        async_exec = configure_arcadedb_async_loader(db, batch_size, parallelism=1)
-        errors: List[Exception] = []
-
-        def on_error(exc: Exception):
-            errors.append(exc)
-
-        async_exec.on_error(on_error)
+        configure_arcadedb_bulk_loader(db)
 
         try:
             table_stats = []
             for table in table_defs:
                 xml_path = data_dir / table["xml"]
                 table_stats.append(
-                    load_table_arcadedb_async(
-                        async_exec,
-                        errors,
+                    load_table_arcadedb_bulk(
+                        db,
                         xml_path,
                         table,
+                        batch_size,
                     )
                 )
             load_time = time.time() - load_start
         finally:
-            reset_arcadedb_async_loader(db, async_exec)
+            reset_arcadedb_bulk_loader(db)
 
         index_time = create_indexes_with_retry(
             db,

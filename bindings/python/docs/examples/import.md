@@ -36,10 +36,15 @@ The current bindings expose SQL `IMPORT DATABASE` plus a narrow
 For very large Python-side bulk ingest workloads in this repository, do not treat
 importer-based paths as the default choice.
 
-- For bulk table/document ingest, prefer async SQL insert with one async worker.
-- Do not rely on multi-threaded async SQL insert for this path in the current Python
-    examples.
+- For bulk table/document ingest, prefer `db.insert_many(...)`, which crosses the
+    Python/Java boundary once per batch and returns the number of rows written.
 - For bulk graph ingest, prefer `GraphBatch`.
+- Do not use the async executor's SQL command path
+    (`db.async_executor().command(...)`) for bulk writes at any parallel level. Above
+    parallel level 1 it silently discards records: no error reaches the per-command
+    callback, nothing is logged, and `wait_completion()` returns normally. Filed
+    upstream as `ArcadeData/arcadedb#7615`. `create_record`, `append_samples`,
+    `db.insert_many(...)`, and `db.graph_batch(...)` are unaffected.
 
 More broadly, this repository does not currently encourage `IMPORT DATABASE` as the main
 Python-side ingest recommendation. It remains available for the supported file-driven
@@ -119,7 +124,7 @@ with arcadedb.create_database("./graph_import_demo") as db:
 2. Use a larger `commitEvery` value when you intentionally choose the SQL import path.
 3. Drop expensive secondary indexes before a one-shot import and recreate them afterward.
 4. Validate source files before starting long-running jobs.
-5. For bulk table/document ingest, prefer single-worker async SQL instead of importer-based paths.
+5. For bulk table/document ingest, prefer `db.insert_many(...)` instead of importer-based paths.
 6. For bulk graph ingest, prefer `GraphBatch` instead of importer-based graph loading.
 
 ## Additional Resources

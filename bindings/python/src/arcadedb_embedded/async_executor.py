@@ -1,26 +1,37 @@
 """
 Async API wrapper for ArcadeDB's DatabaseAsyncExecutor.
 
-This module provides a Pythonic interface to ArcadeDB's powerful async
-execution capabilities, enabling parallel processing, automatic batching,
-and optimized WAL operations.
+This module provides a Pythonic interface to ArcadeDB's async execution
+capabilities: parallel processing, automatic transaction batching, and
+optimized WAL settings.
 
-Key Benefits:
-- 3-5x faster bulk inserts via parallel execution
-- Automatic transaction batching (commitEvery parameter)
-- Constant memory usage (vs. growing with transaction size)
-- 50,000-200,000 records/sec throughput (vs. 15,000-30,000 sequential)
+Known defect -- do not use :meth:`AsyncExecutor.command` for bulk writes
+=======================================================================
+At a parallel level above 1, SQL commands submitted through this executor
+are silently discarded: ArcadeData/arcadedb#7615. Observed on
+arcadedb-engine 26.9.1 and 26.6.1, measured 2026-09-15. How much is lost
+varies by run and by workload shape: 9,742 single-record ``INSERT``
+commands at parallel level 4 stored 2,436, 5,742, and 7,742 rows across
+runs. No error reaches the per-command callback, nothing is logged, and
+``wait_completion()`` returns normally. Only the executor-wide
+:meth:`AsyncExecutor.on_error` handler sees anything, one
+``ConcurrentModificationException`` per rolled-back batch.
+
+Use instead:
+
+- ``Database.graph_batch(...)`` for bulk graph loading.
+- ``Database.insert_many(...)`` or a plain batched transaction for
+  documents.
+
+Measured unaffected, so these stay usable as they are: ``create_record``,
+``append_samples``, ``insert_many(parallel=True)`` (which routes through
+``createRecord``, not through SQL), and the edge flush inside
+``graph_batch``. ``command`` at parallel level 1 is also exact.
 
 Example:
-    >>> async_exec = db.async_executor()
-    >>> async_exec.set_parallel_level(8).set_commit_every(5000)
-    >>> for i in range(100000):
-    ...     async_exec.command(
-    ...         "sql",
-    ...         "INSERT INTO User SET id = :id",
-    ...         id=i,
-    ...     )
-    >>> async_exec.wait_completion()
+    >>> # documents: one FFI crossing per batch, every row lands
+    >>> db.insert_many("User", [{"id": i} for i in range(100000)])
+    100000
 """
 
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Union
@@ -79,21 +90,15 @@ class AsyncExecutor:
         The underlying Java executor is thread-safe. Python callbacks
         are executed in Java worker threads, so they must be thread-safe.
 
+    Bulk writes:
+        Do not drive bulk ingest through :meth:`command`. Above parallel
+        level 1 it silently drops records (ArcadeData/arcadedb#7615; see
+        the module docstring for the measurement and the safe paths).
+
     Example:
-        >>> # Configure executor
+        >>> # a one-off async command, not a bulk load
         >>> async_exec = db.async_executor()
-        >>> async_exec.set_parallel_level(4)  # 4 worker threads
-        >>> async_exec.set_commit_every(1000)  # Auto-commit every 1K ops
-        >>>
-        >>> # Execute SQL asynchronously
-        >>> for i in range(10000):
-        ...     async_exec.command(
-        ...         "sql",
-        ...         "INSERT INTO User SET id = :id",
-        ...         id=i,
-        ...     )
-        >>>
-        >>> # Wait for completion
+        >>> async_exec.command("sql", "DELETE FROM User WHERE id = ?", args=[7])
         >>> async_exec.wait_completion()
     """
 
@@ -639,6 +644,16 @@ class AsyncExecutor:
             callback: Optional result callback
             **params: Command parameters
 
+        Not a bulk-write path:
+            Above parallel level 1 the engine silently discards a share of
+            the commands submitted here (ArcadeData/arcadedb#7615; the
+            module docstring carries the measurement). Nothing is raised,
+            nothing is logged, and ``wait_completion()`` returns normally,
+            so a short load looks like a fast one. For bulk ingest use
+            ``Database.graph_batch(...)`` for graphs and
+            ``Database.insert_many(...)`` or a batched transaction for
+            documents.
+
         Performance note:
             Submitting commands without callbacks runs at Java-native speed
             (~8us/op measured). A Python ``callback`` costs ~100us per
@@ -839,6 +854,12 @@ class AsyncExecutor:
 
         This callback is called for every failed operation if no
         per-operation error callback was provided.
+
+        It is also the only place the ArcadeData/arcadedb#7615 record loss
+        becomes visible: when the executor rolls back a batch, the
+        per-command callbacks report nothing, but this handler receives one
+        ``ConcurrentModificationException`` per rolled-back batch. Attach it
+        before any load you cannot afford to lose silently.
 
         Args:
             callback: Error callback, receives exception

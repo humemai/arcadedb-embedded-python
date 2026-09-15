@@ -87,7 +87,7 @@ Complex graph construction from CSV data:
 - Importing Users, Movies, and Ratings
 - Creating edges (User-[RATED]->Movie) from foreign keys
 - Handling large-scale edge creation (millions of edges)
-- Benchmarking different import strategies (Sync vs Async vs Batch)
+- Benchmarking different import strategies (GraphBatch vs synchronous transactions)
 - Memory management for large graphs
 
 **Learn:** Graph ETL, edge creation patterns, performance optimization, memory management
@@ -213,11 +213,14 @@ Lifecycle benchmark for embedded ArcadeDB with mixed workloads:
 **Transactional SQL vs Async SQL vs SQL Import | Table Ingest Benchmark**
 
 Synthetic multi-table ingest comparison harness:
-- Runs three modes against the same generated dataset shape
-- Modes: transactional SQL, async SQL, SQL `IMPORT DATABASE`
+- Runs four modes against the same generated dataset shape
+- Modes: transactional SQL, async SQL, SQL `IMPORT DATABASE`, and `db.import_documents(...)`
 - Includes parity checks so final table counts must match before timing results should
   be trusted
 - Current outcome is workload-dependent; SQL import can win on some table-heavy shapes
+- The async SQL arm is a comparison arm, not a recommendation, and `--async-parallel`
+  accepts only 1: above parallel level 1 the async executor silently discards records
+  (ArcadeData/arcadedb#7615). For bulk document ingest use `db.insert_many(...)`
 
 **Learn:** Table-ingest tradeoffs for embedded Python workloads
 
@@ -227,10 +230,14 @@ Synthetic multi-table ingest comparison harness:
 **Transactional SQL vs Async SQL vs SQL Import | Graph Ingest Benchmark**
 
 Synthetic graph ingest comparison harness:
-- Runs transactional SQL, async SQL, and SQL import on equivalent vertex/edge data
+- Runs transactional SQL, GraphBatch, async SQL, and SQL import on equivalent
+  vertex/edge data
 - Includes parity checks on final vertex and edge counts
-- Current outcome is workload-dependent; async SQL can outperform SQL import on
-  graph-heavy shapes
+- On the recorded 5M/5M run, async SQL was the slowest arm at 701s against 359s for
+  GraphBatch and 275s for SQL import, both at four threads
+- The async SQL arm is pinned to `--async-parallel 1`: above parallel level 1 the async
+  executor silently discards records (#7615). GraphBatch is the recommended bulk graph
+  ingest path
 
 **Learn:** Graph-ingest tradeoffs for embedded Python workloads
 

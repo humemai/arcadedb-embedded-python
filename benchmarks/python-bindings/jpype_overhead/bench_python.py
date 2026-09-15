@@ -448,7 +448,13 @@ def bench_async(db_dir: str):
         db.command("sql", "CREATE PROPERTY A.id INTEGER")
         db.command("sql", "CREATE PROPERTY A.name STRING")
 
-        executor = db.async_executor()
+        # Pinned to one worker. Above parallel level 1 the async executor
+        # silently discards a share of the commands submitted to it
+        # (ArcadeData/arcadedb#7615), so the default level would time 10k
+        # submissions of which only a fraction ever becomes a row. The Java
+        # counterpart in OverheadBench.java pins the same level, so the pair
+        # stays matched.
+        executor = db.async_executor().set_parallel_level(1)
 
         # warmup
         for i in range(1_000):

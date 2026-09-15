@@ -782,24 +782,32 @@ class Database:
         """
         Get async executor for parallel operations.
 
-        The engine's parallel bulk-write path; insert_many(parallel=True) routes through it.
-
-        Returns async executor that enables:
-        - Parallel record creation (3-5x faster bulk inserts)
+        Returns the database's single async executor, which provides:
+        - Parallel record creation
         - Automatic transaction batching
         - Optimized WAL configuration
-        - 50,000-200,000 records/sec throughput
+
+        Note that this is one executor per database, not a new one per
+        call, so ``close()`` on the returned object shuts it down for
+        every other caller too.
+
+        Not the recommended bulk-write path:
+            ``AsyncExecutor.command`` silently discards records above
+            parallel level 1 (ArcadeData/arcadedb#7615; the measurement is
+            in the ``async_executor`` module docstring). Bulk graph loads
+            belong in ``graph_batch()``; bulk document loads belong in
+            ``insert_many()`` or a batched transaction. ``create_record``,
+            ``append_samples``, and ``insert_many(parallel=True)`` do run
+            through this executor and are measured unaffected.
 
         Returns:
             AsyncExecutor instance configured for this database
 
         Example:
-            >>> # Configure async executor
+            >>> # create_record: the executor's own record path, unaffected
             >>> async_exec = db.async_executor()
-            >>> async_exec.set_parallel_level(8)  # 8 worker threads
             >>> async_exec.set_commit_every(5000)  # Auto-commit every 5K
             >>>
-            >>> # Create 100K records in parallel
             >>> for i in range(100000):
             ...     vertex = db.new_vertex("User")
             ...     vertex.set("id", i)
@@ -807,11 +815,6 @@ class Database:
             >>>
             >>> # Wait for completion
             >>> async_exec.wait_completion()
-
-        Note:
-            The async executor is most beneficial for bulk operations.
-            For small batches (<1000 records), regular transactions
-            may be simpler and sufficient.
         """
         self._check_not_closed()
         from .async_executor import AsyncExecutor
@@ -845,6 +848,13 @@ class Database:
         This wraps ArcadeDB's builder-backed batch graph API and is intended for
         workloads that need to create many vertices and buffered edges more efficiently
         than per-edge transactional writes.
+
+        This is the recommended path for bulk graph loading, and the reason is
+        not only throughput: the alternative of submitting per-record SQL
+        through ``async_executor().command(...)`` loses records above parallel
+        level 1 (ArcadeData/arcadedb#7615). ``graph_batch`` dispatches its edge
+        flush through the same executor and is measured exact, 20,000 vertices
+        and 40,000 edges with and without ``parallel_flush``.
 
         Args:
             batch_size: Maximum buffered edges before auto-flush.

@@ -509,6 +509,14 @@ public class OverheadBench {
         type.createProperty("name", Type.STRING);
       });
 
+      // Pinned to one worker. Above parallel level 1 the async executor
+      // silently discards a share of the commands submitted to it
+      // (ArcadeData/arcadedb#7615), so the default level would time 10k
+      // submissions of which only a fraction ever becomes a row. The Python
+      // counterpart in bench_python.py pins the same level, so the pair stays
+      // matched.
+      db.async().setParallelLevel(1);
+
       // warmup
       for (int i = 0; i < 1_000; i++)
         db.async().command("sql", "INSERT INTO A SET id = ?, name = ?", null, i, "w" + i);

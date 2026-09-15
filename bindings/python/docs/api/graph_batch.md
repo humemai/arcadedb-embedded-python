@@ -6,7 +6,12 @@ The `GraphBatch` helper exposes ArcadeDB's high-throughput graph-ingest path fro
 
 Use `GraphBatch` when you need to load many vertices and edges efficiently.
 
-This is the repository's current recommended bulk graph-ingest path from Python.
+This is the repository's current recommended bulk graph-ingest path from Python, and
+the reason is not only throughput. The alternative of submitting per-record SQL through
+`db.async_executor().command(...)` silently discards records above parallel level 1
+(`ArcadeData/arcadedb#7615`). `GraphBatch` dispatches its edge flush through that same
+executor and is measured exact: 20,000 vertices and 40,000 edges landed in full, with
+and without `parallel_flush`.
 
 You typically create it through `db.graph_batch(...)` rather than constructing the class directly.
 

@@ -10,7 +10,7 @@ does not encourage leaning on importer-based paths heavily from Python.
 
 Use it when you need its supported file-import behavior or a full
 `EXPORT DATABASE` + `IMPORT DATABASE` restore flow. For large Python-side table/document
-ingest, prefer async SQL with a single async worker.
+ingest, prefer `db.insert_many(...)`; for bulk graph ingest, prefer `GraphBatch`.
 
 ## Overview
 
@@ -42,11 +42,18 @@ not something we currently encourage as the default Python import story.
 + Example 15 plus the larger table examples are the basis for the current repository
     guidance.
 + For bulk document ingest from Python, `db.insert_many(...)` (optionally with
-    `parallel=True`) is the recommended default — it batches rows across the FFI
+    `parallel=True`) is the recommended default: it batches rows across the FFI
     boundary; see Example 22.
-+ Async SQL with a single async worker remains a secondary option. Do not rely on
-    multi-threaded async SQL insert for this path in the current Python examples. It
-    has not been safe or reliable in testing.
++ The async executor's SQL command path (`db.async_executor().command(...)`) is not a
+    bulk-write path at any parallel level. Above parallel level 1 it silently discards
+    records. Observed on arcadedb-engine 26.9.1 and 26.6.1, measured 2026-09-15: how
+    much is lost varies by run and by workload shape, and 9,742 single-record `INSERT`
+    commands submitted at parallel level 4 stored 2,436, 5,742, and 7,742 rows across
+    runs. No error reaches the per-command callback,
+    nothing is logged, and `wait_completion()` returns normally. Only the executor-wide
+    `on_error` handler sees anything, one `ConcurrentModificationException` per
+    rolled-back batch. Filed upstream as `ArcadeData/arcadedb#7615`. `create_record`,
+    `append_samples`, `db.insert_many(...)`, and `db.graph_batch(...)` are unaffected.
 + `db.import_documents(...)` exists for document-shaped file import convenience, but in
     current Python testing it has also shown reliability problems under heavier loads.
 + Reserve `IMPORT DATABASE` for supported import formats, restore flows, and cases where
@@ -66,7 +73,8 @@ Example 15 and 16 are the repository's focused ingest comparison harnesses.
 + Both examples enforce parity checks on the final loaded data so timing comparisons are
     only accepted when the result counts match the expected shape.
 + Example 15 is useful for comparison, but the repository recommendation for bulk
-    table/document ingest is still single-worker async SQL.
+    table/document ingest is `db.insert_many(...)`, and for bulk graph ingest
+    `GraphBatch`.
 
 ## Quick Start
 
@@ -213,8 +221,8 @@ you do choose the SQL import path.
 ### Drop Heavy Indexes Before Bulk Loads
 
 For large one-shot imports, remove expensive indexes first and recreate them afterward.
-For the largest Python benchmark ingest paths in this repo, prefer async SQL with a
-single async worker instead of leaning on `IMPORT DATABASE`.
+For the largest Python benchmark ingest paths in this repo, prefer `db.insert_many(...)`
+for documents and `GraphBatch` for graphs instead of leaning on `IMPORT DATABASE`.
 
 ```python
 db.command("sql", "DROP INDEX `User[email]`")

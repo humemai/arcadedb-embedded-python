@@ -4,10 +4,13 @@ Prefer SQL/OpenCypher for schema and CRUD. When you see `temp_db_path`, substitu
 the test harness.
 
 > **Embedded note:** For bulk table/document ingest in embedded mode, the repository
-> recommendation is `db.insert_many(...)`, which batches rows across the FFI boundary
-> (async SQL insert with a single async worker is a secondary option). Use explicit
-> chunked transactions when you need tight manual control, but do not treat them as
-> the default bulk-ingest recommendation here.
+> recommendation is `db.insert_many(...)`, which batches rows across the FFI boundary.
+> Use explicit chunked transactions when you need tight manual control, but do not
+> treat them as the default bulk-ingest recommendation here. The async executor's SQL
+> command path (`db.async_executor().command(...)`) is not a bulk-ingest path: above
+> parallel level 1 it silently discards records, with no error on the per-command
+> callback and a normal return from `wait_completion()`. See
+> `ArcadeData/arcadedb#7615`.
 
 ## Basic commit and rollback
 

@@ -10,6 +10,84 @@ def _count(db, type_name):
     return int(db.query("sql", q).to_list()[0]["n"])
 
 
+class TestRecommendedBulkPathsLandEveryRow:
+    """A bulk load through each recommended path, counted against what it was given.
+
+    ArcadeData/arcadedb#7615 went unnoticed because no test compared rows
+    submitted with rows stored at a size where the loss shows. The async
+    command path drops roughly three quarters of a 9,742-row load at parallel
+    level 4 while raising nothing, logging nothing, and returning normally from
+    `wait_completion()`, so only a count catches it. These are the counts, on
+    the paths the documentation now recommends instead.
+    """
+
+    # Sizes from the original report: 9,742 documents, and the 20,000/40,000
+    # graph that was measured landing every row through GraphBatch.
+    DOCUMENTS = 9_742
+    VERTICES = 20_000
+    EDGES = 40_000
+
+    def test_insert_many_lands_every_document(self, temp_db):
+        temp_db.command("sql", "CREATE DOCUMENT TYPE BulkDoc")
+        rows = [{"id": i, "name": f"row_{i}"} for i in range(self.DOCUMENTS)]
+
+        written = temp_db.insert_many("BulkDoc", rows, commit_every=1_000)
+
+        assert written == self.DOCUMENTS
+        assert _count(temp_db, "BulkDoc") == self.DOCUMENTS
+        # the rows are the ones submitted, not merely the right number of rows
+        agg = temp_db.query(
+            "sql", "SELECT min(id) AS lo, max(id) AS hi, sum(id) AS total FROM BulkDoc"
+        ).to_list()[0]
+        assert int(agg["lo"]) == 0
+        assert int(agg["hi"]) == self.DOCUMENTS - 1
+        assert int(agg["total"]) == self.DOCUMENTS * (self.DOCUMENTS - 1) // 2
+
+    def test_insert_many_parallel_lands_every_document(self, temp_db):
+        """insert_many(parallel=True) routes through the executor's createRecord.
+
+        That is a different submission path from `command`, and it is measured
+        unaffected by #7615. This test is what keeps that true.
+        """
+        temp_db.command("sql", "CREATE DOCUMENT TYPE BulkPar")
+        rows = [{"id": i} for i in range(self.DOCUMENTS)]
+
+        written = temp_db.insert_many("BulkPar", rows, parallel=True)
+
+        assert written == self.DOCUMENTS
+        assert _count(temp_db, "BulkPar") == self.DOCUMENTS
+
+    @pytest.mark.parametrize("parallel_flush", [False, True])
+    def test_graph_batch_lands_every_vertex_and_edge(self, temp_db, parallel_flush):
+        """GraphBatch flushes edges through the same async executor.
+
+        It is the recommended bulk graph path precisely because it stays exact
+        while the SQL command path does not, so the flush runs both ways here.
+        """
+        temp_db.schema.create_vertex_type("BulkV")
+        temp_db.schema.create_edge_type("BulkE")
+
+        # a parallel level the command path would lose records at, to show the
+        # executor is busy on more than one worker during the edge flush
+        temp_db.async_executor().set_parallel_level(4)
+
+        with temp_db.graph_batch(parallel_flush=parallel_flush) as batch:
+            rids = batch.create_vertices(
+                "BulkV", [{"k": i} for i in range(self.VERTICES)]
+            )
+            assert len(rids) == self.VERTICES
+
+            sources = [rids[i % self.VERTICES] for i in range(self.EDGES)]
+            targets = [rids[(i * 7 + 1) % self.VERTICES] for i in range(self.EDGES)]
+            batch.new_edges(sources, "BulkE", targets)
+            batch.flush()
+
+        temp_db.async_executor().wait_completion()
+
+        assert _count(temp_db, "BulkV") == self.VERTICES
+        assert _count(temp_db, "BulkE") == self.EDGES
+
+
 class TestInsertMany:
     def test_basic_roundtrip(self, temp_db):
         temp_db.command("sql", "CREATE DOCUMENT TYPE Item")

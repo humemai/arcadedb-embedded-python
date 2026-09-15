@@ -26,7 +26,7 @@ creation, and nearest neighbor search.
 Production CSV import with automatic type inference by Java, NULL handling, and index optimization. Imports MovieLens dataset (36M+ records) with comprehensive performance analysis and result validation with actual data samples.
 
 **[05 - CSV Import - Graph](05_csv_import_graph.md)**
-Production graph creation from MovieLens dataset. Comprehensive performance analysis of SQL pipelines, synchronous vs async, and index effects. Includes benchmark configurations, validation queries, and export/import roundtrip testing.
+Production graph creation from MovieLens dataset. Performance analysis of SQL pipelines, `GraphBatch` versus synchronous vertex transactions, and index effects. Includes benchmark configurations, validation queries, and export/import roundtrip testing.
 
 **[06 - Vector Search - Movie Recommendations](06_vector_search_recommendations.md)**
 Production-ready vector embeddings and HNSW (JVector) indexing for semantic movie search.
@@ -56,7 +56,7 @@ Standalone SQL + graph + vector workflow over Stack Overflow data.
 Embedded lifecycle benchmark covering JVM startup, load, query, close, and reopen timing.
 
 **[15 - Import Database vs Transactional Table Ingest](15_import_database_vs_transactional_table_ingest.md)**
-Four-way table-ingest comparison. Repository guidance from these experiments is to prefer single-worker async SQL for bulk table/document ingest.
+Four-way table-ingest comparison. Repository guidance from these experiments is to prefer `db.insert_many(...)` for bulk table/document ingest; the async SQL arm is a comparison arm, not a recommendation.
 
 **[16 - Import Database vs Transactional Graph Ingest](16_import_database_vs_transactional_graph_ingest.md)**
 Four-way graph-ingest comparison. Repository guidance from these experiments is to prefer `GraphBatch` for bulk graph ingest.

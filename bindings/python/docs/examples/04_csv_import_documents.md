@@ -2,8 +2,8 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/04_csv_import_documents.py){ .md-button }
 
-**Bulk CSV import with explicit schema mapping, WAL-off ingest, NULL handling, and index
-optimization**
+**Bulk CSV import with explicit schema mapping, batched-transaction ingest, NULL
+handling, and index optimization**
 
 ## Overview
 
@@ -13,7 +13,7 @@ ArcadeDB documents. You'll learn production-ready patterns for:
 - **Explicit schema mapping** - Each document type's columns are mapped to fixed
   ArcadeDB types (LONG, DOUBLE, STRING)
 - **Bulk INSERT ingest** - Python parses the CSV and runs batched `INSERT INTO ... SET`
-- **WAL-off ingest** - WAL is disabled during the bulk load, then re-enabled
+- **Read-your-writes off during ingest** - turned off for the load, then restored
 - **NULL value handling** - Import and query missing data across all types
 - **Batch processing** - Optimize import performance with commit batching
 - **Index optimization** - Create indexes AFTER import for maximum throughput
@@ -165,20 +165,31 @@ if not check_dataset_exists(data_dir):
 `check_dataset_exists()` verifies that `movies.csv`, `ratings.csv`, `links.csv`, and
 `tags.csv` are all present; if not, the script downloads the dataset automatically.
 
-### Enable WAL-off ingest mode
+### Turn off read-your-writes for the ingest
 
-Before importing, the script puts the database into a faster bulk-load mode and disables
-WAL on the async executor:
+Before importing, the script stops requiring reads to see this session's own uncommitted
+writes:
 
 ```python
 db.set_read_your_writes(False)
-async_exec = db.async_executor()
-async_exec.set_commit_every(args.batch_size)
-async_exec.set_transaction_use_wal(False)
 ```
 
-WAL is re-enabled after the ratings import (`set_transaction_use_wal(True)` and
-`set_read_your_writes(True)`).
+Read-your-writes is restored after the ratings import (`db.set_read_your_writes(True)`).
+
+The ingest itself runs in batched transactions inside
+`import_csv_documents_via_sql(...)`, described in the next section. WAL stays on
+throughout, and nothing here goes through the async executor.
+
+!!! note "Removed on 2026-09-15: a WAL-off async executor configuration"
+
+    Until 2026-09-15 these lines also called `db.async_executor()` and set
+    `set_commit_every(args.batch_size)` and `set_transaction_use_wal(False)` on it.
+    Those settings apply only to work submitted to the executor, and this ingest never
+    submitted any, so they changed nothing: the load always ran in batched
+    transactions with WAL enabled. They were deleted rather than made real, because
+    the executor's SQL command path silently discards records above parallel level 1
+    (`ArcadeData/arcadedb#7615`). For bulk document loading use `db.insert_many(...)`
+    or a plain batched transaction, as this example does.
 
 ### Import CSV files with bulk INSERT
 
@@ -440,7 +451,8 @@ up by `movieId`), and the top 10 most common tags.
 ### ✅ Import Optimization
 
 - Bulk `INSERT INTO ... SET` with batched commits (every `args.batch_size` rows)
-- WAL disabled during ingest (`set_transaction_use_wal(False)`), re-enabled afterward
+- Read-your-writes disabled during ingest (`set_read_your_writes(False)`), re-enabled
+  afterward
 - Larger batches = faster imports (balance with memory); `--batch-size` defaults to 5000
 
 ### ✅ Index Strategy
@@ -518,7 +530,8 @@ The database is preserved for inspection after the example completes.
 ## Key Takeaways
 
 1. ✅ **Explicit schema mapping** assigns LONG/DOUBLE/STRING per column before ingest
-2. ✅ **Bulk INSERT ingest** with WAL disabled during the load (re-enabled afterward)
+2. ✅ **Bulk INSERT ingest** in batched transactions, with read-your-writes disabled for
+   the load and re-enabled afterward
 3. ✅ **NULL value handling** works across types - empty CSV cells become SQL NULL
 4. ✅ **Batch processing** (`--batch-size` / `commitEvery`) improves import performance
 5. ✅ **Create indexes AFTER import** - avoids per-insert index maintenance

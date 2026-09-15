@@ -180,13 +180,19 @@ reserved-word-safe SQL.
 
 The benchmark measures query execution, but the setup path still matters for context.
 
-- ArcadeDB loads documents through async SQL inserts.
+- ArcadeDB loads documents through `db.insert_many(...)` in batches of `--batch-size`
+  rows, and raises if a table writes fewer rows than it submitted.
 - SQLite uses batched inserts.
 - DuckDB bulk-loads CSV via `COPY`.
 - PostgreSQL bulk-loads CSV via `COPY ... FROM STDIN`.
 - After load, the ArcadeDB, SQLite, and PostgreSQL paths build the `INDEX_DEFS` set
   (a unique `Id` index per table plus secondary indexes on selected columns). The DuckDB
   path skips manual secondary indexes for this benchmark.
+
+The ArcadeDB load submitted one async SQL `INSERT` per row until 2026-09-15. That was
+changed because the async executor's SQL command path discards records above parallel
+level 1 (`ArcadeData/arcadedb#7615`). Any ArcadeDB load time you recorded from an
+earlier run of this script came from the async path, not from `insert_many`.
 
 ## Result Notes
 

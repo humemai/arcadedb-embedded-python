@@ -9,7 +9,8 @@ document-shaped file imports.
 That path exists and is covered by tests, but it is not currently something this
 repository encourages people to rely on heavily from Python. In practice, behavior has
 been inconsistent enough that the preferred guidance for large Python-side ingest is
-still transactional or async SQL instead. This may improve in the future.
+`db.insert_many(...)` for documents and `db.graph_batch(...)` for graphs, with a plain
+batched transaction as the fallback. This may improve in the future.
 
 ## Available Entry Points
 
@@ -44,16 +45,16 @@ current guidance in this repository is not to encourage the importer-based paths
 default Python-side ingest path right now.
 
 - For focused ingest benchmarks, use Example 15 and 16 style comparisons across
-    transactional SQL, async SQL, and SQL import rather than assuming one winner.
+    transactional SQL, the batch helpers, and SQL import rather than assuming one winner.
 - For bulk document ingest from Python, prefer `db.insert_many(...)` (optionally with
     `parallel=True`), which batches rows across the FFI boundary; see Example 22.
 - Treat `db.import_documents(...)` as a narrow convenience wrapper, not as the default
     ingest story for Python.
-- Async SQL insert with a single async worker remains a secondary option for
-    Python-managed ingest experiments; measured results are workload-dependent.
-- Do not rely on multi-threaded async SQL insert for that path in the current Python
-    examples. It has not been safe or reliable in testing.
-- For bulk graph ingest, prefer `GraphBatch` rather than importer-based graph loading.
+- Do not use the async executor's SQL `command(...)` as an ingest path. Above one async
+    worker it silently discards records, with nothing raised or logged
+    (`ArcadeData/arcadedb#7615`).
+- For bulk graph ingest, prefer `GraphBatch` (`db.graph_batch(...)`) rather than
+    importer-based graph loading or async SQL.
 - Use SQL `IMPORT DATABASE` mainly when you specifically need one of the supported file
     import formats or a full ArcadeDB export/restore path.
 - Treat this guidance as current, not permanent. The recommendation can change if the

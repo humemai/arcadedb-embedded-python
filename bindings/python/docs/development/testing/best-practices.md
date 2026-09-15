@@ -149,7 +149,8 @@ db.command(
     "IMPORT DATABASE file:///data/people.csv WITH documentType = 'Person'",
 )
 
-# For the largest Python benchmark ingest paths, prefer transactional or async SQL.
+# For the largest Python benchmark ingest paths, prefer insert_many() for documents
+# and GraphBatch for graphs.
 ```
 
 ## Query Handling

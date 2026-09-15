@@ -4,7 +4,7 @@ Example 05: Graph Creation Benchmark - Clean Architecture
 
 This benchmark compares graph creation strategies with multiple options:
 - Method: Java API vs SQL
-- Async: Async executor (parallel) vs Synchronous (sequential)
+- Batch: GraphBatch (buffered) vs Synchronous transactions (sequential)
 - Indexes: With indexes vs Without indexes
 
 Architecture:
@@ -13,29 +13,33 @@ Architecture:
 - Shared vertex creation logic
 - Shared edge creation logic
 - Method-specific executors (Java API vs SQL)
-- Async executor support:
-    * Java mode: Uses async SQL command submission for parallel inserts.
+- Bulk vertex creation:
+    * Java mode: GraphBatch, one boundary crossing per batch.
     * SQL mode: Synchronous transactions for bulk vertex creation.
 - Index-aware implementations
 
-Async Executor:
-===============
-The async executor enables parallel processing with configurable worker threads:
+Bulk vertex path:
+=================
+**Java mode + batch (default for `--method java`):**
+- Uses GraphBatch: rows cross the boundary once per batch and every row lands
+- Command: `--method java`
+- `--parallel` selects GraphBatch's parallel flush rather than an async
+  executor parallel level
 
-**Java mode + Async:**
-- Uses AsyncExecutor with SQL command submission
-- Parallel vertex and edge creation
-- Command: `--method java` (async enabled by default)
+**Java mode + `--no-async`:**
+- Synchronous transactions, one INSERT per row
+- Slower, same resulting graph
 
 **SQL Mode (ALWAYS SYNCHRONOUS FOR VERTICES):**
 - Direct SQL commands via transactions
-- Avoids ConcurrentModificationException (multiple threads → same pages)
 - Sequential processing (one operation at a time)
 - Command: `--method sql`
 - The `--no-async` flag has no effect on SQL (always synchronous)
 
-Note: Async executor with SQL INSERT causes concurrent modification errors
-during bulk vertex creation, so SQL mode always uses synchronous transactions.
+Note: vertex creation here used to submit one INSERT per row through
+`async_executor().command(...)`. That path silently drops records above
+parallel level 1 (ArcadeData/arcadedb#7615), so it is gone from this example.
+GraphBatch drives the same executor for its edge flush and is measured exact.
 
 Proper Database-Level Streaming:
 =================================
@@ -91,48 +95,34 @@ Expected Results (movielens-small dataset):
 ✓ Edges: 97,823 RATED + 3,436 TAGGED = 101,259 total
 
 Performance (movielens-small dataset):
-- Java API w/ indexes + async: ~5-10K vertices/sec, ~2-3K edges/sec -- but see
-  the next section: that path does not currently produce a complete graph, so
-  these rates are not comparable with the SQL ones
+- Java API w/ indexes + GraphBatch: ~5-10K vertices/sec, ~2-3K edges/sec
 - SQL w/ indexes (sync): Slower than Java API (sequential processing)
 - Without indexes: MUCH slower (no optimization)
 
-`--method java` does not work on arcadedb-embedded 26.9.1:
-==========================================================
-Measured 2026-09-15 on 26.9.1, on the pristine file as well as this one, so
-it is not a regression from the baseline corrections below.
+Why `--method java` no longer uses the async executor:
+======================================================
+Until 2026-09-15 the Java+async path submitted one INSERT per vertex through
+`async_executor().command(...)`. Measured on 26.9.1, that lost most of the
+writes: 610 Users submitted, 458 stored; 9,742 Movies submitted, 2,436 stored,
+with nothing raised, nothing logged at SEVERE, and wait_completion() returning
+normally. The edge phase then read a graph missing three quarters of its
+Movies and created 18,372 of 97,823 RATED edges. Filed as
+ArcadeData/arcadedb#7615.
 
-It fails in two stages. First it raises "Async executor has been shut down"
-while creating Movie vertices: _create_users() calls async_exec.close() when
-it is done, but db.async_executor() hands out the database's ONE executor, so
-closing it there shuts it down for the whole database and _create_movies()
-gets the corpse.
-
-Second -- and this is the reason the close() is not simply deleted -- if the
-close() calls are removed so the run does get past that, the async executor
-silently loses most of the writes: 610 Users submitted, 458 stored; 9,742
-Movies submitted, 2,436 stored. Nothing is raised, nothing is logged at
-SEVERE, and wait_completion() returns normally. The edge phase then reads a
-graph missing three quarters of its Movies, misses the vertex cache, and
-creates 18,372 of 97,823 RATED edges. validate_counts_and_samples() does
-catch all of it, which is the one part working as intended.
-
-So the crash is the lesser fault and it stays until the loss is fixed, since
-"fixing" it would trade a loud failure for a quiet one.
-
-The Java API itself is not at fault -- the async executor is. `--method java
---no-async` creates vertices in synchronous transactions and produces exactly
-the same graph as `--method sql`: 610 / 9,742 / 97,823 / 3,436, on the
-pristine file. `--method sql` is unaffected for the same reason, and
-EdgeCreator never touches the async executor at all in either method (it
-stores use_async and parallel_level and reads neither). CI runs --method sql.
+The Java API was never at fault -- the async executor's SQL command path is.
+The path now builds vertices through GraphBatch, which dispatches its edge
+flush through that same executor and is measured exact. `--method java`,
+`--method java --no-async`, and `--method sql` all produce the same graph:
+610 / 9,742 / 97,823 / 3,436. EdgeCreator never touched the async executor in
+either method (it stores use_async and parallel_level and reads neither). CI
+runs --method sql.
 
 Usage:
 ======
-# Recommended, and the only method that currently produces a correct graph:
+# Recommended:
 python 05_csv_import_graph.py --dataset movielens-small --method sql
 
-# Broken on 26.9.1, see above:
+# Java API with GraphBatch vertices - same graph as --method sql:
 python 05_csv_import_graph.py --dataset movielens-small --method java
 
 # Java API without async (synchronous) - correct, same graph as --method sql:
@@ -362,11 +352,9 @@ class VertexCreator:
         batch_count = 0
 
         if self.use_async and self.use_java_api:
-            # Async SQL insert path
-            async_exec = self.db.async_executor()
-            async_exec.set_parallel_level(self.parallel_level)
-            async_exec.set_commit_every(self.batch_size)
-
+            # GraphBatch path. This used to submit one INSERT per user through
+            # async_executor().command(); see the "Bulk vertex path" note in the
+            # module docstring for why it does not any more.
             with arcadedb.open_database(
                 str(self.data_loader.source_db_path)
             ) as source_db:
@@ -374,16 +362,20 @@ class VertexCreator:
                     "SELECT userId FROM (SELECT DISTINCT userId FROM Rating) "
                     "ORDER BY userId"
                 )
-                for record in source_db.query("sql", query):
-                    user_id = record.get("userId")
-                    async_exec.command(
-                        "sql",
-                        "INSERT INTO User SET userId = :userId",
-                        userId=user_id,
-                    )
-                    user_count += 1
+                pending: list[dict[str, Any]] = []
+                with self.db.graph_batch(
+                    parallel_flush=self.parallel_level > 1
+                ) as batch:
 
-                    if user_count % self.batch_size == 0:
+                    def flush_users(rows):
+                        nonlocal user_count, batch_count
+                        created = batch.create_vertices("User", rows)
+                        if len(created) != len(rows):
+                            raise RuntimeError(
+                                f"GraphBatch returned {len(created)} RIDs for "
+                                f"{len(rows)} User rows"
+                            )
+                        user_count += len(created)
                         batch_count += 1
                         self._report_progress(
                             "User",
@@ -393,8 +385,14 @@ class VertexCreator:
                             start_time,
                         )
 
-            async_exec.wait_completion()
-            async_exec.close()
+                    for record in source_db.query("sql", query):
+                        pending.append({"userId": record.get("userId")})
+                        if len(pending) >= self.batch_size:
+                            flush_users(pending)
+                            pending = []
+
+                    if pending:
+                        flush_users(pending)
         elif self.use_java_api:
             # Java API without async (synchronous transactions)
             with arcadedb.open_database(
@@ -488,78 +486,71 @@ class VertexCreator:
         batch_count = 0
 
         if self.use_async and self.use_java_api:
-            # Async SQL insert path
-            async_exec = self.db.async_executor()
-            async_exec.set_parallel_level(self.parallel_level)
-            async_exec.set_commit_every(self.batch_size)
-
+            # GraphBatch path, for the same reason as _create_users above.
             with arcadedb.open_database(
                 str(self.data_loader.source_db_path)
             ) as source_db:
                 last_rid = "#-1:-1"
-                while True:
-                    query_start = time.time()
-                    query = f"""
-                        SELECT *, @rid as rid FROM Movie
-                        WHERE @rid > {last_rid}
-                        LIMIT {self.batch_size}
-                    """
-                    chunk = list(source_db.query("sql", query))
-                    query_time = time.time() - query_start
-                    stats.add_query_time(query_time)
-                    if not chunk:
-                        break
+                with self.db.graph_batch(
+                    parallel_flush=self.parallel_level > 1
+                ) as batch:
+                    while True:
+                        query_start = time.time()
+                        query = f"""
+                            SELECT *, @rid as rid FROM Movie
+                            WHERE @rid > {last_rid}
+                            LIMIT {self.batch_size}
+                        """
+                        chunk = list(source_db.query("sql", query))
+                        query_time = time.time() - query_start
+                        stats.add_query_time(query_time)
+                        if not chunk:
+                            break
 
-                    for record in chunk:
-                        movie_id = record.get("movieId")
-                        title = (
-                            record.get("title") if record.has_property("title") else ""
+                        rows = []
+                        for record in chunk:
+                            movie_id = record.get("movieId")
+                            title = (
+                                record.get("title")
+                                if record.has_property("title")
+                                else ""
+                            )
+                            genres = (
+                                record.get("genres")
+                                if record.has_property("genres")
+                                else ""
+                            )
+
+                            props = {
+                                "movieId": movie_id,
+                                "title": title or "",
+                                "genres": genres or "",
+                            }
+                            link_data = links_data.get(movie_id)
+                            if link_data:
+                                if link_data["imdbId"] is not None:
+                                    props["imdbId"] = link_data["imdbId"]
+                                if link_data["tmdbId"] is not None:
+                                    props["tmdbId"] = link_data["tmdbId"]
+                            rows.append(props)
+
+                        created = batch.create_vertices("Movie", rows)
+                        if len(created) != len(rows):
+                            raise RuntimeError(
+                                f"GraphBatch returned {len(created)} RIDs for "
+                                f"{len(rows)} Movie rows"
+                            )
+                        movie_count += len(created)
+                        batch_count += 1
+                        last_rid = chunk[-1].get("rid")
+                        self._report_progress(
+                            "Movie",
+                            batch_count,
+                            movie_count,
+                            total_movies,
+                            start_time,
+                            query_time,
                         )
-                        genres = (
-                            record.get("genres")
-                            if record.has_property("genres")
-                            else ""
-                        )
-
-                        params = {
-                            "movieId": movie_id,
-                            "title": title or "",
-                            "genres": genres or "",
-                        }
-                        link_data = links_data.get(movie_id)
-                        if link_data:
-                            if link_data["imdbId"] is not None:
-                                params["imdbId"] = link_data["imdbId"]
-                            if link_data["tmdbId"] is not None:
-                                params["tmdbId"] = link_data["tmdbId"]
-
-                        async_exec.command(
-                            "sql",
-                            (
-                                "INSERT INTO Movie SET movieId = :movieId, title = :title, "
-                                "genres = :genres, imdbId = :imdbId, tmdbId = :tmdbId"
-                            ),
-                            movieId=params.get("movieId"),
-                            title=params.get("title", ""),
-                            genres=params.get("genres", ""),
-                            imdbId=params.get("imdbId"),
-                            tmdbId=params.get("tmdbId"),
-                        )
-                        movie_count += 1
-
-                    batch_count += 1
-                    last_rid = chunk[-1].get("rid")
-                    self._report_progress(
-                        "Movie",
-                        batch_count,
-                        movie_count,
-                        total_movies,
-                        start_time,
-                        query_time,
-                    )
-
-            async_exec.wait_completion()
-            async_exec.close()
         elif self.use_java_api:
             # Java API without async (synchronous transactions)
             with arcadedb.open_database(
@@ -2260,7 +2251,7 @@ def main():
         "--parallel",
         type=int,
         default=4,
-        help="Parallel level for async executor (1-16, default: 4)",
+        help="Above 1, enable GraphBatch parallel flush (default: 4)",
     )
     parser.add_argument(
         "--method",
@@ -2271,7 +2262,7 @@ def main():
     parser.add_argument(
         "--no-async",
         action="store_true",
-        help="Disable async executor (use synchronous transactions - slower)",
+        help="Disable GraphBatch (use synchronous transactions - slower)",
     )
     parser.add_argument(
         "--no-index",
@@ -2328,7 +2319,7 @@ def main():
     print(f"Batch size: {args.batch_size:,}")
     print(f"Parallel level: {args.parallel}")
     print(f"Method: {args.method} API")
-    print(f"Async: {'disabled' if args.no_async else 'enabled'}")
+    print(f"GraphBatch: {'disabled' if args.no_async else 'enabled'}")
     print(f"Indexes: {'disabled' if args.no_index else 'enabled'}")
     print(f"Database: {db_name}")
 

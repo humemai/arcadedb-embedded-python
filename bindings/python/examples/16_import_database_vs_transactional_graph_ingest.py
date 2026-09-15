@@ -34,6 +34,14 @@ Measured ingest times:
 Logical parity:
 - All four methods produced the same final graph output
 
+Recommended path:
+GraphBatch is the recommended bulk graph ingest path here. The async SQL arm is kept
+for comparison only and is pinned to one worker: above parallel level 1 the async
+executor silently discards a share of the commands submitted to it
+(ArcadeData/arcadedb#7615), so `--async-parallel` accepts only 1. That arm now counts
+what landed against what it submitted and fails rather than reporting a time for work
+it did not do.
+
 Known limitation:
 Current `IMPORT DATABASE` behavior can vary by import path and data shape. In some
 CSV-heavy scenarios, transaction splitting via `commitEvery` may not behave as expected,
@@ -502,6 +510,22 @@ def run_async_sql_graph_load(
     vertex_type: str,
     edge_type: str,
 ) -> dict:
+    """Comparison arm: async SQL INSERT/CREATE EDGE through the async executor.
+
+    This arm exists to measure the async executor, so it keeps using it. It is
+    pinned to one worker: above parallel level 1 the executor silently discards
+    a share of the commands submitted to it (ArcadeData/arcadedb#7615), and a
+    benchmark that reports the time for work it did not do is worse than no
+    number. GraphBatch is the recommended bulk graph path and has its own arm
+    below. The submitted-versus-stored checks are what make the pin
+    falsifiable rather than a comment.
+    """
+    if async_parallel != 1:
+        raise ValueError(
+            "run_async_sql_graph_load only runs at --async-parallel 1; "
+            "see ArcadeData/arcadedb#7615"
+        )
+
     recreate_dir(db_path)
 
     db = arcadedb.create_database(
@@ -511,7 +535,7 @@ def run_async_sql_graph_load(
 
     db.set_read_your_writes(False)
     async_exec = db.async_executor()
-    async_exec.set_parallel_level(max(1, async_parallel))
+    async_exec.set_parallel_level(1)
     async_exec.set_commit_every(batch_size)
     async_exec.set_transaction_use_wal(False)
 
@@ -602,6 +626,12 @@ def run_async_sql_graph_load(
             .get("c")
             or 0
         )
+        if int(vertex_loaded) != vertex_count or int(edge_loaded) != edge_count:
+            raise RuntimeError(
+                f"Async SQL ingest stored {int(vertex_loaded)} of {vertex_count} "
+                f"vertices and {int(edge_loaded)} of {edge_count} edges; "
+                "see ArcadeData/arcadedb#7615"
+            )
 
         elapsed = time.perf_counter() - start
     finally:
@@ -948,7 +978,7 @@ def main() -> None:
         "--async-parallel",
         type=int,
         default=1,
-        help="Parallel workers for async SQL path (default 1 for stability)",
+        help="Async SQL workers; only 1 is accepted (ArcadeData/arcadedb#7615)",
     )
     parser.add_argument(
         "--parallel",

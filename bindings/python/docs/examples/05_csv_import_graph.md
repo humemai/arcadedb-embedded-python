@@ -12,7 +12,7 @@ for:
 
 - **Graph modeling** - Users and Movies as vertices, ratings and tags as edges
 - **SQL pipeline** - End-to-end graph creation with SQL DDL/DML
-- **Async vs Sync** - Compare async vs sync modes in embedded mode
+- **GraphBatch vs synchronous transactions** - Compare the two Java-API vertex paths
 - **Index optimization** - Create indexes BEFORE bulk edge creation for 2-3× speedup
 - **Export & roundtrip validation** - Verify data integrity through complete cycle
 - **Performance benchmarking** - Measure and compare 6 different configurations
@@ -23,7 +23,8 @@ for:
 
 - Graph schema design (vertex types, edge types, properties)
 - Foreign key resolution (userId → User vertex, movieId → Movie vertex)
-- **Synchronous is faster than async in embedded mode** (no network I/O to parallelize)
+- Bulk vertex creation through `db.graph_batch(...)`, which crosses the Python/Java
+  boundary once per batch
 - **Indexes provide 2-3× speedup** for edge creation
 - Export/import performance and compression ratios (50-80×)
 - Graph query patterns (MATCH, collaborative filtering, recommendations)
@@ -51,7 +52,10 @@ pre-existing document database from Example 04.
 
 ```bash
 # Recommended SQL configuration (synchronous)
-python 05_csv_import_graph.py --dataset movielens-small --method sql --no-async
+python 05_csv_import_graph.py --dataset movielens-small --method sql
+
+# Java API with GraphBatch vertices, same graph as --method sql
+python 05_csv_import_graph.py --dataset movielens-small --method java
 
 # Run with export for roundtrip validation
 python 05_csv_import_graph.py --dataset movielens-small --batch-size 5000 --method java --no-async --export
@@ -67,10 +71,10 @@ python 05_csv_import_graph.py --help
 
 - `--dataset {movielens-small,movielens-large}` - Dataset size (default: movielens-small)
 - `--method {java,sql}` - Creation method (DSL-first recommendation: `sql`)
-- `--no-async` - Use synchronous transactions (FASTER for embedded mode)
+- `--no-async` - Build vertices in synchronous transactions instead of `GraphBatch`
 - `--no-index` - Skip creating indexes (slower, for comparison)
 - `--batch-size BATCH_SIZE` - Batch size for operations (default: 5000)
-- `--parallel PARALLEL` - Async executor threads (default: 4, not recommended)
+- `--parallel PARALLEL` - Above 1, enable GraphBatch parallel flush (default: 4)
 - `--export` - Export graph database to JSONL after creation
 - `--export-path EXPORT_PATH` - Export filename (default: `{db_name}.jsonl.tgz`)
 - `--db-name DB_NAME` - Database name (default derived from dataset, e.g. `movielens_graph_small_db`)
@@ -80,10 +84,16 @@ python 05_csv_import_graph.py --help
 **Recommendations:**
 
 - **Method:** Use `sql` for consistency with DSL-first examples and guides
-- **Async:** Use `--no-async` for best performance (2.5× faster in embedded mode)
+- **Vertex path:** With `--method java`, leave `GraphBatch` on. It is the repository's
+  recommended bulk graph path, and `--no-async` exists to compare it against synchronous
+  transactions. `--method sql` always builds vertices in synchronous transactions
 - **Indexes:** Keep enabled (2-3× speedup for edge creation)
 - **Batch size:** 5000 for small, 50000 for large datasets
 - **Export:** Use `--export` to validate data integrity via roundtrip
+
+All three of `--method sql`, `--method java`, and `--method java --no-async` produce the
+same graph: 610 Users, 9,742 Movies, 97,823 RATED, and 3,436 TAGGED on
+movielens-small.
 
 ## Graph Schema
 
@@ -120,16 +130,26 @@ NULLs is what that example demonstrates.
 
 ## Performance Results
 
-!!! warning "The async rows predate a defect and have not been re-measured"
+!!! warning "The `java (async executor)` rows measure a path this example no longer has"
 
-    On arcadedb-embedded 26.9.1, `--method java` raises "Async executor has
-    been shut down" before it finishes the vertices, and if that is patched
-    out the async executor silently discards most of the writes (9,742 Movie
-    vertices submitted, 2,436 stored, no error raised). The `java (async)` and
-    `java_noindex (async)` rows below were recorded on an earlier version and
-    no run that loses three quarters of its vertices can be compared with one
-    that does not. `java_noasync` and the `sql` rows are unaffected; the
-    example's module docstring has the measurements.
+    Until 2026-09-15, `--method java` built vertices by submitting one
+    `INSERT` per row through `db.async_executor().command(...)`. That path
+    silently discards records above parallel level 1: measured on 26.9.1,
+    9,742 Movie vertices submitted and 2,436 stored, with nothing raised,
+    nothing logged, and `wait_completion()` returning normally. Filed upstream
+    as `ArcadeData/arcadedb#7615`. The vertex path now uses
+    `db.graph_batch(...)`, which lands every row.
+
+    The two `java (async executor)` rows in the tables below were recorded on
+    that removed path, on an earlier version, and they have not been
+    re-measured. Because the path lost records, their vertex rates may reflect
+    less work than the row count implies, and they cannot be compared with a
+    run that stores every vertex. They are kept as a record of what was
+    measured, not as a current result. `java_noasync` and the `sql` rows were
+    never affected.
+
+    No GraphBatch timings for this example have been measured yet, so the
+    tables have no row for the current `--method java` path.
 
 ### Small Dataset (610 users, 9,742 movies, 101,259 edges)
 
@@ -137,8 +157,8 @@ NULLs is what that example demonstrates.
 |--------|----------|-------|---------------|---------------|
 | **java_noasync** ⚡ | **11,528/s** | **6,927/s** | **15.65s** | 5.5 GB |
 | java_noindex_noasync | 12,514/s | 6,766/s | 15.94s | 5.5 GB |
-| java (async) | 4,453/s | 6,516/s | 18.01s | 5.6 GB |
-| java_noindex (async) | 4,255/s | 6,143/s | 19.07s | 5.0 GB |
+| java (async executor, historical) | 4,453/s | 6,516/s | 18.01s | 5.6 GB |
+| java_noindex (async executor, historical) | 4,255/s | 6,143/s | 19.07s | 5.0 GB |
 | sql_noindex | 5,383/s | 5,225/s | 21.49s | 5.6 GB |
 | sql | 4,882/s | 4,956/s | 22.75s | 5.5 GB |
 
@@ -148,25 +168,32 @@ NULLs is what that example demonstrates.
 |--------|----------|-------|---------------|---------------|
 | **java_noasync** ⚡ | **12,341/s** | **5,071/s** | **1h 57m** | 16.0 GB |
 | sql | 8,734/s | 3,789/s | 2h 36m | 16.0 GB |
-| java (async) | 2,469/s | 2,034/s | 4h 52m | 18.4 GB |
+| java (async executor, historical) | 2,469/s | 2,034/s | 4h 52m | 18.4 GB |
 | java_noindex_noasync | 13,036/s | 1,839/s | 5h 21m | 15.7 GB |
 | sql_noindex | 8,902/s | 1,773/s | 5h 33m | 15.6 GB |
-| java_noindex (async) | 2,662/s | 820/s | 12h 1m | 18.3 GB |
+| java_noindex (async executor, historical) | 2,662/s | 820/s | 12h 1m | 18.3 GB |
 
 ## Key Performance Insights
 
-### 1. 🚀 **Synchronous Java API is FASTEST for Bulk Edge Creation**
+### 1. 🚀 **Java API Beats SQL for Bulk Edge Creation**
 
 **Winner: `java_noasync` (5,071 edges/sec)**
 
 ```
 Large Dataset Edge Creation:
-✅ java_noasync:           5,071 edges/sec  ← FASTEST (sync Java API)
+✅ java_noasync:           5,071 edges/sec  ← FASTEST (Java API)
 ✅ sql:                    3,789 edges/sec  (25% slower)
-❌ java (async):           2,034 edges/sec  (60% slower)
 ```
 
-**Why?** In embedded mode, there's no network I/O to parallelize. Async machinery (futures, thread coordination) adds overhead without benefits. Direct synchronous Java API calls are the fastest path.
+**Why?** The Java API writes edges without parsing and planning a statement per edge.
+
+The `java (async executor, historical)` row shows 2,034 edges/sec, but that gap has no
+clear cause. `EdgeCreator` creates edges the same way in both Java configurations: it
+stores `use_async` and `parallel_level` and reads neither, so the async executor was
+never in the edge path. The removed vertex path also left a graph missing most of its
+Movie vertices, which changes how often the edge phase hits its vertex cache and how
+many edges it creates at all. Do not read that row as a measurement of async overhead
+in edge creation.
 
 ### 2. 📊 **Indexes Provide 2-3× Speedup**
 
@@ -182,19 +209,29 @@ SQL Edge Creation (Large Dataset):
 
 **Best Practice:** Create indexes BEFORE bulk edge creation (unlike documents where indexes come after).
 
-### 3. ⚡ **Async Hurts Performance in Embedded Mode**
+### 3. ⚡ **Historical: the removed async executor vertex path was slower than synchronous transactions**
+
+These are the numbers that were recorded before 2026-09-15, on the vertex path that
+submitted one `INSERT` per row through `db.async_executor().command(...)`:
 
 ```
-Java API with Indexes (Large Dataset):
-✅ Synchronous (java_noasync):     5,071 edges/sec  ← 2.5× faster
-❌ Async (java):                   2,034 edges/sec
+Java API with Indexes (Large Dataset, measured before 2026-09-15):
+   Synchronous (java_noasync):     5,071 edges/sec
+   Async executor (java):          2,034 edges/sec
 
 Vertex Creation:
-✅ Synchronous:                   12,341 vertices/sec  ← 5× faster
-❌ Async:                          2,469 vertices/sec
+   Synchronous:                   12,341 vertices/sec
+   Async executor:                 2,469 vertices/sec
 ```
 
-**Why?** Async is designed for I/O-bound operations (network, disk). In embedded mode, all operations are in-memory JVM calls. Async overhead (thread pools, futures, synchronization) wastes CPU cycles.
+Two cautions before reusing them. The async executor's SQL command path loses records
+above parallel level 1 (#7615), so the async rows may describe a run that did less work
+than its row count implies. And the edge rates cannot be attributed to the async
+executor at all, for the reason given in insight 1.
+
+What replaced that path is `db.graph_batch(...)`, which crosses the Python/Java boundary
+once per batch and lands every row. It has not been timed for this example, so there is
+no GraphBatch-versus-synchronous number here to quote.
 
 ### 4. 🎯 **DSL-First: Use SQL for Ingestion and Queries**
 
@@ -397,7 +434,7 @@ Because the graph is directed, user-to-movie traversals should normally be expre
 outgoing traversals from `User` to `Movie`. If you need incoming traversals, express
 that explicitly in SQL MATCH or OpenCypher.
 
-### Step 2: Create Vertices (SQL)
+### Step 2: Create Vertices
 
 ```python
 # The example uses a VertexCreator class for batch creation. Users come from
@@ -423,8 +460,23 @@ class VertexCreator:
                     batch_user_ids = []
             # ... handle remaining batch ...
 
-# See full implementation in the Python file for the Java-API and async paths.
+# See full implementation in the Python file for the Java-API paths.
 ```
+
+The default `--method java` path builds the same vertices through `GraphBatch`, which
+hands each batch to Java in one call and returns one RID per row:
+
+```python
+with self.db.graph_batch(parallel_flush=self.parallel_level > 1) as batch:
+    created = batch.create_vertices("User", rows)
+    if len(created) != len(rows):
+        raise RuntimeError(
+            f"GraphBatch returned {len(created)} RIDs for {len(rows)} User rows"
+        )
+```
+
+The RID count is checked against the row count on every flush, so a short write raises
+instead of producing a quietly incomplete graph.
 
 ### Step 3: Create Edges with Foreign Key Resolution
 
@@ -487,7 +539,10 @@ print(f"  TAGGED: {tagged_count:,}")
 ### Single Configuration
 
 ```bash
-# Fastest configuration (recommended)
+# Java API with GraphBatch vertices
+python 05_csv_import_graph.py --dataset movielens-small --method java
+
+# Java API with synchronous vertex transactions, for comparison
 python 05_csv_import_graph.py --dataset movielens-small --method java --no-async
 
 # Compare with SQL
@@ -512,12 +567,15 @@ python 05_csv_import_graph.py --dataset movielens-small --batch-size 5000 --meth
 
 **6 Configurations:**
 
-1. `java` - Java API with async and indexes
-2. `java_noasync` - Java API synchronous with indexes ⚡ **FASTEST**
-3. `java_noindex` - Java API with async, no indexes
-4. `java_noindex_noasync` - Java API synchronous, no indexes
+1. `java` - Java API with GraphBatch vertices and indexes
+2. `java_noasync` - Java API with synchronous vertex transactions and indexes
+3. `java_noindex` - Java API with GraphBatch vertices, no indexes
+4. `java_noindex_noasync` - Java API with synchronous vertex transactions, no indexes
 5. `sql` - SQL with indexes (always synchronous)
 6. `sql_noindex` - SQL without indexes (always synchronous)
+
+Configurations 1 and 3 changed on 2026-09-15: they used the async executor before that
+date. Their rows in the tables above are the pre-change measurements.
 
 ## Benchmark Configuration
 
@@ -550,12 +608,14 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g")
 ### Parallel Processing
 
 ```bash
---parallel 4         # Async executor parallel level (1-16, default 4)
+--parallel 4         # Above 1, enable GraphBatch parallel flush (default 4)
 ```
 
-**Note:** This only affects the Java-API async path. Parallel async does NOT help for
-graph creation in embedded mode (and has no effect in `--method sql`, which is always
-synchronous). Use synchronous Java API (`--no-async`) for best performance.
+**Note:** This affects only the Java-API GraphBatch vertex path. The value is not a
+parallel level: the script passes `parallel_flush=args.parallel > 1` to
+`db.graph_batch(...)`, so any value above 1 has the same effect. It has no effect with
+`--no-async` or with `--method sql`, both of which build vertices in synchronous
+transactions. GraphBatch lands every row with `parallel_flush` on or off.
 
 ## Next Steps
 

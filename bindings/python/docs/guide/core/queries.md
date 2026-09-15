@@ -41,10 +41,14 @@ with db.transaction():
     db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Bob", 25)
 ```
 
-### Bulk Inserts (preferred: chunked transactions)
+### Bulk Inserts (preferred: `insert_many` and `graph_batch`)
+
+For bulk document ingest, use `db.insert_many(...)`; for bulk graph ingest, use
+`db.graph_batch(...)`. Both batch rows across the FFI boundary once per call. Chunked
+SQL transactions are still a good fit when you want manual control over each statement.
 
 ```python
-# Efficient bulk insertion (embedded-friendly): use chunked SQL transactions
+# Chunked SQL transactions: manual control, one statement at a time
 chunk_size = 500
 for start in range(0, len(people_data), chunk_size):
     with db.transaction():
@@ -57,8 +61,9 @@ for start in range(0, len(people_data), chunk_size):
                 city,
             )
 
-# Prefer SQL/OpenCypher chunked transactions for embedded bulk work.
-# There is no separate high-level batch context API in the current Python surface.
+# Chunked transactions are the per-statement option for embedded bulk work.
+# Higher-level batch APIs also exist: `Database.insert_many(...)` for documents
+# and `Database.graph_batch(...)` for graphs.
 ```
 
 ## SQL for Queries

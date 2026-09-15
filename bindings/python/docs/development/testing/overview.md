@@ -75,8 +75,8 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 
 | Test File | Description |
 | --------- | ----------- |
-| [`test_async_executor.py`](test-async-executor.md) | Async command/query execution and callback behavior |
-| `test_bulk_insert.py` | `Database.insert_many`, `AsyncExecutor.create_record`, vector columns, and numpy `append_samples` bulk ingest |
+| [`test_async_executor.py`](test-async-executor.md) | Async command/query execution, callback behavior, and command-path exactness at parallel level 1 |
+| `test_bulk_insert.py` | Recommended bulk paths land every row, plus `Database.insert_many`, `AsyncExecutor.create_record`, vector columns, and numpy `append_samples` bulk ingest |
 | [`test_core.py`](test-core.md) | Core database operations, CRUD, transactions, queries |
 | [`test_database_utils.py`](test-database-utils.md) | Database utility helpers and initialization behavior |
 | [`test_docs_examples.py`](test-docs-examples.md) | Executes representative Python snippets from the documentation site |

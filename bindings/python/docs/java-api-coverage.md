@@ -157,7 +157,7 @@ Full Pythonic Schema API available via `db.schema`:
 The importer surface is intentionally still described conservatively in this repository.
 Support exists, but the current repository guidance is:
 
-- bulk table/document ingest: async SQL with a single async worker
+- bulk table/document ingest: `db.insert_many(...)`
 - bulk graph ingest: `GraphBatch`
 - importer-based paths: available, but not the recommended default because they have
     shown reliability issues, including OoM failures, in larger tests
@@ -223,7 +223,7 @@ index = index_builder.withUnique(true).create()
 | Vector similarity search | ✅ Excellent | JVector + NumPy integration |
 | Development with Studio UI | ✅ Excellent | Server mode included |
 | Data migration (CSV/XML/JSONL import) | ✅ Good | SQL import workflows exercised by tests |
-| Async bulk ingestion | ✅ Good | `AsyncExecutor` |
+| Async bulk ingestion | ❌ Not recommended | `AsyncExecutor.command()` silently drops records above parallel level 1 (`ArcadeData/arcadedb#7615`); use `insert_many()` or `GraphBatch` |
 | Multi-master replication | ❌ Not supported | Java server only |
 | Custom query language | ❌ Not supported | Use built-in languages |
 

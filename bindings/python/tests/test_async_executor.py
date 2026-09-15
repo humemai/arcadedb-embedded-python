@@ -6,16 +6,27 @@ import time
 from pathlib import Path
 
 import arcadedb_embedded as arcadedb
+import pytest
+
+# Submissions used by the record-loss tests. 9,742 is the count from the
+# original report: 9,742 Movie vertices submitted, 2,436 stored.
+LOSS_REPRO_ROWS = 9_742
 
 
-def test_async_executor_sql_command_insert():
+def test_async_executor_sql_command_insert_is_exact_at_parallel_one():
+    """Every command submitted at parallel level 1 becomes a row.
+
+    This used to run at parallel level 4 and assert `count > 0`, which is the
+    assertion shape that let ArcadeData/arcadedb#7615 through: at level 4 the
+    executor stores a quarter of what it is given and `count > 0` still passes.
+    """
     db_path = Path(tempfile.mkdtemp()) / "test_async_sql_insert"
 
     try:
         db = arcadedb.create_database(str(db_path))
         db.command("sql", "CREATE DOCUMENT TYPE Item")
 
-        async_exec = db.async_executor().set_parallel_level(4).set_commit_every(1)
+        async_exec = db.async_executor().set_parallel_level(1).set_commit_every(1)
 
         for i in range(200):
             async_exec.command(
@@ -29,10 +40,65 @@ def test_async_executor_sql_command_insert():
         async_exec.close()
 
         count = db.query("sql", "SELECT count(*) as c FROM Item").first().get("c")
-        assert count > 0
+        assert int(count) == 200
         db.close()
     finally:
         shutil.rmtree(db_path, ignore_errors=True)
+
+
+def test_async_executor_bulk_command_is_exact_at_parallel_one(temp_db):
+    """A bulk load through the async command path, at the size that lost rows.
+
+    Parallel level 1 is the only level at which this path is exact, which is
+    why the recommended bulk paths are `Database.insert_many` and
+    `Database.graph_batch` instead. See ArcadeData/arcadedb#7615.
+    """
+    db = temp_db
+    db.command("sql", "CREATE DOCUMENT TYPE Bulk")
+
+    errors = []
+    async_exec = db.async_executor().set_parallel_level(1).set_commit_every(1_000)
+    async_exec.on_error(errors.append)
+
+    for i in range(LOSS_REPRO_ROWS):
+        async_exec.command("sql", "INSERT INTO Bulk SET id = :id", id=i)
+
+    async_exec.wait_completion()
+    async_exec.close()
+
+    stored = int(db.query("sql", "SELECT count(*) AS c FROM Bulk").one().get("c"))
+    assert stored == LOSS_REPRO_ROWS
+    assert errors == []
+
+
+@pytest.mark.skip(
+    reason="ArcadeData/arcadedb#7615: the async executor silently discards "
+    "commands above parallel level 1. Un-skip when the engine is fixed."
+)
+def test_async_executor_bulk_command_is_exact_at_parallel_four(temp_db):
+    """The same load at parallel level 4, which is where the records go missing.
+
+    Kept as a skipped test rather than an assertion of the broken behaviour, so
+    it starts passing when upstream fixes the engine. Observed on
+    arcadedb-engine 26.9.1 and 26.6.1, measured 2026-09-15: of 9,742 submitted,
+    2,436, 5,742, and 7,742 stored across runs, with nothing raised, nothing
+    logged, and `wait_completion()` returning normally. Only the executor-wide
+    `on_error` handler fires, one ConcurrentModificationException per
+    rolled-back batch. The assertion below is exact on purpose: how much is
+    lost varies, so any tolerance would let the defect back through.
+    """
+    db = temp_db
+    db.command("sql", "CREATE DOCUMENT TYPE Bulk4")
+
+    async_exec = db.async_executor().set_parallel_level(4).set_commit_every(1_000)
+    for i in range(LOSS_REPRO_ROWS):
+        async_exec.command("sql", "INSERT INTO Bulk4 SET id = :id", id=i)
+
+    async_exec.wait_completion()
+    async_exec.close()
+
+    stored = int(db.query("sql", "SELECT count(*) AS c FROM Bulk4").one().get("c"))
+    assert stored == LOSS_REPRO_ROWS
 
 
 def test_async_executor_query_callback_collects_rows(temp_db):
@@ -88,7 +154,9 @@ def test_async_executor_pending_and_processing_flags(temp_db):
     db = temp_db
     db.command("sql", "CREATE DOCUMENT TYPE Msg")
 
-    async_exec = db.async_executor().set_commit_every(100)
+    # parallel level 1: above it the submissions would be partly discarded
+    # (ArcadeData/arcadedb#7615), which is noise this flag test does not need.
+    async_exec = db.async_executor().set_parallel_level(1).set_commit_every(100)
     assert not async_exec.is_pending()
 
     for i in range(1000):
