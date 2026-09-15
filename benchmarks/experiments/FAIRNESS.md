@@ -38,7 +38,7 @@ Fitting the pool is resource fitting, the first of the four sanctioned override 
 
 | runtime | evidence | verdict |
 |---|---|---|
-| **DuckDB** | default `threads`=20 under a 12-CPU cpuset in the real bench image | **HOST-DERIVED.** Fixed in `l1_tabular.py` only; l1_tpc, l3d and l4 still run oversubscribed |
+| DuckDB | default `threads`=20 under a 12-CPU cpuset in the real bench image; every lane now sets `PRAGMA threads` from `sched_getaffinity` (l1_tabular first, then l1_tpc, l3d, and l4 on the October instrument, 2026-09-15) | cpuset |
 | Qdrant | `actix-rt` runtime 11 threads, update pool ~11, from `/proc/<pid>/task` | cpuset |
 | Elasticsearch | `_nodes/os` reports `available_processors: 12`, `allocated_processors: 12` | cpuset |
 | Neo4j | 10 `GC Thread#N`; G1 derives `8 + (N-8)*5/8` above 8, so 12 CPUs gives 10 | cpuset |
