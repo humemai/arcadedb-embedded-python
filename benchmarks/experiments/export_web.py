@@ -42,6 +42,13 @@ sys.path.insert(0, str(HERE))
 
 from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path set above)
 
+
+def _l4_points(scale: str) -> str:
+    """The time-series corpus size as the lane defines it, formatted for a label."""
+    from l4_tsbs import SCALE_POINTS  # noqa: E402
+    n = SCALE_POINTS[scale]
+    return f"{n / 1e6:.2f}M" if n >= 1_000_000 else f"{n // 1000}k"
+
 # The frozen selection this payload is built from. A skeleton publish reads
 # its own freeze (DECISIONS #86), so the campaign's tracked runs_paper.csv is
 # never touched and the page's source link names the file it really used.
@@ -561,7 +568,7 @@ SCALE_LABELS = {
     ("e2", "e2"): "50k products",
     # TSBS publishes its corpus as a point count, which is what the ingest
     # column is per second of.
-    ("l4", "ts100"): "2.59M points",
+    ("l4", "ts100"): f"{_l4_points('ts100')} points",
     # The lifecycle tiers are row counts of the structure under test, so the
     # label is the count rather than a tier name a reader cannot size.
     ("lifecycle", "lc10k"): "10k",
@@ -586,7 +593,10 @@ SKELETON_SCALE_LABELS = {
     ("l2", "micro"): "2k people (synthetic, skeleton)",
     ("l3d", "micro"): "5k vectors (skeleton)",
     ("l3s", "micro"): "5k vectors (synthetic, skeleton)",
-    ("l4", "ts100"): "432k points, 12 h (skeleton)",
+    # THE SKELETON READS THE SAME CORPUS AS THE CAMPAIGN, so the count comes
+    # from the lane's constant, not from a typed guess: the first version of
+    # this line said "432k points, 12 h" over rows carrying 2,592,000.
+    ("l4", "ts100"): f"{_l4_points('ts100')} points (skeleton)",
     ("e2", "e2"): "50k products (skeleton)",
     ("lifecycle", "lc10k"): "10k (skeleton)",
 }
