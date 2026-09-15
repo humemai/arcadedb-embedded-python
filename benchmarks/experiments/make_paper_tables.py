@@ -178,6 +178,8 @@ NAMES = {
     "duckdb_vss_dense": "DuckDB-VSS (fp32)",
     "arcadedb_e2": "ArcadeDB (one txn)", "surrealdb_e2": "SurrealDB (one txn)",
     "arangodb_dense": "ArangoDB (fp32)", "arangodb_e2": "ArangoDB (one txn)",
+    "mongodb_dense": "MongoDB (fp32)", "mongodb_e2": "MongoDB (doc txn)",
+    "mongodb_graph": "MongoDB",
     "composed_qdrant_neo4j": "Qdrant+Neo4j (composed)",
     "questdb": "QuestDB", "arcadedb": "ArcadeDB (emb)",
 }

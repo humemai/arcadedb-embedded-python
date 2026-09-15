@@ -77,8 +77,17 @@ case "$_pin" in
 esac
 echo "arcadedb pin: $_pin"
 
-targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age)
+targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age mongo-search)
 for be in "${targets[@]}"; do
+  if [ "$be" = "mongo-search" ]; then
+    # MongoDB Community 8.2.12 + mongot (MongoDB Search Community) 1.70.4 in
+    # one container (Dockerfile.mongosearch), the dense and cross-model arms'
+    # server. Both halves pinned by digest inside the Dockerfile, so a local
+    # build has the same provenance a pulled image would.
+    echo "=== dbbench:mongo-search (Dockerfile.mongosearch)"
+    docker build -q -t dbbench:mongo-search -f Dockerfile.mongosearch . >/dev/null && echo "  ok"
+    continue
+  fi
   if [ "$be" = "pg-age" ]; then
     # PostgreSQL 17 + pgvector + Apache AGE, a server image (Dockerfile.pgage),
     # the cross-model lane's "one engine" rival (2026-09-11).

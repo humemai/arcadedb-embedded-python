@@ -32,6 +32,7 @@ import numpy as np
 import bench_common
 import surreal_common
 import arango_common
+import mongo_common
 
 DATA = os.environ.get("BENCH_DENSE_DATA", "/data/dense")
 DIM = 128
@@ -163,7 +164,11 @@ def degree_stamp(backend):
     hnswlib_style = {"chroma_dense", "lancedb_dense", "qdrant_dense",
                      "milvus_dense", "duckdb_vss_dense",
                      "neo4j_dense", "pgvector_dense",
-                     "surrealdb_dense", "surrealdb_dense_server"}
+                     "surrealdb_dense", "surrealdb_dense_server",
+                     # mongot builds a Lucene HNSW graph whose
+                     # hnswOptions.maxEdges is the per-layer bound with the
+                     # base layer doubled, i.e. hnswlib's M.
+                     "mongodb_dense"}
     # A PRECISION ARM IS THE SAME INDEX AT A DIFFERENT PRECISION, so it keeps
     # its parent's degree and unit. Without this strip, qdrant_dense_int8 and
     # milvus_dense_int8 missed the set and were stamped "exact_scan_no_ann" --
@@ -1265,6 +1270,178 @@ class SurrealDenseServer(SurrealDense):
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
+class MongoDense(Base):
+    """MongoDB 8.2.12 with MongoDB Search (mongot) Community 1.70.4, served
+    (2026-09-15): article documents with an embedding array through
+    insert_many, then a `vectorSearch` index that mongot builds out of band,
+    queried with the $vectorSearch aggregation stage.
+
+    DECISIONS #68 recorded MongoDB's vector search as not joining, because it
+    "needs the separate mongot process, a two-container server the runner
+    cannot start yet". Both halves of that have changed: MongoDB Search went
+    generally available for Community Edition on 2026-06-30, and the pair runs
+    in ONE container here (Dockerfile.mongosearch), which is the deployment
+    MongoDB's own default mongot config is written for and the only one that
+    puts the whole engine inside the single cgroup the runner caps and
+    samples.
+
+    MATCHED OPERATING POINT, EXPRESSIBLE AND EXPRESSED: hnswOptions.maxEdges =
+    COMPARATOR_M, hnswOptions.numEdgeCandidates = EF_CONSTRUCTION, and the
+    stage's numCandidates = EF_SEARCH. maxEdges is Lucene HNSW's per-layer
+    bound with the base layer doubled, so this arm is degree-matched in the
+    same units as Qdrant, pgvector, Neo4j and SurrealDB.
+
+    INGEST AND INDEX ARE TWO TIMERS HERE (DECISIONS #66, #74 item 2), and the
+    boundary is real rather than nominal: mongod accepts the documents, and
+    mongot builds the index afterwards from the oplog. The wait for the index
+    to become queryable is index_s, for the reason BUGS F8 records for Milvus
+    -- an engine that answers a query before its index exists reports a build
+    time that is not one and a recall that did not come from the index under
+    test.
+
+    THE SEARCH PROCESS IS A JVM AND ITS HEAP IS NOT PINNED. mongot runs on a
+    bundled JDK and sizes its heap from the container, so this arm's engine
+    holds a JVM whose heap the harness does not set, while the row records
+    heap=None because the backend name is not in runner.JVM_BACKENDS. Stamping
+    the tier heap would be worse -- a claim about a flag nobody passed -- so
+    the row stays blank and this says why. F3's envelope still holds: the cap
+    is the cell's, and mongot's default is a fraction of it.
+
+    index_s CARRIES A FIXED FLOOR OF ROUGHLY 12 TO 30 SECONDS, and at the small
+    tiers that floor IS the number. Measured on this pin (laptop, 2026-09-15):
+    a ONE-DOCUMENT collection's index becomes queryable in 12.51, 29.63, 30.12
+    and 30.10 s on four consecutive attempts, and 1,000 and 20,000 documents
+    take the same 28 to 30 s. That is mongot noticing the index exists, not
+    mongot building it. So this arm's micro and tiny build numbers are a poll
+    interval wearing a build timer's name and must not be put beside another
+    engine's; only the one-million and ten-million tiers, where real index work
+    dominates, say anything about MongoDB's build speed. Reported rather than
+    subtracted: an adapter that quietly removed a constant from its own engine's
+    timer would be doing the comparator's arithmetic for it.
+    """
+    quantization = "fp32"
+    name = "mongodb_dense"
+    # Every mutation costs a poll on mongot's own view of the data, because
+    # the index is eventually consistent with the collection; the constant is
+    # here rather than inline so the row can say what bound it ran under.
+    MUTATE_SETTLE_S = float(os.environ.get("BENCH_MONGO_SETTLE_S", "600"))
+
+    def connect(self):
+        self.cl, self.db, mongod = mongo_common.connect(auth=True)
+        # BOTH BINARIES ON THE ROW. $vectorSearch is served by mongot, which
+        # has its own release line; a row naming only mongod describes half
+        # the deployment and cannot be re-measured.
+        self.version = mongod + " + " + mongo_common.search_version(self.cl)
+        self.coll = self.db["articles"]
+
+    def build(self, vecs):
+        _t0 = time.perf_counter()
+        for i in range(0, len(vecs), BATCH):
+            chunk = vecs[i:i + BATCH]
+            self.coll.insert_many(
+                [{"_id": i + j, "vid": i + j, "embedding": chunk[j].tolist()}
+                 for j in range(len(chunk))], ordered=False)
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
+        _t1 = time.perf_counter()
+        mongo_common.create_vector_index(self.coll, "embedding", DIM,
+                                         COMPARATOR_M, EF_CONSTRUCTION,
+                                         similarity="euclidean")
+        self._index_state = mongo_common.wait_queryable(self.coll)
+        self.index_s = round(time.perf_counter() - _t1, 2)
+
+    def engine_stats(self):
+        """What mongot says it built, read after the fact and never asserted.
+
+        The whole point of the two-process design is that the index is not the
+        collection, so the row carries mongot's own description of the index it
+        is serving -- including whether it silently dropped the hnswOptions we
+        asked for, which is the one way this arm could stop being
+        degree-matched without any error.
+        """
+        # THE ONE WAY THIS ARM'S SERVER DIFFERS FROM THE DOCUMENT ARM'S, on the
+        # row rather than only in a comment: mongot authenticates to its sync
+        # source with SCRAM and mongod authorizes it through the
+        # searchCoordinator role, so access control is ON here and OFF on the
+        # `mongodb` arm. Nothing we chose; there is no way to run mongot
+        # without it.
+        out = {"mongo_access_control": True}
+        try:
+            idx = [i for i in self.coll.list_search_indexes()
+                   if i.get("name") == mongo_common.VECTOR_INDEX]
+            if idx:
+                d = idx[0]
+                out["mongot_index_status"] = d.get("status")
+                out["mongot_index_queryable"] = d.get("queryable")
+                fields = (d.get("latestDefinition") or {}).get("fields") or []
+                vec = next((f for f in fields if f.get("type") == "vector"), {})
+                out["mongot_indexing_method"] = vec.get("indexingMethod")
+                out["mongot_hnsw_options"] = vec.get("hnswOptions")
+                out["mongot_similarity"] = vec.get("similarity")
+                out["mongot_quantization"] = vec.get("quantization")
+        except Exception as e:                            # noqa: BLE001
+            out["mongot_index_state_error"] = f"{type(e).__name__}: {e}"[:200]
+        return out
+
+    def search(self, qvec, k):
+        return [int(d["vid"]) for d in self.coll.aggregate([
+            {"$vectorSearch": {"index": mongo_common.VECTOR_INDEX,
+                               "path": "embedding",
+                               "queryVector": [float(x) for x in qvec],
+                               "numCandidates": max(k, EF_SEARCH), "limit": k}},
+            {"$project": {"_id": 0, "vid": 1}}])]
+
+    def _settle(self, ids, vecs, want_present):
+        """Wait until mongot's index reflects a mutation mongod has accepted.
+
+        THE WAIT IS INSIDE THE TIMED SECTION ON PURPOSE, exactly as it is for
+        Milvus: "insert into a built index then search" is only that operation
+        once the index can answer for it, and an arm that returned as soon as
+        mongod acked would be timing a different, cheaper operation than every
+        other arm on the table. The probe asks the index for the mutated
+        vector itself, which is its own nearest neighbour, so a hit is
+        unambiguous.
+
+        THE BOUND IS A BOUND, NOT THE CHECK. If it expires the wait stops and
+        the cell carries on, because the row already holds the authoritative
+        evidence: `mutate_deleted_hits` must be zero and
+        `mutate_reinserted_hits` must be the victim count, both measured by the
+        lane from real queries after the mutation. A timeout writes a line to
+        stderr, which the runner captures as the cell's clientlog, so the
+        reason is readable beside the numbers that show it.
+        """
+        deadline = time.time() + self.MUTATE_SETTLE_S
+        probe_id, probe_vec = int(ids[-1]), vecs[-1]
+        while time.time() < deadline:
+            got = set(self.search(probe_vec, 1))
+            if (probe_id in got) == want_present:
+                return True
+            time.sleep(0.25)
+        print(f"[mongodb_dense] mongot did not reflect the mutation of vid={probe_id} "
+              f"(want_present={want_present}) within {self.MUTATE_SETTLE_S}s; read "
+              f"mutate_deleted_hits / mutate_reinserted_hits on the row",
+              file=sys.stderr, flush=True)
+        return False
+
+    def insert_vectors(self, ids, vecs):
+        rows = [{"_id": int(v), "vid": int(v),
+                 "embedding": [float(x) for x in vecs[j]]} for j, v in enumerate(ids)]
+        self.coll.insert_many(rows, ordered=False)
+        self._settle(ids, [r["embedding"] for r in rows], True)
+
+    def delete_vectors(self, ids):
+        # The embeddings are read back BEFORE the delete so the settle probe
+        # has something to ask for afterwards; that read is a cost of this
+        # engine's eventual-consistency boundary and is left inside the timer.
+        keep = [d["embedding"] for d in
+                self.coll.find({"_id": {"$in": [int(v) for v in ids[-1:]]}}, {"embedding": 1})]
+        self.coll.delete_many({"_id": {"$in": [int(v) for v in ids]}})
+        if keep:
+            self._settle(ids, keep, False)
+
+    def close(self):
+        mongo_common.close(self.cl)
+
+
 class ArangoDense(Base):
     """ArangoDB 3.12.11 served (2026-09-13): article documents with an
     embedding array through the bulk import API, then the engine's vector
@@ -1671,6 +1848,7 @@ class MilvusInt8(Milvus):
 BACKENDS = {b.name: b for b in
             (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus,
              PgVector, Neo4jVector, SurrealDense, SurrealDenseServer, ArangoDense,
+             MongoDense,
              ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8,
              ArcadeServerInt8, SqliteVecInt8)}
 
@@ -1718,6 +1896,7 @@ DURABILITY = {
     "surrealdb_dense": bench_common.DURABILITY_SURREAL_EMBEDDED,
     "surrealdb_dense_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_dense": arango_common.DURABILITY,
+    "mongodb_dense": mongo_common.DURABILITY,
 }
 
 

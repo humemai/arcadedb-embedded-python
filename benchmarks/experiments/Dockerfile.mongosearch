@@ -1,0 +1,33 @@
+# MongoDB Community 8.2.12 + MongoDB Search (mongot) Community 1.70.4 in one
+# container: the self-hosted, generally available way to run $vectorSearch.
+#
+# WHY THIS AND NOT mongodb/mongodb-atlas-local. atlas-local is the same two
+# processes in one image and it would have been less work, but MongoDB's own
+# documentation lists it as "For evaluation only" and says "This deployment is
+# not suitable for production use", and the vector-capable variant is its
+# `:preview` tag. DECISIONS #68 pins comparators to the latest SELF-HOSTED
+# RELEASE; a vendor's explicitly-not-production dev convenience image is not
+# one, and publishing a MongoDB vector number measured on it would be measuring
+# something nobody deploys. MongoDB Search and Vector Search went generally
+# available for Community Edition on 2026-06-30 and ship as the mongot binary
+# beside mongod, which is what this image is.
+#
+# Both halves are pinned by digest, so the local build has the same provenance
+# a pulled server image would: the ONLY thing added on top is the entrypoint
+# that starts the pair, and the mongot config, both in docker-conf/.
+#
+# The mongod half is the SAME digest the document, TPC and time-series tables
+# already run (runner.BACKENDS["mongodb"]), so MongoDB's vector rows and its
+# document rows come from one engine build rather than two.
+#
+# Built as dbbench:mongo-search by build_images.sh.
+FROM mongodb/mongodb-community-search@sha256:63ebc805c6b55d027e345b5224d8713009f21911aedafb50b6c28c1cd9583e4f AS mongot
+FROM mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17
+# mongot bundles its own jlink'd JDK under bin/jdk, so the whole directory is
+# self-contained and nothing has to be installed into the mongod image.
+COPY --from=mongot /mongot-community /mongot-community
+COPY docker-conf/mongot-community.yml /mongot-community/config.default.yml
+COPY docker-conf/mongo-search-entrypoint.sh /usr/local/bin/mongo-search-entrypoint.sh
+RUN chmod 755 /usr/local/bin/mongo-search-entrypoint.sh && mkdir -p /mongot-state
+EXPOSE 27017
+ENTRYPOINT ["/usr/local/bin/mongo-search-entrypoint.sh"]

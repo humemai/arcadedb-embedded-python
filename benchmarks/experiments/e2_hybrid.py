@@ -31,6 +31,7 @@ import bench_common
 import numpy as np
 import surreal_common
 import arango_common
+import mongo_common
 
 PRODUCTS = int(os.environ.get("E2_PRODUCTS", "50000"))
 DIM = 64
@@ -648,6 +649,157 @@ class ArangoE2:
         arango_common.close(self.cl)
 
 
+class MongoE2:
+    """MongoDB 8.2.12 with MongoDB Search (mongot) Community 1.70.4, served
+    (2026-09-15): product documents with an embedding under a `vectorSearch`
+    index, `related` as an edge collection, the vector hit through
+    $vectorSearch, the hop through $lookup, and the document updates inside
+    one multi-document transaction that the crash trial aborts before commit.
+
+    THE INTERESTING ANSWER ON THIS TABLE, and it is a refusal rather than a
+    number: **$vectorSearch cannot run inside a multi-document transaction.**
+    mongod answers
+
+        Operation not permitted in transaction :: caused by :: Aggregation
+        stage $vectorSearch cannot run within a multi-document transaction.
+
+    which is measured on this pin at connect time, not quoted from a manual,
+    and lands on the row as `txn_scope`. So the composed operation is NOT one
+    transaction over three models on MongoDB: the vector read is outside it by
+    engine rule, the graph hop is inside one if asked (it is $lookup and
+    $graphLookup, both of which ARE permitted -- also measured), and the
+    document write is inside. The atomicity trial still runs and still means
+    something -- the document half must roll back cleanly -- but what it
+    demonstrates is document atomicity, not the three-model atomicity this
+    lane exists to test, and the row says so rather than letting a torn_count
+    of zero imply the stronger claim.
+
+    THE SECOND HALF OF THE SAME BOUNDARY: mongot maintains the vector index
+    from the oplog, asynchronously, so a committed write is visible to $match
+    before it is visible to $vectorSearch. Nothing in this lane writes an
+    embedding, so no measurement here depends on that lag; it is recorded
+    because it is the reason a MongoDB vector index cannot be transactional
+    even in principle.
+    """
+    name = "mongodb_e2"
+
+    def __init__(self):
+        self.cl, self.db, mongod = mongo_common.connect(auth=True)
+        self.version = mongod + " + " + mongo_common.search_version(self.cl)
+        self.durability = bench_common.at_class(mongo_common.DURABILITY)
+        self._wc = mongo_common.write_concern()
+
+    def build(self, vecs, edges):
+        prod = self.db.get_collection("product", write_concern=self._wc)
+        rel = self.db.get_collection("related", write_concern=self._wc)
+        for s in range(0, len(vecs), BATCH):
+            prod.insert_many([{"_id": i, "pid": i, "views": 0, "embedding": vecs[i].tolist()}
+                              for i in range(s, min(s + BATCH, len(vecs)))], ordered=False)
+        for s in range(0, len(edges), BATCH):
+            rel.insert_many([{"src": a, "dst": b} for a, b in edges[s:s + BATCH]], ordered=False)
+        rel.create_index("src")
+        # `pid` as a filter field so the filtered search is a PRE-filter: the
+        # candidate set goes into the index, not around it.
+        mongo_common.create_vector_index(prod, "embedding", DIM, 16, 100,
+                                         similarity="euclidean", filter_paths=("pid",))
+        mongo_common.wait_queryable(prod)
+        self.prod, self.rel = prod, rel
+        self.TXN_SCOPE = self._probe_txn_scope()
+
+    def _probe_txn_scope(self):
+        """ASK THE ENGINE what it will let inside a transaction, on this pin.
+
+        A sentence in a doc page is a claim with an expiry date; the string on
+        the row is what this build answered today.
+        """
+        def _try(stage_name, pipeline, coll):
+            with self.cl.start_session() as s:
+                try:
+                    with s.start_transaction():
+                        list(coll.aggregate(pipeline, session=s))
+                    return f"{stage_name}: allowed"
+                except Exception as e:                      # noqa: BLE001
+                    return f"{stage_name}: refused ({str(e).split(', full error')[0][:160]})"
+        qv = [0.0] * DIM
+        qv[0] = 1.0
+        vec = _try("$vectorSearch", [
+            {"$vectorSearch": {"index": mongo_common.VECTOR_INDEX, "path": "embedding",
+                               "queryVector": qv, "numCandidates": 10, "limit": 1}},
+            {"$project": {"_id": 0, "pid": 1}}], self.prod)
+        hop = _try("$lookup", [
+            {"$limit": 1},
+            {"$lookup": {"from": "related", "localField": "src",
+                         "foreignField": "src", "as": "h"}}], self.rel)
+        glk = _try("$graphLookup", [
+            {"$limit": 1},
+            {"$graphLookup": {"from": "related", "startWith": "$dst",
+                              "connectFromField": "dst", "connectToField": "src",
+                              "as": "p", "maxDepth": 1}}], self.rel)
+        return ("document update inside one multi-document transaction; the graph hop "
+                f"may be inside ({hop}; {glk}); the vector hit CANNOT be ({vec})")
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        pids = self._vec_topk(qvec, K)
+        rel = self._hop(pids[:1])
+        touched = list(pids[:3]) + list(rel[:3])
+        with self.cl.start_session() as s:
+            with s.start_transaction(write_concern=self._wc):
+                self.db["product"].update_many(
+                    {"_id": {"$in": sorted({int(p) for p in touched})}},
+                    {"$inc": {"views": 1}}, session=s)
+                if crash:
+                    # Injected failure inside the transaction: leaving the
+                    # context by exception aborts it, which is the rollback
+                    # the trial is measuring.
+                    raise RuntimeError("injected-crash")
+        return len(touched)
+
+    FILTER_MODE = ("pre-filter: the candidate ids go into $vectorSearch's own `filter` "
+                   "on an indexed field, with exact:true so the filtered set is scanned "
+                   "rather than approximated")
+
+    def _vec_topk(self, qvec, k, ef=100):
+        return [int(d["pid"]) for d in self.prod.aggregate([
+            {"$vectorSearch": {"index": mongo_common.VECTOR_INDEX, "path": "embedding",
+                               "queryVector": [float(x) for x in qvec],
+                               "numCandidates": max(k, ef), "limit": k}},
+            {"$project": {"_id": 0, "pid": 1}}])]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        return [int(d["dst"]) for d in self.rel.find(
+            {"src": {"$in": [int(p) for p in pids]}}, {"_id": 0, "dst": 1})]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        return list(self.prod.find({"_id": {"$in": [int(p) for p in pids]}},
+                                   {"_id": 0, "pid": 1, "views": 1}))
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        # exact:true is ENN over the filtered set, which is what "rank this
+        # candidate set" means; numCandidates is not accepted beside it.
+        return [int(d["pid"]) for d in self.prod.aggregate([
+            {"$vectorSearch": {"index": mongo_common.VECTOR_INDEX, "path": "embedding",
+                               "queryVector": [float(x) for x in qvec],
+                               "filter": {"pid": {"$in": [int(p) for p in cands]}},
+                               "exact": True, "limit": k}},
+            {"$project": {"_id": 0, "pid": 1}}])]
+
+    def total_views(self):
+        rows = list(self.prod.aggregate([
+            {"$group": {"_id": None, "s": {"$sum": "$views"}}}]))
+        if not rows:
+            raise RuntimeError("mongodb: total_views read returned no rows")
+        return int(rows[0]["s"] or 0)
+
+    def close(self):
+        mongo_common.close(self.cl)
+
+
 class PgAgeE2:
     """PostgreSQL 17 with pgvector and Apache AGE in one database: the vector
     hit is an HNSW query on a vector column, the hop is Cypher through AGE
@@ -1036,7 +1188,8 @@ class ComposedE2:
         self.neo.close()
 
 
-BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, ArangoE2, PgAgeE2, Neo4jE2, ComposedE2)}
+BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, ArangoE2,
+                                MongoE2, PgAgeE2, Neo4jE2, ComposedE2)}
 
 
 # DECISIONS #81, recorded on every row. PG+AGE reads the server's
@@ -1049,6 +1202,7 @@ DURABILITY = {
     "surrealdb_e2": bench_common.DURABILITY_SURREAL_EMBEDDED,
     "surrealdb_e2_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_e2": arango_common.DURABILITY,
+    "mongodb_e2": mongo_common.DURABILITY,
     "neo4j_e2": bench_common.DURABILITY_NEO4J,
     # The composed stack's document and graph half is Neo4j, so the whole
     # operation waits for Neo4j's log; Qdrant's WAL runs at its own default.
@@ -1091,6 +1245,15 @@ def main():
     # which is what it is for (laptop, 2026-09-14).
     bench_common.stamp_durability(out, getattr(b, "durability", None)
                                   or DURABILITY.get(args.backend))
+    # WHAT THE ENGINE LETS INSIDE THE TRANSACTION (2026-10). This lane's
+    # whole argument is that one operation over three models is one
+    # transaction, and until now no row said which parts of the operation
+    # an engine actually admits into one. MongoDB's answer is a refusal --
+    # $vectorSearch is not permitted in a multi-document transaction -- and
+    # a row that recorded only its torn_count of zero would read as the
+    # strong claim while demonstrating the weak one. Declared per adapter;
+    # "not declared" is honest about the ones that have not been asked yet.
+    out["txn_scope"] = getattr(b, "TXN_SCOPE", "not declared")
 
     if args.workload == "hybrid":
         # ------------------------------------------------------------------

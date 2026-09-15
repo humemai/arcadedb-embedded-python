@@ -15,6 +15,7 @@ import sys
 import time
 import surreal_common
 import arango_common
+import mongo_common
 
 from graph_common import (HOP3_VISITED, OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
                           OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
@@ -820,9 +821,251 @@ class ArangoGraph(Base):
         arango_common.close(self.cl)
 
 
+class MongoGraph(Base):
+    """MongoDB 8.2.12 served (2026-09-15): `person` documents keyed by the LDBC
+    id and `knows` as an edge document collection, the same questions as
+    aggregation pipelines.
+
+    MongoDB CLAIMS NO GRAPH MODEL, which is why DECISIONS #68 left it off this
+    table. #92 is the rule that reopens it: an engine competes in its own
+    dialect if it can express the query, and the constructs it cannot are
+    named rather than assumed. Every one of the twelve questions on this lane
+    turned out to be expressible; what follows is the part that is not
+    obvious, and the full account is in COMPARATOR-DIALECTS.md.
+
+    THE MULTI-HOP READS USE CHAINED $lookup, NOT $graphLookup, and the reason
+    is not that $graphLookup fails. Measured at micro (2,000 persons, 40,833
+    edges, the fifty-id read set), with the depth offset written correctly --
+    `startWith: "$dst"` has already consumed the first hop, so "exactly N
+    hops" is `maxDepth: N-2` with `depthField == N-2` -- $graphLookup agrees
+    with the chained form on 50 of 50 ids at two hops AND at three, and both
+    agree with a plain Python enumeration over the same generator. The first
+    version of this probe compared depth 1 against two hops, got a disagreement
+    on 50 of 50, and would have gone into the record as "MongoDB's recursive
+    stage answers a different question"; it was our off-by-one. What decided
+    the spelling is cost, the way DECISIONS #93 decided SurrealDB's triangle
+    count: per operation over the same fifty ids,
+
+        two hops    $graphLookup 4.10 ms   chained $lookup 3.21 ms
+        three hops  $graphLookup 30.01 ms  chained $lookup 38.27 ms
+
+    so neither form wins on both. The chained form is used for both, because
+    it is the only one of the two that is a faithful translation BY
+    CONSTRUCTION rather than by measurement on one corpus (see below), and the
+    three-hop reading is the one place this arm is left slower than it needs
+    to be. Re-checking $graphLookup's equivalence at the campaign's LDBC
+    corpus would buy about 1.3x on hop3f and nothing else.
+
+    RELATIONSHIP UNIQUENESS HAS TO BE WRITTEN OUT. Cypher's MATCH forbids
+    reusing the same relationship inside one path and ArangoDB's traversal
+    defaults to the same (uniqueEdges: path); neither a chain of $lookups nor
+    $graphLookup has such a rule. At three hops the only collision this corpus
+    can produce is the first edge reappearing as the third (a->b, b->a, a->b),
+    so hop3f and the three-hop visited probe carry an explicit `$ne` on the
+    edge _id. On the micro corpus the clause changes the answer on 0 of 50
+    ids, because these queries count DISTINCT endpoints and a dropped path
+    almost always has a surviving twin -- which is exactly why it is written
+    out rather than left to luck: the day it matters, it would be a silent
+    over-count against every engine that enforces the rule.
+    """
+    name = "mongodb_graph"
+
+    def connect(self):
+        self.cl, self.db, self.version = mongo_common.connect(auth=False)
+        self.durability = bench_common.at_class(mongo_common.DURABILITY)
+        self._wc = mongo_common.write_concern()
+        self.person = self.db.get_collection("person", write_concern=self._wc)
+        self.knows = self.db.get_collection("knows", write_concern=self._wc)
+
+    def build(self, n_persons):
+        buf = []
+        for i, name, age, city in gen_persons(n_persons):
+            buf.append({"_id": i, "name": name, "age": age, "city": city})
+            if len(buf) >= INGEST_BATCH:
+                self.person.insert_many(buf, ordered=False); buf = []
+        if buf:
+            self.person.insert_many(buf, ordered=False)
+        buf = []
+        for src, dst, since in gen_edges(n_persons):
+            buf.append({"src": src, "dst": dst, "since": since})
+            if len(buf) >= INGEST_BATCH:
+                self.knows.insert_many(buf, ordered=False); buf = []
+        if buf:
+            self.knows.insert_many(buf, ordered=False)
+        # AFTER the load, which is what every other arm does: an index
+        # maintained per batch costs more than one built over the finished
+        # collection. src is every outbound hop and every write's edge lookup;
+        # dst is the inbound side the triangle count and the delete need.
+        self.knows.create_index("src")
+        self.knows.create_index("dst")
+
+    # ---- reads -------------------------------------------------------
+    # One hop is one $lookup from `knows` into `knows`; the last hop joins
+    # `person` only where a property of the far end is asked for.
+    _HOP = {"from": "knows", "localField": "dst", "foreignField": "src", "as": "e2"}
+
+    def _agg(self, coll, pipeline):
+        return list(coll.aggregate(pipeline))
+
+    @staticmethod
+    def _count_or_zero(rows):
+        """$count and $group emit NOTHING for an empty input; Cypher and AQL
+        emit one row holding 0. Our generator gives every person at least one
+        outgoing edge so this never fires on this corpus, but a digest that
+        depends on that is a digest that breaks the day the corpus changes."""
+        return rows if rows else [{"n": 0}]
+
+    def run_read(self, op, pid):
+        if op == "point":
+            return self._agg(self.person, [
+                {"$match": {"_id": pid}},
+                {"$project": {"_id": 0, "name": 1, "age": 1}}])
+        if op == "hop1":
+            rows = self._agg(self.knows, [
+                {"$match": {"src": pid}},
+                {"$lookup": {"from": "person", "localField": "dst",
+                             "foreignField": "_id", "as": "f"}},
+                {"$unwind": "$f"},
+                {"$group": {"_id": None, "n": {"$sum": 1}, "a": {"$avg": "$f.age"}}},
+                {"$project": {"_id": 0, "n": 1, "a": 1}}])
+            return rows if rows else [{"n": 0, "a": None}]
+        if op == "hop2":
+            return self._count_or_zero(self._agg(self.knows, [
+                {"$match": {"src": pid}},
+                {"$lookup": dict(self._HOP)}, {"$unwind": "$e2"},
+                {"$group": {"_id": "$e2.dst"}},
+                {"$count": "n"}]))
+        if op == "hop3f":
+            return self._count_or_zero(self._agg(self.knows, self._three_hops(pid) + [
+                {"$lookup": {"from": "person", "localField": "e3.dst",
+                             "foreignField": "_id", "as": "x"}},
+                {"$unwind": "$x"},
+                {"$match": {"x.age": {"$gt": 30}}},
+                {"$group": {"_id": "$x._id"}},
+                {"$count": "n"}]))
+        raise KeyError(op)
+
+    @staticmethod
+    def _three_hops(pid):
+        return [
+            {"$match": {"src": pid}},
+            {"$lookup": {"from": "knows", "localField": "dst",
+                         "foreignField": "src", "as": "e2"}},
+            {"$unwind": "$e2"},
+            {"$lookup": {"from": "knows", "localField": "e2.dst",
+                         "foreignField": "src", "as": "e3"}},
+            {"$unwind": "$e3"},
+            # Cypher's relationship isomorphism, written out: the third edge
+            # may not be the first one again (a->b, b->a, a->b).
+            {"$match": {"$expr": {"$ne": ["$e3._id", "$_id"]}}},
+        ]
+
+    def run_visited(self, pid):
+        return self._count_or_zero(self._agg(self.knows, self._three_hops(pid) + [
+            {"$group": {"_id": "$e3.dst"}},
+            {"$count": "n"}]))
+
+    # ---- writes ------------------------------------------------------
+    def run_write(self, pid, new_id):
+        # ONE TRANSACTION, because the Cypher this translates is one: the
+        # person and the edge that links them either both exist or neither
+        # does. A multi-document transaction is why the server runs as a
+        # single-node replica set.
+        with self.cl.start_session() as s:
+            with s.start_transaction(write_concern=self._wc):
+                self.db["person"].insert_one(
+                    {"_id": new_id, "name": f"w{new_id}", "age": 33, "city": "city_0"},
+                    session=s)
+                self.db["knows"].insert_one(
+                    {"src": pid, "dst": new_id, "since": 2026}, session=s)
+
+    def run_update(self, new_id):
+        # NO SESSION, deliberately: one field of one document is atomic in
+        # MongoDB by construction, and wrapping it in a transaction would time
+        # a commit path no other engine on this table pays (the same rule the
+        # document lane's single-record operations follow).
+        self.person.update_one({"_id": new_id}, {"$set": {"age": UPDATE_AGE}})
+
+    def run_delete(self, new_id):
+        # DETACH DELETE: the edges touching the vertex, then the vertex, in
+        # one transaction.
+        with self.cl.start_session() as s:
+            with s.start_transaction(write_concern=self._wc):
+                self.db["knows"].delete_many(
+                    {"$or": [{"src": new_id}, {"dst": new_id}]}, session=s)
+                self.db["person"].delete_one({"_id": new_id}, session=s)
+
+    def person_scan(self, id_from):
+        return self._agg(self.person, [
+            {"$match": {"_id": {"$gte": id_from}}},
+            {"$project": {"_id": 0, "id": "$_id", "name": 1, "age": 1, "city": 1}}])
+
+    # ---- analytics ---------------------------------------------------
+    OLAP = {
+        "top_degree": ("knows", [
+            {"$group": {"_id": "$src", "d": {"$sum": 1}}},
+            {"$sort": {"d": -1, "_id": 1}}, {"$limit": 10},
+            {"$project": {"_id": 0, "id": "$_id", "d": 1}}]),
+        "same_city_edges": ("knows", [
+            {"$lookup": {"from": "person", "localField": "src", "foreignField": "_id", "as": "a"}},
+            {"$unwind": "$a"},
+            {"$lookup": {"from": "person", "localField": "dst", "foreignField": "_id", "as": "b"}},
+            {"$unwind": "$b"},
+            {"$match": {"$expr": {"$eq": ["$a.city", "$b.city"]}}},
+            {"$group": {"_id": "$a.city", "n": {"$sum": 1}}},
+            {"$sort": {"n": -1, "_id": 1}}, {"$limit": 10},
+            {"$project": {"_id": 0, "c": "$_id", "n": 1}}]),
+        "friend_age_by_city": ("knows", [
+            {"$lookup": {"from": "person", "localField": "src", "foreignField": "_id", "as": "a"}},
+            {"$unwind": "$a"},
+            {"$lookup": {"from": "person", "localField": "dst", "foreignField": "_id", "as": "f"}},
+            {"$unwind": "$f"},
+            {"$group": {"_id": "$a.city", "a": {"$avg": "$f.age"}, "n": {"$sum": 1}}},
+            {"$sort": {"n": -1, "_id": 1}}, {"$limit": 10},
+            {"$project": {"_id": 0, "c": "$_id", "a": 1, "n": 1}}]),
+        "degree_dist": ("knows", [
+            {"$group": {"_id": "$src", "d": {"$sum": 1}}},
+            {"$group": {"_id": "$d", "n": {"$sum": 1}}},
+            {"$sort": {"_id": 1}},
+            {"$project": {"_id": 0, "deg": "$_id", "n": 1}}]),
+        # THE SET-INTERSECTION FORM, not a triple $unwind. One row of `knows`
+        # is the a->b leg with a < b; N+(b) and N-(a) are two indexed
+        # $lookups, and the third vertex is any c in both with c > a, so each
+        # triangle is counted once at its smallest-id vertex. The same shape
+        # SurrealDB's triangle count uses, and for the same reason: the
+        # nested-unwind spelling materialises every three-path.
+        "triangles": ("knows", [
+            {"$match": {"$expr": {"$lt": ["$src", "$dst"]}}},
+            {"$lookup": {"from": "knows", "localField": "dst", "foreignField": "src", "as": "bc"}},
+            {"$lookup": {"from": "knows", "localField": "src", "foreignField": "dst", "as": "ca"}},
+            {"$project": {"n": {"$size": {"$filter": {
+                "input": {"$setIntersection": [
+                    {"$map": {"input": "$bc", "in": "$$this.dst"}},
+                    {"$map": {"input": "$ca", "in": "$$this.src"}}]},
+                "cond": {"$gt": ["$$this", "$src"]}}}}}},
+            {"$group": {"_id": None, "n": {"$sum": "$n"}}},
+            {"$project": {"_id": 0, "n": 1}}]),
+    }
+
+    def run_olap(self, qname):
+        coll, pipeline = self.OLAP[qname]
+        # allowDiskUse: the two-sided join in same_city_edges and
+        # friend_age_by_city exceeds the 100 MB in-memory sort/group limit at
+        # the campaign's scale factors, and an engine refusing its own query
+        # for a memory bound is not a result about the query.
+        rows = list(self.db[coll].aggregate(pipeline, allowDiskUse=True))
+        return self._count_or_zero(rows) if qname == "triangles" else rows
+
+    def run_cypher(self, text):
+        raise NotImplementedError("MongoDB runs aggregation pipelines through the name-based hooks")
+
+    def close(self):
+        mongo_common.close(self.cl)
+
+
 ADAPTERS = {a.name: a for a in
             [ArcadeGraphEmbedded, ArcadeGraphServer, Neo4jGraph, LadybugGraph,
-             SurrealGraph, SurrealGraphServer, ArangoGraph]}
+             SurrealGraph, SurrealGraphServer, ArangoGraph, MongoGraph]}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. Neo4j and
 # LadybugDB cannot be relaxed and are the named exceptions on this table; the
@@ -836,6 +1079,7 @@ DURABILITY = {
     "surrealdb_graph": bench_common.DURABILITY_SURREAL_EMBEDDED,
     "surrealdb_graph_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_graph": arango_common.DURABILITY,
+    "mongodb_graph": mongo_common.DURABILITY,
 }
 
 

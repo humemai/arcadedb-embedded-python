@@ -441,6 +441,50 @@ BACKENDS = {
         "server_port": 27017,
         "ready_regex": r"Waiting for connections",
     },
+    # THE GRAPH ARM RUNS THE SAME IMAGE AND THE SAME DIGEST as the document
+    # one, because $graphLookup and $lookup are core mongod and need nothing
+    # mongot does. #68 listed "$graphLookup (not a model it claims)" among the
+    # things not joining; #92 is the rule that overrides it -- an engine
+    # competes in its own dialect if it can express the query, and what it
+    # cannot express is declared with the constructs tried.
+    "mongodb_graph": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",  # 8.2.12
+        "server_cmd": ["--replSet", "rs0", "--bind_ip_all"],
+        "server_port": 27017,
+        "ready_regex": r"Waiting for connections",
+    },
+    # MongoDB Search (mongot) Community beside the SAME mongod digest, in one
+    # container (Dockerfile.mongosearch, built by build_images.sh). #68
+    # recorded MongoDB's vector search as not joining because it "needs the
+    # separate mongot process, a two-container server the runner cannot start
+    # yet"; the pair is one container here, so the runner starts it like every
+    # other served engine and the whole engine sits in the one server cgroup
+    # the cell caps and samples.
+    #
+    # The readiness marker is printed by the entrypoint only after mongot
+    # answers SERVING on its health endpoint, so a cell can never be handed a
+    # mongod whose search process is still starting -- the failure the Milvus
+    # settle (BUGS F8) exists to prevent, caught before the cell rather than
+    # after it.
+    #
+    # NO --replSet HERE: the entrypoint owns it, because mongot cannot sync
+    # from a standalone and the set has to be initiated before mongot starts.
+    "mongodb_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "dbbench:mongo-search",
+        "server_port": 27017,
+        "ready_regex": r"DBBENCH mongod\+mongot ready",
+    },
+    "mongodb_e2": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "dbbench:mongo-search",
+        "server_port": 27017,
+        "ready_regex": r"DBBENCH mongod\+mongot ready",
+    },
     # ---- l4 time series -------------------------------------------------
     # THE ARCADEDB ARMS ARE THREE, NOT ONE, and the split is the point. The
     # native TIMESERIES arm publishes its headline with two opt-in fast paths
@@ -1259,7 +1303,8 @@ LANES = {
            ["oltp", "olap"]),
     "l2": ("l2_graph.py",
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
-            "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server", "arangodb_graph"],
+            "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server", "arangodb_graph",
+            "mongodb_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
               ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "surrealdb_tpc",
@@ -1267,7 +1312,7 @@ LANES = {
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
-            "arangodb_e2", "pg_age_e2", "neo4j_e2", "composed_qdrant_neo4j"],
+            "arangodb_e2", "mongodb_e2", "pg_age_e2", "neo4j_e2", "composed_qdrant_neo4j"],
            ["hybrid", "atomicity"]),
     # L5 measures OPEN and CLOSE, which every embedded deployment does and no
     # benchmark measures. Situations ride the WORKLOAD axis, so each is its own
@@ -1288,7 +1333,7 @@ LANES = {
             ["arcadedb_dense_embedded", "arcadedb_dense_server", "chroma_dense", "lancedb_dense",
              "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
              "milvus_dense", "pgvector_dense", "neo4j_dense", "surrealdb_dense", "surrealdb_dense_server",
-             "arangodb_dense",
+             "arangodb_dense", "mongodb_dense",
              # int8 arms for every dense engine that ships a quantized index.
              # Chroma, DuckDB-VSS and sqlite-vec have none; LanceDB is int8
              # already (IVF_HNSW_SQ is its only HNSW offering).
@@ -1806,7 +1851,7 @@ MP_LABELS = {
     "lancedb_dense": "lancedb",
     "pgvector_dense": "pgvector", "neo4j_dense": "neo4jvec",
     "surrealdb_dense": "surreal", "surrealdb_dense_server": "surrealsrv",
-    "arangodb_dense": "arango",
+    "arangodb_dense": "arango", "mongodb_dense": "mongo",
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
 }
 
