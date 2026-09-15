@@ -38,6 +38,10 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `mp_rows_<pin>.jsonl`, `mp_rows_small_<pin>.jsonl`, `mp_rows_sparse_<pin>.jsonl` | the per-cell multipass rows behind the overlay directories below | nothing on the page; the per-cell record |
 | `runs_skeleton_laptop.csv` | the laptop micro-scale placeholder freeze behind a skeleton publish, one repetition, sweep tier, `bench_host` of the laptop (DECISIONS #86) | `refresh_web_page.py --skeleton`, which refuses a row from the bench host or at paper tier. Never merged into `runs.jsonl` |
 
+The answer digest and its readable sample, the `durability` string, and the thermal fields (BUGS.md F45) are row fields rather than files, so nothing under `results/` holds them separately and a question about any of the three is answered by printing the row.
+
+`equivalence_check.py` reads the frozen set like the other gates and takes `--rows <file>` for a campaign file, a smoke file, or the skeleton freeze, reducing to the newest row per cell before it compares, so a re-run cell does not read as one backend giving two answers.
+
 ## Overlays: directories a table reads directly
 
 | dir | feeds |

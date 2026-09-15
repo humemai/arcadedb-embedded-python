@@ -52,6 +52,7 @@ Beyond the lane's own metrics:
 - **Phases.** `build_s`, settle, query generation, ground-truth load, search wall, recall computation, and `phases_accounted_s` so unexplained time is visible rather than absorbed. The dense and sparse lanes also split `ingest_s` from `index_s` where the engine has the boundary. Every lane prints `PHASE` markers as it goes, so a cell killed by its timeout still says which phase it was in.
 - **Cold and warm**, separately: the first iteration after the database is opened is the cold number and the remaining iterations are the warm one, on every timed query from the 2026-10 instrument (DECISIONS #89). A lane where the split does not apply says so instead of leaving a blank.
 - **Envelope.** cpuset, memory cap, heap, observed server heap and page cache, `mem_split`, image digest, engine version, engine commit.
+- **Thermal.** `host_temp_c_start` and `_end` from the package sensor, `host_throttle_count_start` and `_end` and `host_throttled_ms` from the kernel, on every row since the queue scripts pulled the fix on 2026-09-14 (BUGS.md F45). mini bounces off its thermal ceiling under a long build while the busy cores hold 4.3 GHz, so the power mode stays as the machine ships and each row carries the temperature and the counters as evidence; no protocol change follows.
 - **Instrument.** `instrument`, `bench_host`, the per-engine `durability` string read out of the engine, and the canonical answer digest with its readable sample for every deterministic query (PROTOCOL.md section 2).
 
 ## 4. Heap and memory caps

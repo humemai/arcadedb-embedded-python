@@ -48,6 +48,14 @@ The single rule, from which most of the rest follows:
 
 **A digest is of the canonical answer, not of the raw rows.** The digest is taken after the answer is put in canonical form: sorted unless the query defines an order, floats rounded to a fixed precision, engine-specific row wrappers and column ordering gone. Two engines whose digests match did not return identical result objects, and hashing what a driver handed back instead will disagree on every engine pair for reasons that are not about the answer.
 
+**A measure is compared as a number; a count and an identifier are compared exactly.** A summed or averaged column is declared numeric once per query, so an engine returning an integer and one returning a double agree: ArangoDB's `SUM` returns 37,734,107 where the others return 37,734,107.0, which split the pricing summary seven engines to one at SF1 while both sides held the same number. A count is never declared that way, because the float side rounds to six significant digits and 1,234,567 would agree with 1,234,568.
+
+**The revenue total and the revenue by month carry a row count in the answer.** It is compared exactly and is not a page column (DECISIONS #94): at the campaign's largest tier a single lost row moves either sum by less than the digest's rounding, detected 10.8 and 36.5 per cent of the time, and F46 is an engine that loses exactly one row to an index bound.
+
+**A withheld cell is not a missing measurement.** A disagreement that has been reproduced and filed upstream prints as KNOWN and its cell is withheld (`equivalence_check.KNOWN_DISAGREEMENTS`, `export_web.WITHHELD_CELLS`); today that is the served native time-series group-by, upstream #7610, and the entry goes at the re-pin that carries the fix.
+
+**Every row since 2026-09-14 says how hot the machine was.** `host_temp_c_start` and `_end`, `host_throttle_count_start` and `_end`, and `host_throttled_ms` (BUGS.md F45). mini throttles under sustained load while the busy cores hold 4.3 GHz, the power mode is unchanged by decision, and rows from different stages are compared with those fields read rather than assumed equal.
+
 **"Unexpressible" is a declaration, not a failure.** An engine whose adapter declares an operation absent has said so deliberately (DECISIONS #88); `equivalence_check` names it and the table prints a dash with the reason in its condition. It is not a crashed cell, a timeout, or a gap to be filled, and it is not evidence that the engine is slow. A silently missing answer is the failure, and that is what the gate exists to tell apart from this.
 
 ## Publishing traps

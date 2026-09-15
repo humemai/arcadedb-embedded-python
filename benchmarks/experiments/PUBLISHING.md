@@ -50,6 +50,8 @@ Four gate scripts (`page_check` has two sections), then two structural checks. A
 
 `MAPPING` and `PROSE` split the page because the two surfaces fail differently. Cells are written by the exporter straight from the frozen results, so a wrong one is nearly impossible. Prose is typed by hand, so a wrong one is nearly inevitable: a caption once gave one engine's dense latency from the canonical CSV and the other's from the matched overlay, inside one sentence, with no published cell wrong and nothing invented.
 
+A disagreement that has been reproduced, understood, and filed upstream prints as KNOWN rather than FAIL and its cell is withheld from the page instead of being published beside an answer it does not match (`equivalence_check.KNOWN_DISAGREEMENTS`, `export_web.WITHHELD_CELLS`); today that is the served native time-series group-by, upstream #7610. The entry is deleted at the re-pin that carries the fix, which re-arms the gate for that query, because a gate that cannot pass until an upstream release lands is a gate somebody deletes.
+
 `WEB_ONLY_FIGURES` is the escape hatch for a figure the page shows and nothing else cites. It is deliberately empty; earn a line in it, do not assume one.
 
 ## Adding a table to the page

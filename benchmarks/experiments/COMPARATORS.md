@@ -5,7 +5,10 @@ One row per engine. The digest is the amd64 manifest digest (`docker manifest in
 Which arms are on the page and which are still queued is PAGE-SPEC.md section 2; the queue chain is CAMPAIGN.md section 6. This file says only what each engine is pinned to and why it runs the way it does.
 
 
-ArcadeDB's document analytics rows were withdrawn from the page on 2026-09-14 (BUGS F42 and F43), so the `docs_olap` comparisons on the live page are between comparators only until October re-measures them. The engine defect behind half of it, a bare decimal literal compared at single precision, is the reason this repository's ArcadeDB SQL never compares a numeric column against a bare decimal literal and uses a bound parameter or an explicit type suffix instead.
+ArcadeDB's document analytics rows were withdrawn from the page on 2026-09-14 (BUGS F42 and F43), so the `docs_olap` comparisons on the live page are between comparators only until October re-measures them. The engine defect behind half of it, a bare decimal literal compared at single precision, was filed upstream as #7609 on 2026-09-15 and is the reason this repository's ArcadeDB SQL never compares a numeric column against a bare decimal literal and uses `BETWEEN` or a bound parameter instead. The other half was ours: `Q1_ARCADE` computed four of the five aggregates every comparator computed, so the cell timed a smaller question than the row beside it (BUGS F43).
+
+Two more filings came out of the same answer checking on 2026-09-15. #7610 is the served engine printing a time bucket as a date, which collapses every bucket inside one calendar day, so the served native time-series grouping is withheld from the page and named as a known disagreement. #7611 is an indexed lower bound skipping part of a run of equal entries, which is why the revenue query disagreed only at the size where the loss landed on a qualifying row (BUGS F44 and F46).
+
 ## In the harness
 
 | Engine | Pin | Version | Lanes | Deployment | Ingest path |
@@ -32,6 +35,8 @@ ArcadeDB's document analytics rows were withdrawn from the page on 2026-09-14 (B
 The composed cross-model stack (Qdrant + Neo4j) is not a pinned engine of its own: it is two of the rows above wired together, and it still carries the retired Neo4j 5-community pin until qDT re-runs it.
 
 From 2026-10 every engine above that has a durability setting runs the relaxed commit class, read out of the engine and recorded on the row; FAIRNESS.md F10 holds the mapping and names the engines that cannot be relaxed.
+
+**The two SurrealDB rows are two engines.** The embedded arm used one core on every lane measured, at about 1.0 to 1.3 processor seconds per elapsed second against 6.5 to 14.9 for its own server and 13.5 for ArcadeDB embedded, so its latencies are a single-threaded engine's and the page says so rather than reading them as the product's ceiling. Its core is a year older than the server's (core 2.3.10 against server 3.2.4, BUGS F39) and sits on a different store, so the two rows differ by version, store, and threading as well as by transport (DECISIONS #95). They also run different text for the triangle count, each the form that is fast on its own version (DECISIONS #93, FAIRNESS.md F4).
 
 ## October re-pins (DECISIONS #87, surveyed 2026-09-14)
 
@@ -73,5 +78,11 @@ Servers: PostgreSQL, pgvector, PG+AGE, TimescaleDB, MongoDB, Neo4j, Qdrant, Milv
 Every new adapter runs once on the laptop through the runner, against its pinned image, at a micro or sweep scale with one rep, before its queue script is written. The smoke proves the image, the adapter, the recorded schema, and the version string; nothing it produces is a page number, and every published row is re-measured on mini. The TPC adapters have no laptop corpus and are exercised by their queue script's first cell instead.
 
 Laptop fixtures live in `~/bench-data`: `dense` is a 20k cut of SIFT1M, `dense1m` the full million with ground truth (`BENCH_DENSE_DATA=/data/dense1m` selects it). Mini holds its own copies.
+
+**What durability costs, measured on the laptop skeleton.** Placeholders from a busy development machine, labelled as such: nothing here reaches the page, and the campaign's own rows replace them (DECISIONS #90).
+
+Document insert, strict against relaxed: SQLite 69x (0.021 ms to 1.45 ms), ArcadeDB embedded 33.7x (0.217 to 7.31), PostgreSQL 16.3x (0.155 to 2.53), SurrealDB embedded 12.3x (0.584 to 7.18), MongoDB 4.1x (0.686 to 2.81), ArangoDB 4.0x (2.18 to 8.70), and ArcadeDB served 3.7x (2.47 to 9.19). Graph insert: SurrealDB embedded 10.5x, ArangoDB 3.6x, ArcadeDB embedded 3.5x, and ArcadeDB served 2.1x. Cross-model transaction: ArangoDB 1.4x, ArcadeDB served 1.2x, PostgreSQL with pgvector and AGE 1.2x, and ArcadeDB embedded 1.2x.
+
+The pattern is the finding rather than any one number: the strict document inserts span 1.45 to 9.19 ms where the relaxed ones span 0.021 to 2.47, so waiting for the disk costs every engine about the same and the multiple is largest exactly where the relaxed path is fastest. PROTOCOL.md section 3 carries what follows from it for the write rows the page prints.
 
 Smoke findings that changed an adapter are recorded in `.notes/bench/BUGS.md`, not here.

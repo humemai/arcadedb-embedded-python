@@ -26,6 +26,8 @@ Note the scope. The rule is about *resources*. Upgrading one engine's version is
 
 **F4. Same protocol.** Reps per build, warmup count, settle step and query set are properties of the LANE, not of whoever wrote the driver. If ArcadeDB gets five passes over one build, so does every comparator. If one engine gets a post-ingest settle, all of them do.
 
+*One engine, two versions, two spellings.* The two SurrealDB deployments run different text for the triangle count, because the faster form inverts between their versions: the record-link form is 5.2x faster on the embedded core 2.3.10 and the arrow form is 4.2x faster on the served 3.2.4, both measured, so one shared text would hand whichever arm it suits less a four to five times penalty that measures our spelling rather than either engine (DECISIONS #93). Both texts and both measurements stay in the adapter so the choice is checkable, and the answer digests prove the two forms compute the same number.
+
 **F5. Same engine line within a table.** A row measured on a different release than the row beside it compares versions while appearing to compare configurations.
 
 **F6. Thread pools are fitted to the cpuset, not to the host.** F1 pins the cpuset, which bounds which CPUs a process may run on. It does not bound how many threads the process starts, and several runtimes size their pools from the host core count regardless of the mask. An engine running 20 threads on 12 CPUs pays context switching its 12-thread neighbour does not.
@@ -74,7 +76,7 @@ The DuckDB bias runs **against** DuckDB, which wins that lane regardless, so not
 
 Scope, and it is narrow. One tier, k=10, one query in flight at a time, embedded backends only. It says nothing about concurrent query load, and nothing about Qdrant or Milvus, which run as servers and are the ones most likely to hold per-query pools. Re-measure before extending the claim.
 
-**F9. A kept row needs a control, because the host is not an invariant.** F1 to F8 and F10 to F12 constrain a cell's *configuration*; none constrains *when* it ran. A row printed tonight beside one measured five weeks ago is fully compliant and still potentially wrong, because the kernel, the docker version and the machine's thermal history all moved and none of that is recorded as a run condition.
+**F9. A kept row needs a control, because the host is not an invariant.** F1 to F8 and F10 to F12 constrain a cell's *configuration*; none constrains *when* it ran. A row printed tonight beside one measured five weeks ago is fully compliant and still potentially wrong, because the kernel, the docker version and the machine's thermal history all moved and, apart from the thermal fields every row has carried since the queue scripts pulled them on 2026-09-14 (BUGS.md F45), none of that is recorded as a run condition.
 
 So when a campaign re-measures one engine and carries the others forward, **re-run one untouched comparator as a control and show it reproduces its kept numbers within run-to-run spread.** One extra cell buys evidence for every row that was not re-run. If the control does not reproduce, the carried-forward rows are not usable and the whole tier is re-measured. Record the control's old-against-new delta next to the table it licenses, so a reader can see the carry-forward was checked rather than assumed.
 
@@ -83,6 +85,8 @@ So when a campaign re-measures one engine and carries the others forward, **re-r
 **Neo4j is the exception the decision names**: it flushes its log at every commit, has no setting to relax it, so it runs as it is and its graph and cross-model tables say it is the one engine waiting for the disk, rather than leaving it silently advantaged or disadvantaged. The same read-out-of-the-engine check put LadybugDB and DuckDB in the strict class too, and each table's durability condition is generated from the engines that table shows. SurrealDB served 3.2.4 exposes no durability setting at all, so it is in neither class and its row says so instead of claiming one.
 
 `fairness_check.check_durability` refuses a 2026-10 row carrying no `durability`, a strict string on an engine that has the knob, an unverified string on an engine not named above, and two `instrument` values in one table. The relaxed setting is a real deployment mode every one of these engines documents, it is matched on every engine that has the knob, and the one that cannot match is named: that is the whole fairness argument, and it is not re-litigated per table.
+
+Since DECISIONS #90 every timed write runs at both settings and the page carries both classes rather than choosing one, so the invariant is that a table's engines share a class and not that only the relaxed one is measured; ingest stays at a single setting on every lane (#90a).
 
 **F11. Close cost is an invariant, not a column.** Close should be O(what was written), not O(what is stored), and on the order of 100 ms; the reasoning, the situations, and the numbers are PAGE-SPEC.md section 4 (DECISIONS #50). Checked by `fairness_check.check_close_cost`, which prints under this number.
 
