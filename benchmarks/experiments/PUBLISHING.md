@@ -88,3 +88,13 @@ Never `git add` a raw directory (`results/runs.jsonl`, `dense_mp5_*`, `sparse_mp
 ## The data behind the page, as a release asset
 
 `publish_results_asset.py --tag <tag>` bundles `results/runs_paper.csv` and `results/web_benchmarks.json` with a manifest naming the engine pin, the tables, the row count, the file checksums, and the gate status, and attaches it to a GitHub release with `--publish`. Without `--publish` it writes the bundle and prints what it would upload, the same dry-run-then-apply shape `land_stage.py` uses. It exists because most readers who doubt a benchmark want the rows rather than a way to rerun it, and a table can be checked against its own data with no machine, no corpus, and no container (DECISIONS #97). Run it after a campaign is frozen, not after every stage.
+
+## Switching the page to a new campaign
+
+A switch is the one moment the whole page changes at once: a new engine pin, a re-pinned comparator set, new columns, new prose, and a documentation site that describes all of it (DECISIONS #83).
+
+Run `campaign_switch_check.py --new-pin <pin>` first. It reports three things and changes nothing: whether the preconditions hold, which tracked files still name the old pin, and which documentation lines name a version, a date, an issue number, or an instrument label, since those are prose no generator keeps current.
+
+Then, in order: land the final stage and freeze; run every gate on the new payload, including the manifest coverage check; publish the results asset; copy the preview payload, images, and prose over the live ones in one commit; delete the preview route so nothing stale is reachable; update the files the check listed that are not historical mentions; update the documentation lines it listed that the new campaign changes; and rebuild both sites, checking that the page's link to the docs and the docs' links to the page still resolve.
+
+The check is a report rather than a gate on purpose. Most of what it lists is a judgement call, since a file naming the old pin may be recording history rather than describing the present, and a tool that decided that for you would be wrong in both directions.
