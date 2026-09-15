@@ -84,3 +84,7 @@ One command, the same order every time, refuses by default:
 It pulls `runs_page_<pin>.jsonl` (and, with `--overlay`, an arm's dense multipass files at both sizes), drops the rows of the backends named as still running so a stage in progress never reaches the freeze, merges, publishes through the gates, and prints which page tables changed. Without `--apply` it stops there and restores the site's payload; with `--apply` it builds the site, commits both repositories, and pushes. The merge into `runs.jsonl` is idempotent, so a dry run followed by `--apply` is the normal sequence.
 
 Never `git add` a raw directory (`results/runs.jsonl`, `dense_mp5_*`, `sparse_mp_*`): the bench host writes them, and a tracked copy makes its `git pull --ff-only` refuse, which aborts every queued script. They are ignored by `.gitignore`; keep it that way.
+
+## The data behind the page, as a release asset
+
+`publish_results_asset.py --tag <tag>` bundles `results/runs_paper.csv` and `results/web_benchmarks.json` with a manifest naming the engine pin, the tables, the row count, the file checksums, and the gate status, and attaches it to a GitHub release with `--publish`. Without `--publish` it writes the bundle and prints what it would upload, the same dry-run-then-apply shape `land_stage.py` uses. It exists because most readers who doubt a benchmark want the rows rather than a way to rerun it, and a table can be checked against its own data with no machine, no corpus, and no container (DECISIONS #97). Run it after a campaign is frozen, not after every stage.
