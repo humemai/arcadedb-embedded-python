@@ -129,8 +129,8 @@ Stated here because an absent number is a claim too.
   is censored by GIL queueing above a handful of clients, and a bad concurrency table is
   worse than a disclosed absence.
 - **Import, export, and backup**, and replication beyond one failover trial.
-- **Durability outside the one matched relaxed class** on reads. The timed writes run at
-  both settings; everything else runs at one.
+- **Durability outside the matched relaxed class.** The timed writes are the exception and
+  run at both settings; ingest and everything else run at one.
 - **Anything across a real network.** Served engines run in a sibling container on the same
   host.
 - **Dense dimensionality above 128, and k other than 10.**
