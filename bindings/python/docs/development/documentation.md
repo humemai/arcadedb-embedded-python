@@ -29,8 +29,8 @@ python scripts/fix_markdown.py
 ```
 
 ```bash
-cd bindings/python
-uv run --group docs mkdocs serve
+# from the repository root, where the uv project and its .venv live
+uv run mkdocs serve -f bindings/python/mkdocs.yml
 ```
 
 Then open: <http://127.0.0.1:8000/arcadedb/>
@@ -42,7 +42,7 @@ Any changes to `.md` files will automatically refresh in your browser!
 Build the static site to verify there are no errors:
 
 ```bash
-mkdocs build --strict
+uv run mkdocs build --strict -f bindings/python/mkdocs.yml
 ```
 
 The built site will be in `site/` directory.
@@ -51,10 +51,10 @@ The built site will be in `site/` directory.
 
 ```bash
 # Check for broken links
-mkdocs build --strict
+uv run mkdocs build --strict -f bindings/python/mkdocs.yml
 
 # Validate configuration
-mkdocs --version
+uv run mkdocs --version
 ```
 
 ## Versioned Documentation
@@ -117,22 +117,21 @@ This creates a test deployment without affecting the stable docs.
 List all deployed versions:
 
 ```bash
-cd bindings/python
-mike list
+uv run mike list -F bindings/python/mkdocs.yml
 ```
 
 Delete a version (requires push access):
 
 ```bash
 # Replace X.Y.Z with version to delete
-mike delete X.Y.Z --push
+uv run mike delete X.Y.Z --push -F bindings/python/mkdocs.yml
 ```
 
 Set a different version as default:
 
 ```bash
 # Replace X.Y.Z with version to set as default
-mike set-default X.Y.Z --push
+uv run mike set-default X.Y.Z --push -F bindings/python/mkdocs.yml
 ```
 
 ### Version Alignment
@@ -286,7 +285,7 @@ result = obj.method_name("value", param2=True)
 
 ```bash
 # Build with strict mode (fails on warnings)
-mkdocs build --strict
+uv run mkdocs build --strict -f bindings/python/mkdocs.yml
 ```
 
 ### Check Mobile Responsiveness
@@ -317,11 +316,10 @@ Documentation is automatically validated on every push via GitHub Actions:
 
 ### "Config file not found"
 
-Make sure you're in `bindings/python/` directory:
+Run from the repository root:
 
 ```bash
-cd bindings/python
-uv run --group docs mkdocs serve
+uv run mkdocs serve -f bindings/python/mkdocs.yml
 ```
 
 ### "Module not found" error
@@ -346,8 +344,8 @@ The version selector appears after deploying at least 2 versions with mike:
 
 ```bash
 # Example: Deploy two versions
-mike deploy X.Y.Z latest
-mike deploy dev
+uv run mike deploy X.Y.Z latest -F bindings/python/mkdocs.yml
+uv run mike deploy dev -F bindings/python/mkdocs.yml
 ```
 
 ## Next Steps
