@@ -720,7 +720,8 @@ STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo
 # such a string. Any other backend that starts saying "not verified" is an
 # engine whose default nobody checked, which is exactly what #81 forbids.
 UNVERIFIED_ALLOWED = {"surrealdb_tpc_server", "surrealdb_graph_server",
-                      "surrealdb_dense_server", "surrealdb_e2_server"}
+                      "surrealdb_dense_server", "surrealdb_e2_server",
+                      "surrealdb_ts_server"}
 
 # THE CELLS THAT MUST EXIST IN BOTH DURABILITY CLASSES (DECISIONS #90): the six
 # document operations, the three graph writes, and the cross-model transaction.

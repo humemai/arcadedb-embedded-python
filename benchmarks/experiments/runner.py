@@ -810,6 +810,29 @@ BACKENDS = {
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
+    # TIME SERIES ON A PLAIN TABLE (2026-09-15): SurrealDB in both modes and
+    # ArangoDB join l4 on SQLite's footing, a table with a datetime field and a
+    # composite (host, ts) index. Same pins, same server commands and the same
+    # durability facts as the engines' other arms above; see l4_tsbs.py.
+    "surrealdb_ts": {"topology": "embedded", "image": "dbbench:client"},
+    "surrealdb_ts_server": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        # No durability flag: 3.2.4 has none to set (see surrealdb_graph_server).
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_port": 8000,
+        "ready_regex": r"Started web server",
+    },
+    "arangodb_ts": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
+        "server_cmd": ["arangod", "--vector-index", "true"],
+        "server_port": 8529,
+        "ready_regex": r"is ready for business",
+    },
     "composed_qdrant_neo4j": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1370,7 +1393,10 @@ LANES = {
            # arms run: the document path is what ordinary SQL gives you, the
            # native path is the engine asked in its own idiom, and the page
            # prints both rather than choosing the flattering one.
-           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite", "mongodb", "timescaledb"],
+           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite", "mongodb", "timescaledb",
+            # The plain-table comparators (2026-09-15): no time-series type,
+            # SQLite's footing, see l4_tsbs.SurrealTS / ArangoTS.
+            "surrealdb_ts", "surrealdb_ts_server", "arangodb_ts"],
            ["ingest"]),
 }
 

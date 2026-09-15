@@ -400,9 +400,11 @@ DISPLAY_NAMES = {
     "surrealdb_tpc": "SurrealDB (embedded)", "surrealdb_tpc_server": "SurrealDB (server)",
     "surrealdb_graph": "SurrealDB (embedded)", "surrealdb_graph_server": "SurrealDB (server)",
     "surrealdb_dense": "SurrealDB (embedded)", "surrealdb_dense_server": "SurrealDB (server)",
+    "surrealdb_ts": "SurrealDB (embedded)", "surrealdb_ts_server": "SurrealDB (server)",
     # Served only, so bare, like MongoDB and Neo4j; "(server)" marks an engine
     # that also has an embedded row.
     "arangodb_tpc": "ArangoDB", "arangodb_graph": "ArangoDB", "arangodb_dense": "ArangoDB", "arangodb_e2": "ArangoDB",
+    "arangodb_ts": "ArangoDB",
     "mongodb_graph": "MongoDB", "mongodb_dense": "MongoDB", "mongodb_e2": "MongoDB",
     "arcadedb": "ArcadeDB",
     "sqlite": "SQLite", "chroma": "Chroma", "ladybug": "LadybugDB",
@@ -1861,6 +1863,11 @@ L4_CANON_LABELS = {
     "mongodb":            "mongodb",
     "timescaledb":        "timescaledb",
     "duckdb":             "duckdb",
+    # The plain-table comparators (2026-09-15), named like their rows on the
+    # document and graph tables.
+    "surrealdb_ts":        "SurrealDB (embedded)",
+    "surrealdb_ts_server": "SurrealDB (server)",
+    "arangodb_ts":         "ArangoDB",
 }
 
 
@@ -2404,7 +2411,8 @@ def _l4_table(all_rows):
         return None
 
     order = ["ArcadeDB (embedded, native time series)", "ArcadeDB (embedded, document path)",
-             "questdb", "duckdb", "sqlite", "mongodb", "timescaledb"]
+             "questdb", "duckdb", "sqlite", "mongodb", "timescaledb",
+             "SurrealDB (embedded)", "SurrealDB (server)", "ArangoDB"]
     # This lane predates runner.BACKENDS and keeps its own adapters, so the
     # topology lookup does not reach it. QuestDB is a server (ILP ingest on
     # 9009, SQL over pg-wire, see l4_tsbs.py); the other two run in-process.
@@ -2412,7 +2420,8 @@ def _l4_table(all_rows):
                      "ArcadeDB (server, document path)": "server",
                      "ArcadeDB (server, native time series)": "server",
                      "ArcadeDB (embedded, document path)": "embedded",
-                     "questdb": "server", "duckdb": "embedded", "sqlite": "embedded", "mongodb": "server", "timescaledb": "server"}
+                     "questdb": "server", "duckdb": "embedded", "sqlite": "embedded", "mongodb": "server", "timescaledb": "server",
+                     "SurrealDB (embedded)": "embedded", "SurrealDB (server)": "server", "ArangoDB": "server"}
     # The October set REPLACES L4_METRICS (see OCT_TABLE_METRICS): five
     # queries, one p99, one cold column, in the order the section reads.
     # Resolved once, before the loop, so the table's column list cannot come

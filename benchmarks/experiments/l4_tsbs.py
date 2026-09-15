@@ -5,6 +5,9 @@ Backends: arcadedb (embedded; Point documents with a composite (host, ts)
 index -- its idiomatic timeseries shape), duckdb (table + ART index),
 questdb (server; ILP ingest on 9009, SQL over pg-wire). InfluxDB3 omitted
 (no stable embedded/pinnable OSS artifact at eval time; disclosed).
+SurrealDB (embedded core 2.3.10 through the SDK, and the served 3.2.4) and
+ArangoDB 3.12.11 joined 2026-09-15 on SQLite's footing: a plain table with a
+datetime field and a composite (host, ts) index, no time-series type.
 
 Queries (TSBS-flavored):
   q_last    last point for one host
@@ -24,6 +27,8 @@ import os
 import statistics
 import time
 import bench_common
+import surreal_common
+import arango_common
 
 # THE CORPUS. BENCH_-prefixed because runner.py's env allowlist is a CLOSED
 # tuple: a variable not in it is dropped at the container boundary and the
@@ -909,13 +914,241 @@ class QuestTS:
     def close(self):
         self.cx.close()
 
+def _surreal_dt(epoch_s):
+    """A SurrealQL datetime literal for an epoch second. SurrealQL 2.x stopped
+    coercing a bare string to a datetime (a string compared with a datetime
+    field is a type mismatch, not a cast), so the literal carries the d prefix:
+    https://surrealdb.com/docs/surrealql/datamodel/datetimes"""
+    return "d'" + _dt.datetime.fromtimestamp(epoch_s, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "'"
+
+
+class SurrealTS:
+    """SurrealDB with no time-series type, on SQLite's footing (2026-09-15).
+
+    Embedded through the Python SDK (surrealdb==2.0.0, which carries core
+    2.3.10) on its SurrealKV disk store: one SCHEMALESS table `p` whose `ts`
+    field is a SurrealDB datetime (the SDK encodes a tz-aware Python datetime
+    as one over CBOR; read back, `SELECT ts` returns datetime objects), plus
+    the tag and the three metrics, and a composite index `DEFINE INDEX
+    p_host_ts ON p FIELDS host, ts` defined BEFORE the load (the SDK's SurrealKV
+    store writes a post-load DEFINE INDEX as one transaction record and failed
+    on it at 6.0M rows, BUGS F41). EXPLAIN on both versions shows the newest
+    reading and the one-host hour served from that index (2.3.10: `Iterate
+    Index` with prefix ['host_42'] and the two ts ranges; 3.2.4: `IndexScan`,
+    direction Backward, limit 1), and every all-host query as a table scan,
+    which is what SQLite's (host, ts) index gives it too.
+
+    Bucketing is `time::floor(ts, 1m)` / `time::floor(ts, 1h)`: truncation to
+    a multiple of the duration from the Unix epoch, which is the same bucket
+    `ts - ts % 60` and `date_trunc` produce (function reference:
+    https://surrealdb.com/docs/surrealql/functions/database/time). `time::group(ts,
+    'hour')` gives the same buckets and was measured equal; the duration form
+    covers the minute and the hour with one function.
+
+    One query is spelled as a subquery on purpose: on core 2.3.10 an `ORDER BY
+    h DESC LIMIT 5` written after `GROUP BY h` sorts by the group key
+    ASCENDING and takes the first five buckets, i.e. the wrong set (the same
+    finding as BUGS F31 on the TPC lane); wrapped in `SELECT * FROM (...)` it
+    orders correctly on both versions, and 3.2.4 answers the two spellings in
+    the same time (143 vs 145 ms, laptop probe), so both deployments run the
+    one text.
+
+    Every other SurrealDB arm loads with the SDK's insert() in batches; this
+    one does the same, 5,000 rows per call.
+    """
+    name = "surrealdb_ts"
+    URL = "surrealkv:///tmp/l4_surrealkv"
+    BATCH = 5000
+    # DECISIONS #81/#90: the string every SurrealDB embedded arm records, resolved
+    # at the cell's class before the store is opened.
+    durability = bench_common.DURABILITY_SURREAL_EMBEDDED
+
+    def _open(self):
+        self.durability = bench_common.at_class(bench_common.DURABILITY_SURREAL_EMBEDDED)
+        surreal_common.apply_durability()
+        import shutil
+        from surrealdb import Surreal
+        shutil.rmtree("/tmp/l4_surrealkv", ignore_errors=True)
+        self.db = Surreal(self.URL)
+        self.db.use("bench", "bench")
+        self._ver = surreal_common.engine_stamp(self.db)   # core version, not the SDK's (F39)
+
+    def connect(self):
+        self._open()
+        self.db.query("REMOVE TABLE IF EXISTS p")
+
+    def version(self):
+        return self._ver
+
+    def ingest(self, pts):
+        self.db.query("DEFINE TABLE p SCHEMALESS; DEFINE INDEX p_host_ts ON p FIELDS host, ts")
+        buf = []
+        for h, ts, uu, us, ui in pts:
+            buf.append({"host": h, "ts": _dt.datetime.fromtimestamp(ts, _dt.timezone.utc),
+                        "uu": uu, "us": us, "ui": ui})
+            if len(buf) >= self.BATCH:
+                self.db.insert("p", buf); buf = []
+        if buf:
+            self.db.insert("p", buf)
+
+    _A, _B1, _B12 = _surreal_dt(T0), _surreal_dt(T0 + 3600), _surreal_dt(T0 + 43200)
+    Q = {
+        "q_last": f"SELECT ts, uu FROM p WHERE host = '{HOST}' ORDER BY ts DESC LIMIT 1",
+        "q_range": (f"SELECT time::floor(ts, 1m) AS m, math::max(uu) AS v FROM p "
+                    f"WHERE host = '{HOST}' AND ts >= {_A} AND ts < {_B1} GROUP BY m ORDER BY m"),
+        "q_global": (f"SELECT time::floor(ts, 1h) AS h, math::mean(uu) AS v FROM p "
+                     f"WHERE ts >= {_A} AND ts < {_B12} GROUP BY h ORDER BY h"),
+        "q_groupby": (f"SELECT host, time::floor(ts, 1h) AS h, math::mean(uu) AS v FROM p "
+                      f"WHERE ts >= {_A} AND ts < {_B12} GROUP BY host, h ORDER BY host, h"),
+        "q_high": f"SELECT host, ts, uu FROM p WHERE ts >= {_A} AND ts < {_B12} AND uu > {HIGH}",
+        "q_orderlimit": (f"SELECT * FROM (SELECT time::floor(ts, 1h) AS h, math::max(uu) AS v FROM p "
+                         f"WHERE ts >= {_A} AND ts < {_B12} GROUP BY h) ORDER BY h DESC LIMIT {ORDERLIMIT_N}"),
+    }
+
+    @staticmethod
+    def _rows(res):
+        if isinstance(res, list) and res and isinstance(res[0], dict) and "result" in res[0]:
+            res = res[-1]["result"]
+        return res if isinstance(res, list) else ([res] if res is not None else [])
+
+    def q_last(self):
+        return self._rows(self.db.query(self.Q["q_last"]))
+
+    def q_range(self):
+        return self._rows(self.db.query(self.Q["q_range"]))
+
+    def q_global(self):
+        return self._rows(self.db.query(self.Q["q_global"]))
+
+    def q_groupby(self):
+        return self._rows(self.db.query(self.Q["q_groupby"]))
+
+    def q_high(self):
+        return self._rows(self.db.query(self.Q["q_high"]))
+
+    def q_orderlimit(self):
+        return self._rows(self.db.query(self.Q["q_orderlimit"]))
+
+    def close(self):
+        try:
+            self.db.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class SurrealTSServer(SurrealTS):
+    """The same table, index and SurrealQL against the served 3.2.4 on RocksDB,
+    through the shared reconnecting client (DECISIONS #91)."""
+    name = "surrealdb_ts_server"
+    durability = bench_common.DURABILITY_SURREAL_SERVER
+
+    def _open(self):
+        self.db = surreal_common.served_client()
+        self._ver = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
+
+
+class ArangoTS:
+    """ArangoDB 3.12.11 through python-arango, served only, on SQLite's footing
+    (2026-09-15): one collection `p`, `ts` held as epoch MILLISECONDS (AQL's
+    date functions take "numeric timestamp or ISO 8601 date time string"; the
+    number is what DATE_TIMESTAMP returns and what a range filter compares
+    cheapest), the tag and the three metrics, and a persistent index over
+    ["host", "ts"], which the explain plan uses (IndexNode on host, ts) for the
+    newest reading and the one-host hour. Bulk import API in 50,000-row
+    batches, like the other ArangoDB arms.
+
+    Bucketing is `DATE_TRUNC(d.ts, 'minute')` / `DATE_TRUNC(d.ts, 'hour')`,
+    which "truncates the given date after unit and returns the modified
+    date" as an ISO 8601 string (2026-01-01T00:00:00.000Z); the digest
+    declares the bucket an instant, so the string and everyone else's epoch
+    second are one value. DATE_ROUND(d.ts, 1, 'hour') returns the same bucket
+    and was checked equal on the probe; DATE_TRUNC is the direct spelling.
+    Reference: https://docs.arango.ai/arangodb/3.12/aql/functions/date/
+    (DATE_TRUNC, DATE_ROUND).
+
+    The collection is created with waitForSync at the cell's class
+    (DECISIONS #90) and the row records what the collection reads back, not
+    what was asked (#81): the ingest IS this lane's timed write.
+    """
+    name = "arangodb_ts"
+    durability = arango_common.DURABILITY
+    BATCH = 50_000
+
+    def connect(self):
+        self.cl, self.db, self._ver = arango_common.connect()
+
+    def version(self):
+        return self._ver
+
+    def ingest(self, pts):
+        col = self.db.create_collection("p", sync=arango_common.sync_flag())
+        col.add_index({"type": "persistent", "fields": ["host", "ts"]})
+        buf = []
+        for h, ts, uu, us, ui in pts:
+            buf.append({"host": h, "ts": ts * 1000, "uu": uu, "us": us, "ui": ui})
+            if len(buf) >= self.BATCH:
+                col.import_bulk(buf); buf = []
+        if buf:
+            col.import_bulk(buf)
+        self.durability = arango_common.durability_readback(self.db, "p")
+
+    _A, _B1, _B12 = T0 * 1000, (T0 + 3600) * 1000, (T0 + 43200) * 1000
+    Q = {
+        "q_last": "FOR d IN p FILTER d.host == @h SORT d.ts DESC LIMIT 1 RETURN {ts: d.ts, uu: d.uu}",
+        "q_range": ("FOR d IN p FILTER d.host == @h AND d.ts >= @a AND d.ts < @b "
+                    "COLLECT m = DATE_TRUNC(d.ts, 'minute') AGGREGATE v = MAX(d.uu) SORT m RETURN {m, v}"),
+        "q_global": ("FOR d IN p FILTER d.ts >= @a AND d.ts < @b "
+                     "COLLECT h = DATE_TRUNC(d.ts, 'hour') AGGREGATE v = AVG(d.uu) SORT h RETURN {h, v}"),
+        "q_groupby": ("FOR d IN p FILTER d.ts >= @a AND d.ts < @b "
+                      "COLLECT host = d.host, h = DATE_TRUNC(d.ts, 'hour') AGGREGATE v = AVG(d.uu) "
+                      "SORT host, h RETURN {host, h, v}"),
+        "q_high": ("FOR d IN p FILTER d.ts >= @a AND d.ts < @b AND d.uu > @high "
+                   "RETURN {host: d.host, ts: d.ts, uu: d.uu}"),
+        "q_orderlimit": ("FOR d IN p FILTER d.ts >= @a AND d.ts < @b "
+                         "COLLECT h = DATE_TRUNC(d.ts, 'hour') AGGREGATE v = MAX(d.uu) "
+                         "SORT h DESC LIMIT @n RETURN {h, v}"),
+    }
+    BIND = {
+        "q_last": {"h": HOST},
+        "q_range": {"h": HOST, "a": _A, "b": _B1},
+        "q_global": {"a": _A, "b": _B12},
+        "q_groupby": {"a": _A, "b": _B12},
+        "q_high": {"a": _A, "b": _B12, "high": HIGH},
+        "q_orderlimit": {"a": _A, "b": _B12, "n": ORDERLIMIT_N},
+    }
+
+    def _run(self, qn):
+        return list(self.db.aql.execute(self.Q[qn], bind_vars=self.BIND[qn], batch_size=10_000))
+
+    def q_last(self):
+        return self._run("q_last")
+
+    def q_range(self):
+        return self._run("q_range")
+
+    def q_global(self):
+        return self._run("q_global")
+
+    def q_groupby(self):
+        return self._run("q_groupby")
+
+    def q_high(self):
+        return self._run("q_high")
+
+    def q_orderlimit(self):
+        return self._run("q_orderlimit")
+
+    def close(self):
+        arango_common.close(self.cl)
+
 
 # Backends whose cell runs a SEPARATE server container, so run_conditions reads
 # the driver's cgroup and not the engine's. Kept as data beside the adapters so
 # adding a served arm cannot forget to update the role test.
-_CLIENT_SERVER = {"questdb"}
+_CLIENT_SERVER = {"questdb", "surrealdb_ts_server", "arangodb_ts"}
 
-BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS)}
+BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS,
+                                SurrealTS, SurrealTSServer, ArangoTS)}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. DuckDB is
 # the named exception here; TimescaleDB reads the server's own
@@ -930,6 +1163,12 @@ DURABILITY = {
     "sqlite": bench_common.DURABILITY_SQLITE,
     "mongodb": bench_common.DURABILITY_MONGODB,
     "questdb": bench_common.DURABILITY_QUESTDB,
+    # The three plain-table arms resolve their own string at connect (SurrealDB
+    # embedded at the class, ArangoDB read back from the collection); these are
+    # the relaxed defaults the map exists to name.
+    "surrealdb_ts": bench_common.DURABILITY_SURREAL_EMBEDDED,
+    "surrealdb_ts_server": bench_common.DURABILITY_SURREAL_SERVER,
+    "arangodb_ts": arango_common.DURABILITY,
 }
 
 
@@ -1014,7 +1253,9 @@ def main():
         for _ in range(QITER):
             t = time.perf_counter()
             ref = getattr(b, qn)()
-            times.append((time.perf_counter() - t) * 1000)
+            # DECISIONS #91: a sample taken across a served SurrealDB reconnect
+            # is discarded; every other adapter keeps every sample.
+            surreal_common.keep(b, times, (time.perf_counter() - t) * 1000)
         # Four decimals, not two: SQLite's index-backed newest reading takes
         # about 4 us and two decimals printed it as 0.00 ms (2026-09-12).
         out[f"{qn}_ms"] = round(statistics.median(times), 4)
@@ -1115,6 +1356,8 @@ def main():
     with _beat.phase("close"):
         b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
+    # `reconnects` on every SurrealDB row, zero when nothing happened (#91).
+    surreal_common.stamp_reconnects(out, b)
 
     # Stamp what this actually ran under. Until now every row this lane wrote
     # carried only the backend name and the metrics, so T5's time-series block
