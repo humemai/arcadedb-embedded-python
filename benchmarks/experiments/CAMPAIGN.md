@@ -1,5 +1,29 @@
 # Running a campaign
 
+## The routine, end to end
+
+Two loops, one inside the other. This is the whole procedure in order; each step names where its detail lives, and nothing below contradicts it.
+
+Per campaign, once:
+
+1. Settle the instrument before any cell runs: the query set, the measurement set, the durability rule, the fairness invariants, and the answer checking. A change mid-campaign splits the rows, so this is the only free moment (DECISIONS #82d, #88, #89, #90; PROTOCOL.md).
+2. Smoke every adapter on the laptop, one cell per engine per lane, and keep the evidence table (section 2 below).
+3. Re-pin every comparator to its latest stable release, smoking the risky jumps on their own (COMPARATORS.md, DECISIONS #87).
+4. Publish a skeleton to the preview route from laptop data, so the page's shape can be reviewed before the numbers exist (DECISIONS #86, PUBLISHING.md).
+5. Run the campaign, landing each stage to the preview rather than to the live page (section 6 below).
+6. Freeze, run every gate including the manifest coverage check, and publish the results asset (`publish_results_asset.py`, PUBLISHING.md).
+7. Switch: copy the preview payload, images, and prose over the live ones in one commit, and delete the preview route (`campaign_switch_check.py`, PUBLISHING.md).
+8. Prune what the campaign made obsolete: superseded decisions, bugs that retired with it, retired markers, and any withheld cell whose upstream issue has closed (step 4 of the switch check).
+9. Re-read every document the pruning touched, then rebuild both sites and check the links between them resolve.
+
+Per stage, repeated inside step 5:
+
+1. Write the queue script, lint it with `queue_lint.py`, and chain it behind the previous one (section 5 below).
+2. Let it run. The session watches STATUS.txt and docker; investigate any failure before recording it, because a recorded failure is a published claim.
+3. Land it with `land_stage.py`: pull the rows, exclude the backends still running, merge, run the gates, read the table diff, then apply, which commits the data and publishes the page.
+4. Regenerate anything derived from the rows that changed, such as the bottleneck memo.
+
+
 How a full re-measure is executed on mini. `PROTOCOL.md` holds the rules a row must satisfy; this file holds the procedure that produces the rows. If the two disagree, PROTOCOL wins and this file is wrong.
 
 ## 1. The shape: parallel where nothing is measured, serial where it is
