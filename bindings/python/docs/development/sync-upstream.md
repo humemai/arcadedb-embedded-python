@@ -29,3 +29,5 @@ cd bindings/python
 pytest tests/ -v
 git push origin main
 ```
+
+This is step one of the contribution routine. The whole order, through to regenerating the pull-request branch, is in [Contributing Back to Upstream](upstream-pr.md).

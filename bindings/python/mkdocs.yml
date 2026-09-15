@@ -211,6 +211,7 @@ nav:
   - Contributing: development/contributing.md
   - Documentation: development/documentation.md
   - Syncing Upstream: development/sync-upstream.md
+  - Contributing Back to Upstream: development/upstream-pr.md
   - Testing:
     - Overview: development/testing.md
     - Getting Started: development/testing/overview.md
