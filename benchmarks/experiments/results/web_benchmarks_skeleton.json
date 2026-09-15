@@ -28,6 +28,9 @@
     "arangodb_tpc": [
       "arangodb:3.12.11"
     ],
+    "arangodb_ts": [
+      "(no version recorded)"
+    ],
     "chroma_dense": [
       "1.5.9"
     ],
@@ -142,6 +145,12 @@
     "surrealdb_tpc_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
+    "surrealdb_ts": [
+      "(no version recorded)"
+    ],
+    "surrealdb_ts_server": [
+      "(no version recorded)"
+    ],
     "timescaledb": [
       "(no version recorded)"
     ]
@@ -167,9 +176,11 @@
   "provenance_note": "Host identity is recorded on the sparse and dense lanes only; the remaining lanes record the container but not the machine. Every lane ran on the same benchmark host, but this file reports only what the frozen rows can prove.",
   "hosts_recorded": [
     "container:027afa5dd02f (host unknown)",
+    "container:05afec638dcd (host unknown)",
     "container:063ecac72985 (host unknown)",
     "container:096efb4bdc65 (host unknown)",
     "container:12aa4ff523e4 (host unknown)",
+    "container:17da845be344 (host unknown)",
     "container:1ca569993fdd (host unknown)",
     "container:1f62d4a525de (host unknown)",
     "container:1ff678e8b783 (host unknown)",
@@ -187,6 +198,7 @@
     "container:6650ffd8dd62 (host unknown)",
     "container:6ceb3153e98f (host unknown)",
     "container:6fb41ca977e6 (host unknown)",
+    "container:70f866955ca6 (host unknown)",
     "container:8ecfdf1cc94e (host unknown)",
     "container:a638e1dee200 (host unknown)",
     "container:a6eb5444b414 (host unknown)",
@@ -5124,7 +5136,7 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes by 65%, so it stays on.",
         "ArcadeDB's served arm is not shown for the per-host hourly query: on the server's SQL path that query returns one bucket per host instead of one per host and hour, which the answer check caught by comparing its result against the other engines'. Its embedded twin, on the same build, returns the same answer as everyone else, and the single-key form of the same query agrees on both. A latency for an answer that differs from every other engine's is not a measurement of this query, so the cell is withheld rather than printed.",
         "The cold column is the very first query of a session, the newest reading, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, MongoDB, SQLite, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is ArangoDB, DuckDB, MongoDB, SQLite, SurrealDB (embedded), which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP."
       ],
@@ -5459,6 +5471,86 @@
           }
         },
         {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "scale": "2.59M points",
+          "scale_label": "432k points, 12 h (skeleton)",
+          "workload": "TSBS cpu-only",
+          "n_docs": "2592000",
+          "deployment": "server",
+          "image": null,
+          "version_name": "arangodb 3.12.11",
+          "host": "container:05afec638dcd (host unknown)",
+          "metrics": {
+            "newest reading p50 ms": {
+              "median": 3.5994,
+              "min": 3.5994,
+              "max": 3.5994,
+              "n": 1
+            },
+            "newest reading p99 ms": {
+              "median": 3.5994,
+              "min": 3.5994,
+              "max": 3.5994,
+              "n": 1
+            },
+            "12h aggregate p50 ms": {
+              "median": 1057.8353,
+              "min": 1057.8353,
+              "max": 1057.8353,
+              "n": 1
+            },
+            "per-host hourly p50 ms": {
+              "median": 1131.3843,
+              "min": 1131.3843,
+              "max": 1131.3843,
+              "n": 1
+            },
+            "high-usage p50 ms": {
+              "median": 1036.0565,
+              "min": 1036.0565,
+              "max": 1036.0565,
+              "n": 1
+            },
+            "grouped, ordered, limited p50 ms": {
+              "median": 1177.5278,
+              "min": 1177.5278,
+              "max": 1177.5278,
+              "n": 1
+            },
+            "cold first query ms": {
+              "median": 6.0977,
+              "min": 6.0977,
+              "max": 6.0977,
+              "n": 1
+            },
+            "ingest points/s": {
+              "median": 29786.9,
+              "min": 29786.9,
+              "max": 29786.9,
+              "n": 1
+            },
+            "ingest total s": {
+              "median": 87.02,
+              "min": 87.02,
+              "max": 87.02,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 1.5555,
+              "min": 1.5555,
+              "max": 1.5555,
+              "n": 1
+            },
+            "disk GiB": {
+              "median": 0.4223,
+              "min": 0.4223,
+              "max": 0.4223,
+              "n": 1
+            }
+          }
+        },
+        {
           "backend": "DuckDB",
           "is_arcadedb": false,
           "scale": "2.59M points",
@@ -5774,6 +5866,166 @@
               "median": 0.114,
               "min": 0.114,
               "max": 0.114,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "is_arcadedb": false,
+          "scale": "2.59M points",
+          "scale_label": "432k points, 12 h (skeleton)",
+          "workload": "TSBS cpu-only",
+          "n_docs": "2592000",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": "container:17da845be344 (host unknown)",
+          "metrics": {
+            "newest reading p50 ms": {
+              "median": 974.259,
+              "min": 974.259,
+              "max": 974.259,
+              "n": 1
+            },
+            "newest reading p99 ms": {
+              "median": 974.259,
+              "min": 974.259,
+              "max": 974.259,
+              "n": 1
+            },
+            "12h aggregate p50 ms": {
+              "median": 62674.1794,
+              "min": 62674.1794,
+              "max": 62674.1794,
+              "n": 1
+            },
+            "per-host hourly p50 ms": {
+              "median": 96674.9211,
+              "min": 96674.9211,
+              "max": 96674.9211,
+              "n": 1
+            },
+            "high-usage p50 ms": {
+              "median": 58830.8313,
+              "min": 58830.8313,
+              "max": 58830.8313,
+              "n": 1
+            },
+            "grouped, ordered, limited p50 ms": {
+              "median": 61318.118,
+              "min": 61318.118,
+              "max": 61318.118,
+              "n": 1
+            },
+            "cold first query ms": {
+              "median": 974.259,
+              "min": 974.259,
+              "max": 974.259,
+              "n": 1
+            },
+            "ingest points/s": {
+              "median": 5049.9,
+              "min": 5049.9,
+              "max": 5049.9,
+              "n": 1
+            },
+            "ingest total s": {
+              "median": 513.28,
+              "min": 513.28,
+              "max": 513.28,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 4.1732,
+              "min": 4.1732,
+              "max": 4.1732,
+              "n": 1
+            },
+            "disk GiB": {
+              "median": 0.8115,
+              "min": 0.8115,
+              "max": 0.8115,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "scale": "2.59M points",
+          "scale_label": "432k points, 12 h (skeleton)",
+          "workload": "TSBS cpu-only",
+          "n_docs": "2592000",
+          "deployment": "server",
+          "image": null,
+          "version_name": "surrealdb 3.2.4",
+          "host": "container:70f866955ca6 (host unknown)",
+          "metrics": {
+            "newest reading p50 ms": {
+              "median": 1.8303,
+              "min": 1.8303,
+              "max": 1.8303,
+              "n": 1
+            },
+            "newest reading p99 ms": {
+              "median": 1.8303,
+              "min": 1.8303,
+              "max": 1.8303,
+              "n": 1
+            },
+            "12h aggregate p50 ms": {
+              "median": 3122.7847,
+              "min": 3122.7847,
+              "max": 3122.7847,
+              "n": 1
+            },
+            "per-host hourly p50 ms": {
+              "median": 3258.6757,
+              "min": 3258.6757,
+              "max": 3258.6757,
+              "n": 1
+            },
+            "high-usage p50 ms": {
+              "median": 2444.4502,
+              "min": 2444.4502,
+              "max": 2444.4502,
+              "n": 1
+            },
+            "grouped, ordered, limited p50 ms": {
+              "median": 3112.1848,
+              "min": 3112.1848,
+              "max": 3112.1848,
+              "n": 1
+            },
+            "cold first query ms": {
+              "median": 13.3076,
+              "min": 13.3076,
+              "max": 13.3076,
+              "n": 1
+            },
+            "ingest points/s": {
+              "median": 8702.0,
+              "min": 8702.0,
+              "max": 8702.0,
+              "n": 1
+            },
+            "ingest total s": {
+              "median": 297.86,
+              "min": 297.86,
+              "max": 297.86,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 2.4705,
+              "min": 2.4705,
+              "max": 2.4705,
+              "n": 1
+            },
+            "disk GiB": {
+              "median": 0.3245,
+              "min": 0.3245,
+              "max": 0.3245,
               "n": 1
             }
           }
