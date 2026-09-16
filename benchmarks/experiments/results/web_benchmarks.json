@@ -101,6 +101,9 @@
     "surrealdb_graph_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
+    "surrealdb_tpc": [
+      "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
+    ],
     "surrealdb_tpc_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
@@ -10927,8 +10930,7 @@
         "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
         "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme: nearly all of the figure shown is the Python client and almost none of it is the database.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
-        "Each repetition runs 1,000 new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate.",
-        "SurrealDB (embedded) at TPC-H SF1 (6.0M line items): the transaction cell failed inside its budget and was not retried, so there is no row. What it reported: surrealdb.errors.InternalError: The query was not executed due to a failed transaction. Th"
+        "Each repetition runs 1,000 new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate."
       ],
       "columns": [
         "new-order p50 ms",
@@ -11283,6 +11285,63 @@
           }
         },
         {
+          "backend": "SurrealDB (embedded)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch1",
+          "scale_label": "TPC-H SF1 (6.0M line items)",
+          "workload": "",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": null,
+          "metrics": {
+            "new-order p50 ms": {
+              "median": 0.14,
+              "min": 0.139,
+              "max": 0.141,
+              "n": 5
+            },
+            "new-order p99 ms": {
+              "median": 0.207,
+              "min": 0.164,
+              "max": 0.247,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 6984.5,
+              "min": 6869.0,
+              "max": 7083.8,
+              "n": 5
+            },
+            "ingest documents/s": {
+              "median": 11263.4681,
+              "min": 11190.499,
+              "max": 11316.0858,
+              "n": 10
+            },
+            "ingest total s": {
+              "median": 550.56,
+              "min": 548.0,
+              "max": 554.15,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 7.3306,
+              "min": 7.3021,
+              "max": 7.4063,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 2.5132,
+              "min": 2.5131,
+              "max": 2.5134,
+              "n": 10
+            }
+          }
+        },
+        {
           "backend": "SurrealDB (server)",
           "is_arcadedb": false,
           "precision": null,
@@ -11364,8 +11423,7 @@
         "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme: nearly all of the figure shown is the Python client and almost none of it is the database.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared.",
-        "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
-        "SurrealDB (embedded) at TPC-H SF1 (6.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: surrealdb.errors.InternalError: The query was not executed due to a failed transaction. Th"
+        "Each repetition runs every query 100 times; the p50 and p99 are over those runs."
       ],
       "columns": [
         "Q1 p50 ms",
@@ -11626,6 +11684,69 @@
               "median": 0.39,
               "min": 0.39,
               "max": 0.39,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch1",
+          "scale_label": "TPC-H SF1 (6.0M line items)",
+          "workload": "",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": null,
+          "metrics": {
+            "Q1 p50 ms": {
+              "median": 102364.91,
+              "min": 102037.03,
+              "max": 104197.82,
+              "n": 5
+            },
+            "Q1 p99 ms": {
+              "median": 104130.55,
+              "min": 103318.7,
+              "max": 105105.0,
+              "n": 5
+            },
+            "Q6 p50 ms": {
+              "median": 10840.26,
+              "min": 10826.23,
+              "max": 10868.25,
+              "n": 5
+            },
+            "Q6 p99 ms": {
+              "median": 10974.64,
+              "min": 10924.99,
+              "max": 11036.55,
+              "n": 5
+            },
+            "ingest documents/s": {
+              "median": 11263.4681,
+              "min": 11190.499,
+              "max": 11316.0858,
+              "n": 10
+            },
+            "ingest total s": {
+              "median": 550.56,
+              "min": 548.0,
+              "max": 554.15,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 7.3306,
+              "min": 7.3021,
+              "max": 7.4063,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 2.5132,
+              "min": 2.5131,
+              "max": 2.5134,
               "n": 10
             }
           }
