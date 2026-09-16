@@ -48,7 +48,7 @@
     <colgroup><col class="c-model"><col class="c-op"><col class="c-size"><col class="c-a"><col class="c-b"><col class="c-r"></colgroup>
     <thead><tr><th>Model</th><th>Operation</th><th>Size</th><th class="num">ArcadeDB</th><th class="num">Best other engine</th><th>Ratio</th></tr></thead>
     <tbody>
-      <tr class="behind"><td class="model">Documents</td><td>TPC-C new-order transaction: read a part, insert an order line, update stock</td><td>TPC-H scale 1, 6.0M line items</td><td class="num">0.397 ms</td><td class="num">SQLite 0.011 ms, PostgreSQL 2.39 ms</td><td class="ratio">36x behind</td></tr>
+      <tr class="behind"><td class="model">Documents</td><td>TPC-C new-order transaction: read a part, insert an order line, update stock</td><td>TPC-H scale 1, 6.0M line items</td><td class="num">0.397 ms</td><td class="num">SQLite 0.011 ms, SurrealDB (embedded) 0.140 ms</td><td class="ratio">36x behind</td></tr>
       <tr class="behind"><td class="model">Graph</td><td>Create one edge between two existing vertices, Cypher</td><td>SF10, 73k people</td><td class="num">0.659 ms</td><td class="num">SurrealDB (embedded) 0.183 ms</td><td class="ratio">3.6x behind</td></tr>
       <tr class="behind"><td class="model">Graph</td><td>One-hop traversal from a person over KNOWS edges</td><td>SF10, 73k people</td><td class="num">0.614 ms</td><td class="num">SurrealDB (server) 0.432 ms</td><td class="ratio">1.4x behind</td></tr>
       <tr class="behind"><td class="model">Graph</td><td>Two-hop traversal from a person</td><td>SF10, 73k people</td><td class="num">1.67 ms</td><td class="num">SurrealDB (server) 1.24 ms</td><td class="ratio">1.3x behind</td></tr>
