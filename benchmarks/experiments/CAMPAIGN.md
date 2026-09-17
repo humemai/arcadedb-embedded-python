@@ -16,6 +16,8 @@ Per campaign, once:
 8. Prune what the campaign made obsolete: superseded decisions, bugs that retired with it, retired markers, any withheld cell whose upstream issue has closed, and the previous page's typed sentences in the exporter, which are deleted rather than kept for a page that no longer exists (step 4 of the switch check).
 9. Re-read every document the pruning touched, then rebuild both sites, the project page and the package documentation, and check the links between them resolve in both directions (`uv run mkdocs build --strict -f bindings/python/mkdocs.yml` from the repository root).
 
+Extending a published campaign (DECISIONS #103a). After its chain ends, a campaign may still gain new comparators and new tiers at its own pin and instrument: those are new rows beside the old ones, landed stage by stage like any other, each tier with its own size label read from the rows. It may not have an existing cell re-measured on a different corpus, because that row would replace one measured under other conditions and the page could no longer say what it compares; a new corpus for an existing cell is the next campaign's change. A new comparator's arm is added as a new backend without touching any existing arm, linted and smoked on the laptop, and only then queued.
+
 Per stage, repeated inside step 5:
 
 1. Write the queue script, lint it with `queue_lint.py`, and chain it behind the previous one (section 5 below).
