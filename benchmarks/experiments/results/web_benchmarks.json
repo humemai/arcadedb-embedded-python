@@ -3,6 +3,18 @@
   "generator": "benchmarks/experiments/export_web.py",
   "arcadedb_version": null,
   "comparator_versions": {
+    "arangodb_dense": [
+      "arangodb:3.12.11"
+    ],
+    "arangodb_e2": [
+      "arangodb:3.12.11"
+    ],
+    "arangodb_graph": [
+      "arangodb:3.12.11"
+    ],
+    "arangodb_tpc": [
+      "arangodb:3.12.11"
+    ],
     "chroma_dense": [
       "1.5.9"
     ],
@@ -176,6 +188,7 @@
     "container:148c80348eeb (host unknown)",
     "container:14cafd67c55c (host unknown)",
     "container:155b5c187b88 (host unknown)",
+    "container:15e2b3755beb (host unknown)",
     "container:166ad4fcd6ea (host unknown)",
     "container:188a19504c20 (host unknown)",
     "container:18d0d77fdb3c (host unknown)",
@@ -398,6 +411,7 @@
     "container:9645b2d0a026 (host unknown)",
     "container:96f291e20f56 (host unknown)",
     "container:9722b449316d (host unknown)",
+    "container:97b4d8cdb757 (host unknown)",
     "container:98494c43d6dc (host unknown)",
     "container:989d80f7737a (host unknown)",
     "container:9926ff23a946 (host unknown)",
@@ -462,6 +476,7 @@
     "container:bd6d2850b2a5 (host unknown)",
     "container:bd7bed2042dd (host unknown)",
     "container:be792ad767f6 (host unknown)",
+    "container:beb7432d8b69 (host unknown)",
     "container:bf0a3db84c9b (host unknown)",
     "container:bf1fcb160a70 (host unknown)",
     "container:c01818605fb4 (host unknown)",
@@ -519,6 +534,7 @@
     "container:daa52b1b107e (host unknown)",
     "container:dd516f6f0aab (host unknown)",
     "container:ddc3d3286cb8 (host unknown)",
+    "container:df26e258e629 (host unknown)",
     "container:dfc40e0e74ed (host unknown)",
     "container:e06cba51efe1 (host unknown)",
     "container:e0b175b02561 (host unknown)",
@@ -554,6 +570,7 @@
     "container:f1dc4891f5a1 (host unknown)",
     "container:f1e870385350 (host unknown)",
     "container:f32f06f7c937 (host unknown)",
+    "container:f35ec9e55dda (host unknown)",
     "container:f531e124ab98 (host unknown)",
     "container:f5a0c9ec6ce5 (host unknown)",
     "container:f5a700cd60ab (host unknown)",
@@ -2479,6 +2496,7 @@
       "conditions": [
         "ingest+index total s is one timer around inserting the vectors and building the index; the two are not timed separately (Qdrant and Chroma build the index while ingesting, so the split is not defined there). ingest+index vectors/s divides the vector count by it.",
         "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
+        "ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not HNSW, so the degree match above does not apply to it; its rows record nLists (about the square root of the corpus) and nProbe (an eighth of the lists) instead.",
         "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. ArcadeDB pages its index off disk while most comparators are resident from build, so read the two columns against each other rather than either alone.",
         "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the 6 to 8 segment layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, runs landed on many small segments and read slower with higher recall, at a moment the engine chose. One line changed from the image's configuration; sparse rows are at the default.",
         "ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.",
@@ -2487,6 +2505,7 @@
         "SurrealDB (embedded) at 9.99M vectors: the search cell exceeded its 8 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (server) at 9.99M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent",
         "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "ArangoDB at 9.99M vectors is withheld: its search answered with a recall@10 of 0.0001 across 5 repetition(s), which is not a measurement of search but of a broken index, so its latency is not printed beside engines answering correctly. The cause is investigated on the bench host before anything is claimed about it (BUGS F55).",
         "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
       ],
       "columns": [
@@ -2775,6 +2794,75 @@
               "median": 0.8063,
               "min": 0.7991,
               "max": 0.8603,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB (fp32)",
+          "is_arcadedb": false,
+          "precision": "fp32",
+          "scale": "small",
+          "scale_label": "1M vectors",
+          "workload": "search",
+          "n_docs": "1,000,000",
+          "deployment": "server",
+          "image": null,
+          "version_name": "arangodb 3.12.11",
+          "host": "mini",
+          "metrics": {
+            "cold p50 ms": {
+              "median": 5.891,
+              "min": 5.177,
+              "max": 6.727,
+              "n": 5
+            },
+            "cold p99 ms": {
+              "median": 7.607,
+              "min": 6.978,
+              "max": 8.611,
+              "n": 5
+            },
+            "warm p50 ms": {
+              "median": 5.8175,
+              "min": 5.121,
+              "max": 6.534,
+              "n": 20
+            },
+            "warm p99 ms": {
+              "median": 7.534,
+              "min": 6.856,
+              "max": 8.43,
+              "n": 20
+            },
+            "recall@10": {
+              "median": 0.9887,
+              "min": 0.9865,
+              "max": 0.992,
+              "n": 20
+            },
+            "ingest+index total s": {
+              "median": 93.27,
+              "min": 88.35,
+              "max": 94.44,
+              "n": 5
+            },
+            "ingest+index vectors/s": {
+              "median": 10721.6,
+              "min": 10588.7,
+              "max": 11318.6,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.8109,
+              "min": 1.6669,
+              "max": 1.8442,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.0386,
+              "min": 0.9541,
+              "max": 1.1296,
               "n": 5
             }
           }
@@ -4660,6 +4748,93 @@
           }
         },
         {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.812,
+              "min": 0.699,
+              "max": 0.868,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 1.132,
+              "min": 0.977,
+              "max": 1.23,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.98,
+              "min": 0.856,
+              "max": 1.022,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 1.442,
+              "min": 1.313,
+              "max": 1.625,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 2.315,
+              "min": 2.28,
+              "max": 2.361,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 16.274,
+              "min": 16.028,
+              "max": 16.842,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 0.814,
+              "min": 0.645,
+              "max": 0.889,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 1.08,
+              "min": 1.01,
+              "max": 1.196,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 98203.6082,
+              "min": 97700.0,
+              "max": 98712.4352,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 1.94,
+              "min": 1.93,
+              "max": 1.95,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.2906,
+              "min": 0.2873,
+              "max": 0.2924,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0474,
+              "min": 0.0474,
+              "max": 0.0474,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "LadybugDB",
           "is_arcadedb": false,
           "precision": null,
@@ -5171,6 +5346,93 @@
               "median": 0.1626,
               "min": 0.1255,
               "max": 0.1792,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.85,
+              "min": 0.728,
+              "max": 0.924,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 1.188,
+              "min": 0.971,
+              "max": 1.391,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.052,
+              "min": 0.935,
+              "max": 1.081,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 2.064,
+              "min": 1.966,
+              "max": 2.176,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 5.816,
+              "min": 5.794,
+              "max": 6.153,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 73.805,
+              "min": 71.144,
+              "max": 73.857,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 0.929,
+              "min": 0.777,
+              "max": 0.968,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 1.171,
+              "min": 1.078,
+              "max": 1.238,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 91765.6136,
+              "min": 91222.6218,
+              "max": 92187.7185,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 21.84,
+              "min": 21.74,
+              "max": 21.97,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.7779,
+              "min": 0.7611,
+              "max": 0.7887,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.8811,
+              "min": 0.8811,
+              "max": 0.8811,
               "n": 5
             }
           }
@@ -5884,6 +6146,81 @@
           }
         },
         {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "ingest vertices+edges/s": {
+              "median": 97700.0,
+              "min": 96219.697,
+              "max": 98712.4352,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 1.95,
+              "min": 1.93,
+              "max": 1.98,
+              "n": 5
+            },
+            "average friend age p50 ms": {
+              "median": 532.09,
+              "min": 524.58,
+              "max": 536.63,
+              "n": 5
+            },
+            "average friend age p99 ms": {
+              "median": 547.24,
+              "min": 538.43,
+              "max": 552.1,
+              "n": 5
+            },
+            "friends in same city p50 ms": {
+              "median": 544.2,
+              "min": 543.16,
+              "max": 559.25,
+              "n": 5
+            },
+            "friends in same city p99 ms": {
+              "median": 571.32,
+              "min": 560.95,
+              "max": 576.15,
+              "n": 5
+            },
+            "most friends p50 ms": {
+              "median": 45.39,
+              "min": 43.9,
+              "max": 46.07,
+              "n": 5
+            },
+            "most friends p99 ms": {
+              "median": 48.22,
+              "min": 45.7,
+              "max": 49.41,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.5152,
+              "min": 0.5024,
+              "max": 0.529,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0471,
+              "min": 0.0471,
+              "max": 0.0471,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "LadybugDB",
           "is_arcadedb": false,
           "precision": null,
@@ -6490,6 +6827,81 @@
           }
         },
         {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "ingest vertices+edges/s": {
+              "median": 91305.7403,
+              "min": 89953.3662,
+              "max": 92187.7185,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 21.95,
+              "min": 21.74,
+              "max": 22.28,
+              "n": 5
+            },
+            "average friend age p50 ms": {
+              "median": 7852.94,
+              "min": 7807.67,
+              "max": 8047.08,
+              "n": 5
+            },
+            "average friend age p99 ms": {
+              "median": 7946.9,
+              "min": 7891.45,
+              "max": 8181.2,
+              "n": 5
+            },
+            "friends in same city p50 ms": {
+              "median": 8192.77,
+              "min": 8184.97,
+              "max": 8402.56,
+              "n": 5
+            },
+            "friends in same city p99 ms": {
+              "median": 8299.75,
+              "min": 8256.86,
+              "max": 8495.39,
+              "n": 5
+            },
+            "most friends p50 ms": {
+              "median": 427.54,
+              "min": 420.33,
+              "max": 435.65,
+              "n": 5
+            },
+            "most friends p99 ms": {
+              "median": 439.95,
+              "min": 432.49,
+              "max": 449.05,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.7832,
+              "min": 0.7754,
+              "max": 0.7863,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.4081,
+              "min": 0.4077,
+              "max": 0.4868,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "LadybugDB",
           "is_arcadedb": false,
           "precision": null,
@@ -6800,6 +7212,33 @@
           }
         },
         {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "Neo4j (vector index)",
           "is_arcadedb": false,
           "precision": null,
@@ -7069,6 +7508,57 @@
               "median": 0.0991,
               "min": 0.0412,
               "max": 0.1023,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "p50 ms": {
+              "median": 5.248,
+              "min": 5.116,
+              "max": 5.823,
+              "n": 5
+            },
+            "p99 ms": {
+              "median": 7.091,
+              "min": 6.525,
+              "max": 7.756,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 43196.1123,
+              "min": 40079.7595,
+              "max": 44052.4229,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 4.63,
+              "min": 4.54,
+              "max": 4.99,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.5746,
+              "min": 0.5659,
+              "max": 0.5833,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1402,
+              "min": 0.1402,
+              "max": 0.1403,
               "n": 5
             }
           }
@@ -11057,6 +11547,63 @@
           }
         },
         {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch1",
+          "scale_label": "TPC-H SF1 (6.0M line items)",
+          "workload": "",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "new-order p50 ms": {
+              "median": 2.652,
+              "min": 2.599,
+              "max": 2.904,
+              "n": 5
+            },
+            "new-order p99 ms": {
+              "median": 3.863,
+              "min": 3.636,
+              "max": 4.238,
+              "n": 5
+            },
+            "OLTP ops/s": {
+              "median": 363.2,
+              "min": 337.5,
+              "max": 367.7,
+              "n": 5
+            },
+            "ingest documents/s": {
+              "median": 95213.387,
+              "min": 93773.0984,
+              "max": 98244.8511,
+              "n": 10
+            },
+            "ingest total s": {
+              "median": 65.13,
+              "min": 63.12,
+              "max": 66.13,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 4.2807,
+              "min": 4.2246,
+              "max": 4.2949,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.0182,
+              "min": 0.9757,
+              "max": 1.5601,
+              "n": 10
+            }
+          }
+        },
+        {
           "backend": "DuckDB",
           "is_arcadedb": false,
           "precision": null,
@@ -11436,6 +11983,69 @@
         "disk GiB"
       ],
       "entries": [
+        {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch1",
+          "scale_label": "TPC-H SF1 (6.0M line items)",
+          "workload": "",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "Q1 p50 ms": {
+              "median": 12425.16,
+              "min": 12135.53,
+              "max": 12450.98,
+              "n": 5
+            },
+            "Q1 p99 ms": {
+              "median": 12581.88,
+              "min": 12404.79,
+              "max": 12814.08,
+              "n": 5
+            },
+            "Q6 p50 ms": {
+              "median": 1763.76,
+              "min": 1695.53,
+              "max": 1767.59,
+              "n": 5
+            },
+            "Q6 p99 ms": {
+              "median": 1773.17,
+              "min": 1712.57,
+              "max": 1780.34,
+              "n": 5
+            },
+            "ingest documents/s": {
+              "median": 95213.387,
+              "min": 93773.0984,
+              "max": 98244.8511,
+              "n": 10
+            },
+            "ingest total s": {
+              "median": 65.13,
+              "min": 63.12,
+              "max": 66.13,
+              "n": 10
+            },
+            "peak memory GiB": {
+              "median": 4.2807,
+              "min": 4.2246,
+              "max": 4.2949,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.0182,
+              "min": 0.9757,
+              "max": 1.5601,
+              "n": 10
+            }
+          }
+        },
         {
           "backend": "DuckDB",
           "is_arcadedb": false,

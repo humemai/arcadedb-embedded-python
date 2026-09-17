@@ -52,7 +52,7 @@
       <tr class="behind"><td class="model">Graph</td><td>Create one edge between two existing vertices, Cypher</td><td>SF10, 73k people</td><td class="num">0.659 ms</td><td class="num">SurrealDB (embedded) 0.183 ms</td><td class="ratio">3.6x behind</td></tr>
       <tr class="behind"><td class="model">Graph</td><td>One-hop traversal from a person over KNOWS edges</td><td>SF10, 73k people</td><td class="num">0.614 ms</td><td class="num">SurrealDB (server) 0.432 ms</td><td class="ratio">1.4x behind</td></tr>
       <tr class="behind"><td class="model">Graph</td><td>Two-hop traversal from a person</td><td>SF10, 73k people</td><td class="num">1.67 ms</td><td class="num">SurrealDB (server) 1.24 ms</td><td class="ratio">1.3x behind</td></tr>
-      <tr class="ahead"><td class="model">Cross-model</td><td>Vector search hit, expand over graph edges, update a document, one transaction</td><td>50k products</td><td class="num">2.03 ms</td><td class="num">SurrealDB (embedded) 8.29 ms</td><td class="ratio">4.1x ahead</td></tr>
+      <tr class="ahead"><td class="model">Cross-model</td><td>Vector search hit, expand over graph edges, update a document, one transaction</td><td>50k products</td><td class="num">2.03 ms</td><td class="num">ArangoDB 5.25 ms</td><td class="ratio">2.6x ahead</td></tr>
       <tr class="even"><td class="model">Time series</td><td>Ingest through the native time-series type, embedded</td><td>2.59M points</td><td class="num">1.96M points/s</td><td class="num">DuckDB 1.88M points/s</td><td class="ratio">parity</td></tr>
     </tbody>
   </table></div>
