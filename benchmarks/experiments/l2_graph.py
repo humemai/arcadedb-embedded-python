@@ -704,6 +704,195 @@ class LadybugGraph(Base):
         return [list(r) for r in self.conn.execute(text)]
 
 
+class DuckpgqGraph(Base):
+    """DuckDB with the DuckPGQ community extension (embedded, in-process through
+    the duckdb Python package on the pinned dbbench:duckdb image, duckdb==1.5.4).
+    The persons-and-knows data lives in two DuckDB tables; a PROPERTY GRAPH over
+    them answers every graph read in SQL/PGQ (`GRAPH_TABLE ... MATCH`), and the
+    writes are plain SQL on the underlying tables, one statement group per
+    transaction (DECISIONS #103d, #92).
+
+    WHY 1.5.4 AND NOT 1.5.5. The community-extensions registry has a DuckPGQ
+    build for 1.5.4 and none for 1.5.5 or 1.6.0, so the page pins every DuckDB
+    arm to 1.5.4 (DECISIONS #103d): `INSTALL duckpgq FROM community` on 1.5.5
+    answers HTTP 404. Verified on the image, INSTALL/LOAD both succeed on 1.5.4.
+
+    NOTHING IS UNEXPRESSIBLE ON THIS LANE. All twelve questions run in SQL/PGQ
+    and every digest matched the Cypher engines' on the micro corpus (laptop,
+    2026-09-17). The point lookup, one/two/three hops and the three-hop visited
+    probe are `GRAPH_TABLE MATCH` patterns; the five analytics queries are a
+    MATCH feeding an outer GROUP BY; the triangle count is the natural 3-cycle
+    pattern `(a)->(b)->(c)->(a)` with `a.id` the smallest, exact against the
+    harness's own enumeration (2,776 at 2,000 persons, 2,999 at 600). DuckPGQ
+    requires EVERY edge pattern to bind a variable -- a bare `-[:knows]->` raises
+    "All patterns must bind to a variable" -- so each hop names its edge. The
+    property graph is a live view over the tables, so a plain-SQL insert or
+    delete is visible to the next MATCH with no re-definition (verified). The
+    UNEXPRESSIBLE hook stays and stays empty (DECISIONS #88), for the next query
+    added to OLAP_QUERIES.
+
+    DURABILITY is DuckDB's own, with no knob (DECISIONS #90): fsync at commit,
+    the same string the document, time-series and dense-VSS DuckDB arms record,
+    printed unchanged in both durability classes.
+
+    THREAD POOL fitted to the cpuset (FAIRNESS F6): `PRAGMA threads` from
+    `sched_getaffinity`, the fix every other DuckDB arm carries, recorded as
+    `duckpgq_threads`.
+    """
+    name = "duckpgq_graph"
+    durability = bench_common.DURABILITY_DUCKDB
+    DBPATH = "/tmp/l2_duckpgq.db"
+
+    # PGQ reads: {id} formatted in as a literal, like the lane's Cypher, so
+    # every engine stays on the same query-plan surface. Every edge binds a
+    # variable (DuckPGQ requires it); the COLUMNS clause names the answer in the
+    # declared digest order (graph_common.READ_DIGEST).
+    READS = {
+        "point": ("SELECT name, age FROM GRAPH_TABLE (pg "
+                  "MATCH (p:Person WHERE p.id = {id}) "
+                  "COLUMNS (p.name AS name, p.age AS age))"),
+        "hop1": ("SELECT count(*) AS n, avg(fage) AS a FROM GRAPH_TABLE (pg "
+                 "MATCH (p:Person WHERE p.id = {id})-[k:knows]->(f:Person) "
+                 "COLUMNS (f.age AS fage))"),
+        "hop2": ("SELECT count(DISTINCT fof) AS n FROM GRAPH_TABLE (pg "
+                 "MATCH (p:Person WHERE p.id = {id})-[k1:knows]->(m:Person)"
+                 "-[k2:knows]->(fof:Person) COLUMNS (fof.id AS fof))"),
+        "hop3f": ("SELECT count(DISTINCT x) AS n FROM GRAPH_TABLE (pg "
+                  "MATCH (p:Person WHERE p.id = {id})-[k1:knows]->(m1:Person)"
+                  "-[k2:knows]->(m2:Person)-[k3:knows]->(x:Person WHERE x.age > 30) "
+                  "COLUMNS (x.id AS x))"),
+    }
+    VISITED = ("SELECT count(DISTINCT x) AS n FROM GRAPH_TABLE (pg "
+               "MATCH (p:Person WHERE p.id = {id})-[k1:knows]->(m1:Person)"
+               "-[k2:knows]->(m2:Person)-[k3:knows]->(x:Person) COLUMNS (x.id AS x))")
+    OLAP = {
+        "top_degree": ("SELECT id, count(*) AS d FROM GRAPH_TABLE (pg "
+                       "MATCH (p:Person)-[k:knows]->(f:Person) COLUMNS (p.id AS id)) "
+                       "GROUP BY id ORDER BY d DESC, id ASC LIMIT 10"),
+        "same_city_edges": ("SELECT c, count(*) AS n FROM GRAPH_TABLE (pg "
+                            "MATCH (a:Person)-[k:knows]->(b:Person) WHERE a.city = b.city "
+                            "COLUMNS (a.city AS c)) GROUP BY c ORDER BY n DESC, c ASC LIMIT 10"),
+        "friend_age_by_city": ("SELECT c, avg(fage) AS a, count(*) AS n FROM GRAPH_TABLE (pg "
+                               "MATCH (p:Person)-[k:knows]->(f:Person) "
+                               "COLUMNS (p.city AS c, f.age AS fage)) "
+                               "GROUP BY c ORDER BY n DESC, c ASC LIMIT 10"),
+        # Degree distribution: the per-person out-degree, then a histogram over
+        # it. Two levels, the inner GROUP BY over the MATCH's one-row-per-edge
+        # and the outer over the degrees; persons with no outgoing KNOWS are
+        # outside the MATCH and so outside the histogram, matching the Cypher.
+        "degree_dist": ("SELECT deg, count(*) AS n FROM (SELECT id, count(*) AS deg "
+                        "FROM GRAPH_TABLE (pg MATCH (p:Person)-[k:knows]->(f:Person) "
+                        "COLUMNS (p.id AS id)) GROUP BY id) GROUP BY deg ORDER BY deg"),
+        # The triangle count as the 3-cycle pattern, closing back on `a`; the
+        # id ordering keeps `a` the smallest of the three so each triangle is
+        # counted once, the same rule the Cypher and every other adapter apply.
+        "triangles": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg "
+                      "MATCH (a:Person)-[k1:knows]->(b:Person)-[k2:knows]->(c:Person)"
+                      "-[k3:knows]->(a:Person) WHERE a.id < b.id AND a.id < c.id "
+                      "COLUMNS (a.id AS aid, b.id AS bid, c.id AS cid))"),
+    }
+    # Nothing on this lane is unexpressible in SQL/PGQ. The hook stays, and
+    # stays empty (DECISIONS #88), for the next query added to OLAP_QUERIES.
+    UNEXPRESSIBLE = {}
+
+    def connect(self):
+        import duckdb
+        if os.path.exists(self.DBPATH):
+            os.remove(self.DBPATH)
+        self.cx = duckdb.connect(self.DBPATH)
+        # F6: DuckDB sizes its pool from the host under the cpuset; only
+        # sched_getaffinity sees the mask. Same fix as the other DuckDB arms.
+        self._threads = len(os.sched_getaffinity(0))
+        self.cx.execute(f"PRAGMA threads={self._threads}")
+        # The community DuckPGQ build for the pinned 1.5.4 (404 on 1.5.5).
+        self.cx.execute("INSTALL duckpgq FROM community; LOAD duckpgq;")
+        _ext = self.cx.execute(
+            "SELECT extension_version FROM duckdb_extensions() "
+            "WHERE extension_name = 'duckpgq'").fetchall()
+        _ev = _ext[0][0] if _ext else "?"
+        self.version = f"duckdb:{duckdb.__version__} + duckpgq:{_ev}"
+        self.row_extra = {"duckpgq_threads": self._threads,
+                          "duckpgq_extension_version": _ev}
+        # Tables first, then the property graph over them (empty is fine: the
+        # graph is a live view, so the build below fills it). Person keyed by id
+        # so the point lookup and the plain-SQL writes reach one row by key.
+        self.cx.execute("CREATE TABLE Person(id BIGINT PRIMARY KEY, name VARCHAR, "
+                        "age BIGINT, city VARCHAR)")
+        self.cx.execute("CREATE TABLE knows(src BIGINT, dst BIGINT, since BIGINT)")
+        self.cx.execute("CREATE PROPERTY GRAPH pg VERTEX TABLES (Person) "
+                        "EDGE TABLES (knows SOURCE KEY (src) REFERENCES Person (id) "
+                        "DESTINATION KEY (dst) REFERENCES Person (id))")
+
+    def _bulk(self, table, cols, gen):
+        # DuckDB's columnar bulk path: an Arrow table per batch, INSERT SELECT,
+        # rather than row-by-row executemany (l3d measured the latter as hours
+        # for a large load). Batched so memory stays bounded at the larger tiers.
+        import pyarrow as pa
+        buf = []
+
+        def flush():
+            columns = list(zip(*buf))
+            tbl = pa.table({c: pa.array(columns[i]) for i, c in enumerate(cols)})
+            self.cx.register("_src", tbl)
+            self.cx.execute(f"INSERT INTO {table} SELECT * FROM _src")
+            self.cx.unregister("_src")
+
+        for row in gen:
+            buf.append(row)
+            if len(buf) >= INGEST_BATCH:
+                flush(); buf = []
+        if buf:
+            flush()
+
+    def build(self, n_persons):
+        self._bulk("Person", ["id", "name", "age", "city"], gen_persons(n_persons))
+        self._bulk("knows", ["src", "dst", "since"], gen_edges(n_persons))
+        # AFTER the load, like MongoDB's graph arm: src is every write's edge
+        # lookup, dst is the inbound side the delete needs. PGQ builds its own
+        # traversal structures, so these serve only the plain-SQL write/delete.
+        self.cx.execute("CREATE INDEX k_src ON knows(src)")
+        self.cx.execute("CREATE INDEX k_dst ON knows(dst)")
+
+    def run_read(self, op, pid):
+        return self.cx.execute(self.READS[op].format(id=pid)).fetchall()
+
+    def run_visited(self, pid):
+        return self.cx.execute(self.VISITED.format(id=pid)).fetchall()
+
+    def run_olap(self, qname):
+        return self.cx.execute(self.OLAP[qname]).fetchall()
+
+    def person_scan(self, id_from):
+        return self.cx.execute(
+            f"SELECT id, name, age, city FROM Person WHERE id >= {id_from} "
+            "ORDER BY id").fetchall()
+
+    def run_write(self, pid, new_id):
+        # One transaction, the Cypher's CREATE-and-link: the person and the edge
+        # either both exist or neither does.
+        self.cx.execute("BEGIN")
+        self.cx.execute("INSERT INTO Person VALUES (?, ?, 33, 'city_0')",
+                        [new_id, f"w{new_id}"])
+        self.cx.execute("INSERT INTO knows VALUES (?, ?, 2026)", [pid, new_id])
+        self.cx.execute("COMMIT")
+
+    def run_update(self, new_id):
+        self.cx.execute("UPDATE Person SET age = ? WHERE id = ?", [UPDATE_AGE, new_id])
+
+    def run_delete(self, new_id):
+        # DETACH DELETE: the edges touching the vertex, then the vertex, one txn.
+        self.cx.execute("BEGIN")
+        self.cx.execute("DELETE FROM knows WHERE src = ? OR dst = ?", [new_id, new_id])
+        self.cx.execute("DELETE FROM Person WHERE id = ?", [new_id])
+        self.cx.execute("COMMIT")
+
+    def run_cypher(self, text):
+        raise NotImplementedError("DuckPGQ runs SQL/PGQ through the name-based hooks")
+
+    def close(self):
+        self.cx.close()
+
+
 class SurrealGraph(Base):
     """SurrealDB through its Python SDK on the SDK's SurrealKV disk store
     (SDK 2.0.0, which carries core 2.3.10), the same LDBC questions in SurrealQL: person records with
@@ -1273,7 +1462,7 @@ class MongoGraph(Base):
 ADAPTERS = {a.name: a for a in
             [ArcadeGraphEmbedded, ArcadeGraphServer, Neo4jGraph, LadybugGraph,
              SurrealGraph, SurrealGraphServer, ArangoGraph, MongoGraph,
-             MemgraphGraph, FalkorGraph]}
+             MemgraphGraph, FalkorGraph, DuckpgqGraph]}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. Neo4j and
 # LadybugDB cannot be relaxed and are the named exceptions on this table; the
@@ -1292,6 +1481,9 @@ DURABILITY = {
     # these are the relaxed strings the read-back is compared against.
     "memgraph_graph": bench_common.DURABILITY_MEMGRAPH,
     "falkordb_graph": bench_common.DURABILITY_FALKORDB,
+    # DuckDB has no durability knob (DECISIONS #90): one string in both classes,
+    # the same the document, time-series and dense-VSS DuckDB arms record.
+    "duckpgq_graph": bench_common.DURABILITY_DUCKDB,
 }
 
 

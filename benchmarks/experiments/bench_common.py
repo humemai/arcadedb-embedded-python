@@ -72,8 +72,9 @@ def durability_class(text):
 #   SQLite      PRAGMA journal_mode and synchronous read back (wal, 1), and
 #               strace: 50 commits -> 8 fsync, so a commit does not sync.
 #   DuckDB      strace: 50 commits -> 55 fsync, one per commit; and
-#               duckdb_settings() at 1.5.5 offers no commit-sync knob at all,
-#               only checkpoint thresholds. Hence "not configurable".
+#               duckdb_settings() at 1.5.4 (the pin since DECISIONS #103d)
+#               offers no commit-sync knob at all, only checkpoint and
+#               WAL-autocheckpoint thresholds. Hence "not configurable".
 #   LadybugDB   strace: 50 auto-commit writes -> 56 fdatasync, one per
 #               commit; ladybug 0.20.4's Database() takes no sync option.
 #   PostgreSQL  read per row, not asserted: each adapter runs

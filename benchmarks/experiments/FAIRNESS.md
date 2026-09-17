@@ -38,7 +38,7 @@ Fitting the pool is resource fitting, the first of the four sanctioned override 
 
 | runtime | evidence | verdict |
 |---|---|---|
-| DuckDB | default `threads`=20 under a 12-CPU cpuset in the real bench image; every lane now sets `PRAGMA threads` from `sched_getaffinity` (l1_tabular first, then l1_tpc, l3d, and l4 on the October instrument, 2026-09-15) | cpuset |
+| DuckDB | default `threads`=20 under a 12-CPU cpuset in the real bench image; every lane now sets `PRAGMA threads` from `sched_getaffinity` (l1_tabular first, then l1_tpc, l3d, and l4 on the October instrument, 2026-09-15; the l2 DuckPGQ graph arm carries the same fix, 2026-09-17, and records it as `duckpgq_threads`) | cpuset |
 | Qdrant | `actix-rt` runtime 11 threads, update pool ~11, from `/proc/<pid>/task` | cpuset |
 | Elasticsearch | `_nodes/os` reports `available_processors: 12`, `allocated_processors: 12` | cpuset |
 | Neo4j | 10 `GC Thread#N`; G1 derives `8 + (N-8)*5/8` above 8, so 12 CPUs gives 10 | cpuset |
@@ -110,7 +110,8 @@ Neo4j: `SHOW SETTINGS` at 2026.07.1 offers no durability or sync setting at all
 the log at commit is its documented behaviour. LadybugDB: `strace` counts 56
 `fdatasync` calls for 50 auto-commit writes, and `ladybug` 0.20.4's `Database()`
 takes no sync option. DuckDB: `strace` counts 55 `fsync` calls for 50 commits,
-and `duckdb_settings()` at 1.5.5 exposes only checkpoint thresholds.
+and `duckdb_settings()` at 1.5.4 (the pin since DECISIONS #103d) exposes only
+checkpoint and WAL-autocheckpoint thresholds, no commit-sync knob.
 
 **One engine is in neither class, and says so.** SurrealDB 3.2.4 served has no
 durability setting to match: its binary contains no `SYNC_DATA` and no

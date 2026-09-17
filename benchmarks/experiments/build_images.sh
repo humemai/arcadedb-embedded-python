@@ -31,9 +31,15 @@ declare -A PKGS=(
   # months behind is unfair in our favour, and it is the first thing a reviewer
   # checks. qdrant-client, pymilvus, elasticsearch and ladybug were all behind.
   [arcadedb]="$ARCADE_PKGS"
-  [duckdb]="duckdb==1.5.5 pandas pyarrow"
+  # 1.5.4, NOT 1.5.5 (DECISIONS #103d): the community-extensions registry has a
+  # DuckPGQ build for 1.5.4 and none for 1.5.5 (or 1.6.0), and the graph arm
+  # cannot be measured on a version whose graph extension 404s. One DuckDB
+  # version wears the page (#103c's sibling rule, the two-version trap this file
+  # guards against below), so documents, time series, dense VSS and the DuckPGQ
+  # graph arm all pin here.
+  [duckdb]="duckdb==1.5.4 pandas pyarrow"
   [client]="requests psycopg[binary] pandas pyarrow numpy surrealdb==2.0.0 qdrant-client==1.19.0 pymilvus==3.0.1 elasticsearch==9.5.0 neo4j==6.2.0 ladybug==0.19.1 pymongo==4.18.1 python-arango==8.3.5 falkordb==1.7.1 redis==8.1.0"
-  [dense]="chromadb==1.5.9 lancedb==0.37.1 sqlite-vec==0.1.9 duckdb==1.5.5 numpy pandas pyarrow"
+  [dense]="chromadb==1.5.9 lancedb==0.37.1 sqlite-vec==0.1.9 duckdb==1.5.4 numpy pandas pyarrow"
 )
 # A GUARD, not a comment. The dev pin above survived because nothing checked
 # it. BENCH_ALLOW_DEV=1 is the deliberate escape hatch for engine debugging.

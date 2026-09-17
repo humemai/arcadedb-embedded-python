@@ -713,6 +713,17 @@ BACKENDS = {
         "server_port": 6379,
         "ready_regex": r"Ready to accept connections",
     },
+    # DUCKPGQ 0.x on DuckDB 1.5.4 (2026-09-17, DECISIONS #103d), embedded in the
+    # DuckDB image (which carries pyarrow for the bulk load). SQL/PGQ over a
+    # PROPERTY GRAPH on the persons and knows tables (l2_graph.DuckpgqGraph). The
+    # `INSTALL duckpgq FROM community` at connect needs the cell network, which
+    # every embedded cell already has (the DuckDB VSS dense arm installs its
+    # extension the same way); it is why the DuckDB arms pin to 1.5.4 rather than
+    # 1.5.5, the newest DuckDB the community registry has a DuckPGQ build for.
+    "duckpgq_graph": {
+        "topology": "embedded",
+        "image": "dbbench:duckdb",
+    },
     # ---- E2 hybrid-ACID lane ----
     "arcadedb_e2": {
         "topology": "embedded",
@@ -1393,7 +1404,7 @@ LANES = {
     "l2": ("l2_graph.py",
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
             "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server", "arangodb_graph",
-            "mongodb_graph", "memgraph_graph", "falkordb_graph"],
+            "mongodb_graph", "memgraph_graph", "falkordb_graph", "duckpgq_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
               ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "surrealdb_tpc",

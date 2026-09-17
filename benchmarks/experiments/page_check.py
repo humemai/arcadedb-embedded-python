@@ -833,6 +833,10 @@ NOT_PRINTED = [
      "pool (FAIRNESS F6, audited in FAIRNESS.md rather than printed as a "
      "column), memory limit, and query timeouts, which explain the cell "
      "rather than measure it"),
+    (r"^duckpgq_threads$",
+     "the DuckPGQ graph arm's DuckDB thread pool, sized from the cpuset via "
+     "PRAGMA threads=sched_getaffinity (FAIRNESS F6, audited in FAIRNESS.md "
+     "rather than printed as a column)"),
     (r"^(torn_count|build_docs_per_s|ingest_pts_per_s|disk_data_mb|"
      r"peak_anon_mib_sum|build_s|ingest_s|index_s|gav_build_s)$",
      "printed under a different label by the table that owns it; listed here "

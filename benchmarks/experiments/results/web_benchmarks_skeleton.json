@@ -39,10 +39,13 @@
     ],
     "duckdb": [
       "(no version recorded)",
-      "1.5.5"
+      "1.5.4"
     ],
     "duckdb_vss_dense": [
-      "1.5.5"
+      "1.5.4"
+    ],
+    "duckpgq_graph": [
+      "duckdb:1.5.4 + duckpgq:f386a6c"
     ],
     "elasticsearch_sparse": [
       "9.4.1"
@@ -186,8 +189,8 @@
   "hosts_recorded": [
     "container:027afa5dd02f (host unknown)",
     "container:05afec638dcd (host unknown)",
-    "container:063ecac72985 (host unknown)",
     "container:096efb4bdc65 (host unknown)",
+    "container:0d6ffe7a52e8 (host unknown)",
     "container:12aa4ff523e4 (host unknown)",
     "container:17da845be344 (host unknown)",
     "container:1ca569993fdd (host unknown)",
@@ -202,6 +205,7 @@
     "container:340d87e25eca (host unknown)",
     "container:3955434bfa1a (host unknown)",
     "container:4047301c9126 (host unknown)",
+    "container:4bd0dede718e (host unknown)",
     "container:4ed0c3af03be (host unknown)",
     "container:5263ce08154f (host unknown)",
     "container:56d0037eb4f6 (host unknown)",
@@ -215,6 +219,7 @@
     "container:8ecfdf1cc94e (host unknown)",
     "container:a638e1dee200 (host unknown)",
     "container:a6eb5444b414 (host unknown)",
+    "container:b04d3410e539 (host unknown)",
     "container:b1abaaf31ae7 (host unknown)",
     "container:b7571df5e813 (host unknown)",
     "container:b9248b48398f (host unknown)",
@@ -235,7 +240,6 @@
     "container:dfc57b786d7f (host unknown)",
     "container:e449f9f1e14d (host unknown)",
     "container:e5ff479adc13 (host unknown)",
-    "container:edc647a7790b (host unknown)",
     "container:eed80af52d22 (host unknown)",
     "container:f6bbbb54e6db (host unknown)",
     "container:fa1b270a466c (host unknown)",
@@ -1469,86 +1473,86 @@
           "n_docs": "5000",
           "deployment": "embedded",
           "image": null,
-          "version_name": "duckdb vss 1.5.5",
-          "host": "container:063ecac72985 (host unknown)",
+          "version_name": "duckdb vss 1.5.4",
+          "host": "container:b04d3410e539 (host unknown)",
           "metrics": {
             "cold p50 ms": {
-              "median": 3.344,
-              "min": 3.344,
-              "max": 3.344,
-              "n": 1
+              "median": 3.2625,
+              "min": 3.224,
+              "max": 3.301,
+              "n": 2
             },
             "cold p99 ms": {
-              "median": 4.244,
-              "min": 4.244,
-              "max": 4.244,
-              "n": 1
+              "median": 4.6365,
+              "min": 4.306,
+              "max": 4.967,
+              "n": 2
             },
             "after insert p50 ms": {
-              "median": 3.652,
-              "min": 3.652,
-              "max": 3.652,
-              "n": 1
+              "median": 3.443,
+              "min": 3.432,
+              "max": 3.454,
+              "n": 2
             },
             "after delete p50 ms": {
-              "median": 3.514,
-              "min": 3.514,
-              "max": 3.514,
-              "n": 1
+              "median": 3.465,
+              "min": 3.442,
+              "max": 3.488,
+              "n": 2
             },
             "recall@10": {
-              "median": 0.9997,
-              "min": 0.9997,
-              "max": 0.9997,
-              "n": 1
+              "median": 0.9998,
+              "min": 0.9998,
+              "max": 0.9998,
+              "n": 2
             },
             "insert into index ms/vector": {
-              "median": 8.48,
-              "min": 8.48,
-              "max": 8.48,
-              "n": 1
+              "median": 8.689,
+              "min": 8.635,
+              "max": 8.743,
+              "n": 2
             },
             "recall@10 after insert": {
-              "median": 0.9997,
-              "min": 0.9997,
-              "max": 0.9997,
-              "n": 1
+              "median": 0.9998,
+              "min": 0.9998,
+              "max": 0.9998,
+              "n": 2
             },
             "delete from index ms/vector": {
-              "median": 0.064,
-              "min": 0.064,
-              "max": 0.064,
-              "n": 1
+              "median": 0.0795,
+              "min": 0.077,
+              "max": 0.082,
+              "n": 2
             },
             "recall@10 after delete": {
-              "median": 0.9999,
-              "min": 0.9999,
-              "max": 0.9999,
-              "n": 1
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 2
             },
             "ingest+index vectors/s": {
-              "median": 3229.5,
-              "min": 3229.5,
-              "max": 3229.5,
-              "n": 1
+              "median": 4118.05,
+              "min": 3989.3,
+              "max": 4246.8,
+              "n": 2
             },
             "ingest+index total s": {
-              "median": 1.55,
-              "min": 1.55,
-              "max": 1.55,
-              "n": 1
+              "median": 1.215,
+              "min": 1.18,
+              "max": 1.25,
+              "n": 2
             },
             "peak memory GiB": {
-              "median": 0.1544,
-              "min": 0.1544,
-              "max": 0.1544,
-              "n": 1
+              "median": 0.1428,
+              "min": 0.1389,
+              "max": 0.1467,
+              "n": 2
             },
             "disk GiB": {
-              "median": 0.04,
-              "min": 0.04,
-              "max": 0.04,
-              "n": 1
+              "median": 0.0399,
+              "min": 0.0399,
+              "max": 0.0399,
+              "n": 2
             }
           }
         },
@@ -2775,7 +2779,7 @@
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
         "Each repetition runs every read against a fresh set of start persons (2k people, 41k friendships (synthetic, skeleton): 50) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
         "FalkorDB at 2k people, 41k friendships (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 6 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.01 GiB, not as a size.",
@@ -3056,6 +3060,93 @@
               "median": 0.0093,
               "min": 0.0093,
               "max": 0.0093,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "micro",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.64,
+              "min": 0.64,
+              "max": 0.64,
+              "n": 1
+            },
+            "point p99 ms": {
+              "median": 0.836,
+              "min": 0.836,
+              "max": 0.836,
+              "n": 1
+            },
+            "1-hop p50 ms": {
+              "median": 2.434,
+              "min": 2.434,
+              "max": 2.434,
+              "n": 1
+            },
+            "2-hop p50 ms": {
+              "median": 5.924,
+              "min": 5.924,
+              "max": 5.924,
+              "n": 1
+            },
+            "3-hop filtered p50 ms": {
+              "median": 10.544,
+              "min": 10.544,
+              "max": 10.544,
+              "n": 1
+            },
+            "insert p50 ms": {
+              "median": 9.087,
+              "min": 9.087,
+              "max": 9.087,
+              "n": 1
+            },
+            "update p50 ms": {
+              "median": 7.549,
+              "min": 7.549,
+              "max": 7.549,
+              "n": 1
+            },
+            "delete p50 ms": {
+              "median": 8.914,
+              "min": 8.914,
+              "max": 8.914,
+              "n": 1
+            },
+            "ingest vertices+edges/s": {
+              "median": 41185.5769,
+              "min": 41185.5769,
+              "max": 41185.5769,
+              "n": 1
+            },
+            "ingest total s": {
+              "median": 1.04,
+              "min": 1.04,
+              "max": 1.04,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.1205,
+              "min": 0.1205,
+              "max": 0.1205,
+              "n": 1
+            },
+            "disk GiB": {
+              "median": 0.0342,
+              "min": 0.0342,
+              "max": 0.0342,
               "n": 1
             }
           }
@@ -3704,7 +3795,7 @@
         "Five questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. Degree distribution: how many people have each number of friends, counted over every edge in the graph. Triangle count: how many sets of three people are all friends with one another, each triangle counted once. All times are milliseconds.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
         "The cold column is the very first query of a session, most friends, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Rows labelled GAV ran with it built, once, before any query was timed, and the view build column is what that took.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at 2k people, 41k friendships (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
@@ -3983,6 +4074,87 @@
               "median": 0.0085,
               "min": 0.0085,
               "max": 0.0085,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "micro",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "average friend age p50 ms": {
+              "median": 4.69,
+              "min": 4.69,
+              "max": 4.69,
+              "n": 1
+            },
+            "average friend age p99 ms": {
+              "median": 7.76,
+              "min": 7.76,
+              "max": 7.76,
+              "n": 1
+            },
+            "friends in same city p50 ms": {
+              "median": 9.65,
+              "min": 9.65,
+              "max": 9.65,
+              "n": 1
+            },
+            "most friends p50 ms": {
+              "median": 3.28,
+              "min": 3.28,
+              "max": 3.28,
+              "n": 1
+            },
+            "degree distribution p50 ms": {
+              "median": 4.75,
+              "min": 4.75,
+              "max": 4.75,
+              "n": 1
+            },
+            "triangle count p50 ms": {
+              "median": 41.85,
+              "min": 41.85,
+              "max": 41.85,
+              "n": 1
+            },
+            "cold first query ms": {
+              "median": 5.23,
+              "min": 5.23,
+              "max": 5.23,
+              "n": 1
+            },
+            "ingest vertices+edges/s": {
+              "median": 39296.3303,
+              "min": 39296.3303,
+              "max": 39296.3303,
+              "n": 1
+            },
+            "ingest total s": {
+              "median": 1.09,
+              "min": 1.09,
+              "max": 1.09,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.145,
+              "min": 0.145,
+              "max": 0.145,
+              "n": 1
+            },
+            "disk GiB": {
+              "median": 0.0342,
+              "min": 0.0342,
+              "max": 0.0342,
               "n": 1
             }
           }
@@ -5942,67 +6114,67 @@
           "n_docs": "2592000",
           "deployment": "embedded",
           "image": null,
-          "version_name": "duckdb 1.5.5",
-          "host": "container:edc647a7790b (host unknown)",
+          "version_name": "duckdb 1.5.4",
+          "host": "container:4bd0dede718e (host unknown)",
           "metrics": {
             "newest reading p50 ms": {
-              "median": 3.3814,
-              "min": 3.3814,
-              "max": 3.3814,
+              "median": 3.3988,
+              "min": 3.3988,
+              "max": 3.3988,
               "n": 1
             },
             "newest reading p99 ms": {
-              "median": 6.5085,
-              "min": 6.5085,
-              "max": 6.5085,
+              "median": 6.4603,
+              "min": 6.4603,
+              "max": 6.4603,
               "n": 1
             },
             "12h aggregate p50 ms": {
-              "median": 13.4423,
-              "min": 13.4423,
-              "max": 13.4423,
+              "median": 13.9286,
+              "min": 13.9286,
+              "max": 13.9286,
               "n": 1
             },
             "per-host hourly p50 ms": {
-              "median": 14.7335,
-              "min": 14.7335,
-              "max": 14.7335,
+              "median": 15.789,
+              "min": 15.789,
+              "max": 15.789,
               "n": 1
             },
             "high-usage p50 ms": {
-              "median": 20.2308,
-              "min": 20.2308,
-              "max": 20.2308,
+              "median": 24.0589,
+              "min": 24.0589,
+              "max": 24.0589,
               "n": 1
             },
             "grouped, ordered, limited p50 ms": {
-              "median": 12.7559,
-              "min": 12.7559,
-              "max": 12.7559,
+              "median": 13.6769,
+              "min": 13.6769,
+              "max": 13.6769,
               "n": 1
             },
             "cold first query ms": {
-              "median": 15.7937,
-              "min": 15.7937,
-              "max": 15.7937,
+              "median": 6.0442,
+              "min": 6.0442,
+              "max": 6.0442,
               "n": 1
             },
             "ingest points/s": {
-              "median": 671572.2,
-              "min": 671572.2,
-              "max": 671572.2,
+              "median": 749735.5,
+              "min": 749735.5,
+              "max": 749735.5,
               "n": 1
             },
             "ingest total s": {
-              "median": 3.86,
-              "min": 3.86,
-              "max": 3.86,
+              "median": 3.46,
+              "min": 3.46,
+              "max": 3.46,
               "n": 1
             },
             "peak memory GiB": {
-              "median": 0.9419,
-              "min": 0.9419,
-              "max": 0.9419,
+              "median": 0.9413,
+              "min": 0.9413,
+              "max": 0.9413,
               "n": 1
             },
             "disk GiB": {
@@ -7698,7 +7870,7 @@
         "The read is the control, and it is the row that makes the rest readable: it runs in both cells like everything else and commits nothing, so it is what the writes are moving against.",
         "The Size column names the operation rather than a corpus size: the three lanes that time a write do not write the same thing, so each engine is compared only against the engines running its own operation.",
         "The setting is a property of the cell, not a second measurement inside one: it lives on the database or on the server for most of these engines, so each pair of numbers is two runs.",
-        "DuckDB, LadybugDB, Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
+        "DuckDB, DuckPGQ, LadybugDB, Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
         "SurrealDB (server) has no durability setting to read and what it does at commit could not be established from the engine, so the one number printed is in neither class. It is placed in the waiting column because that is the safer reading of an unknown, and this line is why it is there.",
         "The ratio is what the strict setting costs on that engine, at this corpus size and this operation count. It is not a claim about any other write. A large ratio is not a slow engine: it is an engine whose relaxed path was fast, measured against a flush that costs what a flush costs."
       ],
@@ -7815,13 +7987,13 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "duckdb 1.5.5",
+          "version_name": "duckdb 1.5.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
-              "median": 9.512,
-              "min": 9.508,
-              "max": 9.516,
+              "median": 9.5175,
+              "min": 9.444,
+              "max": 9.591,
               "n": 2
             }
           }
@@ -8079,13 +8251,13 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "duckdb 1.5.5",
+          "version_name": "duckdb 1.5.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
-              "median": 9.248,
-              "min": 9.215,
-              "max": 9.281,
+              "median": 9.3865,
+              "min": 9.354,
+              "max": 9.419,
               "n": 2
             }
           }
@@ -8343,13 +8515,13 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "duckdb 1.5.5",
+          "version_name": "duckdb 1.5.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
-              "median": 7.9855,
-              "min": 7.949,
-              "max": 8.022,
+              "median": 7.724,
+              "min": 7.708,
+              "max": 7.74,
               "n": 2
             }
           }
@@ -8607,13 +8779,13 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "duckdb 1.5.5",
+          "version_name": "duckdb 1.5.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
-              "median": 7.5995,
-              "min": 7.57,
-              "max": 7.629,
+              "median": 7.3305,
+              "min": 7.284,
+              "max": 7.377,
               "n": 2
             }
           }
@@ -8871,13 +9043,13 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "duckdb 1.5.5",
+          "version_name": "duckdb 1.5.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
-              "median": 7.7185,
-              "min": 7.7,
-              "max": 7.737,
+              "median": 7.4165,
+              "min": 7.318,
+              "max": 7.515,
               "n": 2
             }
           }
@@ -9135,13 +9307,13 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": "",
-          "version_name": "duckdb 1.5.5",
+          "version_name": "duckdb 1.5.4",
           "host": "",
           "metrics": {
             "waits for the disk ms": {
-              "median": 0.4385,
-              "min": 0.377,
-              "max": 0.5,
+              "median": 0.529,
+              "min": 0.528,
+              "max": 0.53,
               "n": 2
             }
           }
@@ -9387,6 +9559,26 @@
               "min": 3.73,
               "max": 3.73,
               "n": 1
+            }
+          }
+        },
+        {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": "",
+          "version_name": null,
+          "host": "",
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 9.1375,
+              "min": 9.087,
+              "max": 9.188,
+              "n": 2
             }
           }
         },
@@ -9675,6 +9867,26 @@
           }
         },
         {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": "",
+          "version_name": null,
+          "host": "",
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 7.5185,
+              "min": 7.488,
+              "max": 7.549,
+              "n": 2
+            }
+          }
+        },
+        {
           "backend": "FalkorDB",
           "is_arcadedb": false,
           "scale": "graph_update",
@@ -9955,6 +10167,26 @@
               "min": 3.27,
               "max": 3.27,
               "n": 1
+            }
+          }
+        },
+        {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": "",
+          "version_name": null,
+          "host": "",
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 8.9535,
+              "min": 8.914,
+              "max": 8.993,
+              "n": 2
             }
           }
         },
@@ -10711,73 +10943,73 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "duckdb 1.5.5",
+          "version_name": "duckdb 1.5.4",
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 9.516,
-              "min": 9.516,
-              "max": 9.516,
+              "median": 9.591,
+              "min": 9.591,
+              "max": 9.591,
               "n": 1
             },
             "new-order p99 ms": {
-              "median": 11.981,
-              "min": 11.981,
-              "max": 11.981,
+              "median": 11.396,
+              "min": 11.396,
+              "max": 11.396,
               "n": 1
             },
             "payment p50 ms": {
-              "median": 9.281,
-              "min": 9.281,
-              "max": 9.281,
+              "median": 9.354,
+              "min": 9.354,
+              "max": 9.354,
               "n": 1
             },
             "insert p50 ms": {
-              "median": 8.022,
-              "min": 8.022,
-              "max": 8.022,
+              "median": 7.708,
+              "min": 7.708,
+              "max": 7.708,
               "n": 1
             },
             "read p50 ms": {
-              "median": 0.5,
-              "min": 0.5,
-              "max": 0.5,
+              "median": 0.53,
+              "min": 0.53,
+              "max": 0.53,
               "n": 1
             },
             "update p50 ms": {
-              "median": 7.57,
-              "min": 7.57,
-              "max": 7.57,
+              "median": 7.377,
+              "min": 7.377,
+              "max": 7.377,
               "n": 1
             },
             "delete p50 ms": {
-              "median": 7.7,
-              "min": 7.7,
-              "max": 7.7,
+              "median": 7.515,
+              "min": 7.515,
+              "max": 7.515,
               "n": 1
             },
             "OLTP ops/s": {
-              "median": 106.2,
-              "min": 106.2,
-              "max": 106.2,
+              "median": 105.4,
+              "min": 105.4,
+              "max": 105.4,
               "n": 1
             },
             "ingest documents/s": {
-              "median": 336326.7544,
-              "min": 327236.8421,
-              "max": 345416.6667,
+              "median": 303473.2143,
+              "min": 296071.4286,
+              "max": 310875.0,
               "n": 2
             },
             "ingest total s": {
-              "median": 0.185,
-              "min": 0.18,
-              "max": 0.19,
+              "median": 0.205,
+              "min": 0.2,
+              "max": 0.21,
               "n": 2
             },
             "peak memory GiB": {
-              "median": 0.165,
-              "min": 0.165,
-              "max": 0.165,
+              "median": 0.1679,
+              "min": 0.1679,
+              "max": 0.1679,
               "n": 1
             },
             "disk GiB": {
@@ -11534,67 +11766,67 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "duckdb 1.5.5",
+          "version_name": "duckdb 1.5.4",
           "host": null,
           "metrics": {
             "Q1 p50 ms": {
-              "median": 5.92,
-              "min": 5.92,
-              "max": 5.92,
+              "median": 6.17,
+              "min": 6.17,
+              "max": 6.17,
               "n": 1
             },
             "Q1 p99 ms": {
-              "median": 7.32,
-              "min": 7.32,
-              "max": 7.32,
+              "median": 6.99,
+              "min": 6.99,
+              "max": 6.99,
               "n": 1
             },
             "Q6 p50 ms": {
-              "median": 1.6,
-              "min": 1.6,
-              "max": 1.6,
+              "median": 1.89,
+              "min": 1.89,
+              "max": 1.89,
               "n": 1
             },
             "top parts p50 ms": {
-              "median": 2.01,
-              "min": 2.01,
-              "max": 2.01,
+              "median": 2.26,
+              "min": 2.26,
+              "max": 2.26,
               "n": 1
             },
             "ship mode p50 ms": {
-              "median": 7.28,
-              "min": 7.28,
-              "max": 7.28,
+              "median": 7.98,
+              "min": 7.98,
+              "max": 7.98,
               "n": 1
             },
             "by month p50 ms": {
-              "median": 9.91,
-              "min": 9.91,
-              "max": 9.91,
+              "median": 10.81,
+              "min": 10.81,
+              "max": 10.81,
               "n": 1
             },
             "cold first query ms": {
-              "median": 10.7472,
-              "min": 7.3242,
-              "max": 14.1702,
+              "median": 8.9612,
+              "min": 7.1482,
+              "max": 10.7742,
               "n": 2
             },
             "ingest documents/s": {
-              "median": 336326.7544,
-              "min": 327236.8421,
-              "max": 345416.6667,
+              "median": 303473.2143,
+              "min": 296071.4286,
+              "max": 310875.0,
               "n": 2
             },
             "ingest total s": {
-              "median": 0.185,
-              "min": 0.18,
-              "max": 0.19,
+              "median": 0.205,
+              "min": 0.2,
+              "max": 0.21,
               "n": 2
             },
             "peak memory GiB": {
-              "median": 0.165,
-              "min": 0.165,
-              "max": 0.165,
+              "median": 0.1679,
+              "min": 0.1679,
+              "max": 0.1679,
               "n": 1
             },
             "disk GiB": {
@@ -12263,9 +12495,10 @@
         ]
       },
       {
-        "text": "DuckDB, LadybugDB, Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
+        "text": "DuckDB, DuckPGQ, LadybugDB, Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
         "values": [
           "DuckDB",
+          "DuckPGQ",
           "LadybugDB",
           "Neo4j",
           "Neo4j (vector index)",
@@ -12342,8 +12575,9 @@
         ]
       },
       {
-        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "values": [
+          "DuckPGQ",
           "LadybugDB",
           "Neo4j",
           "SurrealDB (server)"

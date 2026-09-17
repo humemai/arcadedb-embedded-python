@@ -723,7 +723,7 @@ def check_close_cost(rows):
 # string on an engine that has the knob, or a PostgreSQL row whose server
 # answered anything but synchronous_commit=off.
 STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo4j",
-                  "ladybug_graph", "duckdb", "duckdb_vss_dense"}
+                  "ladybug_graph", "duckdb", "duckdb_vss_dense", "duckpgq_graph"}
 
 # THE THIRD CLASS, and the only backends allowed to be in it. SurrealDB 3.2.4
 # served has no sync setting at all -- no SYNC_DATA and no SURREAL_DATASTORE
