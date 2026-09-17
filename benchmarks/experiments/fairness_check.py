@@ -86,6 +86,16 @@ def _dense_rows():
         r = dict(p0)
         r["lane"] = "l3d"        # the artifacts say l3d_mp; the LANE is l3d
         r["scale"] = "deep10m"
+        # The freeze withholds an approximate-search row whose recall is below
+        # make_paper_tables.RECALL_FLOOR (BUGS F55); the same rule here, or the
+        # gate judges a cell the page does not print.
+        try:
+            _rec = float(r.get("recall_at_10"))
+        except (TypeError, ValueError):
+            _rec = None
+        if _rec is not None and _rec < _T.RECALL_FLOOR:
+            print(f"  WITHHELD l3d deep10m {r.get('backend')}: recall@10 {_rec:.4f} below the floor; not judged, not printed")
+            continue
         # Served arms record the client container's cap; the split is the
         # lane's, not the row's, so name it here rather than guess later.
         # THE ENVELOPE COMES FROM THE CAMPAIGN ROW, not from the file. The

@@ -719,6 +719,13 @@ def _dense_overlay_entries(scale="deep10m"):
             for p in passes[1:]:
                 warm.append({"p50": p.get("p50"), "p99": p.get("p99")})
                 recall.append({"r": p.get("recall_at_10")})
+        # The same floor the freeze applies to the campaign rows (BUGS F55): an
+        # arm whose passes answer below it is a broken index, not a slow one,
+        # and its cold and warm columns are not printed; the freeze sidecar's
+        # sentence under the table says so.
+        _recs = [x["r"] for x in recall if x.get("r") is not None]
+        if _recs and max(float(v) for v in _recs) < _MPT.RECALL_FLOOR:
+            continue
         metrics = {}
         for label_, rows_, field in (("cold p50 ms", cold, "p50"),
                                      ("cold p99 ms", cold, "p99"),
@@ -2120,8 +2127,42 @@ def _counts_note(table_id, entries):
     return []
 
 
+def _withheld_recall_notes(table_id):
+    """One sentence per approximate-search cell the freeze withheld for a recall
+    below make_paper_tables.RECALL_FLOOR (the sidecar it writes). The cell's
+    absence is said under the table rather than left as a missing row."""
+    if table_id not in ("l3d", "l3s"):
+        return []
+    path = HERE / "results" / "generated" / "withheld_recall.json"
+    try:
+        items = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    lane = table_id
+    seen = {}
+    for it in items:
+        if it.get("lane") != lane:
+            continue
+        key = (str(it.get("backend")), str(it.get("scale")))
+        seen.setdefault(key, []).append(float(it.get("recall_at_10") or 0.0))
+    notes = []
+    for (backend, scale), recs in sorted(seen.items()):
+        label = display_name(backend)
+        try:
+            size = scale_label(lane, scale)
+        except Exception:  # noqa: BLE001
+            size = scale
+        notes.append(
+            f"{label} at {size} is withheld: its search answered with a recall@10 of "
+            f"{max(recs):.4f} across {len(recs)} repetition(s), which is not a measurement of "
+            f"search but of a broken index, so its latency is not printed beside engines "
+            f"answering correctly. The cause is investigated on the bench host before anything "
+            f"is claimed about it (BUGS F55).")
+    return notes
+
+
 def _finish_table(table: dict) -> dict:
-    table["conditions"] = list(table.get("conditions") or []) + _counts_note(table.get("id"), table.get("entries", [])) + _censored_notes(table.get("id"))
+    table["conditions"] = list(table.get("conditions") or []) + _counts_note(table.get("id"), table.get("entries", [])) + _censored_notes(table.get("id")) + _withheld_recall_notes(table.get("id"))
     entries = table["entries"]
     seen = []
     for e in entries:

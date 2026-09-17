@@ -167,7 +167,20 @@ NAMES = {
 }
 
 
+RECALL_FLOOR = 0.5   # below this an ANN row is a broken index, not a slow one
+WITHHELD_RECALL = []
+
+
+def _write_withheld_recall():
+    """Sidecar the exporter reads to declare the withheld cells under the table."""
+    out = os.path.join(RESULTS, "generated", "withheld_recall.json")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w") as fh:
+        json.dump(sorted(WITHHELD_RECALL, key=str), fh, indent=1)
+
+
 def load_canonical(apply_corpus=True):
+    del WITHHELD_RECALL[:]   # per call, or the sidecar counts every earlier call's rows again
     CORPUS_EXCLUDED.clear()
     # Dedupe on PAYLOAD fields, never run_id: pre-2026-07-21 run_ids were not
     # scale-qualified, so different scales collided under one id (the 100k
@@ -241,6 +254,24 @@ def load_canonical(apply_corpus=True):
         # reason -- a row that cannot be published must not be able to shadow.
         if r["lane"] == "l3s" and r.get("recall_at_10") is None:
             continue
+        # A SEARCH THAT RETURNS ALMOST NOTHING RIGHT IS NOT A MEASUREMENT OF
+        # SEARCH. 2026-09-17: ArangoDB's IVF at 9.99M vectors answered with
+        # recall@10 of 0.0000-0.0001 on every repetition, with every one of
+        # its 12,643 lists probed (BUGS F55). Publishing its latency beside
+        # engines answering at 0.95 would compare a working index against a
+        # broken one, and the fairness gate refused the publish. The row is
+        # withheld here, before the dedupe so it cannot shadow, and recorded
+        # in results/generated/withheld_recall.json for the exporter to say so
+        # under the table. Cause is investigated on the bench host, not guessed.
+        if r["lane"] in ("l3d", "l3s"):
+            try:
+                _rec = float(r.get("recall_at_10"))
+            except (TypeError, ValueError):
+                _rec = None
+            if _rec is not None and _rec < RECALL_FLOOR:
+                WITHHELD_RECALL.append({"lane": r["lane"], "backend": r["backend"], "scale": r["scale"],
+                                        "rep": r.get("rep"), "recall_at_10": _rec})
+                continue
         # THE ROW MUST BE ON THE CORPUS ITS TIER PUBLISHES. See PAPER_CORPUS:
         # a retired synthetic corpus shares scale names with the real one, and
         # both survive the canonical key because that key contains n_docs and
@@ -354,6 +385,7 @@ def load_canonical(apply_corpus=True):
              r["backend"], r.get("gav") is not False, r["rep"])
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
             best[k] = r
+    _write_withheld_recall()
     return list(best.values())
 
 
