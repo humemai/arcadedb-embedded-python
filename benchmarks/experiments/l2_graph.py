@@ -33,6 +33,9 @@ if _GRAPH_SOURCE == "ldbc":
     import ldbc_snb as _ldbc
     SCALE_PERSONS = _ldbc.SCALE_PERSONS
     SCALE_OLTP_QUERIES = _ldbc.SCALE_OLTP_QUERIES
+# The analytics message-half cap for a laptop smoke (DECISIONS #104): 0 = the
+# whole SF1 network. Only stamped onto a phase marker here; the loader reads it.
+_MSG_LIMIT = int(os.environ.get("BENCH_GRAPH_MSG_LIMIT") or 0)
 
 INGEST_BATCH = 5_000
 GAV_NAME = "l2gav"
@@ -56,6 +59,16 @@ class Base:
 
     def build(self, n_persons):
         raise NotImplementedError
+
+    def build_messages(self):
+        """Load the FULL-network message half for the analytics workload only
+        (DECISIONS #103b/#104). Called after build() when the source is the LDBC
+        full network and the workload is olap; self._scale names the tier. Each
+        engine consumes the shared ldbc_snb.MessageCorpus spec (vertex_spec /
+        edge_spec) through its own bulk path and records self.msg_counts. The
+        default refuses so an engine missing the loader is obvious rather than
+        silently running LSQB's nine queries on an empty message half."""
+        raise NotImplementedError(f"{self.name} has no message-half loader")
 
     def post_build(self, workload):
         """Engine's documented settle step; counted inside build time."""
@@ -190,6 +203,74 @@ class ArcadeGraphEmbedded(Base):
                 jdb.begin()
         jdb.commit()
 
+    # MESSAGE-HALF SCHEMA, shared by both ArcadeDB arms. Message is an abstract
+    # supertype and Post/Comment EXTEND it, so `MATCH (m:Message)` reaches both
+    # (verified on 26.9.1: the inheritance, `tag1.id <> tag2.id`, the anti-join
+    # `WHERE NOT (c)-[:HAS_TAG]->(t)` and OPTIONAL MATCH all run in openCypher).
+    # Vertices carry only `id`; every LSQB query is a structural count.
+    MSG_EDGE_TYPES = ("IS_LOCATED_IN", "IS_PART_OF", "HAS_MEMBER", "CONTAINER_OF",
+                      "REPLY_OF", "HAS_TAG", "HAS_TYPE", "HAS_CREATOR", "LIKES",
+                      "HAS_INTEREST")
+
+    def _msg_schema_ddl(self):
+        import ldbc_snb as _ldbc
+        ddl = ["CREATE VERTEX TYPE Message"]
+        for label in _ldbc.MSG_VERTEX_LABELS:
+            if label in _ldbc.MSG_MESSAGE_SUBLABELS:
+                ddl.append(f"CREATE VERTEX TYPE {label} EXTENDS Message")
+            else:
+                ddl.append(f"CREATE VERTEX TYPE {label}")
+            ddl.append(f"CREATE PROPERTY {label}.id LONG")
+            ddl.append(f"CREATE INDEX ON {label} (id) UNIQUE")
+        for rel in self.MSG_EDGE_TYPES:
+            ddl.append(f"CREATE EDGE TYPE {rel}")
+        return ddl
+
+    def build_messages(self):
+        # Native Java API with index lookups, the same batched-commit path the
+        # persons+KNOWS load uses. Person is already loaded with a unique id
+        # index (connect()), so its endpoints resolve by lookupByKey too.
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        for ddl in self._msg_schema_ddl():
+            self.db.command("sql", ddl)
+        jdb = self.db.get_java_database()
+        vcount = ecount = 0
+        jdb.begin()
+        n = 0
+        for label, ids in mc.vertex_spec():
+            for vid in ids:
+                v = jdb.newVertex(label)
+                v.set("id", vid)
+                v.save()
+                vcount += 1
+                n += 1
+                if n % INGEST_BATCH == 0:
+                    jdb.commit()
+                    jdb.begin()
+        jdb.commit()
+
+        def _lookup(label, vid):
+            cur = jdb.lookupByKey(label, "id", vid)
+            return cur.next().getRecord() if cur.hasNext() else None
+
+        jdb.begin()
+        n = 0
+        for rel, src_label, dst_label, gen in mc.edge_spec():
+            for s, d in gen():
+                sv = _lookup(src_label, s)
+                dv = _lookup(dst_label, d)
+                if sv is None or dv is None:
+                    continue          # a capped slice can drop an endpoint
+                sv.newEdge(rel, dv)
+                ecount += 1
+                n += 1
+                if n % INGEST_BATCH == 0:
+                    jdb.commit()
+                    jdb.begin()
+        jdb.commit()
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+
     def post_build(self, workload):
         if workload != "olap":
             return
@@ -310,6 +391,37 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
         if buf:
             self._http("command", "sqlscript", ";".join(buf))
 
+    def build_messages(self):
+        # HTTP sqlscript, the server's remote bulk surface, over the SAME schema
+        # the embedded arm builds (_msg_schema_ddl: Message supertype, Post and
+        # Comment EXTENDS it, a unique id index on each). The LSQB Cypher is
+        # identical to the embedded arm's, which is the tested one; only this
+        # ingest text is the server arm's own. INFERRED, not run on the laptop.
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        for ddl in self._msg_schema_ddl():
+            self._http("command", "sql", ddl)
+        vcount = ecount = 0
+        buf = []
+        for label, ids in mc.vertex_spec():
+            for vid in ids:
+                buf.append(f"CREATE VERTEX {label} SET id = {vid}")
+                vcount += 1
+                if len(buf) >= INGEST_BATCH:
+                    self._http("command", "sqlscript", ";".join(buf)); buf = []
+        if buf:
+            self._http("command", "sqlscript", ";".join(buf)); buf = []
+        for rel, src_label, dst_label, gen in mc.edge_spec():
+            for s, d in gen():
+                buf.append(f"CREATE EDGE {rel} FROM (SELECT FROM {src_label} WHERE id = "
+                           f"{s}) TO (SELECT FROM {dst_label} WHERE id = {d})")
+                ecount += 1
+                if len(buf) >= INGEST_BATCH:
+                    self._http("command", "sqlscript", ";".join(buf)); buf = []
+        if buf:
+            self._http("command", "sqlscript", ";".join(buf))
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+
     def post_build(self, workload):
         if workload != "olap":
             return
@@ -417,6 +529,53 @@ class Neo4jGraph(Base):
         this whole load path and builds its index synchronously instead."""
         s.run("CALL db.awaitIndexes()").consume()
 
+    # MESSAGE-HALF loader (DECISIONS #103b/#104), shared with Memgraph (which
+    # inherits this whole path and overrides only the index DDL and the await).
+    # Message is the SNB supertype of Post and Comment, expressed here as a
+    # SECOND LABEL on every such node (`CREATE (n:Post:Message {id: r})`), so
+    # `MATCH (m:Message)` reaches both. Vertices carry only `id`.
+    def _msg_index_ddl(self, label):
+        return f"CREATE INDEX IF NOT EXISTS FOR (n:{label}) ON (n.id)"
+
+    def build_messages(self):
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        vcount = ecount = 0
+        with self.driver.session() as s:
+            for label in _ldbc.MSG_VERTEX_LABELS:
+                s.run(self._msg_index_ddl(label)).consume()
+            self._await_indexes(s)
+            for label, ids in mc.vertex_spec():
+                extra = ":Message" if label in _ldbc.MSG_MESSAGE_SUBLABELS else ""
+                vcount += self._unwind_vertices(s, label, extra, ids)
+            self._await_indexes(s)
+            for rel, src_label, dst_label, gen in mc.edge_spec():
+                ecount += self._unwind_edges(s, rel, src_label, dst_label, gen())
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+
+    def _unwind_vertices(self, s, label, extra, ids):
+        cy = f"UNWIND $rows AS r CREATE (n:{label}{extra} {{id: r}})"
+        batch, n = [], 0
+        for vid in ids:
+            batch.append(vid)
+            if len(batch) >= INGEST_BATCH:
+                s.run(cy, rows=batch).consume(); n += len(batch); batch = []
+        if batch:
+            s.run(cy, rows=batch).consume(); n += len(batch)
+        return n
+
+    def _unwind_edges(self, s, rel, src_label, dst_label, pairs):
+        cy = (f"UNWIND $rows AS r MATCH (a:{src_label} {{id: r.s}}), "
+              f"(b:{dst_label} {{id: r.d}}) CREATE (a)-[:{rel}]->(b)")
+        batch, n = [], 0
+        for sv, dv in pairs:
+            batch.append({"s": sv, "d": dv})
+            if len(batch) >= INGEST_BATCH:
+                s.run(cy, rows=batch).consume(); n += len(batch); batch = []
+        if batch:
+            s.run(cy, rows=batch).consume(); n += len(batch)
+        return n
+
     def post_build(self, workload):
         with self.driver.session() as s:
             self._await_indexes(s)
@@ -507,6 +666,11 @@ class MemgraphGraph(Neo4jGraph):
     def _await_indexes(self, s):
         """CREATE INDEX returns once the index is built; Memgraph has no
         db.awaitIndexes() and needs none."""
+
+    def _msg_index_ddl(self, label):
+        """Memgraph's label-index syntax, built synchronously (no await), the
+        same one-line difference from Neo4j as the Person index in connect()."""
+        return f"CREATE INDEX ON :{label}(id)"
 
 
 def _int_or(v):
@@ -620,6 +784,40 @@ class FalkorGraph(Base):
                          "(b:Person {id: r.d}) CREATE (a)-[:KNOWS {since: r.y}]->(b)",
                          {"rows": batch})
 
+    # MESSAGE-HALF loader (DECISIONS #103b/#104). Same UNWIND shape as Neo4j
+    # over GRAPH.QUERY; Message is a second label (FalkorDB 4.x supports
+    # multiple labels per node), the index is Neo4j's without the name (as the
+    # Person index above). INFERRED, not run: the persons+KNOWS path and every
+    # LSQB query text are identical to the tested Neo4j/ArcadeDB arms, so only
+    # this ingest text is unverified; the bench host confirms (COMPARATOR-DIALECTS).
+    def build_messages(self):
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        vcount = ecount = 0
+        for label in _ldbc.MSG_VERTEX_LABELS:
+            self.g.query(f"CREATE INDEX FOR (n:{label}) ON (n.id)")
+        for label, ids in mc.vertex_spec():
+            extra = ":Message" if label in _ldbc.MSG_MESSAGE_SUBLABELS else ""
+            cy = f"UNWIND $rows AS r CREATE (n:{label}{extra} {{id: r}})"
+            batch = []
+            for vid in ids:
+                batch.append(vid)
+                if len(batch) >= INGEST_BATCH:
+                    self.g.query(cy, {"rows": batch}); vcount += len(batch); batch = []
+            if batch:
+                self.g.query(cy, {"rows": batch}); vcount += len(batch)
+        for rel, src_label, dst_label, gen in mc.edge_spec():
+            cy = (f"UNWIND $rows AS r MATCH (a:{src_label} {{id: r.s}}), "
+                  f"(b:{dst_label} {{id: r.d}}) CREATE (a)-[:{rel}]->(b)")
+            batch = []
+            for sv, dv in gen():
+                batch.append({"s": sv, "d": dv})
+                if len(batch) >= INGEST_BATCH:
+                    self.g.query(cy, {"rows": batch}); ecount += len(batch); batch = []
+            if batch:
+                self.g.query(cy, {"rows": batch}); ecount += len(batch)
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+
     def run_cypher(self, text):
         res = self.g.query(text)
         # header entries are [type, name]; the RETURN aliases are the names
@@ -697,6 +895,138 @@ class LadybugGraph(Base):
         self._mod = ladybug
         self.db = ladybug.Database("/tmp/l2_ladybug")
         self.conn = ladybug.Connection(self.db)
+
+    # MESSAGE-HALF loader + LSQB queries (DECISIONS #103b/#104). INFERRED, NOT
+    # RUN: LadybugDB (Kùzu) has no type inheritance and no multi-label, so it
+    # cannot run the canonical Cypher's `(:Message)`; instead it uses LSQB's own
+    # published Kùzu model (github.com/ldbc/lsqb/tree/main/ladybug) -- a single
+    # Message node table that holds every Post and Comment, and one typed REL
+    # table per relationship. Post and Comment are therefore folded into Message
+    # here, and the LSQB queries below are LSQB's ladybug/*.cypher adapted to
+    # this lane's `id` primary key and to UNDIRECTED knows (`-[:R]-`), because
+    # this lane stores each KNOWS once and the canonical queries traverse it
+    # undirected (the tested ArcadeDB/Neo4j arms do). The bench host confirms the
+    # digests against the Cypher arms (COMPARATOR-DIALECTS.md).
+    #
+    # Generic (rel, src_label, dst_label) tuples map onto Kùzu's typed rel
+    # tables; Post/Comment both resolve to Message. q2 additionally needs the
+    # comment->post reply subset, which LSQB carries as its own Comment_replyOf_Post
+    # table, so that generic edge is loaded into BOTH tables.
+    _MSG_NODE_TABLES = ["Country", "City", "Forum", "Message", "Tag", "TagClass"]
+    _REL_TABLE = {
+        ("IS_LOCATED_IN", "Person", "City"):    "Person_isLocatedIn_City",
+        ("IS_PART_OF", "City", "Country"):       "City_isPartOf_Country",
+        ("HAS_MEMBER", "Forum", "Person"):       "Forum_hasMember_Person",
+        ("CONTAINER_OF", "Forum", "Post"):       "Forum_containerOf_Message",
+        ("REPLY_OF", "Comment", "Post"):         "Message_replyOf_Message",
+        ("REPLY_OF", "Comment", "Comment"):      "Message_replyOf_Message",
+        ("HAS_TAG", "Post", "Tag"):              "Message_hasTag_Tag",
+        ("HAS_TAG", "Comment", "Tag"):           "Message_hasTag_Tag",
+        ("HAS_TYPE", "Tag", "TagClass"):         "Tag_hasType_TagClass",
+        ("HAS_CREATOR", "Post", "Person"):       "Message_hasCreator_Person",
+        ("HAS_CREATOR", "Comment", "Person"):    "Message_hasCreator_Person",
+        ("LIKES", "Person", "Post"):             "Person_likes_Message",
+        ("LIKES", "Person", "Comment"):          "Person_likes_Message",
+        ("HAS_INTEREST", "Person", "Tag"):       "Person_hasInterest_Tag",
+    }
+    _REL_ENDPOINTS = {   # Kùzu needs FROM/TO node tables in the DDL
+        "Person_isLocatedIn_City": ("Person", "City"),
+        "City_isPartOf_Country": ("City", "Country"),
+        "Forum_hasMember_Person": ("Forum", "Person"),
+        "Forum_containerOf_Message": ("Forum", "Message"),
+        "Message_replyOf_Message": ("Message", "Message"),
+        "Comment_replyOf_Post": ("Message", "Message"),
+        "Message_hasTag_Tag": ("Message", "Tag"),
+        "Tag_hasType_TagClass": ("Tag", "TagClass"),
+        "Message_hasCreator_Person": ("Message", "Person"),
+        "Person_likes_Message": ("Person", "Message"),
+        "Person_hasInterest_Tag": ("Person", "Tag"),
+    }
+
+    def build_messages(self):
+        import csv as _csv
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        for t in self._MSG_NODE_TABLES:
+            self.conn.execute(f"CREATE NODE TABLE {t}(id INT64, PRIMARY KEY(id))")
+        for rt, (fr, to) in self._REL_ENDPOINTS.items():
+            self.conn.execute(f"CREATE REL TABLE {rt}(FROM {fr} TO {to})")
+        vcount = ecount = 0
+        # node CSVs: Post and Comment both become Message
+        def _copy_nodes(table, id_iters):
+            nonlocal vcount
+            path = f"/tmp/l2_lady_{table}.csv"
+            with open(path, "w", newline="") as f:
+                w = _csv.writer(f)
+                for ids in id_iters:
+                    for vid in ids:
+                        w.writerow([vid]); vcount += 1
+            self.conn.execute(f"COPY {table} FROM '{path}'")
+            os.unlink(path)
+        by_label = {label: g for label, g in mc.vertex_spec()}
+        _copy_nodes("Message", [by_label["Post"], by_label["Comment"]])
+        for t in ("Country", "City", "Forum", "Tag", "TagClass"):
+            _copy_nodes(t, [by_label[t]])
+        # rel CSVs, one per Kùzu rel table (several generic edges may share one)
+        rel_files = {}
+        for rel, src_label, dst_label, gen in mc.edge_spec():
+            targets = [self._REL_TABLE[(rel, src_label, dst_label)]]
+            if (rel, src_label, dst_label) == ("REPLY_OF", "Comment", "Post"):
+                targets.append("Comment_replyOf_Post")  # q2's comment->post subset
+            pairs = list(gen())
+            ecount += len(pairs)   # the edge is counted once even if stored twice
+            for rt in targets:
+                w = rel_files.get(rt)
+                if w is None:
+                    fh = open(f"/tmp/l2_lady_rel_{rt}.csv", "a", newline="")
+                    rel_files[rt] = (fh, _csv.writer(fh))
+                    w = rel_files[rt]
+                for s, d in pairs:
+                    w[1].writerow([s, d])
+        for rt, (fh, _w) in rel_files.items():
+            fh.close()
+            self.conn.execute(f"COPY {rt} FROM '/tmp/l2_lady_rel_{rt}.csv'")
+            os.unlink(f"/tmp/l2_lady_rel_{rt}.csv")
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+
+    # LSQB in LadybugDB's typed-rel-table Cypher (see the note above). Undirected
+    # knows to match the canonical queries the tested arms run.
+    LSQB = {
+        "lsqb_q1": ("MATCH (:Country)<-[:City_isPartOf_Country]-(:City)<-[:Person_isLocatedIn_City]-(:Person)"
+                    "<-[:Forum_hasMember_Person]-(:Forum)-[:Forum_containerOf_Message]->(:Message)"
+                    "<-[:Message_replyOf_Message]-(:Message)-[:Message_hasTag_Tag]->(:Tag)"
+                    "-[:Tag_hasType_TagClass]->(:TagClass) RETURN count(*) AS n"),
+        "lsqb_q2": ("MATCH (person1:Person)-[:Person_knows_Person]-(person2:Person), "
+                    "(person1)<-[:Message_hasCreator_Person]-(comment:Message)-[:Comment_replyOf_Post]->"
+                    "(post:Message)-[:Message_hasCreator_Person]->(person2) RETURN count(*) AS n"),
+        "lsqb_q3": ("MATCH (country:Country) "
+                    "MATCH (person1:Person)-[:Person_isLocatedIn_City]->(:City)-[:City_isPartOf_Country]->(country) "
+                    "MATCH (person2:Person)-[:Person_isLocatedIn_City]->(:City)-[:City_isPartOf_Country]->(country) "
+                    "MATCH (person3:Person)-[:Person_isLocatedIn_City]->(:City)-[:City_isPartOf_Country]->(country) "
+                    "MATCH (person1)-[:Person_knows_Person]-(person2)-[:Person_knows_Person]-(person3)"
+                    "-[:Person_knows_Person]-(person1) RETURN count(*) AS n"),
+        "lsqb_q4": ("MATCH (:Tag)<-[:Message_hasTag_Tag]-(message:Message)-[:Message_hasCreator_Person]->(creator:Person), "
+                    "(message)<-[:Person_likes_Message]-(liker:Person), "
+                    "(message)<-[:Message_replyOf_Message]-(comment:Message) RETURN count(*) AS n"),
+        "lsqb_q5": ("MATCH (tag1:Tag)<-[:Message_hasTag_Tag]-(message:Message)<-[:Message_replyOf_Message]-"
+                    "(comment:Message)-[:Message_hasTag_Tag]->(tag2:Tag) WHERE tag1.id <> tag2.id RETURN count(*) AS n"),
+        "lsqb_q6": ("MATCH (person1:Person)-[:Person_knows_Person]-(person2:Person)-[:Person_knows_Person]-"
+                    "(person3:Person)-[:Person_hasInterest_Tag]->(tag:Tag) WHERE person1.id <> person3.id RETURN count(*) AS n"),
+        "lsqb_q7": ("MATCH (:Tag)<-[:Message_hasTag_Tag]-(message:Message)-[:Message_hasCreator_Person]->(creator:Person) "
+                    "OPTIONAL MATCH (message)<-[:Person_likes_Message]-(liker:Person) "
+                    "OPTIONAL MATCH (message)<-[:Message_replyOf_Message]-(comment:Message) RETURN count(*) AS n"),
+        "lsqb_q8": ("MATCH (tag1:Tag)<-[:Message_hasTag_Tag]-(message:Message)<-[:Message_replyOf_Message]-"
+                    "(comment:Message)-[:Message_hasTag_Tag]->(tag2:Tag) "
+                    "WHERE NOT (comment)-[:Message_hasTag_Tag]->(tag1) AND tag1.id <> tag2.id RETURN count(*) AS n"),
+        "lsqb_q9": ("MATCH (person1:Person)-[:Person_knows_Person]-(person2:Person)-[:Person_knows_Person]-"
+                    "(person3:Person)-[:Person_hasInterest_Tag]->(tag:Tag) "
+                    "WHERE NOT (person1)-[:Person_knows_Person]-(person3) AND person1.id <> person3.id RETURN count(*) AS n"),
+    }
+
+    def run_olap(self, qname):
+        # The five hand-written analytics queries run the shared Cypher; the nine
+        # LSQB queries need LadybugDB's typed-rel-table spelling.
+        return self.run_cypher(self.LSQB.get(qname) or OLAP_QUERIES[qname])
 
     def run_cypher(self, text):
         # Rows come back positional, in the RETURN clause's order, which is the
@@ -853,6 +1183,126 @@ class DuckpgqGraph(Base):
         self.cx.execute("CREATE INDEX k_src ON knows(src)")
         self.cx.execute("CREATE INDEX k_dst ON knows(dst)")
 
+    # MESSAGE-HALF loader + LSQB SQL/PGQ (DECISIONS #103b/#104). INFERRED, NOT
+    # RUN on the laptop (no duckdb wheel here). It follows LSQB's own published
+    # DuckPGQ implementation (github.com/ldbc/lsqb/tree/main/pgq): separate Post,
+    # Comment and Message vertex tables (Message = Post UNION ALL Comment), one
+    # base edge table per relationship plus Message-level UNION tables for the
+    # queries that use the supertype, and the property graph redefined over all
+    # of them with a LABEL per edge table. The anti-joins (q8, q9) are expressed
+    # the way LSQB does -- a GRAPH_TABLE match exposing the ids through COLUMNS,
+    # LEFT JOINed to the edge table with an IS NULL filter -- because SQL/PGQ has
+    # no inline NOT-pattern. Every edge binds a variable (DuckPGQ requires it).
+    # knows is undirected to match the canonical queries. Bench host confirms.
+    _MSG_EDGE_TABLES = [
+        # (table, generic (rel, src, dst), pgq_source_vertex, pgq_dest_vertex, label)
+        ("dp_person_islocatedin_city", ("IS_LOCATED_IN", "Person", "City"), "Person", "City", "Person_isLocatedIn"),
+        ("dp_city_ispartof_country",   ("IS_PART_OF", "City", "Country"),   "City", "Country", "City_isPartOf_Country"),
+        ("dp_forum_hasmember_person",  ("HAS_MEMBER", "Forum", "Person"),   "Forum", "Person", "hasMember"),
+        ("dp_forum_containerof_post",  ("CONTAINER_OF", "Forum", "Post"),   "Forum", "Post", "containerOf"),
+        ("dp_comment_replyof_post",    ("REPLY_OF", "Comment", "Post"),     "Comment", "Post", "replyOf_Post"),
+        ("dp_comment_replyof_comment", ("REPLY_OF", "Comment", "Comment"),  "Comment", "Comment", "replyOf_Comment"),
+        ("dp_post_hastag_tag",         ("HAS_TAG", "Post", "Tag"),          "Post", "Tag", "Post_hasTag"),
+        ("dp_comment_hastag_tag",      ("HAS_TAG", "Comment", "Tag"),       "Comment", "Tag", "Comment_hasTag"),
+        ("dp_tag_hastype_tagclass",    ("HAS_TYPE", "Tag", "TagClass"),     "Tag", "TagClass", "hasType"),
+        ("dp_post_hascreator_person",  ("HAS_CREATOR", "Post", "Person"),   "Post", "Person", "Post_hasCreator"),
+        ("dp_comment_hascreator_person", ("HAS_CREATOR", "Comment", "Person"), "Comment", "Person", "Comment_hasCreator"),
+        ("dp_person_likes_post",       ("LIKES", "Person", "Post"),         "Person", "Post", "likes_Post"),
+        ("dp_person_likes_comment",    ("LIKES", "Person", "Comment"),      "Person", "Comment", "likes_Comment"),
+        ("dp_person_hasinterest_tag",  ("HAS_INTEREST", "Person", "Tag"),   "Person", "Tag", "hasInterest"),
+    ]
+
+    def build_messages(self):
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        for t in ("Country", "City", "Forum", "Post", "Comment", "Tag", "TagClass"):
+            self.cx.execute(f"CREATE TABLE {t}(id BIGINT)")
+        vcount = 0
+        by_label = {label: g for label, g in mc.vertex_spec()}
+        for t in ("Country", "City", "Forum", "Post", "Comment", "Tag", "TagClass"):
+            self._bulk(t, ["id"], ((v,) for v in by_label[t]))
+            vcount += self.cx.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+        # Message supertype: every Post and Comment.
+        self.cx.execute("CREATE TABLE Message AS SELECT id FROM Post UNION ALL SELECT id FROM Comment")
+        edge_gen = {(rel, s, d): gen for rel, s, d, gen in mc.edge_spec()}
+        ecount = 0
+        for table, key, _sv, _dv, _lbl in self._MSG_EDGE_TABLES:
+            self.cx.execute(f"CREATE TABLE {table}(s BIGINT, d BIGINT)")
+            before = self.cx.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+            self._bulk(table, ["s", "d"], edge_gen[key]())
+            ecount += self.cx.execute(f"SELECT count(*) FROM {table}").fetchone()[0] - before
+        # Message-level UNION edge tables for the supertype queries.
+        self.cx.execute("CREATE TABLE dp_message_hastag AS "
+                        "SELECT s, d FROM dp_post_hastag_tag UNION ALL SELECT s, d FROM dp_comment_hastag_tag")
+        self.cx.execute("CREATE TABLE dp_message_hascreator AS "
+                        "SELECT s, d FROM dp_post_hascreator_person UNION ALL SELECT s, d FROM dp_comment_hascreator_person")
+        self.cx.execute("CREATE TABLE dp_person_likes_message AS "
+                        "SELECT s, d FROM dp_person_likes_post UNION ALL SELECT s, d FROM dp_person_likes_comment")
+        self.cx.execute("CREATE TABLE dp_message_replyof_message AS "
+                        "SELECT s, d FROM dp_comment_replyof_post UNION ALL SELECT s, d FROM dp_comment_replyof_comment")
+        # Redefine the property graph over everything (CREATE PROPERTY GRAPH
+        # cannot be altered). The persons+KNOWS labels are unchanged, so the five
+        # hand-written queries still run against `pg`.
+        et = ["knows SOURCE KEY (src) REFERENCES Person (id) DESTINATION KEY (dst) REFERENCES Person (id) LABEL knows"]
+        for table, _key, sv, dv, lbl in self._MSG_EDGE_TABLES:
+            et.append(f"{table} SOURCE KEY (s) REFERENCES {sv} (id) "
+                      f"DESTINATION KEY (d) REFERENCES {dv} (id) LABEL {lbl}")
+        for table, sv, dv, lbl in [
+            ("dp_message_hastag", "Message", "Tag", "Message_hasTag"),
+            ("dp_message_hascreator", "Message", "Person", "Message_hasCreator"),
+            ("dp_person_likes_message", "Person", "Message", "likes_Message"),
+            ("dp_message_replyof_message", "Comment", "Message", "replyOf_Message")]:
+            et.append(f"{table} SOURCE KEY (s) REFERENCES {sv} (id) "
+                      f"DESTINATION KEY (d) REFERENCES {dv} (id) LABEL {lbl}")
+        self.cx.execute("DROP PROPERTY GRAPH pg")
+        self.cx.execute("CREATE PROPERTY GRAPH pg VERTEX TABLES "
+                        "(Person, Message, Post, Comment, Country, City, Forum, Tag, TagClass) "
+                        "EDGE TABLES (" + ", ".join(et) + ")")
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+
+    # LSQB in SQL/PGQ (see the note above). count(*) over a GRAPH_TABLE match;
+    # the anti-joins are a LEFT JOIN ... IS NULL over the match's COLUMNS output.
+    LSQB = {
+        "lsqb_q1": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg MATCH "
+                    "(co:Country)<-[e1:City_isPartOf_Country]-(ci:City)<-[e2:Person_isLocatedIn]-(p:Person)"
+                    "<-[e3:hasMember]-(f:Forum)-[e4:containerOf]->(po:Post)<-[e5:replyOf_Post]-(cm:Comment)"
+                    "-[e6:Comment_hasTag]->(t:Tag)-[e7:hasType]->(tc:TagClass) COLUMNS (p.id AS x))"),
+        "lsqb_q2": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg MATCH "
+                    "(p1:Person)-[k:knows]-(p2:Person), "
+                    "(p1)<-[hc:Comment_hasCreator]-(cm:Comment)-[ro:replyOf_Post]->(po:Post)"
+                    "-[pc:Post_hasCreator]->(p2) COLUMNS (p1.id AS x))"),
+        "lsqb_q3": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg MATCH "
+                    "(p1:Person)-[e1:Person_isLocatedIn]->(c1:City)-[e2:City_isPartOf_Country]->(co:Country), "
+                    "(p2:Person)-[e3:Person_isLocatedIn]->(c2:City)-[e4:City_isPartOf_Country]->(co), "
+                    "(p3:Person)-[e5:Person_isLocatedIn]->(c3:City)-[e6:City_isPartOf_Country]->(co), "
+                    "(p1)-[k1:knows]-(p2)-[k2:knows]-(p3)-[k3:knows]-(p1) COLUMNS (p1.id AS x))"),
+        "lsqb_q4": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg MATCH "
+                    "(t:Tag)<-[mht:Message_hasTag]-(m:Message)-[mhc:Message_hasCreator]->(creator:Person), "
+                    "(m)<-[lm:likes_Message]-(liker:Person), "
+                    "(m)<-[rom:replyOf_Message]-(cm:Comment) COLUMNS (m.id AS x))"),
+        "lsqb_q5": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg MATCH "
+                    "(tag1:Tag)<-[ht:Message_hasTag]-(m:Message)<-[ro:replyOf_Message]-(cm:Comment)"
+                    "-[ht1:Comment_hasTag]->(tag2:Tag) WHERE tag1.id <> tag2.id COLUMNS (m.id AS x))"),
+        "lsqb_q6": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg MATCH "
+                    "(p1:Person)-[k1:knows]-(p2:Person)-[k2:knows]-(p3:Person)-[hi:hasInterest]->(t:Tag) "
+                    "WHERE p1.id <> p3.id COLUMNS (p1.id AS x))"),
+        # lsqb_q7 is handled specially in run_olap (its two OPTIONAL MATCHes are
+        # a left-join fan-out, not a single GRAPH_TABLE pattern).
+        "lsqb_q8": ("SELECT count(*) AS n FROM ("
+                    "SELECT g.t1 AS t1, g.cid AS cid, g.t2 AS t2 FROM GRAPH_TABLE (pg MATCH "
+                    "(tag1:Tag)<-[ht:Message_hasTag]-(m:Message)<-[ro:replyOf_Message]-(cm:Comment)"
+                    "-[ht1:Comment_hasTag]->(tag2:Tag) COLUMNS (tag1.id AS t1, cm.id AS cid, tag2.id AS t2)) g "
+                    "LEFT JOIN dp_comment_hastag_tag cht ON cht.s = g.cid AND cht.d = g.t1 "
+                    "WHERE g.t2 <> g.t1 AND cht.s IS NULL)"),
+        "lsqb_q9": ("SELECT count(*) AS n FROM ("
+                    "SELECT g.p1 AS p1, g.p3 AS p3 FROM GRAPH_TABLE (pg MATCH "
+                    "(p1:Person)-[k1:knows]-(p2:Person)-[k2:knows]-(p3:Person)-[hi:hasInterest]->(t:Tag) "
+                    "COLUMNS (p1.id AS p1, p3.id AS p3)) g "
+                    "LEFT JOIN knows ka ON ka.src = g.p1 AND ka.dst = g.p3 "
+                    "LEFT JOIN knows kb ON kb.src = g.p3 AND kb.dst = g.p1 "
+                    "WHERE g.p1 <> g.p3 AND ka.src IS NULL AND kb.src IS NULL)"),
+    }
+
     def run_read(self, op, pid):
         return self.cx.execute(self.READS[op].format(id=pid)).fetchall()
 
@@ -860,7 +1310,19 @@ class DuckpgqGraph(Base):
         return self.cx.execute(self.VISITED.format(id=pid)).fetchall()
 
     def run_olap(self, qname):
-        return self.cx.execute(self.OLAP[qname]).fetchall()
+        if qname == "lsqb_q7":
+            # q7's two OPTIONAL MATCHes are a left-join fan-out that a single
+            # GRAPH_TABLE cannot express; done as the base match LEFT JOINed to
+            # the likes and reply edge tables, counting the product (the OPTIONAL
+            # semantics: one row per (message, liker?, reply?) combination).
+            return self.cx.execute(
+                "SELECT count(*) AS n FROM (SELECT g.mid AS mid FROM GRAPH_TABLE (pg MATCH "
+                "(t:Tag)<-[mht:Message_hasTag]-(m:Message)-[mhc:Message_hasCreator]->(creator:Person) "
+                "COLUMNS (m.id AS mid, t.id AS tid)) g "
+                "LEFT JOIN dp_person_likes_message lm ON lm.d = g.mid "
+                "LEFT JOIN dp_message_replyof_message rm ON rm.d = g.mid)").fetchall()
+        q = self.LSQB.get(qname)
+        return self.cx.execute(q).fetchall() if q else self.cx.execute(self.OLAP[qname]).fetchall()
 
     def person_scan(self, id_from):
         return self.cx.execute(
@@ -1065,8 +1527,123 @@ class SurrealGraph(Base):
     # OLAP_QUERIES may need it.
     UNEXPRESSIBLE = {}
 
+    # MESSAGE-HALF loader + LSQB in SurrealQL (DECISIONS #103b/#104). INFERRED,
+    # NOT RUN, and the least certain of all the arms: SurrealQL has no count(*)
+    # over a multi-way pattern, so each LSQB count below is built from graph
+    # traversal and array lengths, the same shape the triangle count uses, and
+    # LSQB publishes no SurrealDB reference. Posts and Comments share a `message`
+    # table (an `mtype` field marks which); each relationship is a RELATION edge
+    # table; KNOWS is traversed undirected (`<->knows<->`). These are good-faith
+    # translations for the bench host to CONFIRM against the Cypher arms or, per
+    # DECISIONS #92, to replace with a declared unexpressible carrying the real
+    # error -- they are NOT claimed correct here (COMPARATOR-DIALECTS.md).
+    _MSG_REL = {   # generic (rel, src, dst) -> (relation table, in table, out table)
+        ("IS_LOCATED_IN", "Person", "City"):  ("islocatedin", "person", "city"),
+        ("IS_PART_OF", "City", "Country"):     ("ispartof", "city", "country"),
+        ("HAS_MEMBER", "Forum", "Person"):     ("hasmember", "forum", "person"),
+        ("CONTAINER_OF", "Forum", "Post"):     ("containerof", "forum", "message"),
+        ("REPLY_OF", "Comment", "Post"):       ("replyof", "message", "message"),
+        ("REPLY_OF", "Comment", "Comment"):    ("replyof", "message", "message"),
+        ("HAS_TAG", "Post", "Tag"):            ("hastag", "message", "tag"),
+        ("HAS_TAG", "Comment", "Tag"):         ("hastag", "message", "tag"),
+        ("HAS_TYPE", "Tag", "TagClass"):       ("hastype", "tag", "tagclass"),
+        ("HAS_CREATOR", "Post", "Person"):     ("hascreator", "message", "person"),
+        ("HAS_CREATOR", "Comment", "Person"):  ("hascreator", "message", "person"),
+        ("LIKES", "Person", "Post"):           ("likes", "person", "message"),
+        ("LIKES", "Person", "Comment"):        ("likes", "person", "message"),
+        ("HAS_INTEREST", "Person", "Tag"):     ("hasinterest", "person", "tag"),
+    }
+
+    def build_messages(self):
+        from surrealdb import RecordID
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        for t in ("message", "country", "city", "forum", "tag", "tagclass"):
+            self.db.query(f"DEFINE TABLE {t} SCHEMALESS")
+        rel_tables = {}
+        for (_k, (rt, itbl, otbl)) in self._MSG_REL.items():
+            if rt not in rel_tables:
+                self.db.query(f"DEFINE TABLE {rt} TYPE RELATION IN {itbl} OUT {otbl} SCHEMALESS")
+                rel_tables[rt] = (itbl, otbl)
+        vcount = ecount = 0
+        by_label = {label: g for label, g in mc.vertex_spec()}
+
+        def _ins(table, docs):
+            nonlocal vcount
+            buf = []
+            for d in docs:
+                buf.append(d); vcount += 1
+                if len(buf) >= INGEST_BATCH:
+                    self.db.insert(table, buf); buf = []
+            if buf:
+                self.db.insert(table, buf)
+        for label, t in [("Country", "country"), ("City", "city"), ("Forum", "forum"),
+                         ("Tag", "tag"), ("TagClass", "tagclass")]:
+            _ins(t, ({"id": RecordID(t, v), "pid": v} for v in by_label[label]))
+        _ins("message", ({"id": RecordID("message", v), "pid": v, "mtype": "post"} for v in by_label["Post"]))
+        _ins("message", ({"id": RecordID("message", v), "pid": v, "mtype": "comment"} for v in by_label["Comment"]))
+        for rel, src_label, dst_label, gen in mc.edge_spec():
+            rt, itbl, otbl = self._MSG_REL[(rel, src_label, dst_label)]
+            buf = []
+            for s, d in gen():
+                buf.append({"in": RecordID(itbl, s), "out": RecordID(otbl, d)}); ecount += 1
+                if len(buf) >= INGEST_BATCH:
+                    self.db.insert_relation(rt, buf); buf = []
+            if buf:
+                self.db.insert_relation(rt, buf)
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+
+    # Good-faith SurrealQL, one count per query (see the note above). Each sums,
+    # over a driving table, the number of pattern completions reachable from
+    # each record; `<->knows<->person` is undirected friendship.
+    LSQB = {
+        "lsqb_q1": ("SELECT math::sum(array::len("
+                    "->hastype<-tag<-hastag<-message<-replyof<-message<-containerof<-forum"
+                    "->hasmember->person->islocatedin->city->ispartof->country)) AS n "
+                    "FROM tagclass GROUP ALL"),
+        "lsqb_q2": ("SELECT math::sum(array::len(array::filter("
+                    "<-hascreator<-message->replyof->message->hascreator->person, "
+                    "|$p| $p IN (<->knows<->person)))) AS n FROM person GROUP ALL"),
+        # q3 counts ordered (person1,person2,person3) triples in one country
+        # that form a KNOWS triangle. Good-faith: for each friendship p1<->p2
+        # in one country, count the third members p3 that both know and that
+        # share the country. Uncertain -- bench host confirms.
+        "lsqb_q3": ("SELECT math::sum(array::len(array::filter("
+                    "(out<->knows<->person), |$p3| "
+                    "$p3 IN (in<->knows<->person) "
+                    "AND (in->islocatedin->city->ispartof->country.pid) = "
+                    "(out->islocatedin->city->ispartof->country.pid) "
+                    "AND ($p3->islocatedin->city->ispartof->country.pid) = "
+                    "(in->islocatedin->city->ispartof->country.pid)))) AS n "
+                    "FROM knows GROUP ALL"),
+        "lsqb_q4": ("SELECT math::sum(array::len(<-replyof<-message)) AS n FROM message "
+                    "WHERE array::len(->hastag->tag) > 0 AND array::len(->hascreator->person) > 0 "
+                    "AND array::len(<-likes<-person) > 0 GROUP ALL"),
+        "lsqb_q5": ("SELECT math::sum(n) AS n FROM (SELECT array::len(array::filter("
+                    "(<-replyof<-message->hastag->tag).pid, |$t2| $t2 NOT IN (->hastag->tag.pid))) "
+                    "AS n FROM message) GROUP ALL"),
+        # q6 counts (p1,p2,p3,tag): p1<->p2<->p3 (undirected), p1<>p3, p3 has a
+        # tag interest. Good-faith: sum over friendships p1<->p2 of, for each
+        # p3 that p2 knows with p3<>p1, that p3's interest count.
+        "lsqb_q6": ("SELECT math::sum(array::len(array::filter("
+                    "(out<->knows<->person), |$p3| $p3.pid != in.pid))) AS n "
+                    "FROM knows GROUP ALL"),
+        "lsqb_q7": ("SELECT math::sum(array::len(->hastag->tag) * "
+                    "math::max([array::len(<-likes<-person), 1]) * "
+                    "math::max([array::len(<-replyof<-message), 1])) AS n FROM message "
+                    "WHERE array::len(->hascreator->person) > 0 GROUP ALL"),
+        "lsqb_q8": ("SELECT math::sum(n) AS n FROM (SELECT array::len(array::filter("
+                    "(<-replyof<-message->hastag->tag).pid, |$t2| $t2 NOT IN (->hastag->tag.pid))) "
+                    "AS n FROM message) GROUP ALL"),
+        # q9 = q6 with p1 NOT directly knowing p3.
+        "lsqb_q9": ("SELECT math::sum(array::len(array::filter("
+                    "(out<->knows<->person), |$p3| $p3.pid != in.pid "
+                    "AND $p3 NOT IN (in<->knows<->person)))) AS n "
+                    "FROM knows GROUP ALL"),
+    }
+
     def run_olap(self, qname):
-        return self._rows(self.db.query(self.OLAP[qname]))
+        return self._rows(self.db.query(self.LSQB.get(qname) or self.OLAP[qname]))
 
     def run_cypher(self, text):
         raise NotImplementedError("SurrealDB runs SurrealQL through the name-based hooks")
@@ -1179,6 +1756,138 @@ class ArangoGraph(Base):
                       "RETURN 1)}"),
     }
 
+    # MESSAGE-HALF loader + LSQB in AQL (DECISIONS #103b/#104). INFERRED, NOT
+    # RUN (no ArangoDB reachable from the laptop). Posts and Comments share one
+    # `message` document collection with an `mtype` field ('post'/'comment'),
+    # which is how the SNB supertype is expressed here; the other message-half
+    # vertices are their own collections and each relationship is its own edge
+    # collection. The LSQB queries are AQL traversals: undirected KNOWS is `ANY`
+    # (this lane stores each KNOWS once, and the canonical queries traverse it
+    # undirected), the two anti-joins (q8, q9) are a NOT with a subquery LENGTH
+    # == 0, and each query returns {n: LENGTH(...)} the digest reads as a count.
+    # The bench host confirms the digests against the Cypher arms.
+    _MSG_VCOLL = ["country", "city", "forum", "message", "tag", "tagclass"]
+    # generic (rel, src, dst) -> (edge collection, _from coll, _to coll)
+    _MSG_ECOLL = {
+        ("IS_LOCATED_IN", "Person", "City"):   ("e_islocatedin", "person", "city"),
+        ("IS_PART_OF", "City", "Country"):      ("e_ispartof", "city", "country"),
+        ("HAS_MEMBER", "Forum", "Person"):      ("e_hasmember", "forum", "person"),
+        ("CONTAINER_OF", "Forum", "Post"):      ("e_containerof", "forum", "message"),
+        ("REPLY_OF", "Comment", "Post"):        ("e_replyof", "message", "message"),
+        ("REPLY_OF", "Comment", "Comment"):     ("e_replyof", "message", "message"),
+        ("HAS_TAG", "Post", "Tag"):             ("e_hastag", "message", "tag"),
+        ("HAS_TAG", "Comment", "Tag"):          ("e_hastag", "message", "tag"),
+        ("HAS_TYPE", "Tag", "TagClass"):        ("e_hastype", "tag", "tagclass"),
+        ("HAS_CREATOR", "Post", "Person"):      ("e_hascreator", "message", "person"),
+        ("HAS_CREATOR", "Comment", "Person"):   ("e_hascreator", "message", "person"),
+        ("LIKES", "Person", "Post"):            ("e_likes", "person", "message"),
+        ("LIKES", "Person", "Comment"):         ("e_likes", "person", "message"),
+        ("HAS_INTEREST", "Person", "Tag"):      ("e_hasinterest", "person", "tag"),
+    }
+
+    def build_messages(self):
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        _sync = arango_common.sync_flag()
+        colls = {c: self.db.create_collection(c, sync=_sync) for c in self._MSG_VCOLL}
+        ecolls = {}
+        for _key, (ec, _f, _t) in self._MSG_ECOLL.items():
+            if ec not in ecolls:
+                ecolls[ec] = self.db.create_collection(ec, edge=True, sync=_sync)
+        vcount = ecount = 0
+        # vertices: Post and Comment both land in `message` with an mtype field
+        vlabel_to_coll = {"Country": "country", "City": "city", "Forum": "forum",
+                          "Tag": "tag", "TagClass": "tagclass"}
+        by_label = {label: g for label, g in mc.vertex_spec()}
+        def _load_docs(coll, docs):
+            nonlocal vcount
+            buf = []
+            for doc in docs:
+                buf.append(doc); vcount += 1
+                if len(buf) >= INGEST_BATCH:
+                    colls[coll].import_bulk(buf); buf = []
+            if buf:
+                colls[coll].import_bulk(buf)
+        for label, coll in vlabel_to_coll.items():
+            _load_docs(coll, ({"_key": str(v), "id": v} for v in by_label[label]))
+        _load_docs("message", ({"_key": str(v), "id": v, "mtype": "post"} for v in by_label["Post"]))
+        _load_docs("message", ({"_key": str(v), "id": v, "mtype": "comment"} for v in by_label["Comment"]))
+        # edges
+        for rel, src_label, dst_label, gen in mc.edge_spec():
+            ec, fc, tc = self._MSG_ECOLL[(rel, src_label, dst_label)]
+            buf = []
+            for s, d in gen():
+                buf.append({"_from": f"{fc}/{s}", "_to": f"{tc}/{d}"}); ecount += 1
+                if len(buf) >= INGEST_BATCH:
+                    ecolls[ec].import_bulk(buf); buf = []
+            if buf:
+                ecolls[ec].import_bulk(buf)
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+
+    LSQB = {
+        "lsqb_q1": ("RETURN {n: LENGTH("
+                    "FOR ci IN city "
+                    "FOR co IN 1..1 OUTBOUND ci e_ispartof "
+                    "FOR p IN 1..1 INBOUND ci e_islocatedin "
+                    "FOR f IN 1..1 INBOUND p e_hasmember "
+                    "FOR po IN 1..1 OUTBOUND f e_containerof "
+                    "FOR cm IN 1..1 INBOUND po e_replyof "
+                    "FOR t IN 1..1 OUTBOUND cm e_hastag "
+                    "FOR tc IN 1..1 OUTBOUND t e_hastype RETURN 1)}"),
+        "lsqb_q2": ("RETURN {n: LENGTH("
+                    "FOR p1 IN person "
+                    "FOR p2 IN 1..1 ANY p1 knows "
+                    "FOR cm IN 1..1 INBOUND p1 e_hascreator FILTER cm.mtype == 'comment' "
+                    "FOR po IN 1..1 OUTBOUND cm e_replyof FILTER po.mtype == 'post' "
+                    "FOR pc IN 1..1 OUTBOUND po e_hascreator FILTER pc._key == p2._key RETURN 1)}"),
+        "lsqb_q3": ("RETURN {n: LENGTH("
+                    "FOR co IN country "
+                    "FOR p1 IN person FILTER LENGTH(FOR c1 IN 1..1 OUTBOUND p1 e_islocatedin "
+                    "  FOR x IN 1..1 OUTBOUND c1 e_ispartof FILTER x._key == co._key RETURN 1) > 0 "
+                    "FOR p2 IN 1..1 ANY p1 knows FILTER LENGTH(FOR c2 IN 1..1 OUTBOUND p2 e_islocatedin "
+                    "  FOR x IN 1..1 OUTBOUND c2 e_ispartof FILTER x._key == co._key RETURN 1) > 0 "
+                    "FOR p3 IN 1..1 ANY p2 knows FILTER LENGTH(FOR c3 IN 1..1 OUTBOUND p3 e_islocatedin "
+                    "  FOR x IN 1..1 OUTBOUND c3 e_ispartof FILTER x._key == co._key RETURN 1) > 0 "
+                    "  AND LENGTH(FOR b IN 1..1 ANY p3 knows FILTER b._key == p1._key RETURN 1) > 0 "
+                    "RETURN 1)}"),
+        "lsqb_q4": ("RETURN {n: LENGTH("
+                    "FOR m IN message "
+                    "FOR t IN 1..1 OUTBOUND m e_hastag "
+                    "FOR creator IN 1..1 OUTBOUND m e_hascreator "
+                    "FOR liker IN 1..1 INBOUND m e_likes "
+                    "FOR cm IN 1..1 INBOUND m e_replyof RETURN 1)}"),
+        "lsqb_q5": ("RETURN {n: LENGTH("
+                    "FOR m IN message "
+                    "FOR tag1 IN 1..1 OUTBOUND m e_hastag "
+                    "FOR cm IN 1..1 INBOUND m e_replyof "
+                    "FOR tag2 IN 1..1 OUTBOUND cm e_hastag FILTER tag1._key != tag2._key RETURN 1)}"),
+        "lsqb_q6": ("RETURN {n: LENGTH("
+                    "FOR p1 IN person "
+                    "FOR p2 IN 1..1 ANY p1 knows "
+                    "FOR p3 IN 1..1 ANY p2 knows FILTER p1._key != p3._key "
+                    "FOR t IN 1..1 OUTBOUND p3 e_hasinterest RETURN 1)}"),
+        "lsqb_q7": ("RETURN {n: SUM("
+                    "FOR m IN message "
+                    "FOR t IN 1..1 OUTBOUND m e_hastag "
+                    "FOR creator IN 1..1 OUTBOUND m e_hascreator "
+                    "LET likers = LENGTH(FOR l IN 1..1 INBOUND m e_likes RETURN 1) "
+                    "LET replies = LENGTH(FOR r IN 1..1 INBOUND m e_replyof RETURN 1) "
+                    "RETURN MAX([likers, 1]) * MAX([replies, 1]))}"),
+        "lsqb_q8": ("RETURN {n: LENGTH("
+                    "FOR m IN message "
+                    "FOR tag1 IN 1..1 OUTBOUND m e_hastag "
+                    "FOR cm IN 1..1 INBOUND m e_replyof "
+                    "FOR tag2 IN 1..1 OUTBOUND cm e_hastag FILTER tag1._key != tag2._key "
+                    "FILTER LENGTH(FOR x IN 1..1 OUTBOUND cm e_hastag FILTER x._key == tag1._key RETURN 1) == 0 "
+                    "RETURN 1)}"),
+        "lsqb_q9": ("RETURN {n: LENGTH("
+                    "FOR p1 IN person "
+                    "FOR p2 IN 1..1 ANY p1 knows "
+                    "FOR p3 IN 1..1 ANY p2 knows FILTER p1._key != p3._key "
+                    "  AND LENGTH(FOR b IN 1..1 ANY p1 knows FILTER b._key == p3._key RETURN 1) == 0 "
+                    "FOR t IN 1..1 OUTBOUND p3 e_hasinterest RETURN 1)}"),
+    }
+
     def _n(self, q, **bv):
         return list(self.db.aql.execute(q, bind_vars=bv))
 
@@ -1208,7 +1917,7 @@ class ArangoGraph(Base):
                 nk=str(new_id))
 
     def run_olap(self, qname):
-        return self._n(self.OLAP[qname])
+        return self._n(self.LSQB.get(qname) or self.OLAP[qname])
 
     def run_cypher(self, text):
         raise NotImplementedError("ArangoDB runs AQL through the name-based hooks")
@@ -1443,7 +2152,154 @@ class MongoGraph(Base):
             {"$project": {"_id": 0, "n": 1}}]),
     }
 
+    # MESSAGE-HALF loader + LSQB as aggregation pipelines (DECISIONS #103b/#104).
+    # INFERRED, NOT RUN (no MongoDB reachable from the laptop), and the LEAST
+    # certain of the non-Cypher arms -- LSQB's shapes (a Message supertype, an
+    # eight-way join, two anti-joins, undirected friendship) are the hardest to
+    # write as pipelines and have no LSQB reference. Modelling: Post and Comment
+    # share a `message` collection with an `mtype` field; each relationship is
+    # its own {s,d} edge collection; and because a $lookup is directed, an
+    # undirected-KNOWS collection `knows_undir` holds every friendship in BOTH
+    # directions (built here, used only by the LSQB pipelines, so the five
+    # hand-written queries on the directed `knows` are untouched). Each pipeline
+    # ends in a document {n: <count(*)>} the digest reads. The anti-joins are a
+    # $lookup with a `$match` on an empty result. THE BENCH HOST MUST CONFIRM OR,
+    # where a shape is genuinely inexpressible, DECLARE IT WITH THE ERROR (#92).
+    _MSG_ECOLL = {
+        ("IS_LOCATED_IN", "Person", "City"):  "e_islocatedin",
+        ("IS_PART_OF", "City", "Country"):     "e_ispartof",
+        ("HAS_MEMBER", "Forum", "Person"):     "e_hasmember",
+        ("CONTAINER_OF", "Forum", "Post"):     "e_containerof",
+        ("REPLY_OF", "Comment", "Post"):       "e_replyof",
+        ("REPLY_OF", "Comment", "Comment"):    "e_replyof",
+        ("HAS_TAG", "Post", "Tag"):            "e_hastag",
+        ("HAS_TAG", "Comment", "Tag"):         "e_hastag",
+        ("HAS_TYPE", "Tag", "TagClass"):       "e_hastype",
+        ("HAS_CREATOR", "Post", "Person"):     "e_hascreator",
+        ("HAS_CREATOR", "Comment", "Person"):  "e_hascreator",
+        ("LIKES", "Person", "Post"):           "e_likes",
+        ("LIKES", "Person", "Comment"):        "e_likes",
+        ("HAS_INTEREST", "Person", "Tag"):     "e_hasinterest",
+    }
+
+    def build_messages(self):
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        vcount = ecount = 0
+        by_label = {label: g for label, g in mc.vertex_spec()}
+
+        def _fill(coll_name, docs):
+            nonlocal vcount
+            coll = self.db.get_collection(coll_name, write_concern=self._wc)
+            buf = []
+            for doc in docs:
+                buf.append(doc); vcount += 1
+                if len(buf) >= INGEST_BATCH:
+                    coll.insert_many(buf, ordered=False); buf = []
+            if buf:
+                coll.insert_many(buf, ordered=False)
+        for label in ("Country", "City", "Forum", "Tag", "TagClass"):
+            _fill(label.lower(), ({"_id": v} for v in by_label[label]))
+        _fill("message", ({"_id": v, "mtype": "post"} for v in by_label["Post"]))
+        _fill("message", ({"_id": v, "mtype": "comment"} for v in by_label["Comment"]))
+        for rel, src_label, dst_label, gen in mc.edge_spec():
+            ec = self.db.get_collection(self._MSG_ECOLL[(rel, src_label, dst_label)],
+                                        write_concern=self._wc)
+            buf = []
+            for s, d in gen():
+                buf.append({"s": s, "d": d}); ecount += 1
+                if len(buf) >= INGEST_BATCH:
+                    ec.insert_many(buf, ordered=False); buf = []
+            if buf:
+                ec.insert_many(buf, ordered=False)
+        # undirected KNOWS for q2/q3/q6/q9, both directions, in its own
+        # collection so the directed-`knows` analytics queries are untouched.
+        ku = self.db.get_collection("knows_undir", write_concern=self._wc)
+        buf = []
+        for e in self.knows.find({}, {"_id": 0, "src": 1, "dst": 1}):
+            buf.append({"s": e["src"], "d": e["dst"]})
+            buf.append({"s": e["dst"], "d": e["src"]})
+            if len(buf) >= INGEST_BATCH:
+                ku.insert_many(buf, ordered=False); buf = []
+        if buf:
+            ku.insert_many(buf, ordered=False)
+        for c in ("e_islocatedin", "e_ispartof", "e_hasmember", "e_containerof",
+                  "e_replyof", "e_hastag", "e_hastype", "e_hascreator", "e_likes",
+                  "e_hasinterest"):
+            self.db[c].create_index("s"); self.db[c].create_index("d")
+        ku.create_index("s")
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+
+    # LSQB pipelines. Each names the collection it starts from and ends in a
+    # {n: count} document (see the note above). Every join is a $lookup +
+    # $unwind that yields one document per matching sub-path, so the final
+    # $count is count(*). Anti-joins keep the rows whose lookup came back empty.
+    _LSQB = {
+        # q1: the eight-label chain, started from the small end (TagClass).
+        "lsqb_q1": ("tagclass", [
+            {"$lookup": {"from": "e_hastype", "localField": "_id", "foreignField": "d", "as": "ht"}},
+            {"$unwind": "$ht"},  # tag -> tagclass
+            {"$lookup": {"from": "e_hastag", "localField": "ht.s", "foreignField": "d", "as": "mt"}},
+            {"$unwind": "$mt"},  # message -> tag
+            {"$lookup": {"from": "e_replyof", "localField": "mt.s", "foreignField": "d", "as": "ro"}},
+            {"$unwind": "$ro"},  # comment -> post(=mt.s)
+            {"$lookup": {"from": "e_containerof", "localField": "mt.s", "foreignField": "d", "as": "co"}},
+            {"$unwind": "$co"},  # forum -> post
+            {"$lookup": {"from": "e_hasmember", "localField": "co.s", "foreignField": "s", "as": "hm"}},
+            {"$unwind": "$hm"},  # forum -> person
+            {"$lookup": {"from": "e_islocatedin", "localField": "hm.d", "foreignField": "s", "as": "il"}},
+            {"$unwind": "$il"},  # person -> city
+            {"$lookup": {"from": "e_ispartof", "localField": "il.d", "foreignField": "s", "as": "ip"}},
+            {"$unwind": "$ip"},  # city -> country
+            {"$count": "n"}]),
+        # q5: message with two differently-tagged sides (message, its reply, two tags).
+        "lsqb_q5": ("e_replyof", [
+            {"$lookup": {"from": "e_hastag", "localField": "d", "foreignField": "s", "as": "t1"}},
+            {"$unwind": "$t1"},  # message(=d) -> tag1
+            {"$lookup": {"from": "e_hastag", "localField": "s", "foreignField": "s", "as": "t2"}},
+            {"$unwind": "$t2"},  # comment(=s) -> tag2
+            {"$match": {"$expr": {"$ne": ["$t1.d", "$t2.d"]}}},
+            {"$count": "n"}]),
+        # q8: q5 with the comment NOT itself carrying tag1 (anti-join).
+        "lsqb_q8": ("e_replyof", [
+            {"$lookup": {"from": "e_hastag", "localField": "d", "foreignField": "s", "as": "t1"}},
+            {"$unwind": "$t1"},
+            {"$lookup": {"from": "e_hastag", "localField": "s", "foreignField": "s", "as": "t2"}},
+            {"$unwind": "$t2"},
+            {"$match": {"$expr": {"$ne": ["$t1.d", "$t2.d"]}}},
+            {"$lookup": {"from": "e_hastag", "let": {"c": "$s", "tg": "$t1.d"},
+                         "pipeline": [{"$match": {"$expr": {"$and": [
+                             {"$eq": ["$s", "$$c"]}, {"$eq": ["$d", "$$tg"]}]}}}], "as": "chk"}},
+            {"$match": {"chk": {"$size": 0}}},
+            {"$count": "n"}]),
+        # q6: two-hop friend chain (undirected) whose far end has a tag interest.
+        "lsqb_q6": ("knows_undir", [
+            {"$lookup": {"from": "knows_undir", "localField": "d", "foreignField": "s", "as": "k2"}},
+            {"$unwind": "$k2"},  # p2 -> p3
+            {"$match": {"$expr": {"$ne": ["$s", "$k2.d"]}}},  # person1 <> person3
+            {"$lookup": {"from": "e_hasinterest", "localField": "k2.d", "foreignField": "s", "as": "hi"}},
+            {"$unwind": "$hi"},  # p3 -> tag
+            {"$count": "n"}]),
+        # q9: q6 with person1 NOT directly KNOWS person3 (anti-join).
+        "lsqb_q9": ("knows_undir", [
+            {"$lookup": {"from": "knows_undir", "localField": "d", "foreignField": "s", "as": "k2"}},
+            {"$unwind": "$k2"},
+            {"$match": {"$expr": {"$ne": ["$s", "$k2.d"]}}},
+            {"$lookup": {"from": "knows_undir", "let": {"a": "$s", "c": "$k2.d"},
+                         "pipeline": [{"$match": {"$expr": {"$and": [
+                             {"$eq": ["$s", "$$a"]}, {"$eq": ["$d", "$$c"]}]}}}], "as": "chk"}},
+            {"$match": {"chk": {"$size": 0}}},
+            {"$lookup": {"from": "e_hasinterest", "localField": "k2.d", "foreignField": "s", "as": "hi"}},
+            {"$unwind": "$hi"},
+            {"$count": "n"}]),
+    }
+
     def run_olap(self, qname):
+        if qname in self._LSQB:
+            coll, pipeline = self._LSQB[qname]
+            return self._count_or_zero(list(self.db[coll].aggregate(pipeline, allowDiskUse=True)))
+        if qname in ("lsqb_q2", "lsqb_q3", "lsqb_q4", "lsqb_q7"):
+            return self._lsqb_special(qname)
         coll, pipeline = self.OLAP[qname]
         # allowDiskUse: the two-sided join in same_city_edges and
         # friend_age_by_city exceeds the 100 MB in-memory sort/group limit at
@@ -1451,6 +2307,69 @@ class MongoGraph(Base):
         # for a memory bound is not a result about the query.
         rows = list(self.db[coll].aggregate(pipeline, allowDiskUse=True))
         return self._count_or_zero(rows) if qname == "triangles" else rows
+
+    def _lsqb_special(self, qname):
+        """The four LSQB pipelines with an extra structural twist (see the note):
+        q2's two-creator + reply chain, q3's country triangle, q4's three-way
+        message fan-in, q7's OPTIONAL-MATCH left-join count. INFERRED."""
+        if qname == "lsqb_q4":
+            return self._count_or_zero(list(self.db["message"].aggregate([
+                {"$lookup": {"from": "e_hastag", "localField": "_id", "foreignField": "s", "as": "t"}},
+                {"$unwind": "$t"},
+                {"$lookup": {"from": "e_hascreator", "localField": "_id", "foreignField": "s", "as": "cr"}},
+                {"$unwind": "$cr"},
+                {"$lookup": {"from": "e_likes", "localField": "_id", "foreignField": "d", "as": "lk"}},
+                {"$unwind": "$lk"},
+                {"$lookup": {"from": "e_replyof", "localField": "_id", "foreignField": "d", "as": "ro"}},
+                {"$unwind": "$ro"},
+                {"$count": "n"}], allowDiskUse=True)))
+        if qname == "lsqb_q7":
+            # OPTIONAL MATCH: one row per (message,tag,creator) times max(likers,1)
+            # times max(replies,1); computed as a sum of that product.
+            rows = list(self.db["message"].aggregate([
+                {"$lookup": {"from": "e_hastag", "localField": "_id", "foreignField": "s", "as": "t"}},
+                {"$unwind": "$t"},
+                {"$lookup": {"from": "e_hascreator", "localField": "_id", "foreignField": "s", "as": "cr"}},
+                {"$unwind": "$cr"},
+                {"$lookup": {"from": "e_likes", "localField": "_id", "foreignField": "d", "as": "lk"}},
+                {"$lookup": {"from": "e_replyof", "localField": "_id", "foreignField": "d", "as": "ro"}},
+                {"$group": {"_id": None, "n": {"$sum": {"$multiply": [
+                    {"$max": [{"$size": "$lk"}, 1]}, {"$max": [{"$size": "$ro"}, 1]}]}}}},
+                {"$project": {"_id": 0, "n": 1}}], allowDiskUse=True))
+            return self._count_or_zero(rows)
+        if qname == "lsqb_q2":
+            return self._count_or_zero(list(self.db["knows_undir"].aggregate([
+                {"$lookup": {"from": "e_hascreator", "localField": "s", "foreignField": "d", "as": "cm"}},
+                {"$unwind": "$cm"},  # comment/post created by person1
+                {"$lookup": {"from": "e_replyof", "localField": "cm.s", "foreignField": "s", "as": "ro"}},
+                {"$unwind": "$ro"},  # that message replies to ro.d (a post)
+                {"$lookup": {"from": "e_hascreator", "localField": "ro.d", "foreignField": "s", "as": "pc"}},
+                {"$unwind": "$pc"},  # post's creator
+                {"$match": {"$expr": {"$eq": ["$pc.d", "$d"]}}},  # == person2
+                {"$count": "n"}], allowDiskUse=True)))
+        if qname == "lsqb_q3":
+            return self._count_or_zero(list(self.db["knows_undir"].aggregate([
+                {"$lookup": {"from": "knows_undir", "localField": "d", "foreignField": "s", "as": "k2"}},
+                {"$unwind": "$k2"},
+                {"$lookup": {"from": "knows_undir", "let": {"c": "$k2.d", "a": "$s"},
+                             "pipeline": [{"$match": {"$expr": {"$and": [
+                                 {"$eq": ["$s", "$$c"]}, {"$eq": ["$d", "$$a"]}]}}}], "as": "close"}},
+                {"$unwind": "$close"},  # p3 knows p1 -> triangle
+                {"$lookup": {"from": "e_islocatedin", "localField": "s", "foreignField": "s", "as": "l1"}},
+                {"$unwind": "$l1"},
+                {"$lookup": {"from": "e_ispartof", "localField": "l1.d", "foreignField": "s", "as": "c1"}},
+                {"$unwind": "$c1"},
+                {"$lookup": {"from": "e_islocatedin", "localField": "d", "foreignField": "s", "as": "l2"}},
+                {"$unwind": "$l2"},
+                {"$lookup": {"from": "e_ispartof", "localField": "l2.d", "foreignField": "s", "as": "c2"}},
+                {"$unwind": "$c2"},
+                {"$lookup": {"from": "e_islocatedin", "localField": "k2.d", "foreignField": "s", "as": "l3"}},
+                {"$unwind": "$l3"},
+                {"$lookup": {"from": "e_ispartof", "localField": "l3.d", "foreignField": "s", "as": "c3"}},
+                {"$unwind": "$c3"},
+                {"$match": {"$expr": {"$and": [{"$eq": ["$c1.d", "$c2.d"]},
+                                               {"$eq": ["$c2.d", "$c3.d"]}]}}},
+                {"$count": "n"}], allowDiskUse=True)))
 
     def run_cypher(self, text):
         raise NotImplementedError("MongoDB runs aggregation pipelines through the name-based hooks")
@@ -1591,12 +2510,26 @@ def main():
     out.update(getattr(ad, "row_extra", None) or {})
     out["instrument"] = bench_common.INSTRUMENT
 
+    # THE MESSAGE HALF, for the analytics workload only (DECISIONS #103b/#104).
+    # Loaded on top of persons+KNOWS when the source is the full LDBC network and
+    # the workload is olap; the interactive (oltp) workload never sees it, so the
+    # interactive l2 table keeps the persons+KNOWS projection unchanged. The
+    # adapter reads self._scale and self._load_messages, set here before build().
+    ad._scale = args.scale
+    ad._load_messages = (_GRAPH_SOURCE == "ldbc" and args.workload == "olap")
     t0 = time.perf_counter()
     with _beat.phase("build", n=n_persons):
         ad.build(n_persons)
+        if ad._load_messages:
+            _beat.mark("build-messages-start", scale=args.scale, msg_limit=_MSG_LIMIT)
+            ad.build_messages()
+            _beat.mark("build-messages-done", **getattr(ad, "msg_counts", {}))
     with _beat.phase("post-build", workload=args.workload):
         ad.post_build(args.workload)
     out["build_s"] = round(time.perf_counter() - t0, 2)
+    # What the message half actually loaded, so a reader can check it against the
+    # corpus README the way n_persons_ingested checks the projection.
+    out.update(getattr(ad, "msg_counts", None) or {})
     # AFTER THE BUILD (DECISIONS #90). ArangoDB's waitForSync is a collection
     # property, so it can only be read back once build() has created one; an
     # adapter that read its value out of its own engine wins over the map.

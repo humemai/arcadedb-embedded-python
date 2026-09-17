@@ -172,6 +172,70 @@ OLAP_QUERIES = {
 }
 
 # ---------------------------------------------------------------------------
+# LSQB's nine pattern-matching queries (DECISIONS #104), on the FULL social
+# network at SF1 that the analytics table moves to (#103b). Canonical Cypher
+# from github.com/ldbc/lsqb (cypher/q1.cypher .. q9.cypher), taken nearly
+# verbatim; the only changes to the published text are:
+#   * `RETURN count(*) AS n` in place of `AS count`, the one alias the digest
+#     compares against on every engine (the same reason the five above alias);
+#   * node inequality written as `<>` on the `.id` property (`tag1.id <>
+#     tag2.id`, `person1.id <> person3.id`) rather than on the node
+#     (`tag1 <> tag2`). Every vertex here carries a unique per-label id, so the
+#     two are the same predicate, and the property form is the one ArcadeDB's
+#     openCypher accepts as well as Neo4j/Memgraph/FalkorDB.
+# Message is the SNB supertype of Post and Comment; the Cypher engines reach it
+# through inheritance (ArcadeDB) or a second label (Neo4j/Memgraph/FalkorDB) on
+# every Post and Comment, so `(:Message)` matches both (see ldbc_snb.py).
+# KNOWS is UNDIRECTED here, exactly as LSQB writes it (`-[:KNOWS]-`), which is
+# why the LSQB queries use `-[:KNOWS]-` where the five hand-written analytics
+# queries above use the directed `-[:KNOWS]->`.
+#
+# Each is a whole-graph count(*), so each digest is `columns=("n",)` (below),
+# and the per-query budget (#100/#100a) bounds all fourteen alike.
+LSQB_QUERIES = {
+    # q1: the eight-label chain, Country<-City<-Person<-Forum->Post<-Comment->Tag->TagClass.
+    "lsqb_q1": ("MATCH (:Country)<-[:IS_PART_OF]-(:City)<-[:IS_LOCATED_IN]-(:Person)"
+                "<-[:HAS_MEMBER]-(:Forum)-[:CONTAINER_OF]->(:Post)<-[:REPLY_OF]-(:Comment)"
+                "-[:HAS_TAG]->(:Tag)-[:HAS_TYPE]->(:TagClass) RETURN count(*) AS n"),
+    # q2: friends where one commented a reply on the other's post.
+    "lsqb_q2": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person), "
+                "(person1)<-[:HAS_CREATOR]-(comment:Comment)-[:REPLY_OF]->(post:Post)"
+                "-[:HAS_CREATOR]->(person2) RETURN count(*) AS n"),
+    # q3: three people in one country, all pairwise KNOWS (country triangle).
+    "lsqb_q3": ("MATCH (country:Country) "
+                "MATCH (person1:Person)-[:IS_LOCATED_IN]->(city1:City)-[:IS_PART_OF]->(country) "
+                "MATCH (person2:Person)-[:IS_LOCATED_IN]->(city2:City)-[:IS_PART_OF]->(country) "
+                "MATCH (person3:Person)-[:IS_LOCATED_IN]->(city3:City)-[:IS_PART_OF]->(country) "
+                "MATCH (person1)-[:KNOWS]-(person2)-[:KNOWS]-(person3)-[:KNOWS]-(person1) "
+                "RETURN count(*) AS n"),
+    # q4: a tagged message with a creator, a liker and an inbound reply.
+    "lsqb_q4": ("MATCH (:Tag)<-[:HAS_TAG]-(message:Message)-[:HAS_CREATOR]->(creator:Person), "
+                "(message)<-[:LIKES]-(liker:Person), "
+                "(message)<-[:REPLY_OF]-(comment:Comment) RETURN count(*) AS n"),
+    # q5: a message and a reply to it that carry two different tags.
+    "lsqb_q5": ("MATCH (tag1:Tag)<-[:HAS_TAG]-(message:Message)<-[:REPLY_OF]-(comment:Comment)"
+                "-[:HAS_TAG]->(tag2:Tag) WHERE tag1.id <> tag2.id RETURN count(*) AS n"),
+    # q6: a two-hop friend chain whose far end has a tag interest.
+    "lsqb_q6": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-(person3:Person)"
+                "-[:HAS_INTEREST]->(tag:Tag) WHERE person1.id <> person3.id RETURN count(*) AS n"),
+    # q7: q4's left join -- a tagged message with a creator, likers and replies OPTIONAL.
+    "lsqb_q7": ("MATCH (:Tag)<-[:HAS_TAG]-(message:Message)-[:HAS_CREATOR]->(creator:Person) "
+                "OPTIONAL MATCH (message)<-[:LIKES]-(liker:Person) "
+                "OPTIONAL MATCH (message)<-[:REPLY_OF]-(comment:Comment) RETURN count(*) AS n"),
+    # q8: q5 with the reply NOT itself carrying tag1 (anti-join).
+    "lsqb_q8": ("MATCH (tag1:Tag)<-[:HAS_TAG]-(message:Message)<-[:REPLY_OF]-(comment:Comment)"
+                "-[:HAS_TAG]->(tag2:Tag) WHERE NOT (comment)-[:HAS_TAG]->(tag1) "
+                "AND tag1.id <> tag2.id RETURN count(*) AS n"),
+    # q9: q6 with person1 NOT directly KNOWS person3 (anti-join).
+    "lsqb_q9": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-(person3:Person)"
+                "-[:HAS_INTEREST]->(tag:Tag) WHERE NOT (person1)-[:KNOWS]-(person3) "
+                "AND person1.id <> person3.id RETURN count(*) AS n"),
+}
+# The table is five hand-written questions plus LSQB's nine = fourteen columns
+# (DECISIONS #104). The harness iterates OLAP_QUERIES, so the nine join it here.
+OLAP_QUERIES.update(LSQB_QUERIES)
+
+# ---------------------------------------------------------------------------
 # WHAT EACH ANSWER LOOKS LIKE (DECISIONS #88). Declared once per query, never
 # per engine; the alternatives inside a tuple are the names the four dialects
 # give the same column.
@@ -202,6 +266,10 @@ OLAP_DIGEST = {
     "degree_dist": dict(columns=("deg", "n")),
     "triangles": dict(columns=("n",)),
 }
+# LSQB's nine are each a whole-graph count(*): one exact integer column `n`
+# (DECISIONS #104). Not a `num` measure -- a count is compared exactly, so two
+# different counts can never collide (see the note above).
+OLAP_DIGEST.update({f"lsqb_q{i}": dict(columns=("n",)) for i in range(1, 10)})
 READ_DIGEST = {
     "point": dict(columns=("name", "age")),
     "hop1": dict(columns=("n", "a"), coerce={"a": "num"}),

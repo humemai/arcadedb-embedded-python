@@ -2253,6 +2253,14 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # and the row records the censoring rather than running for
                    # hours.
                    "BENCH_GRAPH_OLAP_ITER", "BENCH_GRAPH_OLAP_BUDGET_S",
+                   # The analytics message-half caps (DECISIONS #104), for a
+                   # laptop smoke of the LSQB queries only. Default unset = the
+                   # whole SF1 network; the campaign never sets them, so a
+                   # bench-host run loads the full corpus. This tuple is CLOSED,
+                   # so a smoke that exports them and this line omits them would
+                   # silently run the full network instead (the BENCH_LC_ITERS
+                   # trap), which on a laptop is an OOM rather than a wrong row.
+                   "BENCH_GRAPH_MSG_LIMIT", "BENCH_GRAPH_PERSON_LIMIT",
                    # The time-series lane's per-query budget (#100), the same
                    # mechanism; the override is for a laptop probe of it.
                    "BENCH_TS_QUERY_BUDGET_S",
