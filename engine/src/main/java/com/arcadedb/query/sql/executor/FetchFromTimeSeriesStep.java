@@ -21,6 +21,7 @@ package com.arcadedb.query.sql.executor;
 import com.arcadedb.engine.timeseries.ColumnDefinition;
 import com.arcadedb.engine.timeseries.TagFilter;
 import com.arcadedb.engine.timeseries.TimeSeriesEngine;
+import com.arcadedb.engine.timeseries.TimeSeriesNaN;
 import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.schema.LocalTimeSeriesType;
@@ -53,10 +54,16 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
    */
   private final boolean             descending;
   /**
-   * Row cap pushed into the descending scan; {@code <= 0} means unlimited. Only set when the planner
-   * proved that every WHERE condition is consumed by the push-down, so no row can be discarded later.
+   * Row cap pushed into the scan, in whichever direction {@link #descending} selects; {@code <= 0} means
+   * unlimited. Only set when the planner proved that every WHERE condition is consumed by the push-down and that
+   * nothing downstream can discard a row, so the rows the engine stops at really are the answer.
+   * <p>
+   * Ascending is the later of the two (issue #7663). The descending cap came first (issue #5414) because a
+   * last-point query was the obvious O(series) read; the ascending one is the same defect on
+   * {@code ORDER BY ts ASC LIMIT n} and on a bare {@code LIMIT n}, whose surplus rows used to be decompressed,
+   * boxed and held before {@code LimitExecutionStep} dropped them.
    */
-  private final int                 descendingLimit;
+  private final int                 limit;
   private       Iterator<Object[]>  resultIterator;
   private       boolean             fetched = false;
 
@@ -71,14 +78,14 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
   }
 
   public FetchFromTimeSeriesStep(final LocalTimeSeriesType tsType, final long fromTs, final long toTs,
-      final TagFilter tagFilter, final boolean descending, final int descendingLimit, final CommandContext context) {
+      final TagFilter tagFilter, final boolean descending, final int limit, final CommandContext context) {
     super(context);
     this.tsType = tsType;
     this.fromTs = fromTs;
     this.toTs = toTs;
     this.tagFilter = tagFilter;
     this.descending = descending;
-    this.descendingLimit = descendingLimit;
+    this.limit = limit;
   }
 
   @Override
@@ -93,9 +100,15 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
           if (engine == null)
             throw new CommandExecutionException(
                 "TimeSeries engine for type '" + tsType.getName() + "' is not initialized");
+          // The bound belongs to the FETCH in both directions (issues #5414, #7663). iterateQuery is kept for the
+          // genuinely unbounded ascending read and for nothing else: its own javadoc says the sealed layer
+          // materialises every matching row before the iterator is handed out, so it saves the sort and the second
+          // copy against query(), never the series.
           resultIterator = descending
-              ? engine.queryDescending(fromTs, toTs, null, tagFilter, descendingLimit, null).iterator()
-              : engine.iterateQuery(fromTs, toTs, null, tagFilter);
+              ? engine.queryDescending(fromTs, toTs, null, tagFilter, limit, null).iterator()
+              : limit > 0
+                  ? engine.queryAscending(fromTs, toTs, null, tagFilter, limit, null).iterator()
+                  : engine.iterateQuery(fromTs, toTs, null, tagFilter);
           fetched = true;
         } catch (final CommandExecutionException e) {
           throw e;
@@ -143,6 +156,22 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
                 value = DateUtils.dateTime(context.getDatabase(), (Long) value, ChronoUnit.MILLIS, LocalDateTime.class,
                     ChronoUnit.MILLIS);
 
+              // The absent marker becomes SQL NULL at the SQL boundary (issue #7743). NaN is what the storage
+              // layers use for "no measurement here" - it is what a null field value is stored as on a
+              // floating-point column - and NULL is what SQL calls the same thing: sum() and avg() skip it,
+              // min() does not return it, and count(*) still counts the row. Handing the NaN through instead
+              // would make a plain SELECT sum(value) answer NaN for a series with one gap in it, while the
+              // aggregation push-down over the very same rows answers the total of the real samples. The HTTP
+              // read paths already encode it this way (AbstractServerHttpHandler.putSampleValue).
+              //
+              // Only NaN, not every non-finite: an infinity IS a value in SQL arithmetic, and the JSON layer
+              // folds it in only because JSON cannot write one. Asked of TimeSeriesNaN rather than spelled out
+              // here, so the two SQL boundaries cannot drift apart from the storage layer's own definition of
+              // absence (claude-review on PR #7747). A non-floating Number can never be NaN, so the widened
+              // instanceof costs nothing but covers Float without a second arm.
+              if (value instanceof Number n && TimeSeriesNaN.isAbsent(n.doubleValue()))
+                value = null;
+
               result.setProperty(col.getName(), value);
             }
 
@@ -179,8 +208,10 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
     // push-down happened.
     if (tagFilter != null)
       sb.append(" TAGS ").append(tagFilter.describe(nonTsColumnNames()));
-    if (descending && descendingLimit > 0)
-      sb.append(" TOP ").append(descendingLimit);
+    // Shown for either direction: the ascending cap is as much a plan decision as the descending one, and a plan
+    // that hides it reads as if no push-down happened (issue #7663).
+    if (limit > 0)
+      sb.append(" TOP ").append(limit);
     if (context.isProfiling())
       sb.append(" (").append(getCostFormatted()).append(", ").append(getRowCountFormatted()).append(")");
     return sb.toString();
@@ -201,6 +232,6 @@ public class FetchFromTimeSeriesStep extends AbstractExecutionStep {
 
   @Override
   public ExecutionStep copy(final CommandContext context) {
-    return new FetchFromTimeSeriesStep(tsType, fromTs, toTs, tagFilter, descending, descendingLimit, context);
+    return new FetchFromTimeSeriesStep(tsType, fromTs, toTs, tagFilter, descending, limit, context);
   }
 }

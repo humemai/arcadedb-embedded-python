@@ -24,8 +24,10 @@ import com.arcadedb.engine.timeseries.TagFilter;
 import com.arcadedb.engine.timeseries.TimeSeriesGateway;
 import com.arcadedb.engine.timeseries.TimeSeriesGateway.TypeResolution;
 import com.arcadedb.serializer.json.JSONArray;
+import com.arcadedb.serializer.json.JSONException;
 import com.arcadedb.serializer.json.JSONObject;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -46,7 +48,314 @@ final class TimeSeriesHandlerUtils {
    */
   private static final int MAX_ECHOED_VALUE_LENGTH = 64;
 
+  /**
+   * Longest numeric STRING accepted where an integral member is expected. It keeps a pathological digit run out
+   * of {@link BigDecimal}'s parser, whose cost grows superlinearly with the digit count, and that is ALL it is
+   * for: the exponent is what makes a value large, not the text, so the guards in {@link #readLong} are what
+   * close the hole this issue is about.
+   * <p>
+   * Sized so it cannot refuse a value the caller could legitimately mean. A whole number a long can hold needs
+   * at most 20 significant characters, and this leaves more than an order of magnitude of headroom on top for
+   * leading zeros, a sign, a decimal point and a run of trailing ones - so a zero-padded {@code 1} is still read
+   * as {@code 1} (CodeRabbit on PR #7730). It is a bound on absurd TEXT, not a statement about which numbers are
+   * representable, and it is deliberately NOT measured on the significant digits alone: leading zeros cost the
+   * parser exactly as much as significant ones, so measuring only the latter would drop the protection while
+   * keeping the refusal.
+   */
+  private static final int MAX_NUMERIC_TEXT_LENGTH = 256;
+
+  /**
+   * Digits in the largest long, {@code 9223372036854775807}. A value with more integer digits than this cannot
+   * be one, which is the bound {@link BigDecimal#longValueExact()} applies internally - in {@code int}
+   * arithmetic, which is exactly the part {@link #readLong} has to redo.
+   */
+  private static final int LONG_MAX_DIGITS = 19;
+
   private TimeSeriesHandlerUtils() {
+  }
+
+  /**
+   * Resolves a member that must be present and must be a JSON object, naming it by its full request path when it
+   * is not (issue #7340).
+   * <p>
+   * The whole {@code require*}/{@code opt*} family below exists for one reason: {@link JSONObject}'s raising
+   * getters signal an absent, null or wrongly-typed member with a {@link JSONException}, which
+   * {@code AbstractServerHttpHandler}'s mapper answers as {@code 400 "Invalid JSON payload"} with the specifics in
+   * the {@code detail} field - and {@code buildErrorBody} CONCEALS {@code detail} whenever the server runs in
+   * production mode. A caller that omitted {@code field} was told only that its payload was invalid, not which
+   * member was missing. These helpers translate the same failures into an {@link IllegalArgumentException} the
+   * two endpoints render on the surface they answer errors on: a 400 whose {@code error} field is always sent, or
+   * a per-target Grafana error frame. That is the shape #7325 introduced for {@code type}, applied to the members
+   * it left out of scope.
+   * <p>
+   * Each helper DELEGATES to the matching {@link JSONObject} getter rather than re-deciding what is acceptable, so
+   * what the endpoints accept is unchanged and only the refusal differs. In particular {@code getString} still
+   * renders a JSON number as its text, and a numeric STRING is still read as a number; widening or narrowing that
+   * here would change which requests succeed, which issue #7340 did not ask for.
+   * <p>
+   * The one place that does NOT simply delegate is {@link #readLong}, which refuses a number the long it is
+   * narrowed to would not faithfully represent instead of truncating it (issue #7715). See its javadoc.
+   *
+   * @param path the member's dotted path as the caller wrote it, e.g. {@code targets[0].aggregation}
+   */
+  static JSONObject requireObject(final JSONObject owner, final String name, final String path) {
+    if (owner.isNull(name))
+      throw missingMember(path, "a JSON object");
+    try {
+      return owner.getJSONObject(name);
+    } catch (final JSONException e) {
+      throw wrongType(path, "a JSON object", owner.opt(name), e);
+    }
+  }
+
+  /**
+   * Resolves a member that must be present and must be a JSON array. See {@link #requireObject}.
+   */
+  static JSONArray requireArray(final JSONObject owner, final String name, final String path) {
+    if (owner.isNull(name))
+      throw missingMember(path, "a JSON array");
+    try {
+      return owner.getJSONArray(name);
+    } catch (final JSONException e) {
+      throw wrongType(path, "a JSON array", owner.opt(name), e);
+    }
+  }
+
+  /**
+   * Resolves a member that must be present and must be a string. See {@link #requireObject}.
+   */
+  static String requireString(final JSONObject owner, final String name, final String path) {
+    if (owner.isNull(name))
+      throw missingMember(path, "a string");
+    try {
+      return owner.getString(name);
+    } catch (final JSONException e) {
+      throw wrongType(path, "a string", owner.opt(name), e);
+    }
+  }
+
+  /**
+   * Resolves a member that must be present and must be a number. See {@link #requireObject}.
+   */
+  static long requireLong(final JSONObject owner, final String name, final String path) {
+    if (owner.isNull(name))
+      throw missingMember(path, "a number");
+    return readLong(owner, name, path);
+  }
+
+  /**
+   * Resolves an optional member that must be a number when it IS present. An absent or JSON-null member yields
+   * {@code defaultValue}; one that arrives as something a number cannot be read from is a client error, refused by
+   * name rather than through the concealed {@code detail} field.
+   */
+  static long optLong(final JSONObject owner, final String name, final long defaultValue, final String path) {
+    if (owner.isNull(name))
+      return defaultValue;
+    return readLong(owner, name, path);
+  }
+
+  /**
+   * Resolves an optional member that must be an integer when it IS present. See {@link #optLong}.
+   * <p>
+   * Read as a long and range-checked rather than through {@code JSONObject.getInt}, which narrows with
+   * {@code Number.intValue()}: a value an int cannot hold would WRAP instead of being refused, and the caller
+   * would silently get a different number than it sent. That is the same trap
+   * {@code AbstractServerHttpHandler.requireIntLimit} exists for on the 'limit' member.
+   */
+  static int optInt(final JSONObject owner, final String name, final int defaultValue, final String path) {
+    if (owner.isNull(name))
+      return defaultValue;
+
+    final long value = readLong(owner, name, path);
+    if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE)
+      throw new IllegalArgumentException("'" + path + "' must be an integer between " + Integer.MIN_VALUE + " and "
+          + Integer.MAX_VALUE + ": received " + value);
+
+    return (int) value;
+  }
+
+  /**
+   * Resolves an optional member that must be a string when it IS present. See {@link #optLong}.
+   */
+  static String optString(final JSONObject owner, final String name, final String defaultValue, final String path) {
+    if (owner.isNull(name))
+      return defaultValue;
+    try {
+      return owner.getString(name);
+    } catch (final JSONException e) {
+      throw wrongType(path, "a string", owner.opt(name), e);
+    }
+  }
+
+  /**
+   * Resolves an array element that must be a JSON object, naming it by its indexed request path.
+   *
+   * @param index must be within {@code array}'s bounds, which every caller guarantees by iterating over
+   *              {@link JSONArray#length()}
+   */
+  static JSONObject requireObjectElement(final JSONArray array, final int index, final String path) {
+    if (array.isNull(index))
+      throw missingMember(path, "a JSON object");
+    try {
+      return array.getJSONObject(index);
+    } catch (final JSONException e) {
+      throw wrongType(path, "a JSON object", array.get(index), e);
+    }
+  }
+
+  /**
+   * Resolves an array element that must be a string. See {@link #requireObjectElement}.
+   */
+  static String requireStringElement(final JSONArray array, final int index, final String path) {
+    if (array.isNull(index))
+      throw missingMember(path, "a string");
+    try {
+      return array.getString(index);
+    } catch (final JSONException e) {
+      throw wrongType(path, "a string", array.get(index), e);
+    }
+  }
+
+  /**
+   * Reads a member that must be an INTEGRAL number, refusing one the long it is narrowed to would not faithfully
+   * represent (issue #7715).
+   * <p>
+   * {@link JSONObject#getLong} narrows with {@code Number.longValue()}, which does not fail on a value a long
+   * cannot hold: a fractional {@code 1.5} arrives as {@code 1} and a magnitude past {@link Long#MAX_VALUE}
+   * saturates or wraps. Every member read through here is a millisecond instant or a bucket width - quantities
+   * whose whole point is the exact number the caller computed - so a silently different number is answered with a
+   * {@code 200} to a question the caller did not ask. That is the same defect #7675 refused for a non-positive
+   * {@code bucketInterval}, one step earlier: #7675 catches only the half that truncates to zero or below, and
+   * {@code 1.5} is not that half.
+   * <p>
+   * The check is done on the value's EXACT decimal rather than by comparing the narrowed long back against a
+   * double: a double comparison cannot tell {@code 9007199254740993} from its neighbour, which is exactly the
+   * range where a millisecond instant lives. What is accepted is otherwise unchanged - a numeric string is still
+   * read as a number, as the class javadoc states - so no request that named a whole number stops working.
+   * <p>
+   * <b>Why the value is read through {@code getBigDecimal} and not through {@code opt}.</b> {@code opt} goes via
+   * {@code JSONObject.elementToObject}, which narrows any number whose text carries a {@code '.'} or an exponent
+   * to a {@code double} - so {@code {"from": 9007199254740993.0}} would arrive here as
+   * {@code 9007199254740992.0}, already rounded, and would be accepted as a whole number one away from the one
+   * the caller wrote. Rejecting every double past the safe-integer range would close that, but it would also
+   * refuse instants that are perfectly exact as written. {@code getBigDecimal} keeps the LEXEME - the digits the
+   * request actually carried - so the value is neither rounded nor needlessly refused (CodeRabbit on PR #7730).
+   * {@code opt} is still used, for the error message and the length guard, where a narrowed value is fine.
+   * <p>
+   * <b>Why the bound below is re-derived instead of left to {@link BigDecimal#longValueExact()}.</b> That method
+   * bails out early on {@code (precision() - scale) > 19}, computed in {@code int}. A crafted exponent makes the
+   * subtraction OVERFLOW: {@code "1E2147483647"} parses to {@code (unscaled=1, scale=-2147483647)} without
+   * materialising anything, and {@code 1 - (-2147483647)} wraps to {@code -2147483648}, which is not greater
+   * than 19 - so the guard passes and the method goes on to materialise a 2^31-digit integer. The mirror image,
+   * {@code "1E-2147483647"}, drives {@code setScale(0)} into {@code bigTenToThe(2147483647)}. Either is hundreds
+   * of megabytes of allocation from a thirteen-byte request body, on an endpoint whose whole purpose here is
+   * input hardening (claude-review on PR #7730). The scale test and the {@code long} subtraction below run first
+   * and answer both in constant time, so {@code longValueExact()} is only ever reached for a value of at most 19
+   * integer digits.
+   * <p>
+   * Both spellings reach this the same way, whether the member arrived as a JSON number or as a string:
+   * {@code getBigDecimal} reads the lexeme either way. As it happens the JSON layer's own numeric limits turn an
+   * exponent that extreme away first, so the two tests below are not what a caller meets today - they are what
+   * keeps the guarantee from resting on a dependency's internal limit, which is not part of any contract this
+   * code can rely on. That is also why the test bounds assert that the value is refused rather than which of the
+   * two refused it.
+   */
+  private static long readLong(final JSONObject owner, final String name, final String path) {
+    final Object received = owner.opt(name);
+
+    // Before the parse, because BigDecimal's cost grows with the digit count and the body limit was the only
+    // other bound on it. Only a STRING can be long in the first place - an extreme value written as a JSON
+    // number is SHORT, which is why this is defence in depth and not the guard that matters.
+    // On the RAW length, not the trimmed one: getBigDecimal parses the text as it arrived, and its parser
+    // refuses whitespace outright, so a value that trimming would have brought under the cap is refused a moment
+    // later anyway. Trimming here only made the guard look like it accepted something it does not
+    // (claude-review on PR #7730).
+    if (received instanceof String text && text.length() > MAX_NUMERIC_TEXT_LENGTH)
+      throw wrongType(path, "a number", received,
+          new NumberFormatException("longer than " + MAX_NUMERIC_TEXT_LENGTH + " characters"));
+
+    final BigDecimal exact;
+    try {
+      // A boolean, an object, an array, a non-numeric string and the lenient parser's NaN/Infinity all fail
+      // here, which is what makes the "must be a number" refusal below cover every one of them.
+      exact = owner.getBigDecimal(name);
+    } catch (final JSONException e) {
+      throw wrongType(path, "a number", received, e);
+    }
+
+    if (exact.signum() == 0)
+      // Zero at any scale is zero, and answering it here keeps the scale tests below off a value they would
+      // report as fractional ("0E-2147483647" is not).
+      return 0L;
+
+    // Trailing zeros first, so 1.000 is the whole number it plainly is. Cheap: it divides the UNSCALED value by
+    // ten while that stays exact and never materialises the value the scale denotes.
+    //
+    // ONLY for a POSITIVE scale, which is the only scale that can hide a fractional part. Stripping a zero
+    // RAISES the scale, and a scale already at the bottom of its range has nowhere to go: "100E2147483647" is
+    // (unscaled=100, scale=-2147483647), and stripTrailingZeros() throws an ArithmeticException("Overflow") of
+    // its own trying to strip its two zeros - outside the catch below, so it would leave this method as an
+    // ArithmeticException rather than the IllegalArgumentException the endpoints render as a 400, answering a
+    // malformed request with a 500 (CodeRabbit on PR #7730).
+    //
+    // Not reachable as things stand: the JSON layer's numeric limits refuse an exponent that extreme before a
+    // BigDecimal carrying such a scale can exist, which is the same reason the two guards below are not what a
+    // caller meets today. It is guarded for the same reason they are - this method's correctness may not rest on
+    // a dependency's internal limit - and nothing is lost by it: a scale of zero or less has no digits after the
+    // decimal point to begin with, so there is no fractional part for the strip to reveal, and the digit count
+    // below reads the same either way.
+    final BigDecimal stripped = exact.scale() > 0 ? exact.stripTrailingZeros() : exact;
+
+    // A positive scale that survives that strip means the last digit is non-zero and sits after the decimal
+    // point, so the value has a fractional part - the case this issue is about.
+    if (stripped.scale() > 0)
+      throw notAWholeLong(path, received, null);
+
+    // The integer-digit count, in LONG arithmetic: this is the subtraction that overflows above.
+    if ((long) stripped.precision() - (long) stripped.scale() > LONG_MAX_DIGITS)
+      throw notAWholeLong(path, received, null);
+
+    try {
+      return stripped.longValueExact();
+    } catch (final ArithmeticException e) {
+      // 19 integer digits is not quite the same bound as Long.MAX_VALUE: the last few values up to 10^19 - 1
+      // pass the digit count and land here.
+      throw notAWholeLong(path, received, e);
+    }
+  }
+
+  /**
+   * Refusal of a number that is not a whole one, or is one no long can hold. The two share a message because
+   * they are the same thing to the caller: the number it sent is not the number it would have been answered for.
+   */
+  private static IllegalArgumentException notAWholeLong(final String path, final Object received,
+      final Throwable cause) {
+    return new IllegalArgumentException("'" + path + "' must be a whole number between " + Long.MIN_VALUE + " and "
+        + Long.MAX_VALUE + ": received " + describe(received), cause);
+  }
+
+  static IllegalArgumentException missingMember(final String path, final String kind) {
+    return new IllegalArgumentException("'" + path + "' is required and must be " + kind);
+  }
+
+  private static IllegalArgumentException wrongType(final String path, final String kind, final Object received,
+      final Throwable cause) {
+    return new IllegalArgumentException("'" + path + "' must be " + kind + ": received " + describe(received), cause);
+  }
+
+  /**
+   * Renders what arrived for an error message. A container is reported by KIND rather than by content, so a
+   * refusal cannot echo a multi-megabyte payload back at the caller, and a primitive is truncated for the same
+   * reason.
+   */
+  private static String describe(final Object received) {
+    if (received instanceof JSONObject)
+      return "a JSON object";
+    if (received instanceof JSONArray)
+      return "a JSON array";
+    if (received instanceof String text)
+      return "'" + truncate(text) + "'";
+    return truncate(String.valueOf(received));
   }
 
   /**
@@ -71,6 +380,15 @@ final class TimeSeriesHandlerUtils {
    * @throws IllegalArgumentException if {@code type} is absent, null, not a string, or matches no aggregation type
    */
   static AggregationType resolveAggregationType(final JSONObject request, final int index) {
+    return resolveAggregationType(request, "aggregation.requests[" + index + "].type");
+  }
+
+  /**
+   * As {@link #resolveAggregationType(JSONObject, int)}, for the endpoint whose requests are nested under a target
+   * and whose members are therefore named by a longer path, e.g. {@code targets[0].aggregation.requests[0].type}
+   * (issue #7340). The path a caller reads has to be the one it can look up in its own payload.
+   */
+  static AggregationType resolveAggregationType(final JSONObject request, final String path) {
     final Object rawType = request.opt("type");
     if (rawType instanceof String name) {
       final String trimmed = name.trim();
@@ -78,25 +396,25 @@ final class TimeSeriesHandlerUtils {
         try {
           return AggregationType.valueOf(trimmed.toUpperCase(Locale.ENGLISH));
         } catch (final IllegalArgumentException e) {
-          throw unknownAggregationType(index, rawType, e);
+          throw unknownAggregationType(path, rawType, e);
         }
       }
     }
-    throw unknownAggregationType(index, rawType, null);
+    throw unknownAggregationType(path, rawType, null);
   }
 
   /**
    * Refusal of an aggregation function name, worded identically on both time-series HTTP endpoints so the two
    * surfaces report the same thing. Names the field, lists every accepted value, and echoes what arrived.
    */
-  private static IllegalArgumentException unknownAggregationType(final int index, final Object rawType,
+  private static IllegalArgumentException unknownAggregationType(final String path, final Object rawType,
       final Throwable cause) {
     final StringJoiner accepted = new StringJoiner(", ");
     for (final AggregationType type : AggregationType.values())
       accepted.add(type.name());
 
     return new IllegalArgumentException(
-        "'aggregation.requests[" + index + "].type' is required and must be one of " + accepted
+        "'" + path + "' is required and must be one of " + accepted
             + (rawType == null ? "" : ": received '" + truncate(String.valueOf(rawType)) + "'"), cause);
   }
 
@@ -171,15 +489,31 @@ final class TimeSeriesHandlerUtils {
     return filter;
   }
 
-  static int[] resolveColumnIndices(final JSONArray fieldsJson, final List<ColumnDefinition> columns) {
+  /**
+   * Resolves a {@code fields} projection to the column indices the engine takes.
+   * <p>
+   * The JSON SHAPE of the projection is checked here; what the names MEAN is
+   * {@link TimeSeriesGateway#requireColumnIndices}, which every protocol's projection now shares. A well-formed
+   * name that matches no column of the type is REFUSED there (issue #7675) rather than dropped, so
+   * {@code "fields": ["temprature"]} names the typo instead of answering 200 with a timestamp-only row, and a
+   * projection where nothing resolves can no longer collapse to the empty array the engine reads as "every
+   * column". That is the same widening #7334 refused for a tag name, on the sibling member.
+   *
+   * @param path the projection's request path, e.g. {@code fields} or {@code targets[0].fields}, used to name an
+   *             element that is not a string (issue #7340)
+   *
+   * @throws IllegalArgumentException if an element is absent, null or not a string, or names no column of the type
+   */
+  static int[] resolveColumnIndices(final JSONArray fieldsJson, final List<ColumnDefinition> columns,
+      final String path) {
     if (fieldsJson == null || fieldsJson.length() == 0)
       return null;
 
     final List<String> fields = new ArrayList<>(fieldsJson.length());
     for (int f = 0; f < fieldsJson.length(); f++)
-      fields.add(fieldsJson.getString(f));
+      fields.add(requireStringElement(fieldsJson, f, path + "[" + f + "]"));
 
-    return TimeSeriesGateway.resolveColumnIndices(fields, columns);
+    return TimeSeriesGateway.requireColumnIndices(fields, columns);
   }
 
   static int findColumnIndex(final String fieldName, final List<ColumnDefinition> columns) {
@@ -187,18 +521,18 @@ final class TimeSeriesHandlerUtils {
   }
 
   /**
-   * Renders a rejected tag filter as the 400 the TimeSeries read endpoints answer with, carrying the reason in
-   * {@code error} (issue #7334).
+   * Renders a refused request as the 400 the TimeSeries read endpoints answer with, carrying the reason in
+   * {@code error} (issues #7334, #7340).
    * <p>
    * Answered explicitly rather than by letting the exception reach the generic handler mapper, which does map an
    * {@link IllegalArgumentException} to a 400 but puts its text in {@code detail} - a field {@code buildErrorBody}
-   * CONCEALS outside development mode. The whole point of this refusal is that the caller reads which tag did not
-   * resolve and what the type actually declares, so the message has to be in the field that is always sent.
+   * CONCEALS outside development mode. The whole point of these refusals is that the caller reads which tag did
+   * not resolve, or which member was missing, so the message has to be in the field that is always sent.
    * <p>
    * Built with {@link JSONObject} rather than string concatenation because the message echoes caller text, which
    * can carry a double quote or a backslash that raw concatenation would turn into invalid JSON.
    */
-  static ExecutionResponse tagFilterError(final IllegalArgumentException e) {
+  static ExecutionResponse badRequest(final IllegalArgumentException e) {
     return new ExecutionResponse(400, new JSONObject().put("error", e.getMessage()).toString());
   }
 
@@ -208,19 +542,87 @@ final class TimeSeriesHandlerUtils {
    * share the "is not a TimeSeries type" message, which sent an operator chasing the wrong cause (issue #6356
    * follow-up, claude-review on PR #6779).
    * <p>
-   * The engine-unavailable body is built with {@link JSONObject} rather than string concatenation because the
-   * reason embeds a file path that could contain a double quote or a backslash, which raw concatenation would
-   * turn into invalid JSON.
+   * All three bodies are built with {@link JSONObject} rather than string concatenation, because all three embed
+   * text the CALLER supplied - the type name it asked for, and for the unavailable case a file path - and a double
+   * quote or a backslash in any of it would turn raw concatenation into a body no client can parse. The first two
+   * still concatenated after the third was fixed (claude-review on PR #7680).
    */
   static ExecutionResponse resolutionError(final String typeName, final TypeResolution resolved) {
-    return switch (resolved.failure()) {
-      case NOT_FOUND -> new ExecutionResponse(400,
-          "{ \"error\" : \"Type '" + typeName + "' does not exist\"}");
-      case NOT_TIME_SERIES -> new ExecutionResponse(400,
-          "{ \"error\" : \"Type '" + typeName + "' is not a TimeSeries type\"}");
-      case ENGINE_UNAVAILABLE -> new ExecutionResponse(400, new JSONObject().put("error",
-          "TimeSeries type '" + typeName + "' has no storage engine available: " + resolved.unavailableReason())
-          .toString());
+    final String message = switch (resolved.failure()) {
+      case NOT_FOUND -> "Type '" + typeName + "' does not exist";
+      case NOT_TIME_SERIES -> "Type '" + typeName + "' is not a TimeSeries type";
+      case ENGINE_UNAVAILABLE ->
+          "TimeSeries type '" + typeName + "' has no storage engine available: " + resolved.unavailableReason();
     };
+
+    return new ExecutionResponse(400, new JSONObject().put("error", message).toString());
+  }
+
+  /**
+   * The hard row ceiling (issue #5719) spread across a response that answers SEVERAL reads: a Grafana request
+   * carries one target per panel query, a Prometheus remote-read request one {@code Query} per selector, and each
+   * of them used to reach {@code TimeSeriesEngine.query} with no bound at all (issue #7663).
+   * <p>
+   * The budget is deliberately for the whole response and not for each read in it. The setting's own wording is
+   * "the maximum number of rows a single HTTP response may carry", and a per-read ceiling would let a request with
+   * twenty targets return twenty times it - which is the hole, not a narrower version of it.
+   * <p>
+   * Not thread-safe, and it does not need to be: both handlers walk their reads sequentially on the request
+   * thread.
+   */
+  static final class RowBudget {
+    private final int ceiling;
+    private       int used;
+
+    /**
+     * @param ceiling the configured maximum; {@code <= 0} disables the budget, exactly as everywhere else this
+     *                setting is read
+     */
+    RowBudget(final int ceiling) {
+      this.ceiling = ceiling;
+    }
+
+    int ceiling() {
+      return ceiling;
+    }
+
+    /**
+     * The row cap to hand {@code TimeSeriesEngine.queryAscending} for the next read: what the response can still
+     * carry, plus the one row that proves it carried more. {@code 0} - which that method reads as unlimited - when
+     * the ceiling is disabled and there is genuinely no bound.
+     * <p>
+     * A caller stops at the first {@link #charge} that returns {@code false}, so {@code used} never passes
+     * {@code ceiling} while this is read again and the subtraction stays non-negative. The {@code + 1} still has
+     * one arithmetic edge: a ceiling configured AT {@code Integer.MAX_VALUE} would wrap it to a negative value
+     * that {@code queryAscending} reads as unlimited - the right answer by the wrong route, and one that reads
+     * like a bug the first time anyone audits it. It is named instead, exactly as {@code PostTimeSeriesQueryHandler}
+     * names it for the same arithmetic: such a ceiling IS unlimited in practice, because no {@code List} can hold
+     * that many rows (claude-review on PR #7720).
+     * <p>
+     * The off-by-one is what separates a complete response from a truncated one, so it is pinned rather than
+     * merely argued: {@code Issue7663GrafanaPrometheusRowCeilingIT}'s
+     * {@code theGrafanaRawBranchServesExactlyTheCeilingAndRefusesOneMore} and
+     * {@code thePrometheusReadServesExactlyTheCeilingAndRefusesOneMore} fail if this arithmetic moves in either
+     * direction, and {@code RowBudgetTest} covers the edges directly.
+     */
+    int fetchLimit() {
+      if (ceiling <= 0)
+        return 0;
+      final int remaining = ceiling - used;
+      return remaining == Integer.MAX_VALUE ? 0 : remaining + 1;
+    }
+
+    /**
+     * Charges {@code rows} against the budget.
+     *
+     * @return {@code false} when the response would exceed the ceiling, which the caller answers with
+     *         {@code resultSetTooLarge} rather than reading the budget again
+     */
+    boolean charge(final int rows) {
+      if (ceiling <= 0)
+        return true;
+      used += rows;
+      return used <= ceiling;
+    }
   }
 }

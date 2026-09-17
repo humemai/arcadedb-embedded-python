@@ -18,40 +18,67 @@
  */
 package com.arcadedb.server.http.handler;
 
+import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.engine.timeseries.AggregationMetrics;
 import com.arcadedb.engine.timeseries.promql.PromQLEvaluator;
 import com.arcadedb.engine.timeseries.promql.PromQLParser;
 import com.arcadedb.engine.timeseries.promql.PromQLResult;
 import com.arcadedb.engine.timeseries.promql.ast.PromQLExpr;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.http.HttpServer;
+import com.arcadedb.server.monitor.TimeSeriesReadMetrics;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.undertow.server.HttpServerExchange;
-
-import java.util.Deque;
 
 /**
  * HTTP handler for PromQL instant queries.
  * Endpoint: GET /api/v1/ts/{database}/prom/api/v1/query
+ * <p>
+ * On {@link DatabaseAbstractHandler} since issue #7681, for the reasons spelled out on
+ * {@link PostGrafanaQueryHandler}: a request carrying {@code arcadedb-session-id} reads through that session's
+ * transaction, under its lock and on its principal and refreshing its idle timer, and the base class subsumes
+ * the {@code checkAuthorizationOnDatabase} call this handler used to make by hand.
+ *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
-public class GetPromQLQueryHandler extends AbstractServerHttpHandler {
+public class GetPromQLQueryHandler extends DatabaseAbstractHandler {
 
   public GetPromQLQueryHandler(final HttpServer httpServer) {
     super(httpServer);
   }
 
+  /**
+   * A read: an auto-commit wrapper would only add a commit with nothing to commit, so an unresolvable session
+   * id degrades to a session-less read rather than being refused - see
+   * {@link DatabaseAbstractHandler#rejectsUnresolvableSession()}.
+   */
+  @Override
+  protected boolean requiresTransaction() {
+    return false;
+  }
+
+  /**
+   * Evaluates a PromQL expression over the samples it selects, so never on an Undertow IO thread (issue #7722).
+   * <p>
+   * A weaker case than the two discovery endpoints - the bound here is the expression's own range rather than
+   * the whole series - but the same decision: the read is a scan whose size the server does not know before
+   * doing it, and blocking an IO thread on one starves the unrelated connections sharing it. The dispatch costs
+   * a hand-off on a path whose answer takes a scan anyway.
+   * <p>
+   * Answered handler-wide, which SUPERSEDES the per-request override issue #7681 gave this handler. That one
+   * dispatched only a request naming a session, deliberately leaving the session-less case as it was - and the
+   * session-less case is the one Grafana and Prometheus exercise, since neither ever sends
+   * {@code arcadedb-session-id}. Both reasons to leave the IO thread still hold; this is the wider of the two.
+   */
+  @Override
+  protected boolean mustExecuteOnWorkerThread() {
+    return true;
+  }
+
   @Override
   protected ExecutionResponse execute(final HttpServerExchange exchange, final ServerSecurityUser user,
-      final JSONObject payload) throws Exception {
-
-    final Deque<String> databaseParam = exchange.getQueryParameters().get("database");
-    if (databaseParam == null || databaseParam.isEmpty())
-      return new ExecutionResponse(400, PromQLResponseFormatter.formatError("bad_data", "Database parameter is required"));
-
-    // Enforce database-level authorization (GHSA-x8mg-6r4p-87pf): this handler does not extend DatabaseAbstractHandler.
-    // Checked before any payload/parameter validation so an unauthorized caller cannot probe the target database.
-    checkAuthorizationOnDatabase(user, databaseParam.getFirst());
+      final Database db, final JSONObject payload) throws Exception {
 
     final String query = getQueryParameter(exchange, "query");
     if (query == null || query.isBlank())
@@ -71,7 +98,7 @@ public class GetPromQLQueryHandler extends AbstractServerHttpHandler {
       return new ExecutionResponse(400, PromQLResponseFormatter.formatError("bad_data", e.getMessage()));
     }
 
-    final DatabaseInternal database = httpServer.getServer().getDatabase(databaseParam.getFirst(), false, false);
+    final DatabaseInternal database = (DatabaseInternal) db;
 
     try {
       final PromQLExpr expr = new PromQLParser(query).parse();
@@ -79,7 +106,19 @@ public class GetPromQLQueryHandler extends AbstractServerHttpHandler {
       final PromQLEvaluator evaluator = lookbackStr != null && !lookbackStr.isBlank()
           ? new PromQLEvaluator(database, PromQLParser.parseDuration(lookbackStr))
           : new PromQLEvaluator(database);
-      final PromQLResult result = evaluator.evaluateInstant(expr, evalTimeMs);
+
+      // What the selector scans actually did, published to whatever the server's metrics subsystem feeds
+      // (issue #7717). null - and therefore free - whenever metrics are off. The type tag is a constant: one
+      // expression can select several metrics, so there is no single type to name here.
+      final AggregationMetrics readMetrics = TimeSeriesReadMetrics.start();
+      evaluator.setReadMetrics(readMetrics);
+      final PromQLResult result;
+      try {
+        result = evaluator.evaluateInstant(expr, evalTimeMs);
+      } finally {
+        TimeSeriesReadMetrics.publish(readMetrics, database.getName(), TimeSeriesReadMetrics.TYPE_EXPRESSION,
+            TimeSeriesReadMetrics.SURFACE_PROM_QUERY);
+      }
       return new ExecutionResponse(200, PromQLResponseFormatter.formatSuccess(result));
     } catch (final IllegalArgumentException e) {
       return new ExecutionResponse(400, PromQLResponseFormatter.formatError("bad_data", e.getMessage()));

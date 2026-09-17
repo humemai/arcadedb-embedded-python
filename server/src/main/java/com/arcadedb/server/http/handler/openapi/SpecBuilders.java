@@ -19,6 +19,8 @@
 package com.arcadedb.server.http.handler.openapi;
 
 import com.arcadedb.GlobalConfiguration;
+import com.arcadedb.server.http.HttpSessionManager;
+import com.arcadedb.server.http.handler.DatabaseAbstractHandler;
 
 import io.swagger.v3.oas.models.Operation;
 import io.swagger.v3.oas.models.headers.Header;
@@ -52,7 +54,105 @@ public final class SpecBuilders {
           + GlobalConfiguration.HA_PROXY_LONG_COMMAND_TIMEOUT.getKey() + "' for a restore or an import). It may "
           + "still be running on the leader: check there before retrying";
 
+  /**
+   * The session header, and the four paragraphs every session-aware operation says about it.
+   * <p>
+   * Written once here for the reason {@link #LEADER_FORWARD_TIMEOUT_DESCRIPTION} is: issue #7402 documented
+   * three {@code /api/v1/ts} operations and issue #7681 added ten more across two further contributors, and
+   * three copies of the same paragraph is three chances to answer the question differently.
+   */
+  public static final String SESSION_HEADER = HttpSessionManager.ARCADEDB_SESSION_ID;
+
+  public static final String SESSION_REQUEST_DESCRIPTION = """
+      Session id returned by 'beginTransaction'. Present it to run this call inside that transaction: the \
+      call then runs under the session's lock and principal and refreshes its idle timer. Omit it to run \
+      outside any transaction.""";
+
+  /**
+   * What the session header means on a time-series WRITE, which is not the same thing it means on a read and
+   * is the whole of issue #7657/#7658. A read really does run inside the named transaction; an append does not
+   * join it, and never has - {@code TimeSeriesShard.appendSamples} commits its own transaction whatever the
+   * caller has open (#7410). Describing the two the same way is how a generated client ends up with a write
+   * method whose contract is atomicity the server does not offer. Pinned by
+   * {@code Issue7657TimeSeriesWriteSpecStatesNonAtomicityTest}.
+   */
+  public static final String WRITE_SESSION_REQUEST_DESCRIPTION = """
+      Session id returned by 'beginTransaction'. It makes this call run under that session's lock and \
+      principal and refreshes its idle timer, so a client that only ingests does not have its transaction \
+      reaped underneath it, and it turns a session id this server no longer knows into a 404 rather than a \
+      silent write outside the transaction you believe you are in.
+
+      It does NOT put the samples in that transaction. They are committed as they are appended and are \
+      readable by everyone before you commit anything; rolling the transaction back does not remove them. \
+      Omit it to run outside any transaction: for the samples themselves that is the same thing.""";
+
+  public static final String SESSION_RESPONSE_DESCRIPTION =
+      "Echo of the session id this call ran inside. Absent when the call ran outside a transaction.";
+
+  /**
+   * What a 404 covers on a session-aware READ. A read overrides {@code requiresTransaction()} to false and so
+   * reaches {@code DatabaseAbstractHandler}'s degrading branch, exactly as {@code GET /query} does.
+   */
+  public static final String READ_STALE_SESSION_DESCRIPTION =
+      "Database not found. A session id that no longer resolves is NOT an error here: the read degrades to "
+          + "running outside the transaction and still answers 200, reporting the degrade in the "
+          + DatabaseAbstractHandler.SESSION_EXPIRED + " response header.";
+
+  /**
+   * The header {@code DatabaseAbstractHandler} sets on an operation that RAN a request naming a session it could
+   * not resolve, instead of refusing it (issue #7714).
+   * <p>
+   * Lives here for the same reason the four paragraphs above do: the header is set by the base handler, so every
+   * operation whose {@code rejectsUnresolvableSession()} is false carries it - the three {@code /api/v1/ts}
+   * routes, the ten Grafana and Prometheus ones #7681 bound to the session, {@code GET /api/v1/query}, and the
+   * three transaction endpoints. A client generated from this contract can otherwise not tell an answer produced
+   * inside the transaction it named from one produced outside it, which is the whole point of #7714.
+   */
+  public static final String SESSION_EXPIRED_HEADER = DatabaseAbstractHandler.SESSION_EXPIRED;
+
+  public static final String SESSION_EXPIRED_DESCRIPTION =
+      "Present only when the request named a session id this server could not resolve (committed, rolled back, "
+          + "expired, or owned by another principal). It carries that id reduced to the characters a session id "
+          + "is made of - anything else becomes '?', and an overlong one is truncated - and says this answer "
+          + "was produced "
+          + "OUTSIDE the transaction the caller named rather than inside it. The call is not refused, which is "
+          + "what keeps a read-after-commit and an idempotent retry working; the gRPC TimeSeriesQuery and "
+          + "TimeSeriesLatest RPCs refuse the same case with FAILED_PRECONDITION, following their own "
+          + "protocol's convention.";
+
+  /**
+   * What a 404 covers on a session-aware WRITE, which answers true to {@code rejectsUnresolvableSession()}.
+   * The quoted text is the message {@code AbstractServerHttpHandler} actually sends.
+   */
+  public static final String WRITE_STALE_SESSION_DESCRIPTION =
+      "Database not found, or the session id header names a transaction that no longer resolves "
+          + "(\"Remote transaction session not found or expired\"): a write is refused rather than run outside "
+          + "the transaction the caller believes it is inside.";
+
   private SpecBuilders() {
+  }
+
+  /** The optional {@code arcadedb-session-id} request header, on an operation that honours it. */
+  public static Parameter sessionHeaderParam() {
+    return headerParam(SESSION_HEADER, SESSION_REQUEST_DESCRIPTION, false);
+  }
+
+  /** The optional {@code arcadedb-session-id} request header, on a write that does NOT join the transaction. */
+  public static Parameter writeSessionHeaderParam() {
+    return headerParam(SESSION_HEADER, WRITE_SESSION_REQUEST_DESCRIPTION, false);
+  }
+
+  /** The {@code arcadedb-session-id} echo a session-aware operation puts on its success response. */
+  public static Header sessionEchoHeader() {
+    return stringHeader(SESSION_RESPONSE_DESCRIPTION);
+  }
+
+  /**
+   * The {@code arcadedb-session-expired} header a DEGRADING operation puts on its success response - one that
+   * runs a request naming an unresolvable session rather than refusing it (issue #7714).
+   */
+  public static Header sessionExpiredHeader() {
+    return stringHeader(SESSION_EXPIRED_DESCRIPTION);
   }
 
   public static Parameter pathParam(final String name, final String description) {
@@ -180,6 +280,33 @@ public final class SpecBuilders {
     return schema;
   }
 
+  /**
+   * An open map whose keys are not known ahead of time but whose VALUES all have one shape - a tag map of
+   * strings, a file-name-to-checksum map, a database-name-to-group-list map.
+   * <p>
+   * The typed sibling of {@link #freeFormObject(String)}, and the one to reach for whenever the description
+   * would have said "as name to value pairs": that phrasing names the value type, and a generator can emit
+   * {@code Map&lt;String, T&gt;} from it instead of {@code Map&lt;String, Object&gt;} (issue #7577).
+   */
+  public static Schema<Object> mapOf(final Schema<?> values, final String description) {
+    final Schema<Object> schema = object(description);
+    schema.setAdditionalProperties(values);
+    return schema;
+  }
+
+  /**
+   * Any JSON value at all: a scalar, an array, an object, or null.
+   * <p>
+   * Spelled as a schema with no {@code type} rather than as {@code type: object}, because that is what OpenAPI
+   * means by "unconstrained" - a column of a Grafana frame or of a time-series row holds a number, a string or
+   * null, and calling that an object tells a generator the one thing it is not (issue #7577).
+   */
+  public static Schema<Object> anyValue(final String description) {
+    final Schema<Object> schema = new Schema<>();
+    schema.setDescription(description);
+    return schema;
+  }
+
   public static Schema<?> ref(final String componentName) {
     return new Schema<>().$ref("#/components/schemas/" + componentName);
   }
@@ -189,7 +316,10 @@ public final class SpecBuilders {
     body.setDescription(description);
     body.setRequired(required);
     final MediaType mediaType = new MediaType();
-    mediaType.setSchema(componentName == null ? new Schema<>().type("object") : ref(componentName));
+    // A body with no named component is an object whose members this document does not enumerate, which is an
+    // OPEN map - not a bare 'type: object', which carries no information at all and which a strict generator
+    // turns into an empty model (issue #7577).
+    mediaType.setSchema(componentName == null ? freeFormObject(null) : ref(componentName));
     body.setContent(new Content().addMediaType(JSON, mediaType));
     return body;
   }
@@ -208,7 +338,8 @@ public final class SpecBuilders {
     final ApiResponse response = new ApiResponse();
     response.setDescription(description);
     final MediaType mediaType = new MediaType();
-    mediaType.setSchema(componentName == null ? new Schema<>().type("object") : ref(componentName));
+    // Same rule as jsonBody: an un-named response body is an open map, not an empty model (issue #7577).
+    mediaType.setSchema(componentName == null ? freeFormObject(null) : ref(componentName));
     response.setContent(new Content().addMediaType(JSON, mediaType));
     return response;
   }

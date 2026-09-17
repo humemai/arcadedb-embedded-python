@@ -18,9 +18,12 @@
  */
 package com.arcadedb.server.http.handler;
 
+import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.engine.timeseries.AggregationMetrics;
 import com.arcadedb.engine.timeseries.ColumnDefinition;
 import com.arcadedb.engine.timeseries.TimeSeriesEngine;
+import com.arcadedb.engine.timeseries.TimeSeriesGateway;
 import com.arcadedb.engine.timeseries.promql.PromQLEvaluator;
 import com.arcadedb.engine.timeseries.promql.PromQLParser;
 import com.arcadedb.engine.timeseries.promql.ast.PromQLExpr;
@@ -31,11 +34,11 @@ import com.arcadedb.security.SecurityDatabaseUser;
 import com.arcadedb.security.SecurityHelper;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.http.HttpServer;
+import com.arcadedb.server.monitor.TimeSeriesReadMetrics;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.undertow.server.HttpServerExchange;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.LinkedHashMap;
@@ -45,37 +48,75 @@ import java.util.Map;
 /**
  * HTTP handler for PromQL series lookup.
  * Endpoint: GET /api/v1/ts/{database}/prom/api/v1/series
+ * <p>
+ * On {@link DatabaseAbstractHandler} since issue #7681, for the reasons spelled out on
+ * {@link PostGrafanaQueryHandler}: a request carrying {@code arcadedb-session-id} reads through that session's
+ * transaction, under its lock and on its principal and refreshing its idle timer, and the base class subsumes
+ * the {@code checkAuthorizationOnDatabase} call this handler used to make by hand.
+ *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
-public class GetPromQLSeriesHandler extends AbstractServerHttpHandler {
+public class GetPromQLSeriesHandler extends DatabaseAbstractHandler {
 
   public GetPromQLSeriesHandler(final HttpServer httpServer) {
     super(httpServer);
   }
 
+  /**
+   * A read: an auto-commit wrapper would only add a commit with nothing to commit, so an unresolvable session
+   * id degrades to a session-less read rather than being refused - see
+   * {@link DatabaseAbstractHandler#rejectsUnresolvableSession()}.
+   */
+  @Override
+  protected boolean requiresTransaction() {
+    return false;
+  }
+
+  /**
+   * A full-range scan of every sample of every type the {@code match[]} selector resolves to, so never on an
+   * Undertow IO thread (issue #7722), for the reason {@code GetPromQLLabelValuesHandler} gives at its own
+   * override: the work is bounded by the size of the series, not by anything in the request, and an IO thread
+   * parked on it stops serving every other connection it multiplexes.
+   * <p>
+   * Handler-wide, superseding the per-request override of issue #7681 for the reason given there: the
+   * session-less request is the one Grafana and Prometheus actually send.
+   */
+  @Override
+  protected boolean mustExecuteOnWorkerThread() {
+    return true;
+  }
+
   @Override
   protected ExecutionResponse execute(final HttpServerExchange exchange, final ServerSecurityUser user,
-      final JSONObject payload) throws Exception {
-
-    final Deque<String> databaseParam = exchange.getQueryParameters().get("database");
-    if (databaseParam == null || databaseParam.isEmpty())
-      return new ExecutionResponse(400, PromQLResponseFormatter.formatError("bad_data", "Database parameter is required"));
-
-    // Enforce database-level authorization (GHSA-x8mg-6r4p-87pf): this handler does not extend DatabaseAbstractHandler.
-    // Checked before any payload/parameter validation so an unauthorized caller cannot probe the target database.
-    checkAuthorizationOnDatabase(user, databaseParam.getFirst());
+      final Database db, final JSONObject payload) throws Exception {
 
     final Deque<String> matchParams = exchange.getQueryParameters().get("match[]");
     if (matchParams == null || matchParams.isEmpty())
       return new ExecutionResponse(400,
           PromQLResponseFormatter.formatError("bad_data", "Missing required parameter: match[]"));
 
+    // Parsed with the range endpoint's own parser rather than a bare Double.parseDouble (issue #7709, found while
+    // giving /label/{name}/values the same bounds). The bare call let a malformed `start` leave this method as a
+    // NumberFormatException, which the pipeline maps to a 500 - so a Grafana panel with a typo in its time
+    // variable got "internal server error" where Prometheus answers 400 bad_data - and it accepted `Infinity` and
+    // `9e15` without a murmur, which is the unbounded-span hazard issue #6807 closed on /query_range.
     final String startStr = getQueryParameter(exchange, "start");
     final String endStr = getQueryParameter(exchange, "end");
-    final long startMs = startStr != null ? (long) (Double.parseDouble(startStr) * 1000) : Long.MIN_VALUE;
-    final long endMs = endStr != null ? (long) (Double.parseDouble(endStr) * 1000) : Long.MAX_VALUE;
+    final long startMs;
+    final long endMs;
+    try {
+      startMs = startStr != null && !startStr.isBlank()
+          ? GetPromQLQueryRangeHandler.parseTimestampMs("start", startStr) : Long.MIN_VALUE;
+      endMs = endStr != null && !endStr.isBlank()
+          ? GetPromQLQueryRangeHandler.parseTimestampMs("end", endStr) : Long.MAX_VALUE;
+    } catch (final IllegalArgumentException e) {
+      return new ExecutionResponse(400, PromQLResponseFormatter.formatError("bad_data", e.getMessage()));
+    }
+    if (startMs > endMs)
+      return new ExecutionResponse(400,
+          PromQLResponseFormatter.formatError("bad_data", "end timestamp must not be before start timestamp"));
 
-    final DatabaseInternal database = httpServer.getServer().getDatabase(databaseParam.getFirst(), false, false);
+    final DatabaseInternal database = (DatabaseInternal) db;
     // Keyed by the label combination, in first-seen order.
     // The order matters: query() used to hand this loop the rows already sorted by timestamp, so the response
     // came out ordered by when each series first appears. forEachRow visits shard by shard, which would have
@@ -102,22 +143,41 @@ public class GetPromQLSeriesHandler extends AbstractServerHttpHandler {
         if (!SecurityHelper.canAccessType(database, tsType, SecurityDatabaseUser.ACCESS.READ_RECORD))
           continue;
 
-        // forEachRow, not query(): the answer is the number of distinct label COMBINATIONS the metric carries,
-        // while query() merges every shard's full range into one ArrayList and sorts it by timestamp - a sort this
-        // loop does not use. start/end default to the full range here, so `?match[]=cpu` with no time range used
-        // to read a whole series into memory to enumerate a handful of label sets (issue #7354).
+        // forEachTagCombination, not forEachRow and not query(): the answer is the number of distinct label
+        // COMBINATIONS the metric carries, while query() merges every shard's full range into one ArrayList and
+        // sorts it by timestamp - a sort this loop does not use. start/end default to the full range here, so
+        // `?match[]=cpu` with no time range used to read a whole series into memory to enumerate a handful of
+        // label sets (issue #7354), and then still to read every SAMPLE of it to enumerate a handful of tuples
+        // (issue #7710). A sealed block that declares one combination now answers with one row off its directory
+        // entry; the fold below is unchanged, because those rows have the layout the scan produces.
         final TimeSeriesEngine engine = tsType.getEngine();
         final List<ColumnDefinition> columns = tsType.getTsColumns();
 
+        // PROJECTION, not the whole row (issue #7371). The answer is made of the TAG columns, so those are the
+        // only ones the scan decodes: a sealed block stores each column in its own byte range and
+        // TimeSeriesSealedStore.decompressColumns() reads only the ranges the projection names, while
+        // TimeSeriesBucket.readRow() boxes only those. The DOUBLE value column every Prometheus metric carries is
+        // therefore never decoded to enumerate label sets. See the same note in GetPromQLLabelValuesHandler.
+        //
+        // resolveColumnIndices() answers null - meaning "every column" - for an empty request, and a type with no
+        // TAG columns wants the opposite: nothing but the timestamp, whose presence is still what decides whether
+        // the metric has a series in the range at all. That projection is spelled out here rather than inherited.
+        final List<String> tagColumnNames = tagColumnNamesOf(columns);
+        final int[] columnIndices = tagColumnNames.isEmpty()
+            ? new int[0]
+            : TimeSeriesGateway.resolveColumnIndices(tagColumnNames, columns);
+
         // ROW LAYOUT. row[0] is the timestamp by the scan's own contract - every layer builds the row as
-        // { ts, non-ts columns... } - but row[i] for i >= 1 lining up with columns.get(i) holds only because the
-        // TIMESTAMP column is declared first, which is what every type-creation path happens to do and what
-        // nothing in TimeSeriesTypeBuilder actually enforces. Carried over from the query()-based code this
-        // replaces rather than introduced here; stated so that a change to that convention is a change someone
-        // can find, instead of a tag value silently read out of the wrong slot.
-        // The indices of the TAG columns, resolved once per type instead of re-testing every column's role on
-        // every row - the loop below runs once per SAMPLE, and the answer is the same for all of them.
-        final int[] tagColumns = tagColumnsOf(columns);
+        // { ts, selected non-ts columns in schema order... } - and the columns after it are exactly what
+        // TimeSeriesGateway.selectedColumns() lists, so tagNames[i] names the value in row[i + 1]. The names are
+        // read off that list rather than off the schema index, which is what the previous code did and what
+        // rested on the TIMESTAMP column being declared first: true of every type-creation path but enforced by
+        // none of them, and the difference between a tag value and the neighbouring column's.
+        // Resolved once per type, not per row: the visitor below runs once per SAMPLE.
+        final List<ColumnDefinition> projected = TimeSeriesGateway.selectedColumns(columns, columnIndices);
+        final String[] tagNames = new String[projected.size() - 1];
+        for (int i = 1; i < projected.size(); i++)
+          tagNames[i - 1] = projected.get(i).getName();
         // Reused across rows: the dedup key is built per row because that is what identifies the combination,
         // but the buffer it is built in need not be. The labels map is built only for a combination not seen
         // before, i.e. once per SERIES rather than once per sample (issue #7354).
@@ -126,33 +186,49 @@ public class GetPromQLSeriesHandler extends AbstractServerHttpHandler {
         // and it never calls back into the engine.
         final StringBuilder key = new StringBuilder(64);
 
-        engine.forEachRow(startMs, endMs, null, null, null, row -> {
-          key.setLength(0);
-          // The metric name is length-prefixed for the same reason its tags are: two match[] patterns naming
-          // different metrics share this map.
-          key.append(vs.metricName().length()).append(':').append(vs.metricName());
-          for (final int i : tagColumns)
-            if (i < row.length && row[i] != null) {
-              // LENGTH-PREFIXED, not separated by a character the value is assumed not to carry. A tag value is
-              // ingested from a remote-write client, so "realistically never contains this byte" is an assumption
-              // about somebody else's data; a length prefix makes the concatenation unambiguous whatever the
-              // value holds, and two distinct combinations cannot spell one key. Costs one int per tag.
-              final String name = columns.get(i).getName();
-              final String value = row[i].toString();
-              key.append(name.length()).append(':').append(name)
-                  .append(value.length()).append(':').append(value);
-            }
+        // What the scan actually did, published to whatever the server's metrics subsystem feeds (issue #7717).
+        // null - and therefore free - whenever metrics are off. It counts what forEachTagCombination did, which
+        // for a block answered from its directory entry is a SKIPPED block and no materialised row at all - the
+        // saving of issue #7710 is therefore visible in these metrics rather than hidden by them.
+        final AggregationMetrics readMetrics = TimeSeriesReadMetrics.start();
+        try {
+          engine.forEachTagCombination(startMs, endMs, columnIndices, readMetrics, row -> {
+            key.setLength(0);
+            // The metric name is length-prefixed for the same reason its tags are: two match[] patterns naming
+            // different metrics share this map.
+            key.append(vs.metricName().length()).append(':').append(vs.metricName());
+            for (int t = 0; t < tagNames.length; t++)
+              if (t + 1 < row.length && row[t + 1] != null) {
+                final String name = tagNames[t];
+                final String value = row[t + 1].toString();
+                // An empty value is an ABSENT label in Prometheus, so it takes no part in the series identity:
+                // see PromQLResponseFormatter.isLabelValuePresent (issue #7712). Skipped HERE and not only when
+                // the labels map is built, because otherwise a sample whose host is null and one carrying no
+                // host at all would spell two keys and be reported as two series that render identically.
+                if (!PromQLResponseFormatter.isLabelValuePresent(value))
+                  continue;
+                // LENGTH-PREFIXED, not separated by a character the value is assumed not to carry. A tag value is
+                // ingested from a remote-write client, so "realistically never contains this byte" is an assumption
+                // about somebody else's data; a length prefix makes the concatenation unambiguous whatever the
+                // value holds, and two distinct combinations cannot spell one key. Costs one int per tag.
+                key.append(name.length()).append(':').append(name)
+                    .append(value.length()).append(':').append(value);
+              }
 
-          final long timestamp = (long) row[0];
-          final String combination = key.toString();
-          final ObservedSeries seen = seriesByKey.get(combination);
-          if (seen != null)
-            seen.earliest = Math.min(seen.earliest, timestamp);
-          else
-            seriesByKey.put(combination,
-                new ObservedSeries(labelsOf(vs.metricName(), columns, tagColumns, row), timestamp));
-          return true;
-        });
+            final long timestamp = (long) row[0];
+            final String combination = key.toString();
+            final ObservedSeries seen = seriesByKey.get(combination);
+            if (seen != null)
+              seen.earliest = Math.min(seen.earliest, timestamp);
+            else
+              seriesByKey.put(combination,
+                  new ObservedSeries(labelsOf(vs.metricName(), tagNames, row), timestamp));
+            return true;
+          });
+        } finally {
+          TimeSeriesReadMetrics.publish(readMetrics, database.getName(), typeName,
+              TimeSeriesReadMetrics.SURFACE_PROM_SERIES);
+        }
       } catch (final IllegalArgumentException ignored) {
         // Skip malformed match patterns
       }
@@ -182,24 +258,30 @@ public class GetPromQLSeriesHandler extends AbstractServerHttpHandler {
     }
   }
 
-  /** The indices of the TAG columns, in schema order. */
-  private static int[] tagColumnsOf(final List<ColumnDefinition> columns) {
-    final int[] indices = new int[columns.size()];
-    int count = 0;
-    for (int i = 0; i < columns.size(); i++)
-      if (columns.get(i).getRole() == ColumnDefinition.ColumnRole.TAG)
-        indices[count++] = i;
-    return Arrays.copyOf(indices, count);
+  /** The names of the TAG columns, in schema order - the projection the scan is asked for. */
+  private static List<String> tagColumnNamesOf(final List<ColumnDefinition> columns) {
+    final List<String> names = new ArrayList<>(columns.size());
+    for (final ColumnDefinition column : columns)
+      if (column.getRole() == ColumnDefinition.ColumnRole.TAG)
+        names.add(column.getName());
+    return names;
   }
 
-  /** The label set of one row, built once per distinct combination rather than once per sample. */
-  private static Map<String, String> labelsOf(final String metricName, final List<ColumnDefinition> columns,
-      final int[] tagColumns, final Object[] row) {
+  /**
+   * The label set of one row, built once per distinct combination rather than once per sample.
+   * {@code tagNames[t]} names the value in {@code row[t + 1]}; see the ROW LAYOUT note above.
+   * <p>
+   * A label whose value is empty is left OUT, because in Prometheus that is what an absent label is - the same
+   * rule the dedup key above applies, and the two have to agree or a series would be keyed on a label it is not
+   * reported with (issue #7712).
+   */
+  private static Map<String, String> labelsOf(final String metricName, final String[] tagNames, final Object[] row) {
     final Map<String, String> labels = new LinkedHashMap<>();
     labels.put("__name__", metricName);
-    for (final int i : tagColumns)
-      if (i < row.length && row[i] != null)
-        labels.put(columns.get(i).getName(), row[i].toString());
+    for (int t = 0; t < tagNames.length; t++)
+      if (t + 1 < row.length && row[t + 1] != null
+          && PromQLResponseFormatter.isLabelValuePresent(row[t + 1].toString()))
+        labels.put(tagNames[t], row[t + 1].toString());
     return labels;
   }
 }

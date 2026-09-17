@@ -18,24 +18,31 @@
  */
 package com.arcadedb.server.http.handler;
 
+import com.arcadedb.database.Database;
 import com.arcadedb.database.DatabaseInternal;
+import com.arcadedb.engine.timeseries.AggregationMetrics;
 import com.arcadedb.engine.timeseries.promql.PromQLEvaluator;
 import com.arcadedb.engine.timeseries.promql.PromQLParser;
 import com.arcadedb.engine.timeseries.promql.PromQLResult;
 import com.arcadedb.engine.timeseries.promql.ast.PromQLExpr;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.http.HttpServer;
+import com.arcadedb.server.monitor.TimeSeriesReadMetrics;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.undertow.server.HttpServerExchange;
-
-import java.util.Deque;
 
 /**
  * HTTP handler for PromQL range queries.
  * Endpoint: GET /api/v1/ts/{database}/prom/api/v1/query_range
+ * <p>
+ * On {@link DatabaseAbstractHandler} since issue #7681, for the reasons spelled out on
+ * {@link PostGrafanaQueryHandler}: a request carrying {@code arcadedb-session-id} reads through that session's
+ * transaction, under its lock and on its principal and refreshing its idle timer, and the base class subsumes
+ * the {@code checkAuthorizationOnDatabase} call this handler used to make by hand.
+ *
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
-public class GetPromQLQueryRangeHandler extends AbstractServerHttpHandler {
+public class GetPromQLQueryRangeHandler extends DatabaseAbstractHandler {
   // Widest epoch second accepted for start/end. 1e12s is year 33658, ~1600x beyond any real series, and
   // keeps start/end (and therefore their difference in milliseconds) far inside the 64-bit range.
   static final double MAX_TIMESTAMP_SECONDS = 1e12;
@@ -44,17 +51,32 @@ public class GetPromQLQueryRangeHandler extends AbstractServerHttpHandler {
     super(httpServer);
   }
 
+  /**
+   * A read: an auto-commit wrapper would only add a commit with nothing to commit, so an unresolvable session
+   * id degrades to a session-less read rather than being refused - see
+   * {@link DatabaseAbstractHandler#rejectsUnresolvableSession()}.
+   */
+  @Override
+  protected boolean requiresTransaction() {
+    return false;
+  }
+
+  /**
+   * Evaluates a PromQL expression at every step of a range, so never on an Undertow IO thread (issue #7722),
+   * for the reason {@code GetPromQLQueryHandler} gives at its own override - with strictly more work to do,
+   * since the expression is evaluated once per step rather than once.
+   * <p>
+   * Handler-wide, superseding the per-request override of issue #7681 for the reason given there: the
+   * session-less request is the one Grafana and Prometheus actually send.
+   */
+  @Override
+  protected boolean mustExecuteOnWorkerThread() {
+    return true;
+  }
+
   @Override
   protected ExecutionResponse execute(final HttpServerExchange exchange, final ServerSecurityUser user,
-      final JSONObject payload) throws Exception {
-
-    final Deque<String> databaseParam = exchange.getQueryParameters().get("database");
-    if (databaseParam == null || databaseParam.isEmpty())
-      return new ExecutionResponse(400, PromQLResponseFormatter.formatError("bad_data", "Database parameter is required"));
-
-    // Enforce database-level authorization (GHSA-x8mg-6r4p-87pf): this handler does not extend DatabaseAbstractHandler.
-    // Checked before any payload/parameter validation so an unauthorized caller cannot probe the target database.
-    checkAuthorizationOnDatabase(user, databaseParam.getFirst());
+      final Database db, final JSONObject payload) throws Exception {
 
     final String query = getQueryParameter(exchange, "query");
     if (query == null || query.isBlank())
@@ -82,7 +104,7 @@ public class GetPromQLQueryRangeHandler extends AbstractServerHttpHandler {
     if (stepMs <= 0)
       return new ExecutionResponse(400, PromQLResponseFormatter.formatError("bad_data", "Step must be positive"));
 
-    final DatabaseInternal database = httpServer.getServer().getDatabase(databaseParam.getFirst(), false, false);
+    final DatabaseInternal database = (DatabaseInternal) db;
 
     try {
       final PromQLExpr expr = new PromQLParser(query).parse();
@@ -90,7 +112,19 @@ public class GetPromQLQueryRangeHandler extends AbstractServerHttpHandler {
       final PromQLEvaluator evaluator = lookbackStr != null && !lookbackStr.isBlank()
           ? new PromQLEvaluator(database, PromQLParser.parseDuration(lookbackStr))
           : new PromQLEvaluator(database);
-      final PromQLResult result = evaluator.evaluateRange(expr, startMs, endMs, stepMs);
+
+      // What the selector scans actually did, published to whatever the server's metrics subsystem feeds
+      // (issue #7717). null - and therefore free - whenever metrics are off. The type tag is a constant: one
+      // expression can select several metrics, so there is no single type to name here.
+      final AggregationMetrics readMetrics = TimeSeriesReadMetrics.start();
+      evaluator.setReadMetrics(readMetrics);
+      final PromQLResult result;
+      try {
+        result = evaluator.evaluateRange(expr, startMs, endMs, stepMs);
+      } finally {
+        TimeSeriesReadMetrics.publish(readMetrics, database.getName(), TimeSeriesReadMetrics.TYPE_EXPRESSION,
+            TimeSeriesReadMetrics.SURFACE_PROM_QUERY_RANGE);
+      }
       return new ExecutionResponse(200, PromQLResponseFormatter.formatSuccess(result));
     } catch (final IllegalArgumentException e) {
       return new ExecutionResponse(400, PromQLResponseFormatter.formatError("bad_data", e.getMessage()));

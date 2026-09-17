@@ -30,7 +30,6 @@ import com.arcadedb.query.opencypher.executor.DeletedEntityMarker;
 import com.arcadedb.query.opencypher.executor.ExpressionEvaluator;
 import com.arcadedb.query.opencypher.executor.LabelReplacements;
 import com.arcadedb.query.opencypher.executor.RowAliases;
-import com.arcadedb.query.opencypher.temporal.TemporalUtil;
 import com.arcadedb.query.sql.executor.CommandContext;
 import com.arcadedb.query.sql.executor.QueryStatistics;
 import com.arcadedb.query.sql.executor.Result;
@@ -165,7 +164,10 @@ public final class SetClauseApplier {
         // Coerce and validate HERE so an invalid value rejects the clause before any of it has been written: the
         // step rolls back only a transaction it opened itself, so a value refused halfway through would otherwise
         // leave the earlier items behind in the caller's transaction.
-        values[i] = coerceAndValidate(evaluator.evaluate(item.getValueExpression(), result, context));
+        // The property name is the static one when the clause spells it (SET n.m2 = ...), the resolved key when it
+        // computes it (SET n[$k] = ...); either way it is what a refusal has to be able to name (issue #7729).
+        values[i] = coerceAndValidate(evaluator.evaluate(item.getValueExpression(), result, context),
+            item.getProperty() != null ? item.getProperty() : keys[i], item.getValueExpression());
         break;
       case REPLACE_MAP:
       case MERGE_MAP:
@@ -175,7 +177,7 @@ public final class SetClauseApplier {
         // ("SET b.name = 'new', a = b" must copy b's PRE-clause name). Resolving the shape now also means a
         // right-hand side that is neither an entity nor a map fails the clause before any of it has been written.
         values[i] = toPropertyMap(evaluator.evaluate(item.getValueExpression(), result, context),
-            item.getType() == SetClause.SetType.REPLACE_MAP ? "=" : "+=");
+            item.getType() == SetClause.SetType.REPLACE_MAP ? "=" : "+=", item.getValueExpression());
         break;
       case LABELS:
         // A Cypher 25 dynamic label - SET n:$(expr) - is a read of the row, so it is answered from the pre-clause
@@ -385,7 +387,8 @@ public final class SetClauseApplier {
    * null right-hand side stays a no-op, which is what the two callers get back as a null map.
    */
   @SuppressWarnings("unchecked")
-  private static Map<String, Object> toPropertyMap(final Object value, final String operator) {
+  private static Map<String, Object> toPropertyMap(final Object value, final String operator,
+      final Expression valueExpression) {
     if (value == null)
       return null;
 
@@ -402,9 +405,13 @@ public final class SetClauseApplier {
     // replace form clears the target before reading this map, so "SET a = a" would otherwise read a map it has just
     // emptied. Coercing and validating the entries here rather than at write time is what lets an invalid one reject
     // the clause before any earlier item has been written.
+    // The origin is the record itself when the right-hand side was an entity: "SET t = n" names no property and no
+    // value, so without it a refusal can only say that something, somewhere, was a map. Otherwise it is the
+    // right-hand side as written, which is what names the parameter in "SET t += $p" (issue #7729).
+    final Object origin = value instanceof Document sourceRecord ? sourceRecord : valueExpression;
     final Map<String, Object> materialised = new LinkedHashMap<>(source.size());
     for (final Map.Entry<String, Object> entry : source.entrySet())
-      materialised.put(entry.getKey(), coerceAndValidate(entry.getValue()));
+      materialised.put(entry.getKey(), coerceAndValidate(entry.getValue(), entry.getKey(), origin));
     return materialised;
   }
 
@@ -534,25 +541,11 @@ public final class SetClauseApplier {
    * goes through here, so {@code SET n = {x: {y: 1}}} is refused exactly like the {@code SET n.x = {y: 1}} that Neo4j
    * refuses with "Property values can only be of primitive types or arrays thereof" - the map forms used to be the
    * way around the check. Every call is made in phase 1, so the clause is refused as a whole rather than halfway
-   * through.
+   * through. {@link CreateStep} and {@link MergeStep}'s creation branch apply the same check through
+   * {@link CypherValues#coerceAndValidatePropertyValue} (issue #7629), so a map property value is refused the same
+   * way whichever clause writes it.
    */
-  private static Object coerceAndValidate(final Object value) {
-    if (value == null)
-      return null; // a null value is a removal, not a stored value
-    final Object coerced = TemporalUtil.toCoreJavaType(value);
-    validatePropertyValue(coerced);
-    return coerced;
-  }
-
-  private static void validatePropertyValue(final Object value) {
-    if (value instanceof List) {
-      for (final Object element : (List<?>) value) {
-        if (element instanceof Map)
-          throw new IllegalArgumentException("TypeError: InvalidPropertyType - Property values can not contain map values");
-        if (element instanceof List)
-          validatePropertyValue(element);
-      }
-    } else if (value instanceof Map)
-      throw new IllegalArgumentException("TypeError: InvalidPropertyType - Property values can not be maps");
+  private static Object coerceAndValidate(final Object value, final String propertyName, final Object valueOrigin) {
+    return CypherValues.coerceAndValidatePropertyValue(value, propertyName, valueOrigin);
   }
 }

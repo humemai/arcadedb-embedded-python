@@ -451,7 +451,11 @@ public class ArcadeStateMachine extends BaseStateMachine {
   // resync. Scoped per-database so a gap in one database never masks a genuine bug raised while
   // applying an entry for an unrelated, healthy database. Cleared when a snapshot resync completes
   // (it resyncs all databases) and restores consistent state.
-  private final Set<String> divergedDatabases = ConcurrentHashMap.newKeySet();
+  // Keyed by database name, valued by WHY it was quarantined (issue #7741): a WAL version gap is a replication
+  // problem and an undecodable local entry is a corrupt log segment on THIS node, and an operator told only the
+  // first is sent to look at the leader for a bad disk of their own. The map is the set - keySet() is what every
+  // membership test reads - so the cause cannot go missing or outlive the quarantine it describes.
+  private final Map<String, DivergenceCause> divergedDatabases = new ConcurrentHashMap<>();
 
   // Bounded escalation (issue #4740): a node that can never resync (no stable leader reachable)
   // must not stay in "swallow unexpected errors" mode forever, silently degrading. Each error
@@ -1018,6 +1022,13 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // on that database, so quarantine it and let the leader resend it as a snapshot. The node stays up for
       // its other databases, and the entry is never silently skipped. Without a database name there is nothing
       // to quarantine, and handleUnexpectedApplyError escalates to the node-wide halt as before.
+      //
+      // This branch is for the ENVELOPE, decoded above before applyWithRetry is called. A decode failure raised
+      // INSIDE the apply - applyTxEntry's WAL payload, since issue #7495 - has already been through
+      // handleUnexpectedApplyError by the time it leaves applyWithRetry, which is why applyWithRetry re-types the
+      // one case that would otherwise arrive here (see its catch of RaftLogEntryDecodeException). Widening the
+      // catches between here and `catch (Throwable)` would undo that and charge one failure to the swallow budget
+      // twice; theEscalationBudgetIsChargedOncePerUndecodableEntry is the test that says so.
       final String decodeDatabase = e.getDatabaseName();
       LogManager.instance().log(this, Level.SEVERE,
           "Cannot decode the committed Raft log entry at index %d (type=%s, database=%s). This is either a corrupt "
@@ -1161,7 +1172,19 @@ public class ArcadeStateMachine extends BaseStateMachine {
         // recoverable resync condition - leaving them uncaught lets them propagate unchanged to
         // applyTransaction's fatal halt path so the node stops loudly rather than masking a corrupt
         // runtime.
-        handleUnexpectedApplyError(index, databaseName, t);
+        try {
+          handleUnexpectedApplyError(index, databaseName, t);
+        } catch (final RaftLogEntryDecodeException escalated) {
+          // handleUnexpectedApplyError rethrows the ORIGINAL error once the swallow budget is exhausted, so a
+          // node that can never resync halts instead of degrading silently. Since issue #7495 that original can
+          // be a RaftLogEntryDecodeException raised INSIDE this lambda (applyTxEntry's WAL decode), and
+          // applyTransaction catches that type separately - as the handler for an unreadable ENVELOPE, which is
+          // decoded before applyWithRetry is ever called. Letting this one reach that catch would run
+          // handleUnexpectedApplyError a second time for a single failure, charging the swallow twice against
+          // the very budget that just tripped and logging the escalation twice. It has been handled here, so
+          // hand the fatal path the same failure under a type that catch does not claim.
+          throw new IllegalStateException(escalated.getMessage(), escalated);
+        }
       }
     }
 
@@ -1193,8 +1216,13 @@ public class ArcadeStateMachine extends BaseStateMachine {
   private void handleUnexpectedApplyError(final long index, final String databaseName, final RuntimeException t) {
     if (databaseName != null && !databaseName.isEmpty()) {
       // Mark the database diverged on the first error so subsequent errors for it route here too.
-      // add() returns true only the first time, which is when we kick off the targeted resync.
-      if (divergedDatabases.add(databaseName)) {
+      // putIfAbsent() returns null only the first time, which is when we kick off the targeted resync. The cause
+      // recorded with it is what the operator-facing alert says (issue #7741): an entry this node cannot decode
+      // is a corrupt local log segment, not a replication fault, and pointing at the leader for it wastes the
+      // one person who can see the bad disk.
+      if (divergedDatabases.putIfAbsent(databaseName,
+          t instanceof RaftLogEntryDecodeException ? DivergenceCause.UNDECODABLE_LOG_ENTRY : DivergenceCause.APPLY_ERROR)
+          == null) {
         LogManager.instance().log(this, Level.SEVERE,
             "Unexpected error applying Raft entry for database '%s' at index %d; quarantining the database and "
                 + "triggering a targeted snapshot resync instead of halting the node (issue #4797): %s",
@@ -2013,22 +2041,143 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // A transaction this node originated is recognised by its own bytes: the registered transaction carries the WAL
     // it shipped, and an entry is claimed only when it carries the same. No origin marker, client id or context is
     // needed for that, so it holds whatever happened to the leadership, the Raft client or the context in between.
-    final LocalCommit local = localCommits.claim(databaseName, peekWalTransactionId(decoded.walData()), decoded.walData());
+    final LocalCommit local = localCommits.claim(databaseName, walTransactionIdOfCommittedEntry(decoded, entryIndex),
+        decoded.walData());
+    RuntimeException applyFailure = null;
     try {
       if (local != null)
         publishLocalCommit(local, decoded, entryIndex);
       else
         applyReplicatedTransaction(decoded, entryIndex);
+    } catch (final RuntimeException e) {
+      // Kept only so the release below can attach its own failure to this one instead of dropping it; rethrown
+      // unchanged, so the apply path sees exactly what it saw before.
+      applyFailure = e;
+      throw e;
     } finally {
       // Applied, published or reconciled, the local copy of every page of this entry now carries its version, so the
       // reservation taken at append time has done its job. A no-op on a follower, whose ledger is empty.
-      pageVersions.release(databaseName, pages, decoded.walData());
+      //
+      // Nothing thrown here may escape (issue #7741): with no Pages in hand - a leader applying an entry it did
+      // not append - release() parses them out of the WAL payload, and a payload that cannot be parsed is exactly
+      // the state the try block has just failed on. Letting that throw would REPLACE the failure being reported,
+      // and since #7495 that failure is the RaftLogEntryDecodeException whose whole purpose is to quarantine the
+      // database instead of skipping the entry silently. The release is bookkeeping; the apply result is not.
+      try {
+        pageVersions.release(databaseName, pages, decoded.walData());
+      } catch (final RuntimeException e) {
+        // Attached to the apply's own failure when there is one, so the pair is diagnosable from a single stack
+        // trace, and logged when the apply succeeded and there is nothing to attach it to.
+        if (applyFailure != null)
+          applyFailure.addSuppressed(e);
+        else
+          LogManager.instance().log(this, Level.WARNING,
+              "Cannot release the page-version reservations of the Raft entry at index %d (db=%s): %s. The stale-reservation "
+                  + "sweep clears them; the entry's own outcome is unaffected", e, entryIndex, databaseName, e.getMessage());
+      }
     }
   }
 
   /**
-   * The local database a transaction entry targets. The one seam the apply of a transaction entry resolves a database
-   * through, so a unit test can drive {@link #applyTransaction} against a database it opened itself.
+   * The WAL transaction id of a COMMITTED transaction entry, read the way the apply path has to read it.
+   * <p>
+   * {@link #peekWalTransactionId(byte[])} reports a payload too short to hold the id as a {@link ReplicationException}.
+   * Its type is left alone here because its other call sites read the id for a log line rather than to decide
+   * anything ({@code RaftReplicatedDatabase.localWalTxId} catches it and carries on with a sentinel). On the apply
+   * path it was the wrong answer: {@code applyWithRetry} rethrows a
+   * {@code ReplicationException} unchanged (it is the resync signal applyTxEntry raises on a WAL gap), so a committed
+   * entry whose payload is truncated bypassed {@link #handleUnexpectedApplyError} entirely - no quarantine, no targeted
+   * snapshot resync, and the failed future Ratis swallows while advancing its own applied index. The corrupt entry was
+   * therefore skipped on this node and nothing said so.
+   * <p>
+   * A truncated payload IS what {@link RaftLogEntryDecodeException} exists for (issue #7138): a committed entry of a
+   * KNOWN type this version cannot read. Raised as one, it reaches {@code applyWithRetry}'s {@code RuntimeException}
+   * branch, quarantines this one database and lets the leader resend it as a snapshot, exactly as a decode failure of
+   * the envelope itself already does (issue #7495).
+   */
+  private static long walTransactionIdOfCommittedEntry(final RaftLogEntryCodec.DecodedEntry decoded, final long entryIndex) {
+    try {
+      return peekWalTransactionId(decoded.walData());
+    } catch (final RuntimeException e) {
+      throw decodeFailure(decoded, entryIndex, "read the WAL transaction id of", e);
+    }
+  }
+
+  /**
+   * The WAL transaction a committed entry carries, decoded the way the apply path has to decode it: the same
+   * reclassification {@link #walTransactionIdOfCommittedEntry} applies, for the same reason. {@code
+   * deserializeWalTransaction} rejects a misaligned page count or delta range with a {@link ReplicationException}
+   * (issue #4420), and on this path that exception type means "resync already in progress" to
+   * {@code applyWithRetry}, which rethrows it without quarantining anything.
+   * <p>
+   * The catch is on {@code RuntimeException} rather than on {@code ReplicationException} alone because those
+   * explicit checks are not the only way the decode can fail: a payload long enough to hold the transaction id
+   * (8 bytes) but shorter than the header the decoder reads (24) runs out of buffer first and raises a
+   * {@code BufferUnderflowException}. Both shapes are one thing - a committed entry this node cannot read - and
+   * both now say so, rather than the diagnosis depending on how far into the payload the corruption happened to
+   * start. Nothing but the decode of a {@code byte[]} runs inside the try, so the wider catch cannot capture an
+   * unrelated failure.
+   */
+  private static WALFile.WALTransaction walTransactionOfCommittedEntry(final RaftLogEntryCodec.DecodedEntry decoded,
+      final long entryIndex) {
+    return walTransactionOfCommittedEntry(decoded, decoded.walData(), entryIndex, RaftLogEntryType.TX_ENTRY, null);
+  }
+
+  /**
+   * The same decode for a WAL payload a committed entry of any type carries, over an EXPLICIT {@code walData}
+   * (issue #7695).
+   * <p>
+   * A {@code SCHEMA_ENTRY} can carry a whole batch of buffered WAL entries - the {@code recordFileChanges()} path
+   * through {@code RaftReplicatedDatabase}'s schema WAL buffer - and {@code applySchemaEntry} decoded them with a
+   * bare {@link #deserializeWalTransaction} call, which is the very bypass the one-payload form above exists to
+   * close: a {@link ReplicationException} from a misaligned page count or delta range, or a
+   * {@code BufferUnderflowException} from a payload shorter than the 24-byte header, left {@code applyWithRetry}
+   * without ever reaching {@link #handleUnexpectedApplyError}, so the database was not quarantined, no targeted
+   * snapshot resync was triggered, and the corrupt entry was skipped on this node with nothing saying so.
+   *
+   * @param which names the failing payload within a multi-payload entry, so the log line points at one buffered
+   *              WAL entry of the batch rather than at "the entry". Null for an entry that carries exactly one
+   */
+  private static WALFile.WALTransaction walTransactionOfCommittedEntry(final RaftLogEntryCodec.DecodedEntry decoded,
+      final byte[] walData, final long entryIndex, final RaftLogEntryType type, final String which) {
+    try {
+      return deserializeWalTransaction(walData);
+    } catch (final RuntimeException e) {
+      throw decodeFailure(decoded, entryIndex, "decode the WAL payload of", type, which, e);
+    }
+  }
+
+  private static RaftLogEntryDecodeException decodeFailure(final RaftLogEntryCodec.DecodedEntry decoded,
+      final long entryIndex, final String what, final RuntimeException cause) {
+    return decodeFailure(decoded, entryIndex, what, RaftLogEntryType.TX_ENTRY, null, cause);
+  }
+
+  /**
+   * The decode failure of a committed entry, typed as the entry that carried it (issue #7695). The type is what
+   * routes the failure: {@link RaftLogEntryDecodeException} carries it to the per-database quarantine of issue
+   * #7138 together with the database name, and a reader of the log needs to know WHICH kind of entry could not be
+   * read - a transaction, or a DDL statement's buffered WAL - because the two say different things about what
+   * the resync has to replace.
+   */
+  private static RaftLogEntryDecodeException decodeFailure(final RaftLogEntryCodec.DecodedEntry decoded,
+      final long entryIndex, final String what, final RaftLogEntryType type, final String which,
+      final RuntimeException cause) {
+    return new RaftLogEntryDecodeException(
+        "Cannot " + what + " the committed " + entryDescription(type) + " entry for database '"
+            + decoded.databaseName() + "' at index " + entryIndex + (which == null ? "" : " (" + which + ")") + ": "
+            + cause.getMessage(), type, decoded.databaseName(), cause);
+  }
+
+  /** How a decode failure names the entry it could not read. */
+  private static String entryDescription(final RaftLogEntryType type) {
+    return type == RaftLogEntryType.SCHEMA_ENTRY ? "schema" : "transaction";
+  }
+
+  /**
+   * The local database an entry targets. The one seam an apply resolves a database through, so a unit test can
+   * drive {@link #applyTransaction} - or {@link #applySchemaEntry}, which went through {@code server.getDatabase}
+   * directly until issue #7695 needed a harness that could reach its buffered-WAL loop - against a database it
+   * opened itself.
    */
   // @VisibleForTesting
   DatabaseInternal databaseFor(final String databaseName) {
@@ -2091,7 +2240,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
    */
   private void applyReplicatedTransaction(final RaftLogEntryCodec.DecodedEntry decoded, final long entryIndex) {
     final DatabaseInternal db = databaseFor(decoded.databaseName());
-    final WALFile.WALTransaction walTx = deserializeWalTransaction(decoded.walData());
+    final WALFile.WALTransaction walTx = walTransactionOfCommittedEntry(decoded, entryIndex);
 
     HALog.log(this, HALog.DETAILED, "Applying tx %d to database '%s' (pages=%d)",
         walTx.txId, decoded.databaseName(), walTx.pages.length);
@@ -2110,7 +2259,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // the HealthMonitor's periodic check). Every subsequent committed entry for this database will
       // hit the same gap until the resync lands: those log a throttled one-liner (no per-entry stack
       // trace) so the log is not flooded and the download is not starved of CPU/IO on small nodes.
-      if (divergedDatabases.add(decoded.databaseName())) {
+      if (divergedDatabases.putIfAbsent(decoded.databaseName(), DivergenceCause.WAL_VERSION_GAP) == null) {
         LogManager.instance().log(this, Level.SEVERE,
             "WAL version gap on follower - state divergence detected, triggering snapshot resync (db=%s, txId=%d): %s",
             decoded.databaseName(), walTx.txId, e.getMessage());
@@ -2150,7 +2299,9 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * Like {@link #applyTxEntry}, the originator skips this because schema changes were already
    * applied locally during the transaction.
    */
-  private void applySchemaEntry(final RaftLogEntryCodec.DecodedEntry decoded, final long entryIndex,
+  // @VisibleForTesting - the database is resolved through the databaseFor() seam below so a test can drive this
+  // against a database it opened itself, the way applyTxEntry's null-server harness already can (issue #7695).
+  void applySchemaEntry(final RaftLogEntryCodec.DecodedEntry decoded, final long entryIndex,
       final boolean originatedLocally) {
     // Same origin-tracking as applyTxEntry: skip if this node originated the entry in the
     // current lifecycle (schema changes were already applied locally during the transaction).
@@ -2159,7 +2310,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
       return;
     }
 
-    final DatabaseInternal db = (DatabaseInternal) server.getDatabase(decoded.databaseName());
+    final DatabaseInternal db = databaseFor(decoded.databaseName());
 
     HALog.log(this, HALog.DETAILED,
         "Applying schema entry to database '%s' (entryIndex=%d): filesToAdd=%d, filesToRemove=%d, schemaPayload=%s",
@@ -2272,7 +2423,13 @@ public class ArcadeStateMachine extends BaseStateMachine {
           final Map<Integer, Integer> bucketDelta = bucketDeltas != null && i < bucketDeltas.size()
               ? bucketDeltas.get(i)
               : Collections.emptyMap();
-          final WALFile.WALTransaction walTx = deserializeWalTransaction(walData);
+          // Wrapped, not bare (issue #7695): a ReplicationException from a misaligned page count or delta range,
+          // or a BufferUnderflowException from a payload shorter than the header, would otherwise leave
+          // applyWithRetry through its ReplicationException arm - which rethrows unchanged as a resync signal -
+          // and skip the per-database quarantine entirely, so the corrupt entry was dropped on this node and
+          // nothing said so. Named per buffered entry: a schema entry carries a batch of them.
+          final WALFile.WALTransaction walTx = walTransactionOfCommittedEntry(decoded, walData, entryIndex,
+              RaftLogEntryType.SCHEMA_ENTRY, "buffered WAL entry " + (i + 1) + " of " + walEntries.size());
           if (walTx.pages != null)
             for (final WALFile.WALPage page : walTx.pages)
               walTouchedFileIds.add(page.fileId);
@@ -3580,6 +3737,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // node lifetime. This branch never calls drop(), so the eviction cannot precede a failed drop.
     if (!server.existsDatabase(databaseName)) {
       evictBootstrapBaseline(databaseName);
+      clearDroppedDatabaseQuarantine(databaseName);
       HALog.log(this, HALog.TRACE, "Database '%s' already absent, skipping drop-database entry", databaseName);
       return;
     }
@@ -3612,9 +3770,39 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // restart can still recover it (evicting first would lose the baseline of a database that was not
     // actually dropped - the #5100 failure mode).
     evictBootstrapBaseline(databaseName);
+    clearDroppedDatabaseQuarantine(databaseName);
 
     LogManager.instance().log(this, Level.INFO, "Database '%s' dropped via Raft drop-database entry%s", databaseName,
         staged != null ? " (files staged as '" + staged.getFileName() + "' for background deletion)" : "");
+  }
+
+  /**
+   * Retires the quarantine bookkeeping of a database a DROP entry has just removed: the per-database read floor
+   * (issue #6760) and the diverged marker that goes with it.
+   * <p>
+   * Both exist to hold back readers of a database a snapshot install could NOT bring up to date, until a targeted
+   * resync restores it. A dropped database has no such obligation left - there is nothing to resync and nothing to
+   * read - and the floor is only ever cleared by {@link #clearDivergedDatabase}, which runs when a resync succeeds.
+   * So without this, the floor of a database that was quarantined when it was dropped outlives it for the node's
+   * lifetime, with two consequences (review of PR #7649):
+   * <ul>
+   *   <li>{@link RaftHAServer#getTrustedAppliedIndex(String)} clamps to that floor forever, so the local-apply wait
+   *   {@code RaftReplicatedDatabase.dropInReplicas} takes could never be satisfied - the drop would report failure
+   *   through its full quorum timeout even though the directory is gone;</li>
+   *   <li>a database later recreated under the same name would inherit the dead floor and have its LINEARIZABLE
+   *   reads pinned behind it.</li>
+   * </ul>
+   * The same reasoning the eviction of {@code pageVersions} and the bootstrap baseline in this method already
+   * applies - do not keep per-database state for a name that no longer has a database.
+   */
+  private void clearDroppedDatabaseQuarantine(final String databaseName) {
+    if (getDatabaseAppliedFloor(databaseName) < 0 && !isDatabaseDiverged(databaseName))
+      return;
+
+    HALog.log(this, HALog.BASIC,
+        "Database '%s' was quarantined when it was dropped: retiring its read floor and diverged marker, "
+            + "since a dropped database has no resync left to wait for (issue #6760)", databaseName);
+    clearDivergedDatabase(databaseName);
   }
 
   // @VisibleForTesting
@@ -4479,7 +4667,9 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // nothing is known about.
       final long floor = Math.max(0L, readPersistedAppliedIndex(dbName));
       staleDatabaseAppliedFloors.put(dbName, floor);
-      markStateDiverged(dbName);
+      // Named, because the alert quotes it: nothing failed while APPLYING anything here, the install is what did
+      // not finish the job, and an operator sent to look for an apply error would find none (issue #7741).
+      markStateDiverged(dbName, DivergenceCause.SNAPSHOT_INSTALL_INCOMPLETE);
       LogManager.instance().log(this, Level.SEVERE,
           "Snapshot install did not bring database '%s' to snapshotIndex=%d: keeping it marked diverged and "
               + "clamping its LINEARIZABLE / read-your-writes reads at appliedIndex=%d until a resync succeeds. "
@@ -4608,7 +4798,22 @@ public class ArcadeStateMachine extends BaseStateMachine {
    */
   // @VisibleForTesting
   void markStateDiverged(final String dbName) {
-    divergedDatabases.add(dbName);
+    markStateDiverged(dbName, DivergenceCause.APPLY_ERROR);
+  }
+
+  /**
+   * {@link #markStateDiverged(String)} naming why, which is what the cluster status document reports
+   * (issue #7741).
+   * <p>
+   * The FIRST cause a quarantine is recorded with is the one it keeps: {@code putIfAbsent} deliberately, which is
+   * the behaviour the {@code Set.add()} this replaced already had. A quarantined database goes on failing - every
+   * later committed entry for it hits the same wall - so the last cause would be noise from a database that is
+   * already waiting for a resync, while the first is the one that describes what went wrong. The map is cleared
+   * when the resync lands, so the next quarantine records afresh (claude-review on PR #7747).
+   */
+  // @VisibleForTesting
+  void markStateDiverged(final String dbName, final DivergenceCause cause) {
+    divergedDatabases.putIfAbsent(dbName, cause);
   }
 
   /**
@@ -4630,7 +4835,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
 
   // @VisibleForTesting
   boolean isDatabaseDiverged(final String dbName) {
-    return divergedDatabases.contains(dbName);
+    return divergedDatabases.containsKey(dbName);
   }
 
   // @VisibleForTesting
@@ -4690,20 +4895,36 @@ public class ArcadeStateMachine extends BaseStateMachine {
    *
    * @param snapshotDownloadQueued     a snapshot download is flagged but has not started
    * @param snapshotDownloadInProgress a snapshot download is running
-   * @param divergedDatabases          databases quarantined on a WAL version gap and awaiting a resync
-   *                                   (issues #4740, #4797), sorted
    * @param snapshotAppliedFloor       the node-wide stale-snapshot read floor, or {@code -1} when there is none
    *                                   (issue #6111)
    * @param databaseAppliedFloors      per-database read floors left by a snapshot install that could not bring
    *                                   them up to date, keyed by database name (issue #6760)
+   * @param divergenceCauses           the databases quarantined and awaiting a resync (issues #4740, #4797), each
+   *                                   with WHY it was quarantined (issue #7741)
    */
   public record LocalResyncState(boolean snapshotDownloadQueued, boolean snapshotDownloadInProgress,
-                                 List<String> divergedDatabases, long snapshotAppliedFloor,
-                                 Map<String, Long> databaseAppliedFloors) {
+                                 long snapshotAppliedFloor, Map<String, Long> databaseAppliedFloors,
+                                 Map<String, DivergenceCause> divergenceCauses) {
 
     public LocalResyncState {
-      divergedDatabases = List.copyOf(divergedDatabases);
       databaseAppliedFloors = Map.copyOf(databaseAppliedFloors);
+      divergenceCauses = Map.copyOf(divergenceCauses);
+    }
+
+    /**
+     * The quarantined databases, sorted so a status poll payload is stable between ticks on an unchanged node.
+     * <p>
+     * DERIVED from {@link #divergenceCauses} rather than carried beside it (claude-review on PR #7747): the two
+     * were the same set spelled twice, and a future caller updating one and not the other would have published a
+     * name with no cause or a cause with no name. Computed per call, which costs an allocation only on a node
+     * that is actually holding something back - the same trade {@link #getLocalResyncState} makes.
+     */
+    public List<String> divergedDatabases() {
+      if (divergenceCauses.isEmpty())
+        return List.of();
+      final List<String> names = new ArrayList<>(divergenceCauses.keySet());
+      Collections.sort(names);
+      return names;
     }
 
     /**
@@ -4712,7 +4933,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
      * here rather than re-deriving it.
      */
     public boolean inProgress() {
-      return snapshotDownloadQueued || snapshotDownloadInProgress || !divergedDatabases.isEmpty()
+      return snapshotDownloadQueued || snapshotDownloadInProgress || !divergenceCauses.isEmpty()
           || snapshotAppliedFloor >= 0 || !databaseAppliedFloors.isEmpty();
     }
   }
@@ -4731,18 +4952,12 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // A healthy node - the overwhelming majority of calls, since the readiness probe polls this - copies
     // nothing: both immutable empties are shared constants and the record's own copyOf calls return them
     // unchanged. Only a node that actually has something in flight pays for the copies.
-    final List<String> diverged;
-    if (divergedDatabases.isEmpty())
-      diverged = List.of();
-    else {
-      diverged = new ArrayList<>(divergedDatabases);
-      // Sorted so a status poll payload is stable between ticks on an unchanged node.
-      Collections.sort(diverged);
-    }
+    final Map<String, DivergenceCause> causes = divergedDatabases.isEmpty()
+        ? Map.of() : new HashMap<>(divergedDatabases);
     final Map<String, Long> floors = staleDatabaseAppliedFloors.isEmpty()
         ? Map.of() : new HashMap<>(staleDatabaseAppliedFloors);
-    return new LocalResyncState(needsSnapshotDownload.get(), snapshotDownloadInProgress.get(), diverged,
-        staleSnapshotAppliedFloor.get(), floors);
+    return new LocalResyncState(needsSnapshotDownload.get(), snapshotDownloadInProgress.get(),
+        staleSnapshotAppliedFloor.get(), floors, causes);
   }
 
   /**

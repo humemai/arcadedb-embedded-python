@@ -270,9 +270,23 @@ class Issue7089NaNTransparentSumAvgTest extends TestHelper {
 
   // ---- end to end, through the engine ----
 
+  /**
+   * {@code SHARDS 1 COMPACTION_INTERVAL 1 HOURS} is what makes the sealed half of this test mean the same thing on
+   * every machine, and it is not decoration (issue #7495).
+   * <p>
+   * Compaction seals whole data pages, not time buckets, unless the type asks for bucket-aligned blocks - so
+   * without {@code COMPACTION_INTERVAL} the six rows become one block per shard, each straddling the two hour
+   * buckets and therefore unanswerable from its header. And without {@code SHARDS} the shard count defaults to
+   * {@code arcadedb.asyncWorkerThreads}, i.e. {@code availableProcessors() - 1}: rows are handed to shards
+   * round-robin, so the number of straddling blocks - and with it {@link AggregationMetrics#getSlowPathBlocks()} -
+   * was a function of the core count. It was 0 on an 11-shard developer machine and 2 on a 3-shard CI runner, which
+   * is how this test came to fail on CI and nowhere else. Pinned, compaction yields exactly two blocks, one per
+   * hour bucket, and the block-header fast path is the one that answers - which is the path issue #7089 was about.
+   */
   @Test
   void oneNaNSampleNoLongerPoisonsTheBucketOnAnyPath() throws Exception {
-    database.command("sql", "CREATE TIMESERIES TYPE Sensor TIMESTAMP ts FIELDS (value DOUBLE)");
+    database.command("sql",
+        "CREATE TIMESERIES TYPE Sensor TIMESTAMP ts FIELDS (value DOUBLE) SHARDS 1 COMPACTION_INTERVAL 1 HOURS");
     final TimeSeriesEngine engine = ((LocalTimeSeriesType) database.getSchema().getType("Sensor")).getEngine();
 
     // Bucket 0: 10, NaN, 30, 40 -> sum 80, avg 80/3, count 4 (rows), min 10, max 40.
@@ -294,7 +308,8 @@ class Issue7089NaNTransparentSumAvgTest extends TestHelper {
     engine.compactAll();
     final AggregationMetrics metrics = new AggregationMetrics();
     assertBucketsAreNaNTransparent(engine, "sealed", metrics);
-    assertThat(metrics.getFastPathBlocks()).as("answered from the block header").isGreaterThan(0);
+    assertThat(metrics.getFastPathBlocks()).as("answered from the block header, one block per hour bucket")
+        .isEqualTo(2);
     assertThat(metrics.getSlowPathBlocks()).isZero();
     assertSqlPushDownIsNaNTransparent();
 
@@ -353,7 +368,10 @@ class Issue7089NaNTransparentSumAvgTest extends TestHelper {
     assertThat(((Number) rows.get(0).getProperty("s")).doubleValue()).isEqualTo(80.0);
     assertThat(((Number) rows.get(0).getProperty("a")).doubleValue()).isCloseTo(80.0 / 3, within(1e-9));
     assertThat(((Number) rows.get(0).getProperty("c")).longValue()).isEqualTo(4);
-    assertThat(((Number) rows.get(1).getProperty("s")).doubleValue()).isNaN();
+    // The second bucket held no real sample, so its SUM is absent. At the SQL boundary that is spelled NULL
+    // since issue #7743 - the marker is translated by the step rather than handed out raw - which is also what
+    // the generic aggregation and the raw-row projection answer for it. COUNT still counts rows.
+    assertThat(rows.get(1).<Object>getProperty("s")).as("absent SUM reaches SQL as NULL").isNull();
     assertThat(((Number) rows.get(1).getProperty("c")).longValue()).isEqualTo(2);
   }
 

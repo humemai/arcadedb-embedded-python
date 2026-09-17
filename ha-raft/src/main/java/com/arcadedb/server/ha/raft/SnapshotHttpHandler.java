@@ -27,6 +27,7 @@ import com.arcadedb.engine.ComponentFile;
 import com.arcadedb.engine.PageSnapshot;
 import com.arcadedb.engine.timeseries.TimeSeriesCompactionPause;
 import com.arcadedb.engine.timeseries.TimeSeriesSealedStore;
+import com.arcadedb.exception.DatabaseOperationException;
 import com.arcadedb.exception.PageSnapshotException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.utility.CodeUtils;
@@ -42,6 +43,7 @@ import io.undertow.util.HttpString;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -71,6 +73,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.zip.CRC32;
 import java.util.zip.CheckedInputStream;
@@ -330,51 +333,144 @@ public class SnapshotHttpHandler implements HttpHandler {
       // second close is a no-op rather than an unlock of a lock this thread no longer holds (claude-review on
       // PR #7474).
       try (pause) {
-        db.executeInReadLock(() -> {
-          // #6075: stream the page files through a point-in-time snapshot. Shipping a multi-GB snapshot used to
-          // park the flush thread for the whole transfer, which is the longest-lived suspension in the product:
-          // dirty pages piled up until FLUSH_SUSPEND_MAX_DEFERRED_RAM and the leader's committers were throttled
-          // (issue #4728). The window costs one bounded drain instead, and the archive is exactly as consistent.
-          PageSnapshot snapshot = null;
-          if (db.getConfiguration().getValueAsBoolean(GlobalConfiguration.PAGE_SNAPSHOT_ENABLED))
-            try {
-              snapshot = db.getPageManager().openSnapshot(db);
-            } catch (final PageSnapshotException e) {
-              // ONLY A FAILURE TO OPEN THE WINDOW CAN FALL BACK: ONE THAT FAILS MID-STREAM HAS ALREADY PUT BYTES ON
-              // THE WIRE, SO IT SURFACES AS A TRANSFER ERROR AND THE FOLLOWER RETRIES (THE MANIFEST CHECK OF #4831
-              // MAKES A TRUNCATED DOWNLOAD LOUD RATHER THAN SILENT)
-              LogManager.instance().log(this, Level.WARNING,
-                  "Point-in-time snapshot unusable for '%s' (%s): falling back to suspending the page flush", null,
-                  databaseName, e.getMessage());
-            }
-
-          if (snapshot != null) {
-            final PageSnapshot openWindow = snapshot;
-            try {
-              // THE SUSPEND-AND-FREEZE BRANCH BELOW RUNS ITS CALLBACK THROUGH suspendFlushAndExecute, WHICH LOGS AND
-              // SWALLOWS. MATCHING THAT HERE KEEPS THE HANDLER'S CONTRACT IDENTICAL ON BOTH PATHS: A TRANSFER THAT
-              // DIES MID-STREAM HAS ALREADY COMMITTED ITS RESPONSE, SO THERE IS NOTHING USEFUL TO TURN THE THROW
-              // INTO - THE FOLLOWER DETECTS THE MISSING MANIFEST (#4831) AND RETRIES
-              CodeUtils.executeIgnoringExceptions(() -> serveSnapshotZip(exchange, db, databaseName, openWindow, pause),
-                  "Error serving the snapshot of database '" + databaseName + "'", true);
-            } finally {
-              openWindow.close();
-            }
-          } else
-            // The refcounted suspension (#5068) guarantees the flush thread is parked for this whole read;
-            // perDatabaseSuspendLock additionally serializes same-database zip streams (see its comment).
-            // The pause is NOT released early on this path: here the page image is the on-disk one the
-            // suspension is freezing, so it is only fixed for as long as the suspension lasts and the pause has
-            // to span the whole callback - the same asymmetry FullBackupFormat's two paths carry.
-            db.getPageManager().suspendFlushAndExecute(db, () -> serveSnapshotZip(exchange, db, databaseName, null, null));
-          return null;
-        });
+        streamThroughPointInTimeImage(db, databaseName, pause,
+            (image, heldPause) -> serveSnapshotZip(exchange, db, databaseName, image, heldPause));
       } finally {
         dbSuspendLock.unlock();
       }
     } finally {
       concurrencySemaphore.release();
     }
+  }
+
+  /**
+   * The database image one snapshot ship archives: the point-in-time page window, and the TimeSeries sealed-store
+   * files as they stood at that same point in time.
+   * <p>
+   * The two halves are one value because they have to be ONE OBSERVATION (issue #7671). {@code schema.json} comes
+   * from the window's t0 barrier, and a {@code .ts.sealed} set listed at any later moment can disagree with it -
+   * see {@link #streamThroughPointInTimeImage} for what listing them together buys and what it does not.
+   * <p>
+   * {@code sealedFiles} is immutable and never {@code null}; it is empty for a database with no TimeSeries type.
+   */
+  record SnapshotImage(PageSnapshot snapshot, List<File> sealedFiles) {
+  }
+
+  /**
+   * Hands {@code streamer} the database image the ship should archive, and owns the difference between the two
+   * images in what has to be held still while it is read.
+   * <p>
+   * <b>The window path holds the database read lock over the CAPTURE, and not over the transfer (issues #7456,
+   * #7671).</b> #6075 removed the flush suspension from this path, which stopped a resync throttling ordinary
+   * WRITERS; what it left behind was {@code db.executeInReadLock(...)} wrapped around the whole transfer, which
+   * blocks DDL - {@code CREATE TYPE}, {@code DROP TYPE}, {@code CREATE INDEX} - for as long as a follower takes to
+   * download the database. On a multi-GB leader that is the longest such window in the product.
+   * <p>
+   * #7456 dropped that lock entirely, on the ground that since #6114 the window carries {@code configuration.json}
+   * and {@code schema.json} itself, as bytes captured inside its t0 barrier (see
+   * {@link PageSnapshot#getConfigurationFiles()} and {@link #addConfigurationToZip}), leaving the lock nothing to
+   * protect. That was not the whole account, and #7671 is the correction: {@link #serveSnapshotZip} also archives
+   * the TimeSeries sealed stores, which the window CANNOT carry - {@code TimeSeriesSealedStore} opens
+   * {@code <base>.ts.sealed} with raw {@code FileChannel} I/O and never registers it with the {@code FileManager},
+   * so it is in neither {@code getFiles()} nor the deferred-deletion protection {@code PageSnapshot} gives a
+   * dropped page file. The pairing of that set with the t0 {@code schema.json} was exactly what the read lock used
+   * to guarantee, and {@code TimeSeriesCompactionPause} does not: it excludes a compaction, not schema DDL.
+   * <p>
+   * So the lock comes back over the ONE STEP that needs it - opening the window and listing the sealed stores, in
+   * a single read-locked frame - and not over the transfer. A {@code DROP TYPE} can no longer land between t0 and
+   * the listing, so the archive's sealed set is the t0 one, and the availability #7456 bought is kept: the lock is
+   * held for the barrier plus one {@code File.listFiles}, not for the download. What it does NOT buy is the bytes:
+   * a store listed at t0 and deleted before it is read is gone, and {@link #addSealedStoresToZip} fails the ship
+   * rather than shipping the hole - see there for why that is the right answer and not a regression.
+   * <p>
+   * <b>The fallback takes the lock over the whole callback, as it always did.</b> There the page image is the LIVE
+   * on-disk one, held still by the refcounted flush suspension (#5068) rather than by a point in time, so the
+   * configuration files have to be pinned for as long as they are read - there is no t0 to capture them at. The
+   * streamer is handed a {@code null} image on that path, and reads both the configuration and the sealed listing
+   * live under that lock. The compaction pause is likewise NOT released early there, which is why the streamer is
+   * handed {@code null} for it: the image is only fixed for as long as the suspension lasts, so the pause has to
+   * span the whole callback.
+   * <p>
+   * Exceptions are swallowed on the window path exactly as {@code suspendFlushAndExecute} swallows them on the
+   * other, so the handler's contract is identical on both: a transfer that dies mid-stream has already committed
+   * its response, and the follower detects the missing manifest (#4831) and retries.
+   * <p>
+   * Package-private and static so both paths can be driven from a test without an HTTP exchange or a live cluster.
+   */
+  static void streamThroughPointInTimeImage(final DatabaseInternal db, final String databaseName,
+      final TimeSeriesCompactionPause pause, final BiConsumer<SnapshotImage, TimeSeriesCompactionPause> streamer) {
+    // #6075: stream the page files through a point-in-time snapshot. Shipping a multi-GB snapshot used to park the
+    // flush thread for the whole transfer, which is the longest-lived suspension in the product: dirty pages piled
+    // up until FLUSH_SUSPEND_MAX_DEFERRED_RAM and the leader's committers were throttled (issue #4728). The window
+    // costs one bounded drain instead, and the archive is exactly as consistent.
+    SnapshotImage image = null;
+    if (db.getConfiguration().getValueAsBoolean(GlobalConfiguration.PAGE_SNAPSHOT_ENABLED))
+      try {
+        // #7671: ONE READ-LOCKED FRAME AROUND BOTH HALVES OF THE CAPTURE, AND NOTHING ELSE. The lock is released
+        // before a single byte goes to the follower, so DDL still runs alongside the transfer (#7456); what it
+        // excludes is a schema change landing BETWEEN the window's t0 and the sealed listing, which is the one
+        // ordering neither the t0 barrier nor the compaction pause provides.
+        //
+        // A LISTING THAT FAILS HERE - AND ONLY HERE, ON THIS BRANCH - LEAVES THE HANDLER BY A DIFFERENT DOOR FROM
+        // EVERY OTHER FAILURE ON IT (claude-review on PR #7708). listSealedStoresOrFail throws a
+        // DatabaseOperationException, which is not a PageSnapshotException, so it is not caught below and does not
+        // fall back - the fallback lists the same directory and would fail the same way - and it never reaches
+        // serveSnapshotZip's swallow, because that code never runs. It propagates out of handleRequest, which
+        // declares `throws Exception` and does not catch around handleSnapshot, so Undertow ends the exchange.
+        // Every release still happens on the way out: handleSnapshot's `try (pause)` closes the compaction pause,
+        // its finally unlocks the per-database suspend lock, and the outer finally releases the concurrency
+        // semaphore. The follower sees a response with no manifest, which is the #4831 check's whole job, and
+        // retries - the same recovery as a transfer that dies mid-stream, reached before any bytes were sent.
+        //
+        // THE FALLBACK BRANCH DOES NOT SHARE THAT DOOR, and an earlier revision of this comment claimed it did.
+        // There serveSnapshotZip runs as the callback of suspendFlushAndExecute, which wraps it in
+        // CodeUtils.executeIgnoringExceptions("Error during suspend flush", true) - so the identical failure is
+        // LOGGED AT SEVERE AND SWALLOWED one frame earlier, under that generic line rather than the message
+        // naming the database. The follower's recovery is the same (no manifest, so it rejects and retries); what
+        // differs is what an operator greps for with arcadedb.pageSnapshotEnabled=false. Making the two uniform
+        // would mean hoisting the fallback's listing out of serveSnapshotZip and handing it to the streamer, and
+        // the streamer is handed a null image on that branch precisely so a caller can tell the paths apart
+        image = db.executeInReadLock(() -> {
+          final PageSnapshot window = db.getPageManager().openSnapshot(db);
+          try {
+            return new SnapshotImage(window, listSealedStoresOrFail(new File(db.getDatabasePath()), databaseName));
+          } catch (final RuntimeException e) {
+            // A WINDOW THAT NEVER REACHES A STREAMER IS NEVER CLOSED BY ONE: the finally below only covers the
+            // image this block returns. SUPPRESSED RATHER THAN REPLACED - a close that fails on the way out must
+            // not become the exception the operator reads, because the one that got us here is the one that says
+            // what went wrong (claude-review on PR #7708)
+            try {
+              window.close();
+            } catch (final RuntimeException closeFailure) {
+              e.addSuppressed(closeFailure);
+            }
+            throw e;
+          }
+        });
+      } catch (final PageSnapshotException e) {
+        // ONLY A FAILURE TO OPEN THE WINDOW CAN FALL BACK: ONE THAT FAILS MID-STREAM HAS ALREADY PUT BYTES ON
+        // THE WIRE, SO IT SURFACES AS A TRANSFER ERROR AND THE FOLLOWER RETRIES (THE MANIFEST CHECK OF #4831
+        // MAKES A TRUNCATED DOWNLOAD LOUD RATHER THAN SILENT)
+        LogManager.instance().log(SnapshotHttpHandler.class, Level.WARNING,
+            "Point-in-time snapshot unusable for '%s' (%s): falling back to suspending the page flush", null,
+            databaseName, e.getMessage());
+      }
+
+    if (image != null) {
+      final SnapshotImage openWindow = image;
+      try {
+        CodeUtils.executeIgnoringExceptions(() -> streamer.accept(openWindow, pause),
+            "Error serving the snapshot of database '" + databaseName + "'", true);
+      } finally {
+        openWindow.snapshot().close();
+      }
+    } else
+      db.executeInReadLock(() -> {
+        // The refcounted suspension (#5068) guarantees the flush thread is parked for this whole read;
+        // perDatabaseSuspendLock additionally serializes same-database zip streams (see its comment).
+        db.getPageManager().suspendFlushAndExecute(db, () -> streamer.accept(null, null));
+        return null;
+      });
   }
 
   private void handleChecksums(final HttpServerExchange exchange, final String databaseName) throws Exception {
@@ -530,7 +626,15 @@ public class SnapshotHttpHandler implements HttpHandler {
   }
 
   private void serveSnapshotZip(final HttpServerExchange exchange, final DatabaseInternal db, final String databaseName,
-      final PageSnapshot snapshot, final TimeSeriesCompactionPause pause) {
+      final SnapshotImage image, final TimeSeriesCompactionPause pause) {
+    final PageSnapshot snapshot = image != null ? image.snapshot() : null;
+    // #7671: THE t0 SET ON THE WINDOW PATH, A LIVE LISTING ON THE FALLBACK. The fallback holds the database read
+    // lock for this whole callback, so a listing taken here is already paired with the configuration files read
+    // under that same lock; the window path has no such lock left, which is why its set was captured with the
+    // window (see streamThroughPointInTimeImage)
+    final List<File> sealedFiles = image != null ?
+        image.sealedFiles() :
+        listSealedStoresOrFail(new File(db.getDatabasePath()), databaseName);
     final long writeTimeoutMs = httpServer.getServer().getConfiguration().getValueAsLong(GlobalConfiguration.HA_SNAPSHOT_WRITE_TIMEOUT);
     final AtomicBoolean completed = new AtomicBoolean(false);
 
@@ -555,7 +659,7 @@ public class SnapshotHttpHandler implements HttpHandler {
     // Tell the follower how much it is about to extract (issue #7037) before the response is committed by the
     // first body byte, so a follower short of space refuses at once instead of failing mid-extraction.
     exchange.getResponseHeaders().put(new HttpString(SnapshotManager.UNCOMPRESSED_BYTES_HEADER),
-        String.valueOf(estimateUncompressedBytes(db, snapshot)));
+        String.valueOf(estimateUncompressedBytes(db, snapshot, sealedFiles)));
 
     try (final OutputStream rawOut = exchange.getOutputStream();
         final OutputStream out = new ProgressTrackingOutputStream(rawOut, lastProgressMs);
@@ -565,29 +669,17 @@ public class SnapshotHttpHandler implements HttpHandler {
       // final ZIP entry so the follower can detect a truncated download (issue #4831).
       final List<SnapshotManager.ManifestEntry> manifest = new ArrayList<>();
 
-      final File configFile = ((LocalDatabase) db.getEmbedded()).getConfigurationFile();
-      if (configFile.exists())
-        addFileToZip(zipOut, configFile, manifest);
+      addConfigurationToZip(zipOut, db, snapshot, manifest);
 
-      final File schemaFile = ((LocalSchema) db.getSchema()).getConfigurationFile();
-      if (schemaFile.exists())
-        addFileToZip(zipOut, schemaFile, manifest);
-
-      // TimeSeries sealed-store files (.ts.sealed) use raw FileChannel I/O and are NOT registered with
-      // the FileManager, so they are absent from getFiles(). Add them explicitly so a snapshot-syncing
-      // follower also receives the compacted time-series data instead of only the mutable buckets
-      // (issue #4382).
-      //
       // STREAMED BEFORE THE PAGE FILES, which is what lets the compaction pause be released early on the window
       // path (issue #7337): the page image is already fixed at the window's t0 no matter when its bytes go out,
       // so the span that must exclude a compaction - or, on a follower, a shipped sealed blob - ends with the
       // last sealed byte read. Ordering within the archive is free: the installer extracts by entry name, and
       // only the manifest has to be last.
-      for (final File sealedFile : TimeSeriesSealedStore.listSealedFiles(new File(db.getDatabasePath())))
-        addFileToZip(zipOut, sealedFile, manifest);
+      addSealedStoresToZip(zipOut, sealedFiles, manifest);
 
-      // addFileToZip reads its input to the end before returning, so nothing is still reading a sealed file
-      // here. Null on the frozen-files path, which holds the pause for the whole callback instead.
+      // addSealedStoresToZip reads its inputs to the end before returning, so nothing is still reading a sealed
+      // file here. Null on the frozen-files path, which holds the pause for the whole callback instead.
       if (pause != null)
         pause.close();
 
@@ -669,50 +761,197 @@ public class SnapshotHttpHandler implements HttpHandler {
   }
 
   /**
+   * Uncompressed bytes of the files {@link #serveSnapshotZip} is about to stream: the same file set, sized the same
+   * way (a page-snapshot file is its page count times its page size, everything else its on-disk length). An
+   * estimate rather than a promise - a fallback-path file can still grow before it is read - which is all the
+   * follower's up-front space check needs (issue #7037). Package-private for unit testing.
+   * <p>
+   * {@code sealedFiles} is the sealed set the ship is ABOUT TO STREAM, never a fresh listing of the directory
+   * (issue #7671). On the window path those differ: the archive carries the set captured at t0, so announcing the
+   * live one would describe an archive nobody sends - the same mistake #7456 corrected for the configuration
+   * files, one file set further on. It is therefore a required argument rather than one this method can default:
+   * a convenience overload that listed the directory itself existed here and, once {@code serveSnapshotZip} always
+   * had a captured set to pass, nothing but tests called it - so it was removed, because the only thing it could
+   * still do was hand a future caller the answer #7671 is about (issue #7726).
+   */
+  static long estimateUncompressedBytes(final DatabaseInternal db, final PageSnapshot snapshot,
+      final List<File> sealedFiles) {
+    long total = 0L;
+
+    // #7456: SIZED THE SAME WAY THE ENTRIES ARE PRODUCED - from the window when there is one, off the filesystem
+    // only on the fallback (see addConfigurationToZip). Sizing the configuration off the filesystem while
+    // streaming the window's copy would announce a figure for an archive nobody sends, and the follower's
+    // up-front space check (#7037) is the one consumer
+    if (snapshot != null) {
+      for (final PageSnapshot.SnapshotConfigFile config : snapshot.getConfigurationFiles())
+        total += config.size();
+      for (final PageSnapshot.SnapshotFile file : snapshot.getFiles())
+        total += file.size();
+    } else {
+      final File configFile = ((LocalDatabase) db.getEmbedded()).getConfigurationFile();
+      if (configFile.exists())
+        total += configFile.length();
+
+      final File schemaFile = ((LocalSchema) db.getSchema()).getConfigurationFile();
+      if (schemaFile.exists())
+        total += schemaFile.length();
+
+      for (final ComponentFile file : new ArrayList<>(db.getFileManager().getFiles()))
+        if (file != null)
+          total += file.getOSFile().length();
+    }
+
+    for (final File sealedFile : sealedFiles)
+      total += sealedFile.length();
+
+    return total + Long.BYTES; // the last-tx-id marker
+  }
+
+  /**
+   * The sealed-store listing this handler uses, which refuses to answer "this database has none" for a directory
+   * it could not read (claude-review on PR #7708).
+   * <p>
+   * {@link TimeSeriesSealedStore#listSealedFiles(File)} maps an unreadable directory to an EMPTY array, which is
+   * the right answer for a caller that only wants to iterate whatever is there. For this one it is the very
+   * failure #7671 is about, reached by a different road: a listing that failed - a permission change, a transient
+   * I/O error, a directory that went away - would let the ship archive a {@code schema.json} declaring a
+   * TIMESERIES type with no sealed-store entry beside it, and the completeness manifest of #4831 would certify
+   * that archive, exactly as a {@code DROP TYPE} race used to. So the {@code ...OrNull} variant is used instead,
+   * for the reason its own javadoc gives, and the same way {@code PostVerifyDatabaseHandler.collectSealedStores}
+   * uses it (#7338).
+   * <p>
+   * Refusing costs one retried transfer. Answering "none" costs a follower that installs a database whose schema
+   * it cannot load, and reports success.
+   * <p>
+   * Package-private and static so the refusal can be driven from a test without an HTTP exchange.
+   */
+  static List<File> listSealedStoresOrFail(final File databaseDirectory, final String databaseName) {
+    final File[] sealedFiles = TimeSeriesSealedStore.listSealedFilesOrNull(databaseDirectory);
+    if (sealedFiles == null)
+      throw new DatabaseOperationException("Cannot list the directory of database '" + databaseName
+          + "' to archive its TimeSeries sealed stores: a snapshot taken on the assumption that there are none "
+          + "would declare every TIMESERIES type without its data");
+    return List.of(sealedFiles);
+  }
+
+  /**
+   * Archives the TimeSeries sealed stores, and FAILS THE SHIP when one of them is no longer there (issue #7671).
+   * <p>
+   * They are here at all because neither of {@link #serveSnapshotZip}'s page enumerations can reach them:
+   * {@code TimeSeriesSealedStore} opens {@code <base>.ts.sealed} with raw {@code FileChannel} I/O and never
+   * registers it with the {@code FileManager}, so it is absent from {@code getFiles()} and from the window's file
+   * list alike, and without this a snapshot-syncing follower receives only the mutable buckets (issue #4382).
+   * <p>
+   * <b>Why a missing file is fatal here and skipped for a page file.</b> {@code sealedFiles} is the set that
+   * existed at the point in time this archive describes - listed with the window under the database read lock on
+   * the window path, listed under the read lock the callback holds on the fallback one. Every name in it belonged
+   * to a type the {@code schema.json} in this very archive declares. A file that has gone away since is a
+   * {@code DROP TYPE} that landed after that point (or a repair, #7475), and skipping it the way
+   * {@link #addFileToZip} skips a missing page file would hand the follower a database whose schema declares a
+   * TIMESERIES type with no sealed store - the #6356 / #6839 state, arriving by construction rather than by
+   * corruption - with the completeness manifest of #4831 certifying it, because a file that was never added is
+   * never missed. A symlinked store is refused for the same reason and by the same rule: what must not happen is
+   * an archive that silently does not carry a store its schema declares.
+   * <p>
+   * Failing lands on the path the ship already has for a transfer that dies mid-stream: the manifest is not
+   * written, the follower rejects the download (#4831) and retries, and the retry opens its window AFTER the drop,
+   * so the second attempt is coherent. The cost is one wasted transfer in the rare case; the alternative is a
+   * follower that installs an incoherent database and reports success.
+   * <p>
+   * Package-private and static so the pairing can be driven from a test without an HTTP exchange or a live cluster.
+   */
+  static void addSealedStoresToZip(final ZipOutputStream zipOut, final List<File> sealedFiles,
+      final List<SnapshotManager.ManifestEntry> manifest) throws Exception {
+    for (final File sealedFile : sealedFiles)
+      try {
+        // NO exists() PRE-CHECK: the open below is the check, so there is no window between asking and reading in
+        // which the file can still go away silently
+        addFileToZip(zipOut, sealedFile, manifest, false);
+      } catch (final FileNotFoundException e) {
+        // ONLY FileNotFoundException, WHICH IS THE ONLY "GONE" THIS CALL CAN RAISE: addFileToZip reaches the file
+        // through Files.isSymbolicLink, which answers false rather than throwing on an I/O error, and then
+        // FileInputStream. A NoSuchFileException arm here would read as a second way for a store to vanish and
+        // there is none (claude-review on PR #7708). Any other IOException - a real disk error - already fails
+        // the ship, just without this sentence
+        throw new FileNotFoundException("TimeSeries sealed store '" + sealedFile.getName()
+            + "' went away after the snapshot's point in time: the archive would declare its type without its data ("
+            + e.getMessage() + ")");
+      }
+  }
+
+  /**
+   * Archives {@code configuration.json} and {@code schema.json}, from the window when there is one and off the
+   * filesystem when there is not (issue #7456).
+   * <p>
+   * <b>Window path.</b> The two files come from {@link PageSnapshot#getConfigurationFiles()} as bytes captured
+   * inside the window's t0 barrier (#6114), so they describe the very page set the rest of this archive carries: a
+   * {@code schema.json} read off the filesystem afterwards can name a bucket created after t0, whose file the
+   * window does not contain, and the only thing that used to make that safe was the database read lock this path no
+   * longer holds (see {@link #streamThroughPointInTimeImage}). A file that did not exist at t0 is simply absent
+   * from the list, which is the same "no entry rather than an empty one" the {@code exists()} checks below produce.
+   * <p>
+   * <b>Fallback path.</b> With no t0 there is nothing to have captured, so the live files are read under the read
+   * lock the fallback still takes.
+   * <p>
+   * <b>The symlink refusal of {@link #addFileToZip} therefore applies to the fallback only</b>, and that is a
+   * deliberate change of behaviour rather than an oversight. A symlinked {@code schema.json} used to be dropped
+   * from the archive entirely, which ships the follower a database with no schema; the window reads it with
+   * {@code Files.readAllBytes} and so carries the target's bytes. What the refusal defends against - an archive
+   * entry whose content came from an attacker-chosen path - does not arise here: the entry name is one of two
+   * fixed ones, and the bytes are the leader's own live configuration, which is exactly what the ship exists to
+   * transfer. {@code FullBackupFormat} has behaved this way on its window path since #6114; this aligns the ship
+   * with it.
+   * <p>
+   * Package-private and static so both branches can be driven from a test without an HTTP exchange.
+   */
+  static void addConfigurationToZip(final ZipOutputStream zipOut, final DatabaseInternal db,
+      final PageSnapshot snapshot, final List<SnapshotManager.ManifestEntry> manifest) throws Exception {
+    if (snapshot != null) {
+      for (final PageSnapshot.SnapshotConfigFile config : snapshot.getConfigurationFiles())
+        addBytesToZip(zipOut, config.fileName(), config.content(), manifest);
+      return;
+    }
+
+    final File configFile = ((LocalDatabase) db.getEmbedded()).getConfigurationFile();
+    if (configFile.exists())
+      addFileToZip(zipOut, configFile, manifest);
+
+    final File schemaFile = ((LocalSchema) db.getSchema()).getConfigurationFile();
+    if (schemaFile.exists())
+      addFileToZip(zipOut, schemaFile, manifest);
+  }
+
+  /**
    * Streams a single file into the ZIP and, on success, appends its {@link SnapshotManager.ManifestEntry}
    * (name + uncompressed size + CRC32) to {@code manifest}. The CRC and size are computed inline from the
    * exact bytes streamed (via {@link CheckedInputStream}), so they describe what the follower actually
    * receives rather than a separate re-read of the file. Skipped files (absent or symlink) contribute no
    * manifest entry, matching what is sent.
    */
-  /**
-   * Uncompressed bytes of the files {@link #serveSnapshotZip} is about to stream: the same file set, sized the same
-   * way (a page-snapshot file is its page count times its page size, everything else its on-disk length). An
-   * estimate rather than a promise - a fallback-path file can still grow before it is read - which is all the
-   * follower's up-front space check needs (issue #7037). Package-private for unit testing.
-   */
-  static long estimateUncompressedBytes(final DatabaseInternal db, final PageSnapshot snapshot) {
-    long total = 0L;
-
-    final File configFile = ((LocalDatabase) db.getEmbedded()).getConfigurationFile();
-    if (configFile.exists())
-      total += configFile.length();
-
-    final File schemaFile = ((LocalSchema) db.getSchema()).getConfigurationFile();
-    if (schemaFile.exists())
-      total += schemaFile.length();
-
-    if (snapshot != null)
-      for (final PageSnapshot.SnapshotFile file : snapshot.getFiles())
-        total += file.size();
-    else
-      for (final ComponentFile file : new ArrayList<>(db.getFileManager().getFiles()))
-        if (file != null)
-          total += file.getOSFile().length();
-
-    for (final File sealedFile : TimeSeriesSealedStore.listSealedFiles(new File(db.getDatabasePath())))
-      total += sealedFile.length();
-
-    return total + Long.BYTES; // the last-tx-id marker
+  private static void addFileToZip(final ZipOutputStream zipOut, final File inputFile,
+      final List<SnapshotManager.ManifestEntry> manifest) throws Exception {
+    addFileToZip(zipOut, inputFile, manifest, true);
   }
 
-  private void addFileToZip(final ZipOutputStream zipOut, final File inputFile,
-      final List<SnapshotManager.ManifestEntry> manifest) throws Exception {
-    if (!inputFile.exists())
+  /**
+   * The same, with the two SKIPS made a caller's decision rather than this method's (issue #7671).
+   * <p>
+   * {@code skippable} is what the page files and the fallback configuration want: a file that is not there, or
+   * that is a symlink this method refuses to follow, is simply left out of the archive. That is survivable for
+   * them - a page file absent at t0 has no content at t0, and the follower's manifest check is over what WAS
+   * added. It is not survivable for a TimeSeries sealed store, whose absence the archive's own {@code schema.json}
+   * contradicts; {@link #addSealedStoresToZip} passes {@code false} and says why there.
+   */
+  private static void addFileToZip(final ZipOutputStream zipOut, final File inputFile,
+      final List<SnapshotManager.ManifestEntry> manifest, final boolean skippable) throws Exception {
+    if (skippable && !inputFile.exists())
       return;
     final Path filePath = inputFile.toPath();
     if (Files.isSymbolicLink(filePath)) {
-      LogManager.instance().log(this, Level.WARNING, "Skipping symlink in snapshot: %s", filePath);
+      if (!skippable)
+        throw new IOException("Refusing to archive the symlink '" + filePath
+            + "': the entry's content would come from a path this archive does not name");
+      LogManager.instance().log(SnapshotHttpHandler.class, Level.WARNING, "Skipping symlink in snapshot: %s", filePath);
       return;
     }
     final ZipEntry entry = new ZipEntry(inputFile.getName());
@@ -731,7 +970,7 @@ public class SnapshotHttpHandler implements HttpHandler {
    * Streams a point-in-time page file into the ZIP and appends its manifest record. The size and CRC are computed
    * from the exact bytes streamed, so they describe what the follower receives.
    */
-  private void addStreamToZip(final ZipOutputStream zipOut, final String name, final InputStream input,
+  private static void addStreamToZip(final ZipOutputStream zipOut, final String name, final InputStream input,
       final List<SnapshotManager.ManifestEntry> manifest) throws Exception {
     final ZipEntry entry = new ZipEntry(name);
     zipOut.putNextEntry(entry);
@@ -749,7 +988,7 @@ public class SnapshotHttpHandler implements HttpHandler {
    * synthesized at snapshot time (e.g. the {@code last-tx-id.bin} recency marker, issue #5277) whose
    * on-disk counterpart on the leader is stale while the database is open.
    */
-  private void addBytesToZip(final ZipOutputStream zipOut, final String name, final byte[] payload,
+  private static void addBytesToZip(final ZipOutputStream zipOut, final String name, final byte[] payload,
       final List<SnapshotManager.ManifestEntry> manifest) throws Exception {
     final ZipEntry entry = new ZipEntry(name);
     zipOut.putNextEntry(entry);

@@ -40,6 +40,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -392,6 +393,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     try {
       final List<Object[]> results = new ArrayList<>();
       final int tsColIdx = findTimestampColumnIndex();
+      // The filter's own columns are read even when the projection leaves them out, and the row is narrowed once
+      // it has passed (issue #7733).
+      final TagProjection projection = TagProjection.of(columnIndices, tagFilter);
 
       for (final BlockEntry entry : blockDirectory) {
         if (entry.maxTimestamp < fromTs || entry.minTimestamp > toTs)
@@ -404,7 +408,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           continue;
 
         final long[] timestamps = decompressTimestamps(entry, tsColIdx);
-        final Object[][] decompressedCols = decompressColumns(entry, columnIndices, tsColIdx);
+        final Object[][] decompressedCols = decompressColumns(entry, projection.scanIndices(), tsColIdx);
 
         final int resultCols = decompressedCols.length + 1;
         for (int i = 0; i < timestamps.length; i++) {
@@ -417,11 +421,11 @@ public class TimeSeriesSealedStore implements AutoCloseable {
             row[c + 1] = decompressedCols[c][i];
 
           // For SLOW_PATH blocks (mixed tag values), apply per-row filtering.
-          // Use matchesMapped() so the filter works correctly when columnIndices is a subset.
-          if (tagMatch == BlockMatchResult.SLOW_PATH && !tagFilter.matchesMapped(row, columnIndices))
+          // Use matchesMapped() so the filter works correctly when the row is a subset of the columns.
+          if (tagMatch == BlockMatchResult.SLOW_PATH && !tagFilter.matchesMapped(row, projection.scanIndices()))
             continue;
 
-          results.add(row);
+          results.add(projection.narrow(row));
         }
       }
       return results;
@@ -452,8 +456,17 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    */
   public Iterator<Object[]> iterateRange(final long fromTs, final long toTs, final int[] columnIndices,
       final TagFilter tagFilter) throws IOException {
+    return iterateRange(fromTs, toTs, columnIndices, tagFilter, null);
+  }
+
+  /**
+   * {@link #iterateRange(long, long, int[], TagFilter)}, counting what the walk did into {@code metrics}
+   * (issue #7717). {@code null} means "do not count" and is the path every pre-existing caller takes.
+   */
+  public Iterator<Object[]> iterateRange(final long fromTs, final long toTs, final int[] columnIndices,
+      final TagFilter tagFilter, final AggregationMetrics metrics) throws IOException {
     final List<Object[]> results = new ArrayList<>();
-    forEachRow(fromTs, toTs, columnIndices, tagFilter, null, row -> results.add(row));
+    forEachRow(fromTs, toTs, columnIndices, tagFilter, metrics, row -> results.add(row));
     return results.iterator();
   }
 
@@ -477,12 +490,71 @@ public class TimeSeriesSealedStore implements AutoCloseable {
    */
   public boolean forEachRow(final long fromTs, final long toTs, final int[] columnIndices, final TagFilter tagFilter,
       final AggregationMetrics metrics, final TimeSeriesRowVisitor visitor) throws IOException {
+    return walkBlocks(fromTs, toTs, columnIndices, tagFilter, metrics, visitor, false);
+  }
+
+  /**
+   * Visits the distinct TAG COMBINATIONS the sealed blocks carry in the range, rather than the samples that carry
+   * them (issue #7710).
+   * <p>
+   * The rows handed to {@code visitor} have the layout {@link #forEachRow} produces for the same projection -
+   * {@code { timestamp, projected columns in schema order }} - and fold to the SAME answer for a caller whose
+   * answer is a set of combinations plus, per combination, the earliest timestamp it was observed at. They are
+   * not the same rows: a block whose directory entry declares EVERY projected TAG column as a single value holds
+   * exactly one combination, so it is answered with ONE synthetic row carrying the block's own
+   * {@code minTimestamp} - no file read, no decode - instead of one row per sample.
+   * <p>
+   * What stops the cross product being taken for an answer is that a single-valued declaration per column is the
+   * only shape from which the tuple follows: a block declaring {@code host in {h1, h2}} and
+   * {@code region in {eu, us}} is consistent with two combinations or with four, and the entry cannot say which,
+   * so such a block is READ. The same goes for a block only partially covered by the range, whose earliest
+   * IN-RANGE timestamp is not its {@code minTimestamp}, and for a projected column whose declaration is not
+   * spelled the way a scan spells it ({@link #declaredDistinctValuesAreExact}).
+   * <p>
+   * No tag filter: the one caller enumerates a metric's series and applies no filter, and a filter would have to
+   * be evaluated against a declaration whose values are TEXT while a condition holds the boxed value.
+   *
+   * @param columnIndices the projection, in NON-timestamp column indices; every entry must name a TAG column for
+   *                      any block to be answered from its declaration
+   * @param metrics       optional counters, may be {@code null}. A block answered from its directory entry counts
+   *                      as SKIPPED, because it is not decompressed
+   *
+   * @return {@code false} when the visitor asked to stop
+   */
+  public boolean forEachTagCombination(final long fromTs, final long toTs, final int[] columnIndices,
+      final AggregationMetrics metrics, final TimeSeriesRowVisitor visitor) throws IOException {
+    return walkBlocks(fromTs, toTs, columnIndices, null, metrics, visitor, true);
+  }
+
+  /**
+   * The block walk both {@link #forEachRow} and {@link #forEachTagCombination} are: one binary search into the
+   * directory, one early termination, one read lock over all the file I/O. {@code combinationsOnly} decides only
+   * whether a block that can be answered from its directory entry is read anyway.
+   */
+  private boolean walkBlocks(final long fromTs, final long toTs, final int[] columnIndices,
+      final TagFilter tagFilter, final AggregationMetrics metrics, final TimeSeriesRowVisitor visitor,
+      final boolean combinationsOnly) throws IOException {
     // Hold the read lock for all file I/O to prevent stale offsets after
     // atomic file replacement by concurrent writers (truncate/downsample).
     directoryLock.readLock().lock();
     try {
       final int tsColIdx = findTimestampColumnIndex();
       final int dirSize = blockDirectory.size();
+      // See scanRange: a condition on a column outside the projection is applied, not silently refused (#7733).
+      final TagProjection projection = TagProjection.of(columnIndices, tagFilter);
+
+      // Loop-invariant for the whole walk, so built once rather than per block: a projection does not vary from
+      // block to block, and neither does the timestamp column (claude-review on PR #7730). Named apart from the
+      // TagProjection above because they answer different questions: this one is the membership test the
+      // combinations fast path reads a DECLARATION through, and never widens - #7710's walk takes no filter.
+      BitSet combinationColumns = null;
+      int combinationWidth = 0;
+      if (combinationsOnly && columnIndices != null) {
+        combinationColumns = new BitSet();
+        for (final int idx : columnIndices)
+          combinationColumns.set(idx);
+        combinationWidth = columnIndices.length;
+      }
 
       // Binary search: find first block whose maxTimestamp >= fromTs
       int startBlockIdx = 0;
@@ -517,6 +589,19 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           continue;
         }
 
+        if (combinationsOnly) {
+          // The whole point of issue #7710: one row off the directory entry, with no file read and no decode.
+          final Object[] combination = declaredSingleCombination(entry, combinationColumns, combinationWidth, tsColIdx,
+              fromTs, toTs);
+          if (combination != null) {
+            if (metrics != null)
+              metrics.addSkippedBlock();
+            if (!visitor.visit(combination))
+              return false;
+            continue;
+          }
+        }
+
         final long[] ts = decompressTimestamps(entry, tsColIdx);
         final int start = lowerBound(ts, fromTs);
         final int end = upperBound(ts, toTs);
@@ -531,7 +616,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
             metrics.addFastPathBlock();
         }
 
-        final Object[][] decompCols = decompressColumns(entry, columnIndices, tsColIdx);
+        final Object[][] decompCols = decompressColumns(entry, projection.scanIndices(), tsColIdx);
         final int resultCols = decompCols.length + 1;
 
         for (int i = start; i < end; i++) {
@@ -539,12 +624,12 @@ public class TimeSeriesSealedStore implements AutoCloseable {
           row[0] = ts[i];
           for (int c = 0; c < decompCols.length; c++)
             row[c + 1] = decompCols[c][i];
-          // Use matchesMapped() so the filter works correctly when columnIndices is a subset.
-          if (tagMatch == BlockMatchResult.SLOW_PATH && !tagFilter.matchesMapped(row, columnIndices))
+          // Use matchesMapped() so the filter works correctly when the row is a subset of the columns.
+          if (tagMatch == BlockMatchResult.SLOW_PATH && !tagFilter.matchesMapped(row, projection.scanIndices()))
             continue;
           if (metrics != null)
             metrics.addMaterializedRows(1);
-          if (!visitor.visit(row))
+          if (!visitor.visit(projection.narrow(row)))
             return false;
         }
       }
@@ -552,6 +637,136 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     } finally {
       directoryLock.readLock().unlock();
     }
+  }
+
+  /**
+   * Adds the distinct values of one TAG column to {@code out}, reading a block's DIRECTORY ENTRY instead of the
+   * block itself wherever the entry already declares them (issue #7660).
+   * <p>
+   * The declaration is not an approximation and not a Bloom-style superset: {@code TimeSeriesShard}'s
+   * {@code buildCompressedBlocks} and {@link #downsampleBlocks} both build it from the very {@code Object[]} they
+   * hand to {@link #compressColumn}, with the same {@code val != null ? val.toString() : ""} normalisation the
+   * block's dictionary is built with, so the declared set IS that dictionary. The paths that rewrite a block
+   * afterwards keep it true: {@link #truncateBefore} and {@link #truncateToBlockCount} drop whole blocks and copy
+   * every retained one verbatim, compaction's {@link #writeTempCompactionFile} does the same, and
+   * {@link #downsampleBlocks} recomputes the set from the rows it emits. Nothing deletes a row from a sealed block,
+   * so no declaration outlives the rows it was computed from.
+   * <p>
+   * What a declaration cannot carry is the BOXING the scan applies on the way out: {@link #decompressColumns} puts
+   * every dictionary string through {@link ColumnDefinition#boxString}, which returns its argument unchanged for a
+   * {@code STRING} column and only for one - elsewhere {@code ""} comes back as {@code null} (as {@code false} for
+   * {@code BOOLEAN}) and a numeric string comes back normalised. A block is therefore answered from its declaration
+   * only for a {@code STRING} TAG column stored with {@code DICTIONARY}, and read otherwise. Either way what lands
+   * in {@code out} is exactly what a full scan of that block would have put there.
+   * <p>
+   * {@code fromTs}/{@code toTs} bound the answer to the values carried by a row IN THAT RANGE (issue #7709), and
+   * cost nothing on the blocks that do not straddle a bound: a block outside the range is dropped on its directory
+   * entry without being touched, a block inside it still answers from its declaration, and only the at most two
+   * blocks holding a bound are decompressed and filtered per row. {@code Long.MIN_VALUE}/{@code Long.MAX_VALUE}
+   * ask for the whole series and take exactly the path they took before the bounds existed.
+   *
+   * @param schemaColumnIndex the column's index in the full schema, timestamp column included
+   * @param nonTsColumnIndex  the same column's index among the NON-timestamp columns, which is how a projection is
+   *                          spelled on every read path
+   * @param fromTs            lower bound, inclusive
+   * @param toTs              upper bound, inclusive
+   * @param out               receives the values; a {@code null} is never added, and the sealed layer never
+   *                          produces one for a {@code STRING} TAG because {@link #compressColumn} writes a null
+   *                          tag as the empty string
+   * @param metrics           optional counters, may be {@code null}. A block answered from its directory entry is
+   *                          counted as a SKIPPED block, because it is not decompressed; a block that had to be
+   *                          read counts as a slow-path block plus its rows
+   */
+  void collectDistinctTagValues(final int schemaColumnIndex, final int nonTsColumnIndex, final long fromTs,
+      final long toTs, final Set<String> out, final AggregationMetrics metrics) throws IOException {
+    directoryLock.readLock().lock();
+    try {
+      final boolean declarationIsExact = declaredDistinctValuesAreExact(columns.get(schemaColumnIndex));
+      final int tsColIdx = findTimestampColumnIndex();
+      final int[] projection = { nonTsColumnIndex };
+
+      for (final BlockEntry entry : blockDirectory) {
+        // Outside the range entirely: the directory entry alone settles it, so the block is neither read nor
+        // declared from (issue #7709).
+        if (entry.maxTimestamp < fromTs || entry.minTimestamp > toTs) {
+          if (metrics != null)
+            metrics.addSkippedBlock();
+          continue;
+        }
+
+        // A block WHOLLY inside the range still answers from its declaration, because the declaration is the set
+        // of the rows it holds and the range holds all of them. A block STRADDLING a bound cannot: the declaration
+        // says nothing about which of its rows carry which value, and there are at most two such blocks per
+        // request - the one holding `fromTs` and the one holding `toTs`.
+        final boolean whollyInsideRange = entry.minTimestamp >= fromTs && entry.maxTimestamp <= toTs;
+        final String[] declared = whollyInsideRange && declarationIsExact && entry.tagDistinctValues != null
+            && schemaColumnIndex < entry.tagDistinctValues.length ? entry.tagDistinctValues[schemaColumnIndex] : null;
+
+        if (declared != null) {
+          // The whole point of issue #7660: O(cardinality) off the directory entry, with no file read and no decode.
+          Collections.addAll(out, declared);
+          if (metrics != null)
+            metrics.addSkippedBlock();
+          continue;
+        }
+
+        // No usable declaration - a block written before the tag metadata section existed, a TAG column whose
+        // boxing the declaration cannot reproduce, or a block straddling a range bound. Read that one column of
+        // that one block, nothing more, plus the timestamps when a row-level bound has to be applied.
+        final Object[][] decompressed = decompressColumns(entry, projection, tsColIdx);
+        if (decompressed.length == 0)
+          continue;
+        final int rowCount = decompressed[0].length;
+
+        // A block's rows are in ascending timestamp order, so the range clips to a contiguous slice found by
+        // binary search - the same lowerBound/upperBound the aggregation path clips with - rather than by testing
+        // every row. A block wholly inside the range needs no timestamps decoded at all.
+        int from = 0;
+        int to = rowCount;
+        if (!whollyInsideRange) {
+          final long[] timestamps = decompressTimestamps(entry, tsColIdx);
+          final int decoded = Math.min(rowCount, timestamps.length);
+          from = lowerBound(timestamps, 0, decoded, fromTs);
+          to = upperBound(timestamps, 0, decoded, toTs);
+        }
+
+        for (int i = from; i < to; i++) {
+          final Object value = decompressed[0][i];
+          if (value != null)
+            out.add(value.toString());
+        }
+        if (metrics != null) {
+          metrics.addSlowPathBlock();
+          // The whole column was decoded, whatever the range then kept, so that is what is counted.
+          metrics.addMaterializedRows(rowCount);
+        }
+      }
+    } finally {
+      directoryLock.readLock().unlock();
+    }
+  }
+
+  /**
+   * Whether {@link BlockEntry#tagDistinctValues} for this column holds the values a SCAN of the block produces,
+   * so a declared value may be handed back in place of the value the scan would have decoded.
+   * <p>
+   * True only for a {@code STRING} TAG column stored with {@code DICTIONARY}. The declaration is always TEXT -
+   * every writer builds it with {@code val != null ? val.toString() : ""} - while {@link #decompressColumns} puts
+   * a dictionary entry through {@link ColumnDefinition#boxString} and a {@code SIMPLE8B} one through
+   * {@link ColumnDefinition#boxRaw}, either of which can hand back something a string is not. For a
+   * {@code STRING} column {@code boxString} returns its argument unchanged, and only there are the two the same.
+   * A TAG column that was not given an explicit codec is always a dictionary one
+   * ({@link ColumnDefinition#defaultCodecFor}), so this is the ordinary case rather than a special one.
+   * <p>
+   * ONE method for both readers that answer from a declaration - {@link #collectDistinctTagValues}, which unions
+   * one column's declared set (issue #7660), and {@link #declaredSingleCombination}, which reads a whole
+   * single-valued combination off the entry (issue #7710). They arrived on separate branches with a byte-identical
+   * copy each; widening this predicate to another codec or type in only one of them would silently reintroduce
+   * exactly the class of defect both issues are about (claude-review on PR #7730).
+   */
+  private static boolean declaredDistinctValuesAreExact(final ColumnDefinition column) {
+    return column.getRole() == ColumnDefinition.ColumnRole.TAG && column.getDataType() == Type.STRING
+        && column.getCompressionHint() == TimeSeriesCodec.DICTIONARY;
   }
 
   /**
@@ -584,6 +799,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     try {
       final List<Object[]> results = new ArrayList<>();
       final int tsColIdx = findTimestampColumnIndex();
+      // The filter's own columns are read even when the projection leaves them out, and the row is narrowed
+      // once it has passed (issue #7733).
+      final TagProjection projection = TagProjection.of(columnIndices, tagFilter);
       final int dirSize = blockDirectory.size();
       if (dirSize == 0)
         return results;
@@ -642,20 +860,20 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
         // Columns stay unboxed: only the rows that survive the tag filter and make the top-N are
         // materialised, instead of boxing every value of the block (issue #5416).
-        final RawColumn[] rawCols = decompressColumnsRaw(entry, columnIndices, tsColIdx);
+        final RawColumn[] rawCols = decompressColumnsRaw(entry, projection.scanIndices(), tsColIdx);
         final int resultCols = rawCols.length + 1;
 
         // Rows inside a block are ascending, so walking backwards yields descending order and the
         // first `need` matches found are the newest ones in this block.
         int taken = 0;
         for (int i = end - 1; i >= start && taken < need; i--) {
-          if (tagMatch == BlockMatchResult.SLOW_PATH && !matchesRawColumns(rawCols, i, tagFilter, columnIndices))
+          if (tagMatch == BlockMatchResult.SLOW_PATH && !matchesRawColumns(rawCols, i, tagFilter, projection.scanIndices()))
             continue;
           final Object[] row = new Object[resultCols];
           row[0] = ts[i];
           for (int c = 0; c < rawCols.length; c++)
             row[c + 1] = rawCols[c].valueAt(i);
-          results.add(row);
+          results.add(projection.narrow(row));
           taken++;
         }
         if (metrics != null)
@@ -672,6 +890,148 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     } finally {
       directoryLock.readLock().unlock();
     }
+  }
+
+
+  /**
+   * Scans sealed blocks <em>oldest-first</em> and returns at most {@code limit} rows in ascending
+   * timestamp order (issue #7336).
+   * <p>
+   * The ascending mirror of {@link #scanRangeDescending}, and the reason it exists: a caller that wants the
+   * oldest {@code n} rows of a wide range had only {@link #scanRange} and {@link #iterateRange}, both of which
+   * decompress and materialise <em>every</em> matching row before the caller can drop the ones past its limit.
+   * This one stops walking blocks as soon as its own limit is satisfied, so the cost is O(blocks touched)
+   * rather than O(rows in range).
+   * <p>
+   * Block entries are ordered by ascending {@code minTimestamp}, so once {@code limit} rows are held the walk
+   * can stop at the first block that starts after the newest row retained: no later block can start earlier.
+   * Blocks are NOT assumed to be disjoint, which is why the retained rows are sorted and trimmed rather than
+   * taken as found.
+   *
+   * @param fromTs        start timestamp (inclusive)
+   * @param toTs          end timestamp (inclusive)
+   * @param columnIndices which columns to return (null = all)
+   * @param tagFilter     optional tag filter, applied at block level when possible
+   * @param limit         maximum number of rows to return; {@code <= 0} means unlimited
+   * @param metrics       optional block-level counters, may be {@code null}
+   *
+   * @return rows sorted by ascending timestamp, at most {@code limit} of them
+   */
+  public List<Object[]> scanRangeAscending(final long fromTs, final long toTs, final int[] columnIndices,
+      final TagFilter tagFilter, final int limit, final AggregationMetrics metrics) throws IOException {
+    final int need = limit > 0 ? limit : Integer.MAX_VALUE;
+
+    directoryLock.readLock().lock();
+    try {
+      final List<Object[]> results = new ArrayList<>();
+      final int tsColIdx = findTimestampColumnIndex();
+      // The filter's own columns are read even when the projection leaves them out, and the row is narrowed
+      // once it has passed (issue #7733).
+      final TagProjection projection = TagProjection.of(columnIndices, tagFilter);
+      final int dirSize = blockDirectory.size();
+      if (dirSize == 0)
+        return results;
+
+      // Binary search: find the first block whose maxTimestamp >= fromTs. Everything before it ends before the
+      // requested lower bound. Same search iterateRange/forEachRow use.
+      int lo = 0, hi = dirSize - 1;
+      while (lo < hi) {
+        final int mid = (lo + hi) >>> 1;
+        if (blockDirectory.get(mid).maxTimestamp < fromTs)
+          lo = mid + 1;
+        else
+          hi = mid;
+      }
+      final int startBlockIdx = lo;
+
+      // Timestamp of the newest row retained so far: once `need` rows are held, any block that starts after it
+      // cannot contribute and the walk stops.
+      long cutoffTs = Long.MAX_VALUE;
+
+      for (int blockIdx = startBlockIdx; blockIdx < dirSize; blockIdx++) {
+        final BlockEntry entry = blockDirectory.get(blockIdx);
+
+        // Early termination: blocks are ordered by ascending minTimestamp, so once a block starts after the
+        // requested upper bound no later block can be in range either.
+        if (entry.minTimestamp > toTs)
+          break;
+
+        if (results.size() >= need && entry.minTimestamp > cutoffTs)
+          break;
+
+        if (entry.maxTimestamp < fromTs)
+          continue;
+
+        final BlockMatchResult tagMatch = tagFilter != null
+            ? blockMatchesTagFilter(entry, tagFilter)
+            : BlockMatchResult.FAST_PATH;
+        if (tagMatch == BlockMatchResult.SKIP) {
+          if (metrics != null)
+            metrics.addSkippedBlock();
+          continue;
+        }
+
+        final long[] ts = decompressTimestamps(entry, tsColIdx);
+        final int start = lowerBound(ts, fromTs);
+        final int end = upperBound(ts, toTs);
+        if (start >= end)
+          continue;
+
+        if (metrics != null) {
+          if (tagMatch == BlockMatchResult.SLOW_PATH)
+            metrics.addSlowPathBlock();
+          else
+            metrics.addFastPathBlock();
+        }
+
+        // Columns stay unboxed: only the rows that survive the tag filter and make the bottom-N are
+        // materialised, instead of boxing every value of the block (same reason as issue #5416).
+        final RawColumn[] rawCols = decompressColumnsRaw(entry, projection.scanIndices(), tsColIdx);
+        final int resultCols = rawCols.length + 1;
+
+        // Rows inside a block are ascending, so the first `need` matches found are the oldest ones in it.
+        // `need` and not `need - results.size()`: blocks are ordered by minTimestamp but are not disjoint, so
+        // this block can hold rows older than every row already retained, and the remainder would take too few.
+        int taken = 0;
+        for (int i = start; i < end && taken < need; i++) {
+          // Once `need` rows are held, a row newer than the newest of them cannot enter the answer, and the
+          // rest of the block is newer still. `cutoffTs` is the value from before this block, so it can only
+          // over-estimate - rows added since are older and would lower it - which makes this break conservative.
+          // It keeps a block from materialising `need` rows when a handful of its oldest already lose.
+          if (results.size() >= need && ts[i] > cutoffTs)
+            break;
+          if (tagMatch == BlockMatchResult.SLOW_PATH && !matchesRawColumns(rawCols, i, tagFilter, projection.scanIndices()))
+            continue;
+          final Object[] row = new Object[resultCols];
+          row[0] = ts[i];
+          for (int c = 0; c < rawCols.length; c++)
+            row[c + 1] = rawCols[c].valueAt(i);
+          results.add(projection.narrow(row));
+          taken++;
+        }
+        if (metrics != null)
+          metrics.addMaterializedRows(taken);
+
+        if (results.size() >= need) {
+          trimToAscendingLimit(results, need);
+          cutoffTs = (long) results.getLast()[0];
+        }
+      }
+
+      trimToAscendingLimit(results, need);
+      return results;
+    } finally {
+      directoryLock.readLock().unlock();
+    }
+  }
+
+  /**
+   * Sorts the rows by ascending timestamp and drops everything past {@code need}.
+   */
+  static void trimToAscendingLimit(final List<Object[]> rows, final int need) {
+    rows.sort(Comparator.comparingLong(row -> (long) row[0]));
+    while (rows.size() > need)
+      rows.removeLast();
   }
 
   /**
@@ -816,6 +1176,12 @@ public class TimeSeriesSealedStore implements AutoCloseable {
     directoryLock.readLock().lock();
     try {
       for (final BlockEntry entry : blockDirectory) {
+        if (result.isOverBucketCeiling())
+          // The answer already carries more buckets than the caller will accept, so every remaining block is
+          // work whose only possible outcome is a refusal (issue #7724). Asked once per block rather than once
+          // per row, which bounds the overshoot to the block in hand and costs one comparison per block.
+          break;
+
         if (entry.maxTimestamp < fromTs || entry.minTimestamp > toTs) {
           if (metrics != null)
             metrics.addSkippedBlock();
@@ -1129,27 +1495,25 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
     // Decompress all qualifying blocks and aggregate per (bucketTs, tagKey)
     // Use List<String> as map key (not null-byte-joined String) since tag values may contain null bytes.
-    final Map<List<String>, Map<Long, double[]>> groupedData = new HashMap<>(); // tagKey -> (bucketTs -> [sum0, count0, sum1, count1, ...])
+    // The key holds the value in its STORED form, not its text: the row rebuilt from it below is handed straight
+    // back to compressColumn, which reads a SIMPLE8B or GORILLA_XOR column's value as a Number (issue #7711).
+    final Map<List<Object>, Map<Long, double[]>> groupedData = new HashMap<>(); // tagKey -> (bucketTs -> [sum0, count0, sum1, count1, ...])
     final int numFields = numericColIndices.size();
     final int accSize = numFields * 2; // sum + count per numeric field
 
     for (final BlockEntry entry : toDownsample) {
       final long[] timestamps = decompressTimestamps(entry, tsColIdx);
 
-      // Decompress tag columns
+      // Decompress tag columns THROUGH THE CODEC EACH WAS WRITTEN WITH (issue #7711). This used to decode only a
+      // DICTIONARY column and yield an array of nulls for anything else - not a failure to read but a discard:
+      // the grouping key below turns every null into "", so every distinct value of a tag column carrying an
+      // explicit SIMPLE8B or GORILLA_XOR codec collapsed into ONE group and the rewritten blocks carried "" where
+      // the tag value had been. The recomputed distinct-value declaration was built from those same rewritten
+      // rows, so it agreed with the damage and checkDictionaryColumn could not see it either.
       final Object[][] tagData = new Object[tagColIndices.size()][];
       for (int t = 0; t < tagColIndices.size(); t++) {
         final int ci = tagColIndices.get(t);
-        final byte[] compressed = readBytes(entry.columnOffsets[ci], entry.columnSizes[ci]);
-        tagData[t] = switch (columns.get(ci).getCompressionHint()) {
-          case DICTIONARY -> {
-            final String[] vals = DictionaryCodec.decode(compressed);
-            final Object[] boxed = new Object[vals.length];
-            System.arraycopy(vals, 0, boxed, 0, vals.length);
-            yield boxed;
-          }
-          default -> new Object[entry.sampleCount];
-        };
+        tagData[t] = decodeColumn(columns.get(ci), readBytes(entry.columnOffsets[ci], entry.columnSizes[ci]));
       }
 
       // Decompress numeric columns
@@ -1163,10 +1527,13 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       for (int i = 0; i < timestamps.length; i++) {
         final long bucketTs = Math.floorDiv(timestamps[i], granularityMs) * granularityMs;
 
-        // Build tag key as List<String> to avoid ambiguity with null bytes in tag values
-        final List<String> tagKey = new ArrayList<>(tagData.length);
-        for (final Object[] tagCol : tagData)
-          tagKey.add(tagCol[i] != null ? tagCol[i].toString() : "");
+        // Build tag key as a List to avoid ambiguity with null bytes in tag values. Each element is the value
+        // CANONICALISED the way its column stores it, so two rows that would be written identically are one
+        // group: without that a DICTIONARY column's null and "" - which compressColumn writes the same way -
+        // would produce two groups whose rewritten rows are indistinguishable.
+        final List<Object> tagKey = new ArrayList<>(tagData.length);
+        for (int t = 0; t < tagData.length; t++)
+          tagKey.add(canonicalStoredValue(columns.get(tagColIndices.get(t)), tagData[t][i]));
 
         final Map<Long, double[]> buckets = groupedData.computeIfAbsent(tagKey, k -> new HashMap<>());
         final double[] acc = buckets.computeIfAbsent(bucketTs, k -> new double[accSize]);
@@ -1184,8 +1551,8 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
     // Build new downsampled samples from grouped data
     final List<Object[]> newSamples = new ArrayList<>();
-    for (final Map.Entry<List<String>, Map<Long, double[]>> tagEntry : groupedData.entrySet()) {
-      final List<String> tagParts = tagEntry.getKey();
+    for (final Map.Entry<List<Object>, Map<Long, double[]>> tagEntry : groupedData.entrySet()) {
+      final List<Object> tagParts = tagEntry.getKey();
       for (final Map.Entry<Long, double[]> bucketEntry : tagEntry.getValue().entrySet()) {
         final long bucketTs = bucketEntry.getKey();
         final double[] acc = bucketEntry.getValue();
@@ -1194,8 +1561,9 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         // ordered by column index
         final Object[] row = new Object[columns.size()];
         row[tsColIdx] = bucketTs;
+        // tagParts has one entry per tag column by construction, in the same order.
         for (int t = 0; t < tagColIndices.size(); t++)
-          row[tagColIndices.get(t)] = t < tagParts.size() ? tagParts.get(t) : "";
+          row[tagColIndices.get(t)] = tagParts.get(t);
         for (int n = 0; n < numFields; n++) {
           final double count = acc[n * 2 + 1];
           // A bucket that held no real sample is downsampled to the absent marker, not to a zero that would read
@@ -1247,7 +1615,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
           // Compute stats for numeric columns
           if (hasNumericStats(c)) {
-            final double[] stats = reduceNumericStats(chunkValues);
+            final double[] stats = reduceNumericStats(columns.get(c), chunkValues);
             mins[c] = stats[0];
             maxs[c] = stats[1];
             sums[c] = stats[2];
@@ -1682,7 +2050,7 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       case GORILLA_XOR -> {
         final double[] doubles = new double[values.length];
         for (int i = 0; i < values.length; i++)
-          doubles[i] = ColumnDefinition.numericValueOf(values[i]);
+          doubles[i] = col.storedNumericValueOf(values[i]);
         yield GorillaXORCodec.encode(doubles);
       }
       case SIMPLE8B -> {
@@ -2272,12 +2640,14 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
   /**
    * {@link #reduceNumericStats(double[])} over the boxed values a write path holds, unboxed exactly the way
-   * {@link #compressColumn} unboxes them so the statistics describe the bytes that get written.
+   * {@link #compressColumn} unboxes them so the statistics describe the bytes that get written. Which is why it
+   * takes the column: a null is the absent marker on a floating-point column and a zero on every other, and the
+   * declared minimum has to agree with the encoder about that (issue #7743).
    */
-  static double[] reduceNumericStats(final Object[] values) {
+  static double[] reduceNumericStats(final ColumnDefinition col, final Object[] values) {
     final double[] unboxed = new double[values.length];
     for (int i = 0; i < values.length; i++)
-      unboxed[i] = ColumnDefinition.numericValueOf(values[i]);
+      unboxed[i] = col.storedNumericValueOf(values[i]);
     return reduceNumericStats(unboxed);
   }
 
@@ -2635,6 +3005,68 @@ public class TimeSeriesSealedStore implements AutoCloseable {
         allSingleMatch = false;
     }
     return allSingleMatch ? BlockMatchResult.FAST_PATH : BlockMatchResult.SLOW_PATH;
+  }
+
+  /**
+   * The ONE row a block contributes to a tag-combination fold, or {@code null} when the block has to be read
+   * (issue #7710).
+   * <p>
+   * A row comes back only when all of the following hold, because each is a way for the directory entry to be
+   * consistent with more than one answer:
+   * <ul>
+   * <li>the block lies ENTIRELY inside the range - otherwise the earliest in-range timestamp of the combination
+   * is not the block's {@code minTimestamp}, which is the timestamp this row carries;</li>
+   * <li>the block holds at least one sample;</li>
+   * <li>every projected column is a TAG column whose declaration is spelled the way a scan spells it
+   * ({@link #declaredDistinctValuesAreExact}) and lists EXACTLY ONE value. Two columns declaring two values each are
+   * consistent with two combinations and with four, and {@code tagDistinctValues} is per column
+   * (see {@link BlockEntry#tagDistinctValues}) so it cannot say which.</li>
+   * </ul>
+   *
+   * @param projection the projected NON-timestamp column indices, as the set {@link #walkBlocks} built ONCE for
+   *                   the whole walk - it does not vary per block, and neither does {@code tsColIdx}, in a method
+   *                   whose entire purpose is to do no per-block work (claude-review on PR #7730). {@code null}
+   *                   means every column, which is never answerable from the declaration because a value column
+   *                   has none
+   * @param width      how many columns {@code projection} selects, i.e. the row's width minus the timestamp
+   */
+  private Object[] declaredSingleCombination(final BlockEntry entry, final BitSet projection, final int width,
+      final int tsColIdx, final long fromTs, final long toTs) {
+    if (projection == null || entry.sampleCount == 0)
+      return null;
+    if (entry.minTimestamp < fromTs || entry.maxTimestamp > toTs)
+      return null;
+
+    final Object[] row = new Object[width + 1];
+    row[0] = entry.minTimestamp;
+
+    // Walked in SCHEMA order, the order decompressColumns fills a projected row in - not in the order the
+    // projection was written, which is a different thing whenever a caller hands the indices over unsorted.
+    int nonTsIdx = 0;
+    int slot = 1;
+    for (int c = 0; c < columns.size(); c++) {
+      if (c == tsColIdx)
+        continue;
+      if (!projection.get(nonTsIdx++))
+        continue;
+
+      // Read inside the loop, not before it: a type with NO tag columns declares nothing, and its blocks carry a
+      // null here - yet such a block holds exactly one (empty) combination and needs no read at all. Checking the
+      // array up front turned the simplest case of all into a full decompression (claude-review on PR #7730).
+      if (entry.tagDistinctValues == null || c >= entry.tagDistinctValues.length
+          || !declaredDistinctValuesAreExact(columns.get(c)))
+        return null;
+
+      final String[] declared = entry.tagDistinctValues[c];
+      if (declared == null || declared.length != 1)
+        return null;
+
+      row[slot++] = declared[0];
+    }
+
+    // A projection naming a column the schema does not have would leave a slot unfilled, which would read as a
+    // null tag rather than as the mismatch it is.
+    return slot == row.length ? row : null;
   }
 
   /**
@@ -2998,6 +3430,11 @@ public class TimeSeriesSealedStore implements AutoCloseable {
 
   /**
    * Mirrors {@link TagFilter#matchesMapped(Object[], int[])} against the raw, still unboxed columns.
+   * <p>
+   * {@code columnIndices} is the set of columns the RAW COLUMNS were decompressed from, which since issue #7733
+   * is the projection widened by whatever the filter needs - see {@link TagProjection}. A condition whose column
+   * is absent from it is one the scan cannot evaluate at all, and answering {@code false} for it is the last
+   * resort rather than the normal case it used to be.
    */
   private static boolean matchesRawColumns(final RawColumn[] rawColumns, final int rowIdx, final TagFilter tagFilter,
       final int[] columnIndices) {
@@ -3044,39 +3481,71 @@ public class TimeSeriesSealedStore implements AutoCloseable {
       }
 
       final byte[] compressed = readBytes(entry.columnOffsets[c], entry.columnSizes[c]);
-      final ColumnDefinition col = columns.get(c);
 
-      // Boxing goes through the column definition so a sealed block hands back the same Java type the
-      // mutable row does for the same declared column (issue #5475).
-      final Object[] decompressed = switch (col.getCompressionHint()) {
-        case GORILLA_XOR -> {
-          final double[] vals = GorillaXORCodec.decode(compressed);
-          final Object[] boxed = new Object[vals.length];
-          for (int i = 0; i < vals.length; i++)
-            boxed[i] = col.boxDouble(vals[i]);
-          yield boxed;
-        }
-        case SIMPLE8B -> {
-          final long[] vals = Simple8bCodec.decode(compressed);
-          final Object[] boxed = new Object[vals.length];
-          for (int i = 0; i < vals.length; i++)
-            boxed[i] = col.boxRaw(vals[i]);
-          yield boxed;
-        }
-        case DICTIONARY -> {
-          final String[] vals = DictionaryCodec.decode(compressed);
-          final Object[] boxed = new Object[vals.length];
-          for (int i = 0; i < vals.length; i++)
-            boxed[i] = col.boxString(vals[i]);
-          yield boxed;
-        }
-        default -> new Object[entry.sampleCount];
-      };
-
-      result.add(decompressed);
+      result.add(decodeColumn(columns.get(c), compressed));
       nonTsIdx++;
     }
     return result.toArray(new Object[0][]);
+  }
+
+  /**
+   * Decodes one non-timestamp column's bytes through the codec it was WRITTEN with, boxing each value into the
+   * column's declared Java type so a sealed block hands back what the mutable row does for the same column
+   * (issue #5475).
+   * <p>
+   * This is the single place that knows how to reverse {@link #compressColumn}, and it is deliberately the
+   * mirror image of it: the same three codecs, and an exception - not an empty array - for anything else. A
+   * silent {@code default} arm is what made {@link #downsampleBlocks} REWRITE every value of a tag column it
+   * could not decode as the empty string (issue #7711); no reader may quietly answer a column it did not read.
+   * Nothing can be sealed under {@code DELTA_OF_DELTA} or {@code NONE} outside the timestamp column, which every
+   * caller resolves separately, so the throw is unreachable for any block this build could have written - it is
+   * there so the next codec added to the enum cannot land here by omission.
+   *
+   * @throws IllegalStateException if the column's codec has no decoder here
+   */
+  private static Object[] decodeColumn(final ColumnDefinition col, final byte[] compressed) throws IOException {
+    return switch (col.getCompressionHint()) {
+      case GORILLA_XOR -> {
+        final double[] vals = GorillaXORCodec.decode(compressed);
+        final Object[] boxed = new Object[vals.length];
+        for (int i = 0; i < vals.length; i++)
+          boxed[i] = col.boxDouble(vals[i]);
+        yield boxed;
+      }
+      case SIMPLE8B -> {
+        final long[] vals = Simple8bCodec.decode(compressed);
+        final Object[] boxed = new Object[vals.length];
+        for (int i = 0; i < vals.length; i++)
+          boxed[i] = col.boxRaw(vals[i]);
+        yield boxed;
+      }
+      case DICTIONARY -> {
+        final String[] vals = DictionaryCodec.decode(compressed);
+        final Object[] boxed = new Object[vals.length];
+        for (int i = 0; i < vals.length; i++)
+          boxed[i] = col.boxString(vals[i]);
+        yield boxed;
+      }
+      default -> throw new IllegalStateException(
+          "Column '" + col.getName() + "' is stored with codec " + col.getCompressionHint()
+              + ", which has no decoder: the column cannot be read");
+    };
+  }
+
+  /**
+   * The value as {@link #compressColumn} would write it, which is what makes it usable as a grouping key: two
+   * values that canonicalise the same are one group, because the rows rebuilt from them would be one row on disk
+   * (issue #7711).
+   * <p>
+   * Only a dictionary column needs normalising - it stores text, and writes both {@code null} and {@code ""} as
+   * the empty string. A numeric codec stores the number itself, so the decoded value IS the stored one and has to
+   * be handed back unchanged: rendering it as text here would put a {@code String} into a column
+   * {@link ColumnDefinition#integerValueOf} reads as a {@link Number}.
+   */
+  private static Object canonicalStoredValue(final ColumnDefinition col, final Object value) {
+    if (col.getCompressionHint() == TimeSeriesCodec.DICTIONARY)
+      return value != null ? value.toString() : "";
+    return value;
   }
 
   private byte[] readBytes(final long offset, final int size) throws IOException {

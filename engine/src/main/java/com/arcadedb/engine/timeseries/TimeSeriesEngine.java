@@ -28,6 +28,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.PriorityQueue;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
@@ -50,6 +51,13 @@ import java.util.concurrent.atomic.AtomicLong;
  * @author Luca Garulli (l.garulli@arcadedata.com)
  */
 public class TimeSeriesEngine implements AutoCloseable {
+
+  /**
+   * A projection of NO columns: every read path builds a row as {@code columnIndices.length + 1} slots with the
+   * timestamp in slot 0, so this asks for the timestamp alone and decodes not one value column. Used by
+   * {@link #hasRowsInRange}, which only needs to know whether a row exists.
+   */
+  private static final int[]           EMPTY_PROJECTION = new int[0];
 
   private final DatabaseInternal       database;
   private final String                 typeName;
@@ -130,12 +138,20 @@ public class TimeSeriesEngine implements AutoCloseable {
    * they may be routed to the same shard. For contention-free writes, use the async API
    * which provides 1:1 slot-to-shard affinity.
    * <p>
-   * <b>Threading:</b> the append runs on the calling thread. When invoked inside an enclosing
-   * transaction (as on the SQL INSERT path), the shard's internal {@code begin/commit} nests into
-   * that transaction, so the mutable-bucket page writes are published and replicated by the
-   * enclosing commit as a single, in-order transaction. Routing the append onto another thread to
-   * make it a top-level transaction must be avoided: it would publish the shard pages out of band
-   * with the enclosing commit and, under HA, reorder the page versions on the Raft log.
+   * <b>Transaction scope (#7410): the append commits its own transaction, whatever the caller has open.</b>
+   * Called inside an enclosing transaction (as on the SQL INSERT path), the samples are durable and globally
+   * visible as soon as this method returns; they are <b>not</b> published by the enclosing commit, and a
+   * rollback of the enclosing transaction does <b>not</b> take them back. Earlier revisions of this javadoc
+   * asserted the opposite - that the shard's {@code begin/commit} nested into the caller's transaction and
+   * was published with it as a single, in-order transaction - which the code has never done. The mechanism,
+   * and the canonical statement of this contract, is on
+   * {@link TimeSeriesShard#appendSamples(TimeSeriesRowSource)}.
+   * <p>
+   * <b>Threading:</b> the append runs on the calling thread and must stay there when a transaction is open.
+   * Routing it onto another thread would give the shard write its own fresh {@code DatabaseContext}, so the
+   * shard transactions would commit in an order the caller no longer controls - and, under HA, reach the Raft
+   * log in that order. See {@link #appendBatch(TimeSeriesRowSource)} for the same rule applied to the
+   * per-shard fan-out, and issue #4957 for the fix that introduced it.
    * <p>
    * <b>Dictionary column constraint:</b> columns using {@code DICTIONARY} compression
    * (typically TAG columns) must not exceed {@link com.arcadedb.engine.timeseries.codec.DictionaryCodec#MAX_DICTIONARY_SIZE}
@@ -149,7 +165,8 @@ public class TimeSeriesEngine implements AutoCloseable {
   /**
    * Appends the samples of a primitive row source to a single shard, chosen round-robin.
    * <p>
-   * Same routing and threading contract as {@link #appendSamples(long[], Object[][])}; the source
+   * Same routing, threading and transaction-scope contract as {@link #appendSamples(long[], Object[][])} -
+   * in particular, it commits its own transaction rather than joining an enclosing one (#7410). The source
    * hands over the raw bits the row format stores, so a caller holding primitive samples never
    * allocates an object per value (issue #5474).
    */
@@ -187,12 +204,22 @@ public class TimeSeriesEngine implements AutoCloseable {
    * shard's write is dispatched to the shared {@code shardExecutor} so all active
    * shards write in parallel when multiple CPU cores are available.
    * <p>
+   * <b>Transaction scope (#7410):</b> this method does not make the batch atomic with the caller's
+   * transaction, on either path. Each shard write commits its own transaction - see
+   * {@link TimeSeriesShard#appendSamples(TimeSeriesRowSource)} - so by the time this method returns, every
+   * sub-batch it wrote is already durable and a rollback of the enclosing transaction will not take it back.
+   * What "one transaction per shard instead of one per sample" buys is fewer commits, not atomicity.
+   * <p>
    * <b>Threading (#4957):</b> the parallel dispatch is only used when NO transaction is active on the
-   * calling thread. With an enclosing transaction open, each TS-Shard thread would run with its own fresh
-   * {@code DatabaseContext}/transaction, publishing the shard pages out of band with the enclosing commit
-   * and, under HA, reordering the page versions on the Raft log - exactly the hazard documented on
-   * {@link #appendSamples}. In that case the per-shard sub-batches are written sequentially on the calling
-   * thread, preserving the batched-transaction saving (at most S nested-TX cycles) without the parallelism.
+   * calling thread. With an enclosing transaction open, each TS-Shard thread would run the shard's
+   * {@code begin/commit} in its own fresh {@code DatabaseContext}, concurrently with the other shards', so
+   * the order in which the shard transactions commit - and, under HA, the order their page versions reach
+   * the Raft log - would no longer be the calling thread's. (The original note gave the reason as the shard
+   * pages being published "out of band with the enclosing commit"; per #7410 that happens on both paths,
+   * since the shard commit never was the enclosing one. The cross-thread dispatch is what the in-thread
+   * fallback actually removes, and what {@code Issue4957AppendBatchTransactionTest} pins.) In that case the
+   * per-shard sub-batches are written sequentially on the calling thread, preserving the batched-transaction
+   * saving (at most S shard transactions) without the parallelism.
    * <p>
    * Data layout: {@code allColumnValues[colIndex][sampleIndex]}.
    *
@@ -227,9 +254,11 @@ public class TimeSeriesEngine implements AutoCloseable {
     // which is the same assignment the per-sample increment produced, computed without a second pass.
     final long base = appendCounter.getAndAdd(n);
 
-    // #4957: with an enclosing transaction on the calling thread the shard writes MUST stay in-thread
-    // (see the threading note in the javadoc); routing them to shardExecutor would publish the pages
-    // out of band with the enclosing commit. The per-shard grouping is kept in both cases.
+    // #4957: with an enclosing transaction on the calling thread the shard writes MUST stay in-thread (see
+    // the threading note in the javadoc); routing them to shardExecutor would let each shard's own
+    // begin/commit run concurrently in a foreign DatabaseContext, in an order this thread no longer sets.
+    // It does NOT make the batch part of the enclosing transaction either way (#7410). The per-shard
+    // grouping is kept in both cases.
     final boolean inThread = database.isTransactionActive();
 
     final List<CompletableFuture<Void>> futures = inThread ? null : new ArrayList<>(shardCount);
@@ -287,6 +316,50 @@ public class TimeSeriesEngine implements AutoCloseable {
   }
 
   /**
+   * Queries all shards oldest-first and returns at most {@code limit} rows in ascending timestamp
+   * order (issue #7336).
+   * <p>
+   * The bound belongs to the FETCH, which is what separates this method from {@link #query} followed by a
+   * {@code subList}: every shard stops walking blocks as soon as its own limit is satisfied, so the oldest
+   * {@code n} rows of a wide range cost O(shards x blocks touched) instead of O(series). {@link #iterateQuery}
+   * is not a substitute - its own javadoc says so - because the sealed layer it merges materialises every
+   * matching row before the first one is handed out.
+   * <p>
+   * The upper bound is tightened to the newest row held so far as soon as {@code limit} rows are collected, for
+   * the reason {@link #queryDescending} tightens the lower one (issue #5416): samples are routed to shards
+   * round-robin, so a tag can be absent from a shard entirely, and without the running bound such a shard has
+   * nothing to build its own cut-off from.
+   *
+   * @param limit   maximum number of rows to return; {@code <= 0} means unlimited
+   * @param metrics optional block-level counters, may be {@code null}. Shards are visited
+   *                sequentially on the calling thread, so a single instance is safe here.
+   *
+   * @return rows sorted by ascending timestamp, at most {@code limit} of them
+   */
+  public List<Object[]> queryAscending(final long fromTs, final long toTs, final int[] columnIndices,
+      final TagFilter tagFilter, final int limit, final AggregationMetrics metrics) throws IOException {
+    final int need = limit > 0 ? limit : Integer.MAX_VALUE;
+
+    final List<Object[]> merged = new ArrayList<>();
+    long upperBound = toTs;
+    for (final TimeSeriesShard shard : shards) {
+      final List<Object[]> shardRows = shard.scanRangeAscending(fromTs, upperBound, columnIndices, tagFilter, limit,
+          metrics);
+      if (shardRows.isEmpty())
+        continue;
+      merged.addAll(shardRows);
+      if (merged.size() >= need) {
+        TimeSeriesSealedStore.trimToAscendingLimit(merged, need);
+        // Inclusive: rows sharing the cut-off timestamp are still eligible, ties are broken by the merge.
+        upperBound = Math.min(upperBound, (long) merged.getLast()[0]);
+      }
+    }
+
+    TimeSeriesSealedStore.trimToAscendingLimit(merged, need);
+    return merged;
+  }
+
+  /**
    * Returns a merge-sorted iterator across all shards, using a min-heap to merge the per-shard iterators by
    * timestamp.
    * <p>
@@ -301,11 +374,24 @@ public class TimeSeriesEngine implements AutoCloseable {
    */
   public Iterator<Object[]> iterateQuery(final long fromTs, final long toTs, final int[] columnIndices,
       final TagFilter tagFilter) throws IOException {
+    return iterateQuery(fromTs, toTs, columnIndices, tagFilter, null);
+  }
+
+  /**
+   * {@link #iterateQuery(long, long, int[], TagFilter)}, counting what the sealed walk did into
+   * {@code metrics} (issue #7717). {@code null} means "do not count" and costs nothing, as everywhere else.
+   * <p>
+   * This is the read the PromQL evaluation endpoints reach - {@code /prom/api/v1/query} and
+   * {@code /query_range} both resolve their selectors through here - and until it took a metrics parameter
+   * those two surfaces were the only {@code /ts} reads the sink could not see.
+   */
+  public Iterator<Object[]> iterateQuery(final long fromTs, final long toTs, final int[] columnIndices,
+      final TagFilter tagFilter, final AggregationMetrics metrics) throws IOException {
     final PriorityQueue<PeekableIterator> heap = new PriorityQueue<>(
         Math.max(1, shardCount), Comparator.comparingLong(it -> (long) it.peek()[0]));
 
     for (final TimeSeriesShard shard : shards) {
-      final Iterator<Object[]> it = shard.iterateRange(fromTs, toTs, columnIndices, tagFilter);
+      final Iterator<Object[]> it = shard.iterateRange(fromTs, toTs, columnIndices, tagFilter, metrics);
       if (it.hasNext())
         heap.add(new PeekableIterator(it));
     }
@@ -353,6 +439,122 @@ public class TimeSeriesEngine implements AutoCloseable {
   }
 
   /**
+   * Hands {@code visitor} the distinct TAG COMBINATIONS the type carries in the range, instead of the samples
+   * that carry them (issue #7710). Returns {@code false} when the visitor asked to stop.
+   * <p>
+   * The read path for the OTHER discovery question - {@code GET /prom/api/v1/series} asks which
+   * {@code {host, region, ...}} tuples a metric has, and a tuple is the answer's unit, not a row. Nothing on disk
+   * records a tuple: a sealed block's directory entry declares the distinct values of each TAG column SEPARATELY,
+   * and the cross product of two such sets over-counts. But a block that declares every projected tag column as a
+   * single value holds exactly one tuple, and for Prometheus data - where one block usually holds one series -
+   * that is the common shape. Such a block is answered from the entry alone, with no read and no decode; every
+   * other block is scanned exactly as {@link #forEachRow} would scan it.
+   * <p>
+   * The rows have {@link #forEachRow}'s layout for the same projection, so a caller that folds them into a set of
+   * combinations - each with the earliest timestamp it was observed at - gets the answer a full scan would give.
+   * A caller that needs the ROWS, or a tag filter, wants {@link #forEachRow}: this method takes no filter, for the
+   * reason {@link TimeSeriesSealedStore#forEachTagCombination} gives.
+   *
+   * @param columnIndices the projection, in NON-timestamp column indices; every entry should name a TAG column,
+   *                      since a block can only be answered from its declaration for columns that have one
+   * @param metrics       optional block-level counters, may be {@code null}
+   */
+  public boolean forEachTagCombination(final long fromTs, final long toTs, final int[] columnIndices,
+      final AggregationMetrics metrics, final TimeSeriesRowVisitor visitor) throws IOException {
+    for (final TimeSeriesShard shard : shards)
+      if (!shard.forEachTagCombination(fromTs, toTs, columnIndices, metrics, visitor))
+        return false;
+    return true;
+  }
+
+  /**
+   * The distinct values of one TAG column, across every shard, without scanning the samples that already declared
+   * them (issue #7660).
+   * <p>
+   * {@link #forEachRow} is the right shape for a fold over the rows, but this particular fold has its answer
+   * already written down: every sealed block's directory entry carries the complete distinct value set of each of
+   * its TAG columns, recorded at seal time from the very rows the block holds. Unioning those entries answers the
+   * sealed layer in O(blocks x cardinality) without decompressing a block, and the walk over millions of samples
+   * that a Grafana label picker used to pay for on every dashboard load is left to the mutable bucket alone.
+   * <p>
+   * This is NOT an over-approximation, which is what kept it out of issue #7371. The returned set is exactly the
+   * set a full projected scan produces - {@link TimeSeriesSealedStore#collectDistinctTagValues} spells out why the
+   * declaration cannot outlive its rows, and falls back to reading the block in the one case where the declaration
+   * and the scan would disagree. {@code TimeSeriesTagDictionary} is deliberately NOT consulted: its own class
+   * javadoc calls it append-only, and it holds values no live sample carries once retention has expired.
+   *
+   * @param tagColumnName the TAG column to enumerate
+   * @param out           receives the distinct values; not cleared first, so several types can fold into one set
+   * @param metrics       optional counters, may be {@code null}
+   *
+   * @throws IllegalArgumentException when this type declares no TAG column with that name. A FIELD of the same
+   *                                  name is not a label and does not answer here
+   */
+  public void collectDistinctTagValues(final String tagColumnName, final Set<String> out,
+      final AggregationMetrics metrics) throws IOException {
+    collectDistinctTagValues(tagColumnName, Long.MIN_VALUE, Long.MAX_VALUE, out, metrics);
+  }
+
+  /**
+   * The same, bounded to the values carried by a row in {@code [fromTs, toTs]} (issue #7709).
+   * <p>
+   * Prometheus documents {@code /label/{name}/values} as answering over the requested time range, and the endpoint
+   * ignored {@code start}/{@code end} entirely: a Grafana picker scoped to the last hour was offered every value
+   * the type had ever held that retention had not yet expired, while the sibling {@code /series} endpoint - which
+   * does read them - disagreed with it about what a range means.
+   * <p>
+   * The bound is nearly free on the sealed layer because the answer is resolved block by block: a block outside
+   * the range is dropped on its directory entry without being touched, a block wholly inside it still answers from
+   * its declaration, and only the at most two blocks that STRADDLE a bound are decompressed and filtered per row.
+   * {@code Long.MIN_VALUE}/{@code Long.MAX_VALUE} - what the 3-argument overload passes - take exactly the path
+   * they took before, so an unscoped request answers what it always did.
+   *
+   * @param fromTs lower bound, inclusive
+   * @param toTs   upper bound, inclusive
+   */
+  public void collectDistinctTagValues(final String tagColumnName, final long fromTs, final long toTs,
+      final Set<String> out, final AggregationMetrics metrics) throws IOException {
+    int schemaColumnIndex = -1;
+    int nonTsColumnIndex = -1;
+
+    int nonTsIdx = 0;
+    for (int c = 0; c < columns.size(); c++) {
+      final ColumnDefinition column = columns.get(c);
+      if (column.getRole() == ColumnDefinition.ColumnRole.TIMESTAMP)
+        continue;
+      if (column.getRole() == ColumnDefinition.ColumnRole.TAG && column.getName().equals(tagColumnName)) {
+        schemaColumnIndex = c;
+        nonTsColumnIndex = nonTsIdx;
+        break;
+      }
+      nonTsIdx++;
+    }
+
+    if (schemaColumnIndex < 0)
+      throw new IllegalArgumentException(
+          "TimeSeries type '" + typeName + "' declares no TAG column named '" + tagColumnName + "'");
+
+    for (final TimeSeriesShard shard : shards)
+      shard.collectDistinctTagValues(schemaColumnIndex, nonTsColumnIndex, fromTs, toTs, out, metrics);
+  }
+
+  /**
+   * Whether any row of this type falls in {@code [fromTs, toTs]} (issue #7709).
+   * <p>
+   * Folded over {@link #forEachRow} with a visitor that stops on the first row, rather than given a walk of its
+   * own: the sealed layer already drops a block whose directory entry puts it outside the range, so the answer
+   * costs one block read at most - and a "no" costs none at all.
+   * <p>
+   * This is what scopes {@code /label/__name__/values} to the requested range, which is a metric name rather than
+   * a tag value and so has no declaration to read.
+   */
+  public boolean hasRowsInRange(final long fromTs, final long toTs, final AggregationMetrics metrics)
+      throws IOException {
+    // forEachRow answers false when the visitor stopped it, which here means it had a row to offer.
+    return !forEachRow(fromTs, toTs, EMPTY_PROJECTION, null, metrics, row -> false);
+  }
+
+  /**
    * Queries all shards newest-first and returns at most {@code limit} rows in descending timestamp
    * order (issue #5414).
    * <p>
@@ -396,6 +598,14 @@ public class TimeSeriesEngine implements AutoCloseable {
 
   /**
    * Aggregates across all shards.
+   * <p>
+   * <b>Validates nothing.</b> {@code columnIndex} is used as given: a column no storage layer can read as a
+   * number answers {@link TimeSeriesNaN#ABSENT} per row rather than being refused, and an index the row does
+   * not reach does the same. The refusal that makes an unreadable column a named error instead of a silent gap
+   * is {@link TimeSeriesGateway#requireAggregatableColumn}, which every caller-facing surface applies before it
+   * builds a request; a caller reaching this method directly wants the same check first, or it gets the gap.
+   * No production surface calls this - the three wire protocols and the SQL push-down all go through
+   * {@link #aggregateMulti} - so this note is for whoever adds the first one (issue #7725).
    *
    * @param columnIndex 0-based index among non-timestamp columns (i.e. column 0 = first non-ts column).
    *                    This differs from {@link MultiColumnAggregationRequest#columnIndex()} which uses
@@ -415,10 +625,11 @@ public class TimeSeriesEngine implements AutoCloseable {
       final long bucketTs = bucketIntervalMs > 0 ? Math.floorDiv(ts, bucketIntervalMs) * bucketIntervalMs : singleBucketTs;
       final double value;
 
-      if (columnIndex + 1 < row.length && row[columnIndex + 1] instanceof Number)
-        value = ((Number) row[columnIndex + 1]).doubleValue();
-      else
-        value = 0.0;
+      // Same unboxing as the multi-column path, for the reason TimeSeriesNaN.asMeasurement gives: the value
+      // an aggregate sees must not depend on whether the sample has been compacted yet (issue #7725). Note the
+      // +1 - this method's columnIndex counts non-timestamp columns, unlike
+      // MultiColumnAggregationRequest.columnIndex().
+      value = columnIndex + 1 < row.length ? TimeSeriesNaN.asMeasurement(row[columnIndex + 1]) : TimeSeriesNaN.ABSENT;
 
       accumulateToBucket(result, bucketTs, value, aggType);
     }
@@ -453,6 +664,42 @@ public class TimeSeriesEngine implements AutoCloseable {
   public MultiColumnAggregationResult aggregateMulti(final long fromTs, final long toTs,
       final List<MultiColumnAggregationRequest> requests, final long bucketIntervalMs,
       final TagFilter tagFilter, final AggregationMetrics metrics) throws IOException {
+    return aggregateMulti(fromTs, toTs, requests, bucketIntervalMs, tagFilter, metrics, 0);
+  }
+
+  /**
+   * Aggregates multiple columns in a single pass, stopping as soon as the answer carries more than
+   * {@code bucketCeiling} buckets (issue #7724).
+   * <p>
+   * The three aggregation surfaces - {@code /ts/query}, the Grafana query route and the gRPC bucket stream -
+   * all refuse a response whose bucket count exceeds a configured maximum, and all of them used to enforce that
+   * on the RESULT: the whole range was scanned, the whole bucket set was built, and only then was it thrown
+   * away. So the cheapest shape of an abusive request - a one-millisecond bucket interval over a year, which a
+   * dashboard can re-issue every few seconds - made the server do the entire scan every time.
+   * <p>
+   * The bound is carried into the scan instead. The sealed layer asks before each block and the mutable layer
+   * before each row, so the work stops within one block of the ceiling being passed, and what comes back is a
+   * result that is INCOMPLETE BY CONSTRUCTION.
+   * <p>
+   * <b>How far past the ceiling it goes.</b> On the sealed side, one block: the block in hand is decompressed
+   * in full before the next check. On the mutable side, two ROWS - {@code TimeSeriesBucket.iterateRange}
+   * prefetches, so the row that trips the ceiling is followed by one more being located before the loop
+   * breaks. It is two rows and not the rest of the bucket, because that prefetch returns at the first in-range
+   * row it finds and never evaluates the tag filter, so rows this loop will later reject cannot draw it
+   * further either. {@code Issue7724AggregationBucketCeilingTest} pins the number so a restructuring cannot
+   * quietly turn it into a scan. That is safe precisely because the scan stops only once the
+   * count is already ABOVE the ceiling: the caller's own after-the-fact check therefore fires on it and refuses
+   * it, in the same words as before, so no partial answer can escape. The alternative shape - refusing up front
+   * on {@code (toTs - fromTs) / bucketIntervalMs}, as the issue proposed - would refuse requests that succeed
+   * today, because that arithmetic counts the buckets the RANGE spans and the result carries only the buckets a
+   * sample landed in: a year-wide range at a one-millisecond interval over ten samples spans thirty-one billion
+   * and returns ten.
+   *
+   * @param bucketCeiling the largest bucket count the caller will accept, {@code <= 0} for no ceiling
+   */
+  public MultiColumnAggregationResult aggregateMulti(final long fromTs, final long toTs,
+      final List<MultiColumnAggregationRequest> requests, final long bucketIntervalMs,
+      final TagFilter tagFilter, final AggregationMetrics metrics, final int bucketCeiling) throws IOException {
     final int reqCount = requests.size();
 
     // Determine actual data range to size flat arrays correctly.
@@ -546,6 +793,17 @@ public class TimeSeriesEngine implements AutoCloseable {
             try {
               final MultiColumnAggregationResult shardResult =
                   new MultiColumnAggregationResult(requests, firstBucket, bucketIntervalMs, maxBuckets);
+              // Each shard stops at the ceiling on its own. Buckets only ever union across shards, so a shard
+              // that has passed it guarantees the merged total has too (issue #7724).
+              //
+              // The ceiling is given to each shard WHOLE rather than divided by their number, which makes this
+              // path's worst case O(shards x ceiling) instead of O(ceiling): every shard may scan its way to
+              // the ceiling before any of them stops. That is deliberate. Dividing would be unsound, not merely
+              // tighter - the buckets of different shards overlap, so a shard legitimately holding more than
+              // ceiling/N of them is not evidence that the UNION is over the ceiling, and stopping it would
+              // refuse a request whose real answer fits. The bound stays a bound either way, and it is the one
+              // that cannot refuse an answer the caller was entitled to.
+              shardResult.setBucketCeiling(bucketCeiling);
               shard.getSealedStore().aggregateMultiBlocks(fromTs, toTs, requests, bucketIntervalMs, shardResult, shardMetrics, tagFilter);
               return shardResult;
             } catch (final IOException e) {
@@ -576,21 +834,19 @@ public class TimeSeriesEngine implements AutoCloseable {
         // compaction read locks acquired above, so compaction cannot clear mutable data now)
         final double[] rowValues = new double[reqCount];
         for (final TimeSeriesShard shard : shards) {
-          final Iterator<Object[]> mutableIter = shard.getMutableBucket().iterateRange(fromTs, toTs, null);
+          if (result.isOverBucketCeiling())
+            break;
+          final Iterator<Object[]> mutableIter = shard.getMutableBucket().iterateRange(fromTs, toTs, null, metrics);
           while (mutableIter.hasNext()) {
+            if (result.isOverBucketCeiling())
+              break;
             final Object[] row = mutableIter.next();
             if (tagFilter != null && !tagFilter.matches(row))
               continue;
             final long ts = (long) row[0];
             final long bucketTs = Math.floorDiv(ts, bucketIntervalMs) * bucketIntervalMs;
-            for (int r = 0; r < reqCount; r++) {
-              if (isCount[r])
-                rowValues[r] = 1.0;
-              else if (columnIndices[r] < row.length && row[columnIndices[r]] instanceof Number n)
-                rowValues[r] = n.doubleValue();
-              else
-                rowValues[r] = 0.0;
-            }
+            for (int r = 0; r < reqCount; r++)
+              rowValues[r] = mutableSample(row, columnIndices[r], isCount[r]);
             result.accumulateRow(bucketTs, rowValues);
           }
         }
@@ -609,34 +865,33 @@ public class TimeSeriesEngine implements AutoCloseable {
       final MultiColumnAggregationResult result = maxBuckets > 0
           ? new MultiColumnAggregationResult(requests, firstBucket, bucketIntervalMs, maxBuckets)
           : new MultiColumnAggregationResult(requests);
+      result.setBucketCeiling(bucketCeiling);
 
       final double[] rowValues = new double[reqCount];
 
       final long singleBucketTs = singleBucketAnchor(fromTs);
 
       for (final TimeSeriesShard shard : shards) {
+        if (result.isOverBucketCeiling())
+          break;
         // Hold the compaction read lock for sealed+mutable reads to prevent data loss
         // if compaction completes between reading the two layers.
         shard.getCompactionLock().readLock().lock();
         try {
           shard.getSealedStore().aggregateMultiBlocks(fromTs, toTs, requests, bucketIntervalMs, result, metrics, tagFilter);
 
-          final Iterator<Object[]> mutableIter = shard.getMutableBucket().iterateRange(fromTs, toTs, null);
+          final Iterator<Object[]> mutableIter = shard.getMutableBucket().iterateRange(fromTs, toTs, null, metrics);
           while (mutableIter.hasNext()) {
+            if (result.isOverBucketCeiling())
+              break;
             final Object[] row = mutableIter.next();
             if (tagFilter != null && !tagFilter.matches(row))
               continue;
             final long ts = (long) row[0];
             final long bucketTs = bucketIntervalMs > 0 ? Math.floorDiv(ts, bucketIntervalMs) * bucketIntervalMs : singleBucketTs;
 
-            for (int r = 0; r < reqCount; r++) {
-              if (isCount[r])
-                rowValues[r] = 1.0;
-              else if (columnIndices[r] < row.length && row[columnIndices[r]] instanceof Number n)
-                rowValues[r] = n.doubleValue();
-              else
-                rowValues[r] = 0.0;
-            }
+            for (int r = 0; r < reqCount; r++)
+              rowValues[r] = mutableSample(row, columnIndices[r], isCount[r]);
 
             result.accumulateRow(bucketTs, rowValues);
           }
@@ -650,6 +905,26 @@ public class TimeSeriesEngine implements AutoCloseable {
         metrics.addOverflowBuckets(result.getOverflowBucketCount());
       return result;
     }
+  }
+
+  /**
+   * The value one MUTABLE row contributes to one aggregation request, unboxed the way the sealed layer unboxes
+   * the same sample (issue #7725).
+   * <p>
+   * A COUNT contributes one per row without reading the column at all, matching the sealed layer, which does
+   * not even resolve a schema index for such a request. Everything else goes through
+   * {@link TimeSeriesNaN#asMeasurement(Object)}, whose javadoc carries the reason the two layers have to agree.
+   * <p>
+   * The width guard answers {@link TimeSeriesNaN#ABSENT} rather than zero for a request whose column index the
+   * row does not reach: absence is what "this row carries no such column" means, and an aggregate skips it.
+   * It should not be reachable - a mutable row carries the timestamp followed by every non-timestamp column in
+   * schema order, so its length is the schema's - and it is kept because the alternative to a gap here is an
+   * {@link ArrayIndexOutOfBoundsException} out of a read path.
+   */
+  private static double mutableSample(final Object[] row, final int columnIndex, final boolean isCount) {
+    if (isCount)
+      return 1.0;
+    return columnIndex < row.length ? TimeSeriesNaN.asMeasurement(row[columnIndex]) : TimeSeriesNaN.ABSENT;
   }
 
   /**

@@ -36,6 +36,14 @@ import java.util.List;
  * Remote read and write exchange Snappy-compressed protobuf messages, which no JSON schema can
  * describe, so their bodies are declared as opaque binary and the framing lives in the description.
  * The query API answers in the Prometheus HTTP API envelope, which takes four distinct shapes.
+ * <p>
+ * All seven operations moved onto {@code DatabaseAbstractHandler} in issue #7681, so they honour the session
+ * header the way {@code /api/v1/query} and the {@code /api/v1/ts} operations of issue #7402 do. Prometheus
+ * itself will never send it - it has no notion of an ArcadeDB session - so the caller this documents is a
+ * hand-written client or an ArcadeDB client wrapper speaking the same wire format. {@code remote_write} is the
+ * one write among them, and the only one whose 404 covers a stale session: see
+ * {@link SpecBuilders#WRITE_STALE_SESSION_DESCRIPTION} against
+ * {@link SpecBuilders#READ_STALE_SESSION_DESCRIPTION}.
  */
 public class PrometheusApiSpec implements OpenApiContributor {
 
@@ -68,6 +76,7 @@ public class PrometheusApiSpec implements OpenApiContributor {
             write. Answers 204 with no body once the samples are applied; an empty write request also \
             answers 204.""");
     post.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
+    post.addParametersItem(SpecBuilders.sessionHeaderParam());
     post.setRequestBody(SpecBuilders.rawBody(
         "Snappy-compressed protobuf WriteRequest, per the Prometheus remote-write specification",
         PROTOBUF, "binary"));
@@ -78,8 +87,11 @@ public class PrometheusApiSpec implements OpenApiContributor {
         "Bad request: database parameter missing, body empty, or not Snappy-compressed"));
     responses.addApiResponse("401", SpecBuilders.errorResponse("Unauthorized"));
     responses.addApiResponse("403", SpecBuilders.errorResponse("Forbidden"));
-    responses.addApiResponse("404", SpecBuilders.errorResponse("Database not found"));
+    responses.addApiResponse("404", SpecBuilders.errorResponse(SpecBuilders.WRITE_STALE_SESSION_DESCRIPTION));
     responses.addApiResponse("500", SpecBuilders.errorResponse("Internal server error"));
+    // No arcadedb-session-expired here: remote-write answers true to rejectsUnresolvableSession(), so it
+    // REFUSES a stale id with 404 and never runs outside the transaction the caller named (issue #7714).
+    responses.get("204").addHeaderObject(SpecBuilders.SESSION_HEADER, SpecBuilders.sessionEchoHeader());
     post.setResponses(responses);
 
     final PathItem pathItem = new PathItem();
@@ -95,6 +107,7 @@ public class PrometheusApiSpec implements OpenApiContributor {
             Snappy block format. Answers with a Snappy-compressed protobuf ReadResponse. Configure \
             this endpoint as a remote_read target in prometheus.yml.""");
     post.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
+    post.addParametersItem(SpecBuilders.sessionHeaderParam());
     post.setRequestBody(SpecBuilders.rawBody(
         "Snappy-compressed protobuf ReadRequest, per the Prometheus remote-read specification",
         PROTOBUF, "binary"));
@@ -104,6 +117,9 @@ public class PrometheusApiSpec implements OpenApiContributor {
     final MediaType mediaType = new MediaType();
     mediaType.setSchema(new Schema<>().type("string").format("binary"));
     success.setContent(new Content().addMediaType(PROTOBUF, mediaType));
+    success.addHeaderObject(SpecBuilders.SESSION_HEADER, SpecBuilders.sessionEchoHeader());
+    // Degrades rather than refuses a session it cannot resolve, so it can say so (issue #7714).
+    success.addHeaderObject(SpecBuilders.SESSION_EXPIRED_HEADER, SpecBuilders.sessionExpiredHeader());
 
     final ApiResponses responses = new ApiResponses();
     responses.addApiResponse("200", success);
@@ -111,7 +127,7 @@ public class PrometheusApiSpec implements OpenApiContributor {
         "Bad request: database parameter missing, body empty, or not Snappy-compressed"));
     responses.addApiResponse("401", SpecBuilders.errorResponse("Unauthorized"));
     responses.addApiResponse("403", SpecBuilders.errorResponse("Forbidden"));
-    responses.addApiResponse("404", SpecBuilders.errorResponse("Database not found"));
+    responses.addApiResponse("404", SpecBuilders.errorResponse(SpecBuilders.READ_STALE_SESSION_DESCRIPTION));
     responses.addApiResponse("500", SpecBuilders.errorResponse("Internal server error"));
     post.setResponses(responses);
 
@@ -128,6 +144,7 @@ public class PrometheusApiSpec implements OpenApiContributor {
             /api/v1/query endpoint, so Grafana's Prometheus data source and promtool can target it \
             directly.""");
     get.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
+    get.addParametersItem(SpecBuilders.sessionHeaderParam());
     get.addParametersItem(SpecBuilders.queryParam("query", "PromQL expression", true));
     get.addParametersItem(SpecBuilders.queryParam("time",
         "Evaluation instant as a Unix timestamp in seconds, fractional seconds allowed. Defaults to now.",
@@ -150,6 +167,7 @@ public class PrometheusApiSpec implements OpenApiContributor {
             Prometheus /api/v1/query_range endpoint. 'step' must be positive; a non-positive step \
             answers 400.""");
     get.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
+    get.addParametersItem(SpecBuilders.sessionHeaderParam());
     get.addParametersItem(SpecBuilders.queryParam("query", "PromQL expression", true));
     get.addParametersItem(SpecBuilders.queryParam("start",
         "Inclusive range start as a Unix timestamp in seconds, fractional seconds allowed", true));
@@ -175,6 +193,7 @@ public class PrometheusApiSpec implements OpenApiContributor {
             Compatible with the Prometheus /api/v1/labels endpoint. Takes no filtering parameters: \
             unlike Prometheus itself, this endpoint does not accept 'start', 'end', or 'match[]'.""");
     get.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
+    get.addParametersItem(SpecBuilders.sessionHeaderParam());
     get.setResponses(promQlResponses("Sorted label names", "PromQLLabelsResponse"));
 
     final PathItem pathItem = new PathItem();
@@ -186,12 +205,20 @@ public class PrometheusApiSpec implements OpenApiContributor {
     final Operation get = SpecBuilders.operation("promQLLabelValues", "PromQL",
         "List the values of one label",
         """
-            Lists every value of one label name, sorted. Compatible with the Prometheus \
-            /api/v1/label/{name}/values endpoint. Querying '__name__' returns every time-series type \
-            name instead of scanning a tag column. Takes no filtering parameters: unlike Prometheus \
-            itself, this endpoint does not accept 'start', 'end', or 'match[]'.""");
+            Lists the values of one label name, sorted, over the requested time range. Compatible with \
+            the Prometheus /api/v1/label/{name}/values endpoint. Querying '__name__' returns the \
+            time-series type names instead of scanning a tag column. 'start' and 'end' are optional and \
+            default to the whole series: when either is supplied, the answer is restricted to the values - \
+            and, for '__name__', the types - carried by a sample in that range; with neither, every \
+            time-series type is named, one holding no sample at all included. Unlike Prometheus itself, \
+            this endpoint does not accept 'match[]'.""");
     get.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
+    get.addParametersItem(SpecBuilders.sessionHeaderParam());
     get.addParametersItem(SpecBuilders.pathParam("name", "Label name"));
+    get.addParametersItem(SpecBuilders.queryParam("start",
+        "Inclusive range start as a Unix timestamp in seconds, fractional seconds allowed", false));
+    get.addParametersItem(SpecBuilders.queryParam("end",
+        "Inclusive range end as a Unix timestamp in seconds, fractional seconds allowed", false));
     get.setResponses(promQlResponses("Sorted label values", "PromQLLabelsResponse"));
 
     final PathItem pathItem = new PathItem();
@@ -208,6 +235,7 @@ public class PrometheusApiSpec implements OpenApiContributor {
             '__name__' label. A selector that fails to parse is skipped rather than rejected, so a \
             mix of valid and malformed 'match[]' values still returns the matches from the valid ones.""");
     get.addParametersItem(SpecBuilders.pathParam("database", "Database name"));
+    get.addParametersItem(SpecBuilders.sessionHeaderParam());
     final Parameter match = SpecBuilders.repeatableQueryParam("match[]",
         "Series selector. Repeatable: every occurrence is evaluated and the results are unioned.", true);
     get.addParametersItem(match);
@@ -227,13 +255,18 @@ public class PrometheusApiSpec implements OpenApiContributor {
    * a client written against the Prometheus API can parse both outcomes with one reader.
    */
   private ApiResponses promQlResponses(final String successDescription, final String successSchema) {
+    final ApiResponse success = SpecBuilders.jsonResponse(successDescription, successSchema);
+    success.addHeaderObject(SpecBuilders.SESSION_HEADER, SpecBuilders.sessionEchoHeader());
+    // Degrades rather than refuses a session it cannot resolve, so it can say so (issue #7714).
+    success.addHeaderObject(SpecBuilders.SESSION_EXPIRED_HEADER, SpecBuilders.sessionExpiredHeader());
+
     final ApiResponses responses = new ApiResponses();
-    responses.addApiResponse("200", SpecBuilders.jsonResponse(successDescription, successSchema));
+    responses.addApiResponse("200", success);
     responses.addApiResponse("400",
         SpecBuilders.jsonResponse("Bad request, in the Prometheus error envelope", "PromQLErrorResponse"));
     responses.addApiResponse("401", SpecBuilders.errorResponse("Unauthorized"));
     responses.addApiResponse("403", SpecBuilders.errorResponse("Forbidden"));
-    responses.addApiResponse("404", SpecBuilders.errorResponse("Database not found"));
+    responses.addApiResponse("404", SpecBuilders.errorResponse(SpecBuilders.READ_STALE_SESSION_DESCRIPTION));
     responses.addApiResponse("500", SpecBuilders.errorResponse("Internal server error"));
     return responses;
   }
@@ -268,11 +301,24 @@ public class PrometheusApiSpec implements OpenApiContributor {
     final Schema<Object> data = SpecBuilders.object("Evaluation result");
     data.addProperty("resultType", resultType);
     data.addProperty("result", result);
+    data.setRequired(List.of("resultType", "result"));
 
     final Schema<Object> schema = SpecBuilders.object("Prometheus query response");
-    schema.addProperty("status", SpecBuilders.string("Always 'success' on a 200"));
+    schema.addProperty("status", successStatus());
     schema.addProperty("data", data);
+    // The Prometheus envelope is two members and PromQLResponseFormatter writes both on every 200; the
+    // vocabulary of 'status' is closed and is what tells the success envelope from the error one (issue #7578,
+    // #7579).
+    schema.setRequired(List.of("status", "data"));
     return schema;
+  }
+
+  /** The {@code status} of a successful Prometheus envelope, whose only value is 'success'. */
+  private Schema<String> successStatus() {
+    final Schema<String> status = SpecBuilders.string(
+        "Always 'success' on a 200. The error envelope carries 'error' here instead");
+    status.setEnum(List.of("success"));
+    return status;
   }
 
   /**
@@ -307,27 +353,34 @@ public class PrometheusApiSpec implements OpenApiContributor {
 
   private Schema<?> createLabelsResponseSchema() {
     final Schema<Object> schema = SpecBuilders.object("Prometheus label response");
-    schema.addProperty("status", SpecBuilders.string("Always 'success' on a 200"));
+    schema.addProperty("status", successStatus());
     schema.addProperty("data", SpecBuilders.arrayOf(
-        SpecBuilders.string("Label name or value"), "Sorted names or values"));
+        SpecBuilders.string("Label name or value"), "Sorted names or values. Empty when nothing matched"));
+    schema.setRequired(List.of("status", "data"));
     return schema;
   }
 
   private Schema<?> createSeriesResponseSchema() {
     final Schema<Object> schema = SpecBuilders.object("Prometheus series response");
-    schema.addProperty("status", SpecBuilders.string("Always 'success' on a 200"));
-    schema.addProperty("data", SpecBuilders.arrayOf(
-        SpecBuilders.object("One series as a label map, including the '__name__' label"),
-        "Matching series"));
+    schema.addProperty("status", successStatus());
+    // The same label map the instant/range entries carry, so a generator emits one type for both rather than an
+    // empty model here and Map<String, String> there (issue #7577).
+    schema.addProperty("data", SpecBuilders.arrayOf(metricLabelsSchema(),
+        "Matching series. Empty when nothing matched"));
+    schema.setRequired(List.of("status", "data"));
     return schema;
   }
 
   private Schema<?> createErrorResponseSchema() {
+    final Schema<String> status = SpecBuilders.string("Always 'error'");
+    status.setEnum(List.of("error"));
+
     final Schema<Object> schema = SpecBuilders.object("Prometheus error envelope");
-    schema.addProperty("status", SpecBuilders.string("Always 'error'"));
+    schema.addProperty("status", status);
     schema.addProperty("errorType", SpecBuilders.string(
         "Prometheus error class, for example 'bad_data'"));
     schema.addProperty("error", SpecBuilders.string("Human-readable message"));
+    schema.setRequired(List.of("status", "errorType", "error"));
     return schema;
   }
 }

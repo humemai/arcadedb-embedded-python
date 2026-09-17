@@ -400,8 +400,48 @@ public class TimeSeriesBucket extends PaginatedComponent {
    * @return list of sample rows: each row is Object[] { timestamp, col1, col2, ... }
    */
   public List<Object[]> scanRange(final long fromTs, final long toTs, final int[] columnIndices) throws IOException {
+    return scanRange(fromTs, toTs, columnIndices, null);
+  }
+
+  /**
+   * {@link #scanRange(long, long, int[])}, counting the pages it discarded on their header, the pages it
+   * examined and the rows it materialised into {@code metrics} (issue #7717). {@code null} means "do not
+   * count".
+   * <p>
+   * The counters matter here for the same reason they do on the sealed side: without them a read answered
+   * entirely from the mutable bucket - which is every read of a type whose compaction interval has not
+   * elapsed - reported nothing at all, so a dashboard showed zero work for a query that had done plenty.
+   * {@link #scanRangeDescending} has counted this way all along; this is the ascending twin catching up.
+   */
+  public List<Object[]> scanRange(final long fromTs, final long toTs, final int[] columnIndices,
+      final AggregationMetrics metrics) throws IOException {
+    return scanRange(fromTs, toTs, columnIndices, null, metrics);
+  }
+
+  /**
+   * {@link #scanRange(long, long, int[], AggregationMetrics)} with the tag filter applied HERE, straight off the
+   * page, instead of by the caller against the row this hands back (issue #7733).
+   * <p>
+   * The two are not the same test whenever {@code columnIndices} is a projection: a row built from a subset of the
+   * columns cannot answer a condition on a column outside it, so a caller filtering the returned row had to drop
+   * every row - the query answered nothing at all - while the sealed layer's fast path answered the matching rows
+   * for the very same query. Evaluated against the page there is no such thing as a column the filter cannot see:
+   * {@link #matchesTagFilter} walks the row's stored columns by their schema position, which the projection does
+   * not change. Filtering here is also what the descending and ascending scans have always done, so this puts the
+   * unlimited scan on the same footing, and it is cheaper besides - a rejected row is never materialised.
+   *
+   * @param tagFilter optional tag filter, evaluated on the page; a condition on a column outside
+   *                  {@code columnIndices} is applied like any other
+   */
+  public List<Object[]> scanRange(final long fromTs, final long toTs, final int[] columnIndices,
+      final TagFilter tagFilter, final AggregationMetrics metrics) throws IOException {
     final List<Object[]> results = new ArrayList<>();
     final int dataPageCount = getDataPageCount();
+
+    final TagMatcher[] matchers = tagFilter == null ? null : buildTagMatchers(tagFilter);
+    if (tagFilter != null && matchers == null)
+      // A condition no value in the dictionary can satisfy: nothing can match.
+      return results;
 
     for (int pageNum = 1; pageNum <= dataPageCount; pageNum++) {
       final BasePage page = database.getTransaction().getPage(new PageId(database, fileId, pageNum), pageSize);
@@ -414,19 +454,32 @@ public class TimeSeriesBucket extends PaginatedComponent {
       final long pageMaxTs = page.readLong(DATA_MAX_TS_OFFSET);
 
       // Skip pages outside range
-      if (pageMaxTs < fromTs || pageMinTs > toTs)
+      if (pageMaxTs < fromTs || pageMinTs > toTs) {
+        if (metrics != null)
+          metrics.addSkippedPage();
         continue;
+      }
 
+      if (metrics != null)
+        metrics.addScannedPage();
+
+      int materialized = 0;
       for (int row = 0; row < sampleCount; row++) {
         final int rowOffset = DATA_ROWS_OFFSET + row * rowSize;
         final long ts = page.readLong(rowOffset);
 
         if (ts < fromTs || ts > toTs)
           continue;
+        if (matchers != null && !matchesTagFilter(page, rowOffset, matchers))
+          continue;
 
         final Object[] sample = readRow(page, rowOffset, columnIndices);
         results.add(sample);
+        materialized++;
       }
+
+      if (metrics != null && materialized > 0)
+        metrics.addMaterializedRows(materialized);
     }
     return results;
   }
@@ -456,9 +509,9 @@ public class TimeSeriesBucket extends PaginatedComponent {
     final int need = limit > 0 ? limit : Integer.MAX_VALUE;
     final int dataPageCount = getDataPageCount();
 
-    final TagMatcher[] matchers = tagFilter == null ? null : buildTagMatchers(tagFilter, columnIndices);
+    final TagMatcher[] matchers = tagFilter == null ? null : buildTagMatchers(tagFilter);
     if (tagFilter != null && matchers == null)
-      // A condition on a column the caller did not ask for: nothing can match.
+      // A condition no value in the dictionary can satisfy: nothing can match.
       return new ArrayList<>();
 
     // Bounded queries keep the current best rows in a min-heap on the timestamp, so the cut-off is
@@ -539,6 +592,110 @@ public class TimeSeriesBucket extends PaginatedComponent {
   }
 
   /**
+   * Scans the mutable bucket oldest-first and returns at most {@code limit} rows, the oldest ones in
+   * the requested range (issue #7336).
+   * <p>
+   * The ascending mirror of {@link #scanRangeDescending}, with the same page pruning and the same
+   * assumption - none - about rows being globally ordered across pages: late arrivals are always
+   * appended to the last page, so a page whose minimum is newer than the current cut-off is skipped
+   * rather than ending the walk.
+   *
+   * @param fromTs        start timestamp (inclusive)
+   * @param toTs          end timestamp (inclusive)
+   * @param columnIndices which columns to return (null = all)
+   * @param tagFilter     optional tag filter, evaluated straight off the page so non-matching rows
+   *                      cost no allocation
+   * @param limit         maximum number of rows to return, 0 or less means unlimited
+   * @param metrics       optional page and row counters, may be {@code null}
+   *
+   * @return list of sample rows ordered from the oldest to the newest
+   */
+  public List<Object[]> scanRangeAscending(final long fromTs, final long toTs, final int[] columnIndices,
+      final TagFilter tagFilter, final int limit, final AggregationMetrics metrics) throws IOException {
+    final int need = limit > 0 ? limit : Integer.MAX_VALUE;
+    final int dataPageCount = getDataPageCount();
+
+    final TagMatcher[] matchers = tagFilter == null ? null : buildTagMatchers(tagFilter);
+    if (tagFilter != null && matchers == null)
+      // A condition no value in the dictionary can satisfy: nothing can match.
+      return new ArrayList<>();
+
+    // Bounded queries keep the current best rows in a max-heap on the timestamp, so the cut-off is
+    // always exact and a row is materialised only when it really enters the result. Unlimited
+    // queries have no cut-off to maintain and just collect.
+    final PriorityQueue<Object[]> heap = need == Integer.MAX_VALUE ?
+        null :
+        new PriorityQueue<>(Math.min(need, 1024), (a, b) -> Long.compare((long) b[0], (long) a[0]));
+    final List<Object[]> collected = heap == null ? new ArrayList<>() : null;
+
+    // Timestamp of the newest row retained so far: with `need` rows already held, nothing newer can
+    // enter the result.
+    long cutoffTs = Long.MAX_VALUE;
+    int held = 0;
+
+    for (int pageNum = 1; pageNum <= dataPageCount; pageNum++) {
+      final BasePage page = database.getTransaction().getPage(new PageId(database, fileId, pageNum), pageSize);
+
+      final int sampleCount = page.readShort(DATA_SAMPLE_COUNT_OFFSET) & 0xFFFF;
+      if (sampleCount == 0)
+        continue;
+
+      final long pageMinTs = page.readLong(DATA_MIN_TS_OFFSET);
+      final long pageMaxTs = page.readLong(DATA_MAX_TS_OFFSET);
+
+      // Skip pages outside range
+      if (pageMaxTs < fromTs || pageMinTs > toTs) {
+        if (metrics != null)
+          metrics.addSkippedPage();
+        continue;
+      }
+
+      // Skip pages that cannot beat the rows already collected
+      if (held >= need && pageMinTs >= cutoffTs) {
+        if (metrics != null)
+          metrics.addSkippedPage();
+        continue;
+      }
+
+      if (metrics != null)
+        metrics.addScannedPage();
+
+      for (int row = 0; row < sampleCount; row++) {
+        final int rowOffset = DATA_ROWS_OFFSET + row * rowSize;
+        final long ts = page.readLong(rowOffset);
+
+        if (ts < fromTs || ts > toTs)
+          continue;
+        if (held >= need && ts >= cutoffTs)
+          continue;
+        if (matchers != null && !matchesTagFilter(page, rowOffset, matchers))
+          continue;
+
+        final Object[] materialized = readRow(page, rowOffset, columnIndices);
+        if (metrics != null)
+          metrics.addMaterializedRows(1);
+
+        if (heap == null) {
+          collected.add(materialized);
+          held++;
+          continue;
+        }
+
+        heap.add(materialized);
+        if (heap.size() > need)
+          heap.poll();
+        held = heap.size();
+        if (held >= need)
+          cutoffTs = (long) heap.peek()[0];
+      }
+    }
+
+    final List<Object[]> results = heap == null ? collected : new ArrayList<>(heap);
+    TimeSeriesSealedStore.trimToAscendingLimit(results, need);
+    return results;
+  }
+
+  /**
    * A tag condition prepared for repeated evaluation against raw page bytes.
    * <p>
    * String tags are by far the common case and used to cost a {@code byte[]} plus a {@code String}
@@ -563,17 +720,24 @@ public class TimeSeriesBucket extends PaginatedComponent {
   /**
    * Prepares the filter for the scan, or returns {@code null} when it can never match.
    * <p>
-   * Mirrors {@link TagFilter#matchesMapped(Object[], int[])}: a condition on a column that the
-   * caller did not request cannot be satisfied, because the row handed back would not carry it.
+   * The projection plays no part in this (issue #7733). The matchers are evaluated by
+   * {@link #matchesTagFilter} against the PAGE, which carries every column whatever the caller asked to be
+   * handed back, and the projection is applied afterwards by {@link #readRow}. A condition on a column outside
+   * the projection is therefore an ordinary condition, not an unsatisfiable one: refusing it here made
+   * {@code fields:[value], tags:{host:web1}} answer zero rows on the mutable layer and on sealed slow-path
+   * blocks, while sealed fast-path blocks - which decide on the block's tag metadata and never consult the
+   * projection - answered the matching ones. One query, three answers, chosen by how far compaction had got.
+   * <p>
+   * {@code null} still means "nothing can match", but now for the one reason that is true of the data rather
+   * than of the request: a dictionary-encoded condition whose every candidate is a value the dictionary has
+   * never seen.
    */
-  private TagMatcher[] buildTagMatchers(final TagFilter tagFilter, final int[] columnIndices) {
+  private TagMatcher[] buildTagMatchers(final TagFilter tagFilter) {
     final List<TagFilter.Condition> conditions = tagFilter.getConditions();
     final TagMatcher[] matchers = new TagMatcher[conditions.size()];
 
     for (int i = 0; i < conditions.size(); i++) {
       final TagFilter.Condition cond = conditions.get(i);
-      if (columnIndices != null && !isInArray(cond.columnIndex(), columnIndices))
-        return null;
 
       if (cond.columnIndex() >= 0 && cond.columnIndex() < dictEncoded.length && dictEncoded[cond.columnIndex()]) {
         // Resolve the candidates to ids once. A candidate the dictionary has never seen cannot appear
@@ -689,6 +853,22 @@ public class TimeSeriesBucket extends PaginatedComponent {
    * @return iterator yielding Object[] { timestamp, col1, col2, ... }
    */
   public Iterator<Object[]> iterateRange(final long fromTs, final long toTs, final int[] columnIndices) throws IOException {
+    return iterateRange(fromTs, toTs, columnIndices, null);
+  }
+
+  /**
+   * {@link #iterateRange(long, long, int[])}, counting the pages it discards on their header, the pages it
+   * examines and the rows it materialises into {@code metrics} (issue #7717). {@code null} means "do not
+   * count".
+   * <p>
+   * This is the mutable half of {@code TimeSeriesEngine.aggregateMulti}, so without it an aggregation answered
+   * mostly from uncompacted data reported zero pages and zero rows while genuinely doing the work - the same
+   * way round as the ascending {@link #scanRange} did before it was given counters. The counting is lazy like
+   * the iterator: a page is charged when the walk actually opens it, not when the iterator is built, so a
+   * caller that stops early (the bucket-ceiling stop of issue #7724 does) is charged only for what it read.
+   */
+  public Iterator<Object[]> iterateRange(final long fromTs, final long toTs, final int[] columnIndices,
+      final AggregationMetrics metrics) throws IOException {
     if (getSampleCount() == 0)
       return Collections.emptyIterator();
 
@@ -723,10 +903,15 @@ public class TimeSeriesBucket extends PaginatedComponent {
               final long pageMinTs = currentPage.readLong(DATA_MIN_TS_OFFSET);
               final long pageMaxTs = currentPage.readLong(DATA_MAX_TS_OFFSET);
               if (pageMaxTs < fromTs || pageMinTs > toTs) {
+                if (metrics != null)
+                  metrics.addSkippedPage();
                 currentPage = null;
                 pageNum++;
                 continue;
               }
+
+              if (metrics != null)
+                metrics.addScannedPage();
             }
 
             while (rowIdx < currentSampleCount) {
@@ -736,6 +921,8 @@ public class TimeSeriesBucket extends PaginatedComponent {
 
               if (ts >= fromTs && ts <= toTs) {
                 nextRow = readRow(currentPage, rowOffset, columnIndices);
+                if (metrics != null)
+                  metrics.addMaterializedRows(1);
                 return;
               }
             }

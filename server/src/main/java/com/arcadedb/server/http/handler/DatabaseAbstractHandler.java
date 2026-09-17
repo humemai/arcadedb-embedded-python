@@ -46,6 +46,32 @@ import java.util.logging.Level;
 public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler {
   private static final HttpString SESSION_ID_HEADER = new HttpString(HttpSessionManager.ARCADEDB_SESSION_ID);
 
+  /**
+   * Response header naming a session id this server could not resolve, on a request that ran ANYWAY (issue
+   * #7714). A client can tell "your transaction is gone, this answer was produced outside it" apart from "your
+   * transaction answered this".
+   * <p>
+   * The value is the id the request sent, SANITIZED and bounded - see {@link #sanitizedSessionId}, which reduces
+   * it to the characters a session id is made of and caps its length. For an id this server issued that is the
+   * id verbatim; for anything else it is a bounded rendering of it, and a client comparing the two must expect
+   * that (CodeRabbit on PR #7730).
+   * <p>
+   * The degrade itself is deliberate and is not changing: it is what keeps a read-after-commit and an idempotent
+   * retry of {@code /commit} working, and refusing instead would turn a currently-succeeding retry into an error
+   * for every client that does one. What it should not be is SILENT. Until now the only signal was the ABSENCE
+   * of {@code arcadedb-session-id} in the response - inferable, but only by a client that knew to look for
+   * something that is not there. This header is the positive statement, it is additive, and a client that ignores
+   * it sees exactly what it saw before.
+   *
+   * @see #rejectsUnresolvableSession()
+   */
+  public static final String SESSION_EXPIRED = "arcadedb-session-expired";
+
+  private static final HttpString SESSION_EXPIRED_HEADER = new HttpString(SESSION_EXPIRED);
+
+  /** A session id is a UUID, 36 characters. See {@link #sanitizedSessionId}. */
+  private static final int MAX_ECHOED_SESSION_ID_LENGTH = 64;
+
   protected DatabaseAbstractHandler(final HttpServer httpServer) {
     super(httpServer);
   }
@@ -167,7 +193,7 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
           else
             response.set(execute(exchange, user, database, payload));
           return null;
-        });
+        }, participatesInSessionTransaction());
       } else {
         if (finalAtomicTransaction)
           executeInTransaction(exchange, user, database, payload, response, retries);
@@ -300,12 +326,89 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
     }
   }
 
+  /**
+   * Whether this request names a session at all - the one question a {@link #mustExecuteOnWorkerThread(HttpServerExchange)}
+   * override needs in order to keep answering a session-less request on the IO thread while dispatching a
+   * session-scoped one to a worker.
+   * <p>
+   * It has to be asked, because a session-scoped request runs inside {@code HttpSession.execute}, which blocks
+   * on the session lock for up to five seconds. An Undertow IO thread serves many connections, so that wait is
+   * not paid by the caller that queued behind its own session: it is paid by every unrelated connection
+   * multiplexed onto the same thread. Introduced with {@code GET /api/v1/ts/{database}/latest} in issue #7402
+   * and shared from here since issue #7681, which put eight more IO-thread handlers on this base class.
+   * <p>
+   * Only tests the header's presence, which is deliberately the SAME test {@link #setTransactionInThreadLocal}
+   * and {@link #removeSession} make on the same header - all three read it as
+   * {@code sessionId != null && !sessionId.isEmpty()}, where {@code isEmpty()} asks whether the header carries
+   * any value at all, not whether that value is blank. Keeping them identical is the point: this method decides
+   * which THREAD the request is answered on and that one decides what the id RESOLVES to, so tightening one
+   * without the other would answer a request on the IO thread and then block it on the session lock anyway, or
+   * dispatch one that was never going to touch a session. A value that turns out not to resolve has by then
+   * cost a dispatch, which is the cheap half of the trade (claude-review on PR #7723).
+   */
+  protected boolean carriesSessionId(final HttpServerExchange exchange) {
+    final HeaderValues sessionId = exchange.getRequestHeaders().get(SESSION_ID_HEADER);
+    return sessionId != null && !sessionId.isEmpty();
+  }
+
+  /**
+   * Whether a failure raised by this handler must roll back the session's transaction (issue #7734).
+   * <p>
+   * True for every handler that runs INSIDE the caller's transaction, which is the default and what
+   * {@code HttpSession.execute} has always done: the command failed part way, so what it was running in cannot
+   * be trusted.
+   * <p>
+   * False for a route whose documented contract is that it does not participate in that transaction - the three
+   * {@code /api/v1/ts} routes, which resolve the session for its LOCK, PRINCIPAL and IDLE CLOCK (issue #7402)
+   * but write through {@code TimeSeriesShard.appendSamples}' own nested begin/commit, or read without touching
+   * it. Before #7402 those routes extended {@link AbstractServerHttpHandler} and never resolved a session at
+   * all, so nothing they did could reach a client's transaction; moving them onto this class put them inside
+   * {@code HttpSession.execute}'s rollback arm, where a 400 from a malformed line-protocol body - refused before
+   * one byte reached the engine - and a 413 from a read answering "too many rows" both destroyed a transaction
+   * the client opened with {@code /begin} and still believed it owned, leaving the session registered so its
+   * later {@code /commit} reported nothing lost.
+   * <p>
+   * This is deliberately a property of the HANDLER rather than of the individual failure. The two sharp cases
+   * are pure client input, but the contract the routes publish is not "these two errors are harmless": it is
+   * that the samples are durable before the caller commits anything and the reads detach from the session. A
+   * per-exception rule would have to be re-derived every time one of those routes grew a new failure mode.
+   *
+   * @see PostTimeSeriesWriteHandler
+   */
+  protected boolean participatesInSessionTransaction() {
+    return true;
+  }
+
   protected boolean requiresDatabase() {
     return true;
   }
 
   protected boolean requiresTransaction() {
     return true;
+  }
+
+  /**
+   * Whether an {@code arcadedb-session-id} this server cannot resolve must be refused rather than silently
+   * degraded to a session-less request. See the branch in {@link #setTransactionInThreadLocal} for what the two
+   * answers mean.
+   * <p>
+   * Defaults to {@link #requiresTransaction()}, which is the answer for every handler whose auto-commit wrapper
+   * IS the thing a stale id would substitute for the caller's transaction. It is a separate question for a
+   * handler that writes without wanting that wrapper: {@code POST /api/v1/ts/{database}/write} appends through
+   * {@code TimeSeriesShard.appendSamples}, which opens and commits its own transaction per shard whatever the
+   * caller has open (#7410), so an outer auto-commit transaction would buy it nothing - it would neither make
+   * the write atomic nor take it back on rollback, and the samples are published by the shard's own commit
+   * either way. That handler answers {@code false} to {@link #requiresTransaction()} and {@code true} here: a
+   * write must still not run outside the transaction its caller believes it is inside (issue #7402).
+   * <p>
+   * What that {@code false} does NOT buy is the parallel shard dispatch, which this javadoc used to give as the
+   * reason (issue #7741): {@code TimeSeriesGateway.write} calls {@code database.begin()} itself before the
+   * appends, so {@code TimeSeriesEngine.appendBatch} sees an active transaction and keeps the shard writes
+   * in-thread on this route whatever the wrapper does. The dispatch is taken by callers that append with no
+   * transaction of their own (#4957); the line-protocol ingest has never been one.
+   */
+  protected boolean rejectsUnresolvableSession() {
+    return requiresTransaction();
   }
 
   /**
@@ -361,6 +464,43 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
     }
   }
 
+  /**
+   * The id to echo in {@link #SESSION_EXPIRED}, reduced to the shape a session id actually has (issue #7714).
+   * <p>
+   * This is the first value that travels from a REQUEST header into a RESPONSE header, and the only one on this
+   * path the client chose rather than the server. Undertow's parser already refuses CR and LF inside a header
+   * value, so response splitting is not reachable - but a session id is a UUID, and anything that is not one is
+   * a client that is already wrong, so nothing is lost by reducing what is echoed to the characters a UUID is
+   * made of and a length no id exceeds. That also keeps an arbitrary caller-chosen string out of whatever reads
+   * these headers downstream, which is a log scraper as often as it is a client (claude-review on PR #7730).
+   */
+  private static String sanitizedSessionId(final String sessionId) {
+    // The common case by far is an id that needs nothing done to it - a UUID this server issued, echoed back by
+    // a client whose session has since expired. Scanned first and returned UNCHANGED when it is already clean,
+    // so the ordinary degrade allocates nothing (claude-review on PR #7730).
+    final int length = sessionId.length();
+    if (length <= MAX_ECHOED_SESSION_ID_LENGTH) {
+      int i = 0;
+      while (i < length && isSessionIdChar(sessionId.charAt(i)))
+        i++;
+      if (i == length)
+        return sessionId;
+    }
+
+    final int kept = Math.min(length, MAX_ECHOED_SESSION_ID_LENGTH);
+    final StringBuilder sanitized = new StringBuilder(kept);
+    for (int i = 0; i < kept; i++) {
+      final char c = sessionId.charAt(i);
+      sanitized.append(isSessionIdChar(c) ? c : '?');
+    }
+    return sanitized.toString();
+  }
+
+  /** The alphabet a session id is made of: a UUID's, plus the underscore. See {@link #sanitizedSessionId}. */
+  private static boolean isSessionIdChar(final char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+  }
+
   protected HttpSession setTransactionInThreadLocal(final HttpServerExchange exchange, final Database database,
       final ServerSecurityUser user) {
     final HeaderValues sessionId = exchange.getRequestHeaders().get(HttpSessionManager.ARCADEDB_SESSION_ID);
@@ -371,11 +511,16 @@ public abstract class DatabaseAbstractHandler extends AbstractServerHttpHandler 
         // The session id is not resolvable (committed/rolled back, expired, or owned by another principal).
         // A write-capable handler MUST reject it: falling through session-less would run the command in an
         // implicit auto-committing transaction while the client believes it is inside a transaction it can
-        // still roll back. Read-only handlers (GET /query) and the transaction endpoints
-        // (/begin, /commit, /rollback) instead degrade to a session-less request, keeping read-after-commit
-        // and idempotent retries of commit/rollback working.
-        if (requiresTransaction())
+        // still roll back. Read-only handlers (GET /query, and the nine read routes under /api/v1/ts that
+        // issues #7402 and #7681 moved onto this class) and the transaction endpoints (/begin, /commit,
+        // /rollback) instead degrade to a session-less request, keeping read-after-commit and idempotent
+        // retries of commit/rollback working.
+        if (rejectsUnresolvableSession())
           throw new HttpSessionException("Remote transaction '" + sessionId.getFirst() + "' not found or expired");
+
+        // The degrade is deliberate but must not be silent: the caller believes it is inside a transaction and is
+        // about to be answered from outside one (issue #7714). See SESSION_EXPIRED.
+        exchange.getResponseHeaders().put(SESSION_EXPIRED_HEADER, sanitizedSessionId(sessionId.getFirst()));
 
         return null;
       }

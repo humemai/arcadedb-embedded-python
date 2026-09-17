@@ -36,16 +36,38 @@ public final class ColumnDefinition {
   private final Type            dataType;
   private final ColumnRole      role;
   private final TimeSeriesCodec compressionHint;
+  private final boolean         explicitCodec;
 
+  /**
+   * A column whose codec is DERIVED from its data type and role, through {@link #defaultCodecFor}.
+   * <p>
+   * This is what {@code withTimestamp}/{@code withTag}/{@code withField} build, and what a {@code CREATE
+   * TIMESERIES TYPE} column with no {@code CODEC} clause parses to. A renderer must NOT name the resolved codec
+   * back, or it would freeze today's default table into the statement - see {@link #isExplicitCodec()}.
+   */
   public ColumnDefinition(final String name, final Type dataType, final ColumnRole role) {
-    this(name, dataType, role, defaultCodecFor(dataType, role));
+    this.name = name;
+    this.dataType = dataType;
+    this.role = role;
+    this.compressionHint = defaultCodecFor(dataType, role);
+    this.explicitCodec = false;
   }
 
+  /**
+   * A column whose codec was NAMED by the caller: a {@code CODEC} clause, a {@code "compression"} entry in an
+   * export or in {@code schema.json}, or an application handing a {@link ColumnDefinition} to
+   * {@code withColumn}. The codec travels with the column from here on, default table or not.
+   * <p>
+   * {@code null} is read as "none named" rather than stored: the codec is resolved from the default table and the
+   * column is indistinguishable from the 3-argument one. Nothing in {@code src/main} passes it, and the
+   * alternative is a column whose codec is {@code null} on every read path that asks for it.
+   */
   public ColumnDefinition(final String name, final Type dataType, final ColumnRole role, final TimeSeriesCodec compressionHint) {
     this.name = name;
     this.dataType = dataType;
     this.role = role;
-    this.compressionHint = compressionHint;
+    this.compressionHint = compressionHint != null ? compressionHint : defaultCodecFor(dataType, role);
+    this.explicitCodec = compressionHint != null;
   }
 
   public String getName() {
@@ -65,6 +87,25 @@ public final class ColumnDefinition {
   }
 
   /**
+   * Whether this column's codec was NAMED by whoever built it, rather than derived from the default table
+   * (issue #7703).
+   * <p>
+   * The codec is always populated, so before this flag existed the only way to ask was "does it differ from
+   * {@link #defaultCodecFor}?" - which answers NO for a column that named the very codec the table happens to
+   * return today. A renderer that omits the clause on that answer emits DDL the receiving build re-derives, and
+   * a build whose default table has since moved resolves a DIFFERENT codec: the restored type is not the
+   * exported one, and nothing says so. That is exactly the failure issue #5475 fixed, re-entered through the
+   * DDL door, and {@link #legacyCodecFor} exists because the table has already changed once.
+   * <p>
+   * The distinction is a property of the COLUMN rather than a mode on the renderer, so it survives every hop a
+   * column definition makes - export to import, {@code schema.json} to builder, builder to SQL - without a
+   * caller having to remember to turn it on.
+   */
+  public boolean isExplicitCodec() {
+    return explicitCodec;
+  }
+
+  /**
    * Returns the fixed byte size for this column's data type in the mutable row format, or -1 for a
    * variable-length column (STRING, and any type not storable in a fixed-stride row).
    * <p>
@@ -75,6 +116,26 @@ public final class ColumnDefinition {
    */
   public int getFixedSize() {
     return fixedSizeOf(dataType);
+  }
+
+  /**
+   * Whether an aggregate other than COUNT can read this column as a number on BOTH storage layers (issue #7725).
+   * <p>
+   * Asked of the CODEC rather than of the data type, because the codec is exactly what decides the answer: the
+   * sealed layer reads an aggregation column through {@code decompressDoubleColumnFromBytes}, which decodes
+   * {@code GORILLA_XOR} and {@code SIMPLE8B} and throws on everything else. So a {@code STRING} field, a TAG of
+   * any declared type (a tag is always {@code DICTIONARY}, even a {@code LONG} one) and the timestamp column
+   * itself are all unreadable there, whatever their {@link Type} suggests.
+   * <p>
+   * Before this existed the two layers disagreed about such a column instead of refusing it: the mutable path
+   * answered a real {@code 0.0} per sample and the sealed path threw, so the same request answered 200 with
+   * zeros until compaction ran and 500 afterwards.
+   */
+  public boolean isNumericallyAggregatable() {
+    return switch (getCompressionHint()) {
+      case GORILLA_XOR, SIMPLE8B -> true;
+      default -> false;
+    };
   }
 
   /**
@@ -198,8 +259,34 @@ public final class ColumnDefinition {
   }
 
   /**
+   * Numeric view of a value as THIS column stores it, for the {@code GORILLA_XOR} encoder and for the
+   * min/max/sum block statistics the aggregation push-down answers from (issue #7743).
+   * <p>
+   * The one thing it adds over {@link #numericValueOf(Object)} is the null: a floating-point column stores it
+   * as {@link TimeSeriesNaN#ABSENT}, because it can, and every other column as zero, because it cannot. Both
+   * halves have to be spelled here rather than at each call site, because the statistics describe the bytes and
+   * would otherwise declare a minimum of zero for a block whose encoder wrote no zero.
+   *
+   * @see TimeSeriesBatch#rawNull(byte) the same rule on the mutable side
+   */
+  public double storedNumericValueOf(final Object value) {
+    if (value == null)
+      return storesAbsentMarker() ? TimeSeriesNaN.ABSENT : 0.0;
+    return numericValueOf(value);
+  }
+
+  /**
+   * Whether "no measurement" has a representation in this column's stored form: a floating-point column has
+   * NaN, and nothing else has anything (issue #7743).
+   */
+  public boolean storesAbsentMarker() {
+    return dataType == Type.DOUBLE || dataType == Type.FLOAT;
+  }
+
+  /**
    * Numeric view of a stored value, for the min/max/sum block statistics used by aggregation
-   * push-down. {@code null} counts as zero, matching what the column stores for it.
+   * push-down. {@code null} counts as zero, which is what a column with no absent marker stores for it;
+   * a floating-point column goes through {@link #storedNumericValueOf(Object)} instead.
    */
   public static double numericValueOf(final Object value) {
     if (value == null)
@@ -224,7 +311,12 @@ public final class ColumnDefinition {
     };
   }
 
-  private static TimeSeriesCodec defaultCodecFor(final Type dataType, final ColumnRole role) {
+  /**
+   * The codec a column of this data type and role gets when none is named. Public because a caller that has to
+   * decide whether a {@link ColumnDefinition} carries an EXPLICIT codec has no other way to ask: the codec is always
+   * populated, so "explicit" is only visible as "differs from this" (issue #7399).
+   */
+  public static TimeSeriesCodec defaultCodecFor(final Type dataType, final ColumnRole role) {
     if (role == ColumnRole.TIMESTAMP)
       return TimeSeriesCodec.DELTA_OF_DELTA;
     if (role == ColumnRole.TAG)

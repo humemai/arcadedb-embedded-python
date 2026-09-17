@@ -20,7 +20,9 @@ package com.arcadedb.server.http.handler;
 
 import com.arcadedb.database.Database;
 import com.arcadedb.log.LogManager;
+import com.arcadedb.query.sql.executor.ExecutionPlan;
 import com.arcadedb.query.sql.executor.ResultSet;
+import com.arcadedb.query.sql.parser.ExplainResultSet;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.monitor.QueryProfile;
@@ -97,8 +99,24 @@ public class GetQueryHandler extends AbstractQueryHandler {
         final int limit = resolveLimit(requestLimit, planLimit);
         profile.addEngineNanos(System.nanoTime() - engineStart);
 
+        // Issue #7575. EXPLAIN is the one statement whose answer is a plan rather than rows, and this handler
+        // had no branch for it in either arm: a streamed one put the plan row on the wire as an
+        // NdJsonQueryEvent 'record' no consumer knows how to read, and a buffered one serialized it as if it
+        // were a record, so the 'explain'/'explainPlan' envelope properties the POST operations produce were
+        // unreachable from here. Both arms now do what POST does, through the same three methods on
+        // AbstractQueryHandler, so the three ndjson-capable query operations cannot drift apart again.
+        if (streaming)
+          requireStreamableResultSet(qResult);
+
         final long serializationStart = System.nanoTime();
-        if (streaming) {
+        if (qResult instanceof ExplainResultSet) {
+          final ExecutionPlan executionPlan = drainExplainResultSet(qResult);
+          final SerializationOutcome outcome = serializeResultSetBounded(database, serializer, limit,
+              getMaxResultRows(), response, qResult, includeTypeHints);
+          reportLimits(response, limit, outcome);
+          reportExplainPlan(response, executionPlan);
+          profile.addSerializationNanos(System.nanoTime() - serializationStart);
+        } else if (streaming) {
           // The response is written here, row by row, and the method returns null below so the request pipeline
           // does not send a second one (issue #7306).
           final SerializationOutcome outcome = streamResultSetAsNdJson(exchange, database, serializer, limit,
@@ -162,12 +180,21 @@ public class GetQueryHandler extends AbstractQueryHandler {
   }
 
   /**
-   * A buffered GET query is short enough to answer on the IO thread, which is what this handler has always done.
-   * A streamed one is not: it writes blocking output for as long as the client takes to read it, and blocking an
-   * IO thread starves every other connection the server is serving on it.
+   * A buffered, session-less GET query is short enough to answer on the IO thread, which is what this handler has
+   * always done. Two kinds of request are not:
+   * <ul>
+   * <li>a STREAMED one, which writes blocking output for as long as the client takes to read it;</li>
+   * <li>one that names a session (issue #7684), because {@code DatabaseAbstractHandler.execute} then runs it
+   * inside {@code HttpSession.execute}, which waits up to five seconds on the session lock. "Short" is a
+   * property of the query; the lock wait is not, and it is reached by nothing worse than a client issuing two
+   * requests on one session at the same time, or retrying one whose predecessor is still running.</li>
+   * </ul>
+   * Blocking an IO thread starves every other connection multiplexed onto it, so neither cost is paid by the
+   * caller that incurred it. A session-less buffered GET keeps answering on the IO thread, so nothing gets
+   * slower for the common case.
    */
   @Override
   protected boolean mustExecuteOnWorkerThread(final HttpServerExchange exchange) {
-    return isNdJsonRequested(exchange);
+    return isNdJsonRequested(exchange) || carriesSessionId(exchange);
   }
 }

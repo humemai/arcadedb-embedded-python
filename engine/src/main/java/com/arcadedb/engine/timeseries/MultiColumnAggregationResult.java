@@ -69,6 +69,15 @@ public final class MultiColumnAggregationResult {
   private Map<Long, double[]> overflowValues;
   private Map<Long, long[]>   overflowCounts;
 
+  // --- Response ceiling (issue #7724) ---
+  // The number of buckets the caller will accept, 0 for no ceiling, and the running count of the buckets
+  // something has actually landed in. A scan asks isOverBucketCeiling() as it goes and stops the moment the
+  // answer can no longer be sent, so an oversized request costs the work of reaching the ceiling rather than
+  // the work of computing an answer that is thrown away. In flat mode the count cannot be read off
+  // bucketUsed[] without walking it, hence the counter; in map mode orderedBuckets already is the count.
+  private int bucketCeiling;
+  private int flatUsedBuckets;
+
   /**
    * Map-mode constructor (original behavior).
    */
@@ -323,6 +332,9 @@ public final class MultiColumnAggregationResult {
    * "was the accumulator ever touched" guard here any more - the seed carries that answer itself, which is what
    * issues #4596 and #7043 needed and what a count-based guard could not give (a NaN sample increments the count
    * without contributing a value).
+   * <p>
+   * SUM and AVG answer the same way (issue #7089), and answer it whether the request was offered only absent
+   * samples or offered none at all: the two are one question here, decided in issue #7694.
    */
   public double getValue(final long bucketTs, final int requestIndex) {
     if (flatMode) {
@@ -361,14 +373,40 @@ public final class MultiColumnAggregationResult {
   }
 
   public int size() {
-    if (flatMode) {
-      int count = overflowValues != null ? overflowValues.size() : 0;
-      for (int b = 0; b < maxBuckets; b++)
-        if (bucketUsed[b])
-          count++;
-      return count;
-    }
-    return valuesByBucket.size();
+    return getUsedBucketCount();
+  }
+
+  /**
+   * The number of buckets something has landed in, which is the number of rows
+   * {@link #getBucketTimestamps()} will hand back. O(1) in both modes.
+   */
+  public int getUsedBucketCount() {
+    if (flatMode)
+      return flatUsedBuckets + (overflowValues != null ? overflowValues.size() : 0);
+    return orderedBuckets.size();
+  }
+
+  /**
+   * Declares the largest number of buckets the caller can accept, {@code <= 0} for no ceiling (issue #7724).
+   * <p>
+   * A bound on the WORK, not a truncation: a result that trips the ceiling is incomplete by construction and
+   * exists only to be refused. Every surface that sets one already refuses a bucket count above it after the
+   * fact - {@code /ts/query}, the Grafana query route, the gRPC bucket stream - and that refusal is what still
+   * answers the caller, unchanged in wording. What changes is its price: the scan stops as soon as the count
+   * passes the ceiling instead of visiting the whole range first. Because the scan stops only once the count is
+   * ALREADY above the ceiling, the after-the-fact check necessarily fires, so no caller can receive a partial
+   * result.
+   */
+  public void setBucketCeiling(final int bucketCeiling) {
+    this.bucketCeiling = bucketCeiling;
+  }
+
+  /**
+   * Whether this result has passed the ceiling {@link #setBucketCeiling(int)} declared, i.e. whether the scan
+   * filling it is now doing work that can only end in a refusal. Always false when no ceiling was declared.
+   */
+  public boolean isOverBucketCeiling() {
+    return bucketCeiling > 0 && getUsedBucketCount() > bucketCeiling;
   }
 
   /**
@@ -488,6 +526,7 @@ public final class MultiColumnAggregationResult {
       return false;
     if (!bucketUsed[idx]) {
       bucketUsed[idx] = true;
+      flatUsedBuckets++;
       flatValues[idx] = newInitializedValues();
       flatCounts[idx] = new long[requestCount];
       cachedBucketTimestamps = null; // invalidate cache
@@ -506,6 +545,16 @@ public final class MultiColumnAggregationResult {
    * {@link TimeSeriesNaN#min}/{@link TimeSeriesNaN#max} as the fold, "nothing real arrived" IS the value, and no
    * side-channel is needed to recover it. SUM/AVG follow since issue #7089: a zero seed cannot tell "nothing real
    * arrived" from "it all added up to zero", and the {@code +=} it fed turned one NaN sample into a NaN total.
+   * <p>
+   * SUM keeps the absent seed too, rather than the additive identity issue #7506 gave it (issue #7694). That seed
+   * existed so a request nothing was ever offered in a bucket could answer the empty sum instead of an absence -
+   * a state no QUERY produces: every call site in {@code src/main} goes through {@link #accumulateRow} or
+   * {@link #accumulateBlockStats}, which take one value per request, or loops {@link #accumulateSingleStat} over
+   * all of them, so a bucket that exists has been offered to every request. The single-request
+   * {@link #accumulate(long, int, double)} can still construct it, and the tests do; what it cannot do is come
+   * from a query. The distinction also disagreed with SQL's {@code SUM}, which is NULL over an empty group and
+   * over an all-NULL one alike. COUNT is the one accumulator seeded with a number, counting rows as
+   * {@code COUNT(*)} does.
    */
   private double[] newInitializedValues() {
     final double[] vals = new double[requestCount];

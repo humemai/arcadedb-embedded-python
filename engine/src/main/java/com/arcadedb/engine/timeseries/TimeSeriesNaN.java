@@ -43,6 +43,13 @@ package com.arcadedb.engine.timeseries;
  * it - which is why the SUM fold is keyed on that count rather than on the accumulator's value. {@code COUNT} is the one aggregate that does not
  * skip: it counts rows, as SQL's {@code COUNT(*)} does, and the SQL push-down maps it from {@code count(*)}.
  * <p>
+ * A window offered no sample at all and one whose samples were all absent get the SAME answer, {@link #ABSENT},
+ * and no accumulator tells them apart (issue #7694). Issue #7506 briefly seeded SUM at the additive identity so
+ * that they could be: no query reaches that state - see {@code MultiColumnAggregationResult.newInitializedValues}
+ * for which paths rule it out - and it disagreed with the SQL semantics this policy is modelled on, where
+ * {@code SUM} over an empty group and over an all-NULL group are both NULL. {@code COUNT} remains the one
+ * aggregate that answers the number zero for no rows.
+ * <p>
  * The PromQL layer is deliberately NOT under this policy for {@code sum}/{@code avg}: Prometheus propagates NaN
  * through those, and a PromQL query is expected to answer what Prometheus would.
  *
@@ -63,6 +70,44 @@ public final class TimeSeriesNaN {
    */
   public static boolean isAbsent(final double value) {
     return Double.isNaN(value);
+  }
+
+  /**
+   * The double a value read from the MUTABLE layer contributes to an aggregate, unboxed exactly the way the
+   * SEALED layer's codecs unbox the same value on the way in (issue #7725).
+   * <p>
+   * The mutable and the sealed layer answer the same samples, so they have to answer them alike: whether a
+   * sample has been compacted yet is not a question a caller asked. The two used to differ in two ways, both
+   * silent. A {@link Boolean} is not a {@link Number} - {@code BOOLEAN} has been an integer column since issue
+   * #5475 - so the mutable path read every boolean sample as a real {@code 0.0} while the sealed path, whose
+   * {@code SIMPLE8B} column went through {@link ColumnDefinition#integerValueOf(Object)}, read the same samples
+   * as 1 and 0. And anything else that is not a measurement became a real {@code 0.0} as well, which under this
+   * class's policy is a MEASUREMENT of zero: it enters the SUM and drags the AVG toward it, where
+   * {@link #ABSENT} would have been skipped by every aggregate.
+   * <p>
+   * {@code null} is zero rather than absent, and that is not a policy choice made here: it is what the column
+   * STORES for it, so answering anything else would recreate the very disagreement this method exists to remove.
+   * Since issue #7743 that answer depends on the column and is decided before the value ever reaches this method:
+   * a floating-point column writes a null out as {@link #ABSENT} on both layers - {@link TimeSeriesBatch#rawNull}
+   * on the mutable page, {@link ColumnDefinition#storedNumericValueOf} in the {@code GORILLA_XOR} encoder and in
+   * the block statistics - so a null measurement arrives here as a NaN {@link Double} and is skipped by every
+   * aggregate, which is what a client saying "no measurement here" asked for. Every other numeric column has no
+   * value to spend on absence, writes the null out as a real zero, and reads it back through this arm.
+   * <p>
+   * The remaining arm - a value that is neither null, a boolean nor a number - is a column the sealed layer
+   * cannot read as a number at all ({@code DICTIONARY} and {@code DELTA_OF_DELTA} have no numeric decoder, and
+   * {@code decompressDoubleColumnFromBytes} throws on them). Such a request is refused before it reaches either
+   * layer, by {@link TimeSeriesGateway#requireAggregatableColumn}; this answers {@link #ABSENT} so that a path
+   * that ever slips past the refusal reports a gap rather than inventing a zero.
+   */
+  public static double asMeasurement(final Object value) {
+    if (value == null)
+      return 0.0;
+    if (value instanceof final Number n)
+      return n.doubleValue();
+    if (value instanceof final Boolean b)
+      return b ? 1.0 : 0.0;
+    return ABSENT;
   }
 
   /**
