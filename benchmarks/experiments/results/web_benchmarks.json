@@ -234,6 +234,7 @@
     "container:30cd7e9192c1 (host unknown)",
     "container:31c2896725a8 (host unknown)",
     "container:332d041ed47c (host unknown)",
+    "container:3345b2a728d5 (host unknown)",
     "container:33df25a17869 (host unknown)",
     "container:33ed64e2098c (host unknown)",
     "container:3411350a268e (host unknown)",
@@ -256,6 +257,7 @@
     "container:3f1ecf2ad71a (host unknown)",
     "container:40411823c868 (host unknown)",
     "container:419932f15a5c (host unknown)",
+    "container:428086fce407 (host unknown)",
     "container:43af42ab2012 (host unknown)",
     "container:43d521031738 (host unknown)",
     "container:43f617498809 (host unknown)",
@@ -292,7 +294,6 @@
     "container:50b5255f3b4b (host unknown)",
     "container:50ca4c00c4d4 (host unknown)",
     "container:540e6dc1d521 (host unknown)",
-    "container:542b48ee6d8c (host unknown)",
     "container:5440e5d98766 (host unknown)",
     "container:54d0943b3f23 (host unknown)",
     "container:5700f1096187 (host unknown)",
@@ -355,10 +356,10 @@
     "container:77d0d0c52b8e (host unknown)",
     "container:77dd8173d40b (host unknown)",
     "container:793c4f17e248 (host unknown)",
+    "container:7a9bcb89d771 (host unknown)",
     "container:7b2de57e8af2 (host unknown)",
     "container:7b47b18f14ac (host unknown)",
     "container:7b830271fdbd (host unknown)",
-    "container:7c06dc7b1fad (host unknown)",
     "container:7c0cc10aaa98 (host unknown)",
     "container:7c8b3a3a8ce4 (host unknown)",
     "container:7cda220d6b9b (host unknown)",
@@ -473,6 +474,7 @@
     "container:bbdfdbb1c384 (host unknown)",
     "container:bbf5124a06c3 (host unknown)",
     "container:bc0754ea5071 (host unknown)",
+    "container:bd6c3d96f4e9 (host unknown)",
     "container:bd6d2850b2a5 (host unknown)",
     "container:bd7bed2042dd (host unknown)",
     "container:be792ad767f6 (host unknown)",
@@ -493,7 +495,6 @@
     "container:c4d814e24a9e (host unknown)",
     "container:c614c27f1711 (host unknown)",
     "container:c650ecda550a (host unknown)",
-    "container:c659e4f25cc3 (host unknown)",
     "container:c6dd3fd12b35 (host unknown)",
     "container:c6fc870eb7eb (host unknown)",
     "container:c81926749c63 (host unknown)",
@@ -503,7 +504,6 @@
     "container:cc1f2b2b6e22 (host unknown)",
     "container:cdda81ac28e3 (host unknown)",
     "container:cdf80a395ddf (host unknown)",
-    "container:ceda8119abc2 (host unknown)",
     "container:cf22f75007e0 (host unknown)",
     "container:cf8f271444a5 (host unknown)",
     "container:cfbf4e1bf664 (host unknown)",
@@ -533,6 +533,7 @@
     "container:da8555a4594a (host unknown)",
     "container:daa52b1b107e (host unknown)",
     "container:dd516f6f0aab (host unknown)",
+    "container:dd614c3c6780 (host unknown)",
     "container:ddc3d3286cb8 (host unknown)",
     "container:df26e258e629 (host unknown)",
     "container:dfc40e0e74ed (host unknown)",
@@ -543,7 +544,6 @@
     "container:e252c422db5f (host unknown)",
     "container:e2daa6c96d75 (host unknown)",
     "container:e3616efaf613 (host unknown)",
-    "container:e3e9b72b53fb (host unknown)",
     "container:e4123a3ef89a (host unknown)",
     "container:e4371072a603 (host unknown)",
     "container:e4953966cde4 (host unknown)",
@@ -3475,15 +3475,15 @@
               "n": 5
             },
             "peak memory GiB": {
-              "median": 13.2252,
-              "min": 13.0452,
-              "max": 14.1463,
+              "median": 13.092,
+              "min": 12.5294,
+              "max": 14.1418,
               "n": 5
             },
             "disk GiB": {
-              "median": 0.0006,
-              "min": 0.0005,
-              "max": 0.0009,
+              "median": 0.7393,
+              "min": 0.6847,
+              "max": 0.993,
               "n": 5
             }
           }
@@ -5109,69 +5109,75 @@
           "host": null,
           "metrics": {
             "point p50 ms": {
-              "median": 0.094,
+              "median": 0.113,
               "min": 0.093,
-              "max": 0.103,
+              "max": 0.116,
               "n": 5
             },
             "point p99 ms": {
-              "median": 0.264,
-              "min": 0.247,
-              "max": 0.622,
+              "median": 0.297,
+              "min": 0.27,
+              "max": 0.594,
               "n": 5
             },
             "1-hop p50 ms": {
-              "median": 0.171,
-              "min": 0.156,
-              "max": 0.171,
+              "median": 0.186,
+              "min": 0.153,
+              "max": 0.227,
               "n": 5
             },
             "1-hop p99 ms": {
-              "median": 0.64,
-              "min": 0.557,
-              "max": 0.692,
-              "n": 5
-            },
-            "2-hop p50 ms": {
-              "median": 0.567,
-              "min": 0.469,
+              "median": 0.575,
+              "min": 0.507,
               "max": 0.677,
               "n": 5
             },
+            "2-hop p50 ms": {
+              "median": 0.504,
+              "min": 0.431,
+              "max": 0.702,
+              "n": 5
+            },
             "2-hop p99 ms": {
-              "median": 2.951,
-              "min": 2.776,
-              "max": 3.028,
+              "median": 3.054,
+              "min": 2.687,
+              "max": 3.356,
               "n": 5
             },
             "write p50 ms": {
-              "median": 17.517,
-              "min": 17.484,
-              "max": 17.664,
+              "median": 17.575,
+              "min": 17.432,
+              "max": 17.762,
               "n": 5
             },
             "write p99 ms": {
-              "median": 29.218,
-              "min": 26.695,
-              "max": 44.449,
+              "median": 32.268,
+              "min": 29.511,
+              "max": 32.381,
               "n": 5
             },
             "ingest vertices+edges/s": {
-              "median": 19886.7432,
-              "min": 19302.4316,
-              "max": 20033.123,
+              "median": 20033.123,
+              "min": 19500.0,
+              "max": 20375.9358,
               "n": 5
             },
             "ingest total s": {
-              "median": 9.58,
-              "min": 9.51,
-              "max": 9.87,
+              "median": 9.51,
+              "min": 9.35,
+              "max": 9.77,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 0.3041,
-              "min": 0.2999,
-              "max": 0.3327,
+              "median": 0.3054,
+              "min": 0.2908,
+              "max": 0.334,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0471,
+              "min": 0.0471,
+              "max": 0.0471,
               "n": 5
             }
           }
@@ -5712,69 +5718,75 @@
           "host": null,
           "metrics": {
             "point p50 ms": {
-              "median": 0.176,
-              "min": 0.173,
-              "max": 0.208,
+              "median": 0.173,
+              "min": 0.151,
+              "max": 0.18,
               "n": 5
             },
             "point p99 ms": {
-              "median": 0.604,
-              "min": 0.563,
-              "max": 0.699,
+              "median": 0.67,
+              "min": 0.527,
+              "max": 0.714,
               "n": 5
             },
             "1-hop p50 ms": {
-              "median": 0.432,
-              "min": 0.384,
-              "max": 0.472,
+              "median": 0.415,
+              "min": 0.392,
+              "max": 0.443,
               "n": 5
             },
             "1-hop p99 ms": {
-              "median": 1.474,
-              "min": 1.429,
-              "max": 1.795,
+              "median": 1.436,
+              "min": 1.4,
+              "max": 1.547,
               "n": 5
             },
             "2-hop p50 ms": {
-              "median": 1.242,
-              "min": 1.23,
-              "max": 1.292,
+              "median": 1.221,
+              "min": 1.128,
+              "max": 1.273,
               "n": 5
             },
             "2-hop p99 ms": {
-              "median": 13.941,
-              "min": 13.458,
-              "max": 14.527,
+              "median": 13.794,
+              "min": 12.962,
+              "max": 14.05,
               "n": 5
             },
             "write p50 ms": {
-              "median": 17.673,
-              "min": 17.628,
-              "max": 18.052,
+              "median": 17.644,
+              "min": 17.516,
+              "max": 17.879,
               "n": 5
             },
             "write p99 ms": {
-              "median": 25.912,
-              "min": 22.51,
-              "max": 35.469,
+              "median": 29.653,
+              "min": 20.871,
+              "max": 33.199,
               "n": 5
             },
             "ingest vertices+edges/s": {
-              "median": 17929.5133,
-              "min": 17829.0277,
-              "max": 18133.9215,
+              "median": 17833.7872,
+              "min": 17795.7823,
+              "max": 17977.7628,
               "n": 5
             },
             "ingest total s": {
-              "median": 111.78,
-              "min": 110.52,
-              "max": 112.41,
+              "median": 112.38,
+              "min": 111.48,
+              "max": 112.62,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 1.9937,
-              "min": 1.9277,
-              "max": 2.0265,
+              "median": 2.0228,
+              "min": 1.9724,
+              "max": 2.0437,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.2588,
+              "min": 0.2588,
+              "max": 0.2589,
               "n": 5
             }
           }
@@ -6459,57 +6471,63 @@
           "host": null,
           "metrics": {
             "ingest vertices+edges/s": {
-              "median": 19460.1634,
-              "min": 19070.5706,
-              "max": 19970.1258,
+              "median": 19681.3017,
+              "min": 19341.6244,
+              "max": 19886.7432,
               "n": 5
             },
             "ingest total s": {
-              "median": 9.79,
-              "min": 9.54,
-              "max": 9.99,
+              "median": 9.68,
+              "min": 9.58,
+              "max": 9.85,
               "n": 5
             },
             "average friend age p50 ms": {
-              "median": 691.04,
-              "min": 688.07,
-              "max": 693.87,
+              "median": 700.12,
+              "min": 681.93,
+              "max": 717.85,
               "n": 5
             },
             "average friend age p99 ms": {
-              "median": 706.54,
-              "min": 698.26,
-              "max": 708.21,
+              "median": 712.23,
+              "min": 692.65,
+              "max": 728.24,
               "n": 5
             },
             "friends in same city p50 ms": {
-              "median": 690.05,
-              "min": 678.72,
-              "max": 692.3,
+              "median": 697.01,
+              "min": 669.96,
+              "max": 712.53,
               "n": 5
             },
             "friends in same city p99 ms": {
-              "median": 700.54,
-              "min": 694.67,
-              "max": 706.05,
+              "median": 705.22,
+              "min": 682.95,
+              "max": 723.44,
               "n": 5
             },
             "most friends p50 ms": {
-              "median": 103.53,
-              "min": 102.71,
-              "max": 103.92,
+              "median": 104.07,
+              "min": 102.97,
+              "max": 104.4,
               "n": 5
             },
             "most friends p99 ms": {
-              "median": 105.23,
-              "min": 104.8,
-              "max": 105.94,
+              "median": 105.83,
+              "min": 104.59,
+              "max": 106.96,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 0.3022,
-              "min": 0.2937,
-              "max": 0.3184,
+              "median": 0.3078,
+              "min": 0.2983,
+              "max": 0.3459,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0471,
+              "min": 0.0471,
+              "max": 0.0471,
               "n": 5
             }
           }
@@ -7065,57 +7083,63 @@
           "host": null,
           "metrics": {
             "ingest vertices+edges/s": {
-              "median": 17822.6856,
-              "min": 17721.8233,
-              "max": 18031.1381,
+              "median": 17770.5356,
+              "min": 17662.4747,
+              "max": 17956.8229,
               "n": 5
             },
             "ingest total s": {
-              "median": 112.45,
-              "min": 111.15,
-              "max": 113.09,
+              "median": 112.78,
+              "min": 111.61,
+              "max": 113.47,
               "n": 5
             },
             "average friend age p50 ms": {
-              "median": 7829.1,
-              "min": 7791.98,
-              "max": 7838.8,
+              "median": 7833.96,
+              "min": 7797.85,
+              "max": 7939.14,
               "n": 5
             },
             "average friend age p99 ms": {
-              "median": 7883.88,
-              "min": 7878.38,
-              "max": 8030.7,
+              "median": 7950.28,
+              "min": 7887.86,
+              "max": 8085.52,
               "n": 5
             },
             "friends in same city p50 ms": {
-              "median": 7919.26,
-              "min": 7889.01,
-              "max": 7920.91,
+              "median": 7930.64,
+              "min": 7917.19,
+              "max": 8042.33,
               "n": 5
             },
             "friends in same city p99 ms": {
-              "median": 7991.73,
-              "min": 7978.87,
-              "max": 8018.08,
+              "median": 8006.43,
+              "min": 7996.42,
+              "max": 8112.13,
               "n": 5
             },
             "most friends p50 ms": {
-              "median": 939.77,
-              "min": 937.68,
-              "max": 943.2,
+              "median": 942.39,
+              "min": 939.11,
+              "max": 945.08,
               "n": 5
             },
             "most friends p99 ms": {
-              "median": 952.96,
-              "min": 950.39,
-              "max": 954.86,
+              "median": 956.78,
+              "min": 951.77,
+              "max": 958.64,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 2.1187,
-              "min": 2.0961,
-              "max": 2.1629,
+              "median": 2.1357,
+              "min": 2.0866,
+              "max": 2.2171,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.2588,
+              "min": 0.2588,
+              "max": 0.2589,
               "n": 5
             }
           }
@@ -7781,33 +7805,39 @@
           "host": null,
           "metrics": {
             "p50 ms": {
-              "median": 14.998,
-              "min": 14.394,
-              "max": 16.18,
+              "median": 16.129,
+              "min": 16.005,
+              "max": 16.733,
               "n": 5
             },
             "p99 ms": {
-              "median": 29.33,
-              "min": 20.608,
-              "max": 62.958,
+              "median": 24.215,
+              "min": 19.519,
+              "max": 28.317,
               "n": 5
             },
             "ingest+index vertices+edges/s": {
-              "median": 16778.3557,
-              "min": 16433.6894,
-              "max": 16906.0017,
+              "median": 16420.197,
+              "min": 16366.4484,
+              "max": 16447.2039,
               "n": 5
             },
             "ingest+index total s": {
-              "median": 11.92,
-              "min": 11.83,
-              "max": 12.17,
+              "median": 12.18,
+              "min": 12.16,
+              "max": 12.22,
               "n": 5
             },
             "peak memory GiB": {
-              "median": 0.872,
-              "min": 0.8568,
-              "max": 0.9524,
+              "median": 0.9099,
+              "min": 0.8666,
+              "max": 0.9155,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.4809,
+              "min": 0.4739,
+              "max": 0.4811,
               "n": 5
             }
           }
@@ -11902,40 +11932,46 @@
           "host": null,
           "metrics": {
             "new-order p50 ms": {
-              "median": 10.041,
-              "min": 9.912,
-              "max": 10.069,
+              "median": 10.101,
+              "min": 10.012,
+              "max": 10.112,
               "n": 5
             },
             "new-order p99 ms": {
-              "median": 19.347,
-              "min": 17.532,
-              "max": 19.591,
+              "median": 19.34,
+              "min": 18.093,
+              "max": 20.299,
               "n": 5
             },
             "OLTP ops/s": {
-              "median": 95.2,
-              "min": 91.0,
-              "max": 96.0,
+              "median": 90.3,
+              "min": 82.5,
+              "max": 94.3,
               "n": 5
             },
             "ingest documents/s": {
-              "median": 7860.144,
-              "min": 7804.4917,
-              "max": 7919.3091,
+              "median": 21886.1766,
+              "min": 21819.1302,
+              "max": 22089.6057,
               "n": 10
             },
             "ingest total s": {
-              "median": 788.945,
-              "min": 783.05,
-              "max": 794.57,
+              "median": 283.34,
+              "min": 280.73,
+              "max": 284.21,
               "n": 10
             },
             "peak memory GiB": {
-              "median": 9.9951,
-              "min": 9.8324,
-              "max": 10.1263,
+              "median": 8.8856,
+              "min": 8.6223,
+              "max": 9.1277,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.6663,
+              "min": 0.6663,
+              "max": 0.667,
+              "n": 10
             }
           }
         }
@@ -12375,46 +12411,52 @@
           "host": null,
           "metrics": {
             "Q1 p50 ms": {
-              "median": 41126.37,
-              "min": 40917.5,
-              "max": 41208.05,
+              "median": 54886.5,
+              "min": 54523.29,
+              "max": 55177.79,
               "n": 5
             },
             "Q1 p99 ms": {
-              "median": 41708.64,
-              "min": 41486.54,
-              "max": 41846.81,
+              "median": 55411.68,
+              "min": 54965.33,
+              "max": 55751.32,
               "n": 5
             },
             "Q6 p50 ms": {
-              "median": 3334.8,
-              "min": 3300.97,
-              "max": 3411.05,
+              "median": 5376.79,
+              "min": 5219.83,
+              "max": 5540.97,
               "n": 5
             },
             "Q6 p99 ms": {
-              "median": 3500.44,
-              "min": 3440.64,
-              "max": 3533.63,
+              "median": 5562.59,
+              "min": 5391.77,
+              "max": 5627.47,
               "n": 5
             },
             "ingest documents/s": {
-              "median": 7860.144,
-              "min": 7804.4917,
-              "max": 7919.3091,
+              "median": 21886.1766,
+              "min": 21819.1302,
+              "max": 22089.6057,
               "n": 10
             },
             "ingest total s": {
-              "median": 788.945,
-              "min": 783.05,
-              "max": 794.57,
+              "median": 283.34,
+              "min": 280.73,
+              "max": 284.21,
               "n": 10
             },
             "peak memory GiB": {
-              "median": 9.9951,
-              "min": 9.8324,
-              "max": 10.1263,
+              "median": 8.8856,
+              "min": 8.6223,
+              "max": 9.1277,
               "n": 5
+            },
+            "disk GiB": {
+              "median": 0.6663,
+              "min": 0.6663,
+              "max": 0.667,
+              "n": 10
             }
           }
         }
