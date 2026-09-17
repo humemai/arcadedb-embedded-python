@@ -179,10 +179,39 @@ def main():
                "benchmarks/experiments/results/generated",
                "benchmarks/experiments/results/generated/preview-tables.md" if args.preview
                else "benchmarks/experiments/PAGE-SPEC.md"]
-    sh(["git", "add"] + tracked, cwd=REPO)
-    sh(["git", "commit", "-q", "-m", f"results: {args.message}{TRAILER}"], cwd=REPO, check=False)
+    # THE COMMIT MUST BE VERIFIED, NOT ASSUMED. 2026-09-18 (BUGS F56): the
+    # pre-commit hook rewrote a staged JSON file, git aborted the commit, this
+    # script printed LANDED and pushed nothing, and the frozen rows sat staged
+    # and uncommitted while the site had already moved. A hook that rewrites a
+    # file aborts the commit; the fix is to re-add and commit once more, and
+    # to refuse the LANDED line unless HEAD actually moved.
+    before_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, text=True,
+                                 capture_output=True).stdout.strip()
+    for attempt in (1, 2):
+        sh(["git", "add"] + tracked, cwd=REPO)
+        rc = sh(["git", "commit", "-q", "-m", f"results: {args.message}{TRAILER}"],
+                cwd=REPO, check=False).returncode
+        after_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, text=True,
+                                    capture_output=True).stdout.strip()
+        if after_head != before_head:
+            break
+        dirty = subprocess.run(["git", "status", "--short"] + tracked, cwd=REPO, text=True,
+                               capture_output=True).stdout.strip()
+        if not dirty:
+            print("  nothing to commit in the bindings repo (rows unchanged)")
+            break
+        print(f"  commit attempt {attempt} did not move HEAD (rc={rc}); a hook rewrote a staged file, retrying")
+    else:
+        print("\nREFUSED: the bindings commit did not land after two attempts; the site is pushed "
+              "but the frozen rows are not. Commit them by hand before anything else.")
+        return 1
     sh(["git", "push", "-q", "origin", "main"], cwd=REPO)
-    print("\nLANDED.")
+    pushed = subprocess.run(["git", "rev-parse", "origin/main"], cwd=REPO, text=True,
+                            capture_output=True).stdout.strip()
+    if pushed != after_head:
+        print(f"\nREFUSED: push did not land (origin/main {pushed[:10]} != HEAD {after_head[:10]}).")
+        return 1
+    print(f"\nLANDED. bindings {after_head[:10]}")
     return 0
 
 

@@ -21,7 +21,7 @@ Per stage, repeated inside step 6:
 
 1. Write the queue script, lint it with `queue_lint.py`, and chain it behind the previous one (section 5 below).
 2. Let it run. The session watches STATUS.txt and docker; investigate any failure before recording it, because a recorded failure is a published claim.
-3. Land it with `land_stage.py`: pull the rows, exclude the backends still running, merge, run the gates, read the table diff, then apply, which commits the data and publishes the page.
+3. Land it with `land_stage.py`: pull the rows, exclude the backends still running, merge, run the gates, read the table diff, then apply, which commits the data and publishes the page. `--exclude-backends` matches by prefix, so a family name catches its served twin (`surrealdb_dense` also drops `surrealdb_dense_server`); when the next stage re-runs one arm of a family, exclude by time instead, `--exclude-since` set to the finished stage's ALL-DONE timestamp, and read the `dropped` line the script prints before applying. The script refuses LANDED unless the bindings commit moved HEAD and the push reached origin (a pre-commit hook that rewrites a staged file aborts the commit; the script retries once).
 4. Regenerate anything derived from the rows that changed, such as the bottleneck memo. Do not write interpretation of the new rows on the page; that waits for the freeze (step 6 above).
 
 
