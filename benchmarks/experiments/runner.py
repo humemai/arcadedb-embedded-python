@@ -657,6 +657,62 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:client",
     },
+    # MEMGRAPH 3.13.1 (2026-09-17), served, Bolt through the same neo4j driver
+    # the Neo4j arm uses and the lane's Cypher verbatim (l2_graph.MemgraphGraph).
+    # Four of its defaults are sized from the HOST or unbounded, and each is
+    # set from the cell here and read back onto the row by the adapter:
+    #   --bolt-num-workers and --storage-snapshot-thread-count read 16 under a
+    #     12-CPU cpuset (SHOW CONFIG on the pinned image; FAIRNESS F6), so both
+    #     take {ncpu}, the size of the cell's cpuset;
+    #   --memory-limit=0 means 90% of PHYSICAL memory (it reported 30.35 GiB
+    #     inside an 8g container), so it takes {mem90_mib}, the engine's own
+    #     rule applied to the container cap instead of the host;
+    #   --query-execution-timeout-sec defaults to 600, which would abort a
+    #     triangle count the lane's own 300 s budget is meant to censor
+    #     (DECISIONS #82b); 0 disables it so the budget is the only censor;
+    #   --telemetry-enabled=false, the image default being true.
+    # INFO logging to stderr is what makes the ready line visible: at the
+    # default WARNING level the log shows only the banner, which prints
+    # about a second before Bolt listens. Durability (DECISIONS #90): the
+    # strict class appends --storage-wal-file-flush-every-n-tx=1 in
+    # durability_server_patch; the relaxed default is 100000.
+    "memgraph_graph": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1
+        "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
+                       "--bolt-num-workers={ncpu}",
+                       "--storage-snapshot-thread-count={ncpu}",
+                       "--memory-limit={mem90_mib}",
+                       "--query-execution-timeout-sec=0",
+                       "--telemetry-enabled=false"],
+        "server_port": 7687,
+        "ready_regex": r"Bolt server is fully armed and operational",
+    },
+    # FALKORDB 4.20.6 on Redis 8.6.3 (2026-09-17), served, the falkordb Python
+    # client over the Redis protocol and the lane's Cypher verbatim
+    # (l2_graph.FalkorGraph). The image's own FALKORDB_ARGS is
+    # "MAX_QUEUED_QUERIES 25 TIMEOUT 1000 RESULTSET_SIZE 10000": a one-second
+    # query timeout that aborts the triangle count at MICRO (1.2 s) and a
+    # 10,000-row result cap, the ArcadeDB HTTP 20,000-row trap in another
+    # engine. Replaced wholesale: RESULTSET_SIZE -1 (no cap), TIMEOUT left at
+    # the module default of 0 (no limit; the lane's budget censors), and
+    # THREAD_COUNT from the cpuset, because the module sizes its pool from the
+    # host's logical cores ("Thread pool created, using 16 threads" under a
+    # 12-CPU cpuset; FAIRNESS F6). BROWSER=0 stops the image's Next.js
+    # process, which would otherwise share the cell's cpuset and cap.
+    # Durability (DECISIONS #90): the strict class adds REDIS_ARGS
+    # "--appendonly yes --appendfsync always" in durability_server_patch;
+    # the relaxed default is RDB snapshots only.
+    "falkordb_graph": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",  # v4.20.6
+        "server_env": ["-e", "BROWSER=0",
+                       "-e", "FALKORDB_ARGS=THREAD_COUNT {ncpu} RESULTSET_SIZE -1"],
+        "server_port": 6379,
+        "ready_regex": r"Ready to accept connections",
+    },
     # ---- E2 hybrid-ACID lane ----
     "arcadedb_e2": {
         "topology": "embedded",
@@ -1337,7 +1393,7 @@ LANES = {
     "l2": ("l2_graph.py",
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
             "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server", "arangodb_graph",
-            "mongodb_graph"],
+            "mongodb_graph", "memgraph_graph", "falkordb_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
               ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "surrealdb_tpc",
@@ -1413,6 +1469,21 @@ LANES = {
 }
 
 
+def _cpuset_size(cpuset):
+    """How many CPUs a docker cpuset string names ('0-11', '0-5,8-11', '3')."""
+    n = 0
+    for part in str(cpuset).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            n += int(b) - int(a) + 1
+        else:
+            n += 1
+    return n
+
+
 def durability_server_patch(cfg, cls):
     """The SERVED half of the durability axis (DECISIONS #90).
 
@@ -1447,6 +1518,17 @@ def durability_server_patch(cfg, cls):
     if "questdb" in str(cfg.get("server_image", "")):
         env += ["-e", "QDB_CAIRO_COMMIT_MODE=sync"]
         notes.append("cairo.commit.mode=sync")
+    # Memgraph: the WAL is written at commit and fsynced every N transactions;
+    # N=1 is a sync at every commit (strace: 3,012 fsync for 3,009 commits).
+    if "memgraph" in str(cfg.get("server_image", "")):
+        cmd.append("--storage-wal-file-flush-every-n-tx=1")
+        notes.append("storage-wal-file-flush-every-n-tx=1")
+    # FalkorDB: Redis persistence. The image default is RDB snapshots only;
+    # AOF with appendfsync always is one fdatasync per write (strace: 3,011
+    # for 3,011 writes). REDIS_ARGS is the image entrypoint's own hook.
+    if "falkordb" in str(cfg.get("server_image", "")):
+        env += ["-e", "REDIS_ARGS=--appendonly yes --appendfsync always"]
+        notes.append("appendonly=yes, appendfsync=always")
     cfg["server_cmd"] = cmd
     cfg["server_env"] = env
     return cfg, (", ".join(notes) if notes else None)
@@ -2006,9 +2088,16 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # assumed cached). Only the tuned arm uses these; every other
             # backend's server_cmd has no placeholders and formats to itself.
             srv_gb = max(1, server_mem // (1 << 30))
+            # {ncpu} is the size of the cell's cpuset, for engines that size a
+            # thread pool from the host's core count regardless of the mask
+            # (FAIRNESS F6: FalkorDB's THREAD_COUNT, Memgraph's Bolt workers);
+            # {mem90_mib} is 90% of the server's cap in MiB, Memgraph's own
+            # memory-limit rule applied to the container rather than the host.
+            _fit = dict(ncpu=_cpuset_size(cpuset),
+                        mem90_mib=int(server_mem * 0.9) >> 20)
             server_cmd = [c.format(sb=f"{max(1, srv_gb // 4)}GB",
                                    ecs=f"{max(1, srv_gb * 3 // 4)}GB",
-                                   mwm=f"{max(1, srv_gb // 2)}GB")
+                                   mwm=f"{max(1, srv_gb // 2)}GB", **_fit)
                           for c in be.get("server_cmd", [])]
             # What it was actually launched with, so a reader of the row does
             # not have to re-derive it from the scale.
@@ -2028,7 +2117,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                              "--cpuset-cpus", cpuset,
                              "--memory", str(server_mem), "--memory-swap", str(server_mem),
                              "--shm-size", str(server_mem)]
-                            + [s.format(heap=heap, pagecache=_pagecache_for(server_mem, heap))
+                            + [s.format(heap=heap, pagecache=_pagecache_for(server_mem, heap),
+                                        **_fit)
                                for s in be.get("server_env", [])]
                             + be.get("server_volumes", [])
                             + [be["server_image"]]

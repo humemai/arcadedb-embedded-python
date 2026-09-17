@@ -395,7 +395,7 @@ class Neo4jGraph(Base):
                 s.run("UNWIND $rows AS r CREATE (:Person {id: r.id, "
                       "name: r.name, age: r.age, city: r.city})",
                       rows=batch).consume()
-            s.run("CALL db.awaitIndexes()").consume()
+            self._await_indexes(s)
             batch = []
             for src, dst, since in gen_edges(n_persons):
                 batch.append({"s": src, "d": dst, "y": since})
@@ -411,9 +411,15 @@ class Neo4jGraph(Base):
                       "CREATE (a)-[:KNOWS {since: r.y}]->(b)",
                       rows=batch).consume()
 
+    def _await_indexes(self, s):
+        """Neo4j populates an index in the background; wait for it before the
+        edge load looks persons up by id. A hook, because Memgraph below shares
+        this whole load path and builds its index synchronously instead."""
+        s.run("CALL db.awaitIndexes()").consume()
+
     def post_build(self, workload):
         with self.driver.session() as s:
-            s.run("CALL db.awaitIndexes()").consume()
+            self._await_indexes(s)
 
     def run_cypher(self, text):
         with self.driver.session() as s:
@@ -425,6 +431,207 @@ class Neo4jGraph(Base):
 
     def close(self):
         self.driver.close()
+
+
+class MemgraphGraph(Neo4jGraph):
+    """Memgraph 3.13.1 served (2026-09-17): the Neo4j arm's Bolt path, through
+    the same neo4j driver, and the lane's Cypher VERBATIM. Every one of the
+    twelve questions, the three writes and the two untimed read-backs ran
+    unchanged on the pinned image and every digest matched Neo4j's on the
+    micro corpus (laptop probe, 2026-09-17). What differs is the schema
+    statement (`CREATE INDEX ON :Person(id)` against Neo4j's `FOR (p:Person)
+    ON (p.id)`), that the index is built synchronously so there is nothing to
+    await, and that the server takes no auth by default.
+
+    IN MEMORY, BY DESIGN: the documented default storage mode is
+    IN_MEMORY_TRANSACTIONAL, which holds the whole graph in RAM with a WAL and
+    periodic snapshots on disk for recovery. Measured on the pinned image:
+    10,000 persons and 206,713 KNOWS cost 236 MiB of tracked memory, about
+    1.1 KiB per object, so SF10 (72,949 persons, about 1.9M edges) needs on
+    the order of 2.3 GiB for the graph before query memory, inside the 24g
+    the sf10 tier gives a server. Its own limit ignores the cgroup (it
+    reported 30.35 GiB inside an 8g container), so runner.py sets
+    --memory-limit to 90% of the container cap, which is the engine's own
+    rule for the default applied to the cap rather than to the host.
+
+    DURABILITY, READ BACK FROM SHOW CONFIG. storage-wal-enabled=true and
+    storage-wal-file-flush-every-n-tx=100000 are the image defaults: the WAL
+    is written at commit and fsynced every 100,000 transactions. strace on
+    the pinned image, build plus 3,009 commits: 1 fsync at the default and
+    3,012 with --storage-wal-file-flush-every-n-tx=1, which is what the strict
+    class sets (DECISIONS #90).
+    """
+    name = "memgraph_graph"
+
+    def connect(self):
+        import neo4j
+        host = os.environ["BENCH_SERVER_HOST"]
+        port = os.environ.get("BENCH_SERVER_PORT", "7687")
+        self.driver = neo4j.GraphDatabase.driver(f"bolt://{host}:{port}", auth=None)
+        self.driver.verify_connectivity()
+        with self.driver.session() as s:
+            v = s.run("SHOW VERSION").single()["version"]
+            cfg = {r["name"]: r["current_value"] for r in s.run("SHOW CONFIG")}
+        self.version = f"memgraph:{v}"
+        self.driver_version = f"neo4j-driver:{neo4j.__version__}"
+        # The settings that decide what was measured, from the server itself:
+        # the thread pool (FAIRNESS F6), the memory limit, the storage mode,
+        # and the query timeout the runner disables so the lane's own budget
+        # is the only censor (DECISIONS #82b).
+        self.row_extra = {
+            "driver_version": self.driver_version,
+            "memgraph_storage_mode": cfg.get("storage_mode"),
+            "memgraph_bolt_workers": _int_or(cfg.get("bolt_num_workers")),
+            "memgraph_snapshot_threads": _int_or(cfg.get("storage_snapshot_thread_count")),
+            "memgraph_memory_limit_mib": _int_or(cfg.get("memory_limit")),
+            "memgraph_query_timeout_s": _int_or(cfg.get("query_execution_timeout_sec")),
+            "memgraph_snapshot_interval_s": _int_or(cfg.get("storage_snapshot_interval_sec")),
+            "memgraph_wal_flush_every_n_tx": _int_or(cfg.get("storage_wal_file_flush_every_n_tx")),
+        }
+        self.durability = self._durability_readback(cfg)
+        with self.driver.session() as s:
+            s.run("CREATE INDEX ON :Person(id)").consume()
+
+    @staticmethod
+    def _durability_readback(cfg):
+        """The engine's own answer, never the flag we sent (DECISIONS #81)."""
+        wal = str(cfg.get("storage_wal_enabled"))
+        every = str(cfg.get("storage_wal_file_flush_every_n_tx"))
+        if wal == "true" and every == "100000":
+            return bench_common.DURABILITY_MEMGRAPH
+        if wal == "true" and every == "1":
+            return bench_common.DURABILITY_MEMGRAPH_STRICT
+        return (f"storage-wal-enabled={wal}, storage-wal-file-flush-every-n-tx={every}, "
+                "which is neither class (DECISIONS #90)")
+
+    def _await_indexes(self, s):
+        """CREATE INDEX returns once the index is built; Memgraph has no
+        db.awaitIndexes() and needs none."""
+
+
+def _int_or(v):
+    try:
+        return int(str(v))
+    except (TypeError, ValueError):
+        return v
+
+
+class FalkorGraph(Base):
+    """FalkorDB 4.20.6 served (2026-09-17): a Redis module, reached through the
+    falkordb Python client over the Redis protocol (GRAPH.QUERY), the lane's
+    Cypher VERBATIM. Every timed and untimed statement ran unchanged on the
+    pinned image and every digest matched Neo4j's on the micro corpus (laptop
+    probe, 2026-09-17); the only text of its own is the index statement,
+    `CREATE INDEX FOR (p:Person) ON (p.id)`, Neo4j's without the name. One
+    GRAPH.QUERY call is one transaction, so the write's CREATE-and-link and
+    the DETACH DELETE are atomic without a session.
+
+    THREE IMAGE DEFAULTS ARE OVERRIDDEN, each recorded on the row, because
+    each would have measured something other than the query:
+      * FALKORDB_ARGS in the image is "MAX_QUEUED_QUERIES 25 TIMEOUT 1000
+        RESULTSET_SIZE 10000": a one-second query timeout and a 10,000-row
+        result cap. The triangle count takes 1.2 s at MICRO, so the image's
+        own default would have aborted it, and the row cap is the ArcadeDB
+        20,000-row trap in another engine (HTTP_LIMIT above). The runner
+        sets RESULTSET_SIZE -1 and leaves TIMEOUT at the module default of
+        0, no limit, so the lane's budget is the only censor (#82b).
+      * THREAD_COUNT is sized from the HOST's logical cores: the log read
+        "Thread pool created, using 16 threads" under a 12-CPU cpuset, while
+        its OpenMP pool read 12 (FAIRNESS F6). The runner passes THREAD_COUNT
+        from the cpuset and the row records what the server reports.
+      * BROWSER=1 starts a Next.js process in the same container; BROWSER=0.
+
+    DURABILITY IS REDIS PERSISTENCE, read back with CONFIG GET. The image
+    default is RDB snapshots only (save "3600 1 300 100 60 10000", appendonly
+    no): a write returns with nothing on disk until the next snapshot.
+    strace on the pinned image, build plus 3,011 writes: 0 fsync at the
+    default and 3,011 fdatasync with --appendonly yes --appendfsync always,
+    which is what the strict class sets through REDIS_ARGS (DECISIONS #90).
+    """
+    name = "falkordb_graph"
+
+    def connect(self):
+        import falkordb
+        import importlib.metadata as _md
+        host = os.environ["BENCH_SERVER_HOST"]
+        port = int(os.environ.get("BENCH_SERVER_PORT", "6379"))
+        self.db = falkordb.FalkorDB(host=host, port=port)
+        self.conn = self.db.connection
+        self.g = self.db.select_graph("bench")
+        info = self.conn.info("server")
+        mods = {m.get("name"): m.get("ver") for m in self.conn.module_list()}
+        ver = int(mods.get("graph") or 0)
+        self.version = (f"falkordb:{ver // 10000}.{(ver // 100) % 100}.{ver % 100} "
+                        f"(redis {info.get('redis_version')})")
+        self.driver_version = (f"falkordb:{_md.version('falkordb')}, "
+                               f"redis:{_md.version('redis')}")
+        self.row_extra = {
+            "driver_version": self.driver_version,
+            "falkordb_thread_count": _int_or(self._gcfg("THREAD_COUNT")),
+            "falkordb_omp_threads": _int_or(self._gcfg("OMP_THREAD_COUNT")),
+            "falkordb_resultset_size": _int_or(self._gcfg("RESULTSET_SIZE")),
+            "falkordb_timeout_ms": _int_or(self._gcfg("TIMEOUT")),
+            "falkordb_timeout_default_ms": _int_or(self._gcfg("TIMEOUT_DEFAULT")),
+            "falkordb_timeout_max_ms": _int_or(self._gcfg("TIMEOUT_MAX")),
+        }
+        self.durability = self._durability_readback()
+        self.g.query("CREATE INDEX FOR (p:Person) ON (p.id)")
+
+    def _gcfg(self, name):
+        """GRAPH.CONFIG GET, which answers [name, value]."""
+        v = self.db.config_get(name)
+        return v[-1] if isinstance(v, (list, tuple)) else v
+
+    def _durability_readback(self):
+        c = self.conn.config_get("appendonly")
+        c.update(self.conn.config_get("appendfsync"))
+        c.update(self.conn.config_get("save"))
+        ao, fsync, save = c.get("appendonly"), c.get("appendfsync"), c.get("save")
+        if ao == "no" and save == "3600 1 300 100 60 10000":
+            return bench_common.DURABILITY_FALKORDB
+        if ao == "yes" and fsync == "always":
+            return bench_common.DURABILITY_FALKORDB_STRICT
+        return (f"appendonly={ao}, appendfsync={fsync}, save={save!r}, "
+                "which is neither class (DECISIONS #90)")
+
+    def build(self, n_persons):
+        # UNWIND batches, the same statements as Neo4j's; the client carries
+        # the parameter list as a CYPHER prefix on the query.
+        batch = []
+        for i, name, age, city in gen_persons(n_persons):
+            batch.append({"id": i, "name": name, "age": age, "city": city})
+            if len(batch) >= INGEST_BATCH:
+                self.g.query("UNWIND $rows AS r CREATE (:Person {id: r.id, "
+                             "name: r.name, age: r.age, city: r.city})", {"rows": batch})
+                batch = []
+        if batch:
+            self.g.query("UNWIND $rows AS r CREATE (:Person {id: r.id, "
+                         "name: r.name, age: r.age, city: r.city})", {"rows": batch})
+        batch = []
+        for src, dst, since in gen_edges(n_persons):
+            batch.append({"s": src, "d": dst, "y": since})
+            if len(batch) >= INGEST_BATCH:
+                self.g.query("UNWIND $rows AS r MATCH (a:Person {id: r.s}), "
+                             "(b:Person {id: r.d}) CREATE (a)-[:KNOWS {since: r.y}]->(b)",
+                             {"rows": batch})
+                batch = []
+        if batch:
+            self.g.query("UNWIND $rows AS r MATCH (a:Person {id: r.s}), "
+                         "(b:Person {id: r.d}) CREATE (a)-[:KNOWS {since: r.y}]->(b)",
+                         {"rows": batch})
+
+    def run_cypher(self, text):
+        res = self.g.query(text)
+        # header entries are [type, name]; the RETURN aliases are the names
+        # the digest compares against.
+        cols = [h[1] if isinstance(h, (list, tuple)) else h for h in res.header]
+        return [dict(zip(cols, row)) for row in res.result_set]
+
+    def run_cypher_write(self, text):
+        self.g.query(text)
+
+    def close(self):
+        self.conn.close()
 
 
 # --------------------------------------------------------------- LadybugDB
@@ -1065,7 +1272,8 @@ class MongoGraph(Base):
 
 ADAPTERS = {a.name: a for a in
             [ArcadeGraphEmbedded, ArcadeGraphServer, Neo4jGraph, LadybugGraph,
-             SurrealGraph, SurrealGraphServer, ArangoGraph, MongoGraph]}
+             SurrealGraph, SurrealGraphServer, ArangoGraph, MongoGraph,
+             MemgraphGraph, FalkorGraph]}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. Neo4j and
 # LadybugDB cannot be relaxed and are the named exceptions on this table; the
@@ -1080,6 +1288,10 @@ DURABILITY = {
     "surrealdb_graph_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_graph": arango_common.DURABILITY,
     "mongodb_graph": mongo_common.DURABILITY,
+    # Both read their own setting back at connect (SHOW CONFIG, CONFIG GET);
+    # these are the relaxed strings the read-back is compared against.
+    "memgraph_graph": bench_common.DURABILITY_MEMGRAPH,
+    "falkordb_graph": bench_common.DURABILITY_FALKORDB,
 }
 
 
@@ -1181,6 +1393,10 @@ def main():
         ad.connect()
     out["connect_s"] = round(time.perf_counter() - t0, 3)
     out["engine_version"] = ad.version
+    # What the served engine reported about itself at connect: client library
+    # version, thread pool, memory limit, timeouts (Memgraph, FalkorDB). Read
+    # from the server, not restated from the flags the runner sent.
+    out.update(getattr(ad, "row_extra", None) or {})
     out["instrument"] = bench_common.INSTRUMENT
 
     t0 = time.perf_counter()

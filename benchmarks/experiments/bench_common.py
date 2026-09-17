@@ -43,7 +43,9 @@ UNVERIFIED_MARK = "not verified"
 # compares the two. A mismatch is a cell that asked for one setting and got
 # another, which is the failure mode a flag the server ignores produces.
 STRICT_MARKS = ("txWalFlush=2", "synchronous=FULL", "j=true", "commit.mode=sync",
-                "SURREAL_SYNC_DATA=true", "waitForSync=true", "synchronous_commit=on")
+                "SURREAL_SYNC_DATA=true", "waitForSync=true", "synchronous_commit=on",
+                # the colon keeps "=1:" from matching the relaxed "=100000"
+                "flush-every-n-tx=1:", "appendfsync=always")
 
 
 def durability_class(text):
@@ -98,6 +100,16 @@ def durability_class(text):
 #               (the tx_log settings are buffer, preallocation, and rotation
 #               only), so it cannot be relaxed; that it forces the log at
 #               commit is Neo4j's documented behaviour, not measured here.
+#   Memgraph    3.13.1 SHOW CONFIG: storage_wal_enabled true,
+#               storage_wal_file_flush_every_n_tx 100000 (the image's
+#               defaults); strace on the pinned image, build plus 3,009
+#               commits: 1 fsync at the default, 3,012 with
+#               --storage-wal-file-flush-every-n-tx=1 (laptop, 2026-09-17).
+#   FalkorDB    4.20.6 on Redis 8.6.3, CONFIG GET: appendonly no, save
+#               "3600 1 300 100 60 10000" (the image's defaults, RDB only);
+#               strace, build plus 3,011 writes: 0 fsync at the default,
+#               3,011 fdatasync with --appendonly yes --appendfsync always
+#               (laptop, 2026-09-17).
 #
 # One string per engine, defined here, so two lanes cannot describe the same
 # engine differently and a re-check lands in one place.
@@ -116,6 +128,10 @@ DURABILITY_PG_OFF = "synchronous_commit=off"
 # Defined here, not in arango_common, so at_class() can map it like every other
 # engine's; arango_common re-exports this name as its DURABILITY.
 DURABILITY_ARANGO = "waitForSync=false (default); RocksDB WAL synced every 100 ms"
+DURABILITY_MEMGRAPH = ("storage-wal-enabled=true, storage-wal-file-flush-every-n-tx=100000 "
+                       "(image default): the WAL is fsynced every 100,000 transactions, not at commit")
+DURABILITY_FALKORDB = ("appendonly=no, RDB save '3600 1 300 100 60 10000' (image default): "
+                       "nothing is synced at commit")
 
 # ---------------------------------------------------------------------------
 # BOTH DURABILITY SETTINGS, ON THE WRITES (DECISIONS #90, superseding the
@@ -147,6 +163,8 @@ DURABILITY_QUESTDB_STRICT = "cairo.commit.mode=sync: fsync at commit"
 DURABILITY_SURREAL_EMBEDDED_STRICT = "SurrealKV, SURREAL_SYNC_DATA=true: sync at commit"
 DURABILITY_ARANGO_STRICT = "waitForSync=true: the commit waits for the WAL sync"
 DURABILITY_PG_ON = "synchronous_commit=on"
+DURABILITY_MEMGRAPH_STRICT = "storage-wal-file-flush-every-n-tx=1: the WAL is fsynced at every commit"
+DURABILITY_FALKORDB_STRICT = "appendonly=yes, appendfsync=always: the AOF is fdatasynced at every write"
 
 # THE ENGINES WITH NO KNOB. #90: "The three engines with no knob (Neo4j,
 # DuckDB, and LadybugDB, each straced rather than assumed) print one number in
@@ -177,6 +195,8 @@ STRICT_OF = {
     DURABILITY_SURREAL_EMBEDDED: DURABILITY_SURREAL_EMBEDDED_STRICT,
     DURABILITY_PG_OFF: DURABILITY_PG_ON,
     DURABILITY_ARANGO: DURABILITY_ARANGO_STRICT,
+    DURABILITY_MEMGRAPH: DURABILITY_MEMGRAPH_STRICT,
+    DURABILITY_FALKORDB: DURABILITY_FALKORDB_STRICT,
 }
 
 

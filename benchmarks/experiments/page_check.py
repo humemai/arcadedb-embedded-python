@@ -828,6 +828,11 @@ NOT_PRINTED = [
     (r"^(recall_filtered|recall_retrieval)$",
      "recall for the two cross-model read paths, printed by the e2 table "
      "under its own labels"),
+    (r"^(memgraph|falkordb)_\w+$",
+     "a served comparator's own config, read back at connect: its thread "
+     "pool (FAIRNESS F6, audited in FAIRNESS.md rather than printed as a "
+     "column), memory limit, and query timeouts, which explain the cell "
+     "rather than measure it"),
     (r"^(torn_count|build_docs_per_s|ingest_pts_per_s|disk_data_mb|"
      r"peak_anon_mib_sum|build_s|ingest_s|index_s|gav_build_s)$",
      "printed under a different label by the table that owns it; listed here "

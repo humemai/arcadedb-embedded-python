@@ -840,7 +840,7 @@ def f4_one_vs_n(rows):
     DENSE_COMPS = ("qdrant_dense", "qdrant_dense_int8", "milvus_dense", "milvus_dense_int8",
                    "chroma_dense", "lancedb_dense", "duckdb_vss_dense", "arangodb_dense",
                    "mongodb_dense")
-    GRAPH = ("ladybug_graph", "neo4j_graph", "mongodb_graph")
+    GRAPH = ("ladybug_graph", "neo4j_graph", "mongodb_graph", "memgraph_graph", "falkordb_graph")
     SPARSE = ("qdrant_sparse", "milvus_sparse", "elasticsearch_sparse")
     TSC = ("questdb", "duckdb", "sqlite")
 

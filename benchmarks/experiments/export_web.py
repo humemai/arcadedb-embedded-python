@@ -414,6 +414,7 @@ DISPLAY_NAMES = {
     "arangodb_tpc": "ArangoDB", "arangodb_graph": "ArangoDB", "arangodb_dense": "ArangoDB", "arangodb_e2": "ArangoDB",
     "arangodb_ts": "ArangoDB",
     "mongodb_graph": "MongoDB", "mongodb_dense": "MongoDB", "mongodb_e2": "MongoDB",
+    "memgraph_graph": "Memgraph", "falkordb_graph": "FalkorDB",
     "arcadedb": "ArcadeDB",
     "sqlite": "SQLite", "chroma": "Chroma", "ladybug": "LadybugDB",
 }
@@ -2987,7 +2988,8 @@ INGEST_NOTES = {
               "SELECT from in-memory frames."),
     "l2": ("Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in "
            "5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as "
-           "sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, "
+           "sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB "
+           "the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, "
            "its native bulk path."),
     "e2": ("ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 "
            "records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served "
@@ -3185,7 +3187,7 @@ OCT_PROSE = {
     },
     "l2": {
         "projection": ("Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.", []),
-        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts.",
+        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts.",
                    [(r"in ([\d,]+)-record transactions", lambda P, rows: _const("l2_graph", "INGEST_BATCH"), "const")]),
     },
     "l2olap": {

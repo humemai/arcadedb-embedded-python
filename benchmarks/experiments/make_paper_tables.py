@@ -180,6 +180,7 @@ NAMES = {
     "arangodb_dense": "ArangoDB (fp32)", "arangodb_e2": "ArangoDB (one txn)",
     "mongodb_dense": "MongoDB (fp32)", "mongodb_e2": "MongoDB (doc txn)",
     "mongodb_graph": "MongoDB",
+    "memgraph_graph": "Memgraph", "falkordb_graph": "FalkorDB",
     "composed_qdrant_neo4j": "Qdrant+Neo4j (composed)",
     "questdb": "QuestDB", "arcadedb": "ArcadeDB (emb)",
 }
