@@ -2771,8 +2771,8 @@
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction (DECISIONS #89)",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
-        "Each repetition runs every read against a fresh set of start persons (2k people (synthetic, skeleton): 50) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
-        "SurrealDB (server) at 2k people (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "Each repetition runs every read against a fresh set of start persons (2k people, 41k friendships (synthetic, skeleton): 50) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
+        "SurrealDB (server) at 2k people, 41k friendships (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts."
       ],
       "columns": [
@@ -2797,7 +2797,7 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "embedded",
@@ -2884,7 +2884,7 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "server",
@@ -2971,7 +2971,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "server",
@@ -3058,7 +3058,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "embedded",
@@ -3145,7 +3145,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "server",
@@ -3232,7 +3232,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "server",
@@ -3319,7 +3319,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "embedded",
@@ -3406,7 +3406,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "oltp",
           "n_docs": null,
           "deployment": "server",
@@ -3526,11 +3526,11 @@
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Rows labelled GAV ran with it built, once, before any query was timed, and the view build column is what that took.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
-        "SurrealDB (embedded) at 2k people (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "ArangoDB at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
-        "ArcadeDB (embedded, GAV) at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 18 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
-        "ArcadeDB (server, GAV) at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 16 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
-        "SurrealDB (server) at 2k people (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "SurrealDB (embedded) at 2k people, 41k friendships (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "ArangoDB at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArcadeDB (embedded, GAV) at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 18 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArcadeDB (server, GAV) at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 16 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (server) at 2k people, 41k friendships (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts."
       ],
       "columns": [
@@ -3555,7 +3555,7 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "embedded",
@@ -3642,7 +3642,7 @@
           "is_arcadedb": true,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
@@ -3729,7 +3729,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
@@ -3810,7 +3810,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "embedded",
@@ -3891,7 +3891,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
@@ -3972,7 +3972,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
@@ -4053,7 +4053,7 @@
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
-          "scale_label": "2k people (synthetic, skeleton)",
+          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
@@ -4150,7 +4150,7 @@
           "backend": "SurrealDB (embedded)",
           "column": null,
           "kind": "censored",
-          "why": "SurrealDB (embedded) at 2k people (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
+          "why": "SurrealDB (embedded) at 2k people, 41k friendships (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
         }
       ],
       "source_paths": [
@@ -11864,17 +11864,17 @@
         ]
       },
       {
-        "text": "Each repetition runs every read against a fresh set of start persons (2k people (synthetic, skeleton): 50) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
+        "text": "Each repetition runs every read against a fresh set of start persons (2k people, 41k friendships (synthetic, skeleton): 50) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
         "values": [
-          "2k people (synthetic, skeleton): 50",
+          "2k people, 41k friendships (synthetic, skeleton): 50",
           "1,000"
         ]
       },
       {
-        "text": "SurrealDB (server) at 2k people (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
+        "text": "SurrealDB (server) at 2k people, 41k friendships (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
         "values": [
           "SurrealDB (server)",
-          "2k people (synthetic, skeleton)",
+          "2k people, 41k friendships (synthetic, skeleton)",
           "0.0",
           "74",
           "0.07"
@@ -11891,38 +11891,38 @@
         ]
       },
       {
-        "text": "SurrealDB (embedded) at 2k people (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "text": "SurrealDB (embedded) at 2k people, 41k friendships (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "values": [
           "SurrealDB (embedded)",
-          "2k people (synthetic, skeleton)",
+          "2k people, 41k friendships (synthetic, skeleton)",
           "0.25 hour"
         ]
       },
       {
-        "text": "ArangoDB at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "text": "ArangoDB at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
         "values": [
           "ArangoDB",
-          "2k people (synthetic, skeleton)",
+          "2k people, 41k friendships (synthetic, skeleton)",
           "triangle count",
           "300 s budget",
           "after 5 of 100 iterations"
         ]
       },
       {
-        "text": "ArcadeDB (embedded, GAV) at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 18 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "text": "ArcadeDB (embedded, GAV) at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 18 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
         "values": [
           "ArcadeDB (embedded, GAV)",
-          "2k people (synthetic, skeleton)",
+          "2k people, 41k friendships (synthetic, skeleton)",
           "triangle count",
           "300 s budget",
           "after 18 of 100 iterations"
         ]
       },
       {
-        "text": "ArcadeDB (server, GAV) at 2k people (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 16 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "text": "ArcadeDB (server, GAV) at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 16 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
         "values": [
           "ArcadeDB (server, GAV)",
-          "2k people (synthetic, skeleton)",
+          "2k people, 41k friendships (synthetic, skeleton)",
           "triangle count",
           "300 s budget",
           "after 16 of 100 iterations"

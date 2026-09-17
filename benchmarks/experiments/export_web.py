@@ -603,6 +603,30 @@ SKELETON_SCALE_LABELS = {
 }
 
 
+def _l2_size(scale: str) -> str | None:
+    """The graph corpus as the rows record it: people and friendships loaded.
+
+    The labels used to type "73k people" and said nothing about the edges,
+    which are the part that is millions; read from the frozen rows so the
+    number cannot drift from what was loaded (DECISIONS #102)."""
+    people = edges = None
+    for r in _FROZEN_ROWS:
+        if r.get("lane") != "l2" or str(r.get("scale")) != str(scale):
+            continue
+        try:
+            people = people or int(float(r.get("n_persons") or 0)) or None
+            edges = edges or int(float(r.get("n_edges_ingested") or 0)) or None
+        except ValueError:
+            continue
+        if people and edges:
+            break
+    if not people:
+        return None
+    def _k(n):
+        return f"{n / 1e6:.1f}M" if n >= 1_000_000 else f"{round(n / 1000)}k"
+    return f"{_k(people)} people, {_k(edges)} friendships" if edges else f"{_k(people)} people"
+
+
 def scale_label(lane: str, scale: str) -> str:
     """Reader-facing size for a lane's tier name.
 
@@ -610,6 +634,12 @@ def scale_label(lane: str, scale: str) -> str:
     the page under its harness label is exactly the defect this map exists to
     prevent, and a silent fallback would let it through looking deliberate.
     """
+    if lane == "l2":
+        size = _l2_size(scale)
+        if size:
+            if SKELETON:
+                return f"{size} (synthetic, skeleton)"
+            return f"{str(scale).upper()} ({size})"
     try:
         if SKELETON:
             return SKELETON_SCALE_LABELS[(lane, scale)]
