@@ -172,6 +172,53 @@ def vector_index(col, field: str, dim: int, n: int, metric: str = "l2") -> tuple
     return nlists, nprobe
 
 
+def imported(result, sent: int) -> int:
+    """The number of documents a bulk import CREATED, or a RuntimeError.
+
+    import_bulk answers with counters (created, errors, empty, updated,
+    ignored) and python-arango raises only on a failed request, so a batch
+    the server accepted and partly rejected used to pass in silence, and the
+    row's n_docs (len(train), never a count) could not show it (BUGS F55: the
+    deep10m rows carried n_docs 9,990,000 on the adapter's word alone).
+    """
+    if not isinstance(result, dict):
+        return sent
+    created = int(result.get("created", 0))
+    if created != sent or result.get("errors") or result.get("error"):
+        raise RuntimeError(f"arangodb import_bulk: sent {sent}, created {created}, "
+                           f"errors {result.get('errors')}, details {str(result.get('details'))[:500]}")
+    return created
+
+
+def index_readback(dbname: str, col_name: str) -> dict:
+    """The vector index as the SERVER reports it, hidden fields included:
+    trainingState, errorMessage, resolvedNLists, figures.memory.
+
+    From 3.12.10 the create call succeeds even when training fails and the
+    index stays "unusable" (docs: vector-indexes.md, inBackground), and an
+    index that is not "ready" answers by a linear scan. python-arango's
+    indexes() does not pass withHidden, so this goes to /_api/index directly
+    with the campaign's root credentials.
+    """
+    import requests
+    host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+    port = os.environ.get("BENCH_SERVER_PORT", "8529")
+    r = requests.get(f"http://{host}:{port}/_db/{dbname}/_api/index",
+                     params={"collection": col_name, "withHidden": "true", "withStats": "true"},
+                     auth=("root", PASSWORD), timeout=600)
+    r.raise_for_status()
+    vec = [ix for ix in r.json().get("indexes", []) if ix.get("type") == "vector"]
+    if not vec:
+        return {"trainingState": "absent"}
+    ix = vec[0]
+    shard = next(iter(ix.get("shards", {}).values()), {})
+    return {"trainingState": ix.get("trainingState") or shard.get("trainingState"),
+            "errorMessage": ix.get("errorMessage") or shard.get("error") or "",
+            "resolvedNLists": ix.get("resolvedNLists") or shard.get("resolvedNLists"),
+            "memory": (ix.get("figures") or {}).get("memory"),
+            "params": ix.get("params", {})}
+
+
 def close(cl):
     try:
         cl.close()
