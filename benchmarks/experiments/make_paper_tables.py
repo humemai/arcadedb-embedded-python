@@ -122,6 +122,17 @@ PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
                 "e2": ["e2"],
                 "l4": ["ts100"],
                 "lifecycle": ["lc10k", "lc100k", "lc1m", "lc10m"]}
+# THE SEPTEMBER EXTENSION'S RAISED SIZES (DECISIONS #103b) ARE NOT LISTED YET,
+# ON PURPOSE. A raised size REPLACES a tier: documents analytics moves to
+# tpch10, time series to ts1000, cross-model to e2_500k, graph analytics to
+# sf1full (the interactive graph table keeps sf1 and sf10). None of the page
+# tables after l2olap filters on scale, so listing a new tier here while its
+# old one stays would print two corpora on one table the moment the first
+# row landed. The switch is one edit per table, made when every engine on
+# that table has its rows at the new size: replace the old tier with the new
+# one here (for l2, ADD sf1full and move export_web's l2olap only_scales to
+# {"sf1full"}; sf1 and sf10 stay for the interactive table), then freeze.
+# The dropped rows stay in the campaign file and the release asset.
 
 NAMES = {
     "arcadedb_embedded": "ArcadeDB (emb)", "arcadedb_server": "ArcadeDB (srv)",
@@ -131,6 +142,8 @@ NAMES = {
     "arcadedb_graph_embedded": "ArcadeDB (emb)",
     "arcadedb_graph_server": "ArcadeDB (srv)",
     "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
+    "memgraph_graph": "Memgraph", "falkordb_graph": "FalkorDB",
+    "duckpgq_graph": "DuckPGQ",
     "arcadedb_sparse_embedded": "ArcadeDB (emb, int8)",
     "arcadedb_sparse_embedded_fp32": "ArcadeDB (emb, fp32)",
     "arcadedb_sparse_embedded_nocompact": "ArcadeDB (emb, no settle)",

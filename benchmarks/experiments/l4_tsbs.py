@@ -24,22 +24,38 @@ import time
 # tuple: a variable not in it is dropped at the container boundary and the
 # in-script default silently runs instead. The old TSBS_ names are still read as
 # a fallback so ts5414_driver.py, qlast_ab.py and ts_stride_probe.py keep working.
-LP = os.environ.get("BENCH_TSBS_LP") or os.environ.get(
-    "TSBS_LP", "/data/tsbs/cpu_influx.lp")
+# BENCH_TSBS_LP names ONE file and overrides the tier's own; unset, the tier
+# picks its file from SCALE_LP under BENCH_TSBS_DIR (default /data/tsbs).
+LP = os.environ.get("BENCH_TSBS_LP") or os.environ.get("TSBS_LP")
+TSBS_DIR = os.environ.get("BENCH_TSBS_DIR", "/data/tsbs")
 LIMIT = int(os.environ.get("BENCH_TS_LIMIT") or os.environ.get("TSBS_LIMIT", "0"))
 
-# THE TIER. One today. It exists so the lane has a scale axis at all: every
-# registered lane has one, PAPER_SCALES keys on it, and load_canonical drops a
-# row whose scale is not listed for its lane.
-SCALE_POINTS = {"ts100": 2_592_000}
+# THE TIERS. ts100 is TSBS's smallest defined configuration (100 hosts, the
+# `--scale` the generator takes); ts1000 is the same generator at 1,000 hosts
+# (DECISIONS #103: 100 hosts is the smallest configuration TSBS defines, and
+# the time-series table moves to 1,000 alone, #103b). Both files are three
+# days at ten seconds, seed 123 (gen_tsbs_corpus.sh), so a point count is
+# hosts x 25,920 intervals. The scale axis exists so PAPER_SCALES can key on
+# it: load_canonical drops a row whose scale is not listed for its lane.
+SCALE_POINTS = {"ts100": 2_592_000, "ts1000": 25_920_000}
+# The file each tier reads, by the generator's own naming (cpu_influx_s<scale>
+# .lp for anything but the original 100-host file); mini has held
+# cpu_influx_s1000.lp since 2026-08-06, byte-identical to the corpus README's
+# sha256 (~/bench-data/tsbs/README.md on the staging host).
+SCALE_LP = {"ts100": "cpu_influx.lp", "ts1000": "cpu_influx_s1000.lp"}
 QITER = 100   # was 10; a p99 needs the samples (2026-09-10, BUGS F29)
 HOST = "host_42"
 T0 = 1767225600  # 2026-01-01T00:00:00Z epoch seconds
 
 
-def parse_lp():
+def lp_path(scale):
+    """The corpus file this tier reads: the explicit override, else the tier's."""
+    return LP or os.path.join(TSBS_DIR, SCALE_LP[scale])
+
+
+def parse_lp(path):
     pts = []  # (host, ts_epoch_s, usage_user, usage_system, usage_idle)
-    with open(LP) as f:
+    with open(path) as f:
         for i, line in enumerate(f):
             if LIMIT and i >= LIMIT:
                 break
@@ -724,17 +740,19 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    pts = parse_lp()
+    lp = lp_path(args.scale)
+    pts = parse_lp(lp)
     # n_docs, not just n_points: BOTH canonical keys include n_docs
     # (make_paper_tables and merge_campaign), and PAPER_CORPUS fingerprints a
     # tier on it. Without it two TSBS corpora of different sizes would collide
     # on one key, which is the defect that pooled two sparse campaigns.
     out = {"n_points": len(pts), "n_docs": len(pts), "backend": args.backend,
-           "scale": args.scale, "workload": args.workload}
+           "scale": args.scale, "workload": args.workload,
+           "tsbs_lp": os.path.basename(lp)}
     want = SCALE_POINTS[args.scale]
     if LIMIT == 0 and len(pts) != want:
         raise SystemExit(
-            f"l4: {args.scale} expects {want:,} points and the corpus at {LP} "
+            f"l4: {args.scale} expects {want:,} points and the corpus at {lp} "
             f"holds {len(pts):,}. A tier that silently measures a different "
             f"corpus than its name claims is the sparse-pooling defect again.")
     b = BACKENDS[args.backend]()

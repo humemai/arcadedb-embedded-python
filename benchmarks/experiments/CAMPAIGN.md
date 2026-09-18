@@ -131,6 +131,18 @@ The September chain on mini, each script waiting on its predecessor and gated on
 
 Finished scripts move to `~/queue_archive` on mini. The chain holds its pin start to finish; an upstream fix landing mid-run becomes a candidate for the next re-pin, never a restart.
 
+**The September extension (DECISIONS #103a to #103e), after qDX, same pin, same instrument.** Drafted 2026-09-18 and linted; installed once the repetition count per stage is decided (`REPS`, default 5, set per script). Each script carries its own preflight: the corpus file it reads, the image pins it needs (`build_images.sh duckdb client`, the Memgraph and FalkorDB digests), and `verify_pair_c25.sh`.
+
+| script | what it runs |
+|---|---|
+| qDY | documents analytics at TPC-H SF10 (`tpch10`), every comparator, olap only; the ArcadeDB arms opt in with `WITH_ARCADEDB_OLAP=1`, since their September Q1/Q6 text is the one BUGS F42/F43 withdrew |
+| qDZ | graph analytics on the full SF1 network (`sf1full`), every engine including Memgraph, FalkorDB, and DuckPGQ, with and without the view for ArcadeDB; then the three new engines on the interactive table at SF1 and SF10 |
+| qEA | time series at 1,000 hosts (`ts1000`), every engine, with `BENCH_CLIENT_MEM=16g` for the served cells' driver |
+| qEB | cross-model at 500k products (`e2_500k`), every engine, both workloads |
+| qEC | DuckDB re-measured at 1.5.4 on its September tiers: tpch1 both workloads, ts100, dense VSS at 1M and DEEP-10M, lane and multipass |
+
+A raised size replaces a tier (#103b): the page table switches to the new tier only when every engine on it has landed there (`make_paper_tables.PAPER_SCALES` and, for graph analytics, `export_web` `l2olap` `only_scales`), so no table ever prints two corpora.
+
 ## 7. October: the skeleton, then the comparators, then one switch
 
 The instrument is final before the first October cell: the forty-operation query set (PROTOCOL.md section 2), the matched durability class (FAIRNESS.md F10), the answer digests (F12), the ingest and index timers, and `bench_host` on every row. Rows measured under two instruments cannot share a table, so the preparation happens while the September chain is still running and the user's go turns into cells the same day (DECISIONS #84).

@@ -31,7 +31,16 @@ import numpy as np
 import surreal_common
 import arango_common
 
-PRODUCTS = int(os.environ.get("E2_PRODUCTS", "50000"))
+# THE TIERS. e2 is the 50k catalog every cross-model row was measured on;
+# e2_500k is the same generator at 500,000 products (DECISIONS #103: cross-
+# model goes to 500k so its retrieval recall is measured on more than a toy,
+# and the table moves to that size alone, #103b). numpy fills the vector
+# array sequentially from one stream, so the first 50k rows of the 500k
+# catalog ARE the 50k catalog (checked while staging, 2026-09-17).
+# E2_PRODUCTS overrides the tier for a host-side probe; the runner does not
+# forward it, so a cell always runs the tier it was asked for.
+SCALE_PRODUCTS = {"e2": 50_000, "e2_500k": 500_000}
+PRODUCTS = int(os.environ.get("E2_PRODUCTS") or SCALE_PRODUCTS["e2"])
 DIM = 64
 EDGES_PER = 3
 K = 10
@@ -648,12 +657,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", required=True, choices=list(BACKENDS))
     ap.add_argument("--workload", required=True, choices=["hybrid", "atomicity"])
-    ap.add_argument("--scale", default="e2")
+    ap.add_argument("--scale", default="e2", choices=list(SCALE_PRODUCTS))
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    # The tier sets the catalog size; gen_data reads the module global at call
+    # time. An explicit E2_PRODUCTS (a host probe) wins over the tier.
+    global PRODUCTS
+    if not os.environ.get("E2_PRODUCTS"):
+        PRODUCTS = SCALE_PRODUCTS[args.scale]
     vecs, edges, queries = gen_data()
-    out = {"n_products": PRODUCTS, "n_edges": len(edges), "dim": DIM, "k": K}
+    out = {"n_products": PRODUCTS, "n_edges": len(edges), "dim": DIM, "k": K,
+           "scale": args.scale}
 
     b = BACKENDS[args.backend]()
     out["engine_version"] = b.version

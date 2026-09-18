@@ -133,7 +133,31 @@ MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 "e2": "12g", "tpch1": "16g",
                 # TPC-H SF10 (~10 GB). SF1 is 1 GB, which reads as a toy
                 # scale at a DB venue where comparable papers run 700 GB+.
-                "tpch10": "32g"}
+                "tpch10": "32g",
+                # THE SEPTEMBER EXTENSION'S RAISED SIZES (DECISIONS #103b), each
+                # the tpch10 shape: 32g cap, 16g heap, an 8h watchdog.
+                #   sf1full  the full SF1 social network for graph analytics:
+                #            3.2M vertices and 13.8M edges on top of the
+                #            persons+KNOWS projection, 17M records against
+                #            sf10's 2.0M. Memgraph holds the whole graph in
+                #            RAM (about 1.1 KiB per property-carrying object
+                #            measured at 10k persons; the message half carries
+                #            ids only), and its limit is 90% of this cap.
+                #   ts1000   1,000 hosts, 25.9M points, ten times ts100. The
+                #            driver stages the parsed corpus in Python before
+                #            ingesting (about 240 B per point, so 6 GiB of
+                #            tuples), which is why ts100 reserves 8 GiB beside
+                #            its 8g heap; ten times the corpus needs the
+                #            reserve doubled and the heap doubled with it. A
+                #            SERVED cell's driver holds that corpus in the
+                #            CLIENT container, whose cap is BENCH_CLIENT_MEM
+                #            (8g): the ts1000 queue script exports 16g.
+                #   e2_500k  500k products: ten times e2's 12g/6g would be
+                #            120g; the corpus is 128 MB of vectors and 1.5M
+                #            edges, and the cost is the vector index build,
+                #            so 32g/16g (the same shape) is the cap, not a
+                #            tenfold one.
+                "sf1full": "32g", "ts1000": "32g", "e2_500k": "32g"}
 # Per-cell watchdog: a cell exceeding this is killed and recorded as a timeout.
 # Generous by design (ingest included); real hangs run to infinity without it.
 TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
@@ -164,7 +188,19 @@ TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     # a real hang is the point of having one.
                     "sf1": 3600, "sf10": 8 * 3600, "deep10m": 8 * 3600,
                     "e2": 3600, "tpch1": 3 * 3600,
-                    "tpch10": 8 * 3600}
+                    "tpch10": 8 * 3600,
+                    # The raised tiers (see MEM_BY_SCALE). sf1full: 17M
+                    # records through index lookups, and a single-threaded
+                    # SurrealDB SDK that took 2 h on sf10's 2M, so 8h is the
+                    # budget a censored cell is named against. ts1000: the
+                    # slowest ts100 arm ingests in 65 s and parses in
+                    # seconds; ten times that plus the 100-iteration queries
+                    # over a 12-hour window across 1,000 hosts is well under
+                    # an hour, so 4 h is generous without being unable to
+                    # fail. e2_500k: SurrealDB embedded builds its HNSW in
+                    # 334 s at 50k on one core, so ten times the corpus is an
+                    # hour or more before the 300 timed operations; 4 h.
+                    "sf1full": 8 * 3600, "ts1000": 4 * 3600, "e2_500k": 4 * 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  "large": "24g",
                  # Lifecycle tiers (l5): small heaps on purpose. The lane times
@@ -229,7 +265,9 @@ HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  # is the MiB values relabelled. They are 20.1-20.3 and
                  # 28.2-28.4 GiB.
                  "sf1": "4g", "sf10": "12g", "deep10m": "24g", "e2": "6g", "tpch1": "8g",
-                    "tpch10": "16g"}
+                    "tpch10": "16g",
+                 # The raised tiers, heap = 50% of the 32g cap (MEM_BY_SCALE).
+                 "sf1full": "16g", "ts1000": "16g", "e2_500k": "16g"}
 def heap_policy(scale):
     """(heap_gib, cap_gib, ratio, verdict) for one tier.
 
@@ -276,7 +314,8 @@ def heap_policy(scale):
     # anon floor it used to be described as. NOTE: this value is computed and
     # never read -- the verdict below reports cap - heap directly -- so a tier
     # can depart from the stated reserve without the printed policy saying so.
-    reserve = 8.0 if scale in ("deep10m", "medium", "tpch10", "sf10", "ts100") else 4.0
+    reserve = 8.0 if scale in ("deep10m", "medium", "tpch10", "sf10", "ts100",
+                               "sf1full", "ts1000", "e2_500k") else 4.0
     verdict = "ratio 0.50" if abs(ratio - 0.50) < 0.01 else (
         f"DEVIATES from 0.50 (heap = cap - {cap - heap:.0f}g)")
     return heap, cap, ratio, verdict
@@ -596,6 +635,72 @@ BACKENDS = {
         # embedded engine, runs in-process in the client image
         "topology": "embedded",
         "image": "dbbench:client",
+    },
+    # MEMGRAPH 3.13.1 (2026-09-17), served, Bolt through the same neo4j driver
+    # the Neo4j arm uses and the lane's Cypher verbatim (l2_graph.MemgraphGraph).
+    # Four of its defaults are sized from the HOST or unbounded, and each is
+    # set from the cell here and read back onto the row by the adapter:
+    #   --bolt-num-workers and --storage-snapshot-thread-count read 16 under a
+    #     12-CPU cpuset (SHOW CONFIG on the pinned image; FAIRNESS F6), so both
+    #     take {ncpu}, the size of the cell's cpuset;
+    #   --memory-limit=0 means 90% of PHYSICAL memory (it reported 30.35 GiB
+    #     inside an 8g container), so it takes {mem90_mib}, the engine's own
+    #     rule applied to the container cap instead of the host;
+    #   --query-execution-timeout-sec defaults to 600, which would abort a
+    #     whole-graph aggregate the lane's own watchdog is meant to censor;
+    #     0 disables it so the watchdog is the only censor;
+    #   --telemetry-enabled=false, the image default being true.
+    # INFO logging to stderr is what makes the ready line visible: at the
+    # default WARNING level the log shows only the banner, which prints
+    # about a second before Bolt listens. Durability is the image default
+    # (WAL fsynced every 100,000 transactions), read back onto the row.
+    "memgraph_graph": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1
+        "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
+                       "--bolt-num-workers={ncpu}",
+                       "--storage-snapshot-thread-count={ncpu}",
+                       "--memory-limit={mem90_mib}",
+                       "--query-execution-timeout-sec=0",
+                       "--telemetry-enabled=false"],
+        "server_port": 7687,
+        "ready_regex": r"Bolt server is fully armed and operational",
+    },
+    # FALKORDB 4.20.6 on Redis 8.6.3 (2026-09-17), served, the falkordb Python
+    # client over the Redis protocol and the lane's Cypher verbatim
+    # (l2_graph.FalkorGraph). The image's own FALKORDB_ARGS is
+    # "MAX_QUEUED_QUERIES 25 TIMEOUT 1000 RESULTSET_SIZE 10000": a one-second
+    # query timeout that would abort a whole-graph aggregate and a
+    # 10,000-row result cap, the ArcadeDB HTTP 20,000-row trap in another
+    # engine. Replaced wholesale: RESULTSET_SIZE -1 (no cap), TIMEOUT left at
+    # the module default of 0 (no limit; the lane's watchdog censors), and
+    # THREAD_COUNT from the cpuset, because the module sizes its pool from the
+    # host's logical cores ("Thread pool created, using 16 threads" under a
+    # 12-CPU cpuset; FAIRNESS F6). BROWSER=0 stops the image's Next.js
+    # process, which would otherwise share the cell's cpuset and cap.
+    # Durability is the image default (RDB snapshots only), read back onto
+    # the row.
+    "falkordb_graph": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",  # v4.20.6
+        "server_env": ["-e", "BROWSER=0",
+                       "-e", "FALKORDB_ARGS=THREAD_COUNT {ncpu} RESULTSET_SIZE -1"],
+        "server_port": 6379,
+        "ready_regex": r"Ready to accept connections",
+    },
+    # DUCKPGQ on DuckDB 1.5.4 (2026-09-17, DECISIONS #103d/#103e), embedded in
+    # the DuckDB image (which carries pyarrow for the bulk load). SQL/PGQ over
+    # a PROPERTY GRAPH on the persons and knows tables (l2_graph.DuckpgqGraph).
+    # The `INSTALL duckpgq FROM community` at connect needs the cell network,
+    # which every embedded cell already has (the DuckDB VSS dense arm installs
+    # its extension the same way); it is why the DuckDB arms pin to 1.5.4
+    # rather than 1.5.5, the newest DuckDB the community registry has a
+    # DuckPGQ build for.
+    "duckpgq_graph": {
+        "topology": "embedded",
+        "image": "dbbench:duckdb",
     },
     # ---- E2 hybrid-ACID lane ----
     "arcadedb_e2": {
@@ -1209,7 +1314,8 @@ LANES = {
            ["oltp", "olap"]),
     "l2": ("l2_graph.py",
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
-            "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server", "arangodb_graph"],
+            "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server", "arangodb_graph",
+            "memgraph_graph", "falkordb_graph", "duckpgq_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
               ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "surrealdb_tpc",
@@ -1278,6 +1384,21 @@ LANES = {
            ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite", "mongodb", "timescaledb"],
            ["ingest"]),
 }
+
+
+def _cpuset_size(cpuset):
+    """How many CPUs a docker cpuset string names ('0-11', '0-5,8-11', '3')."""
+    n = 0
+    for part in str(cpuset).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            n += int(b) - int(a) + 1
+        else:
+            n += 1
+    return n
 
 
 def _pagecache_for(server_mem_bytes, heap):
@@ -1839,9 +1960,16 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # assumed cached). Only the tuned arm uses these; every other
             # backend's server_cmd has no placeholders and formats to itself.
             srv_gb = max(1, server_mem // (1 << 30))
+            # {ncpu} is the size of the cell's cpuset, for engines that size a
+            # thread pool from the host's core count regardless of the mask
+            # (FAIRNESS F6: FalkorDB's THREAD_COUNT, Memgraph's Bolt workers);
+            # {mem90_mib} is 90% of the server's cap in MiB, Memgraph's own
+            # memory-limit rule applied to the container rather than the host.
+            _fit = dict(ncpu=_cpuset_size(cpuset),
+                        mem90_mib=int(server_mem * 0.9) >> 20)
             server_cmd = [c.format(sb=f"{max(1, srv_gb // 4)}GB",
                                    ecs=f"{max(1, srv_gb * 3 // 4)}GB",
-                                   mwm=f"{max(1, srv_gb // 2)}GB")
+                                   mwm=f"{max(1, srv_gb // 2)}GB", **_fit)
                           for c in be.get("server_cmd", [])]
             # What it was actually launched with, so a reader of the row does
             # not have to re-derive it from the scale.
@@ -1861,7 +1989,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                              "--cpuset-cpus", cpuset,
                              "--memory", str(server_mem), "--memory-swap", str(server_mem),
                              "--shm-size", str(server_mem)]
-                            + [s.format(heap=heap, pagecache=_pagecache_for(server_mem, heap))
+                            + [s.format(heap=heap, pagecache=_pagecache_for(server_mem, heap),
+                                        **_fit)
                                for s in be.get("server_env", [])]
                             + be.get("server_volumes", [])
                             + [be["server_image"]]
@@ -1920,6 +2049,15 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    "BENCH_DENSE_BUILD_CACHE", "BENCH_DENSE_BUILD_CACHE_PCT",
                    "BENCH_SKIP_CLOSE",
                    "BENCH_TPC_DATA", "BENCH_TPC_SF", "BENCH_GAV",
+                   # The graph analytics message-half caps (ldbc_snb), for a
+                   # laptop smoke of the full-network loader only. Default
+                   # unset = the whole SF1 network; the campaign never sets
+                   # them, so a bench-host run loads the full corpus. This
+                   # tuple is CLOSED, so a smoke that exports them and this
+                   # line omits them would silently run the full network
+                   # instead (the BENCH_LC_ITERS trap), which on a laptop is
+                   # an OOM rather than a wrong row.
+                   "BENCH_GRAPH_MSG_LIMIT", "BENCH_GRAPH_PERSON_LIMIT",
                    # lifecycle. ABSENT UNTIL NOW, and the tuple being closed meant
                    # every cell silently ran the lane's in-script defaults: ITERS=3
                    # and WARMUP=1, while the campaign scripts set 5 and 2 and every

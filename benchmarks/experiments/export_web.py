@@ -42,6 +42,36 @@ sys.path.insert(0, str(HERE))
 
 from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path set above)
 
+
+# SIZE LABELS FROM THE LANES' OWN CONSTANTS, not typed. The time-series label
+# was typed as "2.59M points" beside a lane constant of 2,592,000, and the
+# cross-model one as "50k products" beside E2's default; a raised tier
+# (DECISIONS #103b) would have needed a second typed number each. Formatted
+# from the constant the lane reads, so the label cannot drift from the rows.
+def _l4_points(scale: str) -> str:
+    """The time-series corpus size as the lane defines it, formatted for a label."""
+    from l4_tsbs import SCALE_POINTS  # noqa: E402
+    n = SCALE_POINTS[scale]
+    return f"{n / 1e6:.2f}M" if n >= 1_000_000 else f"{n // 1000}k"
+
+
+def _e2_products(scale: str) -> str:
+    """The cross-model catalog size as the lane defines it, formatted for a label."""
+    from e2_hybrid import SCALE_PRODUCTS  # noqa: E402
+    n = SCALE_PRODUCTS[scale]
+    return f"{n // 1000}k" if n < 1_000_000 else f"{n / 1e6:.1f}M"
+
+
+def _l2_full_network(scale: str) -> str:
+    """The full-network graph tier's size from the loader's own expected counts
+    (ldbc_snb.FULL_NETWORK_COUNTS, the numbers the lane refuses a shortfall
+    against), persons and KNOWS included."""
+    from ldbc_snb import FULL_NETWORK_COUNTS  # noqa: E402
+    c = FULL_NETWORK_COUNTS[scale]
+    v = c["persons"] + c["msg_vertices"]
+    e = c["knows"] + c["msg_edges"]
+    return f"{v / 1e6:.1f}M vertices, {e / 1e6:.1f}M edges"
+
 FROZEN = HERE / "results" / "runs_paper.csv"
 OUT = HERE / "results" / "web_benchmarks.json"
 
@@ -371,7 +401,9 @@ DISPLAY_NAMES = {
     "elasticsearch_sparse": "Elasticsearch",
     "chroma_dense": "Chroma", "lancedb_dense": "LanceDB",
     "sqlite_vec_dense": "sqlite-vec", "duckdb_vss_dense": "DuckDB VSS",
+    "duckpgq_graph": "DuckPGQ",
     "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
+    "memgraph_graph": "Memgraph", "falkordb_graph": "FalkorDB",
     "postgres": "PostgreSQL", "postgres_tuned": "PostgreSQL (tuned)",
     "duckdb": "DuckDB", "questdb": "QuestDB", "sqlite": "SQLite", "mongodb": "MongoDB",
     "timescaledb": "TimescaleDB", "pgvector_dense": "pgvector", "pgvector_sparse": "pgvector", "neo4j_dense": "Neo4j",
@@ -528,12 +560,26 @@ SCALE_LABELS = {
     # own vocabulary rather than ours; the person count says how big that is.
     ("l2", "sf1"): "SF1 (11k people)",
     ("l2", "sf10"): "SF10 (73k people)",
+    # THE SEPTEMBER EXTENSION'S RAISED SIZES (DECISIONS #103b). Each is a
+    # tier of its own so its rows never share a canonical key with the rows
+    # they replace; the page table switches tiers when every engine on it has
+    # landed at the new size, never before, so a table is never two corpora.
+    # sf1full: the full SF1 social network, persons+KNOWS plus the message
+    # half, for the analytics table only (the interactive table keeps the
+    # projection at SF1 and SF10).
+    ("l2", "sf1full"): f"SF1, full network ({_l2_full_network('sf1full')})",
     ("l1", "medium"): "20M orders (synthetic)",
     ("l1tpc", "tpch1"): "TPC-H SF1 (6.0M line items)",
-    ("e2", "e2"): "50k products",
+    # 59,986,052 line items in the DuckDB 1.5.4 dbgen output (the corpus
+    # README's parquet metadata; the lane records the file's own count as
+    # n_lineitem on every row).
+    ("l1tpc", "tpch10"): "TPC-H SF10 (60.0M line items)",
+    ("e2", "e2"): f"{_e2_products('e2')} products",
+    ("e2", "e2_500k"): f"{_e2_products('e2_500k')} products",
     # TSBS publishes its corpus as a point count, which is what the ingest
     # column is per second of.
-    ("l4", "ts100"): "2.59M points",
+    ("l4", "ts100"): f"{_l4_points('ts100')} points",
+    ("l4", "ts1000"): f"{_l4_points('ts1000')} points (1,000 hosts)",
     # The lifecycle tiers are row counts of the structure under test, so the
     # label is the count rather than a tier name a reader cannot size.
     ("lifecycle", "lc10k"): "10k",
@@ -1006,6 +1052,12 @@ LANES = {
         "title": "Graph OLAP",
         "dataset": "LDBC-SNB, SF10",
         "lane_source": "l2",
+        # AT LANDING of the September extension (DECISIONS #103b) this becomes
+        # {"sf1full"}: the full-network tier replaces both projection tiers on
+        # this table, once every engine on it has a sf1full row. Not before:
+        # a table that lists both would print two corpora side by side. The
+        # interactive table above keeps sf1 and sf10 (it lists no only_scales,
+        # and sf1full never runs the oltp workload).
         "only_scales": {"sf1", "sf10"},
         "only_workload": "olap",
         # p50, not the mean the page printed until 2026-09-10 (the lane's own
@@ -1991,8 +2043,10 @@ INGEST_NOTES = {
               "SELECT from in-memory frames."),
     "l2": ("Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in "
            "5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as "
-           "sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, "
-           "its native bulk path."),
+           "sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the "
+           "same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk "
+           "path; DuckPGQ Arrow INSERT SELECT into the persons and knows tables under a property "
+           "graph."),
     "e2": ("ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 "
            "records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served "
            "sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE "

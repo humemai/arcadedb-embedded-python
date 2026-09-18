@@ -442,6 +442,38 @@ def _check_page_atomicity(page_path):
 LIVE_JSON = PAGE_TS.parents[3] / "data" / "arcadedb-benchmarks.json"
 
 
+# FIELDS THAT ARE MEASURED AND DELIBERATELY NOT PRINTED. A declaration, as
+# (regex, reason) pairs: the reason is the thing being asserted. On the
+# September instrument nothing reads this list (the coverage gate that does,
+# A2 in October's page_check, is October's), but the September extension's
+# arms record fields the September exporter never prints, and a field the
+# page leaves out without a stated reason is the miss October's gate exists
+# to catch. Declared here so the reason travels with the row schema and the
+# gate finds it declared the day the two files meet.
+NOT_PRINTED = [
+    (r"^(memgraph|falkordb)_\w+$",
+     "a served comparator's own config, read back at connect: its thread "
+     "pool (FAIRNESS F6, audited in FAIRNESS.md rather than printed as a "
+     "column), memory limit, query timeouts, and persistence settings, which "
+     "explain the cell rather than measure it"),
+    (r"^duckpgq_(threads|extension_version)$",
+     "the DuckPGQ graph arm's DuckDB thread pool, sized from the cpuset via "
+     "PRAGMA threads=sched_getaffinity (FAIRNESS F6, audited in FAIRNESS.md "
+     "rather than printed as a column), and the community build id the row "
+     "carries beside the DuckDB version the page prints"),
+    (r"^driver_version$",
+     "the client library a served arm was reached through; the page prints "
+     "the engine's version, and the driver stays on the row for an audit"),
+    (r"^(msg_vertices|msg_edges|msg_limit|person_limit)$",
+     "the full-network graph tier's message half, counted at load and "
+     "checked against the corpus README by the lane; the Size label names "
+     "the corpus and the ingest column prices it"),
+    (r"^(n_lineitem_streamed|li_batches|li_batch_rows|li_row_groups|tsbs_lp)$",
+     "how the corpus was read: the streamed line-item count the lane refuses "
+     "a shortfall against, its batching, and the time-series file's name"),
+]
+
+
 # Tables removed from the page on purpose, with the reason. Anything else
 # that disappears against the live page is a defect and fails below.
 RETIRED_TABLES = {

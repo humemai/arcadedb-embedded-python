@@ -51,6 +51,7 @@ BACKEND_PKG = {
     "sqlite_vec_dense": "sqlite-vec",
     "duckdb_vss_dense": "duckdb",
     "duckdb": "duckdb",
+    "duckpgq_graph": "duckdb",
     "elasticsearch_sparse": "elasticsearch",
     "surrealdb_e2": "surrealdb",
 }
