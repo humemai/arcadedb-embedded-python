@@ -125,8 +125,9 @@ apply, the table says so in a clause instead of leaving a blank. A transactional
 against a warm database by construction, and the session-cost table is itself the cold
 measurement.
 
-**A query has a budget, and the cell does not die with it.** On the graph analytics and
-time-series tables each query gets the same time budget on every engine. A query that
+**A query has a budget, and the cell does not die with it.** On the graph analytics,
+time-series, and document analytics tables each query gets the same time budget on every
+engine, a property of the lane read from its code and printed on the page. A query that
 exceeds it stops at the iteration it reached, its numbers are over those iterations, the
 table says so in a sentence naming the budget and the count, and the cell's other queries
 keep theirs. Without this a slow scan on one engine took the whole cell past the timeout
