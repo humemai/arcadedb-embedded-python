@@ -81,7 +81,14 @@ BATCH = 10_000
 # What an IVF arm records instead of a degree (arango_common); the lane and
 # the multipass driver read the same tuple so they cannot disagree.
 IVF_FIELDS = ("ivf_nlists", "ivf_nprobe", "ivf_recall_target", "ivf_recall_target_source",
-              "ivf_calibration_recall", "ivf_calibration_queries", "ivf_calibration_slice")
+              "ivf_calibration_recall", "ivf_calibration_queries", "ivf_calibration_slice",
+              # What the SERVER says it holds after the build (BUGS F55): the
+              # collection's own count, the index's training state and the
+              # nLists it resolved to, and the index's size in bytes. n_docs
+              # is len(train) and could not have shown a short load or an
+              # untrained index.
+              "ivf_server_doc_count", "ivf_training_state", "ivf_resolved_nlists",
+              "ivf_index_bytes")
 
 # The DDL's vocabulary and the results' vocabulary disagreed, and a recorded
 # label could not be fed back in as an input.
@@ -1074,9 +1081,28 @@ class ArangoDense(Base):
         col = self.db.create_collection("article")
         for i in range(0, len(vecs), BATCH):
             chunk = vecs[i:i + BATCH]
-            col.import_bulk([{"_key": str(i + j), "vid": i + j, "embedding": chunk[j].tolist()}
-                             for j in range(len(chunk))])
+            # Every batch's answer is checked: a short batch raises here, in
+            # the load, instead of surfacing as a recall of 0.0 two hours
+            # later with n_docs still claiming the full corpus (BUGS F55).
+            arango_common.imported(
+                col.import_bulk([{"_key": str(i + j), "vid": i + j, "embedding": chunk[j].tolist()}
+                                 for j in range(len(chunk))]), len(chunk))
+        self.ivf_server_doc_count = int(col.count())
+        if self.ivf_server_doc_count != len(vecs):
+            raise RuntimeError(f"arangodb: server holds {self.ivf_server_doc_count} documents, "
+                               f"the corpus has {len(vecs)}; refusing to index a short load")
         self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(col, "embedding", DIM, len(vecs))
+        # The index as the server reports it, not as we asked for it: from
+        # 3.12.10 a failed training leaves the index "unusable" and the
+        # create call still succeeds; an index that is not "ready" answers by
+        # a linear scan, which is a different experiment.
+        rb = arango_common.index_readback(arango_common.DB, "article")
+        self.ivf_training_state = rb.get("trainingState")
+        self.ivf_resolved_nlists = rb.get("resolvedNLists")
+        self.ivf_index_bytes = rb.get("memory")
+        if self.ivf_training_state != "ready":
+            raise RuntimeError(f"arangodb: vector index is {self.ivf_training_state!r}, not ready: "
+                               f"{rb.get('errorMessage')!r}")
 
     def search(self, qvec, k, nprobe=None):
         cur = self.db.aql.execute(
