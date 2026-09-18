@@ -672,6 +672,29 @@ class MemgraphGraph(Neo4jGraph):
         same one-line difference from Neo4j as the Person index in connect()."""
         return f"CREATE INDEX ON :{label}(id)"
 
+    # LSQB q3 WITH ITS CLAUSES REORDERED (2026-09-18, DECISIONS #92/#93).
+    # LSQB's text binds `MATCH (country:Country)` first and joins the KNOWS
+    # triangle last; Memgraph's planner follows the written clause order, so
+    # it expands every (person, city, country) chain three times over before
+    # the triangle is applied, and the probe cell on the capped slice ran q3
+    # for the remainder of its hour without answering (q1 and q2 had answered
+    # in under two seconds). The same clauses in the other order, triangle
+    # first, are the same query: each pattern stays in its own MATCH, so the
+    # relationship-uniqueness rule (which a single merged MATCH would apply
+    # across the three IS_PART_OF legs, dropping same-city triangles) is
+    # unchanged. Proven by the digest against the reference on the slice.
+    LSQB = {
+        "lsqb_q3": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-(person3:Person)"
+                    "-[:KNOWS]-(person1) "
+                    "MATCH (person1)-[:IS_LOCATED_IN]->(:City)-[:IS_PART_OF]->(country:Country) "
+                    "MATCH (person2)-[:IS_LOCATED_IN]->(:City)-[:IS_PART_OF]->(country) "
+                    "MATCH (person3)-[:IS_LOCATED_IN]->(:City)-[:IS_PART_OF]->(country) "
+                    "RETURN count(*) AS n"),
+    }
+
+    def run_olap(self, qname):
+        return self.run_cypher(self.LSQB.get(qname) or OLAP_QUERIES[qname])
+
 
 def _int_or(v):
     try:
@@ -817,6 +840,27 @@ class FalkorGraph(Base):
             if batch:
                 self.g.query(cy, {"rows": batch}); ecount += len(batch)
         self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+
+    # LSQB q1 WITH EVERY NODE NAMED (2026-09-18, DECISIONS #92). The canonical
+    # text binds none of its nine nodes, and on FalkorDB 4.20.6 the anonymous
+    # chain loses PATH MULTIPLICITY across its intermediates: on the capped SF1
+    # slice the eight-label chain answered 2,393 against 300,871 on every
+    # other engine, and cutting it short showed where. Country<-City<-Person
+    # is 2,000 on both spellings, but Country<-City<-Person<-Forum is 69,114
+    # anonymous against 101,903 named, and 69,114 is exactly
+    # `count(DISTINCT [id(country), id(forum)])`: the eliminated middle nodes
+    # are folded into a boolean product. Naming the nodes (or, equally, the
+    # edges) restores 300,871 on the same server, so the named spelling is
+    # the same query and this is the text FalkorDB runs. Every other LSQB
+    # query names the nodes it chains through and agreed unchanged.
+    LSQB = {
+        "lsqb_q1": ("MATCH (co:Country)<-[:IS_PART_OF]-(ci:City)<-[:IS_LOCATED_IN]-(p:Person)"
+                    "<-[:HAS_MEMBER]-(f:Forum)-[:CONTAINER_OF]->(po:Post)<-[:REPLY_OF]-(cm:Comment)"
+                    "-[:HAS_TAG]->(t:Tag)-[:HAS_TYPE]->(tc:TagClass) RETURN count(*) AS n"),
+    }
+
+    def run_olap(self, qname):
+        return self.run_cypher(self.LSQB.get(qname) or OLAP_QUERIES[qname])
 
     def run_cypher(self, text):
         res = self.g.query(text)
@@ -996,21 +1040,21 @@ class LadybugGraph(Base):
                     "<-[:Forum_hasMember_Person]-(:Forum)-[:Forum_containerOf_Message]->(:Message)"
                     "<-[:Message_replyOf_Message]-(:Message)-[:Message_hasTag_Tag]->(:Tag)"
                     "-[:Tag_hasType_TagClass]->(:TagClass) RETURN count(*) AS n"),
-        "lsqb_q2": ("MATCH (person1:Person)-[:Person_knows_Person]-(person2:Person), "
+        "lsqb_q2": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person), "
                     "(person1)<-[:Message_hasCreator_Person]-(comment:Message)-[:Comment_replyOf_Post]->"
                     "(post:Message)-[:Message_hasCreator_Person]->(person2) RETURN count(*) AS n"),
         "lsqb_q3": ("MATCH (country:Country) "
                     "MATCH (person1:Person)-[:Person_isLocatedIn_City]->(:City)-[:City_isPartOf_Country]->(country) "
                     "MATCH (person2:Person)-[:Person_isLocatedIn_City]->(:City)-[:City_isPartOf_Country]->(country) "
                     "MATCH (person3:Person)-[:Person_isLocatedIn_City]->(:City)-[:City_isPartOf_Country]->(country) "
-                    "MATCH (person1)-[:Person_knows_Person]-(person2)-[:Person_knows_Person]-(person3)"
-                    "-[:Person_knows_Person]-(person1) RETURN count(*) AS n"),
+                    "MATCH (person1)-[:KNOWS]-(person2)-[:KNOWS]-(person3)"
+                    "-[:KNOWS]-(person1) RETURN count(*) AS n"),
         "lsqb_q4": ("MATCH (:Tag)<-[:Message_hasTag_Tag]-(message:Message)-[:Message_hasCreator_Person]->(creator:Person), "
                     "(message)<-[:Person_likes_Message]-(liker:Person), "
                     "(message)<-[:Message_replyOf_Message]-(comment:Message) RETURN count(*) AS n"),
         "lsqb_q5": ("MATCH (tag1:Tag)<-[:Message_hasTag_Tag]-(message:Message)<-[:Message_replyOf_Message]-"
                     "(comment:Message)-[:Message_hasTag_Tag]->(tag2:Tag) WHERE tag1.id <> tag2.id RETURN count(*) AS n"),
-        "lsqb_q6": ("MATCH (person1:Person)-[:Person_knows_Person]-(person2:Person)-[:Person_knows_Person]-"
+        "lsqb_q6": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-"
                     "(person3:Person)-[:Person_hasInterest_Tag]->(tag:Tag) WHERE person1.id <> person3.id RETURN count(*) AS n"),
         "lsqb_q7": ("MATCH (:Tag)<-[:Message_hasTag_Tag]-(message:Message)-[:Message_hasCreator_Person]->(creator:Person) "
                     "OPTIONAL MATCH (message)<-[:Person_likes_Message]-(liker:Person) "
@@ -1018,9 +1062,9 @@ class LadybugGraph(Base):
         "lsqb_q8": ("MATCH (tag1:Tag)<-[:Message_hasTag_Tag]-(message:Message)<-[:Message_replyOf_Message]-"
                     "(comment:Message)-[:Message_hasTag_Tag]->(tag2:Tag) "
                     "WHERE NOT (comment)-[:Message_hasTag_Tag]->(tag1) AND tag1.id <> tag2.id RETURN count(*) AS n"),
-        "lsqb_q9": ("MATCH (person1:Person)-[:Person_knows_Person]-(person2:Person)-[:Person_knows_Person]-"
+        "lsqb_q9": ("MATCH (person1:Person)-[:KNOWS]-(person2:Person)-[:KNOWS]-"
                     "(person3:Person)-[:Person_hasInterest_Tag]->(tag:Tag) "
-                    "WHERE NOT (person1)-[:Person_knows_Person]-(person3) AND person1.id <> person3.id RETURN count(*) AS n"),
+                    "WHERE NOT (person1)-[:KNOWS]-(person3) AND person1.id <> person3.id RETURN count(*) AS n"),
     }
 
     def run_olap(self, qname):
@@ -1056,6 +1100,11 @@ class DuckpgqGraph(Base):
     harness's own enumeration (2,776 at 2,000 persons, 2,999 at 600). DuckPGQ
     requires EVERY edge pattern to bind a variable -- a bare `-[:knows]->` raises
     "All patterns must bind to a variable" -- so each hop names its edge. The
+    same rule for LABELS (2026-09-18, LSQB q2/q3/q4): a vertex variable that
+    is re-used in a second pattern element must repeat its label, `(p1:Person)`
+    every time and never a bare `(p1)`, or the extension raises "All patterns
+    must bind to a label"; the triangle count's closing `(a:Person)` is the
+    same rule already obeyed. The
     property graph is a live view over the tables, so a plain-SQL insert or
     delete is visible to the next MATCH with no re-definition (verified). The
     UNEXPRESSIBLE hook stays and stays empty (DECISIONS #88), for the next query
@@ -1269,17 +1318,17 @@ class DuckpgqGraph(Base):
                     "-[e6:Comment_hasTag]->(t:Tag)-[e7:hasType]->(tc:TagClass) COLUMNS (p.id AS x))"),
         "lsqb_q2": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg MATCH "
                     "(p1:Person)-[k:knows]-(p2:Person), "
-                    "(p1)<-[hc:Comment_hasCreator]-(cm:Comment)-[ro:replyOf_Post]->(po:Post)"
-                    "-[pc:Post_hasCreator]->(p2) COLUMNS (p1.id AS x))"),
+                    "(p1:Person)<-[hc:Comment_hasCreator]-(cm:Comment)-[ro:replyOf_Post]->(po:Post)"
+                    "-[pc:Post_hasCreator]->(p2:Person) COLUMNS (p1.id AS x))"),
         "lsqb_q3": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg MATCH "
                     "(p1:Person)-[e1:Person_isLocatedIn]->(c1:City)-[e2:City_isPartOf_Country]->(co:Country), "
-                    "(p2:Person)-[e3:Person_isLocatedIn]->(c2:City)-[e4:City_isPartOf_Country]->(co), "
-                    "(p3:Person)-[e5:Person_isLocatedIn]->(c3:City)-[e6:City_isPartOf_Country]->(co), "
-                    "(p1)-[k1:knows]-(p2)-[k2:knows]-(p3)-[k3:knows]-(p1) COLUMNS (p1.id AS x))"),
+                    "(p2:Person)-[e3:Person_isLocatedIn]->(c2:City)-[e4:City_isPartOf_Country]->(co:Country), "
+                    "(p3:Person)-[e5:Person_isLocatedIn]->(c3:City)-[e6:City_isPartOf_Country]->(co:Country), "
+                    "(p1:Person)-[k1:knows]-(p2:Person)-[k2:knows]-(p3:Person)-[k3:knows]-(p1:Person) COLUMNS (p1.id AS x))"),
         "lsqb_q4": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg MATCH "
                     "(t:Tag)<-[mht:Message_hasTag]-(m:Message)-[mhc:Message_hasCreator]->(creator:Person), "
-                    "(m)<-[lm:likes_Message]-(liker:Person), "
-                    "(m)<-[rom:replyOf_Message]-(cm:Comment) COLUMNS (m.id AS x))"),
+                    "(m:Message)<-[lm:likes_Message]-(liker:Person), "
+                    "(m:Message)<-[rom:replyOf_Message]-(cm:Comment) COLUMNS (m.id AS x))"),
         "lsqb_q5": ("SELECT count(*) AS n FROM GRAPH_TABLE (pg MATCH "
                     "(tag1:Tag)<-[ht:Message_hasTag]-(m:Message)<-[ro:replyOf_Message]-(cm:Comment)"
                     "-[ht1:Comment_hasTag]->(tag2:Tag) WHERE tag1.id <> tag2.id COLUMNS (m.id AS x))"),
@@ -1596,50 +1645,74 @@ class SurrealGraph(Base):
     # Good-faith SurrealQL, one count per query (see the note above). Each sums,
     # over a driving table, the number of pattern completions reachable from
     # each record; `<->knows<->person` is undirected friendship.
+    # LSQB IN SURREALQL (2026-09-18, DECISIONS #92/#104a), every one proven
+    # against the ArcadeDB/Neo4j reference on the capped SF1 slice. What the
+    # first draft got wrong, and the two facts of the dialect that decided
+    # the rewrite (measured on core 2.3.10 through the probe cell):
+    #   * `<->knows<->person` is NOT the undirected neighbourhood. From a
+    #     person it yields BOTH endpoints of every incident edge, so the list
+    #     is 4x the edge count and 1,574 of 2,000 persons contain themselves.
+    #     The undirected neighbourhood is `->knows->person` concatenated with
+    #     `<-knows<-person` (one edge per unordered pair in LDBC, so no
+    #     duplicates), which is what every friend-of-friend query below uses.
+    #   * A multi-hop traversal keeps PATH multiplicity: the directed two-hop
+    #     `->knows->person->knows->person` summed to exactly the 60,345 paths
+    #     an independent enumeration counts, so a chain's length is a match
+    #     count, the same thing Cypher's count(*) is. A traversal also chains
+    #     off a parenthesised array expression, `(array::complement(a, b))
+    #     ->hasinterest->tag`, which is what the anti-joins need.
+    # Each query is a sum over the edge or vertex that pins the pattern, of a
+    # product of independent leg counts (q1, q4, q7) or a set operation on
+    # neighbourhoods (q2, q3, q5, q6, q8, q9), every one an exact count of
+    # the Cypher's matches rather than an approximation of it.
+    _NIN = "array::concat(in->knows->person, in<-knows<-person)"
+    _NOUT = "array::concat(out->knows->person, out<-knows<-person)"
     LSQB = {
-        "lsqb_q1": ("SELECT math::sum(array::len("
-                    "->hastype<-tag<-hastag<-message<-replyof<-message<-containerof<-forum"
-                    "->hasmember->person->islocatedin->city->ispartof->country)) AS n "
-                    "FROM tagclass GROUP ALL"),
-        "lsqb_q2": ("SELECT math::sum(array::len(array::filter("
-                    "<-hascreator<-message->replyof->message->hascreator->person, "
-                    "|$p| $p IN (<->knows<->person)))) AS n FROM person GROUP ALL"),
-        # q3 counts ordered (person1,person2,person3) triples in one country
-        # that form a KNOWS triangle. Good-faith: for each friendship p1<->p2
-        # in one country, count the third members p3 that both know and that
-        # share the country. Uncertain -- bench host confirms.
-        "lsqb_q3": ("SELECT math::sum(array::len(array::filter("
-                    "(out<->knows<->person), |$p3| "
-                    "$p3 IN (in<->knows<->person) "
-                    "AND (in->islocatedin->city->ispartof->country.pid) = "
-                    "(out->islocatedin->city->ispartof->country.pid) "
-                    "AND ($p3->islocatedin->city->ispartof->country.pid) = "
-                    "(in->islocatedin->city->ispartof->country.pid)))) AS n "
-                    "FROM knows GROUP ALL"),
-        "lsqb_q4": ("SELECT math::sum(array::len(<-replyof<-message)) AS n FROM message "
-                    "WHERE array::len(->hastag->tag) > 0 AND array::len(->hascreator->person) > 0 "
-                    "AND array::len(<-likes<-person) > 0 GROUP ALL"),
-        "lsqb_q5": ("SELECT math::sum(n) AS n FROM (SELECT array::len(array::filter("
-                    "(<-replyof<-message->hastag->tag).pid, |$t2| $t2 NOT IN (->hastag->tag.pid))) "
-                    "AS n FROM message) GROUP ALL"),
-        # q6 counts (p1,p2,p3,tag): p1<->p2<->p3 (undirected), p1<>p3, p3 has a
-        # tag interest. Good-faith: sum over friendships p1<->p2 of, for each
-        # p3 that p2 knows with p3<>p1, that p3's interest count.
-        "lsqb_q6": ("SELECT math::sum(array::len(array::filter("
-                    "(out<->knows<->person), |$p3| $p3.pid != in.pid))) AS n "
-                    "FROM knows GROUP ALL"),
+        # q1: pin the comment->post REPLY_OF edge; the tag/tagclass legs hang
+        # off the comment, the forum/person/city/country legs off the post.
+        "lsqb_q1": ("SELECT math::sum(array::len(in->hastag->tag->hastype->tagclass) * "
+                    "array::len(out<-containerof<-forum->hasmember->person->islocatedin->city"
+                    "->ispartof->country)) AS n FROM replyof WHERE out.mtype = 'post' GROUP ALL"),
+        # q2: the comment's creator is a KNOWS-neighbour (either direction) of
+        # the post's creator. One creator each, so the intersection is 0 or 1.
+        "lsqb_q2": ("SELECT math::sum(array::len(array::intersect(in->hascreator->person, "
+                    "out->hascreator->person->knows->person)) + array::len(array::intersect("
+                    "in->hascreator->person, out->hascreator->person<-knows<-person))) AS n "
+                    "FROM replyof WHERE out.mtype = 'post' GROUP ALL"),
+        # q3: per KNOWS edge whose ends share a country, the common neighbours
+        # in that country; each triangle sits on three edges and the Cypher
+        # counts its six orderings, hence the 2x.
+        "lsqb_q3": ("SELECT math::sum(2 * array::len(array::filter(array::intersect(" + _NIN + ", " + _NOUT + "), "
+                    "|$c| $c->islocatedin->city->ispartof->country = in->islocatedin->city->ispartof->country))) AS n "
+                    "FROM knows WHERE in->islocatedin->city->ispartof->country = "
+                    "out->islocatedin->city->ispartof->country GROUP ALL"),
+        # q4: four independent legs off one message, so the product.
+        "lsqb_q4": ("SELECT math::sum(array::len(->hastag->tag) * array::len(->hascreator->person) * "
+                    "array::len(<-likes<-person) * array::len(<-replyof<-message)) AS n FROM message GROUP ALL"),
+        # q5: pairs (tag1 of the message, tag2 of the reply) with tag1 <> tag2.
+        "lsqb_q5": ("SELECT math::sum(array::len(out->hastag->tag) * array::len(in->hastag->tag) - "
+                    "array::len(array::intersect(out->hastag->tag, in->hastag->tag))) AS n FROM replyof GROUP ALL"),
+        # q6: for the middle person, every ordered (person1, person3) pair of
+        # distinct neighbours, weighted by person3's interests: (deg - 1)
+        # times the interests summed over the neighbourhood.
+        "lsqb_q6": ("SELECT math::sum((count(->knows) + count(<-knows) - 1) * "
+                    "(array::len(->knows->person->hasinterest->tag) + "
+                    "array::len(<-knows<-person->hasinterest->tag))) AS n FROM person GROUP ALL"),
+        # q7: q4 with the liker and reply legs OPTIONAL, so each contributes
+        # max(count, 1).
         "lsqb_q7": ("SELECT math::sum(array::len(->hastag->tag) * "
                     "math::max([array::len(<-likes<-person), 1]) * "
                     "math::max([array::len(<-replyof<-message), 1])) AS n FROM message "
                     "WHERE array::len(->hascreator->person) > 0 GROUP ALL"),
-        "lsqb_q8": ("SELECT math::sum(n) AS n FROM (SELECT array::len(array::filter("
-                    "(<-replyof<-message->hastag->tag).pid, |$t2| $t2 NOT IN (->hastag->tag.pid))) "
-                    "AS n FROM message) GROUP ALL"),
-        # q9 = q6 with p1 NOT directly knowing p3.
-        "lsqb_q9": ("SELECT math::sum(array::len(array::filter("
-                    "(out<->knows<->person), |$p3| $p3.pid != in.pid "
-                    "AND $p3 NOT IN (in<->knows<->person)))) AS n "
-                    "FROM knows GROUP ALL"),
+        # q8: q5 where tag1 is not also on the reply: |tags(message) minus
+        # tags(reply)| times |tags(reply)|.
+        "lsqb_q8": ("SELECT math::sum(array::len(array::complement(out->hastag->tag, in->hastag->tag)) * "
+                    "array::len(in->hastag->tag)) AS n FROM replyof GROUP ALL"),
+        # q9: per KNOWS edge (person1, person2) in both roles, person3 ranges
+        # over person2's neighbours minus person1's neighbours minus person1.
+        "lsqb_q9": ("SELECT math::sum(array::len((array::complement(" + _NOUT + ", array::append(" + _NIN + ", in)))"
+                    "->hasinterest->tag) + array::len((array::complement(" + _NIN + ", array::append(" + _NOUT + ", out)))"
+                    "->hasinterest->tag)) AS n FROM knows GROUP ALL"),
     }
 
     def run_olap(self, qname):
@@ -1681,6 +1754,36 @@ class SurrealGraphServer(SurrealGraph):
                            "SELECT array::len(array::filter(array::intersect("
                            "out->knows->person, in<-knows<-person), |$c| $c > in)) AS n "
                            "FROM knows WHERE in < out) GROUP ALL"))
+
+    # THE SERVED 3.2.4 SPELLS THREE OF THE NINE DIFFERENTLY (2026-09-18,
+    # DECISIONS #93 applied to LSQB), each proven against the reference on the
+    # capped slice through the probe cell, with the embedded 2.3.10 text's
+    # failure on 3.2.4 recorded verbatim:
+    #   q6, q7: 3.2.4 treats count() and math::max() inside math::sum() as
+    #     nested aggregates ("Invalid query: Nested aggregate functions are
+    #     not supported"); array::len() and array::max() are plain functions
+    #     on both versions and give the same numbers.
+    #   q9: on 3.2.4 a traversal off a parenthesised array keeps ONE hit per
+    #     element, `(array::concat(->knows->person, []))->hasinterest->tag`
+    #     summed to 7,012 (the edge count) where the same expression on
+    #     2.3.10 and the direct chain on both give 155,775; the embedded q9
+    #     therefore came out 160,637 against 7,952,866. array::map with the
+    #     traversal inside the closure keeps multiplicity on both versions.
+    # The other six run the embedded text unchanged.
+    LSQB = dict(SurrealGraph.LSQB,
+        lsqb_q6=("SELECT math::sum((array::len(->knows) + array::len(<-knows) - 1) * "
+                 "(array::len(->knows->person->hasinterest->tag) + "
+                 "array::len(<-knows<-person->hasinterest->tag))) AS n FROM person GROUP ALL"),
+        lsqb_q7=("SELECT math::sum(array::len(->hastag->tag) * "
+                 "array::max([array::len(<-likes<-person), 1]) * "
+                 "array::max([array::len(<-replyof<-message), 1])) AS n FROM message "
+                 "WHERE array::len(->hascreator->person) > 0 GROUP ALL"),
+        lsqb_q9=("SELECT math::sum(array::len(array::flatten(array::map(array::complement("
+                 + SurrealGraph._NOUT + ", array::append(" + SurrealGraph._NIN + ", in)), "
+                 "|$p| $p->hasinterest->tag))) + array::len(array::flatten(array::map(array::complement("
+                 + SurrealGraph._NIN + ", array::append(" + SurrealGraph._NOUT + ", out)), "
+                 "|$p| $p->hasinterest->tag)))) AS n FROM knows GROUP ALL"),
+    )
 
     def _open(self):
         # One shared client for every served arm (DECISIONS #91): it sets the
@@ -2241,10 +2344,14 @@ class MongoGraph(Base):
             {"$unwind": "$ht"},  # tag -> tagclass
             {"$lookup": {"from": "e_hastag", "localField": "ht.s", "foreignField": "d", "as": "mt"}},
             {"$unwind": "$mt"},  # message -> tag
-            {"$lookup": {"from": "e_replyof", "localField": "mt.s", "foreignField": "d", "as": "ro"}},
-            {"$unwind": "$ro"},  # comment -> post(=mt.s)
-            {"$lookup": {"from": "e_containerof", "localField": "mt.s", "foreignField": "d", "as": "co"}},
-            {"$unwind": "$co"},  # forum -> post
+            # THE TAG IS ON THE COMMENT (LSQB q1: ...Post<-REPLY_OF-Comment-HAS_TAG->Tag).
+            # The first version looked up replies TO mt.s and the forum OF
+            # mt.s, i.e. it put the tag on the post (found by reading the
+            # pipeline against the Cypher, 2026-09-18).
+            {"$lookup": {"from": "e_replyof", "localField": "mt.s", "foreignField": "s", "as": "ro"}},
+            {"$unwind": "$ro"},  # comment(=mt.s) -> post(=ro.d)
+            {"$lookup": {"from": "e_containerof", "localField": "ro.d", "foreignField": "d", "as": "co"}},
+            {"$unwind": "$co"},  # forum -> post; only a Post is contained, so ro.d is one
             {"$lookup": {"from": "e_hasmember", "localField": "co.s", "foreignField": "s", "as": "hm"}},
             {"$unwind": "$hm"},  # forum -> person
             {"$lookup": {"from": "e_islocatedin", "localField": "hm.d", "foreignField": "s", "as": "il"}},
@@ -2342,7 +2449,12 @@ class MongoGraph(Base):
                 {"$lookup": {"from": "e_hascreator", "localField": "s", "foreignField": "d", "as": "cm"}},
                 {"$unwind": "$cm"},  # comment/post created by person1
                 {"$lookup": {"from": "e_replyof", "localField": "cm.s", "foreignField": "s", "as": "ro"}},
-                {"$unwind": "$ro"},  # that message replies to ro.d (a post)
+                {"$unwind": "$ro"},  # that message replies to ro.d, a post OR a comment
+                # (post:Post): REPLY_OF also links comment to comment, and the
+                # Cypher counts only replies to a Post (2026-09-18).
+                {"$lookup": {"from": "message", "localField": "ro.d", "foreignField": "_id", "as": "pm"}},
+                {"$unwind": "$pm"},
+                {"$match": {"pm.mtype": "post"}},
                 {"$lookup": {"from": "e_hascreator", "localField": "ro.d", "foreignField": "s", "as": "pc"}},
                 {"$unwind": "$pc"},  # post's creator
                 {"$match": {"$expr": {"$eq": ["$pc.d", "$d"]}}},  # == person2

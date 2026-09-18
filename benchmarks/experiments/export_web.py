@@ -616,7 +616,11 @@ def _l2_size(scale: str) -> str | None:
         if r.get("lane") != "l2" or str(r.get("scale")) != str(scale):
             continue
         try:
-            people = people or int(float(r.get("n_persons") or 0)) or None
+            # What was LOADED, not the tier's constant: under the smoke cap
+            # (DECISIONS #104) n_persons still names the whole tier while
+            # n_persons_ingested is the 2,000 the cell read.
+            people = people or int(float(r.get("n_persons_ingested") or 0)) \
+                or int(float(r.get("n_persons") or 0)) or None
             edges = edges or int(float(r.get("n_edges_ingested") or 0)) or None
         except ValueError:
             continue
@@ -640,6 +644,13 @@ def scale_label(lane: str, scale: str) -> str:
         size = _l2_size(scale)
         if size:
             if SKELETON:
+                # The skeleton's analytics rows read a capped slice of the
+                # real LDBC SF1 network (DECISIONS #104a); its interactive
+                # rows read the micro generator. The rows say which.
+                src = next((str(r.get("graph_source") or "") for r in _FROZEN_ROWS
+                            if r.get("lane") == "l2" and str(r.get("scale")) == str(scale)), "")
+                if src.startswith("ldbc"):
+                    return f"{size} (LDBC SF1 slice, skeleton)"
                 return f"{size} (synthetic, skeleton)"
             return f"{str(scale).upper()} ({size})"
     try:
@@ -1097,6 +1108,16 @@ OCT_TABLE_METRICS = {
         # budget at the larger size, and a censored cell is a result.
         ("degree_dist_p50_ms", "degree distribution p50 ms"),
         ("triangles_p50_ms", "triangle count p50 ms"),
+        # LSQB's nine (DECISIONS #104): one exact count each, p50 only.
+        ("lsqb_q1_p50_ms", "LSQB Q1 p50 ms"),
+        ("lsqb_q2_p50_ms", "LSQB Q2 p50 ms"),
+        ("lsqb_q3_p50_ms", "LSQB Q3 p50 ms"),
+        ("lsqb_q4_p50_ms", "LSQB Q4 p50 ms"),
+        ("lsqb_q5_p50_ms", "LSQB Q5 p50 ms"),
+        ("lsqb_q6_p50_ms", "LSQB Q6 p50 ms"),
+        ("lsqb_q7_p50_ms", "LSQB Q7 p50 ms"),
+        ("lsqb_q8_p50_ms", "LSQB Q8 p50 ms"),
+        ("lsqb_q9_p50_ms", "LSQB Q9 p50 ms"),
         ("cold_first_query_ms", "cold first query ms"),
         (_rate(("n_persons_ingested", "n_edges_ingested"), "build_s"), "ingest vertices+edges/s"),
         ("build_s", "ingest total s"),
@@ -1534,7 +1555,10 @@ LANES = {
         # two tiers the graph analytics table was the one section of the
         # October page the skeleton silently did not draw: the rows were
         # frozen, the table was never built, and nothing said so.
-        "only_scales": {"micro"} if SKELETON else {"sf1", "sf10"},
+        # The skeleton's analytics rows are the capped LDBC SF1 slice the LSQB
+        # smoke ran (DECISIONS #104a), not the micro generator: the nine LSQB
+        # columns need the message half, which only the ldbc source loads.
+        "only_scales": {"sf1"} if SKELETON else {"sf1", "sf10"},
         "only_workload": "olap",
         # p50, not the mean the page printed until 2026-09-10 (the lane's own
         # comment says p50 first, and it recorded one); p99 arrives with the
@@ -1547,6 +1571,15 @@ LANES = {
                     ("same_city_edges_p99_ms", "friends in same city p99 ms"),
                     ("top_degree_p50_ms", "most friends p50 ms"),
                     ("top_degree_p99_ms", "most friends p99 ms"),
+                    ("lsqb_q1_p50_ms", "LSQB Q1 p50 ms"),
+                    ("lsqb_q2_p50_ms", "LSQB Q2 p50 ms"),
+                    ("lsqb_q3_p50_ms", "LSQB Q3 p50 ms"),
+                    ("lsqb_q4_p50_ms", "LSQB Q4 p50 ms"),
+                    ("lsqb_q5_p50_ms", "LSQB Q5 p50 ms"),
+                    ("lsqb_q6_p50_ms", "LSQB Q6 p50 ms"),
+                    ("lsqb_q7_p50_ms", "LSQB Q7 p50 ms"),
+                    ("lsqb_q8_p50_ms", "LSQB Q8 p50 ms"),
+                    ("lsqb_q9_p50_ms", "LSQB Q9 p50 ms"),
                     ("gav_build_s", "view build s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     (_disk_data, "disk GiB")],
@@ -3265,7 +3298,8 @@ def _R(table_id, key):
 
 _WORDS = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five",
           6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten",
-          11: "Eleven", 12: "Twelve"}
+          11: "Eleven", 12: "Twelve", 13: "Thirteen", 14: "Fourteen",
+          15: "Fifteen", 16: "Sixteen"}
 
 # What each timed query or operation asks, in plain words, keyed by the page's
 # own column label with its statistic stripped. The sentence is generated
@@ -3279,6 +3313,15 @@ QUERY_WORDS = {
         "most friends": "which people have the highest number of friends",
         "degree distribution": "how many people have each number of friends, counted over every edge in the graph",
         "triangle count": "how many sets of three people are all friends with one another, each triangle counted once",
+        "LSQB Q1": "LSQB's first query, the eight-label chain: a country, a city in it, a person living there, a forum that person belongs to, a post in that forum, a comment replying to the post, the comment's tag, and the tag's class, every match counted",
+        "LSQB Q2": "LSQB's second query: pairs of friends where one wrote a comment replying to a post the other wrote",
+        "LSQB Q3": "LSQB's third query: three people who all live in the same country and are all friends with one another, each ordering counted",
+        "LSQB Q4": "LSQB's fourth query: a tagged message with its creator, a person who liked it, and a comment replying to it, every combination counted",
+        "LSQB Q5": "LSQB's fifth query: a tagged message and a reply to it carrying a different tag",
+        "LSQB Q6": "LSQB's sixth query: a friend of a friend and that far person's tag interests, the two ends being different people",
+        "LSQB Q7": "LSQB's seventh query, the fourth with the liker and the reply optional, so a tagged message with neither still counts once per creator",
+        "LSQB Q8": "LSQB's eighth query, the fifth where the reply does not also carry the message's own tag",
+        "LSQB Q9": "LSQB's ninth query, the sixth where the two people at the ends are not themselves friends",
     }),
     "docs_olap": ("analytical queries, each over the whole line-item table", "All times are milliseconds.", {
         "Q1": "TPC-H's own Q1, the pricing summary: it groups and aggregates every line item, so it measures a full scan",
@@ -3517,6 +3560,17 @@ _TABLE_LANE = {
     # coverage gate had no lane to read its fields from.
     "lifecycle": ("lifecycle", None),
 }
+
+
+def _table_scales(table_id):
+    """The tiers a table prints (its spec's only_scales), or None for all.
+
+    A note about a cell the table does not show is a note about nothing: the
+    graph analytics table prints the LDBC slice and its notes named the micro
+    generator's rows (2026-09-18)."""
+    spec = LANES.get(table_id) or {}
+    return spec.get("only_scales")
+
 _CENSORED_CACHE = None
 
 
@@ -3564,8 +3618,11 @@ def _censored_notes(table_id):
         return []
     lane, wl = lane_wl
     notes = []
+    scales = _table_scales(table_id)
     for (l, scale, backend, w), secs in sorted(_censored_cells().items(), key=str):
         if l != lane or (wl and w != wl):
+            continue
+        if scales and str(scale) not in scales:
             continue
         budget = f"{secs / 3600:g} hour" if secs else "its"
         what = {"oltp": "transaction", "olap": "analytics", "hybrid": "transaction",
@@ -3608,7 +3665,8 @@ _QUERY_BUDGET_TABLES = {
     "l2olap": ("l2", "olap", {
         "friend_age_by_city": "average friend age", "same_city_edges": "friends in same city",
         "top_degree": "most friends", "degree_dist": "degree distribution",
-        "triangles": "triangle count"}, ("graph_common", "OLAP_ITERATIONS"),
+        "triangles": "triangle count",
+        "lsqb_q1": "LSQB Q1", "lsqb_q2": "LSQB Q2", "lsqb_q3": "LSQB Q3", "lsqb_q4": "LSQB Q4", "lsqb_q5": "LSQB Q5", "lsqb_q6": "LSQB Q6", "lsqb_q7": "LSQB Q7", "lsqb_q8": "LSQB Q8", "lsqb_q9": "LSQB Q9"}, ("graph_common", "OLAP_ITERATIONS"),
         "warm iterations after the cold pass"),
     "l4": ("l4", None, {
         "q_last": "newest reading", "q_range": "one-hour range", "q_global": "12h aggregate",
@@ -3643,8 +3701,11 @@ def _query_budget_notes(table_id):
         asked = None
     # (label, scale, query) -> [(iters, elapsed_s, budget_s)] across reps
     hits = collections.defaultdict(list)
+    scales = _table_scales(table_id)
     for r in _FROZEN_ROWS:
         if r.get("lane") != lane or (wl and r.get("workload") != wl):
+            continue
+        if scales and str(r.get("scale")) not in scales:
             continue
         for q, col in labels.items():
             if str(r.get(f"{q}_censored") or "").strip().lower() != "true":

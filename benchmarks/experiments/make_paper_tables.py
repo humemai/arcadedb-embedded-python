@@ -131,7 +131,10 @@ PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
 # freeze is written to the same runs_paper.csv and must never be committed;
 # every cell it produces is stamped skeleton by the exporter and refused by a
 # live publish.
-SKELETON_SCALES = {"l1tpc": ["micro"], "l2": ["micro"], "l3s": ["micro"],
+# l2 carries sf1 as well: the graph analytics skeleton is the capped LDBC SF1
+# slice the LSQB smoke ran on the laptop (DECISIONS #104a); the interactive
+# skeleton stays the micro generator.
+SKELETON_SCALES = {"l1tpc": ["micro"], "l2": ["micro", "sf1"], "l3s": ["micro"],
                    "l3d": ["micro"], "e2": ["e2"], "l4": ["ts100"],
                    "lifecycle": ["lc10k"]}
 SKELETON = os.environ.get("BENCH_SKELETON") == "1"

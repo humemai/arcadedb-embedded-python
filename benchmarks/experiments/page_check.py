@@ -720,7 +720,10 @@ OPERATION_MANIFEST = {
            "delete p50 ms"],
     "l2olap": ["average friend age p50 ms", "friends in same city p50 ms",
                "most friends p50 ms", "degree distribution p50 ms",
-               "triangle count p50 ms", "cold first query ms"],
+               "triangle count p50 ms",
+               # LSQB's nine (DECISIONS #104): fourteen query columns in all.
+               *[f"LSQB Q{i} p50 ms" for i in range(1, 10)],
+               "cold first query ms"],
     "l3d": ["cold p50 ms", "recall@10", "after insert p50 ms",
             "after delete p50 ms", "insert into index ms/vector",
             "delete from index ms/vector", "recall@10 after insert",
@@ -753,7 +756,9 @@ NOT_PRINTED = [
      "provenance: which repetition this row is and whether it exited clean"),
     (r"^(tpch_sf|n_docs|n_docs_ingested|n_lineitem|n_part|n_persons|"
      r"n_persons_in_corpus|n_persons_ingested|n_edges|n_edges_ingested|"
-     r"n_points|n_products|n_rows|dim|dims|ts_chunk|ts_shards|last_window_s)$",
+     r"n_points|n_products|n_rows|dim|dims|ts_chunk|ts_shards|last_window_s|"
+     # the analytics message half (DECISIONS #104): what the LSQB queries walk
+     r"msg_vertices|msg_edges)$",
      "the corpus: it is the Size column and the dataset line under the table"),
     (r"^(oltp_ops|oltp_total_s|ops|payments_n|read_ops|write_ops|update_ops|"
      r"delete_ops|crud_\w+_ops|n_queries|n_queries_timed|query_n|olap_iters|"

@@ -3792,16 +3792,55 @@
       "dataset": "LDBC-SNB, SF10",
       "conditions": [
         "Take every number in this table with a grain of salt. It was timed on a laptop that was running other work at the same time, with no cores set aside for the benchmark and one run per cell, so these times can be out by a large factor and the engines here cannot be compared with each other, or with the same table on the live page. The columns, the conditions, and the sizes are October's; the values are filler until the campaign measures them on the bench machine.",
-        "Five questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. Degree distribution: how many people have each number of friends, counted over every edge in the graph. Triangle count: how many sets of three people are all friends with one another, each triangle counted once. All times are milliseconds.",
+        "Fourteen questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. Degree distribution: how many people have each number of friends, counted over every edge in the graph. Triangle count: how many sets of three people are all friends with one another, each triangle counted once. LSQB Q1: LSQB's first query, the eight-label chain: a country, a city in it, a person living there, a forum that person belongs to, a post in that forum, a comment replying to the post, the comment's tag, and the tag's class, every match counted. LSQB Q2: LSQB's second query: pairs of friends where one wrote a comment replying to a post the other wrote. LSQB Q3: LSQB's third query: three people who all live in the same country and are all friends with one another, each ordering counted. LSQB Q4: LSQB's fourth query: a tagged message with its creator, a person who liked it, and a comment replying to it, every combination counted. LSQB Q5: LSQB's fifth query: a tagged message and a reply to it carrying a different tag. LSQB Q6: LSQB's sixth query: a friend of a friend and that far person's tag interests, the two ends being different people. LSQB Q7: LSQB's seventh query, the fourth with the liker and the reply optional, so a tagged message with neither still counts once per creator. LSQB Q8: LSQB's eighth query, the fifth where the reply does not also carry the message's own tag. LSQB Q9: LSQB's ninth query, the sixth where the two people at the ends are not themselves friends. All times are milliseconds.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
         "The cold column is the very first query of a session, most friends, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Rows labelled GAV ran with it built, once, before any query was timed, and the view build column is what that took.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
-        "SurrealDB (embedded) at 2k people, 41k friendships (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "ArangoDB at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
-        "ArcadeDB (embedded, GAV) at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 18 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
-        "ArcadeDB (server, GAV) at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 16 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q1 query exceeded its 300 s budget, the same budget every engine on this table had, after 20 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q2 query exceeded its 300 s budget, the same budget every engine on this table had, after 18 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q3 query exceeded its 300 s budget, the same budget every engine on this table had, after 10 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q5 query exceeded its 300 s budget, the same budget every engine on this table had, after 35 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q6 query exceeded its 300 s budget, the same budget every engine on this table had, after 19 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q8 query exceeded its 300 s budget, the same budget every engine on this table had, after 30 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 3 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 53 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArcadeDB (embedded, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q6 query exceeded its 300 s budget, the same budget every engine on this table had, after 21 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArcadeDB (embedded, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q8 query exceeded its 300 s budget, the same budget every engine on this table had, after 99 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArcadeDB (embedded, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 0 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArcadeDB (server, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q6 query exceeded its 300 s budget, the same budget every engine on this table had, after 20 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArcadeDB (server, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q8 query exceeded its 300 s budget, the same budget every engine on this table had, after 88 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "ArcadeDB (server, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 0 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "FalkorDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q2 query exceeded its 300 s budget, the same budget every engine on this table had, after 22 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "FalkorDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q3 query exceeded its 300 s budget, the same budget every engine on this table had, after 71 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "FalkorDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 11 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "Memgraph at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q3 query exceeded its 300 s budget, the same budget every engine on this table had, after 6 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "Memgraph at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 30 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q1 query exceeded its 300 s budget, the same budget every engine on this table had, after 10 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q2 query exceeded its 300 s budget, the same budget every engine on this table had, after 9 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q3 query exceeded its 300 s budget, the same budget every engine on this table had, after 6 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q4 query exceeded its 300 s budget, the same budget every engine on this table had, after 53 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q5 query exceeded its 300 s budget, the same budget every engine on this table had, after 52 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q6 query exceeded its 300 s budget, the same budget every engine on this table had, after 7 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q7 query exceeded its 300 s budget, the same budget every engine on this table had, after 43 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q8 query exceeded its 300 s budget, the same budget every engine on this table had, after 13 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 3 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q1 query exceeded its 300 s budget, the same budget every engine on this table had, after 1 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q2 query exceeded its 300 s budget, the same budget every engine on this table had, after 4 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q3 query exceeded its 300 s budget, the same budget every engine on this table had, after 8 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q4 query exceeded its 300 s budget, the same budget every engine on this table had, after 3 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q5 query exceeded its 300 s budget, the same budget every engine on this table had, after 3 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q6 query exceeded its 300 s budget, the same budget every engine on this table had, after 3 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q7 query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q8 query exceeded its 300 s budget, the same budget every engine on this table had, after 4 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 0 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 43 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (server) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q1 query exceeded its 300 s budget, the same budget every engine on this table had, after 22 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (server) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q2 query exceeded its 300 s budget, the same budget every engine on this table had, after 61 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (server) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q4 query exceeded its 300 s budget, the same budget every engine on this table had, after 76 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (server) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q7 query exceeded its 300 s budget, the same budget every engine on this table had, after 89 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "SurrealDB (server) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 0 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
         "FalkorDB at 2k people, 41k friendships (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 6 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.01 GiB, not as a size.",
         "SurrealDB (server) at 2k people, 41k friendships (synthetic, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts."
@@ -3813,6 +3852,15 @@
         "most friends p50 ms",
         "degree distribution p50 ms",
         "triangle count p50 ms",
+        "LSQB Q1 p50 ms",
+        "LSQB Q2 p50 ms",
+        "LSQB Q3 p50 ms",
+        "LSQB Q4 p50 ms",
+        "LSQB Q5 p50 ms",
+        "LSQB Q6 p50 ms",
+        "LSQB Q7 p50 ms",
+        "LSQB Q8 p50 ms",
+        "LSQB Q9 p50 ms",
         "cold first query ms",
         "view build s",
         "ingest vertices+edges/s",
@@ -3827,8 +3875,8 @@
           "backend": "ArcadeDB (embedded, GAV)",
           "is_arcadedb": true,
           "precision": null,
-          "scale": "micro",
-          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "embedded",
@@ -3837,75 +3885,129 @@
           "host": null,
           "metrics": {
             "average friend age p50 ms": {
-              "median": 22.92,
-              "min": 22.92,
-              "max": 22.92,
+              "median": 12.99,
+              "min": 12.99,
+              "max": 12.99,
               "n": 1
             },
             "average friend age p99 ms": {
-              "median": 50.62,
-              "min": 50.62,
-              "max": 50.62,
+              "median": 19.08,
+              "min": 19.08,
+              "max": 19.08,
               "n": 1
             },
             "friends in same city p50 ms": {
-              "median": 24.81,
-              "min": 24.81,
-              "max": 24.81,
+              "median": 8.85,
+              "min": 8.85,
+              "max": 8.85,
               "n": 1
             },
             "most friends p50 ms": {
-              "median": 6.19,
-              "min": 6.19,
-              "max": 6.19,
+              "median": 3.82,
+              "min": 3.82,
+              "max": 3.82,
               "n": 1
             },
             "degree distribution p50 ms": {
-              "median": 15.87,
-              "min": 15.87,
-              "max": 15.87,
+              "median": 5.03,
+              "min": 5.03,
+              "max": 5.03,
               "n": 1
             },
             "triangle count p50 ms": {
-              "median": 16091.34,
-              "min": 16091.34,
-              "max": 16091.34,
+              "median": 622.06,
+              "min": 622.06,
+              "max": 622.06,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 174.41,
+              "min": 174.41,
+              "max": 174.41,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 495.47,
+              "min": 495.47,
+              "max": 495.47,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 246.1,
+              "min": 246.1,
+              "max": 246.1,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 150.14,
+              "min": 150.14,
+              "max": 150.14,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 1048.33,
+              "min": 1048.33,
+              "max": 1048.33,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 14136.88,
+              "min": 14136.88,
+              "max": 14136.88,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 146.27,
+              "min": 146.27,
+              "max": 146.27,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 3010.9,
+              "min": 3010.9,
+              "max": 3010.9,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 602217.91,
+              "min": 602217.91,
+              "max": 602217.91,
               "n": 1
             },
             "cold first query ms": {
-              "median": 393.42,
-              "min": 393.42,
-              "max": 393.42,
+              "median": 347.96,
+              "min": 347.96,
+              "max": 347.96,
               "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 15982.4627,
-              "min": 15982.4627,
-              "max": 15982.4627,
+              "median": 123.3844,
+              "min": 123.3844,
+              "max": 123.3844,
               "n": 1
             },
             "ingest total s": {
-              "median": 2.68,
-              "min": 2.68,
-              "max": 2.68,
+              "median": 73.04,
+              "min": 73.04,
+              "max": 73.04,
               "n": 1
             },
             "view build s": {
-              "median": 1.118,
-              "min": 1.118,
-              "max": 1.118,
+              "median": 1.104,
+              "min": 1.104,
+              "max": 1.104,
               "n": 1
             },
             "peak memory GiB": {
-              "median": 2.674,
-              "min": 2.674,
-              "max": 2.674,
+              "median": 2.7934,
+              "min": 2.7934,
+              "max": 2.7934,
               "n": 1
             },
             "disk GiB": {
-              "median": 0.003,
-              "min": 0.003,
-              "max": 0.003,
+              "median": 0.0345,
+              "min": 0.0345,
+              "max": 0.0345,
               "n": 1
             }
           }
@@ -3914,8 +4016,8 @@
           "backend": "ArcadeDB (server, GAV)",
           "is_arcadedb": true,
           "precision": null,
-          "scale": "micro",
-          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
@@ -3924,75 +4026,129 @@
           "host": null,
           "metrics": {
             "average friend age p50 ms": {
-              "median": 46.35,
-              "min": 46.35,
-              "max": 46.35,
+              "median": 15.78,
+              "min": 15.78,
+              "max": 15.78,
               "n": 1
             },
             "average friend age p99 ms": {
-              "median": 58.58,
-              "min": 58.58,
-              "max": 58.58,
+              "median": 22.78,
+              "min": 22.78,
+              "max": 22.78,
               "n": 1
             },
             "friends in same city p50 ms": {
-              "median": 62.9,
-              "min": 62.9,
-              "max": 62.9,
+              "median": 14.85,
+              "min": 14.85,
+              "max": 14.85,
               "n": 1
             },
             "most friends p50 ms": {
-              "median": 9.76,
-              "min": 9.76,
-              "max": 9.76,
+              "median": 8.99,
+              "min": 8.99,
+              "max": 8.99,
               "n": 1
             },
             "degree distribution p50 ms": {
-              "median": 26.83,
-              "min": 26.83,
-              "max": 26.83,
+              "median": 10.71,
+              "min": 10.71,
+              "max": 10.71,
               "n": 1
             },
             "triangle count p50 ms": {
-              "median": 18373.48,
-              "min": 18373.48,
-              "max": 18373.48,
+              "median": 737.9,
+              "min": 737.9,
+              "max": 737.9,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 199.7,
+              "min": 199.7,
+              "max": 199.7,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 580.23,
+              "min": 580.23,
+              "max": 580.23,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 291.26,
+              "min": 291.26,
+              "max": 291.26,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 177.34,
+              "min": 177.34,
+              "max": 177.34,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 1172.01,
+              "min": 1172.01,
+              "max": 1172.01,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 14502.79,
+              "min": 14502.79,
+              "max": 14502.79,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 178.06,
+              "min": 178.06,
+              "max": 178.06,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 3411.8,
+              "min": 3411.8,
+              "max": 3411.8,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 696178.12,
+              "min": 696178.12,
+              "max": 696178.12,
               "n": 1
             },
             "cold first query ms": {
-              "median": 577.95,
-              "min": 577.95,
-              "max": 577.95,
+              "median": 504.23,
+              "min": 504.23,
+              "max": 504.23,
               "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 5643.3465,
-              "min": 5643.3465,
-              "max": 5643.3465,
+              "median": 106.0734,
+              "min": 106.0734,
+              "max": 106.0734,
               "n": 1
             },
             "ingest total s": {
-              "median": 7.59,
-              "min": 7.59,
-              "max": 7.59,
+              "median": 84.96,
+              "min": 84.96,
+              "max": 84.96,
               "n": 1
             },
             "view build s": {
-              "median": 1.069,
-              "min": 1.069,
-              "max": 1.069,
+              "median": 1.068,
+              "min": 1.068,
+              "max": 1.068,
               "n": 1
             },
             "peak memory GiB": {
-              "median": 2.9312,
-              "min": 2.9312,
-              "max": 2.9312,
+              "median": 2.8563,
+              "min": 2.8563,
+              "max": 2.8563,
               "n": 1
             },
             "disk GiB": {
-              "median": 0.0091,
-              "min": 0.0091,
-              "max": 0.0091,
+              "median": 0.0517,
+              "min": 0.0517,
+              "max": 0.0517,
               "n": 1
             }
           }
@@ -4001,8 +4157,8 @@
           "backend": "ArangoDB",
           "is_arcadedb": false,
           "precision": null,
-          "scale": "micro",
-          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
@@ -4011,63 +4167,387 @@
           "host": null,
           "metrics": {
             "average friend age p50 ms": {
-              "median": 320.75,
-              "min": 320.75,
-              "max": 320.75,
+              "median": 97.54,
+              "min": 97.54,
+              "max": 97.54,
               "n": 1
             },
             "average friend age p99 ms": {
-              "median": 353.64,
-              "min": 353.64,
-              "max": 353.64,
+              "median": 125.53,
+              "min": 125.53,
+              "max": 125.53,
               "n": 1
             },
             "friends in same city p50 ms": {
-              "median": 334.79,
-              "min": 334.79,
-              "max": 334.79,
+              "median": 121.39,
+              "min": 121.39,
+              "max": 121.39,
               "n": 1
             },
             "most friends p50 ms": {
-              "median": 27.72,
-              "min": 27.72,
-              "max": 27.72,
+              "median": 16.33,
+              "min": 16.33,
+              "max": 16.33,
               "n": 1
             },
             "degree distribution p50 ms": {
-              "median": 30.74,
-              "min": 30.74,
-              "max": 30.74,
+              "median": 19.33,
+              "min": 19.33,
+              "max": 19.33,
               "n": 1
             },
             "triangle count p50 ms": {
-              "median": 52042.87,
-              "min": 52042.87,
-              "max": 52042.87,
+              "median": 5670.12,
+              "min": 5670.12,
+              "max": 5670.12,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 14390.79,
+              "min": 14390.79,
+              "max": 14390.79,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 15901.9,
+              "min": 15901.9,
+              "max": 15901.9,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 27951.43,
+              "min": 27951.43,
+              "max": 27951.43,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 653.98,
+              "min": 653.98,
+              "max": 653.98,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 8391.19,
+              "min": 8391.19,
+              "max": 8391.19,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 15053.65,
+              "min": 15053.65,
+              "max": 15053.65,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 1214.28,
+              "min": 1214.28,
+              "max": 1214.28,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 9971.95,
+              "min": 9971.95,
+              "max": 9971.95,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 94337.14,
+              "min": 94337.14,
+              "max": 94337.14,
               "n": 1
             },
             "cold first query ms": {
-              "median": 61.69,
-              "min": 61.69,
-              "max": 61.69,
+              "median": 42.55,
+              "min": 42.55,
+              "max": 42.55,
               "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 32948.4615,
-              "min": 32948.4615,
-              "max": 32948.4615,
+              "median": 142.5949,
+              "min": 142.5949,
+              "max": 142.5949,
               "n": 1
             },
             "ingest total s": {
-              "median": 1.3,
-              "min": 1.3,
-              "max": 1.3,
+              "median": 63.2,
+              "min": 63.2,
+              "max": 63.2,
               "n": 1
             },
             "peak memory GiB": {
-              "median": 0.2856,
-              "min": 0.2856,
-              "max": 0.2856,
+              "median": 0.6216,
+              "min": 0.6216,
+              "max": 0.6216,
+              "n": 1
+            },
+            "disk GiB": {
+              "median": 0.0812,
+              "min": 0.0812,
+              "max": 0.0812,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "metrics": {
+            "average friend age p50 ms": {
+              "median": 7.31,
+              "min": 7.31,
+              "max": 7.31,
+              "n": 1
+            },
+            "average friend age p99 ms": {
+              "median": 12.99,
+              "min": 12.99,
+              "max": 12.99,
+              "n": 1
+            },
+            "friends in same city p50 ms": {
+              "median": 5.62,
+              "min": 5.62,
+              "max": 5.62,
+              "n": 1
+            },
+            "most friends p50 ms": {
+              "median": 5.3,
+              "min": 5.3,
+              "max": 5.3,
+              "n": 1
+            },
+            "degree distribution p50 ms": {
+              "median": 7.09,
+              "min": 7.09,
+              "max": 7.09,
+              "n": 1
+            },
+            "triangle count p50 ms": {
+              "median": 12.36,
+              "min": 12.36,
+              "max": 12.36,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 32.82,
+              "min": 32.82,
+              "max": 32.82,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 16.55,
+              "min": 16.55,
+              "max": 16.55,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 16.61,
+              "min": 16.61,
+              "max": 16.61,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 31.74,
+              "min": 31.74,
+              "max": 31.74,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 48.34,
+              "min": 48.34,
+              "max": 48.34,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 93.74,
+              "min": 93.74,
+              "max": 93.74,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 21.21,
+              "min": 21.21,
+              "max": 21.21,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 71.78,
+              "min": 71.78,
+              "max": 71.78,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 313.73,
+              "min": 313.73,
+              "max": 313.73,
+              "n": 1
+            },
+            "cold first query ms": {
+              "median": 12.95,
+              "min": 12.95,
+              "max": 12.95,
+              "n": 1
+            },
+            "ingest vertices+edges/s": {
+              "median": 167.5404,
+              "min": 167.5404,
+              "max": 167.5404,
+              "n": 1
+            },
+            "ingest total s": {
+              "median": 53.79,
+              "min": 53.79,
+              "max": 53.79,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.2532,
+              "min": 0.2532,
+              "max": 0.2532,
+              "n": 1
+            },
+            "disk GiB": {
+              "median": 0.0407,
+              "min": 0.0407,
+              "max": 0.0407,
+              "n": 1
+            }
+          }
+        },
+        {
+          "backend": "FalkorDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",
+          "version_name": "falkordb v4.20.6",
+          "host": null,
+          "metrics": {
+            "average friend age p50 ms": {
+              "median": 16.12,
+              "min": 16.12,
+              "max": 16.12,
+              "n": 1
+            },
+            "average friend age p99 ms": {
+              "median": 20.28,
+              "min": 20.28,
+              "max": 20.28,
+              "n": 1
+            },
+            "friends in same city p50 ms": {
+              "median": 11.98,
+              "min": 11.98,
+              "max": 11.98,
+              "n": 1
+            },
+            "most friends p50 ms": {
+              "median": 12.16,
+              "min": 12.16,
+              "max": 12.16,
+              "n": 1
+            },
+            "degree distribution p50 ms": {
+              "median": 13.29,
+              "min": 13.29,
+              "max": 13.29,
+              "n": 1
+            },
+            "triangle count p50 ms": {
+              "median": 305.31,
+              "min": 305.31,
+              "max": 305.31,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 2544.19,
+              "min": 2544.19,
+              "max": 2544.19,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 13057.31,
+              "min": 13057.31,
+              "max": 13057.31,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 4147.63,
+              "min": 4147.63,
+              "max": 4147.63,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 462.35,
+              "min": 462.35,
+              "max": 462.35,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 302.68,
+              "min": 302.68,
+              "max": 302.68,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 2347.62,
+              "min": 2347.62,
+              "max": 2347.62,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 456.7,
+              "min": 456.7,
+              "max": 456.7,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 354.36,
+              "min": 354.36,
+              "max": 354.36,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 26393.83,
+              "min": 26393.83,
+              "max": 26393.83,
+              "n": 1
+            },
+            "cold first query ms": {
+              "median": 15.64,
+              "min": 15.64,
+              "max": 15.64,
+              "n": 1
+            },
+            "ingest vertices+edges/s": {
+              "median": 114.8172,
+              "min": 114.8172,
+              "max": 114.8172,
+              "n": 1
+            },
+            "ingest total s": {
+              "median": 78.49,
+              "min": 78.49,
+              "max": 78.49,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 0.1713,
+              "min": 0.1713,
+              "max": 0.1713,
               "n": 1
             },
             "disk GiB": {
@@ -4079,173 +4559,11 @@
           }
         },
         {
-          "backend": "DuckPGQ",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "micro",
-          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "metrics": {
-            "average friend age p50 ms": {
-              "median": 4.69,
-              "min": 4.69,
-              "max": 4.69,
-              "n": 1
-            },
-            "average friend age p99 ms": {
-              "median": 7.76,
-              "min": 7.76,
-              "max": 7.76,
-              "n": 1
-            },
-            "friends in same city p50 ms": {
-              "median": 9.65,
-              "min": 9.65,
-              "max": 9.65,
-              "n": 1
-            },
-            "most friends p50 ms": {
-              "median": 3.28,
-              "min": 3.28,
-              "max": 3.28,
-              "n": 1
-            },
-            "degree distribution p50 ms": {
-              "median": 4.75,
-              "min": 4.75,
-              "max": 4.75,
-              "n": 1
-            },
-            "triangle count p50 ms": {
-              "median": 41.85,
-              "min": 41.85,
-              "max": 41.85,
-              "n": 1
-            },
-            "cold first query ms": {
-              "median": 5.23,
-              "min": 5.23,
-              "max": 5.23,
-              "n": 1
-            },
-            "ingest vertices+edges/s": {
-              "median": 39296.3303,
-              "min": 39296.3303,
-              "max": 39296.3303,
-              "n": 1
-            },
-            "ingest total s": {
-              "median": 1.09,
-              "min": 1.09,
-              "max": 1.09,
-              "n": 1
-            },
-            "peak memory GiB": {
-              "median": 0.145,
-              "min": 0.145,
-              "max": 0.145,
-              "n": 1
-            },
-            "disk GiB": {
-              "median": 0.0342,
-              "min": 0.0342,
-              "max": 0.0342,
-              "n": 1
-            }
-          }
-        },
-        {
-          "backend": "FalkorDB",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "micro",
-          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "server",
-          "image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",
-          "version_name": "falkordb v4.20.6",
-          "host": null,
-          "metrics": {
-            "average friend age p50 ms": {
-              "median": 28.06,
-              "min": 28.06,
-              "max": 28.06,
-              "n": 1
-            },
-            "average friend age p99 ms": {
-              "median": 38.02,
-              "min": 38.02,
-              "max": 38.02,
-              "n": 1
-            },
-            "friends in same city p50 ms": {
-              "median": 22.41,
-              "min": 22.41,
-              "max": 22.41,
-              "n": 1
-            },
-            "most friends p50 ms": {
-              "median": 24.21,
-              "min": 24.21,
-              "max": 24.21,
-              "n": 1
-            },
-            "degree distribution p50 ms": {
-              "median": 25.02,
-              "min": 25.02,
-              "max": 25.02,
-              "n": 1
-            },
-            "triangle count p50 ms": {
-              "median": 1197.69,
-              "min": 1197.69,
-              "max": 1197.69,
-              "n": 1
-            },
-            "cold first query ms": {
-              "median": 39.88,
-              "min": 39.88,
-              "max": 39.88,
-              "n": 1
-            },
-            "ingest vertices+edges/s": {
-              "median": 15352.3297,
-              "min": 15352.3297,
-              "max": 15352.3297,
-              "n": 1
-            },
-            "ingest total s": {
-              "median": 2.79,
-              "min": 2.79,
-              "max": 2.79,
-              "n": 1
-            },
-            "peak memory GiB": {
-              "median": 0.1087,
-              "min": 0.1087,
-              "max": 0.1087,
-              "n": 1
-            },
-            "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
-              "n": 1
-            }
-          }
-        },
-        {
           "backend": "LadybugDB",
           "is_arcadedb": false,
           "precision": null,
-          "scale": "micro",
-          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "embedded",
@@ -4254,69 +4572,123 @@
           "host": null,
           "metrics": {
             "average friend age p50 ms": {
-              "median": 7.95,
-              "min": 7.95,
-              "max": 7.95,
+              "median": 7.07,
+              "min": 7.07,
+              "max": 7.07,
               "n": 1
             },
             "average friend age p99 ms": {
-              "median": 9.3,
-              "min": 9.3,
-              "max": 9.3,
+              "median": 8.77,
+              "min": 8.77,
+              "max": 8.77,
               "n": 1
             },
             "friends in same city p50 ms": {
-              "median": 8.24,
-              "min": 8.24,
-              "max": 8.24,
+              "median": 6.51,
+              "min": 6.51,
+              "max": 6.51,
               "n": 1
             },
             "most friends p50 ms": {
-              "median": 4.19,
-              "min": 4.19,
-              "max": 4.19,
+              "median": 4.34,
+              "min": 4.34,
+              "max": 4.34,
               "n": 1
             },
             "degree distribution p50 ms": {
-              "median": 6.52,
-              "min": 6.52,
-              "max": 6.52,
+              "median": 6.56,
+              "min": 6.56,
+              "max": 6.56,
               "n": 1
             },
             "triangle count p50 ms": {
-              "median": 51.24,
-              "min": 51.24,
-              "max": 51.24,
+              "median": 9.87,
+              "min": 9.87,
+              "max": 9.87,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 211.08,
+              "min": 211.08,
+              "max": 211.08,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 30.42,
+              "min": 30.42,
+              "max": 30.42,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 2308.97,
+              "min": 2308.97,
+              "max": 2308.97,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 30.96,
+              "min": 30.96,
+              "max": 30.96,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 40.79,
+              "min": 40.79,
+              "max": 40.79,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 152.15,
+              "min": 152.15,
+              "max": 152.15,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 52.3,
+              "min": 52.3,
+              "max": 52.3,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 111.97,
+              "min": 111.97,
+              "max": 111.97,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 186.16,
+              "min": 186.16,
+              "max": 186.16,
               "n": 1
             },
             "cold first query ms": {
-              "median": 46.2,
-              "min": 46.2,
-              "max": 46.2,
+              "median": 37.83,
+              "min": 37.83,
+              "max": 37.83,
               "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 118980.5556,
-              "min": 118980.5556,
-              "max": 118980.5556,
+              "median": 173.4745,
+              "min": 173.4745,
+              "max": 173.4745,
               "n": 1
             },
             "ingest total s": {
-              "median": 0.36,
-              "min": 0.36,
-              "max": 0.36,
+              "median": 51.95,
+              "min": 51.95,
+              "max": 51.95,
               "n": 1
             },
             "peak memory GiB": {
-              "median": 0.1791,
-              "min": 0.1791,
-              "max": 0.1791,
+              "median": 0.2754,
+              "min": 0.2754,
+              "max": 0.2754,
               "n": 1
             },
             "disk GiB": {
-              "median": 0.0029,
-              "min": 0.0029,
-              "max": 0.0029,
+              "median": 0.02,
+              "min": 0.02,
+              "max": 0.02,
               "n": 1
             }
           }
@@ -4325,8 +4697,8 @@
           "backend": "Memgraph",
           "is_arcadedb": false,
           "precision": null,
-          "scale": "micro",
-          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
@@ -4335,69 +4707,123 @@
           "host": null,
           "metrics": {
             "average friend age p50 ms": {
-              "median": 28.19,
-              "min": 28.19,
-              "max": 28.19,
+              "median": 23.98,
+              "min": 23.98,
+              "max": 23.98,
               "n": 1
             },
             "average friend age p99 ms": {
-              "median": 31.84,
-              "min": 31.84,
-              "max": 31.84,
+              "median": 30.98,
+              "min": 30.98,
+              "max": 30.98,
               "n": 1
             },
             "friends in same city p50 ms": {
-              "median": 26.12,
-              "min": 26.12,
-              "max": 26.12,
+              "median": 21.64,
+              "min": 21.64,
+              "max": 21.64,
               "n": 1
             },
             "most friends p50 ms": {
-              "median": 19.74,
-              "min": 19.74,
-              "max": 19.74,
+              "median": 21.82,
+              "min": 21.82,
+              "max": 21.82,
               "n": 1
             },
             "degree distribution p50 ms": {
-              "median": 14.79,
-              "min": 14.79,
-              "max": 14.79,
+              "median": 22.87,
+              "min": 22.87,
+              "max": 22.87,
               "n": 1
             },
             "triangle count p50 ms": {
-              "median": 305.94,
-              "min": 305.94,
-              "max": 305.94,
+              "median": 58.13,
+              "min": 58.13,
+              "max": 58.13,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 456.81,
+              "min": 456.81,
+              "max": 456.81,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 1633.58,
+              "min": 1633.58,
+              "max": 1633.58,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 45495.53,
+              "min": 45495.53,
+              "max": 45495.53,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 70.37,
+              "min": 70.37,
+              "max": 70.37,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 195.76,
+              "min": 195.76,
+              "max": 195.76,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 1906.7,
+              "min": 1906.7,
+              "max": 1906.7,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 92.14,
+              "min": 92.14,
+              "max": 92.14,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 199.07,
+              "min": 199.07,
+              "max": 199.07,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 9763.35,
+              "min": 9763.35,
+              "max": 9763.35,
               "n": 1
             },
             "cold first query ms": {
-              "median": 32.42,
-              "min": 32.42,
-              "max": 32.42,
+              "median": 38.84,
+              "min": 38.84,
+              "max": 38.84,
               "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 25344.9704,
-              "min": 25344.9704,
-              "max": 25344.9704,
+              "median": 139.7859,
+              "min": 139.7859,
+              "max": 139.7859,
               "n": 1
             },
             "ingest total s": {
-              "median": 1.69,
-              "min": 1.69,
-              "max": 1.69,
+              "median": 64.47,
+              "min": 64.47,
+              "max": 64.47,
               "n": 1
             },
             "peak memory GiB": {
-              "median": 0.3122,
-              "min": 0.3122,
-              "max": 0.3122,
+              "median": 0.3567,
+              "min": 0.3567,
+              "max": 0.3567,
               "n": 1
             },
             "disk GiB": {
-              "median": 0.0052,
-              "min": 0.0052,
-              "max": 0.0052,
+              "median": 0.0613,
+              "min": 0.0613,
+              "max": 0.0613,
               "n": 1
             }
           }
@@ -4406,8 +4832,8 @@
           "backend": "MongoDB",
           "is_arcadedb": false,
           "precision": null,
-          "scale": "micro",
-          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
@@ -4416,150 +4842,258 @@
           "host": null,
           "metrics": {
             "average friend age p50 ms": {
-              "median": 1651.17,
-              "min": 1651.17,
-              "max": 1651.17,
+              "median": 338.57,
+              "min": 338.57,
+              "max": 338.57,
               "n": 1
             },
             "average friend age p99 ms": {
-              "median": 1926.33,
-              "min": 1926.33,
-              "max": 1926.33,
+              "median": 411.39,
+              "min": 411.39,
+              "max": 411.39,
               "n": 1
             },
             "friends in same city p50 ms": {
-              "median": 1929.88,
-              "min": 1929.88,
-              "max": 1929.88,
+              "median": 333.81,
+              "min": 333.81,
+              "max": 333.81,
               "n": 1
             },
             "most friends p50 ms": {
-              "median": 24.13,
-              "min": 24.13,
-              "max": 24.13,
+              "median": 6.77,
+              "min": 6.77,
+              "max": 6.77,
               "n": 1
             },
             "degree distribution p50 ms": {
-              "median": 14.06,
-              "min": 14.06,
-              "max": 14.06,
+              "median": 5.29,
+              "min": 5.29,
+              "max": 5.29,
               "n": 1
             },
             "triangle count p50 ms": {
-              "median": 1838.38,
-              "min": 1838.38,
-              "max": 1838.38,
+              "median": 373.89,
+              "min": 373.89,
+              "max": 373.89,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 28882.43,
+              "min": 28882.43,
+              "max": 28882.43,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 30290.82,
+              "min": 30290.82,
+              "max": 30290.82,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 48141.89,
+              "min": 48141.89,
+              "max": 48141.89,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 5613.17,
+              "min": 5613.17,
+              "max": 5613.17,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 5640.2,
+              "min": 5640.2,
+              "max": 5640.2,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 37392.17,
+              "min": 37392.17,
+              "max": 37392.17,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 6911.26,
+              "min": 6911.26,
+              "max": 6911.26,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 22785.0,
+              "min": 22785.0,
+              "max": 22785.0,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 82031.61,
+              "min": 82031.61,
+              "max": 82031.61,
               "n": 1
             },
             "cold first query ms": {
-              "median": 36.28,
-              "min": 36.28,
-              "max": 36.28,
+              "median": 7.25,
+              "min": 7.25,
+              "max": 7.25,
               "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 33203.876,
-              "min": 33203.876,
-              "max": 33203.876,
+              "median": 145.8725,
+              "min": 145.8725,
+              "max": 145.8725,
               "n": 1
             },
             "ingest total s": {
-              "median": 1.29,
-              "min": 1.29,
-              "max": 1.29,
+              "median": 61.78,
+              "min": 61.78,
+              "max": 61.78,
               "n": 1
             },
             "peak memory GiB": {
-              "median": 0.1857,
-              "min": 0.1857,
-              "max": 0.1857,
+              "median": 0.3721,
+              "min": 0.3721,
+              "max": 0.3721,
               "n": 1
             },
             "disk GiB": {
-              "median": 0.006,
-              "min": 0.006,
-              "max": 0.006,
+              "median": 0.0508,
+              "min": 0.0508,
+              "max": 0.0508,
               "n": 1
             }
           }
         },
         {
-          "backend": "Neo4j",
+          "backend": "SurrealDB (embedded)",
           "is_arcadedb": false,
           "precision": null,
-          "scale": "micro",
-          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
           "workload": "olap",
           "n_docs": null,
-          "deployment": "server",
-          "image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",
-          "version_name": "neo4j 2026.07.1",
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "average friend age p50 ms": {
-              "median": 46.76,
-              "min": 46.76,
-              "max": 46.76,
+              "median": 516.01,
+              "min": 516.01,
+              "max": 516.01,
               "n": 1
             },
             "average friend age p99 ms": {
-              "median": 67.67,
-              "min": 67.67,
-              "max": 67.67,
+              "median": 631.58,
+              "min": 631.58,
+              "max": 631.58,
               "n": 1
             },
             "friends in same city p50 ms": {
-              "median": 42.22,
-              "min": 42.22,
-              "max": 42.22,
+              "median": 389.79,
+              "min": 389.79,
+              "max": 389.79,
               "n": 1
             },
             "most friends p50 ms": {
-              "median": 30.22,
-              "min": 30.22,
-              "max": 30.22,
+              "median": 749.45,
+              "min": 749.45,
+              "max": 749.45,
               "n": 1
             },
             "degree distribution p50 ms": {
-              "median": 25.08,
-              "min": 25.08,
-              "max": 25.08,
+              "median": 757.81,
+              "min": 757.81,
+              "max": 757.81,
               "n": 1
             },
             "triangle count p50 ms": {
-              "median": 1205.92,
-              "min": 1205.92,
-              "max": 1205.92,
+              "median": 6802.97,
+              "min": 6802.97,
+              "max": 6802.97,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 279453.37,
+              "min": 279453.37,
+              "max": 279453.37,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 75760.96,
+              "min": 75760.96,
+              "max": 75760.96,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 36196.55,
+              "min": 36196.55,
+              "max": 36196.55,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 81834.96,
+              "min": 81834.96,
+              "max": 81834.96,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 90565.01,
+              "min": 90565.01,
+              "max": 90565.01,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 84828.31,
+              "min": 84828.31,
+              "max": 84828.31,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 58314.22,
+              "min": 58314.22,
+              "max": 58314.22,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 62478.89,
+              "min": 62478.89,
+              "max": 62478.89,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 2145693.4,
+              "min": 2145693.4,
+              "max": 2145693.4,
               "n": 1
             },
             "cold first query ms": {
-              "median": 518.76,
-              "min": 518.76,
-              "max": 518.76,
+              "median": 673.87,
+              "min": 673.87,
+              "max": 673.87,
               "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 9311.5217,
-              "min": 9311.5217,
-              "max": 9311.5217,
+              "median": 66.7012,
+              "min": 66.7012,
+              "max": 66.7012,
               "n": 1
             },
             "ingest total s": {
-              "median": 4.6,
-              "min": 4.6,
-              "max": 4.6,
+              "median": 135.11,
+              "min": 135.11,
+              "max": 135.11,
               "n": 1
             },
             "peak memory GiB": {
-              "median": 4.6108,
-              "min": 4.6108,
-              "max": 4.6108,
+              "median": 1.0424,
+              "min": 1.0424,
+              "max": 1.0424,
               "n": 1
             },
             "disk GiB": {
-              "median": 0.0034,
-              "min": 0.0034,
-              "max": 0.0034,
+              "median": 0.2015,
+              "min": 0.2015,
+              "max": 0.2015,
               "n": 1
             }
           }
@@ -4568,8 +5102,8 @@
           "backend": "SurrealDB (server)",
           "is_arcadedb": false,
           "precision": null,
-          "scale": "micro",
-          "scale_label": "2k people, 41k friendships (synthetic, skeleton)",
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
           "workload": "olap",
           "n_docs": null,
           "deployment": "server",
@@ -4578,69 +5112,123 @@
           "host": null,
           "metrics": {
             "average friend age p50 ms": {
-              "median": 382.25,
-              "min": 382.25,
-              "max": 382.25,
+              "median": 61.69,
+              "min": 61.69,
+              "max": 61.69,
               "n": 1
             },
             "average friend age p99 ms": {
-              "median": 428.89,
-              "min": 428.89,
-              "max": 428.89,
+              "median": 82.08,
+              "min": 82.08,
+              "max": 82.08,
               "n": 1
             },
             "friends in same city p50 ms": {
-              "median": 403.99,
-              "min": 403.99,
-              "max": 403.99,
+              "median": 58.13,
+              "min": 58.13,
+              "max": 58.13,
               "n": 1
             },
             "most friends p50 ms": {
-              "median": 64.61,
-              "min": 64.61,
-              "max": 64.61,
+              "median": 51.22,
+              "min": 51.22,
+              "max": 51.22,
               "n": 1
             },
             "degree distribution p50 ms": {
-              "median": 71.57,
-              "min": 71.57,
-              "max": 71.57,
+              "median": 61.87,
+              "min": 61.87,
+              "max": 61.87,
               "n": 1
             },
             "triangle count p50 ms": {
-              "median": 1408.41,
-              "min": 1408.41,
-              "max": 1408.41,
+              "median": 445.6,
+              "min": 445.6,
+              "max": 445.6,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 13273.25,
+              "min": 13273.25,
+              "max": 13273.25,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 4886.86,
+              "min": 4886.86,
+              "max": 4886.86,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 2893.01,
+              "min": 2893.01,
+              "max": 2893.01,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 3891.92,
+              "min": 3891.92,
+              "max": 3891.92,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 2522.98,
+              "min": 2522.98,
+              "max": 2522.98,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 1070.09,
+              "min": 1070.09,
+              "max": 1070.09,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 3352.1,
+              "min": 3352.1,
+              "max": 3352.1,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 1899.4,
+              "min": 1899.4,
+              "max": 1899.4,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 568770.81,
+              "min": 568770.81,
+              "max": 568770.81,
               "n": 1
             },
             "cold first query ms": {
-              "median": 82.35,
-              "min": 82.35,
-              "max": 82.35,
+              "median": 73.09,
+              "min": 73.09,
+              "max": 73.09,
               "n": 1
             },
             "ingest vertices+edges/s": {
-              "median": 7932.037,
-              "min": 7932.037,
-              "max": 7932.037,
+              "median": 88.1973,
+              "min": 88.1973,
+              "max": 88.1973,
               "n": 1
             },
             "ingest total s": {
-              "median": 5.4,
-              "min": 5.4,
-              "max": 5.4,
+              "median": 102.18,
+              "min": 102.18,
+              "max": 102.18,
               "n": 1
             },
             "peak memory GiB": {
-              "median": 0.1995,
-              "min": 0.1995,
-              "max": 0.1995,
+              "median": 0.5068,
+              "min": 0.5068,
+              "max": 0.5068,
               "n": 1
             },
             "disk GiB": {
-              "median": 0.0,
-              "min": 0.0,
-              "max": 0.0,
+              "median": 0.1578,
+              "min": 0.1578,
+              "max": 0.1578,
               "n": 1
             }
           }
@@ -4654,6 +5242,15 @@
         "most friends p50 ms": "down",
         "degree distribution p50 ms": "down",
         "triangle count p50 ms": "down",
+        "LSQB Q1 p50 ms": "down",
+        "LSQB Q2 p50 ms": "down",
+        "LSQB Q3 p50 ms": "down",
+        "LSQB Q4 p50 ms": "down",
+        "LSQB Q5 p50 ms": "down",
+        "LSQB Q6 p50 ms": "down",
+        "LSQB Q7 p50 ms": "down",
+        "LSQB Q8 p50 ms": "down",
+        "LSQB Q9 p50 ms": "down",
         "cold first query ms": "down",
         "view build s": "down",
         "ingest vertices+edges/s": "up",
@@ -4661,14 +5258,7 @@
         "peak memory GiB": "down",
         "disk GiB": "down"
       },
-      "declared_absences": [
-        {
-          "backend": "SurrealDB (embedded)",
-          "column": null,
-          "kind": "censored",
-          "why": "SurrealDB (embedded) at 2k people, 41k friendships (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
-        }
-      ],
+      "declared_absences": [],
       "source_paths": [
         "benchmarks/experiments/results/runs_skeleton_laptop.csv"
       ],
@@ -12584,6 +13174,14 @@
         ]
       },
       {
+        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "values": [
+          "DuckPGQ",
+          "LadybugDB",
+          "SurrealDB (server)"
+        ]
+      },
+      {
         "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "values": [
           "Neo4j",
@@ -12661,7 +13259,7 @@
         ]
       },
       {
-        "text": "Five questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. Degree distribution: how many people have each number of friends, counted over every edge in the graph. Triangle count: how many sets of three people are all friends with one another, each triangle counted once. All times are milliseconds.",
+        "text": "Fourteen questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. Degree distribution: how many people have each number of friends, counted over every edge in the graph. Triangle count: how many sets of three people are all friends with one another, each triangle counted once. LSQB Q1: LSQB's first query, the eight-label chain: a country, a city in it, a person living there, a forum that person belongs to, a post in that forum, a comment replying to the post, the comment's tag, and the tag's class, every match counted. LSQB Q2: LSQB's second query: pairs of friends where one wrote a comment replying to a post the other wrote. LSQB Q3: LSQB's third query: three people who all live in the same country and are all friends with one another, each ordering counted. LSQB Q4: LSQB's fourth query: a tagged message with its creator, a person who liked it, and a comment replying to it, every combination counted. LSQB Q5: LSQB's fifth query: a tagged message and a reply to it carrying a different tag. LSQB Q6: LSQB's sixth query: a friend of a friend and that far person's tag interests, the two ends being different people. LSQB Q7: LSQB's seventh query, the fourth with the liker and the reply optional, so a tagged message with neither still counts once per creator. LSQB Q8: LSQB's eighth query, the fifth where the reply does not also carry the message's own tag. LSQB Q9: LSQB's ninth query, the sixth where the two people at the ends are not themselves friends. All times are milliseconds.",
         "values": []
       },
       {
@@ -12671,41 +13269,433 @@
         ]
       },
       {
-        "text": "SurrealDB (embedded) at 2k people, 41k friendships (synthetic, skeleton): the analytics cell exceeded its 0.25 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "values": [
-          "SurrealDB (embedded)",
-          "2k people, 41k friendships (synthetic, skeleton)",
-          "0.25 hour"
-        ]
-      },
-      {
-        "text": "ArangoDB at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "text": "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q1 query exceeded its 300 s budget, the same budget every engine on this table had, after 20 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
         "values": [
           "ArangoDB",
-          "2k people, 41k friendships (synthetic, skeleton)",
-          "triangle count",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q1",
           "300 s budget",
-          "after 5 of 100 iterations"
+          "after 20 of 100 iterations"
         ]
       },
       {
-        "text": "ArcadeDB (embedded, GAV) at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 18 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "text": "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q2 query exceeded its 300 s budget, the same budget every engine on this table had, after 18 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
         "values": [
-          "ArcadeDB (embedded, GAV)",
-          "2k people, 41k friendships (synthetic, skeleton)",
-          "triangle count",
+          "ArangoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q2",
           "300 s budget",
           "after 18 of 100 iterations"
         ]
       },
       {
-        "text": "ArcadeDB (server, GAV) at 2k people, 41k friendships (synthetic, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 16 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "text": "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q3 query exceeded its 300 s budget, the same budget every engine on this table had, after 10 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
         "values": [
-          "ArcadeDB (server, GAV)",
-          "2k people, 41k friendships (synthetic, skeleton)",
+          "ArangoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q3",
+          "300 s budget",
+          "after 10 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q5 query exceeded its 300 s budget, the same budget every engine on this table had, after 35 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArangoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q5",
+          "300 s budget",
+          "after 35 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q6 query exceeded its 300 s budget, the same budget every engine on this table had, after 19 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArangoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q6",
+          "300 s budget",
+          "after 19 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q8 query exceeded its 300 s budget, the same budget every engine on this table had, after 30 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArangoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q8",
+          "300 s budget",
+          "after 30 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 3 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArangoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q9",
+          "300 s budget",
+          "after 3 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 53 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArangoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
           "triangle count",
           "300 s budget",
-          "after 16 of 100 iterations"
+          "after 53 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArcadeDB (embedded, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q6 query exceeded its 300 s budget, the same budget every engine on this table had, after 21 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArcadeDB (embedded, GAV)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q6",
+          "300 s budget",
+          "after 21 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArcadeDB (embedded, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q8 query exceeded its 300 s budget, the same budget every engine on this table had, after 99 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArcadeDB (embedded, GAV)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q8",
+          "300 s budget",
+          "after 99 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArcadeDB (embedded, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 0 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArcadeDB (embedded, GAV)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q9",
+          "300 s budget",
+          "after 0 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArcadeDB (server, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q6 query exceeded its 300 s budget, the same budget every engine on this table had, after 20 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArcadeDB (server, GAV)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q6",
+          "300 s budget",
+          "after 20 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArcadeDB (server, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q8 query exceeded its 300 s budget, the same budget every engine on this table had, after 88 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArcadeDB (server, GAV)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q8",
+          "300 s budget",
+          "after 88 of 100 iterations"
+        ]
+      },
+      {
+        "text": "ArcadeDB (server, GAV) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 0 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "ArcadeDB (server, GAV)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q9",
+          "300 s budget",
+          "after 0 of 100 iterations"
+        ]
+      },
+      {
+        "text": "FalkorDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q2 query exceeded its 300 s budget, the same budget every engine on this table had, after 22 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "FalkorDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q2",
+          "300 s budget",
+          "after 22 of 100 iterations"
+        ]
+      },
+      {
+        "text": "FalkorDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q3 query exceeded its 300 s budget, the same budget every engine on this table had, after 71 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "FalkorDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q3",
+          "300 s budget",
+          "after 71 of 100 iterations"
+        ]
+      },
+      {
+        "text": "FalkorDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 11 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "FalkorDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q9",
+          "300 s budget",
+          "after 11 of 100 iterations"
+        ]
+      },
+      {
+        "text": "Memgraph at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q3 query exceeded its 300 s budget, the same budget every engine on this table had, after 6 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "Memgraph",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q3",
+          "300 s budget",
+          "after 6 of 100 iterations"
+        ]
+      },
+      {
+        "text": "Memgraph at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 30 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "Memgraph",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q9",
+          "300 s budget",
+          "after 30 of 100 iterations"
+        ]
+      },
+      {
+        "text": "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q1 query exceeded its 300 s budget, the same budget every engine on this table had, after 10 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "MongoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q1",
+          "300 s budget",
+          "after 10 of 100 iterations"
+        ]
+      },
+      {
+        "text": "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q2 query exceeded its 300 s budget, the same budget every engine on this table had, after 9 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "MongoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q2",
+          "300 s budget",
+          "after 9 of 100 iterations"
+        ]
+      },
+      {
+        "text": "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q3 query exceeded its 300 s budget, the same budget every engine on this table had, after 6 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "MongoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q3",
+          "300 s budget",
+          "after 6 of 100 iterations"
+        ]
+      },
+      {
+        "text": "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q4 query exceeded its 300 s budget, the same budget every engine on this table had, after 53 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "MongoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q4",
+          "300 s budget",
+          "after 53 of 100 iterations"
+        ]
+      },
+      {
+        "text": "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q5 query exceeded its 300 s budget, the same budget every engine on this table had, after 52 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "MongoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q5",
+          "300 s budget",
+          "after 52 of 100 iterations"
+        ]
+      },
+      {
+        "text": "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q6 query exceeded its 300 s budget, the same budget every engine on this table had, after 7 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "MongoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q6",
+          "300 s budget",
+          "after 7 of 100 iterations"
+        ]
+      },
+      {
+        "text": "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q7 query exceeded its 300 s budget, the same budget every engine on this table had, after 43 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "MongoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q7",
+          "300 s budget",
+          "after 43 of 100 iterations"
+        ]
+      },
+      {
+        "text": "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q8 query exceeded its 300 s budget, the same budget every engine on this table had, after 13 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "MongoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q8",
+          "300 s budget",
+          "after 13 of 100 iterations"
+        ]
+      },
+      {
+        "text": "MongoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 3 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "MongoDB",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q9",
+          "300 s budget",
+          "after 3 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q1 query exceeded its 300 s budget, the same budget every engine on this table had, after 1 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q1",
+          "300 s budget",
+          "after 1 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q2 query exceeded its 300 s budget, the same budget every engine on this table had, after 4 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q2",
+          "300 s budget",
+          "after 4 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q3 query exceeded its 300 s budget, the same budget every engine on this table had, after 8 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q3",
+          "300 s budget",
+          "after 8 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q4 query exceeded its 300 s budget, the same budget every engine on this table had, after 3 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q4",
+          "300 s budget",
+          "after 3 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q5 query exceeded its 300 s budget, the same budget every engine on this table had, after 3 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q5",
+          "300 s budget",
+          "after 3 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q6 query exceeded its 300 s budget, the same budget every engine on this table had, after 3 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q6",
+          "300 s budget",
+          "after 3 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q7 query exceeded its 300 s budget, the same budget every engine on this table had, after 5 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q7",
+          "300 s budget",
+          "after 5 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q8 query exceeded its 300 s budget, the same budget every engine on this table had, after 4 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q8",
+          "300 s budget",
+          "after 4 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 0 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q9",
+          "300 s budget",
+          "after 0 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the triangle count query exceeded its 300 s budget, the same budget every engine on this table had, after 43 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (embedded)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "triangle count",
+          "300 s budget",
+          "after 43 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (server) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q1 query exceeded its 300 s budget, the same budget every engine on this table had, after 22 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (server)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q1",
+          "300 s budget",
+          "after 22 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (server) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q2 query exceeded its 300 s budget, the same budget every engine on this table had, after 61 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (server)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q2",
+          "300 s budget",
+          "after 61 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (server) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q4 query exceeded its 300 s budget, the same budget every engine on this table had, after 76 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (server)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q4",
+          "300 s budget",
+          "after 76 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (server) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q7 query exceeded its 300 s budget, the same budget every engine on this table had, after 89 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (server)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q7",
+          "300 s budget",
+          "after 89 of 100 iterations"
+        ]
+      },
+      {
+        "text": "SurrealDB (server) at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q9 query exceeded its 300 s budget, the same budget every engine on this table had, after 0 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
+        "values": [
+          "SurrealDB (server)",
+          "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "LSQB Q9",
+          "300 s budget",
+          "after 0 of 100 iterations"
         ]
       },
       {
