@@ -29,6 +29,7 @@ import os
 import random
 import re
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -2450,8 +2451,15 @@ def acquire_host_lock():
     advisory but process-wide; it dies with the process, so a crashed runner
     leaves no stale lock.
     """
-    lock_path = os.path.join(RESULTS, ".runner.lock")
-    os.makedirs(RESULTS, exist_ok=True)
+    # HOST-WIDE, not per checkout. Until 2026-09-18 this lived under RESULTS,
+    # so a runner started from a second checkout of the repository (a git
+    # worktree) held a different file, took its own "lock" cleanly, and
+    # sweep_orphans() killed the first checkout's live cell 57 s into its
+    # build (rc 137, an error row with no digests), and did the same to a
+    # cross-model cell in the other direction. The protocol is one runner per
+    # HOST; the lock has to be where every checkout on the host finds it
+    # (BUGS F58).
+    lock_path = os.path.join(tempfile.gettempdir(), "dbbench-runner.lock")
     fh = open(lock_path, "w")
     try:
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
