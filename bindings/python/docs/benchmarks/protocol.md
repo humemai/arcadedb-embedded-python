@@ -127,7 +127,11 @@ measurement.
 
 **A query has a budget, and the cell does not die with it.** On the graph analytics,
 time-series, and document analytics tables each query gets the same time budget on every
-engine, a property of the lane read from its code and printed on the page. A query that
+engine, and derived rather than chosen: it comes from the bench host's own measured rows,
+three times what the median engine took for that query at that corpus size. It varies by
+table, by corpus size and by query, because a whole-graph aggregation grows with the data
+while an indexed lookup does not, and never by engine, because the engine is what the table
+compares. A query that
 exceeds it stops at the iteration it reached, its numbers are over those iterations, the
 table says so in a sentence naming the budget and the count, and the cell's other queries
 keep theirs. Without this a slow scan on one engine took the whole cell past the timeout
