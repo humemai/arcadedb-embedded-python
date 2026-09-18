@@ -1288,9 +1288,17 @@ def main():
             # still carries a measurement and its answer digest.
             _budget_t0 = time.perf_counter()
             _ran = 0
+            _aband_why = ""
             for _ in range(OLAP_ITER):
                 if _ran and time.perf_counter() - _budget_t0 > _budget_s:
                     break
+                # After the cold pass, abandon rather than spend the whole
+                # budget proving what it already showed (DECISIONS #107).
+                if _ran == 1:
+                    _a, _aband_why = budget_lookup.abandon(
+                        time.perf_counter() - _budget_t0, _budget_s, OLAP_ITER)
+                    if _a:
+                        break
                 t = time.perf_counter()
                 r = b.olap(which)
                 _ran += 1
@@ -1302,6 +1310,8 @@ def main():
             # sample #91 dropped cannot read as a budget the engine did not hit.
             out[f"{which}_budget_s"] = _budget_s
             out[f"{which}_budget_source"] = _budget_src
+            if _aband_why:
+                out[f"{which}_abandoned"] = _aband_why
             out[f"{which}_iters"] = len(times)
             out[f"{which}_elapsed_s"] = round(time.perf_counter() - _budget_t0, 2)
             out[f"{which}_censored"] = _ran < OLAP_ITER

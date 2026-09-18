@@ -46,3 +46,36 @@ def budget_for(lane, tier, query, default_s, env_var=None):
     if got is not None:
         return float(got), MEASURED
     return float(default_s), FALLBACK
+
+
+# ---------------------------------------------------------------- abandonment
+# THE TAIL MUST NOT DOMINATE THE CAMPAIGN. A budget bounds a query, but an
+# engine that cannot finish still burns the whole budget to produce a cell that
+# says "did not finish" (2026-09-18: three engines each spent two hours at
+# TPC-H SF10 for three censored rows, while the two that could answer took ten
+# minutes each). The information in a censored cell does not improve by paying
+# for it, so a query whose FIRST touch already shows it cannot complete a
+# useful number of iterations is abandoned there, in seconds instead of hours.
+#
+# The rule is the same for every engine and uses only the engine's own cold
+# pass, so it is a property of the work, never of who is running it: if the
+# budget cannot buy at least MIN_ITERS iterations at the cold pass's own rate,
+# stop. Five, because a p50 over fewer is not a median of anything, and the
+# cold pass is the fairest estimator available at that moment.
+MIN_ITERS = 5
+
+
+def abandon(cold_s, budget_s, iterations):
+    """(should_abandon, reason). `cold_s` is the first touch, already paid for.
+
+    Returns False when the cold pass is fast enough that the budget buys a
+    usable sample, or when the query would finish all its iterations anyway.
+    """
+    if cold_s <= 0 or budget_s <= 0:
+        return False, ""
+    affordable = budget_s / cold_s
+    if affordable >= min(MIN_ITERS, iterations):
+        return False, ""
+    return True, (f"abandoned after the cold pass: at {cold_s:.1f} s per "
+                  f"iteration the {budget_s:.0f} s budget buys {affordable:.1f} "
+                  f"iterations, fewer than the {MIN_ITERS} a median needs")

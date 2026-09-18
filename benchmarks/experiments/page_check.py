@@ -769,6 +769,7 @@ NOT_MEASURED_BY_ENGINE = {
 # reason), and the reason is the thing being asserted -- a family added here
 # without one is the same miss this gate exists to catch.
 NOT_PRINTED = [
+    r"\w+_abandoned",   # why a query stopped after its cold pass (DECISIONS #107)
     # Written as a BARE STRING with the reason in a trailing comment when
     # DECISIONS #106 landed, which made the entry a 17-character string that
     # `for pattern, reason in NOT_PRINTED` unpacks into 17 values. It could not

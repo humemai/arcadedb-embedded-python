@@ -1286,9 +1286,15 @@ def main():
         # iteration runs only if it starts inside the budget.
         _budget_t0 = time.perf_counter()
         _ran = 0
+        _aband_why = ""
         for _ in range(QITER):
             if _ran and time.perf_counter() - _budget_t0 > _budget_s:
                 break
+            if _ran == 1:
+                _a, _aband_why = budget_lookup.abandon(
+                    time.perf_counter() - _budget_t0, _budget_s, QITER)
+                if _a:
+                    break
             t = time.perf_counter()
             ref = getattr(b, qn)()
             _ran += 1
@@ -1300,6 +1306,8 @@ def main():
         # after a reconnect cannot read as a budget the engine did not hit.
         out[f"{qn}_budget_s"] = _budget_s
         out[f"{qn}_budget_source"] = _budget_src
+        if _aband_why:
+            out[f"{qn}_abandoned"] = _aband_why
         out[f"{qn}_iters"] = len(times)
         out[f"{qn}_elapsed_s"] = round(time.perf_counter() - _budget_t0, 2)
         out[f"{qn}_censored"] = _ran < QITER

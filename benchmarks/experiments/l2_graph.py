@@ -2862,8 +2862,12 @@ def main():
             rows0 = ad.run_olap(qname)  # first touch, now measured
             out[f"cold_{qname}_ms"] = round((time.perf_counter() - _c0) * 1000, 2)
             bench_common.record_first_query(out, qname, out[f"cold_{qname}_ms"])
+            # Abandon here rather than spend the whole budget proving what the
+            # cold pass already showed (DECISIONS #107).
+            _aband, _aband_why = budget_lookup.abandon(
+                out[f"cold_{qname}_ms"] / 1000.0, _budget_s, OLAP_ITERATIONS)
             lat = []
-            for _ in range(OLAP_ITERATIONS):
+            for _ in range(0 if _aband else OLAP_ITERATIONS):
                 if time.perf_counter() - _budget_t0 > _budget_s:
                     break
                 t = time.perf_counter()
@@ -2872,6 +2876,8 @@ def main():
             out[f"{qname}_budget_s"] = _budget_s
             out[f"{qname}_budget_source"] = _budget_src
             out[f"{qname}_censored"] = len(lat) < OLAP_ITERATIONS
+            if _aband:
+                out[f"{qname}_abandoned"] = _aband_why
             if out[f"{qname}_censored"]:
                 _beat.mark(f"olap-{qname}-censored", iters=len(lat),
                            budget_s=_budget_s)
