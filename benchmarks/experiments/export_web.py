@@ -420,6 +420,23 @@ DISPLAY_NAMES = {
     "sqlite": "SQLite", "chroma": "Chroma", "ladybug": "LadybugDB",
 }
 
+# Backends runner.LANES registers that the page deliberately does not print,
+# each with its reason. These are ABLATION ARMS of an engine that IS on the
+# table, not absent engines, so they are neither a row nor a declared absence
+# (censored, withheld, unexpressible) and the roster gate
+# (page_check._check_lane_roster) needs to be told so by name. Every entry
+# here is also skipped by a builder below, at the site the reason names.
+OFF_PAGE_ARMS = {
+    "postgres_tuned": "an ablation of one engine's image defaults, not a second "
+                      "engine; it answered its question (2.33 vs 2.39 ms new-order) "
+                      "and stays in the rows, off the document and durability "
+                      "tables (user, 2026-09-13, DECISIONS #76)",
+    "arcadedb_sparse_embedded_nocompact": "the settle-step ablation; it sat among "
+                      "engine rows while being an ablation no comparator has run, "
+                      "so it stays in the harness and off the page until a "
+                      "comparator has the matching arm (2026-09-10)",
+}
+
 
 # What each dense engine actually STORES its vectors as, read from the adapter
 # that configures it in l3d_dense.py. Not from the data.
@@ -883,6 +900,7 @@ def _dense_overlay_entries(scale="deep10m"):
             v = _campaign_engine_string(_cb)
         out.append({
             "backend": label,
+            "backend_key": _cb,
             "is_arcadedb": ours,
             # NOT `arm == "int8"`. arm is a FILENAME token, and only ArcadeDB's
             # quantized arm is called "int8"; LanceDB's is "lancedb", so the
@@ -2091,6 +2109,7 @@ def _sparse_multipass_table():
             w99 = statistics.median(r["query_p99_ms"] for r in warm if r.get("query_p99_ms") is not None) if any(r.get("query_p99_ms") is not None for r in warm) else None
             entries.append({
                 "backend": label,
+                "backend_key": backend,
                 "is_arcadedb": "arcade" in backend,
                 "precision": SPARSE_PRECISION.get(backend),
                 "scale": tier,
@@ -2258,6 +2277,7 @@ def _lifecycle_table(all_rows):
         _mode = "server" if _srv else "embedded"
         entry = {
             "backend": f"{_name} ({_mode})" if _ours else f"{_name} ({engine}, {_mode})",
+            "backend_key": str(rs[0].get("backend")),
             "is_arcadedb": _ours,
             "engine": engine,
             "scale": scale,
@@ -2431,7 +2451,7 @@ def _durability_table(all_rows):
             # defaults, and it reads as a second engine on a table (DECISIONS
             # #76). It is kept out of the document tables for that reason and
             # out of this one for the same reason.
-            if str(r.get("backend")) == "postgres_tuned":
+            if str(r.get("backend")) in OFF_PAGE_ARMS:
                 continue
             by.setdefault(str(r.get("backend")), []).append(r)
         for backend, rs in sorted(by.items()):
@@ -2700,6 +2720,7 @@ def _l4_table(all_rows):
         rs = grouped[label]
         entry = {
             "backend": display_name(label) if label in DISPLAY_NAMES else label,
+            "backend_key": str(rs[0].get("backend")),
             # case-insensitive: the labels read "ArcadeDB (...)" since
             # 2026-09-11 and the lowercase test unshaded all four rows for a day
             "is_arcadedb": "arcadedb" in label.lower(),
@@ -4194,7 +4215,7 @@ def _restructure_tables(tables, rows):
         # not distort the comparison: 2.33 vs 2.39 ms new-order, 337 vs 331 ms
         # Q1) and stays in the rows; on the page it read as a second engine
         # (user, 2026-09-13, DECISIONS #76).
-        src = dict(src, entries=[e for e in src["entries"] if e["backend"] != "PostgreSQL (tuned)"])
+        src = dict(src, entries=[e for e in src["entries"] if e.get("backend_key") not in OFF_PAGE_ARMS])
         base = {"withheld_scales": [], "withheld_reason": None,
                 "source_paths": src.get("source_paths"), "source_urls": src.get("source_urls")}
         tables.append({"id": "docs_oltp", "title": "Document OLTP",
@@ -4337,7 +4358,7 @@ def main() -> int:
             # deployment axis. It comes off the page for the same reason the
             # f5 figure did: a number no paper reports is a number nobody
             # proofreads. Publish it when a comparator has the matching arm.
-            if backend == "arcadedb_sparse_embedded_nocompact":
+            if backend == "arcadedb_sparse_embedded_nocompact":  # OFF_PAGE_ARMS
                 continue
             image = BACKENDS.get(backend, {}).get("server_image")
             # A comparator row names the image it RAN on (server_image, a bare
@@ -4376,6 +4397,10 @@ def main() -> int:
                          else f"{label} (GAV)")
             entry = {
                 "backend": label,
+                # The runner's own key for the arm, so a gate can hold the
+                # table against runner.LANES without parsing the label
+                # (page_check._check_lane_roster, 2026-09-18).
+                "backend_key": backend,
                 "is_arcadedb": "arcade" in backend,
                 # Precision is a FIELD, not a suffix on the name. The page
                 # renders it as its own column beside Mode, so the label does

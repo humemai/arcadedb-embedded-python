@@ -651,6 +651,11 @@ def main() -> int:
     print(f"\ncoverage: {c_exp} operation-engine cell(s) expected, "
           f"{c_present} present, {c_declared} absent and declared, "
           f"{c_undeclared} absent and undeclared")
+    print("\ncoverage A3: every backend the runner registers for a lane is on "
+          "each table the lane feeds, as a row or a declared absence")
+    r_checked, r_bad = _check_lane_roster(payload)
+    print(f"\n{r_checked} lane registration(s) held against the tables, "
+          f"{r_bad} roster finding(s)")
     print("\nmulti-model coverage table, cell for cell against the tables it is derived from")
     m_checked, m_bad = _check_multimodel(payload)
     print(f"\n{m_checked} coverage cell(s) re-derived, {m_bad} disagree")
@@ -670,7 +675,7 @@ def main() -> int:
     k_bad = _check_conditions(payload, rows)
     print(f"\n{k_bad} condition finding(s)")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
-                 or m_bad or not u_ok or k_bad) else 0
+                 or r_bad or m_bad or not u_ok or k_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -699,6 +704,18 @@ def main() -> int:
 #   A2, the fields. Every measured field on a published row either appears in
 #   a column of its table or is named in NOT_PRINTED with a reason. This is
 #   the half that catches a measurement the page forgot.
+#
+#   A3, the roster (2026-09-18). A1 reads its engines OFF THE TABLE, so an
+#   engine with no row at all is not "on the table" and A1 cannot miss it:
+#   Neo4j's LDBC analytics row was never written, the skeleton's graph
+#   analytics table printed ten engines, and every gate was green. The roster
+#   is therefore read from the RUNNER: every backend runner.LANES registers
+#   for a lane must be on each October table the lane feeds, either as a row
+#   (matched by the backend_key the exporter stamps on every lane-fed entry)
+#   or as a declared absence naming the engine; an ablation arm the page
+#   deliberately does not print is named in export_web.OFF_PAGE_ARMS with its
+#   reason. Anything else registered is MISSING, and a row from a backend the
+#   runner does not register for the lane is STRAY.
 #
 # A declared absence is one of three things, and all three are DATA on the
 # payload rather than prose a gate has to parse: a censored cell (the engine
@@ -1034,6 +1051,57 @@ def _check_coverage(payload):
         else:
             print(f"  ok     {lane}: every measured field printed or declared")
     return bad, (expected, present, declared, undeclared)
+
+
+def _check_lane_roster(payload):
+    """A3, the roster: every backend runner.LANES registers for a lane is on
+    each October table the lane feeds, as a row or a declared absence.
+    Returns (registrations checked, bad)."""
+    import runner as RN
+    import export_web as EW
+    tables = {t["id"]: t for t in payload.get("tables", [])}
+    checked = bad = 0
+    for tid, (lane, _wl) in sorted(EW._TABLE_LANE.items()):
+        t = tables.get(tid)
+        if t is None:
+            print(f"  MISS    {tid}: the payload has no such table")
+            bad += 1
+            continue
+        if t.get("instrument") != "2026-10":
+            print(f"  -       {tid}: not under the 2026-10 instrument; roster not held")
+            continue
+        registered = list(RN.LANES[lane][1])
+        keyed = {}
+        for e in t.get("entries", []):
+            key = e.get("backend_key")
+            if not key:
+                # No stamp, no mechanism: the label would have to be parsed.
+                print(f"  UNKEYED {tid}: row {e.get('backend')!r} carries no "
+                      f"backend_key, so the roster cannot be held against it")
+                bad += 1
+                continue
+            keyed.setdefault(str(key), []).append(e)
+        absent = {str(a.get("backend")) for a in (t.get("declared_absences") or [])
+                  if not a.get("column")}
+        for key in registered:
+            checked += 1
+            label = EW.display_name(key)
+            if key in keyed:
+                continue
+            if key in EW.OFF_PAGE_ARMS:
+                print(f"  off-page {label} [{key}] on {tid}: {EW.OFF_PAGE_ARMS[key]}")
+                continue
+            if label in absent or EW.engine_family(label) in absent:
+                print(f"  declared {label} [{key}] on {tid}: no row, absence declared")
+                continue
+            print(f"  MISSING {label} [{key}] on {tid}: registered for lane {lane}, "
+                  f"no row and no declaration")
+            bad += 1
+        for key in sorted(set(keyed) - set(registered)):
+            print(f"  STRAY   {EW.display_name(key)} [{key}] on {tid}: a row from a "
+                  f"backend runner.LANES does not register for lane {lane}")
+            bad += 1
+    return checked, bad
 
 
 

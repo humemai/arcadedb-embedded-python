@@ -325,6 +325,7 @@
       "entries": [
         {
           "backend": "ArcadeDB (embedded, int8)",
+          "backend_key": "arcadedb_sparse_embedded",
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "micro",
@@ -382,6 +383,7 @@
         },
         {
           "backend": "ArcadeDB (embedded, fp32)",
+          "backend_key": "arcadedb_sparse_embedded_fp32",
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "micro",
@@ -439,6 +441,7 @@
         },
         {
           "backend": "ArcadeDB (server, int8)",
+          "backend_key": "arcadedb_sparse_server",
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "micro",
@@ -496,6 +499,7 @@
         },
         {
           "backend": "ArcadeDB (server, fp32)",
+          "backend_key": "arcadedb_sparse_server_fp32",
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "micro",
@@ -553,6 +557,7 @@
         },
         {
           "backend": "Elasticsearch",
+          "backend_key": "elasticsearch_sparse",
           "is_arcadedb": false,
           "precision": "~9-bit",
           "scale": "micro",
@@ -610,6 +615,7 @@
         },
         {
           "backend": "Milvus",
+          "backend_key": "milvus_sparse",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -667,6 +673,7 @@
         },
         {
           "backend": "pgvector",
+          "backend_key": "pgvector_sparse",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -724,6 +731,7 @@
         },
         {
           "backend": "Qdrant",
+          "backend_key": "qdrant_sparse",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -859,6 +867,7 @@
       "entries": [
         {
           "backend": "ArcadeDB (embedded, int8)",
+          "backend_key": "arcadedb_dense_embedded_int8",
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "micro",
@@ -964,6 +973,7 @@
         },
         {
           "backend": "ArcadeDB (embedded, fp32)",
+          "backend_key": "arcadedb_dense_embedded",
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "micro",
@@ -1069,6 +1079,7 @@
         },
         {
           "backend": "ArcadeDB (server, int8)",
+          "backend_key": "arcadedb_dense_server_int8",
           "is_arcadedb": true,
           "precision": "int8",
           "scale": "micro",
@@ -1174,6 +1185,7 @@
         },
         {
           "backend": "ArcadeDB (server, fp32)",
+          "backend_key": "arcadedb_dense_server",
           "is_arcadedb": true,
           "precision": "fp32",
           "scale": "micro",
@@ -1279,6 +1291,7 @@
         },
         {
           "backend": "ArangoDB (fp32)",
+          "backend_key": "arangodb_dense",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -1372,6 +1385,7 @@
         },
         {
           "backend": "Chroma (fp32)",
+          "backend_key": "chroma_dense",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -1465,6 +1479,7 @@
         },
         {
           "backend": "DuckDB VSS (fp32)",
+          "backend_key": "duckdb_vss_dense",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -1558,6 +1573,7 @@
         },
         {
           "backend": "LanceDB (int8)",
+          "backend_key": "lancedb_dense",
           "is_arcadedb": false,
           "precision": "int8",
           "scale": "micro",
@@ -1663,6 +1679,7 @@
         },
         {
           "backend": "Milvus (int8)",
+          "backend_key": "milvus_dense_int8",
           "is_arcadedb": false,
           "precision": "int8",
           "scale": "micro",
@@ -1768,6 +1785,7 @@
         },
         {
           "backend": "Milvus (fp32)",
+          "backend_key": "milvus_dense",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -1873,6 +1891,7 @@
         },
         {
           "backend": "MongoDB (fp32)",
+          "backend_key": "mongodb_dense",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -1978,6 +1997,7 @@
         },
         {
           "backend": "Neo4j (fp32)",
+          "backend_key": "neo4j_dense",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -2083,6 +2103,7 @@
         },
         {
           "backend": "pgvector (fp32)",
+          "backend_key": "pgvector_dense",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -2188,6 +2209,7 @@
         },
         {
           "backend": "Qdrant (int8)",
+          "backend_key": "qdrant_dense_int8",
           "is_arcadedb": false,
           "precision": "int8",
           "scale": "micro",
@@ -2281,6 +2303,7 @@
         },
         {
           "backend": "Qdrant (fp32)",
+          "backend_key": "qdrant_dense",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -2374,6 +2397,7 @@
         },
         {
           "backend": "sqlite-vec (int8)",
+          "backend_key": "sqlite_vec_dense_int8",
           "is_arcadedb": false,
           "precision": "int8",
           "scale": "micro",
@@ -2467,6 +2491,7 @@
         },
         {
           "backend": "sqlite-vec (fp32)",
+          "backend_key": "sqlite_vec_dense",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -2560,6 +2585,7 @@
         },
         {
           "backend": "SurrealDB (embedded, fp32)",
+          "backend_key": "surrealdb_dense",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -2653,6 +2679,7 @@
         },
         {
           "backend": "SurrealDB (server, fp32)",
+          "backend_key": "surrealdb_dense_server",
           "is_arcadedb": false,
           "precision": "fp32",
           "scale": "micro",
@@ -2805,6 +2832,7 @@
       "entries": [
         {
           "backend": "ArcadeDB (embedded)",
+          "backend_key": "arcadedb_graph_embedded",
           "is_arcadedb": true,
           "precision": null,
           "scale": "micro",
@@ -2892,6 +2920,7 @@
         },
         {
           "backend": "ArcadeDB (server)",
+          "backend_key": "arcadedb_graph_server",
           "is_arcadedb": true,
           "precision": null,
           "scale": "micro",
@@ -2979,6 +3008,7 @@
         },
         {
           "backend": "ArangoDB",
+          "backend_key": "arangodb_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -3066,6 +3096,7 @@
         },
         {
           "backend": "DuckPGQ",
+          "backend_key": "duckpgq_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -3153,6 +3184,7 @@
         },
         {
           "backend": "FalkorDB",
+          "backend_key": "falkordb_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -3240,6 +3272,7 @@
         },
         {
           "backend": "LadybugDB",
+          "backend_key": "ladybug_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -3327,6 +3360,7 @@
         },
         {
           "backend": "Memgraph",
+          "backend_key": "memgraph_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -3414,6 +3448,7 @@
         },
         {
           "backend": "MongoDB",
+          "backend_key": "mongodb_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -3501,6 +3536,7 @@
         },
         {
           "backend": "Neo4j",
+          "backend_key": "neo4j_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -3588,6 +3624,7 @@
         },
         {
           "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -3675,6 +3712,7 @@
         },
         {
           "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_graph_server",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -3795,7 +3833,7 @@
         "Fourteen questions, each asked of the whole graph. Average friend age: for every city, the average age of the friends of the people who live there. Friends in same city: how many friendships connect two people in the same city. Most friends: which people have the highest number of friends. Degree distribution: how many people have each number of friends, counted over every edge in the graph. Triangle count: how many sets of three people are all friends with one another, each triangle counted once. LSQB Q1: LSQB's first query, the eight-label chain: a country, a city in it, a person living there, a forum that person belongs to, a post in that forum, a comment replying to the post, the comment's tag, and the tag's class, every match counted. LSQB Q2: LSQB's second query: pairs of friends where one wrote a comment replying to a post the other wrote. LSQB Q3: LSQB's third query: three people who all live in the same country and are all friends with one another, each ordering counted. LSQB Q4: LSQB's fourth query: a tagged message with its creator, a person who liked it, and a comment replying to it, every combination counted. LSQB Q5: LSQB's fifth query: a tagged message and a reply to it carrying a different tag. LSQB Q6: LSQB's sixth query: a friend of a friend and that far person's tag interests, the two ends being different people. LSQB Q7: LSQB's seventh query, the fourth with the liker and the reply optional, so a tagged message with neither still counts once per creator. LSQB Q8: LSQB's eighth query, the fifth where the reply does not also carry the message's own tag. LSQB Q9: LSQB's ninth query, the sixth where the two people at the ends are not themselves friends. All times are milliseconds.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk, so they stay in.",
         "The cold column is the very first query of a session, most friends, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Rows labelled GAV ran with it built, once, before any query was timed, and the view build column is what that took.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "ArangoDB at 2k people, 7k friendships (LDBC SF1 slice, skeleton): the LSQB Q1 query exceeded its 300 s budget, the same budget every engine on this table had, after 20 of 100 iterations; its p50 and p99 are over those warm iterations after the cold pass, and the cell's other queries keep their numbers (DECISIONS #82b, #100).",
@@ -3873,6 +3911,7 @@
       "entries": [
         {
           "backend": "ArcadeDB (embedded, GAV)",
+          "backend_key": "arcadedb_graph_embedded",
           "is_arcadedb": true,
           "precision": null,
           "scale": "sf1",
@@ -4014,6 +4053,7 @@
         },
         {
           "backend": "ArcadeDB (server, GAV)",
+          "backend_key": "arcadedb_graph_server",
           "is_arcadedb": true,
           "precision": null,
           "scale": "sf1",
@@ -4155,6 +4195,7 @@
         },
         {
           "backend": "ArangoDB",
+          "backend_key": "arangodb_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf1",
@@ -4290,6 +4331,7 @@
         },
         {
           "backend": "DuckPGQ",
+          "backend_key": "duckpgq_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf1",
@@ -4425,6 +4467,7 @@
         },
         {
           "backend": "FalkorDB",
+          "backend_key": "falkordb_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf1",
@@ -4560,6 +4603,7 @@
         },
         {
           "backend": "LadybugDB",
+          "backend_key": "ladybug_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf1",
@@ -4695,6 +4739,7 @@
         },
         {
           "backend": "Memgraph",
+          "backend_key": "memgraph_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf1",
@@ -4830,6 +4875,7 @@
         },
         {
           "backend": "MongoDB",
+          "backend_key": "mongodb_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf1",
@@ -4964,7 +5010,144 @@
           }
         },
         {
+          "backend": "Neo4j",
+          "backend_key": "neo4j_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "2k people, 7k friendships (LDBC SF1 slice, skeleton)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",
+          "version_name": "neo4j 2026.07.1",
+          "host": null,
+          "metrics": {
+            "average friend age p50 ms": {
+              "median": 16.53,
+              "min": 16.53,
+              "max": 16.53,
+              "n": 1
+            },
+            "average friend age p99 ms": {
+              "median": 24.25,
+              "min": 24.25,
+              "max": 24.25,
+              "n": 1
+            },
+            "friends in same city p50 ms": {
+              "median": 19.63,
+              "min": 19.63,
+              "max": 19.63,
+              "n": 1
+            },
+            "most friends p50 ms": {
+              "median": 17.68,
+              "min": 17.68,
+              "max": 17.68,
+              "n": 1
+            },
+            "degree distribution p50 ms": {
+              "median": 13.81,
+              "min": 13.81,
+              "max": 13.81,
+              "n": 1
+            },
+            "triangle count p50 ms": {
+              "median": 72.62,
+              "min": 72.62,
+              "max": 72.62,
+              "n": 1
+            },
+            "LSQB Q1 p50 ms": {
+              "median": 178.6,
+              "min": 178.6,
+              "max": 178.6,
+              "n": 1
+            },
+            "LSQB Q2 p50 ms": {
+              "median": 44.0,
+              "min": 44.0,
+              "max": 44.0,
+              "n": 1
+            },
+            "LSQB Q3 p50 ms": {
+              "median": 312.36,
+              "min": 312.36,
+              "max": 312.36,
+              "n": 1
+            },
+            "LSQB Q4 p50 ms": {
+              "median": 69.67,
+              "min": 69.67,
+              "max": 69.67,
+              "n": 1
+            },
+            "LSQB Q5 p50 ms": {
+              "median": 285.18,
+              "min": 285.18,
+              "max": 285.18,
+              "n": 1
+            },
+            "LSQB Q6 p50 ms": {
+              "median": 1251.64,
+              "min": 1251.64,
+              "max": 1251.64,
+              "n": 1
+            },
+            "LSQB Q7 p50 ms": {
+              "median": 187.7,
+              "min": 187.7,
+              "max": 187.7,
+              "n": 1
+            },
+            "LSQB Q8 p50 ms": {
+              "median": 568.36,
+              "min": 568.36,
+              "max": 568.36,
+              "n": 1
+            },
+            "LSQB Q9 p50 ms": {
+              "median": 1360.41,
+              "min": 1360.41,
+              "max": 1360.41,
+              "n": 1
+            },
+            "cold first query ms": {
+              "median": 555.51,
+              "min": 555.51,
+              "max": 555.51,
+              "n": 1
+            },
+            "ingest vertices+edges/s": {
+              "median": 124.1835,
+              "min": 124.1835,
+              "max": 124.1835,
+              "n": 1
+            },
+            "ingest total s": {
+              "median": 72.57,
+              "min": 72.57,
+              "max": 72.57,
+              "n": 1
+            },
+            "peak memory GiB": {
+              "median": 4.787,
+              "min": 4.787,
+              "max": 4.787,
+              "n": 1
+            },
+            "disk GiB": {
+              "median": 0.0221,
+              "min": 0.0221,
+              "max": 0.0221,
+              "n": 1
+            }
+          }
+        },
+        {
           "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_graph",
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf1",
@@ -5100,6 +5283,7 @@
         },
         {
           "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_graph_server",
           "is_arcadedb": false,
           "precision": null,
           "scale": "sf1",
@@ -5285,6 +5469,7 @@
       "entries": [
         {
           "backend": "ArcadeDB (one transaction)",
+          "backend_key": "arcadedb_e2",
           "is_arcadedb": true,
           "precision": null,
           "scale": "e2",
@@ -5312,6 +5497,7 @@
         },
         {
           "backend": "ArcadeDB (server, one transaction)",
+          "backend_key": "arcadedb_e2_server",
           "is_arcadedb": true,
           "precision": null,
           "scale": "e2",
@@ -5339,6 +5525,7 @@
         },
         {
           "backend": "ArangoDB",
+          "backend_key": "arangodb_e2",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5366,6 +5553,7 @@
         },
         {
           "backend": "MongoDB",
+          "backend_key": "mongodb_e2",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5393,6 +5581,7 @@
         },
         {
           "backend": "Neo4j (vector index)",
+          "backend_key": "neo4j_e2",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5420,6 +5609,7 @@
         },
         {
           "backend": "PostgreSQL + pgvector + AGE",
+          "backend_key": "pg_age_e2",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5447,6 +5637,7 @@
         },
         {
           "backend": "Qdrant + Neo4j (no shared transaction)",
+          "backend_key": "composed_qdrant_neo4j",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5474,6 +5665,7 @@
         },
         {
           "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_e2",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5501,6 +5693,7 @@
         },
         {
           "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_e2_server",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5574,6 +5767,7 @@
       "entries": [
         {
           "backend": "ArcadeDB (one transaction)",
+          "backend_key": "arcadedb_e2",
           "is_arcadedb": true,
           "precision": null,
           "scale": "e2",
@@ -5649,6 +5843,7 @@
         },
         {
           "backend": "ArcadeDB (server, one transaction)",
+          "backend_key": "arcadedb_e2_server",
           "is_arcadedb": true,
           "precision": null,
           "scale": "e2",
@@ -5724,6 +5919,7 @@
         },
         {
           "backend": "ArangoDB",
+          "backend_key": "arangodb_e2",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5799,6 +5995,7 @@
         },
         {
           "backend": "MongoDB",
+          "backend_key": "mongodb_e2",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5874,6 +6071,7 @@
         },
         {
           "backend": "Neo4j (vector index)",
+          "backend_key": "neo4j_e2",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -5949,6 +6147,7 @@
         },
         {
           "backend": "PostgreSQL + pgvector + AGE",
+          "backend_key": "pg_age_e2",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -6024,6 +6223,7 @@
         },
         {
           "backend": "Qdrant + Neo4j (no shared transaction)",
+          "backend_key": "composed_qdrant_neo4j",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -6099,6 +6299,7 @@
         },
         {
           "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_e2",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -6174,6 +6375,7 @@
         },
         {
           "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_e2_server",
           "is_arcadedb": false,
           "precision": null,
           "scale": "e2",
@@ -6303,6 +6505,7 @@
       "entries": [
         {
           "backend": "ArcadeDB (embedded, native time series)",
+          "backend_key": "arcadedb_ts_native",
           "is_arcadedb": true,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -6383,6 +6586,7 @@
         },
         {
           "backend": "ArcadeDB (embedded, document path)",
+          "backend_key": "arcadedb_ts_doc",
           "is_arcadedb": true,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -6463,6 +6667,7 @@
         },
         {
           "backend": "ArcadeDB (server, document path)",
+          "backend_key": "arcadedb_ts_doc_server",
           "is_arcadedb": true,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -6543,6 +6748,7 @@
         },
         {
           "backend": "ArcadeDB (server, native time series)",
+          "backend_key": "arcadedb_ts_native_server",
           "is_arcadedb": true,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -6617,6 +6823,7 @@
         },
         {
           "backend": "ArangoDB",
+          "backend_key": "arangodb_ts",
           "is_arcadedb": false,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -6697,6 +6904,7 @@
         },
         {
           "backend": "DuckDB",
+          "backend_key": "duckdb",
           "is_arcadedb": false,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -6777,6 +6985,7 @@
         },
         {
           "backend": "MongoDB",
+          "backend_key": "mongodb",
           "is_arcadedb": false,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -6857,6 +7066,7 @@
         },
         {
           "backend": "QuestDB",
+          "backend_key": "questdb",
           "is_arcadedb": false,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -6937,6 +7147,7 @@
         },
         {
           "backend": "SQLite",
+          "backend_key": "sqlite",
           "is_arcadedb": false,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -7017,6 +7228,7 @@
         },
         {
           "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_ts",
           "is_arcadedb": false,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -7097,6 +7309,7 @@
         },
         {
           "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_ts_server",
           "is_arcadedb": false,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -7177,6 +7390,7 @@
         },
         {
           "backend": "TimescaleDB",
+          "backend_key": "timescaledb",
           "is_arcadedb": false,
           "scale": "2.59M points",
           "scale_label": "2.59M points (skeleton)",
@@ -7318,6 +7532,7 @@
       "entries": [
         {
           "backend": "Dense vectors (embedded)",
+          "backend_key": "arcadedb_embedded",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7381,6 +7596,7 @@
         },
         {
           "backend": "Dense vectors (server)",
+          "backend_key": "arcadedb_server",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7426,6 +7642,7 @@
         },
         {
           "backend": "Documents (embedded)",
+          "backend_key": "arcadedb_embedded",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7489,6 +7706,7 @@
         },
         {
           "backend": "Documents (server)",
+          "backend_key": "arcadedb_server",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7534,6 +7752,7 @@
         },
         {
           "backend": "Documents, ten indexes (embedded)",
+          "backend_key": "arcadedb_embedded",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7597,6 +7816,7 @@
         },
         {
           "backend": "Documents, ten indexes (server)",
+          "backend_key": "arcadedb_server",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7642,6 +7862,7 @@
         },
         {
           "backend": "Empty database (embedded)",
+          "backend_key": "arcadedb_embedded",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7705,6 +7926,7 @@
         },
         {
           "backend": "Empty database (server)",
+          "backend_key": "arcadedb_server",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7750,6 +7972,7 @@
         },
         {
           "backend": "Graph (embedded)",
+          "backend_key": "arcadedb_embedded",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7813,6 +8036,7 @@
         },
         {
           "backend": "Graph (server)",
+          "backend_key": "arcadedb_server",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7858,6 +8082,7 @@
         },
         {
           "backend": "Sparse vectors (embedded)",
+          "backend_key": "arcadedb_embedded",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7921,6 +8146,7 @@
         },
         {
           "backend": "Sparse vectors (server)",
+          "backend_key": "arcadedb_server",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -7966,6 +8192,7 @@
         },
         {
           "backend": "Time series (embedded)",
+          "backend_key": "arcadedb_embedded",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -8029,6 +8256,7 @@
         },
         {
           "backend": "Time series (server)",
+          "backend_key": "arcadedb_server",
           "is_arcadedb": true,
           "engine": "ArcadeDB",
           "scale": "lc10k",
@@ -8074,6 +8302,7 @@
         },
         {
           "backend": "Dense vectors (SurrealDB, embedded)",
+          "backend_key": "surrealdb_lifecycle",
           "is_arcadedb": false,
           "engine": "SurrealDB",
           "scale": "lc10k",
@@ -8131,6 +8360,7 @@
         },
         {
           "backend": "Documents (SurrealDB, embedded)",
+          "backend_key": "surrealdb_lifecycle",
           "is_arcadedb": false,
           "engine": "SurrealDB",
           "scale": "lc10k",
@@ -8188,6 +8418,7 @@
         },
         {
           "backend": "Documents, ten indexes (SurrealDB, embedded)",
+          "backend_key": "surrealdb_lifecycle",
           "is_arcadedb": false,
           "engine": "SurrealDB",
           "scale": "lc10k",
@@ -8245,6 +8476,7 @@
         },
         {
           "backend": "Empty database (SurrealDB, embedded)",
+          "backend_key": "surrealdb_lifecycle",
           "is_arcadedb": false,
           "engine": "SurrealDB",
           "scale": "lc10k",
@@ -8302,6 +8534,7 @@
         },
         {
           "backend": "Graph (SurrealDB, embedded)",
+          "backend_key": "surrealdb_lifecycle",
           "is_arcadedb": false,
           "engine": "SurrealDB",
           "scale": "lc10k",
@@ -8359,6 +8592,7 @@
         },
         {
           "backend": "Time series (SurrealDB, embedded)",
+          "backend_key": "surrealdb_lifecycle",
           "is_arcadedb": false,
           "engine": "SurrealDB",
           "scale": "lc10k",
@@ -11264,6 +11498,7 @@
       "entries": [
         {
           "backend": "ArcadeDB (embedded)",
+          "backend_key": "arcadedb_embedded",
           "is_arcadedb": true,
           "precision": null,
           "scale": "micro",
@@ -11351,6 +11586,7 @@
         },
         {
           "backend": "ArcadeDB (server)",
+          "backend_key": "arcadedb_server",
           "is_arcadedb": true,
           "precision": null,
           "scale": "micro",
@@ -11438,6 +11674,7 @@
         },
         {
           "backend": "ArangoDB",
+          "backend_key": "arangodb_tpc",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -11525,6 +11762,7 @@
         },
         {
           "backend": "DuckDB",
+          "backend_key": "duckdb",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -11612,6 +11850,7 @@
         },
         {
           "backend": "MongoDB",
+          "backend_key": "mongodb",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -11699,6 +11938,7 @@
         },
         {
           "backend": "PostgreSQL",
+          "backend_key": "postgres",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -11786,6 +12026,7 @@
         },
         {
           "backend": "SQLite",
+          "backend_key": "sqlite",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -11873,6 +12114,7 @@
         },
         {
           "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_tpc",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -11960,6 +12202,7 @@
         },
         {
           "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_tpc_server",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -12105,6 +12348,7 @@
       "entries": [
         {
           "backend": "ArcadeDB (embedded)",
+          "backend_key": "arcadedb_embedded",
           "is_arcadedb": true,
           "precision": null,
           "scale": "micro",
@@ -12186,6 +12430,7 @@
         },
         {
           "backend": "ArcadeDB (server)",
+          "backend_key": "arcadedb_server",
           "is_arcadedb": true,
           "precision": null,
           "scale": "micro",
@@ -12267,6 +12512,7 @@
         },
         {
           "backend": "ArangoDB",
+          "backend_key": "arangodb_tpc",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -12348,6 +12594,7 @@
         },
         {
           "backend": "DuckDB",
+          "backend_key": "duckdb",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -12429,6 +12676,7 @@
         },
         {
           "backend": "MongoDB",
+          "backend_key": "mongodb",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -12510,6 +12758,7 @@
         },
         {
           "backend": "PostgreSQL",
+          "backend_key": "postgres",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -12591,6 +12840,7 @@
         },
         {
           "backend": "SQLite",
+          "backend_key": "sqlite",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -12672,6 +12922,7 @@
         },
         {
           "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_tpc",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -12717,6 +12968,7 @@
         },
         {
           "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_tpc_server",
           "is_arcadedb": false,
           "precision": null,
           "scale": "micro",
@@ -13170,14 +13422,6 @@
           "DuckPGQ",
           "LadybugDB",
           "Neo4j",
-          "SurrealDB (server)"
-        ]
-      },
-      {
-        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
-        "values": [
-          "DuckPGQ",
-          "LadybugDB",
           "SurrealDB (server)"
         ]
       },
