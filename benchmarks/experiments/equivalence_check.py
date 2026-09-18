@@ -101,20 +101,21 @@ LANES_CHECKED_OTHERWISE = {
 # Each entry names the engine, what it returns instead, and what is being done
 # about it. Remove the entry when the engine is re-pinned with the fix, which
 # re-arms the gate for that query.
-KNOWN_DISAGREEMENTS = {
-    ("l4", "q_groupby"): {
-        "arcadedb_ts_native_server": (
-            "the served SQL path returns a CONSTANT bucket for the "
-            "function-derived grouping key when a second grouping key is "
-            "present: 100 hosts x 1 bucket where the embedded arm on the same "
-            "build, and DuckDB, SQLite, MongoDB, QuestDB and TimescaleDB, all "
-            "return 100 x 12. The single-key form of the same expression "
-            "(q_global, GROUP BY the bucket alone) agrees exactly between the "
-            "two ArcadeDB arms, so it is the two-key group-by that is wrong "
-            "and not the bucket function. The cell is withheld from the page "
-            "rather than published as a latency for a different answer"),
-    },
-}
+# EMPTY SINCE 2026-09-18. It held ("l4", "q_groupby") for
+# arcadedb_ts_native_server from 2026-09-08: the served SQL path returned a
+# CONSTANT bucket for the function-derived grouping key when a second grouping
+# key was present, 100 hosts x 1 bucket where the embedded arm on the same
+# build, and DuckDB, SQLite, MongoDB, QuestDB and TimescaleDB, all returned
+# 100 x 12. The single-key form (q_global) agreed on both arms throughout, so
+# the two-key group-by was wrong and not the bucket function.
+#
+# Upstream #7610, the served time-bucket serializer, is in the October pin
+# 417314c18d, and the re-run on that pin closes it: the served arm's digest
+# moves from cf8b95166d59727f (100 x 1 = 100 pairs) to 18c9985de67433e6
+# (100 x 12 = 1200 pairs), which is what every other engine has always
+# returned. Removed together with the export_web.WITHHELD_CELLS entry that
+# kept the cell off the page while this stood; neither is any use alone.
+KNOWN_DISAGREEMENTS = {}
 
 NOT_COMPARABLE = {
     ("lifecycle", "lifecycle_read"):

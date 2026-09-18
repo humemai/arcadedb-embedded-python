@@ -18,7 +18,8 @@ import arango_common
 import mongo_common
 
 import budget_lookup
-from graph_common import (HOP3_VISITED, OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
+from graph_common import (HOP3_VISITED, LSQB_QUERIES, NA_LSQB_NO_MESSAGE_HALF,
+                          OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
                           OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
                           PERSON_STATE_DIGEST, READ_DIGEST, SCALE_OLTP_QUERIES,
                           SCALE_PERSONS, UPDATE_AGE, VISITED_DIGEST, VISITED_SAMPLE,
@@ -2815,6 +2816,16 @@ def main():
         out["oltp_total_s"] = round(time.perf_counter() - total_t0, 2)
     else:
         for qname, text in OLAP_QUERIES.items():
+            # LSQB'S NINE NEED THE MESSAGE HALF (graph_common
+            # .NA_LSQB_NO_MESSAGE_HALF). Without it they each count zero
+            # matches over labels the corpus does not hold. Skipped with the
+            # reason on the row, once, because the absence is a property of
+            # this corpus and identical for every engine on it -- not of any
+            # engine, which is what an unexpressible declaration states.
+            if qname in LSQB_QUERIES and not ad._load_messages:
+                out["lsqb_na"] = NA_LSQB_NO_MESSAGE_HALF
+                _beat.mark(f"olap-{qname}-skipped-no-message-half")
+                continue
             # DECISIONS #88: an engine that cannot ask the question says so on
             # the row, with its reason, and is not silently skipped.
             reason = getattr(ad, "UNEXPRESSIBLE", {}).get(qname)

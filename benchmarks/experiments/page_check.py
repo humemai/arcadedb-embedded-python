@@ -769,7 +769,18 @@ NOT_MEASURED_BY_ENGINE = {
 # reason), and the reason is the thing being asserted -- a family added here
 # without one is the same miss this gate exists to catch.
 NOT_PRINTED = [
-    r"\w+_budget_source",   # which budget applied and whether it was measured (DECISIONS #106)
+    # Written as a BARE STRING with the reason in a trailing comment when
+    # DECISIONS #106 landed, which made the entry a 17-character string that
+    # `for pattern, reason in NOT_PRINTED` unpacks into 17 values. It could not
+    # fail until a row actually carried a `_budget_source` field, and the first
+    # rows that do are the October skeleton re-run -- so the gate crashed with
+    # ValueError rather than reporting, on the first publish after the change.
+    # The paragraph above says a family added here without a reason is the miss
+    # this gate exists to catch; this is that miss, in the gate itself.
+    (r"\w+_budget_source$",
+     "which budget applied to a query and whether it was measured or fell "
+     "back to the lane's constant (DECISIONS #106): it qualifies the budget "
+     "beside it, which is itself a diagnostic and not a column"),
     (r"^(rep|rc|trials|seed)$",
      "provenance: which repetition this row is and whether it exited clean"),
     (r"^(tpch_sf|n_docs|n_docs_ingested|n_lineitem|n_part|n_persons|"

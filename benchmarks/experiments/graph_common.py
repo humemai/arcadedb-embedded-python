@@ -235,6 +235,38 @@ LSQB_QUERIES = {
 # (DECISIONS #104). The harness iterates OLAP_QUERIES, so the nine join it here.
 OLAP_QUERIES.update(LSQB_QUERIES)
 
+# AND THE NINE NEED THE MESSAGE HALF. Every one of them counts a pattern over
+# Forum, Post, Comment, Tag, TagClass or Country, which ldbc_snb.MessageCorpus
+# loads for the analytics workload on the full LDBC network and NOWHERE else
+# (DECISIONS #103b/#104: l2_graph sets ad._load_messages from the source and
+# the workload). The synthetic interactive corpus holds Person, City and KNOWS
+# and nothing else.
+#
+# Asked anyway, they do not fail: they return `0` in one row, nine times, on
+# every engine. l2_graph.build_messages' own docstring names this -- "so an
+# engine missing the loader is obvious rather than silently running LSQB's
+# nine queries on an empty message half" -- and guards the LOADER while the
+# query loop stayed unguarded, so the October l2/micro re-run recorded nine
+# digests of `(0)` beside cold times of 4-34 ms. That is a measurement of how
+# fast an engine can count nothing, and it is not comparable with the same
+# column at SF1, where the labels exist.
+#
+# It also breaks the answer check in the one direction that matters: the
+# comparator rows at micro predate the nine and record no digest, so
+# equivalence E3 reads "ArcadeDB answered nine queries its neighbours did not"
+# -- eight engines x nine queries = 72 failures -- and refuses the publish.
+# The absence belongs to the CORPUS and not to any engine, which is why this
+# is a skip with a reason on the row rather than nine per-engine
+# `unexpressible` declarations (#92 forbids those without an engine error, and
+# there is none: every engine expresses these queries fine).
+NA_LSQB_NO_MESSAGE_HALF = (
+    "LSQB's nine are not asked on this row: they count patterns over the SNB "
+    "message half (Forum, Post, Comment, Tag, TagClass, Country), which is "
+    "loaded only for the analytics workload on the full LDBC network "
+    "(DECISIONS #103b/#104). This row's corpus holds persons, cities and "
+    "KNOWS, so each of the nine would count zero matches over labels that do "
+    "not exist and time how long that takes.")
+
 # ---------------------------------------------------------------------------
 # WHAT EACH ANSWER LOOKS LIKE (DECISIONS #88). Declared once per query, never
 # per engine; the alternatives inside a tuple are the names the four dialects

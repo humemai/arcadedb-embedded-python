@@ -1254,18 +1254,26 @@ EQUIVALENCE_TABLE_OF = {
 # table says why, which is the same treatment a censored cell gets.
 #
 # Keyed (table id, backend label, column) -> the sentence the table prints.
-L4_WITHHELD_HOURLY = (
-    "ArcadeDB's served arm is not shown for the per-host hourly query: on "
-    "the server's SQL path that query returns one bucket per host instead "
-    "of one per host and hour, which the answer check caught by comparing "
-    "its result against the other engines'. Its embedded twin, on the same "
-    "build, returns the same answer as everyone else, and the single-key "
-    "form of the same query agrees on both. A latency for an answer that "
-    "differs from every other engine's is not a measurement of this query, "
-    "so the cell is withheld rather than printed.")
-WITHHELD_CELLS = {
-    ("l4", "ArcadeDB (server, native time series)", "per-host hourly p50 ms"): L4_WITHHELD_HOURLY,
-}
+#
+# EMPTY SINCE 2026-09-18, and the entry it held is why the withholding is a
+# table and not a hard-coded column. The l4 per-host hourly cell for ArcadeDB's
+# served native arm was withheld from 2026-09-08: the server's SQL path
+# returned a CONSTANT bucket for the function-derived key when a second
+# grouping key was present, 100 hosts x 1 bucket where every other engine
+# returned 100 x 12. Upstream #7610 (the served time-bucket serializer) is in
+# the October pin, and the re-run on that pin answers it:
+#
+#   arcadedb_ts_native_server, l4/ts100          digest    hosts x buckets = pairs
+#     26.8.1        (2026-09-08, withheld)   cf8b95166d59727f   100 x  1 =  100
+#     417314c18d    (2026-09-18, published)  18c9985de67433e6   100 x 12 = 1200
+#   every other engine, both dates             18c9985de67433e6   100 x 12 = 1200
+#
+# So the cell publishes: 921.5705 ms p50, beside its embedded twin's 915.4556.
+# Removed here AND from equivalence_check.KNOWN_DISAGREEMENTS, which is the
+# pair that has to move together -- the gate declaration without the
+# withholding would print a latency for a wrong answer, and the withholding
+# without the declaration would fail the gate.
+WITHHELD_CELLS = {}
 
 
 # EVERY ABSENCE ON A TABLE, AS DATA RATHER THAN AS PROSE.
@@ -3264,7 +3272,10 @@ OCT_PROSE = {
         "settle_rows": ("No engine settles inside the ingest timer. QuestDB's WAL apply runs after the clock stops, and the newest-reading query is asked unbounded on every engine, so the unsealed tail a scan walks costs the same everywhere. Sealing the write buffer makes the aggregation faster and the last-point query slower, and settling only ours would have been a one-sided advantage. Rows that record a settle time did that settling after the timer stopped.", []),
         "schema": ("One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark.", []),
         "newest": ("Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound; the same query bounded to the past hour is measured beside it and kept on the row rather than printed.", []),
-        "withheld_hourly": (L4_WITHHELD_HOURLY, []),
+        # "withheld_hourly" was registered here while the served native arm's
+        # per-host hourly cell was withheld. The October pin carries the fix
+        # (see WITHHELD_CELLS above), the cell publishes, and the sentence is
+        # no longer emitted, so its registration is gone with it.
         "ingest": ("Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP; SQLite executemany in batched transactions; MongoDB insert_many in batches into a time-series collection; TimescaleDB COPY; ArangoDB import_bulk; SurrealDB inserts through its Python SDK.", []),
     },
     "lifecycle": {
