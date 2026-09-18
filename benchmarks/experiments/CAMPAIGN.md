@@ -149,4 +149,4 @@ The September chain on mini, each script waiting on its predecessor and gated on
 | qDW | SurrealDB served again on the cells whose disk reading was blank (BUGS.md F38) |
 | qDX | one phase-marked re-run of the embedded SurrealDB 1M dense cell, expected to time out again, for the phase it dies in (BUGS.md F41) |
 
-Finished scripts move to `~/queue_archive` on mini. The chain holds its pin start to finish; an upstream fix landing mid-run becomes a candidate for the next re-pin, never a restart. October's campaign is DECISIONS #74 as amended by #81 to #86, and starts with the comparators.
+Finished scripts move to `~/queue_archive` on mini. The chain holds its pin start to finish; an upstream fix landing mid-run becomes a candidate for the next re-pin, never a restart. After qDX the September chain continues at the same pin with the extension stages of DECISIONS #103a, #103b, and #103e: Memgraph, FalkorDB, and DuckPGQ on the graph tables, every DuckDB arm re-measured at 1.5.4, and the raised sizes replacing their tiers. October's campaign is DECISIONS #74 as amended through #104b, and starts with the comparator re-pin survey.
