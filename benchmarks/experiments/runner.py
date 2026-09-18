@@ -167,6 +167,25 @@ TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     # is the document path at ~65 s of ingest, so an hour is
                     # generous without being unable to fail.
                     "ts100": 3600,
+                    # THE SEPTEMBER EXTENSION'S RAISED TIERS (DECISIONS #105).
+                    # Sized from September's measured builds at the tier below,
+                    # scaled by the corpus and given headroom, then capped so the
+                    # matrix fits: the campaign runs ~9 engines x 5 reps across
+                    # several lanes, so an uncapped slow engine costs days for a
+                    # row that says nothing a censored cell does not. An engine
+                    # that cannot finish inside the cap is censored WITH the cap
+                    # named, which is a true statement about that engine at that
+                    # size; the stage then skips its remaining reps, because
+                    # repeating a timeout measures nothing.
+                    #   tpch10: DuckDB does the whole cell in 140 s; SQLite was
+                    #           still in its first build at 3 h when this was set.
+                    #   sf1full: 13.8M edges against sf10's 1.9M, whose slowest
+                    #           build was 113 s.
+                    #   ts1000: the lane parses the line protocol in Python inside
+                    #           every cell, ~29 min before any engine work.
+                    #   e2_500k: 10x e2, whose slowest build was 334 s.
+                    "tpch10": 2 * 3600, "sf1full": 2 * 3600,
+                    "ts1000": 3 * 3600, "e2_500k": 2 * 3600,
                     # Lifecycle tiers (l5). Generous against the observed cost:
                     # the slowest lc10k situation builds in ~9 s and the whole
                     # cell runs in under a minute, but `vector` and `graph_gav`
