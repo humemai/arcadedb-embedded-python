@@ -769,6 +769,7 @@ NOT_MEASURED_BY_ENGINE = {
 # reason), and the reason is the thing being asserted -- a family added here
 # without one is the same miss this gate exists to catch.
 NOT_PRINTED = [
+    r"\w+_budget_source",   # which budget applied and whether it was measured (DECISIONS #106)
     (r"^(rep|rc|trials|seed)$",
      "provenance: which repetition this row is and whether it exited clean"),
     (r"^(tpch_sf|n_docs|n_docs_ingested|n_lineitem|n_part|n_persons|"

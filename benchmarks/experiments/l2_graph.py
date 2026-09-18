@@ -17,6 +17,7 @@ import surreal_common
 import arango_common
 import mongo_common
 
+import budget_lookup
 from graph_common import (HOP3_VISITED, OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
                           OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
                           PERSON_STATE_DIGEST, READ_DIGEST, SCALE_OLTP_QUERIES,
@@ -2839,6 +2840,12 @@ def main():
             # noticing, which is how a five-minute cell becomes a ten-minute
             # one. With the cold pass inside the budget, a query that blows it
             # on the first touch runs zero warm iterations and the row says so.
+            # The budget is per tier and per query, from the bench host's own
+            # measured medians (DECISIONS #106, budget_lookup/derive_budgets);
+            # where a tier has no measurement yet it falls back to the lane's
+            # flat constant and the row records which it was.
+            _budget_s, _budget_src = budget_lookup.budget_for(
+                "l2", args.scale, qname, OLAP_BUDGET_S, "BENCH_GRAPH_OLAP_BUDGET_S")
             _budget_t0 = time.perf_counter()
             _c0 = time.perf_counter()
             rows0 = ad.run_olap(qname)  # first touch, now measured
@@ -2846,16 +2853,17 @@ def main():
             bench_common.record_first_query(out, qname, out[f"cold_{qname}_ms"])
             lat = []
             for _ in range(OLAP_ITERATIONS):
-                if time.perf_counter() - _budget_t0 > OLAP_BUDGET_S:
+                if time.perf_counter() - _budget_t0 > _budget_s:
                     break
                 t = time.perf_counter()
                 ad.run_olap(qname)
                 surreal_common.keep(ad, lat, (time.perf_counter() - t) * 1000)
-            out[f"{qname}_budget_s"] = OLAP_BUDGET_S
+            out[f"{qname}_budget_s"] = _budget_s
+            out[f"{qname}_budget_source"] = _budget_src
             out[f"{qname}_censored"] = len(lat) < OLAP_ITERATIONS
             if out[f"{qname}_censored"]:
                 _beat.mark(f"olap-{qname}-censored", iters=len(lat),
-                           budget_s=OLAP_BUDGET_S)
+                           budget_s=_budget_s)
             if not lat:
                 # THE COLD PASS ALONE EXCEEDED THE BUDGET. A censored cell with
                 # one measurement is a result (DECISIONS #82b); a cell with none
@@ -2887,7 +2895,7 @@ def main():
             else:
                 out[f"cold_warm_{qname}_na"] = (
                     f"no warm pass: the cold one alone exceeded the "
-                    f"{OLAP_BUDGET_S:.0f}s budget (DECISIONS #82b)")
+                    f"{_budget_s:.0f}s budget (DECISIONS #82b, #106)")
             # THE ANSWER (DECISIONS #88), from the first touch's rows, outside
             # every timed section.
             bench_common.record_result(out, qname, rows0, **OLAP_DIGEST[qname])

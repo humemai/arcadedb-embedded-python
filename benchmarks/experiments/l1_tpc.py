@@ -33,6 +33,7 @@ import statistics
 import time
 import surreal_common
 import arango_common
+import budget_lookup
 import bench_common
 
 
@@ -1279,14 +1280,16 @@ def main():
         for which in OLAP_QUERIES:
             times = []
             ref = None
-            _beat.mark(f"query-{which}-start", iters=OLAP_ITER, budget_s=OLAP_BUDGET_S)
+            _budget_s, _budget_src = budget_lookup.budget_for(
+                "l1tpc", args.scale, which, OLAP_BUDGET_S, "BENCH_DOCS_OLAP_BUDGET_S")
+            _beat.mark(f"query-{which}-start", iters=OLAP_ITER, budget_s=_budget_s)
             # THE BUDGET STARTS BEFORE THE COLD PASS (#82b, #100): the first
             # iteration IS the cold pass and always runs, so a censored query
             # still carries a measurement and its answer digest.
             _budget_t0 = time.perf_counter()
             _ran = 0
             for _ in range(OLAP_ITER):
-                if _ran and time.perf_counter() - _budget_t0 > OLAP_BUDGET_S:
+                if _ran and time.perf_counter() - _budget_t0 > _budget_s:
                     break
                 t = time.perf_counter()
                 r = b.olap(which)
@@ -1297,12 +1300,13 @@ def main():
                 ref = r
             # Censored is counted on iterations RUN, not samples KEPT, so a
             # sample #91 dropped cannot read as a budget the engine did not hit.
-            out[f"{which}_budget_s"] = OLAP_BUDGET_S
+            out[f"{which}_budget_s"] = _budget_s
+            out[f"{which}_budget_source"] = _budget_src
             out[f"{which}_iters"] = len(times)
             out[f"{which}_elapsed_s"] = round(time.perf_counter() - _budget_t0, 2)
             out[f"{which}_censored"] = _ran < OLAP_ITER
             if out[f"{which}_censored"]:
-                _beat.mark(f"query-{which}-censored", iters=_ran, budget_s=OLAP_BUDGET_S,
+                _beat.mark(f"query-{which}-censored", iters=_ran, budget_s=_budget_s,
                            elapsed_s=out[f"{which}_elapsed_s"])
             out[f"{which}_ms"] = round(statistics.median(times), 2)
             _s = sorted(times)

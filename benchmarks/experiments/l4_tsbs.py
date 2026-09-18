@@ -26,6 +26,7 @@ import json
 import os
 import statistics
 import time
+import budget_lookup
 import bench_common
 import surreal_common
 import arango_common
@@ -1276,7 +1277,9 @@ def main():
     for qn in QUERIES:
         times = []
         ref = None
-        _beat.mark(f"query-{qn}-start", iters=QITER, budget_s=QUERY_BUDGET_S)
+        _budget_s, _budget_src = budget_lookup.budget_for(
+            "l4", args.scale, qn, QUERY_BUDGET_S, "BENCH_TS_QUERY_BUDGET_S")
+        _beat.mark(f"query-{qn}-start", iters=QITER, budget_s=_budget_s)
         # THE BUDGET STARTS BEFORE THE COLD PASS (the graph lane's rule, #82b):
         # the first iteration IS the cold pass and always runs, so a censored
         # query still carries a measurement and a digest; every later
@@ -1284,7 +1287,7 @@ def main():
         _budget_t0 = time.perf_counter()
         _ran = 0
         for _ in range(QITER):
-            if _ran and time.perf_counter() - _budget_t0 > QUERY_BUDGET_S:
+            if _ran and time.perf_counter() - _budget_t0 > _budget_s:
                 break
             t = time.perf_counter()
             ref = getattr(b, qn)()
@@ -1295,12 +1298,13 @@ def main():
         # Censored means the loop stopped short of QITER, counted on the
         # iterations RUN rather than the samples KEPT, so a sample #91 dropped
         # after a reconnect cannot read as a budget the engine did not hit.
-        out[f"{qn}_budget_s"] = QUERY_BUDGET_S
+        out[f"{qn}_budget_s"] = _budget_s
+        out[f"{qn}_budget_source"] = _budget_src
         out[f"{qn}_iters"] = len(times)
         out[f"{qn}_elapsed_s"] = round(time.perf_counter() - _budget_t0, 2)
         out[f"{qn}_censored"] = _ran < QITER
         if out[f"{qn}_censored"]:
-            _beat.mark(f"query-{qn}-censored", iters=_ran, budget_s=QUERY_BUDGET_S,
+            _beat.mark(f"query-{qn}-censored", iters=_ran, budget_s=_budget_s,
                        elapsed_s=out[f"{qn}_elapsed_s"])
         # Four decimals, not two: SQLite's index-backed newest reading takes
         # about 4 us and two decimals printed it as 0.00 ms (2026-09-12).
