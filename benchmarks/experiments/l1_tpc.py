@@ -12,7 +12,10 @@ as TPC-C-inspired, not official TPC-C): per transaction, read a part row,
 insert an order document, bump the part's stock counter — one ACID txn.
 
 Data: DuckDB dbgen parquet staged under BENCH_DATA/tpch (sf1_lineitem.parquet,
-sf1_part.parquet). Deterministic; identical rows for every backend.
+sf1_part.parquet). Deterministic; identical rows for every backend. The
+line-item table is STREAMED from the parquet one batch at a time into each
+engine's own batch-insert path (LineItems below), so the tpch10 tier's 60M
+rows never sit in the client's memory whole; SF1 goes through the same path.
 """
 import argparse
 import json
@@ -56,19 +59,85 @@ Q6_ARCADE = ("SELECT sum(l_extendedprice * l_discount) AS revenue FROM LineItem 
 
 LI_COLS = ["l_orderkey", "l_partkey", "l_quantity", "l_extendedprice",
            "l_discount", "l_returnflag", "l_linestatus", "l_shipdate"]
+# Rows per streamed batch. DuckDB's COPY writes 122,880-row row groups (both
+# the SF1 and the SF10 files, DuckDB 1.5.4), so this reads one row group per
+# batch; a batch is one pandas frame of eight columns, about 15 MB, and it is
+# the only part of the fact table the client holds at a time.
+LI_BATCH_ROWS = 122_880
 
 
-def load_frames():
-    import pyarrow.parquet as pq
-    li = pq.read_table(os.path.join(DATA, f"sf{SF}_lineitem.parquet"),
-                       columns=LI_COLS).to_pandas()
+def _prepare(li):
+    """The frame every engine is fed: the same column set and the same
+    coercions the whole-table load applied before the stream existed."""
     li["l_shipdate"] = li["l_shipdate"].astype(str)
     for col in ("l_quantity", "l_extendedprice", "l_discount"):
         li[col] = li[col].astype("float64")  # parquet DECIMAL -> uniform DOUBLE
+    return li
+
+
+class LineItems:
+    """The line-item table, streamed from the parquet in batches.
+
+    WHY. load_frames() read sf{SF}_lineitem.parquet into ONE pandas frame and
+    handed it to every engine. At SF1 that is 6.0M rows and about 1.5 GB of
+    Python objects; at SF10 (DECISIONS #103b: document analytics moves to
+    TPC-H SF10) it is 60M rows and would not fit the client's cap, which is
+    why campaign_env.sh said the tpch10 tier needed a loader that did not
+    exist (task #143). This one reads the parquet with
+    pyarrow.parquet.ParquetFile.iter_batches, LI_BATCH_ROWS rows at a time,
+    prepares each batch exactly as the whole frame was prepared, and feeds
+    each engine's EXISTING batch-insert path from it. SF1 takes the same path
+    with the same batch size, so the two tiers differ only in row count.
+
+    The per-engine batch sizes (SQLite's 50,000-row executemany, MongoDB's
+    50,000-document insert_many, ArcadeDB's 10,000-row insert_many, the
+    server's 2,000-statement sqlscript, ...) are rolling buffers over rows(),
+    so they are unchanged by where a parquet batch boundary falls; DuckDB and
+    PostgreSQL take whole frames and a single COPY respectively, as before.
+    """
+
+    def __init__(self, path):
+        import pyarrow.parquet as pq
+        self.path = path
+        self._pf = pq.ParquetFile(path)
+        self.n_rows = self._pf.metadata.num_rows          # the file's own count
+        self.n_row_groups = self._pf.metadata.num_row_groups
+        self.n_streamed = 0                               # what build() consumed
+        self.n_batches = 0
+
+    def __len__(self):
+        return self.n_rows
+
+    def frames(self):
+        """Yield prepared pandas frames of LI_COLS, LI_BATCH_ROWS rows each."""
+        for b in self._pf.iter_batches(batch_size=LI_BATCH_ROWS, columns=LI_COLS):
+            df = _prepare(b.to_pandas())
+            self.n_streamed += len(df)
+            self.n_batches += 1
+            yield df
+
+    def rows(self):
+        """Yield plain tuples in LI_COLS order, the shape executemany takes."""
+        for df in self.frames():
+            yield from df[LI_COLS].itertuples(index=False, name=None)
+
+    def records(self):
+        """Yield namedtuples (t.l_orderkey, ...), the shape the ArcadeDB arms take."""
+        for df in self.frames():
+            yield from df.itertuples(index=False)
+
+
+def load_lineitems():
+    return LineItems(os.path.join(DATA, f"sf{SF}_lineitem.parquet"))
+
+
+def load_part():
+    """The part table stays a frame: 200k rows at SF1, 2M at SF10, two columns."""
+    import pyarrow.parquet as pq
     part = pq.read_table(os.path.join(DATA, f"sf{SF}_part.parquet"),
                          columns=["p_partkey", "p_retailprice"]).to_pandas()
     part["p_retailprice"] = part["p_retailprice"].astype("float64")
-    return li, part
+    return part
 
 
 class DuckTPC:
@@ -80,8 +149,18 @@ class DuckTPC:
         self.version = duckdb.__version__
 
     def build(self, li, part):
-        self.cx.register("li_src", li)
-        self.cx.execute("CREATE TABLE lineitem AS SELECT * FROM li_src")
+        # The first streamed frame creates the table (CTAS, the shape the
+        # whole-frame load used); every later frame is INSERT INTO ... SELECT
+        # from the registered frame, DuckDB's columnar bulk path.
+        first = True
+        for df in li.frames():
+            self.cx.register("li_src", df)
+            if first:
+                self.cx.execute("CREATE TABLE lineitem AS SELECT * FROM li_src")
+                first = False
+            else:
+                self.cx.execute("INSERT INTO lineitem SELECT * FROM li_src")
+            self.cx.unregister("li_src")
         self.cx.register("p_src", part)
         self.cx.execute("CREATE TABLE part AS SELECT *, 100 AS stock FROM p_src")
         self.cx.execute("CREATE TABLE orders_new (okey BIGINT, pkey BIGINT, qty INT)")
@@ -128,9 +207,8 @@ class SQLiteTPC:
                         "l_returnflag TEXT, l_linestatus TEXT, l_shipdate TEXT)")
         self.cx.execute("CREATE TABLE part (p_partkey INTEGER PRIMARY KEY, p_retailprice REAL, stock INTEGER)")
         self.cx.execute("CREATE TABLE orders_new (okey INTEGER, pkey INTEGER, qty INTEGER)")
-        rows = li[LI_COLS].itertuples(index=False, name=None)
         buf = []
-        for r in rows:
+        for r in li.rows():
             buf.append(r)
             if len(buf) >= 50_000:
                 self.cx.executemany("INSERT INTO lineitem VALUES (?,?,?,?,?,?,?,?)", buf)
@@ -206,7 +284,7 @@ class MongoTPC:
         lc, pc, oc = self.db["lineitem"], self.db["part"], self.db["orders_new"]
         lc.drop(); pc.drop(); oc.drop()
         buf = []
-        for t in li[LI_COLS].itertuples(index=False, name=None):
+        for t in li.rows():
             buf.append(dict(zip(LI_COLS, t)))
             if len(buf) >= 50_000:
                 lc.insert_many(buf, ordered=False); buf = []
@@ -269,7 +347,7 @@ class SurrealTPC:
         # defined first, each 5,000-row batch maintains it in its own record.
         self.db.query("DEFINE INDEX li_shipdate ON lineitem FIELDS l_shipdate")
         buf = []
-        for t in li[LI_COLS].itertuples(index=False, name=None):
+        for t in li.rows():
             buf.append(dict(zip(LI_COLS, t)))
             if len(buf) >= BATCH:
                 self.db.insert("lineitem", buf); buf = []
@@ -347,8 +425,8 @@ class PostgresTPC:
                     "l_discount DOUBLE PRECISION, l_returnflag TEXT, "
                     "l_linestatus TEXT, l_shipdate DATE)")
         with cur.copy("COPY lineitem FROM STDIN") as cp:
-            for t in li.itertuples(index=False):
-                cp.write_row(tuple(t))
+            for t in li.rows():
+                cp.write_row(t)
         cur.execute("CREATE TABLE part (p_partkey BIGINT PRIMARY KEY, "
                     "p_retailprice DOUBLE PRECISION, stock INT DEFAULT 100)")
         with cur.copy("COPY part (p_partkey, p_retailprice) FROM STDIN") as cp:
@@ -432,17 +510,19 @@ class ArcadeTPC:
         # json.dumps the batch and falls back to the slow per-row path on a
         # TypeError, so an unconverted np.int64 would silently restore exactly
         # the behaviour this replaces.
-        for start in range(0, len(li), BATCH):
-            chunk = li.iloc[start:start + BATCH]
-            db.insert_many("LineItem", [
-                {"l_orderkey": int(t.l_orderkey), "l_partkey": int(t.l_partkey),
-                 "l_quantity": float(t.l_quantity),
-                 "l_extendedprice": float(t.l_extendedprice),
-                 "l_discount": float(t.l_discount),
-                 "l_returnflag": str(t.l_returnflag),
-                 "l_linestatus": str(t.l_linestatus),
-                 "l_shipdate": str(t.l_shipdate)}
-                for t in chunk.itertuples(index=False)], commit_every=BATCH)
+        buf = []
+        for t in li.records():
+            buf.append({"l_orderkey": int(t.l_orderkey), "l_partkey": int(t.l_partkey),
+                        "l_quantity": float(t.l_quantity),
+                        "l_extendedprice": float(t.l_extendedprice),
+                        "l_discount": float(t.l_discount),
+                        "l_returnflag": str(t.l_returnflag),
+                        "l_linestatus": str(t.l_linestatus),
+                        "l_shipdate": str(t.l_shipdate)})
+            if len(buf) >= BATCH:
+                db.insert_many("LineItem", buf, commit_every=BATCH); buf = []
+        if buf:
+            db.insert_many("LineItem", buf, commit_every=BATCH)
         for start in range(0, len(part), BATCH):
             chunk = part.iloc[start:start + BATCH]
             db.insert_many("Part", [
@@ -513,7 +593,7 @@ class ArcadeServerTPC(ArcadeTPC):
                     "CREATE DOCUMENT TYPE OrderNew"):
             self._cmd(ddl)
         buf = []
-        for t in li.itertuples(index=False):
+        for t in li.records():
             buf.append("INSERT INTO LineItem SET l_orderkey=%d, l_partkey=%d, "
                        "l_quantity=%f, l_extendedprice=%f, l_discount=%f, "
                        "l_returnflag='%s', l_linestatus='%s', l_shipdate='%s'"
@@ -577,7 +657,7 @@ class ArangoTPC:
         pc = self.db.create_collection("part")
         self.db.create_collection("orders_new")
         buf = []
-        for t in li[LI_COLS].itertuples(index=False, name=None):
+        for t in li.rows():
             buf.append(dict(zip(LI_COLS, t)))
             if len(buf) >= 50_000:
                 lc.import_bulk(buf); buf = []
@@ -627,8 +707,9 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    li, part = load_frames()
-    out = {"n_lineitem": len(li), "n_part": len(part), "tpch_sf": SF}
+    li, part = load_lineitems(), load_part()
+    out = {"n_lineitem": len(li), "n_part": len(part), "tpch_sf": SF,
+           "li_batch_rows": LI_BATCH_ROWS, "li_row_groups": li.n_row_groups}
 
     b = BACKENDS[args.backend]()
     b.connect()
@@ -636,6 +717,16 @@ def main():
     t0 = time.perf_counter()
     b.build(li, part)
     out["build_s"] = round(time.perf_counter() - t0, 2)
+    # COUNTED, not asserted: the stream must have delivered every row the
+    # file holds, or the row would publish a per-second figure over a partial
+    # load under the tier's label (the l2 lane's shortfall rule).
+    out["n_lineitem_streamed"] = li.n_streamed
+    out["li_batches"] = li.n_batches
+    if li.n_streamed != len(li):
+        raise SystemExit(
+            f"streamed {li.n_streamed:,} line items against {len(li):,} in "
+            f"{li.path}: the load is short, so every per-second figure in this "
+            f"row is wrong.")
 
     if args.workload == "olap":
         for which in ("q1", "q6"):

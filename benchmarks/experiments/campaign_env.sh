@@ -34,8 +34,10 @@
 # names would compare a half-degree graph against a full-degree one.
 : "${BENCH_DENSE_M:=32}"
 
-# TPC-H scale factor. tpch1 is SF1; the tpch10 tier needs BENCH_TPC_SF=10 and a
-# streaming loader that does not yet exist (see task #143).
+# TPC-H scale factor. tpch1 is SF1; the tpch10 tier needs BENCH_TPC_SF=10, which
+# the documents-SF10 queue script exports. l1_tpc.py streams the line-item
+# parquet in row-group batches since 2026-09-18 (the loader task #143 asked
+# for), so the client holds one batch at a time at either scale.
 : "${BENCH_TPC_SF:=1}"
 
 export BENCH_HOST BENCH_DATA BENCH_CPUSET \
