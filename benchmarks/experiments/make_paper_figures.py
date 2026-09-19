@@ -25,7 +25,17 @@ RESULTS = os.path.join(HERE, "results")
 # The paper source is deliberately not in this repository. Point
 # BENCH_PAPER_DIR at the directory holding paper.tex and its generated
 # tables/ and figures/ subdirectories.
-_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(HERE, "results", "generated"))   # see make_paper_tables
+# make_paper_tables.GENERATED_NAME, which is the definition and carries the
+# reasoning. A figure is drawn from the freeze this run selected, so October's
+# figures go beside October's tables; refresh_web_page copies the preview
+# route's images out of this directory, and writing them over September's
+# would leave the live page's PDFs describing rows they were not drawn from.
+# A skeleton draws no figure at all (see main), so its entry is the directory
+# it would have used and nothing is written there.
+_GENERATED_NAME = ("generated_skeleton" if os.environ.get("BENCH_SKELETON") == "1"
+                   else "generated_oct" if os.environ.get("BENCH_INSTRUMENT") == "2026-10"
+                   else "generated")
+_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(HERE, "results", _GENERATED_NAME))   # see make_paper_tables
 os.makedirs(_PAPER_DIR, exist_ok=True)
 FIGS = os.path.join(_PAPER_DIR, "figures")
 

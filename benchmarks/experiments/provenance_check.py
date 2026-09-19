@@ -262,9 +262,12 @@ def caption_versions():
     a provenance claim, and until something compares it to the data it is
     exactly as trustworthy as a driver that hardcodes its own version.
     """
+    # _MPT.GENERATED, not a literal "generated": the generator writes each
+    # campaign's artifacts into its own directory (make_paper_tables
+    # .GENERATED_NAME), and this module already imports it, so the name is
+    # taken from the definition rather than repeated here.
     paper = os.path.join(
-        os.environ.get("BENCH_PAPER_DIR", os.path.join(HERE, "results", "generated")),
-        "paper.tex")
+        os.environ.get("BENCH_PAPER_DIR", _MPT.GENERATED), "paper.tex")
     paper = os.path.normpath(paper)
     try:
         body = open(paper).read()

@@ -87,7 +87,15 @@ def min_of(rows, field, **kw):
 # here, so make_paper_figures can import this module for its result-loading
 # helpers without the paper being present.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(_HERE, "results", "generated"))   # see make_paper_tables
+# make_paper_tables.GENERATED_NAME, which is the definition and carries the
+# reasoning. This module is how page_check reads a generated cell, so if these
+# three names disagree with the generator's the gate pins the page against the
+# OTHER campaign's tables and passes. page_check overrides TABLES at call time
+# for its --preview and --skeleton flags, which arrive after this import.
+_GENERATED_NAME = ("generated_skeleton" if os.environ.get("BENCH_SKELETON") == "1"
+                   else "generated_oct" if os.environ.get("BENCH_INSTRUMENT") == "2026-10"
+                   else "generated")
+_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(_HERE, "results", _GENERATED_NAME))   # see make_paper_tables
 TABLES = os.path.join(_PAPER_DIR, "tables")
 PAPER = os.path.join(_PAPER_DIR, "paper.tex")
 

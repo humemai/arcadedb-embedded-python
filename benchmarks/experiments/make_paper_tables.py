@@ -88,16 +88,9 @@ def _commit_matches(row_commit):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, "results")
-# The paper source is deliberately not in this repository. Point
-# BENCH_PAPER_DIR at the directory holding paper.tex and its generated
-# tables/ and figures/ subdirectories.
-# 2026-09-11: the paper directory is gone (the ICDE draft was dropped; the
-# order is project page, then preprint, then a conference paper). The
-# generated tables live in the repo under results/generated, which is what
-# page_check pins against. BENCH_PAPER_DIR still overrides for a future paper.
-_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", os.path.join(HERE, "results", "generated"))
-os.makedirs(_PAPER_DIR, exist_ok=True)
-OUT = os.path.join(_PAPER_DIR, "tables")
+# _PAPER_DIR, GENERATED and OUT are resolved further down, under FROZEN_NAME:
+# which directory this run writes into depends on BENCH_SKELETON and
+# BENCH_INSTRUMENT, and both are read below. See GENERATED_NAME.
 
 # Every published cell is N=5. A row outside 1..5 is a probe, not a repetition;
 # see the rep filter in load_canonical for the 34 rows that made this explicit.
@@ -181,6 +174,46 @@ FROZEN_NAME = ("runs_skeleton_laptop.csv" if SKELETON
                else "runs_paper_oct.csv" if OCTOBER
                else "runs_paper.csv")
 
+# THE GENERATED ARTIFACTS ARE SEPARATED THE SAME WAY, and for the same reason
+# the freeze and the payload are. Until 2026-09-19 they were not: FROZEN_NAME
+# above picked October's CSV while the .tex tables, GATE_STATUS.txt and
+# withheld_recall.json were written unconditionally into results/generated,
+# which is SEPTEMBER'S PUBLISHED SET and what page_check pins the live page
+# against. An October freeze over a log holding October rows rewrote
+# GATE_STATUS.txt, t2_tabular.tex, t3_graph.tex and withheld_recall.json in
+# place; the gate that would have noticed reads the same four files, so it
+# would have been comparing October's tables against October's tables and
+# passing. BENCH_SKELETON=1 had the same hole, narrower only because a
+# skeleton returns before the .tex tables are rendered: it still overwrote
+# GATE_STATUS.txt and withheld_recall.json.
+#
+# A campaign's artifacts are not re-derivable once overwritten -- the rows
+# they came from keep moving -- so the directory is selected here, once, and
+# every consumer resolves the same three names: claims_check (which is what
+# page_check reads cells through), export_web's withheld-cell notes,
+# make_paper_figures, provenance_check, refresh_web_page and land_stage's
+# commit list. Skeleton is tested first, as everywhere else: it is a laptop
+# placeholder and keeps its own names whatever campaign is selected.
+#
+# Only results/generated is tracked. generated_oct is allowlisted in
+# .gitignore (an unnamed path under results/ is ignored, and `git add` on it
+# commits nothing silently); generated_skeleton is deliberately NOT, because
+# a laptop placeholder run has nothing to put under version control.
+GENERATED_NAME = ("generated_skeleton" if SKELETON
+                  else "generated_oct" if OCTOBER
+                  else "generated")
+GENERATED = os.path.join(RESULTS, GENERATED_NAME)
+# The paper source is deliberately not in this repository. Point
+# BENCH_PAPER_DIR at the directory holding paper.tex and its generated
+# tables/ and figures/ subdirectories.
+# 2026-09-11: the paper directory is gone (the ICDE draft was dropped; the
+# order is project page, then preprint, then a conference paper). The
+# generated tables live in the repo under results/generated, which is what
+# page_check pins against. BENCH_PAPER_DIR still overrides for a future paper.
+_PAPER_DIR = os.environ.get("BENCH_PAPER_DIR", GENERATED)
+os.makedirs(_PAPER_DIR, exist_ok=True)
+OUT = os.path.join(_PAPER_DIR, "tables")
+
 NAMES = {
     "arcadedb_embedded": "ArcadeDB (emb)", "arcadedb_server": "ArcadeDB (srv)",
     "duckdb": "DuckDB", "postgres": "PostgreSQL",
@@ -238,8 +271,14 @@ WITHHELD_RECALL = []
 
 
 def _write_withheld_recall():
-    """Sidecar the exporter reads to declare the withheld cells under the table."""
-    out = os.path.join(RESULTS, "generated", "withheld_recall.json")
+    """Sidecar the exporter reads to declare the withheld cells under the table.
+
+    GENERATED, not _PAPER_DIR: this file is read by export_web out of the
+    repository, so BENCH_PAPER_DIR pointing at a paper source must not move
+    it. It IS per-campaign, because the cells it declares withheld are the
+    ones this freeze selected (see GENERATED_NAME).
+    """
+    out = os.path.join(GENERATED, "withheld_recall.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w") as fh:
         json.dump(sorted(WITHHELD_RECALL, key=str), fh, indent=1)
@@ -346,8 +385,9 @@ def load_canonical(apply_corpus=True):
         # engines answering at 0.95 would compare a working index against a
         # broken one, and the fairness gate refused the publish. The row is
         # withheld here, before the dedupe so it cannot shadow, and recorded
-        # in results/generated/withheld_recall.json for the exporter to say so
-        # under the table. Cause is investigated on the bench host, not guessed.
+        # in this campaign's withheld_recall.json (GENERATED) for the exporter
+        # to say so under the table. Cause is investigated on the bench host,
+        # not guessed.
         if r["lane"] in ("l3d", "l3s"):
             try:
                 _rec = float(r.get("recall_at_10"))

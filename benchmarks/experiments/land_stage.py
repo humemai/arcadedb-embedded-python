@@ -188,11 +188,30 @@ def main():
     # committing the live pair here would add nothing and the October freeze
     # would stay untracked -- the page serving numbers whose frozen rows are
     # in no commit.
-    _frozen, _payload = (("runs_paper_oct.csv", "web_benchmarks_next.json") if args.preview
-                         else ("runs_paper.csv", "web_benchmarks.json"))
+    #
+    # THE GENERATED DIRECTORY IS THE THIRD ARTIFACT, and it was the one still
+    # pointing at September. It used to stage results/generated whichever
+    # route this landing was for, which did two wrong things at once on a
+    # preview landing: October's tables (results/generated_oct, since
+    # make_paper_tables.GENERATED_NAME) went into no commit, and anything that
+    # had touched September's published set got committed as part of an
+    # October landing without being read. Staging only what this publish wrote
+    # means a September artifact showing up dirty during an October landing
+    # stays dirty and visible, instead of being swept into the commit.
+    #
+    # results/generated_oct is allowlisted in .gitignore. It has to be: under
+    # the allowlist an unnamed path is ignored and `git add` on it commits
+    # NOTHING, silently, which is exactly where a landing would stop -- the
+    # site pushed, the tables in no commit.
+    _frozen, _payload, _generated = (
+        ("runs_paper_oct.csv", "web_benchmarks_next.json", "generated_oct") if args.preview
+        else ("runs_paper.csv", "web_benchmarks.json", "generated"))
     tracked = [f"benchmarks/experiments/results/{_frozen}",
                f"benchmarks/experiments/results/{_payload}",
-               "benchmarks/experiments/results/generated",
+               f"benchmarks/experiments/results/{_generated}",
+               # the preview route's inventory, which stays under
+               # results/generated beside PAGE-SPEC's own (refresh_web_page
+               # .PREVIEW_INVENTORY says why)
                "benchmarks/experiments/results/generated/preview-tables.md" if args.preview
                else "benchmarks/experiments/PAGE-SPEC.md"]
     # THE COMMIT MUST BE VERIFIED, NOT ASSUMED. 2026-09-18 (BUGS F56): the

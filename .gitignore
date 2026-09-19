@@ -651,3 +651,20 @@ benchmarks/experiments/results/**
 benchmarks/experiments/results/generated/figures/*.pdf
 benchmarks/experiments/results/generated/results_manifest.json
 benchmarks/experiments/results/generated/benchmark-results-*.tar.gz
+# The October campaign's generated artifacts (make_paper_tables.GENERATED_NAME).
+# One directory per campaign, for the reason runs_paper_oct.csv is its own
+# file: results/generated is SEPTEMBER'S PUBLISHED SET, page_check pins the
+# live page against it, and an October freeze used to rewrite it in place.
+# Tracked, and named here because under this allowlist an unnamed path is
+# ignored and `git add` on it commits nothing silently -- which is where a
+# preview landing would stop, the site pushed and the tables in no commit.
+!benchmarks/experiments/results/generated_oct/
+!benchmarks/experiments/results/generated_oct/**
+benchmarks/experiments/results/generated_oct/figures/*.pdf
+benchmarks/experiments/results/generated_oct/results_manifest.json
+benchmarks/experiments/results/generated_oct/benchmark-results-*.tar.gz
+# generated_skeleton is deliberately absent: BENCH_SKELETON=1 is a laptop
+# placeholder run and has nothing to put under version control. It is ignored
+# by the rule above, which is the whole point of it being its own directory --
+# until 2026-09-19 a skeleton run left September's GATE_STATUS.txt and
+# withheld_recall.json dirty, and a dirty tree on the bench host is an outage.

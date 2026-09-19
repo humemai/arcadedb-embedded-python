@@ -73,6 +73,23 @@ def _frozen_name():
     return "runs_paper_oct.csv" if OCTOBER else "runs_paper.csv"
 
 
+def _generated_dir():
+    """make_paper_tables.GENERATED, read at CALL time, for the same reason.
+
+    THE GENERATED TABLES ARE THIS GATE'S OTHER HALF. The frozen CSV above
+    feeds the condition pins; the .tex tables feed the DEEP-10M
+    cross-generator section and every prose pin, and they are read through
+    claims_check.TABLES. That constant is resolved when claims_check is
+    imported, from the environment -- so a hand-run `page_check.py --preview`,
+    where --preview is a FLAG and BENCH_INSTRUMENT is not in the environment,
+    checked October's page against September's tables. Every number would have
+    disagreed, or worse, agreed for the rows the two campaigns share.
+    main() applies this to claims_check once, after the flags are known."""
+    if SKELETON:
+        return HERE / "results" / "generated_skeleton"
+    return HERE / "results" / ("generated_oct" if OCTOBER else "generated")
+
+
 # The rows the atomicity counts are read from. A skeleton publishes from its
 # own results file, so those counts are checked for real rather than waived.
 RUNS_JSONL = HERE / "results" / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
@@ -657,7 +674,7 @@ def main() -> int:
                          "prose sentences must still be present, their values are not compared, "
                          "and the DEEP-10M cross-generator section does not apply")
     args = ap.parse_args()
-    global PAGE_TS, LIVE_JSON, SKELETON
+    global PAGE_TS, LIVE_JSON, SKELETON, OCTOBER
     SKELETON = SKELETON or args.skeleton
     if SKELETON:
         print("target: SKELETON (DECISIONS #86); prose values are placeholders "
@@ -665,6 +682,31 @@ def main() -> int:
     if args.preview:
         PAGE_TS, LIVE_JSON = PREVIEW_TS, PREVIEW_JSON
         print("target: PREVIEW (arcadedb-next.ts, arcadedb-benchmarks-next.json)")
+        # THE PREVIEW ROUTE IS THE OCTOBER CAMPAIGN (DECISIONS #83, #84), the
+        # same equation refresh_web_page makes when it sets BENCH_INSTRUMENT
+        # for the publish. Stated here as well because --preview is a flag and
+        # a gate run by hand carries no environment: without this the frozen
+        # CSV and the generated tables below would both be September's while
+        # the payload and the prose are October's.
+        OCTOBER = True
+        # ...and the payload with it, unless one was named. DEFAULT_JSON is a
+        # module constant resolved from the environment at import, so the same
+        # hand-run would otherwise have read September's payload against
+        # October's prose, rows and tables. A --json the caller typed is left
+        # alone; refresh_web_page sets the environment, so there this is a
+        # no-op and the default already names the file the exporter wrote.
+        if not SKELETON and args.json == str(DEFAULT_JSON):
+            args.json = str(HERE / "results" / "web_benchmarks_next.json")
+
+    # Point claims_check at THIS campaign's generated tables, once, now that
+    # the flags are resolved. page_check reads every generated cell through
+    # claims_check.cell(), whose TABLES was fixed at import from the
+    # environment alone. Setting the attribute rather than re-deriving the
+    # path at each call site keeps one definition; the two functions that
+    # import claims_check get the same module object.
+    import claims_check as _C
+    _C.TABLES = str(_generated_dir() / "tables")
+    print(f"generated tables: {_C.TABLES}")
 
     path = Path(args.json)
     if not path.exists():

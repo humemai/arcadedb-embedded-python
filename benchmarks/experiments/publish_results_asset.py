@@ -27,6 +27,15 @@ HERE = Path(__file__).resolve().parent
 RESULTS = HERE / "results"
 REPO = HERE.parents[1]
 
+# SEPTEMBER ONLY, and deliberately so: this bundles what the LIVE page serves,
+# so it names runs_paper.csv, web_benchmarks.json and results/generated
+# literally and reads no BENCH_INSTRUMENT. It is the one place under results/
+# that is not campaign-switched (make_paper_tables.GENERATED_NAME), because a
+# release asset for a campaign that has not been promoted would describe a
+# page nobody can open. Its own two outputs under generated/ -- the manifest
+# and the tarball -- are gitignored. When October is promoted, the live names
+# become October's and this script follows them there, not before.
+
 
 def _sha256(p: Path) -> str:
     h = hashlib.sha256()

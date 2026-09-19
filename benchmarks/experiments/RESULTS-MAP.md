@@ -42,6 +42,7 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `runs_paper.csv` | `make_paper_tables.py` (the freeze) | every gate, the exporter, the release asset |
 | `web_benchmarks.json` | `export_web.py` | `page_check`, `version_consistency_check`, `refresh_web_page` |
 | `generated/tables/*`, `generated/*.md`, `withheld_recall.json` | `make_paper_tables.py` | `page_check`, the exporter's withheld-cell notes |
+| `generated_oct/**` | `make_paper_tables.py` under `BENCH_INSTRUMENT=2026-10` | the same readers, under the same switch |
 | `generated/memo_bottlenecks.html` | `memo_bottlenecks.py` | the maintainers' memo, not the page |
 | `sparse_cliff.jsonl` | `sparse_cliff_probe.py`, one shot | `make_paper_figures.py`, figure f3 |
 | `e3_q17/*.json` | `e3_recovery.py`, one shot per trial | `claims_check.py`; the recovery table is planned, not built |
@@ -105,4 +106,4 @@ The engine is pinned to upstream's published snapshot `8d6af9475`, and the serve
 
 Every ArcadeDB row measured before that re-pin is superseded, embedded as well as served: the jars moved 84 commits. The campaign started by carrying clean COMPARATOR rows forward from the previous pin's file, each stamped `carried_forward_from` and `carried_forward_reason`; no ArcadeDB row was carried.
 
-The live page stays on this pin for the whole October campaign (DECISIONS #83). October rows accumulate in their own `runs_*_<pin>.jsonl` under the new pin, are frozen and exported separately, and reach the site only through the preview target, whose payload is `arcadedb-benchmarks-next.json` and whose table inventory is `results/generated/preview-tables.md`. A row of one instrument is never merged into the freeze of the other: `instrument` on the row says which it is, and the freeze and the exporter refuse a lane that holds both.
+The live page stays on this pin for the whole October campaign (DECISIONS #83). October rows accumulate in their own `runs_*_<pin>.jsonl` under the new pin, are frozen and exported separately, and reach the site only through the preview target, whose payload is `arcadedb-benchmarks-next.json` and whose table inventory is `results/generated/preview-tables.md`. Its tables, figures, `GATE_STATUS.txt` and `withheld_recall.json` are written to `results/generated_oct/`, not to `results/generated/`, which is September's published set and what `page_check` pins the live page against; `BENCH_SKELETON=1` writes to `results/generated_skeleton/`, which is untracked. A row of one instrument is never merged into the freeze of the other: `instrument` on the row says which it is, and the freeze and the exporter refuse a lane that holds both.

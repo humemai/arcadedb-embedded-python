@@ -106,6 +106,17 @@ OUT_NAME = ("web_benchmarks_skeleton.json" if _SKELETON_ENV
             else "web_benchmarks_next.json" if _OCTOBER_ENV
             else "web_benchmarks.json")
 OUT = HERE / "results" / OUT_NAME
+# AND THE GENERATED ARTIFACTS, for the fourth time for the same reason
+# (make_paper_tables.GENERATED_NAME, which is the definition; this is the
+# third name that has to move with the other two). The only one this module
+# reads is the withheld-recall sidecar, and reading September's while
+# exporting October's payload would declare September's withheld cells under
+# October's tables -- a sentence under a table, sourced from a campaign the
+# table has no rows from.
+GENERATED_NAME = ("generated_skeleton" if _SKELETON_ENV
+                  else "generated_oct" if _OCTOBER_ENV
+                  else "generated")
+GENERATED = HERE / "results" / GENERATED_NAME
 
 # Version names live as trailing comments beside each pin in runner.py; the
 # digest is authoritative and the name is a convenience, so a missing name is
@@ -4200,7 +4211,7 @@ def _withheld_recall_notes(table_id):
     absence is said under the table rather than left as a missing row."""
     if table_id not in ("l3d", "l3s"):
         return []
-    path = HERE / "results" / "generated" / "withheld_recall.json"
+    path = GENERATED / "withheld_recall.json"
     try:
         items = json.loads(path.read_text())
     except (OSError, ValueError):
