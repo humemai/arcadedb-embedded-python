@@ -2,7 +2,7 @@
 
 Every number on the page compares systems. A comparison is only worth printing if both sides were given the same thing. This file says what "the same thing" means, what is allowed to differ, and what is checked mechanically rather than remembered.
 
-`fairness_check.py` is one of the four gates `refresh_web_page.py` runs. It fails loudly rather than warning quietly.
+`fairness_check.py` is one of the FIVE gates `refresh_web_page.py` runs (`equivalence_check`, `provenance_check`, `fairness_check`, `page_check`, `version_consistency_check`). It fails loudly rather than warning quietly.
 
 The failure mode this contract exists to close is **a correct number measured under conditions the row beside it did not get**. `claims_check` and `provenance_check` cannot see it: both verify a number against its own artifact, and such a number is correct about its own run.
 
