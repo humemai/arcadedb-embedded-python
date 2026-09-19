@@ -23,6 +23,7 @@ SAFETY: refuses to write if the merge would reduce the canonical row count, and
 always writes a timestamped backup first.
 """
 import argparse
+import glob
 import inspect
 import json
 import os
@@ -211,6 +212,23 @@ def main():
                 default="unknown")[:19].replace(":", "").replace("-", "")
     backup = f"{CANON}.before-merge-{stamp}"
     shutil.copy2(CANON, backup)
+    # One rollback step, not a museum. These are 6-7 MB each and every one is a
+    # prefix of the next, so eleven of them had accumulated to 73 MB by
+    # 2026-09-19, all fully contained in the canonical file. Keep the newest,
+    # which is the only one that can undo the merge just made, and drop the
+    # rest (delete-superseded-artifacts: the script that makes an artifact
+    # removes what that artifact replaces).
+    # Prune by mtime and exclude the one just written: the stamp comes from the
+    # incoming rows' newest ts_utc, so merging an older campaign file produces a
+    # backup whose NAME sorts early, and a name-sorted prune would delete the
+    # only backup that can undo this merge.
+    _old = [f for f in glob.glob(f"{CANON}.before-merge-*")
+            if os.path.abspath(f) != os.path.abspath(backup)]
+    _old.sort(key=os.path.getmtime)
+    for _stale in _old:
+        os.remove(_stale)
+    if _old:
+        print(f"pruned {len(_old)} superseded backup(s)")
     with open(CANON, "a") as f:
         for r in incoming:
             f.write(json.dumps(r) + "\n")
