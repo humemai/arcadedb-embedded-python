@@ -28,14 +28,23 @@
     "duckdb_vss_dense": [
       "1.5.5"
     ],
+    "duckpgq_graph": [
+      "duckpgq:f386a6c on duckdb:1.5.4"
+    ],
     "elasticsearch_sparse": [
       "9.4.1"
+    ],
+    "falkordb_graph": [
+      "falkordb:4.20.6 (redis 8.6.3)"
     ],
     "ladybug_graph": [
       "ladybug:0.19.1"
     ],
     "lancedb_dense": [
       "0.37.1"
+    ],
+    "memgraph_graph": [
+      "memgraph:3.13.1"
     ],
     "milvus_dense": [
       "milvus:pkg/v2.6.13"
@@ -615,7 +624,10 @@
       "deep10m": "36g",
       "e2": "12g",
       "tpch1": "16g",
-      "tpch10": "32g"
+      "tpch10": "32g",
+      "sf1full": "32g",
+      "ts1000": "32g",
+      "e2_500k": "32g"
     },
     "jvm_heap_by_size": {
       "micro": "4g",
@@ -633,7 +645,10 @@
       "deep10m": "24g",
       "e2": "6g",
       "tpch1": "8g",
-      "tpch10": "16g"
+      "tpch10": "16g",
+      "sf1full": "16g",
+      "ts1000": "16g",
+      "e2_500k": "16g"
     }
   },
   "tables": [
@@ -4554,7 +4569,7 @@
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "Each repetition runs every read against a fresh set of start persons (SF1 (11k people): 500, SF10 (73k people): 200) and commits up to 1,000 writes; the p50 and p99 are over those.",
-        "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
+        "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ Arrow INSERT SELECT into the persons and knows tables under a property graph."
       ],
       "columns": [
         "point p50 ms",
@@ -4835,6 +4850,180 @@
           }
         },
         {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "duckpgq 1.5.4",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.249,
+              "min": 0.247,
+              "max": 0.253,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.302,
+              "min": 0.289,
+              "max": 0.316,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.929,
+              "min": 0.925,
+              "max": 0.94,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 1.214,
+              "min": 1.195,
+              "max": 1.253,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 2.238,
+              "min": 2.227,
+              "max": 2.28,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 3.719,
+              "min": 3.695,
+              "max": 3.77,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 10.502,
+              "min": 10.403,
+              "max": 10.508,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 16.682,
+              "min": 11.966,
+              "max": 19.681,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 202675.5319,
+              "min": 162833.3333,
+              "max": 221529.0698,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 0.94,
+              "min": 0.86,
+              "max": 1.17,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.1398,
+              "min": 0.1381,
+              "max": 0.1412,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0363,
+              "min": 0.0363,
+              "max": 0.0363,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "FalkorDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",
+          "version_name": "falkordb v4.20.6",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.125,
+              "min": 0.095,
+              "max": 0.136,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.292,
+              "min": 0.266,
+              "max": 0.333,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.213,
+              "min": 0.153,
+              "max": 0.231,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 0.468,
+              "min": 0.29,
+              "max": 0.546,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.376,
+              "min": 0.303,
+              "max": 0.529,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 1.016,
+              "min": 0.855,
+              "max": 1.119,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 0.18,
+              "min": 0.151,
+              "max": 0.206,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 0.415,
+              "min": 0.212,
+              "max": 0.48,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 40621.5352,
+              "min": 40535.1064,
+              "max": 40708.3333,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 4.69,
+              "min": 4.68,
+              "max": 4.7,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.1739,
+              "min": 0.1727,
+              "max": 0.1752,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "LadybugDB",
           "is_arcadedb": false,
           "precision": null,
@@ -4917,6 +5106,93 @@
               "median": 0.0055,
               "min": 0.0055,
               "max": 0.0056,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Memgraph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (11k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",
+          "version_name": "memgraph 3.13.1",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.145,
+              "min": 0.143,
+              "max": 0.147,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.274,
+              "min": 0.26,
+              "max": 0.322,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.149,
+              "min": 0.148,
+              "max": 0.153,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 0.267,
+              "min": 0.262,
+              "max": 0.282,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.205,
+              "min": 0.19,
+              "max": 0.21,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 0.76,
+              "min": 0.679,
+              "max": 0.888,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 0.15,
+              "min": 0.146,
+              "max": 0.158,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 0.25,
+              "min": 0.241,
+              "max": 0.372,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 73557.9151,
+              "min": 72439.1635,
+              "max": 74711.7647,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 2.59,
+              "min": 2.55,
+              "max": 2.63,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.4591,
+              "min": 0.4457,
+              "max": 0.5099,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0231,
+              "min": 0.0231,
+              "max": 0.0231,
               "n": 5
             }
           }
@@ -5444,6 +5720,180 @@
           }
         },
         {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "duckpgq 1.5.4",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.258,
+              "min": 0.25,
+              "max": 0.264,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.32,
+              "min": 0.304,
+              "max": 0.347,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.338,
+              "min": 1.329,
+              "max": 1.344,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 1.653,
+              "min": 1.63,
+              "max": 1.69,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 4.26,
+              "min": 4.202,
+              "max": 4.287,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 9.391,
+              "min": 8.773,
+              "max": 10.02,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 10.584,
+              "min": 9.961,
+              "max": 10.73,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 17.857,
+              "min": 11.944,
+              "max": 20.167,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 299128.5075,
+              "min": 277200.6916,
+              "max": 305047.3364,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 6.7,
+              "min": 6.57,
+              "max": 7.23,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.2733,
+              "min": 0.2579,
+              "max": 0.2739,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0942,
+              "min": 0.0942,
+              "max": 0.0947,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "FalkorDB",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",
+          "version_name": "falkordb v4.20.6",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.121,
+              "min": 0.112,
+              "max": 0.156,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.524,
+              "min": 0.302,
+              "max": 0.672,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.225,
+              "min": 0.214,
+              "max": 0.365,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 0.468,
+              "min": 0.355,
+              "max": 0.759,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.738,
+              "min": 0.536,
+              "max": 0.849,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 2.682,
+              "min": 2.628,
+              "max": 2.968,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 0.178,
+              "min": 0.133,
+              "max": 0.198,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 0.379,
+              "min": 0.325,
+              "max": 0.418,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 23166.8131,
+              "min": 22954.5413,
+              "max": 23575.5911,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 86.51,
+              "min": 85.01,
+              "max": 87.31,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.3513,
+              "min": 0.3476,
+              "max": 0.3656,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
           "backend": "LadybugDB",
           "is_arcadedb": false,
           "precision": null,
@@ -5526,6 +5976,93 @@
               "median": 0.0518,
               "min": 0.0513,
               "max": 0.0525,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Memgraph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (73k people)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",
+          "version_name": "memgraph 3.13.1",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.14,
+              "min": 0.137,
+              "max": 0.145,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.308,
+              "min": 0.222,
+              "max": 0.403,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.146,
+              "min": 0.143,
+              "max": 0.151,
+              "n": 5
+            },
+            "1-hop p99 ms": {
+              "median": 0.242,
+              "min": 0.233,
+              "max": 0.252,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.305,
+              "min": 0.271,
+              "max": 0.344,
+              "n": 5
+            },
+            "2-hop p99 ms": {
+              "median": 2.276,
+              "min": 2.138,
+              "max": 2.537,
+              "n": 5
+            },
+            "write p50 ms": {
+              "median": 0.151,
+              "min": 0.147,
+              "max": 0.153,
+              "n": 5
+            },
+            "write p99 ms": {
+              "median": 0.254,
+              "min": 0.246,
+              "max": 0.258,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 72092.1223,
+              "min": 71069.539,
+              "max": 72799.1645,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 27.8,
+              "min": 27.53,
+              "max": 28.2,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.6283,
+              "min": 0.6082,
+              "max": 0.6345,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.2372,
+              "min": 0.2372,
+              "max": 0.2372,
               "n": 5
             }
           }
@@ -5827,7 +6364,8 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at SF10 (73k people): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j UNWIND batches over bolt; LadybugDB COPY from CSV, its native bulk path."
+        "SurrealDB (embedded) at SF1, full network (3.2M vertices, 13.8M edges): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: PHASE build-messages-start scale=sf1full msg_limit=0 person_limit=0",
+        "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ Arrow INSERT SELECT into the persons and knows tables under a property graph."
       ],
       "columns": [
         "average friend age p50 ms",
@@ -12006,7 +12544,12 @@
         "PostgreSQL's memory cell is not comparable to the other two, for the reason given under the table above: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. On this workload the effect is at its most extreme: nearly all of the figure shown is the Python client and almost none of it is the database.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared.",
-        "Each repetition runs every query 100 times; the p50 and p99 are over those runs."
+        "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
+        "ArangoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "MongoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: container exited 137 with no output (cgroup OOM kill: raise the envelope or bound the harn",
+        "SurrealDB (server) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent"
       ],
       "columns": [
         "Q1 p50 ms",
