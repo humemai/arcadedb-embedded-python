@@ -114,6 +114,21 @@ directory.
 written on the timeout path, and the cell log carries the lane's phase markers. Read them
 before recording a did-not-finish.
 
+**A cell killed at the memory cap is not a timeout.** A cell the kernel killed because the
+engine outgrew the memory envelope every engine at that size was given ran out of room, not
+out of time. It says something about that engine's memory behaviour at that size and nothing
+at all about its latency, so it is worded differently from a censored cell and may not be
+read as one. A cell that exceeded its time cap, a cell that failed inside its budget for
+some other reason, and a cell killed at the envelope are three outcomes, and the page names
+which one each was.
+
+**An outcome note can name a corpus size the table does not show.** A table moves to a
+larger corpus only once every engine on it has a row there, so an attempt where some engines
+measured and others did not leaves the table at the smaller size with notes about the larger
+one underneath it. "There is no row" in such a note is about that engine, not about the
+attempt: other engines may well have produced numbers at that size, and they are held back
+until the table can move whole.
+
 ## Traps in the Other Direction
 
 **An absent row makes a claim.** If comparators appear at a size and we do not, a reader

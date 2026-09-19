@@ -125,18 +125,38 @@ apply, the table says so in a clause instead of leaving a blank. A transactional
 against a warm database by construction, and the session-cost table is itself the cold
 measurement.
 
+**Three things stop work, and they stop different things.** A budget stops one query, a cap
+stops a whole cell, and abandonment stops a query early when its budget cannot buy a usable
+measurement. Every one of them is a property of the work rather than of the engine, so no
+engine is ever given more room than the engine beside it.
+
 **A query has a budget, and the cell does not die with it.** On the graph analytics,
 time-series, and document analytics tables each query gets the same time budget on every
 engine, and derived rather than chosen: it comes from the bench host's own measured rows,
-three times what the median engine took for that query at that corpus size. It varies by
+three times what the median engine took for that query at that corpus size. The median
+rather than the slowest, because the slowest is what a budget exists to bound. It varies by
 table, by corpus size and by query, because a whole-graph aggregation grows with the data
 while an indexed lookup does not, and never by engine, because the engine is what the table
-compares. A query that
+compares. Where a corpus size has not been measured yet the budget falls back to the lane's
+older flat value and the row records which of the two applied, so a projection cannot be
+read as a measurement. A query that
 exceeds it stops at the iteration it reached, its numbers are over those iterations, the
 table says so in a sentence naming the budget and the count, and the cell's other queries
 keep theirs. Without this a slow scan on one engine took the whole cell past the timeout
 and left nothing, which is the worse outcome: a censored cell is a measurement, an absent
 one is a story.
+
+**A whole cell has a time cap, and exceeding it is a published outcome.** The cap belongs to
+the corpus size and is identical for every engine at that size. An engine that cannot finish
+inside it is censored with the cap named, which is a true statement about that engine at
+that size rather than a gap, and the remaining repetitions are skipped, because repeating a
+timeout measures nothing and the table should show one censored cell instead of five.
+
+**A query whose budget cannot buy a median is abandoned after its first pass.** The first
+touch of a query is already paid for and is kept, and if the budget would not buy at least
+five iterations at that rate the query stops there with the reason recorded on the row,
+because a median over fewer than five is not a median and the cell would otherwise spend
+hours confirming what the first pass showed. The other queries in the cell are unaffected.
 
 **Every table reports the same measurement set**: cold and warm latency at the median and
 the ninety-ninth percentile, throughput where the operation has a natural rate, recall where

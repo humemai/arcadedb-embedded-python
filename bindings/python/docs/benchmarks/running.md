@@ -51,8 +51,8 @@ either public or reproducible from a script in the repository.
 
 | Corpus | Where it comes from |
 |---|---|
-| TPC-H at scale factor 1 | Generated with DuckDB's `dbgen` and staged as Parquet under `$BENCH_DATA/tpch` |
-| LDBC-SNB Interactive v1, SF1 and SF10 | The LDBC council's pre-generated tarballs, extracted under `$BENCH_DATA/ldbc` |
+| TPC-H at scale factors 1 and 10 | Generated with DuckDB's `dbgen` and staged as Parquet under `$BENCH_DATA/tpch`. The transactional lane reads SF1 and the analytical lane SF10, whose line-item table is streamed in row-group batches so the client never holds it whole |
+| LDBC-SNB Interactive v1, SF1 and SF10 | The LDBC council's pre-generated tarballs, extracted under `$BENCH_DATA/ldbc`. The interactive lane reads the persons-and-`KNOWS` projection at both sizes; the analytics lane reads the full network at SF1, message half included |
 | SIFT1M and DEEP-10M | The ann-benchmarks HDF5 distributions, converted to `.npy` once on the host by `gen_dense_npy.py` so the containers need only numpy |
 | Big-ANN 2023 sparse track | The challenge's CSR files and its own top-k ground truth, staged under `$BENCH_DATA/bigann` |
 | TSBS cpu-only | `gen_tsbs_corpus.sh`, which records the host count, window, and interval so the corpus can be rebuilt rather than merely copied |

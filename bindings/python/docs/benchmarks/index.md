@@ -25,6 +25,12 @@ Two benchmark suites live in the repository, and they answer different questions
 | [`benchmarks/experiments/`](https://github.com/humemai/arcadedb-embedded-python/tree/main/benchmarks/experiments) | Engine against engine. How does ArcadeDB compare with specialist and embedded databases on the same corpus, the same machine, and the same operation? | These pages |
 | [`benchmarks/python-bindings/`](https://github.com/humemai/arcadedb-embedded-python/tree/main/benchmarks/python-bindings) | Binding against binding. What does reaching the same engine through Python cost against calling it from Java? | [Performance: Python Bindings vs Java](../guide/performance.md) |
 
+These pages describe the instrument the NEXT campaign runs, settled before its first cell
+so that nothing changes under the rows (a mid-campaign change splits them). The published
+page still shows the campaign before it, so where a corpus size or an engine list here is
+ahead of what the page prints, that is the gap between an instrument and the rows it has
+produced so far, and the page's own notes say which sizes it carries.
+
 The rest of this section is about the first suite. It runs every engine in Docker, one
 cell at a time, with pinned image digests, an identical CPU set and memory envelope per
 cell, and five repetitions reported as the median with its spread. Every timed query's
@@ -127,7 +133,11 @@ version is the latest self-hosted stable release at which the engine can be meas
 every table it belongs on, re-surveyed at each campaign, and restated at the freeze. DuckDB
 is the one engine where that is not the highest number: it runs at 1.5.4 on every table
 because that is the newest DuckDB the community-extensions registry has a DuckPGQ build
-for, and one engine wears one version on the page.
+for, and one engine wears one version on the page. ArcadeDB is the other: it is pinned to
+one unreleased upstream snapshot rather than the last release, because the fixes the
+campaign depends on are only in that snapshot, and the wheel and the server image are
+built from that one commit so the embedded and served rows differ by transport and by
+nothing else.
 
 ## What Each Table Argues
 

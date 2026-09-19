@@ -115,7 +115,7 @@ Rules that have each cost a run:
 
 The September chain on mini, each script waiting on its predecessor and gated on `verify_pair_c25.sh`, at pin `8d6af9475`:
 
-`qDO` (running, its dense stage) -> `qDP` -> `qDQ` -> `qDR` -> `qDS` -> `qDT` -> `qDU` -> `qDV` -> `qDW` -> `qDX`, ending about 19 September.
+`qDO` -> `qDP` -> `qDQ` -> `qDR` -> `qDS` -> `qDT` -> `qDU` -> `qDV` -> `qDW` -> `qDX`. Complete: qDX ended 2026-09-18 02:20Z and every stage has landed.
 
 | script | what it runs |
 |---|---|
@@ -128,21 +128,23 @@ The September chain on mini, each script waiting on its predecessor and gated on
 | qDU | SurrealDB embedded on the TPC tables again, after BUGS.md F37 |
 | qDV | ArangoDB 3.12.11, served only, on documents, graph, dense, and cross-model (DECISIONS #78) |
 | qDW | SurrealDB served again on the cells whose disk reading was blank (BUGS.md F38) |
-| qDX | one phase-marked re-run of the embedded SurrealDB 1M dense cell, expected to time out again, for the phase it dies in (BUGS.md F41) |
+| qDX | one phase-marked re-run of the embedded SurrealDB 1M dense cell. It timed out again at four hours, which was the point: the record gained the phase, `build-running`, the index build (BUGS.md F41) |
 
 Finished scripts move to `~/queue_archive` on mini. The chain holds its pin start to finish; an upstream fix landing mid-run becomes a candidate for the next re-pin, never a restart.
 
-**The September extension (DECISIONS #103a to #103e), after qDX, same pin, same instrument.** Drafted 2026-09-18 and linted; installed once the repetition count per stage is decided (`REPS`, default 5, set per script). Each script carries its own preflight: the corpus file it reads, the image pins it needs (`build_images.sh duckdb client`, the Memgraph and FalkorDB digests), and `verify_pair_c25.sh`.
+**The September extension (DECISIONS #103a to #103e), after qDX, same pin, same instrument.** Installed as `qEA` to `qEE` on 2026-09-18. It ran two stages and was then stopped; the three that did not run are cancelled, and their raises happen in October instead. `qDY` is not part of it: it is the one-cell BUGS F55 diagnostic for ArangoDB's IVF at deep10m.
 
-| script | what it runs |
-|---|---|
-| qDY | documents analytics at TPC-H SF10 (`tpch10`), every comparator, olap only; the ArcadeDB arms opt in with `WITH_ARCADEDB_OLAP=1`, since their September Q1/Q6 text is the one BUGS F42/F43 withdrew |
-| qDZ | graph analytics on the full SF1 network (`sf1full`), every engine including Memgraph, FalkorDB, and DuckPGQ, with and without the view for ArcadeDB; then the three new engines on the interactive table at SF1 and SF10 |
-| qEA | time series at 1,000 hosts (`ts1000`), every engine, with `BENCH_CLIENT_MEM=16g` for the served cells' driver |
-| qEB | cross-model at 500k products (`e2_500k`), every engine, both workloads |
-| qEC | DuckDB re-measured at 1.5.4 on its September tiers: tpch1 both workloads, ts100, dense VSS at 1M and DEEP-10M, lane and multipass |
+| script | what it runs | outcome |
+|---|---|---|
+| qEA | documents analytics at TPC-H SF10 (`tpch10`), every engine, olap only; the ArcadeDB arms opt in with `WITH_ARCADEDB_OLAP=1`, since their September Q1/Q6 text is the one BUGS F42/F43 withdrew | ran 2026-09-18 04:42Z to 16:52Z; DuckDB and both PostgreSQL arms measured, ArangoDB, MongoDB and SQLite censored at the tier's cap, SurrealDB served failed inside its budget on a closed connection, SurrealDB embedded killed by the kernel at the tier's memory envelope. The tier did not switch; see below |
+| qEB | graph analytics on the full SF1 network (`sf1full`), every engine, the olap workload only, with and without the view for ArcadeDB; then Memgraph, FalkorDB and DuckPGQ on the interactive table at SF1 and SF10 | ran 2026-09-18 17:47Z to 2026-09-19 00:00Z. The three new engines LANDED on the interactive table at both sizes. On the analytics table SurrealDB embedded was killed by the kernel at the tier's memory envelope, so that tier did not switch either |
+| qEC | time series at 1,000 hosts (`ts1000`) | **cancelled**, moved to October |
+| qED | cross-model at 500k products (`e2_500k`) | **cancelled**, moved to October |
+| qEE | DuckDB re-measured at 1.5.4 on its September tiers | **cancelled**, moved to October. Consequence on the live page: DuckPGQ landed at DuckDB 1.5.4 while the documents, time-series and dense-VSS arms still read 1.5.5, so September carries two DuckDB versions until October re-measures them (COMPARATORS.md) |
 
-A raised size replaces a tier (#103b): the page table switches to the new tier only when every engine on it has landed there (`make_paper_tables.PAPER_SCALES` and, for graph analytics, `export_web` `l2olap` `only_scales`), so no table ever prints two corpora.
+A raised size replaces a tier (#103b): the page table switches to the new tier only when every engine on it has landed there (`make_paper_tables.PAPER_SCALES` and, for graph analytics, `export_web` `l2olap` `only_scales`), so no table ever prints two corpora. Neither raise met that bar, so `docs_olap` still prints TPC-H SF1 and `l2olap` still prints the SF1 and SF10 projections. What the reader sees of the attempt is outcome accounting: the exporter reads every failed cell out of `runs.jsonl` and writes a note naming the engine, the raised size, and what it reported, under a table whose rows are still the old size (READING-RESULTS.md, "an outcome note may name a size the table does not print").
+
+**Mini now.** `qCAL`, a calibration pass only: time series at 1,000 hosts, one repetition per engine, writing to `results/runs_CALIBRATION_ts1000_<pin>.jsonl`, which `merge_campaign.py` never reads. It exists to turn the ts1000 query budgets from projections into measurements before October (DECISIONS #106); none of its rows is publishable.
 
 ## 7. October: the skeleton, then the comparators, then one switch
 

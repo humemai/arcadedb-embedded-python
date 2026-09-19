@@ -37,6 +37,7 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `runs-*.csv` | per-invocation summary written by `runner.py` | nothing. Delete them when they pile up; the writer stays |
 | `mp_rows_<pin>.jsonl`, `mp_rows_small_<pin>.jsonl`, `mp_rows_sparse_<pin>.jsonl` | the per-cell multipass rows behind the overlay directories below | nothing on the page; the per-cell record |
 | `runs_skeleton_laptop.csv` | the laptop micro-scale placeholder freeze behind a skeleton publish, one repetition, sweep tier, `bench_host` of the laptop (DECISIONS #86) | `refresh_web_page.py --skeleton`, which refuses a row from the bench host or at paper tier. Never merged into `runs.jsonl` |
+| `runs_CALIBRATION_<tier>_<pin>.jsonl` | a calibration pass: one repetition per engine at a tier nothing has measured yet, run to turn that tier's query budgets from projections into measurements (DECISIONS #106). Not publishable at n=1 | nothing. `merge_campaign.py` takes an explicit `--remote` path and no glob, so it cannot pick one up by accident; `derive_budgets.py` reads the frozen CSV, so a calibration tier reaches the budget table only when someone re-freezes with its rows |
 
 The answer digest and its readable sample, the `durability` string, and the thermal fields (BUGS.md F45) are row fields rather than files, so nothing under `results/` holds them separately and a question about any of the three is answered by printing the row.
 
