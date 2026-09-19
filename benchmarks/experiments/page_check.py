@@ -530,28 +530,7 @@ LIVE_JSON = PAGE_TS.parents[3] / "data" / "arcadedb-benchmarks.json"
 # page leaves out without a stated reason is the miss October's gate exists
 # to catch. Declared here so the reason travels with the row schema and the
 # gate finds it declared the day the two files meet.
-NOT_PRINTED = [
-    (r"^(memgraph|falkordb)_\w+$",
-     "a served comparator's own config, read back at connect: its thread "
-     "pool (FAIRNESS F6, audited in FAIRNESS.md rather than printed as a "
-     "column), memory limit, query timeouts, and persistence settings, which "
-     "explain the cell rather than measure it"),
-    (r"^duckpgq_(threads|extension_version)$",
-     "the DuckPGQ graph arm's DuckDB thread pool, sized from the cpuset via "
-     "PRAGMA threads=sched_getaffinity (FAIRNESS F6, audited in FAIRNESS.md "
-     "rather than printed as a column), and the community build id the row "
-     "carries beside the DuckDB version the page prints"),
-    (r"^driver_version$",
-     "the client library a served arm was reached through; the page prints "
-     "the engine's version, and the driver stays on the row for an audit"),
-    (r"^(msg_vertices|msg_edges|msg_limit|person_limit)$",
-     "the full-network graph tier's message half, counted at load and "
-     "checked against the corpus README by the lane; the Size label names "
-     "the corpus and the ingest column prices it"),
-    (r"^(n_lineitem_streamed|li_batches|li_batch_rows|li_row_groups|tsbs_lp)$",
-     "how the corpus was read: the streamed line-item count the lane refuses "
-     "a shortfall against, its batching, and the time-series file's name"),
-]
+# (the duplicate NOT_PRINTED that stood here is folded into the live one below)
 
 
 # Tables removed from the page on purpose, with the reason. Anything else
@@ -934,6 +913,35 @@ NOT_PRINTED = [
      r"peak_anon_mib_sum|build_s|ingest_s|index_s|gav_build_s)$",
      "printed under a different label by the table that owns it; listed here "
      "so a table which stops printing one still has to say so"),
+    # --- recovered from a SECOND module-level NOT_PRINTED the merge left in
+    # this file (BUGS F65). Two assignments, the later one winning, so these
+    # four declarations were dead and their fields read as undeclared.
+    (r"^duckpgq_(threads|extension_version)$",
+     "the DuckPGQ graph arm's DuckDB thread pool, sized from the cpuset via "
+     "PRAGMA threads=sched_getaffinity (FAIRNESS F6, audited in FAIRNESS.md "
+     "rather than printed as a column), and the community build id the row "
+     "carries beside the DuckDB version the page prints"),
+    (r"^driver_version$",
+     "the client library a served arm was reached through; the page prints "
+     "the engine's version, and the driver stays on the row for an audit"),
+    (r"^(msg_vertices|msg_edges|msg_limit|person_limit)$",
+     "the full-network graph tier's message half, counted at load and "
+     "checked against the corpus README by the lane; the Size label names "
+     "the corpus and the ingest column prices it"),
+    (r"^(n_lineitem_streamed|li_batches|li_batch_rows|li_row_groups|tsbs_lp)$",
+     "how the corpus was read: the streamed line-item count the lane refuses "
+     "a shortfall against, its batching, and the time-series file's name"),
+    # --- host telemetry, recorded on every dense cell so a thermal event can
+    # be told from an engine effect. It explains a cell rather than measuring
+    # one, and FAIRNESS.md is where it is audited.
+    (r"^host_(temp_c|throttle_count|throttle_total_ms)_(start|end)$",
+     "the host's package temperature and throttle counters either side of a "
+     "cell, so a slow run can be told apart from a throttled machine; "
+     "FAIRNESS audits them rather than the page printing them"),
+    (r"^host_throttled_ms$",
+     "milliseconds the host spent throttled during a cell, from the same "
+     "counters; a non-zero value invalidates the cell rather than becoming "
+     "a column"),
 ]
 
 
@@ -1037,6 +1045,16 @@ def _check_coverage(payload):
         if not t:
             print(f"  MISS   {tid}: the payload has no such table")
             bad += 1
+            continue
+        # OPERATION_MANIFEST is the 2026-10 query set (PAGE-SPEC section 2).
+        # Holding it against a September payload asks that page to carry
+        # columns its instrument never measured, which is not a defect in the
+        # page. A3 below already guards this way; A1 did not, and after the
+        # branch integration it failed the live September payload on eighteen
+        # columns that October adds. Same guard, same wording.
+        if t.get("instrument") != "2026-10":
+            print(f"  -      {tid}: not under the 2026-10 instrument; "
+                  f"query set not held")
             continue
         absences = t.get("declared_absences") or []
         whole_row = {a["backend"] for a in absences if not a.get("column")}
