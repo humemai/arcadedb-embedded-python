@@ -938,7 +938,7 @@ class PgAgeE2:
 
 
 class Neo4jE2:
-    """Neo4j 2026.07 alone: Product nodes with an embedding property under its
+    """Neo4j 2026.08 alone: Product nodes with an embedding property under its
     vector index, RELATED edges, the views counter on the node; the hit, the
     hop and the update run in one explicit transaction (2026-09-11)."""
     name = "neo4j_e2"

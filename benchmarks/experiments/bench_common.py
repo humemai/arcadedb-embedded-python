@@ -86,8 +86,10 @@ def durability_class(text):
 #   ArangoDB    server 3.12.11 /_admin/options: database.wait-for-sync false,
 #               rocksdb.use-fsync false, rocksdb.sync-interval 100 ms; a
 #               freshly created collection reads back waitForSync false.
-#   QuestDB     server 9.1.1 SHOW PARAMETERS: cairo.commit.mode = nosync,
-#               value_source = default.
+#   QuestDB     server 10.0.1 SHOW PARAMETERS: cairo.commit.mode = nosync,
+#               value_source = default. RE-MEASURED at the October pin
+#               (laptop, 2026-09-19) because the pin moved 9.1.1 -> 10.0.1, a
+#               major; unchanged, and line.udp.commit.mode reads nosync too.
 #   SurrealDB   embedded (SDK 2.0.0, core 2.3.10) strace A/B: with
 #   embedded    SURREAL_SYNC_DATA unset, 6 fsync at both 50 and 250 commits;
 #               with it true, 56 and 256. The default is no sync at commit.
@@ -97,10 +99,18 @@ def durability_class(text):
 #               The env var this harness used to set was inert and is gone
 #               (runner.py). What it does at commit is NOT verified, and
 #               DURABILITY_SURREAL_SERVER says exactly that.
-#   Neo4j       2026.07.1 SHOW SETTINGS: no durability or sync setting exists
+#   Neo4j       2026.08.1 SHOW SETTINGS: no durability or sync setting exists
 #               (the tx_log settings are buffer, preallocation, and rotation
 #               only), so it cannot be relaxed; that it forces the log at
 #               commit is Neo4j's documented behaviour, not measured here.
+#               RE-MEASURED at the October pin (laptop, 2026-09-19), because
+#               this claim names a version and the pin moved 2026.07.1 ->
+#               2026.08.1. Unchanged: a SHOW SETTINGS filtered on
+#               durab|sync|fsync|flush returns only the three
+#               server.memory.pagecache.* entries, which are page-cache flush
+#               knobs and not commit durability, and db.tx_log.* is still
+#               exactly buffer.size, preallocate, rotation.retention_policy
+#               and rotation.size.
 #   Memgraph    3.13.1 SHOW CONFIG: storage_wal_enabled true,
 #               storage_wal_file_flush_every_n_tx 100000 (the image's
 #               defaults); strace on the pinned image, build plus 3,009
@@ -124,7 +134,7 @@ DURABILITY_SURREAL_EMBEDDED = "SurrealKV, SURREAL_SYNC_DATA unset (the default):
 DURABILITY_SURREAL_SERVER = ("RocksDB at the engine default; SurrealDB 3.2.4 exposes no sync "
                              "setting and the behaviour at commit is not verified")
 DURABILITY_NEO4J = ("fsync at commit, not configurable (no durability setting in "
-                    "SHOW SETTINGS at 2026.07.1)")
+                    "SHOW SETTINGS at 2026.08.1)")
 DURABILITY_PG_OFF = "synchronous_commit=off"
 # Defined here, not in arango_common, so at_class() can map it like every other
 # engine's; arango_common re-exports this name as its DURABILITY.

@@ -482,39 +482,96 @@ OFF_PAGE_ARMS = {
 # Read from each vendor's docs AND source at the version we run, never inferred
 # from the recall we measured:
 #
-#   Qdrant v1.18.2   fp32. SparseIndexParams.datatype defaults to Float32
-#                    (openapi.json at tag v1.18.2); source has
-#                    `pub type DimWeight = f32`, and with on_disk=false the
-#                    mutable RAM inverted index never consults datatype at all.
-#                    Sparse quantization exists as that datatype field and is
-#                    off by default. It is NOT quantization_config, which is
-#                    dense-only; our call passes neither.
-#   Milvus v2.6.13   fp32, from SOURCE, and the citation matters here. The
-#                    often-quoted sentence "the value part can be a
-#                    non-negative 32-bit floating-point number" is on the
-#                    v2.4.x and v3.0.x doc pages but NOT on v2.6.x, which
-#                    dropped that FAQ, so quoting it against the version we run
-#                    would be citing a page that does not say it. A skeptic
-#                    refuted exactly that and was right to.
-#                    What holds at our version: the digest resolves to
-#                    v2.6.13, which pins knowhere v2.6.10, whose
-#                    include/knowhere/operands.h has
-#                    `struct sparse_u32_f32 { using ValueType = float; }` and
-#                    sparse_utils.h a `static_assert(is_same_v<T, fp32>,
-#                    "SparseRow supports float only")`. sparse_index_node.cc
-#                    instantiates InvertedIndex<float, float> for metric IP;
-#                    the uint16-quantized variant of the same class is chosen
-#                    only for BM25, which we do not use. The shipped
-#                    libknowhere.so in that image carries the matching
-#                    typeinfo symbols, so the binary agrees with the source.
+#   Qdrant v1.19.1   fp32. RE-VERIFIED AT THE NEW PIN 2026-09-19, and one
+#                    clause of the old citation was wrong. `datatype` is
+#                    NOT documented with a default: the schema text for
+#                    SparseIndexParams.datatype is byte-identical at v1.18.2
+#                    and v1.19.1 and states none. The Float32 default lives in
+#                    Rust -- VectorStorageDatatype carries #[default] Float32
+#                    (lib/segment/src/types.rs) and the sparse index resolves
+#                    it with `config.datatype.unwrap_or_default()`
+#                    (segment_constructor_base/sparse_vector_index.rs). So
+#                    cite the Rust, not openapi.json.
+#                    `pub type DimWeight = f32` is unchanged
+#                    (lib/sparse/src/common/types.rs at tag v1.19.1), and a
+#                    full file-tree diff of lib/sparse/ between v1.18.2 and
+#                    v1.19.1 is IDENTICAL: still the same three inverted-index
+#                    implementations, still #[default] MutableRam. 1.19 adds
+#                    Turbo4 as a datatype, which is DENSE storage only, and
+#                    1.19.0's one sparse entry is per-query IDF (scoring, not
+#                    storage); 1.19.1 lists nothing sparse.
+#                    THE "NEVER CONSULTS DATATYPE" ARGUMENT IS NARROWER THAN
+#                    IT READ. The wildcard match arm is (MutableRam, _), so it
+#                    holds for the APPENDABLE segment only; an optimized
+#                    segment uses ImmutableRam, which does consult datatype --
+#                    and at the default selects SparseCompressedImmutableRamF32.
+#                    fp32 is therefore right on both paths, for two reasons,
+#                    and the row is labelled from that rather than from the
+#                    one path the old note covered.
+#                    Our call passes on_disk=False; note that 1.19.1
+#                    DEPRECATES on_disk in favour of a `memory` field
+#                    (pinned/cached/cold, default pinned). It still works, and
+#                    is the next thing here that will need rewording.
+#   Milvus v3.0.1    fp32 -- BUT CONDITIONAL, AND THE OLD CITATION IS DEAD.
+#                    Re-derived at the new pin 2026-09-19 (was v2.6.13).
+#                    FIRST, DROP THE DOC SENTENCE ENTIRELY. "the value part
+#                    can be a non-negative 32-bit floating-point number" is
+#                    NOT on the v3.0.x pages either: grepping milvus-docs at
+#                    branch v3.0.x finds zero occurrences of "value part". It
+#                    exists only at v2.4.x (reference/sparse_vector.md). The
+#                    old note said it was on v3.0.x and it is not, so the
+#                    sentence is not re-pointed, it is dropped.
+#                    SECOND, THE SOURCE CITATION MOVED. v3.0.1 pins knowhere
+#                    v3.0.11, not v2.6.10, and sparse_index_node.cc no longer
+#                    instantiates InvertedIndex<float, float> unconditionally
+#                    for IP. What survives is operands.h, which still has
+#                    `struct sparse_u32_f32 { using ValueType = float; }`, so
+#                    the RAW sparse data is fp32 whatever the index does.
+#                    THIRD, AND THIS IS THE REAL FINDING: 3.0 rebuilt sparse
+#                    around SINDI, whose posting values are HARD-QUANTIZED to
+#                    fp16 for IP (sindi_inverted_index.h asserts QuantType is
+#                    fp16 for IP or uint16_t for BM25). SINDI is not a new
+#                    index type -- SPARSE_INVERTED_INDEX is still the only one
+#                    -- it is an algorithm behind a VERSION GATE:
+#                      version_default_to_daat_maxscore() { index_version_ < 10 }
+#                      ValidateInvertedIndexAlgo accepts "SINDI" only at >= 10
+#                      version_support_fp16_quant_for_ip() { index_version_ >= 10 }
+#                    and 3.0.1 ships targetVecIndexVersion 8 while knowhere's
+#                    current_version is 8, so ResolveVecIndexVersion yields 8.
+#                    At 8 the algo is DAAT_MAXSCORE and the posting values are
+#                    float32. Milvus's own 3.0 notes say it out loud: "New
+#                    index versions are opt-in for now", and SINDI is the IP
+#                    default only "once the new index version is enabled".
+#                    So STOCK 3.0.1 DOES NOT RUN SINDI AND IS fp32, and this
+#                    row is fp32 BECAUSE the index version is 8. Raising
+#                    dataCoord.targetVecIndexVersion to 10 or 11 would switch
+#                    sparse weights to fp16 silently and this label would be
+#                    wrong. The harness sets no targetVecIndexVersion, no
+#                    inverted_index_algo and no quant_type (checked), the
+#                    sparse arm mounts no milvus.yaml at all, and AUTOINDEX's
+#                    sparse default carries none of them either -- so every
+#                    path lands on 8. quant_type: "fp32" is the escape hatch
+#                    that would keep fp32 under an opt-in, if it ever happens.
 #   Elasticsearch 9  ~9 significant bits, their own wording: "sparse_vector
 #                    fields only preserve 9 significant bits for the precision,
 #                    which translates to a relative error of about 0.4%."
+#                    Re-verified across the 9.4.1 -> 9.5.4 move: the file
+#                    docs/reference/elasticsearch/mapping-reference/sparse-vector.md
+#                    has the SAME sha256 at tags v9.4.1 and v9.5.4, so the
+#                    wording is unchanged by construction. Cite the versioned
+#                    tag path; elastic.co/docs is unversioned ("current") and
+#                    cannot substantiate a 9.5.x-specific claim.
 #
 # The trap both claims were checked against: Qdrant and Milvus document DENSE
 # quantization far more loudly than sparse storage, so a citation that is
 # really about dense vectors is the likeliest way to put a wrong label on a
 # competitor's row. Both were confirmed against version-pinned source.
+#
+# AND THE TRAP THE 2026-09-19 RE-PIN ADDED: a precision label sourced at one
+# version is not evidence about another. All three entries here were pinned to
+# versions we no longer run, one of them cited a page that never said what it
+# was quoted for, and Milvus's answer now depends on a config key rather than
+# on the version alone. Re-derive this table at every comparator re-pin.
 SPARSE_PRECISION = {
     "arcadedb_sparse_embedded": "int8",
     "arcadedb_sparse_embedded_fp32": "fp32",

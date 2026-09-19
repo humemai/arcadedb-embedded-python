@@ -769,7 +769,20 @@ NOT_MEASURED_BY_ENGINE = {
 # reason), and the reason is the thing being asserted -- a family added here
 # without one is the same miss this gate exists to catch.
 NOT_PRINTED = [
-    r"\w+_abandoned",   # why a query stopped after its cold pass (DECISIONS #107)
+    # AND IT HAPPENED AGAIN, one decision later. The paragraph below was written
+    # about `_budget_source` (DECISIONS #106), which is now a correct tuple; the
+    # entry it warns about was then reintroduced verbatim by DECISIONS #107 as a
+    # bare `r"\w+_abandoned"` with its reason in a trailing comment. Same shape,
+    # same silence: a bare string cannot fail until a row actually carries the
+    # field, and the first rows that carry `*_abandoned` are the October
+    # comparator re-pin smoke (lsqb_q9_abandoned, 2026-09-19). The gate crashed
+    # with ValueError instead of reporting, on the first publish after #107 --
+    # so the commit that added the field also broke the gate that must admit it,
+    # and nothing could notice until a query was actually abandoned.
+    (r"\w+_abandoned$",
+     "whether a query was abandoned after its cold pass rather than run to the "
+     "budget (DECISIONS #107): it qualifies the timing beside it, which makes "
+     "it a diagnostic about how a cell ended and not a column of its own"),
     # Written as a BARE STRING with the reason in a trailing comment when
     # DECISIONS #106 landed, which made the entry a 17-character string that
     # `for pattern, reason in NOT_PRINTED` unpacks into 17 values. It could not

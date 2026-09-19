@@ -20,7 +20,8 @@ fi
 
 declare -A PKGS=(
   # EVERY package pinned, and every pin at the current release as of
-  # 2026-08-15. Two rules, both learned the hard way:
+  # 2026-09-19 (the October re-pin survey, DECISIONS #87/#103d). Two rules,
+  # both learned the hard way:
   #
   # NOTHING UNPINNED. duckdb was bare here while [dense] pinned 1.5.4, so the
   # two images resolved differently on different build days and the SAME PAPER
@@ -38,8 +39,8 @@ declare -A PKGS=(
   # guards against below), so documents, time series, dense VSS and the DuckPGQ
   # graph arm all pin here.
   [duckdb]="duckdb==1.5.4 pandas pyarrow"
-  [client]="requests psycopg[binary] pandas pyarrow numpy surrealdb==2.0.0 qdrant-client==1.19.0 pymilvus==3.0.1 elasticsearch==9.5.0 neo4j==6.2.0 ladybug==0.19.1 pymongo==4.18.1 python-arango==8.3.5 falkordb==1.7.1 redis==8.1.0"
-  [dense]="chromadb==1.5.9 lancedb==0.37.1 sqlite-vec==0.1.9 duckdb==1.5.4 numpy pandas pyarrow"
+  [client]="requests psycopg[binary] pandas pyarrow numpy surrealdb==2.0.0 qdrant-client==1.19.1 pymilvus==3.0.1 elasticsearch==9.5.1 neo4j==6.3.1 ladybug==0.20.4 pymongo==4.18.1 python-arango==8.3.5 falkordb==1.7.1 redis==8.1.0"
+  [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.4 numpy pandas pyarrow"
 )
 # A GUARD, not a comment. The dev pin above survived because nothing checked
 # it. BENCH_ALLOW_DEV=1 is the deliberate escape hatch for engine debugging.

@@ -424,6 +424,25 @@ BACKENDS = {
         "image": "dbbench:client",
     },
     # MongoDB 8.2 (8.0 refuses to start on Linux >= 6.19, SERVER-121912).
+    #
+    # AND IT STAYS AT 8.2.12 THROUGH THE OCTOBER RE-PIN, which is the one place
+    # DECISIONS #103d bit instead of #87. 8.3.11 is the newer release and it
+    # CANNOT BE MEASURED HERE: it refuses to boot on the bench kernel with
+    #   "MongoDB cannot start: Linux kernel versions 6.19 and newer has a known
+    #    incompatibility with this version of MongoDB" (SERVER-121912)
+    # -- the SAME guard that moved this pin off 8.0, reappearing on the 8.3
+    # line. Reproduced on the laptop (kernel 7.0.0-29-generic, 2026-09-19): the
+    # 8.3.11 container exits immediately and the cell dies server_not_ready
+    # after the readiness timeout, while 8.2.12 on the same kernel reaches
+    # "Waiting for connections" and reports 8.2.12. 8.2.12 is also the newest
+    # release on the 8.2 line, so it IS the latest measurable MongoDB.
+    #
+    # Intermediate 8.3.x were deliberately NOT hunted for one that predates the
+    # guard. The guard is MongoDB declaring this kernel incompatible with the
+    # 8.3 line; running an older 8.3 that merely lacks the warning would be
+    # running a configuration its own vendor now calls unsafe, which is worse
+    # than staying on the line that runs.
+    #
     # --replSet: TPC-C new-order is one multi-document transaction, and
     # MongoDB only allows those on a replica set; the adapter initiates the
     # single-node set on connect. No auth: the image runs open without
@@ -433,7 +452,7 @@ BACKENDS = {
     "timescaledb": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "timescale/timescaledb@sha256:189fd4822991918322c1f0d17e5adcf42853bf022a3d0dbdb56da61c5f811286",  # 2.28.3-pg17
+        "server_image": "timescale/timescaledb@sha256:f7036933154c52dbc500f7b08ff8e28404a8ccabbf8ce3528142cde6ab253eef",  # 2.30.1-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
@@ -507,16 +526,34 @@ BACKENDS = {
     "questdb": {
         "topology": "client_server",
         "image": "dbbench:client",
-        # 9.1.1. Verified pullable: `docker manifest inspect` resolves this
-        # digest, so it is a registry manifest digest and not a local-only one.
-        "server_image": "questdb/questdb@sha256:e62916bd62087cc48ab56f10b72a183e8f6aa987b4d46e0f316be083bbee2373",
+        # 10.0.1 (re-pinned 2026-09-19, DECISIONS #87; was 9.1.1). Verified
+        # pullable: `docker manifest inspect` resolves this digest, so it is a
+        # registry manifest digest and not a local-only one.
+        #
+        # QUESTDB 10 IS A MAJOR AND IT ADDS AN INGEST PROTOCOL; THIS LANE KEEPS
+        # THE OLD ONE. 10.0 introduced QWP, a binary columnar protocol over
+        # WebSocket on the HTTP port. l4_tsbs.QuestDB ingests over InfluxDB line
+        # protocol on TCP 9009, and QuestDB's own configuration docs still show
+        # line.tcp.enabled defaulting to true on 0.0.0.0:9009 in 10.x (only the
+        # UDP receiver is deprecated). So the lane's path is unchanged and is
+        # still a first-class one; moving to QWP would be a NEW measurement and
+        # belongs in its own change, not inside a version bump.
+        #
+        # The 10.0.x answer-affecting changes (UNION over SYMBOL now returning
+        # SYMBOL, LEFT JOIN LATERAL count compensation, SHOW PARTITIONS columns,
+        # EXPLAIN no longer HTML-encoded) land on constructs this lane does not
+        # use: its six queries are last-point, range, global aggregate, group-by,
+        # high-selectivity filter and order-limit, with no UNION, no LATERAL, no
+        # SHOW PARTITIONS and no EXPLAIN. The readiness regex below is the part
+        # the release notes do not cover, so it is smoked rather than assumed.
+        "server_image": "questdb/questdb@sha256:931af4156771ee2948ec2431988c3a93b257487d993f1b74771545c8dce5c23d",
         "server_port": 9000,
         "ready_regex": r"server-main enjoy|A O K|http server started",
     },
     "postgres": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",  # 17.10
+        "server_image": "postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7",  # 18.6
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         # DURABILITY MATCHED AT THE RELAXED END (DECISIONS #81): a commit
         # returns when the WAL record is in the OS, the walwriter flushes it
@@ -562,7 +599,7 @@ BACKENDS = {
     "postgres_tuned": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",  # 17.10, same digest as the default arm
+        "server_image": "postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7",  # 18.6, same digest as the default arm
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         # Sized from the container, not written as a constant. The two lanes
         # that run PostgreSQL get different envelopes (24g at medium, 12g at
@@ -618,7 +655,7 @@ BACKENDS = {
     "neo4j_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
+        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
         # heap parity with the ArcadeDB deployments (same per-scale heap)
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
@@ -755,7 +792,7 @@ BACKENDS = {
     "neo4j_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
+        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -914,7 +951,7 @@ BACKENDS = {
     "composed_qdrant_neo4j": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
+        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -1011,14 +1048,31 @@ BACKENDS = {
     "qdrant_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
+        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
+    # MILVUS 3.0.1 (re-pinned 2026-09-19 from v2.6.13, DECISIONS #87/#103d).
+    #
+    # 3.0.1 AND NOT 3.0.2. v3.0.2 has a git tag and pushed images (2026-09-18)
+    # but no GitHub release and no entry in milvus-docs release_notes: it is a
+    # tag, not an announced release, and #87 pins to the latest stable RELEASE.
+    # 3.0.1 is the newest version the project has published notes for, and its
+    # own compatibility table names pymilvus 3.0.1 as the matching client --
+    # which is the pin build_images.sh already carried, against a 2.6 server.
+    # The client was a major ahead of the server until this commit.
+    #
+    # THE SINGLE-CONTAINER STANDALONE SURVIVES THE MAJOR. 3.0 replaces the
+    # message queue with Woodpecker, which in the Docker standalone deployment
+    # defaults to a local-filesystem WAL, so the deployment stays what the
+    # runner can start: one container, embedded etcd, local storage, no MinIO
+    # and no external MQ. ETCD_USE_EMBED / COMMON_STORAGETYPE=local below are
+    # unchanged, and the dataCoord.segment.* keys the dense arm overrides are
+    # not renamed in 3.0.
     "milvus_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+        "server_image": "milvusdb/milvus@sha256:2b2fc2cf499ad897c93d4b90ee251646f718522845261a342d74d7c0c66bb274",
         "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
                        "-e", "ETCD_USE_EMBED=true",
                        "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
@@ -1032,7 +1086,7 @@ BACKENDS = {
     "elasticsearch_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",  # server 9.4.1; the client image pins elasticsearch==9.5.0, a minor ahead (both re-pinned in October, DECISIONS #87)
+        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:33178ff49e06da93e3c51c5d87401b26e7a6dea0ef9bb26539cfddc46478b420",  # server 9.5.4; the client image pins elasticsearch==9.5.1, the newest client release (the client line lags the server line; both re-pinned 2026-09-19, DECISIONS #87)
         "server_env": ["-e", "discovery.type=single-node",
                        "-e", "xpack.security.enabled=false",
                        # F3. This was hardcoded "-Xms2g -Xmx4g", the only
@@ -1128,7 +1182,7 @@ BACKENDS = {
     "qdrant_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
+        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
@@ -1139,11 +1193,11 @@ BACKENDS = {
     "qdrant_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
+        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
-    # pgvector 0.8.6 on PostgreSQL 17. maintenance_work_mem at half the cap:
+    # pgvector 0.8.6 on PostgreSQL 18. maintenance_work_mem at half the cap:
     # the HNSW build spills to a slow path when the graph outgrows it, and at
     # the 64 MB default a 10M build does not finish inside the envelope.
     # shared_buffers a quarter of the cap so the index can be resident, the
@@ -1151,7 +1205,7 @@ BACKENDS = {
     "pgvector_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",  # 0.8.6-pg17
+        "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
@@ -1162,7 +1216,7 @@ BACKENDS = {
     "pgvector_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",  # 0.8.6-pg17
+        "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
@@ -1174,7 +1228,7 @@ BACKENDS = {
     "neo4j_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
+        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -1185,7 +1239,7 @@ BACKENDS = {
     "milvus_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+        "server_image": "milvusdb/milvus@sha256:2b2fc2cf499ad897c93d4b90ee251646f718522845261a342d74d7c0c66bb274",
         "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
                        "-e", "ETCD_USE_EMBED=true",
                        "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
@@ -1210,7 +1264,7 @@ BACKENDS = {
     "milvus_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+        "server_image": "milvusdb/milvus@sha256:2b2fc2cf499ad897c93d4b90ee251646f718522845261a342d74d7c0c66bb274",
         "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
                        "-e", "ETCD_USE_EMBED=true",
                        "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",

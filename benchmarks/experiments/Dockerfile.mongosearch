@@ -1,6 +1,24 @@
 # MongoDB Community 8.2.12 + MongoDB Search (mongot) Community 1.70.4 in one
 # container: the self-hosted, generally available way to run $vectorSearch.
 #
+# mongod DID NOT MOVE IN THE OCTOBER RE-PIN, and this is the one engine where
+# DECISIONS #103d overrode #87. 8.3.11 is the newer release and it cannot be
+# measured on the bench kernel: it refuses to boot with "Linux kernel versions
+# 6.19 and newer has a known incompatibility with this version of MongoDB"
+# (SERVER-121912), the same guard that moved this project off 8.0. Reproduced
+# on the laptop at kernel 7.0.0-29-generic on 2026-09-19; 8.2.12 boots on the
+# same kernel. The reasoning is in runner.py beside the "mongodb" backend.
+# It is still the SAME digest every other MongoDB arm runs, so the vector rows
+# and the document rows come from one engine build.
+#
+# mongot's VERSION did not move -- 1.70.4 is still the newest MongoDB Search
+# Community release -- but its DIGEST did, because the 1.70.4 tag was rebuilt
+# on 2026-09-16. The old pin was also the wrong KIND of digest: 63ebc805 is
+# the multi-arch INDEX digest, not the amd64 manifest digest this file and
+# COMPARATORS.md say every pin is. Both forms resolve, so nothing was ever
+# wrong on the wire; the pin is normalised here to the amd64 manifest digest
+# so the convention the docs state is the convention the file keeps.
+#
 # WHY THIS AND NOT mongodb/mongodb-atlas-local. atlas-local is the same two
 # processes in one image and it would have been less work, but MongoDB's own
 # documentation lists it as "For evaluation only" and says "This deployment is
@@ -21,7 +39,7 @@
 # document rows come from one engine build rather than two.
 #
 # Built as dbbench:mongo-search by build_images.sh.
-FROM mongodb/mongodb-community-search@sha256:63ebc805c6b55d027e345b5224d8713009f21911aedafb50b6c28c1cd9583e4f AS mongot
+FROM mongodb/mongodb-community-search@sha256:24c0cd30baf06c93607f3dbd4816587036996de347f5f11ef47cf998cf4e898c AS mongot
 FROM mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17
 # mongot bundles its own jlink'd JDK under bin/jdk, so the whole directory is
 # self-contained and nothing has to be installed into the mongod image.
