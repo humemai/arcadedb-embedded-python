@@ -838,9 +838,10 @@ def f4_one_vs_n(rows):
     # Every dense comparator that builds an index; sqlite-vec is an exact scan,
     # so its "ingest+index" is an insert and does not do what the row names.
     DENSE_COMPS = ("qdrant_dense", "qdrant_dense_int8", "milvus_dense", "milvus_dense_int8",
-                   "chroma_dense", "lancedb_dense", "duckdb_vss_dense", "arangodb_dense")
-    GRAPH = ("ladybug_graph", "neo4j_graph", "memgraph_graph", "falkordb_graph",
-             "duckpgq_graph")
+                   "chroma_dense", "lancedb_dense", "duckdb_vss_dense", "arangodb_dense",
+                   "mongodb_dense")
+    GRAPH = ("ladybug_graph", "neo4j_graph", "mongodb_graph", "memgraph_graph",
+             "falkordb_graph", "duckpgq_graph")
     SPARSE = ("qdrant_sparse", "milvus_sparse", "elasticsearch_sparse")
     TSC = ("questdb", "duckdb", "sqlite")
 
@@ -1080,6 +1081,19 @@ def main():
             f"BENCH_PAPER_DIR unset or wrong: {os.path.normpath(_PAPER_DIR)} "
             "does not exist.\nSet it to the directory holding paper.tex.")
     os.makedirs(FIGS, exist_ok=True)
+    # THE FIGURES ARE THE CAMPAIGN'S, NOT THE SKELETON'S (DECISIONS #86), the
+    # same ruling make_paper_tables applies to the .tex tables one file over.
+    # Every figure here is a ratio against the best comparator, or a per-query
+    # panel, or a deployment overlay: at one repetition on micro corpora those
+    # are noise drawn to look like results, and f3 and f8 read pinned
+    # bench-host artifacts a laptop skeleton does not have at all. The skeleton
+    # page references no figure, names the summary figure as absent in its
+    # banner, and would publish nothing written here; generating them anyway
+    # would leave stale PDFs for the campaign's own run to trip over.
+    if os.environ.get("BENCH_SKELETON") == "1":
+        print("skeleton: figures are ratios over campaign rows and pinned "
+              "bench-host artifacts; not generated (DECISIONS #86).")
+        return
     rows = canonical()
     f3_sparse_perquery()
     f4_one_vs_n(rows)

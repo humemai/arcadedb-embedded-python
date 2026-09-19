@@ -46,6 +46,43 @@ FALLBACK_RECALL_TARGET = 0.95
 FROZEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results", "runs_paper.csv")
 
 
+# DECISIONS #81. Read from the pinned 3.12.11 server on 2026-09-14, not
+# assumed: /_admin/options answers database.wait-for-sync false,
+# rocksdb.use-fsync false, rocksdb.sync-interval 100, and a freshly created
+# collection reads back waitForSync false. Nothing is set by us; the row
+# records the default. Full evidence block in bench_common.
+# Re-exported from bench_common so at_class() can map it to the strict string
+# like every other engine's, and so one edit changes both (DECISIONS #90).
+import bench_common as _bc
+DURABILITY = _bc.DURABILITY_ARANGO
+
+
+def durability_readback(db, collection):
+    """ASK THE COLLECTION whether waitForSync is on, do not assert it.
+
+    `create_collection(sync=...)` is a request; `properties()["sync"]` is the
+    server's answer, and #81's standard is the answer.
+    """
+    try:
+        on = bool(db.collection(collection).properties().get("sync"))
+    except Exception as e:  # noqa: BLE001
+        return _bc.at_class(DURABILITY) + f" (asserted: read-back failed, {e.__class__.__name__})"
+    return _bc.DURABILITY_ARANGO_STRICT if on else DURABILITY
+
+
+def sync_flag(cls=None):
+    """waitForSync for a collection at this durability class (DECISIONS #90).
+
+    ArangoDB's setting is per collection, so the strict class creates every
+    collection with waitForSync true and the commit then waits for the WAL
+    sync. Nothing is set at the relaxed class: false is the server's own
+    default, read back from /_admin/options and from a freshly created
+    collection (#81's evidence block).
+    """
+    import bench_common
+    return bench_common.journal_ack(cls)
+
+
 def connect(fresh: bool = True, wait_s: int = 120):
     """(client, bench db, "arangodb:<server version>"), waiting for the server."""
     from arango import ArangoClient

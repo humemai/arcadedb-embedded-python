@@ -329,6 +329,15 @@ def _vector_stats(db):
         return {"vector_stats_error": f"{type(e).__name__}: {e}"}
 
 
+# THE ANSWER OF THE READ, kept for the digest (DECISIONS #88). Written on
+# every cycle and digested once, after the timed loops, from the last cycle's
+# rows: the read is deterministic, and the embedded and served arms of this
+# lane must agree on it. The vector situation is excluded from the digest --
+# its read goes through an approximate index, which is checked by recall on the
+# dense lane and must never be fed to a gate that expects an exact match.
+_LAST_READ = {"rows": None, "raw": None, "situation": None}
+
+
 def _read(db, situation):
     if situation == "empty":
         return
@@ -340,7 +349,12 @@ def _read(db, situation):
     q = READS.get(situation)
     if q:
         lang, text = q
-        list(db.query(lang, text))
+        rows = list(db.query(lang, text))
+        # ONE REFERENCE STORE, and nothing else, because this is inside the
+        # timed window. The rows are turned into plain dicts in cycle(), after
+        # the clock stops and before the handle closes.
+        _LAST_READ["raw"] = rows
+        _LAST_READ["situation"] = situation
         # Counts reads ISSUED THROUGH CYPHER, which is necessary but not
         # sufficient for "the view served it": SQL cannot reach a Graph
         # Analytical View at all, so a zero here proves the defect is back,
@@ -486,6 +500,16 @@ def cycle(situation, mode, cold=False):
     elif mode == "drop":
         _drop(db, situation)
     t2 = time.perf_counter()
+    # The read's rows as plain dicts, AFTER t2 so no conversion is charged to
+    # the action timer, and before close() so the handle is still valid.
+    if _LAST_READ.get("raw") is not None:
+        _rows = _LAST_READ.pop("raw")
+        _LAST_READ["raw"] = None
+        try:
+            _LAST_READ["rows"] = [r.to_dict() if hasattr(r, "to_dict") else dict(r)
+                                  for r in _rows]
+        except Exception:  # noqa: BLE001  (a driver row that is not a mapping)
+            _LAST_READ["rows"] = [str(r) for r in _rows]
     # BEFORE close, because close is what the timer's rebuild used to land in
     # and a closed handle answers nothing. Vector workload only: the other
     # situations have no LSM_VECTOR index and would record an error dict that
@@ -572,6 +596,12 @@ def main():
         # assertion: the database lives in the server container.
         import l5_lifecycle_server
         return l5_lifecycle_server.main(args)
+    if args.backend.startswith("surrealdb"):
+        # The comparator arm (2026-09-16, DECISIONS #95a): SurrealDB embedded
+        # through its SDK on SurrealKV, same situations, same sizes, same
+        # session and mode set, the reads digested against this arm's.
+        import l5_lifecycle_surreal
+        return l5_lifecycle_surreal.main(args)
 
     fs = _assert_fs()
     n = SCALE_ROWS[args.scale]
@@ -634,6 +664,19 @@ def main():
     # cached: running it after the warm modes would measure an eviction of a
     # database that several cycles had just re-warmed, which is the same
     # number by construction but a weaker claim.
+    # Read out of the engine, not asserted (#81), and the class named (#90).
+    # This lane's write is an open/write/close cycle rather than one of the ten
+    # timed write operations #90 doubles, so it runs at the relaxed class only.
+    bench_common.stamp_durability(out, bench_common.arcade_durability_readback())
+    out["instrument"] = bench_common.INSTRUMENT
+    # DECISIONS #89: "the lifecycle table is itself the cold measurement", so
+    # the row says that rather than leaving a cold/warm pair blank.
+    out["cold_warm_na"] = bench_common.NA_COLD_WARM_LIFECYCLE
+    # DECISIONS #89 as amended: the one cold column is "the first query after
+    # the database opens", and on this lane that IS the measurement --
+    # clean_open_ms plus clean_action_ms is a cold open followed by a cold
+    # first query, reported as its own table.
+    out["cold_first_query_na"] = bench_common.NA_COLD_WARM_LIFECYCLE
     o, c, w = measure(args.workload, "clean", cold=True)
     out["cold_open_ms"], out["cold_close_ms"] = round(o, 3), round(c, 3)
     out["build_close_ms"] = round(build_close_ms, 3)
@@ -699,6 +742,25 @@ def main():
         out["drop_action_ms"] = round(w, 3)
         out["drop_is_single_cycle"] = True
 
+    # THE READ'S ANSWER (DECISIONS #88), AFTER the cycles have run. The first
+    # version of this block sat above the measure() calls, so it digested a
+    # _LAST_READ that nothing had filled yet and every row said "issues no
+    # read" while read_action_ms sat beside it (laptop, 2026-09-14). One
+    # engine, two deployments: the embedded and served arms must return the
+    # same rows for the same situation, and the gate says so. The vector
+    # situation records the reason instead, because its read is approximate.
+    if args.workload == "vector":
+        bench_common.record_unexpressible(
+            out, "lifecycle_read",
+            "the vector situation's read goes through an approximate index; "
+            "it is checked by recall on the dense lane, not by an exact digest")
+    elif _LAST_READ["rows"] is not None:
+        bench_common.record_result(out, "lifecycle_read", _LAST_READ["rows"])
+        out["lifecycle_read_situation"] = _LAST_READ["situation"]
+    else:
+        bench_common.record_unexpressible(
+            out, "lifecycle_read",
+            f"situation {args.workload!r} issues no read in the modes this cell ran")
     out["close_over_budget"] = out["clean_close_ms"] > 100.0
     if args.workload == "graph_gav":
         out["gav_cypher_reads_issued"] = _gav_cypher_reads[0]

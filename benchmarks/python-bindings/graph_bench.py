@@ -2,7 +2,7 @@
 """Graph lane: OLTP (point/1-hop reads + transactional node writes) and OLAP (traversals).
 
 Backends: ladybug, arcadedb. Graph: (User)-[:POSTED]->(Post), (Post)-[:ANSWERS]->(Post).
-(LadybugDB is the maintained continuation of Kùzu; package `ladybug`, Kùzu-compatible API.)
+(LadybugDB is the embedded Cypher engine; package `ladybug`.)
 Records lifecycle phase timings, on-disk size, and full per-op latency stats. RESULT {json}.
 """
 import argparse
@@ -64,7 +64,7 @@ OLAP = [
 def be_ladybug(users, posts, posted, answers, workload):
     import tempfile
     with bc.timed() as t_imp:
-        import ladybug as lb  # maintained continuation of Kùzu; Kùzu-compatible API
+        import ladybug as lb
     path = tempfile.mkdtemp(prefix="gb_ladybug_") + "/db.lbug"
     with bc.timed() as t_open:
         db = lb.Database(path)

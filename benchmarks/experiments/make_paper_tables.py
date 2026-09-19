@@ -134,6 +134,25 @@ PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
 # {"sf1full"}; sf1 and sf10 stay for the interactive table), then freeze.
 # The dropped rows stay in the campaign file and the release asset.
 
+# THE SKELETON'S TIERS (DECISIONS #86). BENCH_SKELETON=1 swaps the campaign's
+# published tiers for the laptop's micro ones, so the October page's SHAPE can
+# be published weeks before mini measures anything. Nothing else about the
+# selection changes: the serial-cpuset rule, the release rule, the rep range,
+# the corpus fingerprint, and the canonical dedupe all still apply. A skeleton
+# freeze is written to the same runs_paper.csv and must never be committed;
+# every cell it produces is stamped skeleton by the exporter and refused by a
+# live publish.
+# l2 carries sf1 as well: the graph analytics skeleton is the capped LDBC SF1
+# slice the LSQB smoke ran on the laptop (DECISIONS #104a); the interactive
+# skeleton stays the micro generator.
+SKELETON_SCALES = {"l1tpc": ["micro"], "l2": ["micro", "sf1"], "l3s": ["micro"],
+                   "l3d": ["micro"], "e2": ["e2"], "l4": ["ts100"],
+                   "lifecycle": ["lc10k"]}
+SKELETON = os.environ.get("BENCH_SKELETON") == "1"
+if SKELETON:
+    PAPER_SCALES = dict(SKELETON_SCALES)
+FROZEN_NAME = "runs_skeleton_laptop.csv" if SKELETON else "runs_paper.csv"
+
 NAMES = {
     "arcadedb_embedded": "ArcadeDB (emb)", "arcadedb_server": "ArcadeDB (srv)",
     "duckdb": "DuckDB", "postgres": "PostgreSQL",
@@ -175,6 +194,12 @@ NAMES = {
     "duckdb_vss_dense": "DuckDB-VSS (fp32)",
     "arcadedb_e2": "ArcadeDB (one txn)", "surrealdb_e2": "SurrealDB (one txn)",
     "arangodb_dense": "ArangoDB (fp32)", "arangodb_e2": "ArangoDB (one txn)",
+    "mongodb_dense": "MongoDB (fp32)", "mongodb_e2": "MongoDB (doc txn)",
+    "mongodb_graph": "MongoDB",
+    # memgraph_graph, falkordb_graph and duckpgq_graph are named with the other
+    # graph backends above and were bound a second time here by the branch
+    # merge, same value both times. One key per dict: a duplicate literal key
+    # is how four tier caps were silently overridden in runner.TIMEOUT_BY_SCALE.
     "composed_qdrant_neo4j": "Qdrant+Neo4j (composed)",
     "questdb": "QuestDB", "arcadedb": "ArcadeDB (emb)",
 }
@@ -204,7 +229,12 @@ def load_canonical(apply_corpus=True):
     # Dedupe on PAYLOAD fields, never run_id: pre-2026-07-21 run_ids were not
     # scale-qualified, so different scales collided under one id (the 100k
     # sparse tier was invisible under run_id-keyed dedupe).
-    rows = [json.loads(l) for l in open(os.path.join(RESULTS, "runs.jsonl"))
+    # WHICH LOG. runs.jsonl is the campaign's append log and the default. A
+    # skeleton freeze (DECISIONS #86) reads its own file instead, so the
+    # campaign's rows and the laptop's placeholders can never be pooled by a
+    # freeze that happened to run in the wrong directory.
+    rows = [json.loads(l) for l in open(os.path.join(
+                RESULTS, os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")))
             if l.strip()]
     best = {}
     for r in rows:
@@ -400,12 +430,35 @@ def load_canonical(apply_corpus=True):
         # stamp existed built the view, so a missing field means with-view and
         # must land in the SAME bucket as an explicit True. Defaulting the other
         # way would split one N=5 cell into two N=5 cells wearing one label.
+        # THE DURABILITY CLASS IS PART OF THE KEY (DECISIONS #90). The strict
+        # arm of a write cell is the SAME lane, scale, workload, backend and
+        # rep as the relaxed one; without the class here the later of the two
+        # would silently replace the earlier on ts_utc, which is exactly how a
+        # sweep row and a GAV-ablation row could once have shadowed a published
+        # cell. Rows before #90 carry no class and default to relaxed, which is
+        # what they were.
         k = (r["lane"], r["scale"], r.get("n_docs"), r.get("workload"),
-             r["backend"], r.get("gav") is not False, r["rep"])
+             r["backend"], r.get("gav") is not False, r["rep"],
+             r.get("durability_class") or "relaxed")
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
             best[k] = r
     _write_withheld_recall()
-    return list(best.values())
+    out = list(best.values())
+    # ONE INSTRUMENT PER TABLE (DECISIONS #84). A row names the instrument it
+    # was measured under (bench_common.INSTRUMENT; rows before 2026-10 carry
+    # none and are the September instrument). Two instruments in one
+    # (lane, scale) would seat a five-query OLAP row beside a two-query one,
+    # or a relaxed-durability write beside an fsync one, under one header.
+    # Refused here, at the freeze, rather than left for a reader to notice.
+    mixed = {}
+    for r in out:
+        mixed.setdefault((r["lane"], r["scale"]), set()).add(str(r.get("instrument") or "2026-09"))
+    bad = {k: sorted(v) for k, v in mixed.items() if len(v) > 1}
+    if bad:
+        raise SystemExit("REFUSING: rows from two instruments share a table: "
+                         + "; ".join(f"{k[0]}/{k[1]} {v}" for k, v in sorted(bad.items()))
+                         + ". Freeze from one campaign, or exclude the other instrument's rows.")
+    return out
 
 
 def cells(rows, key):
@@ -1145,7 +1198,11 @@ def freeze_paper_rows(rows):
         for k in r:
             if k not in cols:
                 cols.append(k)
-    path = os.path.join(RESULTS, "runs_paper.csv")
+    # A SKELETON FREEZE HAS ITS OWN FILE (DECISIONS #86). runs_paper.csv is
+    # the campaign's tracked freeze and the live page publishes from it; a
+    # laptop placeholder run must not be able to overwrite it, not even for
+    # the minutes a publish takes.
+    path = os.path.join(RESULTS, FROZEN_NAME)
     with open(path, "w", newline="") as f:
         w = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
@@ -1181,6 +1238,17 @@ def main(freeze=True):
     print(f"{len(rows)} canonical rows")
     if freeze:
         freeze_paper_rows(rows)
+    # THE .tex TABLES ARE THE CAMPAIGN'S, NOT THE SKELETON'S (DECISIONS #86).
+    # T4 and T5 read pinned bench-host artifacts and refuse rather than fall
+    # back, correctly; T2 and T3 read lanes and tiers a laptop skeleton does
+    # not run, so they would render rows with N=0 and every caption's N would
+    # be wrong. The skeleton page reads the frozen CSV directly and none of
+    # these files, so the freeze above is the whole job here.
+    if SKELETON:
+        print("skeleton: the paper tables read campaign tiers and pinned "
+              "artifacts; not generated. The frozen rows above are the "
+              "skeleton page's only input.")
+        return 0
     tabular_table(rows)
     graph_table(rows)
     sparse_table(rows)

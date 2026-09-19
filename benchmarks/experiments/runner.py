@@ -31,11 +31,14 @@ import re
 import subprocess
 import tempfile
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import bench_common  # noqa: E402  (INSTRUMENT, stamped on every row)
 DATA = os.path.abspath(os.environ.get("BENCH_DATA", os.path.join(HERE, "data")))
 RESULTS = os.path.join(HERE, "results")
 RAW = os.path.join(RESULTS, "raw")
@@ -43,6 +46,13 @@ SAMPLE_INTERVAL = 0.25
 
 # P-core threads on the i9-12900HK bench host; override for other hosts.
 CPUSET = os.environ.get("BENCH_CPUSET", "0-11")
+# Two numbers the page's condition sentences quote and page_check pins here
+# rather than letting them be typed (2026-09-16): the disk reading settles
+# when two samples agree within this fraction (_disk_reading below), and
+# the Milvus image's own segment seal proportion, which docker-conf/
+# milvus-dense.yaml overrides (BUGS F8; the override is read from the yaml).
+DISK_SETTLE_TOL = 0.01
+MILVUS_IMAGE_SEAL_PROPORTION = 0.12
 MEM_BY_SCALE = {"micro": "8g", "tiny": "8g", "small": "16g", "medium": "32g",
                 "large": "48g",
                 # Lifecycle tiers (l5). Small caps on purpose: this lane
@@ -461,6 +471,25 @@ BACKENDS = {
         "image": "dbbench:client",
     },
     # MongoDB 8.2 (8.0 refuses to start on Linux >= 6.19, SERVER-121912).
+    #
+    # AND IT STAYS AT 8.2.12 THROUGH THE OCTOBER RE-PIN, which is the one place
+    # DECISIONS #103d bit instead of #87. 8.3.11 is the newer release and it
+    # CANNOT BE MEASURED HERE: it refuses to boot on the bench kernel with
+    #   "MongoDB cannot start: Linux kernel versions 6.19 and newer has a known
+    #    incompatibility with this version of MongoDB" (SERVER-121912)
+    # -- the SAME guard that moved this pin off 8.0, reappearing on the 8.3
+    # line. Reproduced on the laptop (kernel 7.0.0-29-generic, 2026-09-19): the
+    # 8.3.11 container exits immediately and the cell dies server_not_ready
+    # after the readiness timeout, while 8.2.12 on the same kernel reaches
+    # "Waiting for connections" and reports 8.2.12. 8.2.12 is also the newest
+    # release on the 8.2 line, so it IS the latest measurable MongoDB.
+    #
+    # Intermediate 8.3.x were deliberately NOT hunted for one that predates the
+    # guard. The guard is MongoDB declaring this kernel incompatible with the
+    # 8.3 line; running an older 8.3 that merely lacks the warning would be
+    # running a configuration its own vendor now calls unsafe, which is worse
+    # than staying on the line that runs.
+    #
     # --replSet: TPC-C new-order is one multi-document transaction, and
     # MongoDB only allows those on a replica set; the adapter initiates the
     # single-node set on connect. No auth: the image runs open without
@@ -470,9 +499,9 @@ BACKENDS = {
     "timescaledb": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "timescale/timescaledb@sha256:189fd4822991918322c1f0d17e5adcf42853bf022a3d0dbdb56da61c5f811286",  # 2.28.3-pg17
+        "server_image": "timescale/timescaledb@sha256:f7036933154c52dbc500f7b08ff8e28404a8ccabbf8ce3528142cde6ab253eef",  # 2.30.1-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
-        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
@@ -485,6 +514,50 @@ BACKENDS = {
         "server_cmd": ["--replSet", "rs0", "--bind_ip_all"],
         "server_port": 27017,
         "ready_regex": r"Waiting for connections",
+    },
+    # THE GRAPH ARM RUNS THE SAME IMAGE AND THE SAME DIGEST as the document
+    # one, because $graphLookup and $lookup are core mongod and need nothing
+    # mongot does. #68 listed "$graphLookup (not a model it claims)" among the
+    # things not joining; #92 is the rule that overrides it -- an engine
+    # competes in its own dialect if it can express the query, and what it
+    # cannot express is declared with the constructs tried.
+    "mongodb_graph": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",  # 8.2.12
+        "server_cmd": ["--replSet", "rs0", "--bind_ip_all"],
+        "server_port": 27017,
+        "ready_regex": r"Waiting for connections",
+    },
+    # MongoDB Search (mongot) Community beside the SAME mongod digest, in one
+    # container (Dockerfile.mongosearch, built by build_images.sh). #68
+    # recorded MongoDB's vector search as not joining because it "needs the
+    # separate mongot process, a two-container server the runner cannot start
+    # yet"; the pair is one container here, so the runner starts it like every
+    # other served engine and the whole engine sits in the one server cgroup
+    # the cell caps and samples.
+    #
+    # The readiness marker is printed by the entrypoint only after mongot
+    # answers SERVING on its health endpoint, so a cell can never be handed a
+    # mongod whose search process is still starting -- the failure the Milvus
+    # settle (BUGS F8) exists to prevent, caught before the cell rather than
+    # after it.
+    #
+    # NO --replSet HERE: the entrypoint owns it, because mongot cannot sync
+    # from a standalone and the set has to be initiated before mongot starts.
+    "mongodb_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "dbbench:mongo-search",
+        "server_port": 27017,
+        "ready_regex": r"DBBENCH mongod\+mongot ready",
+    },
+    "mongodb_e2": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "dbbench:mongo-search",
+        "server_port": 27017,
+        "ready_regex": r"DBBENCH mongod\+mongot ready",
     },
     # ---- l4 time series -------------------------------------------------
     # THE ARCADEDB ARMS ARE THREE, NOT ONE, and the split is the point. The
@@ -500,17 +573,43 @@ BACKENDS = {
     "questdb": {
         "topology": "client_server",
         "image": "dbbench:client",
-        # 9.1.1. Verified pullable: `docker manifest inspect` resolves this
-        # digest, so it is a registry manifest digest and not a local-only one.
-        "server_image": "questdb/questdb@sha256:e62916bd62087cc48ab56f10b72a183e8f6aa987b4d46e0f316be083bbee2373",
+        # 10.0.1 (re-pinned 2026-09-19, DECISIONS #87; was 9.1.1). Verified
+        # pullable: `docker manifest inspect` resolves this digest, so it is a
+        # registry manifest digest and not a local-only one.
+        #
+        # QUESTDB 10 IS A MAJOR AND IT ADDS AN INGEST PROTOCOL; THIS LANE KEEPS
+        # THE OLD ONE. 10.0 introduced QWP, a binary columnar protocol over
+        # WebSocket on the HTTP port. l4_tsbs.QuestDB ingests over InfluxDB line
+        # protocol on TCP 9009, and QuestDB's own configuration docs still show
+        # line.tcp.enabled defaulting to true on 0.0.0.0:9009 in 10.x (only the
+        # UDP receiver is deprecated). So the lane's path is unchanged and is
+        # still a first-class one; moving to QWP would be a NEW measurement and
+        # belongs in its own change, not inside a version bump.
+        #
+        # The 10.0.x answer-affecting changes (UNION over SYMBOL now returning
+        # SYMBOL, LEFT JOIN LATERAL count compensation, SHOW PARTITIONS columns,
+        # EXPLAIN no longer HTML-encoded) land on constructs this lane does not
+        # use: its six queries are last-point, range, global aggregate, group-by,
+        # high-selectivity filter and order-limit, with no UNION, no LATERAL, no
+        # SHOW PARTITIONS and no EXPLAIN. The readiness regex below is the part
+        # the release notes do not cover, so it is smoked rather than assumed.
+        "server_image": "questdb/questdb@sha256:931af4156771ee2948ec2431988c3a93b257487d993f1b74771545c8dce5c23d",
         "server_port": 9000,
         "ready_regex": r"server-main enjoy|A O K|http server started",
     },
     "postgres": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",  # 17.10
+        "server_image": "postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7",  # 18.6
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        # DURABILITY MATCHED AT THE RELAXED END (DECISIONS #81): a commit
+        # returns when the WAL record is in the OS, the walwriter flushes it
+        # within wal_writer_delay (200 ms). The same class as ArcadeDB's
+        # txWalFlush=0 and SQLite's WAL with synchronous=NORMAL. Set on the
+        # server so every session, timed or not, runs under it; the adapter
+        # records it on the row as `durability`. The tuned arm, TimescaleDB,
+        # pgvector, and PG+AGE carry the same flag in their server_cmd.
+        "server_cmd": ["-c", "synchronous_commit=off"],
         "server_port": 5432,
         # the image prints "ready to accept connections" TWICE (initdb's
         # temporary server, then the real one); anchor on the init-complete
@@ -547,14 +646,14 @@ BACKENDS = {
     "postgres_tuned": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",  # 17.10, same digest as the default arm
+        "server_image": "postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7",  # 18.6, same digest as the default arm
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         # Sized from the container, not written as a constant. The two lanes
         # that run PostgreSQL get different envelopes (24g at medium, 12g at
         # tpch1), so a literal 6GB would be a quarter of one and a half of the
         # other. {sb} and {ecs} are filled in below from the memory this
         # container is actually given.
-        "server_cmd": ["-c", "shared_buffers={sb}",
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}",
                        "-c", "effective_cache_size={ecs}",
                        "-c", "work_mem=64MB",
                        "-c", "maintenance_work_mem=1GB",
@@ -603,7 +702,7 @@ BACKENDS = {
     "neo4j_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
+        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
         # heap parity with the ArcadeDB deployments (same per-scale heap)
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
@@ -654,13 +753,16 @@ BACKENDS = {
     #     inside an 8g container), so it takes {mem90_mib}, the engine's own
     #     rule applied to the container cap instead of the host;
     #   --query-execution-timeout-sec defaults to 600, which would abort a
-    #     whole-graph aggregate the lane's own watchdog is meant to censor;
-    #     0 disables it so the watchdog is the only censor;
+    #     whole-graph aggregate or triangle count the lane's own censors are
+    #     meant to handle -- the per-query budget (DECISIONS #82b) and, behind
+    #     it, the cell watchdog; 0 disables it so ours are the only censors;
     #   --telemetry-enabled=false, the image default being true.
     # INFO logging to stderr is what makes the ready line visible: at the
     # default WARNING level the log shows only the banner, which prints
-    # about a second before Bolt listens. Durability is the image default
-    # (WAL fsynced every 100,000 transactions), read back onto the row.
+    # about a second before Bolt listens. Durability (DECISIONS #90): the
+    # strict class appends --storage-wal-file-flush-every-n-tx=1 in
+    # durability_server_patch; the relaxed default is 100000 (the WAL fsynced
+    # every 100,000 transactions), read back onto the row either way.
     "memgraph_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -678,16 +780,19 @@ BACKENDS = {
     # client over the Redis protocol and the lane's Cypher verbatim
     # (l2_graph.FalkorGraph). The image's own FALKORDB_ARGS is
     # "MAX_QUEUED_QUERIES 25 TIMEOUT 1000 RESULTSET_SIZE 10000": a one-second
-    # query timeout that would abort a whole-graph aggregate and a
-    # 10,000-row result cap, the ArcadeDB HTTP 20,000-row trap in another
-    # engine. Replaced wholesale: RESULTSET_SIZE -1 (no cap), TIMEOUT left at
-    # the module default of 0 (no limit; the lane's watchdog censors), and
+    # query timeout that aborts the triangle count at MICRO (1.2 s) and would
+    # abort any whole-graph aggregate, and a 10,000-row result cap, the
+    # ArcadeDB HTTP 20,000-row trap in another engine. Replaced wholesale:
+    # RESULTSET_SIZE -1 (no cap), TIMEOUT left at the module default of 0 (no
+    # limit; the lane's budget and the cell watchdog censor), and
     # THREAD_COUNT from the cpuset, because the module sizes its pool from the
     # host's logical cores ("Thread pool created, using 16 threads" under a
     # 12-CPU cpuset; FAIRNESS F6). BROWSER=0 stops the image's Next.js
     # process, which would otherwise share the cell's cpuset and cap.
-    # Durability is the image default (RDB snapshots only), read back onto
-    # the row.
+    # Durability (DECISIONS #90): the strict class adds REDIS_ARGS
+    # "--appendonly yes --appendfsync always" in durability_server_patch;
+    # the relaxed default is RDB snapshots only. Either way it is read back
+    # onto the row.
     "falkordb_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -730,7 +835,7 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "dbbench:pg-age",  # PostgreSQL 17.11 + pgvector 0.8.6 + AGE 1.7.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
-        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
@@ -739,7 +844,7 @@ BACKENDS = {
     "neo4j_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
+        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -799,6 +904,16 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
+        # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
+        # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
+        # does expose, not one names sync, WAL, fsync, or durability (checked
+        # 2026-09-14 against the image's own /surreal, and against
+        # `surreal start --help`). Setting it would have labelled these rows
+        # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
+        # embedded twin's SURREAL_SYNC_DATA is real and its default is
+        # verified; see the DURABILITY maps in the lanes.
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
@@ -808,15 +923,38 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
+        # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
+        # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
+        # does expose, not one names sync, WAL, fsync, or durability (checked
+        # 2026-09-14 against the image's own /surreal, and against
+        # `surreal start --help`). Setting it would have labelled these rows
+        # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
+        # embedded twin's SURREAL_SYNC_DATA is real and its default is
+        # verified; see the DURABILITY maps in the lanes.
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
     "surrealdb_dense": {"topology": "embedded", "image": "dbbench:client"},
+    # The lifecycle comparator (2026-09-16): SurrealDB embedded through its SDK
+    # on SurrealKV, under the lane's /lcdb bind mount like the ArcadeDB arm.
+    "surrealdb_lifecycle": {"topology": "embedded", "image": "dbbench:client"},
     "surrealdb_dense_server": {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
+        # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
+        # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
+        # does expose, not one names sync, WAL, fsync, or durability (checked
+        # 2026-09-14 against the image's own /surreal, and against
+        # `surreal start --help`). Setting it would have labelled these rows
+        # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
+        # embedded twin's SURREAL_SYNC_DATA is real and its default is
+        # verified; see the DURABILITY maps in the lanes.
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
@@ -825,14 +963,47 @@ BACKENDS = {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        # NO DURABILITY FLAG HERE, because 3.2.4 has none to set. This
+        # carried SURREAL_DATASTORE_SYNC_DATA=never, which the server does not
+        # read: the pinned binary contains zero occurrences of "SYNC_DATA" and
+        # zero of "SURREAL_DATASTORE", and of the 110 SURREAL_* variables it
+        # does expose, not one names sync, WAL, fsync, or durability (checked
+        # 2026-09-14 against the image's own /surreal, and against
+        # `surreal start --help`). Setting it would have labelled these rows
+        # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
+        # embedded twin's SURREAL_SYNC_DATA is real and its default is
+        # verified; see the DURABILITY maps in the lanes.
         "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
+    # TIME SERIES ON A PLAIN TABLE (2026-09-15): SurrealDB in both modes and
+    # ArangoDB join l4 on SQLite's footing, a table with a datetime field and a
+    # composite (host, ts) index. Same pins, same server commands and the same
+    # durability facts as the engines' other arms above; see l4_tsbs.py.
+    "surrealdb_ts": {"topology": "embedded", "image": "dbbench:client"},
+    "surrealdb_ts_server": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
+        # No durability flag: 3.2.4 has none to set (see surrealdb_graph_server).
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_port": 8000,
+        "ready_regex": r"Started web server",
+    },
+    "arangodb_ts": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
+        "server_cmd": ["arangod", "--vector-index", "true"],
+        "server_port": 8529,
+        "ready_regex": r"is ready for business",
+    },
     "composed_qdrant_neo4j": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
+        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -929,14 +1100,31 @@ BACKENDS = {
     "qdrant_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
+        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
+    # MILVUS 3.0.1 (re-pinned 2026-09-19 from v2.6.13, DECISIONS #87/#103d).
+    #
+    # 3.0.1 AND NOT 3.0.2. v3.0.2 has a git tag and pushed images (2026-09-18)
+    # but no GitHub release and no entry in milvus-docs release_notes: it is a
+    # tag, not an announced release, and #87 pins to the latest stable RELEASE.
+    # 3.0.1 is the newest version the project has published notes for, and its
+    # own compatibility table names pymilvus 3.0.1 as the matching client --
+    # which is the pin build_images.sh already carried, against a 2.6 server.
+    # The client was a major ahead of the server until this commit.
+    #
+    # THE SINGLE-CONTAINER STANDALONE SURVIVES THE MAJOR. 3.0 replaces the
+    # message queue with Woodpecker, which in the Docker standalone deployment
+    # defaults to a local-filesystem WAL, so the deployment stays what the
+    # runner can start: one container, embedded etcd, local storage, no MinIO
+    # and no external MQ. ETCD_USE_EMBED / COMMON_STORAGETYPE=local below are
+    # unchanged, and the dataCoord.segment.* keys the dense arm overrides are
+    # not renamed in 3.0.
     "milvus_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+        "server_image": "milvusdb/milvus@sha256:2b2fc2cf499ad897c93d4b90ee251646f718522845261a342d74d7c0c66bb274",
         "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
                        "-e", "ETCD_USE_EMBED=true",
                        "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
@@ -950,7 +1138,7 @@ BACKENDS = {
     "elasticsearch_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:268f65f1b32ea367e49c9be2acab144011b8c66c462c890f6190707743199050",  # server 9.4.1; the client image pins elasticsearch==9.5.0, a minor ahead (both re-pinned in October, DECISIONS #87)
+        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:33178ff49e06da93e3c51c5d87401b26e7a6dea0ef9bb26539cfddc46478b420",  # server 9.5.4; the client image pins elasticsearch==9.5.1, the newest client release (the client line lags the server line; both re-pinned 2026-09-19, DECISIONS #87)
         "server_env": ["-e", "discovery.type=single-node",
                        "-e", "xpack.security.enabled=false",
                        # F3. This was hardcoded "-Xms2g -Xmx4g", the only
@@ -1046,7 +1234,7 @@ BACKENDS = {
     "qdrant_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
+        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
@@ -1057,11 +1245,11 @@ BACKENDS = {
     "qdrant_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",  # v1.18.2
+        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
-    # pgvector 0.8.6 on PostgreSQL 17. maintenance_work_mem at half the cap:
+    # pgvector 0.8.6 on PostgreSQL 18. maintenance_work_mem at half the cap:
     # the HNSW build spills to a slow path when the graph outgrows it, and at
     # the 64 MB default a 10M build does not finish inside the envelope.
     # shared_buffers a quarter of the cap so the index can be resident, the
@@ -1069,9 +1257,9 @@ BACKENDS = {
     "pgvector_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",  # 0.8.6-pg17
+        "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
-        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
@@ -1080,9 +1268,9 @@ BACKENDS = {
     "pgvector_sparse": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "pgvector/pgvector@sha256:dca0d688bbb31d3f851502ffcb9c7791387b4fcc544ae434dab41761e5ece317",  # 0.8.6-pg17
+        "server_image": "pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a",  # 0.8.6-pg18
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
-        "server_cmd": ["-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=8GB"],
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
@@ -1092,7 +1280,7 @@ BACKENDS = {
     "neo4j_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",  # 2026.07.1-community
+        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",
@@ -1103,7 +1291,7 @@ BACKENDS = {
     "milvus_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+        "server_image": "milvusdb/milvus@sha256:2b2fc2cf499ad897c93d4b90ee251646f718522845261a342d74d7c0c66bb274",
         "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
                        "-e", "ETCD_USE_EMBED=true",
                        "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
@@ -1128,7 +1316,7 @@ BACKENDS = {
     "milvus_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
+        "server_image": "milvusdb/milvus@sha256:2b2fc2cf499ad897c93d4b90ee251646f718522845261a342d74d7c0c66bb274",
         "server_env": ["-e", "DEPLOY_MODE=STANDALONE",
                        "-e", "ETCD_USE_EMBED=true",
                        "-e", "ETCD_DATA_DIR=/var/lib/milvus/etcd",
@@ -1191,7 +1379,7 @@ def _require_engine_commit(tier, backends):
     """Rule 3 is a PUBLISHING rule that nothing enforced at production time.
 
     PAGE-SPEC rule 3: every ArcadeDB row in one table comes from the same
-    upstream commit, stamped as engine_commit. build_matched_pair.sh (the pair recipe, in the repository since 2026-09-14) ends by
+    upstream commit, stamped as engine_commit. build_matched_pair.sh ends by
     printing "stamp rows with ARCADEDB_ENGINE_COMMIT=<sha>" -- an instruction to
     a human, which is the whole problem. On 2026-08-25 four separate runs came
     back rc=0 with engine_commit None on every row: 118 lifecycle rows costing
@@ -1216,9 +1404,10 @@ def _require_engine_commit(tier, backends):
         "rule 3 forbids publishing, and the run would still exit 0.\n"
         "Export the pin the pair was built and VERIFIED at:\n"
         "    ~/verify_pair_c25.sh <sha> && export ARCADEDB_ENGINE_COMMIT=<sha>\n"
-        "    (build_matched_pair.sh (the pair recipe, in the repository since 2026-09-14) verifies a locally COMPILED pair; the pair is now\n"
-        "     assembled from upstream's published jars, and verify_pair_c25.sh also\n"
-        "     checks the JVM major matches on both arms, which it never did.)\n"
+        "    (the retired build_engine_pair.sh verified a pair WE compiled; the pair\n"
+        "     is now assembled by build_matched_pair.sh from upstream's published\n"
+        "     jars, and verify_pair_c25.sh also checks the JVM major matches on\n"
+        "     both arms, which nothing did before.)\n"
         "Or pass --tier sweep if these rows are not for the page.")
 # THE SWAP IS OPT-IN; THE CHECK THAT IT HAPPENED MUST NOT BE.
 #
@@ -1322,7 +1511,7 @@ LANES = {
     "l2": ("l2_graph.py",
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
             "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server", "arangodb_graph",
-            "memgraph_graph", "falkordb_graph", "duckpgq_graph"],
+            "mongodb_graph", "memgraph_graph", "falkordb_graph", "duckpgq_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
               ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "surrealdb_tpc",
@@ -1330,15 +1519,17 @@ LANES = {
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
-            "arangodb_e2", "pg_age_e2", "neo4j_e2", "composed_qdrant_neo4j"],
+            "arangodb_e2", "mongodb_e2", "pg_age_e2", "neo4j_e2", "composed_qdrant_neo4j"],
            ["hybrid", "atomicity"]),
     # L5 measures OPEN and CLOSE, which every embedded deployment does and no
     # benchmark measures. Situations ride the WORKLOAD axis, so each is its own
-    # cell and a slow one cannot hide inside a mean. One backend: this lane
-    # compares ArcadeDB against ITSELF across what a database contains, so a
-    # comparator column would be meaningless.
+    # cell and a slow one cannot hide inside a mean. The lane compares
+    # ArcadeDB against ITSELF across what a database contains, and since
+    # 2026-09-16 (DECISIONS #95a) against the one other engine on the page
+    # that a process can open and close in-process: SurrealDB embedded, whose
+    # situations it cannot build are declared on the row (l5_lifecycle_surreal).
     "lifecycle": ("l5_lifecycle.py",
-                  ["arcadedb_embedded", "arcadedb_server"],
+                  ["arcadedb_embedded", "arcadedb_server", "surrealdb_lifecycle"],
                   ["empty", "doc", "doc_idx10", "graph", "graph_gav",
                    "vector", "sparse", "ts"]),
     "l3s": ("l3_sparse.py",
@@ -1351,7 +1542,7 @@ LANES = {
             ["arcadedb_dense_embedded", "arcadedb_dense_server", "chroma_dense", "lancedb_dense",
              "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
              "milvus_dense", "pgvector_dense", "neo4j_dense", "surrealdb_dense", "surrealdb_dense_server",
-             "arangodb_dense",
+             "arangodb_dense", "mongodb_dense",
              # int8 arms for every dense engine that ships a quantized index.
              # Chroma, DuckDB-VSS and sqlite-vec have none; LanceDB is int8
              # already (IVF_HNSW_SQ is its only HNSW offering).
@@ -1388,7 +1579,10 @@ LANES = {
            # arms run: the document path is what ordinary SQL gives you, the
            # native path is the engine asked in its own idiom, and the page
            # prints both rather than choosing the flattering one.
-           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite", "mongodb", "timescaledb"],
+           ["arcadedb_ts_doc", "arcadedb_ts_doc_server", "arcadedb_ts_native", "arcadedb_ts_native_server", "questdb", "duckdb", "sqlite", "mongodb", "timescaledb",
+            # The plain-table comparators (2026-09-15): no time-series type,
+            # SQLite's footing, see l4_tsbs.SurrealTS / ArangoTS.
+            "surrealdb_ts", "surrealdb_ts_server", "arangodb_ts"],
            ["ingest"]),
 }
 
@@ -1406,6 +1600,56 @@ def _cpuset_size(cpuset):
         else:
             n += 1
     return n
+
+
+def durability_server_patch(cfg, cls):
+    """The SERVED half of the durability axis (DECISIONS #90).
+
+    Client-side engines read BENCH_DURABILITY inside the container and turn it
+    into a PRAGMA, a write concern, a waitForSync, or a JVM property. The ones
+    whose setting lives on the server have to be started differently, and that
+    is this function: it returns a copy of the backend config with the strict
+    flags applied, so nothing here mutates the module-level BACKENDS table that
+    every other cell reads.
+
+    Returns (patched_config, note) where the note lands on the row.
+    """
+    if cls != "strict":
+        return cfg, None
+    cfg = dict(cfg)
+    cmd = list(cfg.get("server_cmd", []))
+    env = list(cfg.get("server_env", []))
+    notes = []
+    # PostgreSQL, pgvector, PG+AGE, TimescaleDB: one flag, already present at
+    # its relaxed value, so this is a replacement rather than an addition and
+    # a server that somehow carried neither would be visible as a missing note.
+    if "-c" in cmd and "synchronous_commit=off" in cmd:
+        cmd[cmd.index("synchronous_commit=off")] = "synchronous_commit=on"
+        notes.append("synchronous_commit=on")
+    # ArcadeDB served: the same system property the embedded arm passes to its
+    # own JVM, appended to JAVA_OPTS.
+    for i, e in enumerate(env):
+        if isinstance(e, str) and e.startswith("JAVA_OPTS="):
+            env[i] = e + " -Darcadedb.txWalFlush=2"
+            notes.append("txWalFlush=2")
+    # QuestDB: its commit mode is a server setting.
+    if "questdb" in str(cfg.get("server_image", "")):
+        env += ["-e", "QDB_CAIRO_COMMIT_MODE=sync"]
+        notes.append("cairo.commit.mode=sync")
+    # Memgraph: the WAL is written at commit and fsynced every N transactions;
+    # N=1 is a sync at every commit (strace: 3,012 fsync for 3,009 commits).
+    if "memgraph" in str(cfg.get("server_image", "")):
+        cmd.append("--storage-wal-file-flush-every-n-tx=1")
+        notes.append("storage-wal-file-flush-every-n-tx=1")
+    # FalkorDB: Redis persistence. The image default is RDB snapshots only;
+    # AOF with appendfsync always is one fdatasync per write (strace: 3,011
+    # for 3,011 writes). REDIS_ARGS is the image entrypoint's own hook.
+    if "falkordb" in str(cfg.get("server_image", "")):
+        env += ["-e", "REDIS_ARGS=--appendonly yes --appendfsync always"]
+        notes.append("appendonly=yes, appendfsync=always")
+    cfg["server_cmd"] = cmd
+    cfg["server_env"] = env
+    return cfg, (", ".join(notes) if notes else None)
 
 
 def _pagecache_for(server_mem_bytes, heap):
@@ -1754,7 +1998,7 @@ def container_disk(cid, settle_s=3.0, tries=3):
             round(total, 1), round(rw, 1), round(vol, 1))
         if prev is not None:
             spread = abs(total - prev) / max(total, prev, 1e-9)
-            if spread <= 0.01:
+            if spread <= DISK_SETTLE_TOL:
                 out["disk_settled"] = True
                 return out
             note = f"still moving after {i + 1} samples: {prev:.1f} -> {total:.1f} MiB"
@@ -1874,7 +2118,7 @@ MP_LABELS = {
     "lancedb_dense": "lancedb",
     "pgvector_dense": "pgvector", "neo4j_dense": "neo4jvec",
     "surrealdb_dense": "surreal", "surrealdb_dense_server": "surrealsrv",
-    "arangodb_dense": "arango",
+    "arangodb_dense": "arango", "mongodb_dense": "mongo",
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
 }
 
@@ -1915,7 +2159,15 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     # scale in run_id: out-file names must never collide across campaigns
     # (a stale same-name out file once resurfaced a previous campaign's
     # metrics into a killed cell's row)
-    run_id = f"{job['run_id']}_{scale}_r{rep}"
+    # THE CLASS IS PART OF THE CELL'S IDENTITY (DECISIONS #90). Without it a
+    # strict cell writes the same run_id, the same raw artifact path, and the
+    # same canonical key as the relaxed cell beside it, and the later one
+    # silently shadows the earlier -- the exact shape of the sweep-tier and
+    # GAV-ablation shadowing this file already documents twice.
+    _dcls = os.environ.get("BENCH_DURABILITY", "relaxed")
+    be, _dnote = durability_server_patch(be, _dcls)
+    _dsuffix = "" if _dcls == "relaxed" else f"_d{_dcls}"
+    run_id = f"{job['run_id']}_{scale}_r{rep}{_dsuffix}"
     stale = os.path.join(RAW, f"{run_id}.json")
     if os.path.exists(stale):
         os.unlink(stale)  # belt-and-braces vs stale out-file reads
@@ -1926,6 +2178,22 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     # now tracks main rather than a release, the commit is the only thing that identifies what was measured
     # -- and it is resolvable, because our fork is public. Stamped on every row.
     row = {"run_id": run_id, "engine_commit": _LOCAL_ENGINE_COMMIT,
+           # WHICH MACHINE, and WHICH INSTRUMENT (DECISIONS #74 item 3, #84).
+           # The row used to record only the container id, so the host was a
+           # fact about the page's setup prose and not about the row. The
+           # instrument names the query set, timers, and durability rule the
+           # cell ran under; make_paper_tables refuses to mix two in a table.
+           "bench_host": os.environ.get("BENCH_HOST"),
+           "instrument": bench_common.INSTRUMENT,
+           # The class the cell ASKED for. The lane also stamps it, from the
+           # same variable, beside the string the engine itself reports; both
+           # are here so a row missing the lane's stamp (an old artifact, a
+           # crashed cell) still says which arm it was.
+           "durability_class": _dcls,
+           # What the runner changed on the SERVER for this class, if anything.
+           # Blank on an embedded arm and on a served engine with no knob, and
+           # the lane's own `durability` string is what says which of the two.
+           "durability_server_flags": _dnote,
            "lane": job["lane"], "backend": job["backend"],
            "workload": job["workload"], "scale": scale, "rep": rep, "tier": tier,
            "cpuset": cpuset, "topology": be["topology"],
@@ -2100,7 +2368,56 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # exists to close a fairness violation.
                    "BENCH_TSBS_DATA", "BENCH_TSBS_LP", "BENCH_TS_LIMIT",
                    "BENCH_TS_TAGS", "BENCH_TS_SETTLE_S", "BENCH_TS_LAST_AB",
-                   "BENCH_NEO4J_PAGECACHE"):
+                   "BENCH_NEO4J_PAGECACHE",
+                   # THE 2026-10 INSTRUMENT'S OWN KNOBS, added with the lanes
+                   # that read them, because this tuple is CLOSED: a knob added
+                   # to a lane and forgotten here runs the lane's in-script
+                   # default while the launcher believes otherwise, which is
+                   # exactly how BENCH_LC_ITERS stayed latent for a campaign.
+                   #
+                   #   BENCH_CRUD_OPS          the #82a single-record count (1000)
+                   #   BENCH_DENSE_MUTATE      forces the #82d insert/delete
+                   #                           phase on or off; unset means the
+                   #                           one-million tier only
+                   #   BENCH_DENSE_MUTATE_N    how many vectors are mutated
+                   #   BENCH_DENSE_MUTATE_QUERIES  queries in each post-mutation pass
+                   #   E2_READ_OPS             the #82c read-path op count
+                   #   E2_FILTER_OVERFETCH     how wide a post-filtering engine
+                   #                           searches before dropping
+                   #                           non-neighbours; it decides what a
+                   #                           post-filter arm's recall can be
+                   "BENCH_CRUD_OPS", "BENCH_DENSE_MUTATE",
+                   "BENCH_DENSE_MUTATE_N", "BENCH_DENSE_MUTATE_QUERIES",
+                   "E2_READ_OPS", "E2_FILTER_OVERFETCH", "E2_OPS", "E2_PRODUCTS",
+                   # Analytical iteration counts. The default is the campaign's
+                   # 100 everywhere; a laptop smoke lowers them and the row
+                   # records what it ran (olap_iters, query_iters).
+                   "BENCH_OLAP_ITER", "BENCH_QITER",
+                   # The graph lane's analytics budget (#82b): the triangle
+                   # count is expected to exceed it at the larger scale factor
+                   # and the row records the censoring rather than running for
+                   # hours.
+                   "BENCH_GRAPH_OLAP_ITER", "BENCH_GRAPH_OLAP_BUDGET_S",
+                   # The analytics message-half caps (DECISIONS #104), for a
+                   # laptop smoke of the LSQB queries only. Default unset = the
+                   # whole SF1 network; the campaign never sets them, so a
+                   # bench-host run loads the full corpus. This tuple is CLOSED,
+                   # so a smoke that exports them and this line omits them would
+                   # silently run the full network instead (the BENCH_LC_ITERS
+                   # trap), which on a laptop is an OOM rather than a wrong row.
+                   "BENCH_GRAPH_MSG_LIMIT", "BENCH_GRAPH_PERSON_LIMIT",
+                   # The time-series lane's per-query budget (#100), the same
+                   # mechanism; the override is for a laptop probe of it.
+                   "BENCH_TS_QUERY_BUDGET_S",
+                   # The document OLAP budget (#100, third lane), same mechanism.
+                   "BENCH_DOCS_OLAP_BUDGET_S",
+                   # The durability class (DECISIONS #90). Client-side engines
+                   # read it here: ArcadeDB embedded turns it into a JVM system
+                   # property, SQLite into a PRAGMA, MongoDB into j=true,
+                   # ArangoDB into waitForSync, SurrealDB embedded into
+                   # SURREAL_SYNC_DATA. The served engines are set below, on
+                   # their own containers.
+                   "BENCH_DURABILITY", "SURREAL_SYNC_DATA"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
@@ -2461,10 +2778,10 @@ def acquire_host_lock():
     # so a runner started from a second checkout of the repository (a git
     # worktree) held a different file, took its own "lock" cleanly, and
     # sweep_orphans() killed the first checkout's live cell 57 s into its
-    # build (rc 137, an error row with no digests), and did the same to a
-    # cross-model cell in the other direction. The protocol is one runner per
-    # HOST; the lock has to be where every checkout on the host finds it
-    # (BUGS F58).
+    # build (l2_neo4j_graph_olap_sf1_r1, rc 137, an error row with no
+    # digests), and did the same to a cross-model cell in the other
+    # direction. The protocol is one runner per HOST; the lock has to be
+    # where every checkout on the host finds it (BUGS F58).
     lock_path = os.path.join(tempfile.gettempdir(), "dbbench-runner.lock")
     fh = open(lock_path, "w")
     try:
@@ -2562,6 +2879,18 @@ def main():
                          "resuming a long stage after an interruption without "
                          "re-running finished cells. Errored and timed-out cells "
                          "are NOT skipped -- they are exactly what a resume retries.")
+    # THE DURABILITY AXIS (DECISIONS #90). Every timed WRITE runs at both
+    # settings, and most engines cannot switch per operation -- ArcadeDB's
+    # txWalFlush is per database, SurrealDB's and QuestDB's are server flags --
+    # so the class is a property of the CELL. A queue script asks for the write
+    # workloads twice, once with each value; the reads and the bulk ingests run
+    # at the relaxed default only, because an fsync per batch at ten million
+    # vectors is hours and teaches nothing the write cells do not.
+    ap.add_argument("--durability", default="relaxed", choices=["relaxed", "strict"],
+                    help="durability class for this run (DECISIONS #90). "
+                         "strict makes every engine that HAS the knob wait for "
+                         "the disk at commit; the four that have none run "
+                         "unchanged and their rows declare it.")
     ap.add_argument("--tier", default="paper", choices=["paper", "sweep"])
     ap.add_argument("--workers", type=int, default=0,
                     help="parallel workers on disjoint cpuset shards "
@@ -2677,7 +3006,21 @@ def main():
         for j in jobs:
             j["driver"] = args.driver
             j["driver_out_dir"] = args.driver_out_dir
+    # The lanes read the class from the environment (bench_common.DURABILITY_CLASS)
+    # and the allowlist carries it into the container; set it before anything
+    # reads it, and before the jobs are described.
+    os.environ["BENCH_DURABILITY"] = args.durability
+    if args.durability == "strict":
+        print(f"[durability] STRICT class (DECISIONS #90): every engine with the "
+              f"knob waits for the disk at commit; Neo4j, DuckDB, LadybugDB and "
+              f"the SurrealDB server have none and run unchanged.")
     _require_engine_commit(args.tier, {j["backend"] for j in jobs})
+    # THE HOST IS A ROW FIELD, not a page assumption (#74 item 3). A paper-tier
+    # cell without it would write bench_host=None on every row and exit 0.
+    if args.tier == "paper" and not os.environ.get("BENCH_HOST"):
+        raise SystemExit("REFUSING: BENCH_HOST is unset and this is a PAPER-tier run. "
+                         "Every row would record bench_host=None. Export BENCH_HOST=mini "
+                         "(the queue scripts do) or pass --tier sweep.")
     if args.tier == "paper" and "l3s" in args.lanes.split(",") \
             and os.environ.get("BENCH_SPARSE_SOURCE") != "bigann":
         raise SystemExit("REFUSING: l3s at paper tier needs BENCH_SPARSE_SOURCE=bigann "

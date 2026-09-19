@@ -1,0 +1,49 @@
+---
+# mongot (MongoDB Search / MongoDB Vector Search, Community Edition) as the
+# bench cell runs it. Derived from the image's own config.default.yml with only
+# the paths and addresses changed; every other key is left at the shipped
+# default, which is the same rule every other comparator in this harness runs
+# under.
+#
+# WHY localhost EVERYWHERE. The shipped file says it "is designed to work out
+# of the box for a localhost deployment where mongod and mongot run on the same
+# machine", and marks the TLS-disabled default as acceptable ONLY when both
+# processes are on the same host. Our cell puts both in ONE container, so this
+# is the configuration MongoDB documents rather than an insecure shortcut, and
+# the engine's whole memory footprint lands in one cgroup, which is what makes
+# it comparable with every other served engine on these tables.
+syncSource:
+  replicaSet:
+    hostAndPort: "localhost:27017"
+    # AUTHENTICATION IS NOT OPTIONAL. The shipped config says "Exactly one of
+    # scramAuth (password) or x509 must be configured", and mongod authorizes
+    # mongot through the searchCoordinator role, so the vector arm's mongod
+    # runs WITH access control while the document arm's runs without it. That
+    # difference is a property of the feature, not a choice, and the adapter
+    # records it on the row.
+    scramAuth:
+      username: mongotUser
+      authSource: admin
+      passwordFile: /mongot-state/passwordFile
+      tls:
+        enabled: false
+
+storage:
+  dataPath: "/mongot-state/data"
+
+server:
+  grpc:
+    address: "localhost:27028"
+    tls:
+      mode: "disabled"
+
+# Off: nothing in this harness scrapes Prometheus, and a listener we never read
+# is one more thing that can fail to bind.
+metrics:
+  enabled: false
+
+healthCheck:
+  address: "localhost:8080"
+
+logging:
+  verbosity: INFO

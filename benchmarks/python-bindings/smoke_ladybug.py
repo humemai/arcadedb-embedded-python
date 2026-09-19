@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Smoke test: LadybugDB (graph comparator; embedded, Cypher, in-process).
 
-LadybugDB is the maintained continuation of the Kùzu project (package
-`ladybug`, Kùzu-compatible API).
+LadybugDB is the embedded Cypher engine this suite compares against
+(package `ladybug`).
 """
 import platform
 import tempfile

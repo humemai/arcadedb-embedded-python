@@ -114,11 +114,14 @@ def _static(scale):
 
 # BENCH_GRAPH_PERSON_LIMIT caps the persons+KNOWS projection to the first N
 # persons IN FILE ORDER, and drops every KNOWS whose endpoints are not both
-# loaded. It exists ONLY for a laptop smoke of the analytics message half: the
-# full SF1 network is 17M records, which a laptop cannot load for a smoke.
-# Default 0 = the whole projection, so the interactive oltp workload and every
-# bench-host run are UNCHANGED; only a smoke that exports it is capped, and
-# every engine it compares sees the identical capped graph.
+# loaded. It exists ONLY for a laptop smoke of the analytics message half
+# (DECISIONS #104): the full SF1 network is 17M records, which a laptop cannot
+# load for a smoke, and SF1's full 9,892-person KNOWS graph makes q3/q6/q9 (the
+# friend-of-friend LSQB queries) run for many minutes per cold pass, which the
+# bench host bounds with the per-query budget (#100) but a laptop cannot wait
+# out. Default 0 = the whole projection, so the interactive oltp workload and
+# every bench-host run are UNCHANGED; only a smoke that exports it is capped,
+# and every engine it compares sees the identical capped graph.
 PERSON_LIMIT = int(os.environ.get("BENCH_GRAPH_PERSON_LIMIT") or 0)
 _LOADED_PERSONS = {}
 
@@ -199,14 +202,16 @@ def write_id_base(scale):
 
 # ===========================================================================
 # MESSAGE HALF -- the full social network for the ANALYTICS workload only
-# (DECISIONS #103b: graph analytics moves to the full SF1 network). Loaded
-# ONLY at the sf1full tier, for the olap workload, keyed off
+# (DECISIONS #103b: graph analytics moves to the full SF1 network; #104: LSQB's
+# nine queries join the five hand-written ones). Loaded ONLY at a full-network
+# tier (loads_messages below), for the olap workload, keyed off
 # BENCH_GRAPH_SOURCE=ldbc the same way the persons+KNOWS projection is; the
 # interactive (oltp) workload keeps loading persons+KNOWS alone at sf1 and
 # sf10 and never sees any of this.
 #
-# WHAT IS LOADED, and only this (the query-driven subset the October
-# instrument's LSQB queries need, so the two pages measure one corpus):
+# WHAT IS LOADED, and only this (the query-driven subset DECISIONS #104 names,
+# which is what the October instrument's LSQB queries need, so the two pages
+# measure one corpus):
 #   vertices   Forum, Post, Comment, Tag, TagClass, Country, City
 #   edges      IS_LOCATED_IN (Person->City), IS_PART_OF (City->Country),
 #              HAS_MEMBER (Forum->Person), CONTAINER_OF (Forum->Post),
@@ -223,19 +228,21 @@ def write_id_base(scale):
 #
 # MESSAGE is the SNB supertype of Post and Comment. It is not a file: each
 # engine expresses it as type inheritance (ArcadeDB EXTENDS) or as a second
-# label on every Post and Comment (Neo4j/Memgraph/FalkorDB). The sub-labels
-# are named in MSG_MESSAGE_SUBLABELS.
+# label on every Post and Comment (Neo4j/Memgraph/FalkorDB), so `MATCH
+# (m:Message)` reaches both. The sub-labels are named in MSG_MESSAGE_SUBLABELS.
 #
-# EVERY vertex carries only its id and every edge is a (src_id, dst_id) pair:
-# the analytics table asks structural questions of this half, so nothing else
-# is loaded.
+# EVERY LSQB QUERY IS A STRUCTURAL count(*): none reads a message/tag/forum
+# property, so the vertex streams yield BARE IDS and the edge streams yield
+# (src_id, dst_id) pairs. Nothing else is needed and nothing else is loaded.
 #
 # BENCH_GRAPH_MSG_LIMIT=N caps the three big dynamic vertex files (Forum, Post,
 # Comment) to their first N rows and filters every edge to endpoints that were
 # actually loaded, so the sliced subgraph is self-consistent AND identical on
-# every engine. 0 = the whole corpus. Persons, tags, tag classes and places are
-# always loaded whole (all small), so those endpoints are never dangling and
-# need no filtering. A laptop smoke sets it; the campaign never does.
+# every engine -- which is what makes a laptop cross-engine digest comparison
+# meaningful (DECISIONS #104 smoke). 0 = the whole corpus. Persons, tags, tag
+# classes and places are always loaded whole (all small), so those endpoints
+# are never dangling and need no filtering. A laptop smoke sets it; the
+# campaign never does.
 MSG_LIMIT = int(os.environ.get("BENCH_GRAPH_MSG_LIMIT") or 0)
 
 # Load order: vertices before the edges that reference them.

@@ -30,6 +30,7 @@ import statistics
 import glob
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +56,11 @@ SERVER_MEM_FRACTION_DEFAULT = 0.75
 DISCLOSED = {}
 
 
+# DECISIONS #86. Declared here because _dense_rows() below reads it: a laptop
+# skeleton has no bench-host overlay to open.
+SKELETON = os.environ.get("BENCH_SKELETON") == "1"
+
+
 def _canonical():
     sys.path.insert(0, HERE)
     import make_paper_tables as M
@@ -69,6 +75,11 @@ def _dense_rows():
     build are one cell's worth of envelope, not five.
     """
     out = []
+    # A SKELETON HAS NO OVERLAY. The multipass artifacts are the bench host's
+    # (DECISIONS #86); a laptop skeleton measures the dense lane once and its
+    # own rows are what the checks below read.
+    if SKELETON:
+        return out
     # dense_mp5_2681: five INDEPENDENT builds per arm, so pass 0 of each file
     # is one cell's conditions and there are five cells per arm, not one. The
     # old directory held a single build per arm and needed a "_build" filter to
@@ -547,10 +558,44 @@ def check_protocol_overlays():
 # measured on. Disclosed on the page's lifecycle table by export_web. Remove
 # the entry at the re-pin that carries the fix, so the gate is armed again.
 KNOWN_REGRESSIONS = {
-    "vector": ("8d6af9475",
-               "the first search after a write started a full async rebuild and close() waited on it; "
-               "filed as #7183, fixed in #7191 for 26.10.1"),
+    "vector": {
+        "commit": "8d6af9475",
+        # THE RELEASES THE REGRESSION IS IN, for rows that carry no commit.
+        # engine_commit is stamped by a campaign that built a matched pair;
+        # the laptop skeleton (DECISIONS #86) runs the published wheel and the
+        # published image and stamps none, so a commit-only match turned a
+        # documented, filed, upstream-fixed cost into a gate failure on the one
+        # publish that can do nothing about it. engine_version is what the
+        # running engine reported, which is evidence rather than a claim, so an
+        # unstamped row is matched on the releases the regression was measured
+        # in. #7191 ships in 26.10.1; a row from that release matches neither
+        # key and the gate is armed again, which is the point of the entry
+        # naming its releases instead of "not 26.10.1".
+        "versions": ("26.8", "26.9"),
+        "why": "the first search after a write started a full async rebuild and close() waited on it; "
+               "filed as #7183, fixed in #7191 for 26.10.1",
+    },
 }
+
+
+def _known_applies(known, rows):
+    """Do these rows come from the engine the known regression describes?"""
+    if not known:
+        return False
+    for r in rows:
+        commit = str(r.get("engine_commit") or "").strip()
+        if commit:
+            if commit.startswith(known["commit"]):
+                return True
+            continue
+        ver = str(r.get("engine_version") or "")
+        # Anchored so 26.8 does not match 126.8 or 26.80; the served arm spells
+        # itself "server:26.8.1 (build ...)", so this is a search, not a prefix.
+        if any(re.search(r"(?<![\d.])" + re.escape(v) + r"(?![\d])", ver)
+               for v in known["versions"]):
+            return True
+    return False
+
 
 def check_close_cost(rows):
     """F11: close must be O(what was written), not O(what is stored).
@@ -579,11 +624,22 @@ def check_close_cost(rows):
     # gate goes GREEN on that, and would equally go green on a change that moved
     # cost the other way and made a session slower overall. What a caller pays is
     # open plus close, so that is what gets budgeted.
-    lc = [r for r in rows if r.get("lane") == "lifecycle"
-          and r.get("clean_close_ms") is not None]
-    for r in lc:
-        r["_session_ms"] = (r["clean_close_ms"]
-                            + (r.get("clean_open_ms") or 0.0))
+    # OUR ENGINE'S INVARIANT (DECISIONS #50), checked on our rows. The lane
+    # carries a SurrealDB embedded arm since 2026-09-16 (DECISIONS #95a), and a
+    # cell keyed on (situation, size) alone would take one median over two
+    # engines and judge ArcadeDB's budget against a comparator's numbers. The
+    # comparator's rows are reported beside ours, per situation, and judged
+    # by nothing here: what its session costs is a page number, not a fairness
+    # question.
+    _all = [r for r in rows if r.get("lane") == "lifecycle"
+            and r.get("clean_close_ms") is not None]
+    lc = [r for r in _all if "arcadedb" in str(r.get("backend", ""))]
+    for r in _all:
+        r["_session_ms"] = (r["clean_close_ms"] + (r.get("clean_open_ms") or 0.0))
+    _others = collections.defaultdict(list)
+    for r in _all:
+        if r not in lc:
+            _others[(r.get("backend"), r["workload"], r.get("scale"))].append(r["_session_ms"])
     if not lc:
         # NOT a pass. This gate returned 0 for weeks while PAPER_SCALES was
         # silently deleting every lifecycle row upstream of it, so the one check
@@ -600,6 +656,9 @@ def check_close_cost(rows):
                   "it is deleted by load_canonical before any gate runs.")
         return 1
     print("\n== F11 session cost (open+close): O(written), not O(stored), under 100 ms ==")
+    for (be, sit, scale), vals in sorted(_others.items(), key=str):
+        print(f"  info: {be} {sit}/{scale} clean session (open+close) "
+              f"{statistics.median(vals):.1f} ms median of {len(vals)} (comparator, not judged)")
     bad = 0
     # AGGREGATE BY MEDIAN, per (situation, scale). The first version of this
     # assigned into a dict per row, so with N reps it kept whichever rep came
@@ -609,9 +668,12 @@ def check_close_cost(rows):
     # ignore it, which is worse than not having it.
     cells = collections.defaultdict(list)
     for r in lc:
-        cells[(r["workload"], r.get("scale"))].append(r["_session_ms"])
+        cells[(r["workload"], r.get("scale"))].append(r)
     by_sit = collections.defaultdict(dict)
-    for (sit, scale), vals in sorted(cells.items()):
+    by_sit_rows = collections.defaultdict(list)
+    for (sit, scale), cell_rows in sorted(cells.items()):
+        vals = [r["_session_ms"] for r in cell_rows]
+        by_sit_rows[sit].extend(cell_rows)
         med = statistics.median(vals)
         by_sit[sit][scale] = med
         if med > 100.0:
@@ -620,10 +682,13 @@ def check_close_cost(rows):
             # O(stored) by #7183 (1.4 s at 10M, 2026-09-08), and printing BAD
             # for a documented, fixed-upstream cost trains the reader to skip
             # the line. KNOWN is printed, disclosed on the page, not counted.
+            # Scoped to THIS cell's rows, not to every lifecycle row in the
+            # set: one arm carrying the regressed build was licensing the
+            # exception for arms that did not.
             known = KNOWN_REGRESSIONS.get(sit)
-            if known and any(str(r.get("engine_commit") or "").startswith(known[0]) for r in lc):
+            if _known_applies(known, cell_rows):
                 print(f"  KNOWN: {sit}/{scale} clean session (open+close) {med:.1f} ms "
-                      f"median of {len(vals)} exceeds the 100 ms budget: {known[1]}")
+                      f"median of {len(vals)} exceeds the 100 ms budget: {known['why']}")
             else:
                 print(f"  BAD: {sit}/{scale} clean session (open+close) {med:.1f} ms "
                       f"median of {len(vals)} exceeds the 100 ms budget "
@@ -639,17 +704,165 @@ def check_close_cost(rows):
             small, big = sizes["lc10k"], sizes["lc100k"]
             if small > 0 and big / small > 1.5:
                 known = KNOWN_REGRESSIONS.get(sit)
-                if known and any(str(r.get("engine_commit") or "").startswith(known[0]) for r in lc):
+                if _known_applies(known, by_sit_rows[sit]):
                     print(f"  KNOWN: {sit} clean session grows {big / small:.1f}x "
-                          f"({small:.1f} -> {big:.1f} ms medians) over 10x the rows: {known[1]}")
+                          f"({small:.1f} -> {big:.1f} ms medians) over 10x the rows: {known['why']}")
                 else:
                     print(f"  BAD: {sit} clean session grows {big / small:.1f}x "
                           f"({small:.1f} -> {big:.1f} ms medians) over 10x the "
                           f"rows, with nothing written. That is O(stored).")
                     bad += 1
     if not bad:
-        print(f"  ok {len(lc)} lifecycle row(s), none over budget, none scaling")
+        # "none over budget" read as a contradiction directly under a KNOWN
+        # line that says a cell is over budget. The known ones are disclosed on
+        # the page's own lifecycle table, which is what makes them not failures.
+        print(f"  ok {len(lc)} lifecycle row(s), none over budget or scaling "
+              f"except the known regressions printed above")
     return bad
+
+
+# ---------------------------------------------------------------------------
+# F10: one durability class per table, and one instrument (DECISIONS #81, #84).
+#
+# Every row measured under the 2026-10 instrument records `durability`, the
+# setting its engine ran at commit, and `instrument`. The matched class is
+# "relaxed" (a commit returns without waiting for the disk); an engine that
+# cannot be relaxed says so with a string starting "fsync at commit" and is
+# the named exception on its tables (Neo4j, DuckDB, LadybugDB). Anything
+# else on a 2026-10 row is a FAIL (FAIRNESS.md F10): a row with no durability, a "strict"
+# string on an engine that has the knob, or a PostgreSQL row whose server
+# answered anything but synchronous_commit=off.
+STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo4j",
+                  "ladybug_graph", "duckdb", "duckdb_vss_dense", "duckpgq_graph"}
+
+# THE THIRD CLASS, and the only backends allowed to be in it. SurrealDB 3.2.4
+# served has no sync setting at all -- no SYNC_DATA and no SURREAL_DATASTORE
+# token in its binary, and none of its 110 SURREAL_* variables names sync, WAL,
+# fsync, or durability -- so its behaviour at commit could not be established
+# (evidence in bench_common). Its string says "not verified" rather than
+# claiming a class, and these four arms are the only ones permitted to carry
+# such a string. Any other backend that starts saying "not verified" is an
+# engine whose default nobody checked, which is exactly what #81 forbids.
+UNVERIFIED_ALLOWED = {"surrealdb_tpc_server", "surrealdb_graph_server",
+                      "surrealdb_dense_server", "surrealdb_e2_server",
+                      "surrealdb_ts_server"}
+
+# THE CELLS THAT MUST EXIST IN BOTH DURABILITY CLASSES (DECISIONS #90): the six
+# document operations, the three graph writes, and the cross-model transaction.
+# Bulk ingest stays at one setting, because an fsync per batch at ten million
+# vectors is hours and teaches nothing the write cells do not, and every read
+# path is untouched.
+WRITE_CELLS = {("l1tpc", "oltp"), ("l2", "oltp"), ("e2", "hybrid")}
+
+
+def check_durability(rows):
+    import bench_common
+    print("=== F10: durability class and instrument per table ===")
+    oct_rows = [r for r in rows if str(r.get("instrument") or "") == "2026-10"]
+    if not oct_rows:
+        print("  no 2026-10 rows in the canonical set; nothing to check yet")
+        return 0
+    bad = 0
+    unverified = set()
+    no_setting = set()
+    seen_classes = collections.defaultdict(set)   # (lane, scale, workload, backend) -> classes
+    for r in oct_rows:
+        d = str(r.get("durability") or "")
+        # THE TWO THINGS A ROW NOW SAYS (DECISIONS #90): the class the CELL
+        # asked for, and the class the ENGINE reported. A cell that asked for
+        # strict and whose engine reports relaxed is a flag that did not take,
+        # which is the failure a server that silently ignores an environment
+        # variable produces and the reason #81 refuses an asserted string.
+        asked = str(r.get("durability_class") or "relaxed")
+        got = bench_common.durability_class(d)
+        where = f"{r.get('lane')} {r.get('scale')} {r.get('workload')} {r.get('backend')} [{asked}]"
+        key = (r.get("lane"), str(r.get("scale")), r.get("workload"), r.get("backend"))
+        if r.get("durability_no_setting"):
+            no_setting.add(r.get("backend"))
+            seen_classes[key].add("no-setting")
+        else:
+            seen_classes[key].add(asked)
+        if got is None:
+            print(f"  FAIL {where}: 2026-10 row records no durability"); bad += 1
+            continue
+        if r.get("durability_no_setting"):
+            # An engine with no knob reports the same string in both classes,
+            # by construction; #90 puts it on an equal footing by printing that
+            # one number in both columns rather than comparing its strict
+            # number against everyone else's relaxed one.
+            if r.get("backend") not in STRICT_ALLOWED | UNVERIFIED_ALLOWED:
+                print(f"  FAIL {where}: declares no durability setting but is not "
+                      f"one of the named exceptions"); bad += 1
+            if got == "unverified":
+                unverified.add(r.get("backend"))
+            continue
+        if got == "unverified" and r.get("backend") not in UNVERIFIED_ALLOWED:
+            print(f"  FAIL {where}: '{d}' -- an unchecked default on an engine "
+                  f"that is not one of the named exceptions"); bad += 1
+        elif got == "unverified":
+            unverified.add(r.get("backend"))
+        elif got != asked:
+            print(f"  FAIL {where}: the cell asked for the {asked} class and the "
+                  f"engine reports '{d}', which is {got}"); bad += 1
+        elif "NOT the #" in d:
+            print(f"  FAIL {where}: the server answered '{d}'"); bad += 1
+
+    # BOTH CLASSES ON THE WRITE CELLS (DECISIONS #90). "Every timed write
+    # operation runs twice, once with each setting." A write cell that exists
+    # in only one class is a failure unless the engine declared no setting, in
+    # which case one cell is the whole answer and the page says so.
+    for (lane, scale, workload, backend), classes in sorted(seen_classes.items()):
+        if (lane, workload) not in WRITE_CELLS:
+            continue
+        if "no-setting" in classes:
+            continue
+        missing = {"relaxed", "strict"} - classes
+        if missing:
+            print(f"  FAIL {lane} {scale} {workload} {backend}: a timed write cell "
+                  f"in only the {sorted(classes)} class; #90 runs it at both "
+                  f"(missing {sorted(missing)})")
+            bad += 1
+    # The two data-dependent time-series shapes must agree across engines
+    # (l4_tsbs records the counts; a query that returned a different number
+    # of rows measured a different question).
+    # ...and the document analytics shapes, per scale (the three 2026-10
+    # queries return a fixed count only if every engine grouped the same way).
+    for lane, fields in (("l4", ("q_groupby_rows", "q_high_rows")),
+                         ("l1tpc", ("top_parts_rows", "ship_mode_rows", "by_month_rows"))):
+        for qn in fields:
+            got = {}
+            for r in oct_rows:
+                if r.get("lane") == lane and r.get(qn) not in (None, ""):
+                    got.setdefault((r.get("scale"), str(r.get(qn))), set()).add(r.get("backend"))
+            per_scale = {}
+            for (sc, n), bes in got.items():
+                per_scale.setdefault(sc, {})[n] = sorted(bes)
+            for sc, d in per_scale.items():
+                if len(d) > 1:
+                    print(f"  FAIL {lane} {sc} {qn} disagrees across engines: {d}"); bad += 1
+    if unverified:
+        print(f"  NAMED EXCEPTION: {sorted(unverified)} run at an engine default "
+              f"this project could not establish; their rows and tables say so "
+              f"(FAIRNESS F10)")
+    if no_setting:
+        print(f"  NO SETTING: {sorted(no_setting)} have no durability knob "
+              f"(each straced rather than assumed); they run once and the page "
+              f"prints that one number in both columns (DECISIONS #90)")
+    if not bad:
+        print(f"  ok: {len(oct_rows)} 2026-10 rows, every durability recorded, "
+              f"in the class the cell asked for, and both classes present on "
+              f"every write cell")
+    return bad
+
+
+# (moved above _dense_rows: it is read there too)
+# DECISIONS #86: the laptop skeleton waives the two invariants that are about
+# the BENCH HOST and nothing else -- F1's cpuset pinning and F3's per-size
+# memory envelope -- because a laptop has neither. Every other invariant,
+# including the degree match, the close cost, the durability class, and the
+# instrument, runs exactly as it will in October. The waiver is printed here
+# and published in the payload (export_web.SKELETON_WAIVERS); it is never
+# silent, and BENCH_SKELETON is set by the skeleton publish alone.
 
 
 def main():
@@ -658,8 +871,17 @@ def main():
     except Exception as e:
         print(f"cannot load canonical rows: {e}")
         return 2
-    bad = check_cpuset(rows) + check_envelope(rows) + check_degree(rows)
+    if SKELETON:
+        print("=== SKELETON publish (DECISIONS #86): F1 (cpuset) and F3 "
+              "(memory envelope) are WAIVED ===")
+        print("  Both describe the bench host, which for a skeleton is the "
+              "laptop. Every other invariant below runs unchanged.")
+        bad = 0
+    else:
+        bad = check_cpuset(rows) + check_envelope(rows)
+    bad += check_degree(rows)
     bad += check_close_cost(rows)
+    bad += check_durability(rows)
     check_protocol_overlays()
     bad += report_producers(rows)
     print(f"\n{bad} fairness invariant failure(s)")

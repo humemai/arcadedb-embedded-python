@@ -5,11 +5,18 @@ Backends: arcadedb (embedded; Point documents with a composite (host, ts)
 index -- its idiomatic timeseries shape), duckdb (table + ART index),
 questdb (server; ILP ingest on 9009, SQL over pg-wire). InfluxDB3 omitted
 (no stable embedded/pinnable OSS artifact at eval time; disclosed).
+SurrealDB (embedded core 2.3.10 through the SDK, and the served 3.2.4) and
+ArangoDB 3.12.11 joined 2026-09-15 on SQLite's footing: a plain table with a
+datetime field and a composite (host, ts) index, no time-series type.
 
 Queries (TSBS-flavored):
-  q_last   last point for one host
-  q_range  1h of one host, per-minute max(usage_user)
-  q_global 12h across all hosts, hourly avg(usage_user)
+  q_last    last point for one host
+  q_range   1h of one host, per-minute max(usage_user)
+  q_global  12h across all hosts, hourly avg(usage_user)
+  q_groupby 12h across all hosts, avg(usage_user) per host per hour (TSBS
+            double-groupby-1; 2026-10, DECISIONS #82)
+  q_high    12h across all hosts, readings with usage_user > 90 (TSBS
+            high-cpu-all; 2026-10, DECISIONS #82)
 
 Metrics per rep: ingest points/s, per-query p50 and p99 ms over QITER iterations.
 """
@@ -19,6 +26,10 @@ import json
 import os
 import statistics
 import time
+import budget_lookup
+import bench_common
+import surreal_common
+import arango_common
 
 # THE CORPUS. BENCH_-prefixed because runner.py's env allowlist is a CLOSED
 # tuple: a variable not in it is dropped at the container boundary and the
@@ -32,8 +43,9 @@ LIMIT = int(os.environ.get("BENCH_TS_LIMIT") or os.environ.get("TSBS_LIMIT", "0"
 
 # THE TIERS. ts100 is TSBS's smallest defined configuration (100 hosts, the
 # `--scale` the generator takes); ts1000 is the same generator at 1,000 hosts
-# (DECISIONS #103: 100 hosts is the smallest configuration TSBS defines, and
-# the time-series table moves to 1,000 alone, #103b). Both files are three
+# (DECISIONS #103: 100 hosts is the smallest configuration TSBS defines).
+# The table carries BOTH sizes in October (#108 retires #103b's replacement
+# rule: the large size is a row group, not a switch). Both files are three
 # days at ten seconds, seed 123 (gen_tsbs_corpus.sh), so a point count is
 # hosts x 25,920 intervals. The scale axis exists so PAPER_SCALES can key on
 # it: load_canonical drops a row whose scale is not listed for its lane.
@@ -43,9 +55,81 @@ SCALE_POINTS = {"ts100": 2_592_000, "ts1000": 25_920_000}
 # cpu_influx_s1000.lp since 2026-08-06, byte-identical to the corpus README's
 # sha256 (~/bench-data/tsbs/README.md on the staging host).
 SCALE_LP = {"ts100": "cpu_influx.lp", "ts1000": "cpu_influx_s1000.lp"}
-QITER = 100   # was 10; a p99 needs the samples (2026-09-10, BUGS F29)
+# 100 runs per query per repetition: was 10, and a p99 needs the samples
+# (2026-09-10, BUGS F29). BENCH_QITER lowers it for a laptop smoke; the count
+# lands on the row as `query_iters`.
+QITER = int(os.environ.get("BENCH_QITER") or 100)
+# THE PER-QUERY BUDGET (DECISIONS #100): the graph lane's mechanism
+# (graph_common.OLAP_BUDGET_S, DECISIONS #82b), a property of the lane and the
+# same for every engine on the table, so it moves no comparison by itself. The
+# clock starts before the cold pass, the cold pass always runs, and the loop
+# stops at the first iteration that would start after the budget is spent; the
+# row records <q>_budget_s, <q>_iters, <q>_elapsed_s and <q>_censored, and the
+# table names a censored query with its iteration count and the time it
+# reached while the cell's other queries keep their numbers.
+#
+# WHY 600 s. Derived from the slowest legitimate SERVED engine at ts100, which
+# is ArcadeDB's own served document path: on mini in September
+# (results/runs_paper.csv, five reps) its twelve-hour aggregate is 1.55-1.65 s
+# per iteration, so a hundred iterations is about 165 s, and the three October
+# scans of the same shape sit within 8% of it on the laptop skeleton
+# (4.85-5.31 s each, where the same aggregate is 4.93 s), so about 180 s on
+# mini. 600 s is 3.3x that. It is also the largest budget at which the slowest
+# engine measured so far, embedded SurrealDB 2.3.10 at 59-97 s per scan on the
+# laptop, fits its four scanning queries, its 513 s ingest, its 97 s of
+# last-point iterations and the untimed shape check inside the tier's 3,600 s
+# cell timeout (4 x 600 + about 800 s), and the laptop skeleton's slowest served
+# arm (531 s for a hundred iterations) stays under it, so the preview does not
+# censor an engine the bench host would not. The override exists for a laptop
+# probe of the mechanism and never for a campaign.
+QUERY_BUDGET_S = float(os.environ.get("BENCH_TS_QUERY_BUDGET_S") or 600.0)
 HOST = "host_42"
 T0 = 1767225600  # 2026-01-01T00:00:00Z epoch seconds
+HIGH = 90.0      # the high-cpu threshold, TSBS's own
+# THE SERVER TRUNCATES AT 20,000 ROWS UNLESS TOLD OTHERWISE, and until the #88
+# digests compared the two deployments nothing here knew that. Both served
+# ArcadeDB arms returned exactly 20,000 rows for the high-usage filter where
+# the two embedded arms, DuckDB, SQLite, MongoDB, QuestDB and TimescaleDB all
+# returned 32,944 (laptop, 12 h of the corpus, 2026-09-14), so the served arms
+# were timing a query over 61% of the qualifying rows and calling it the same
+# query. The HTTP API takes a `limit`; -1 means no cap, and every query this
+# lane sends now says so. A harness defect, not an engine one: the server did
+# exactly what its documented default says.
+HTTP_LIMIT = -1
+QUERIES = ("q_last", "q_range", "q_global", "q_groupby", "q_high", "q_orderlimit")
+ORDERLIMIT_N = 5   # TSBS groupby-orderby-limit takes the last five buckets
+
+# ---------------------------------------------------------------------------
+# WHAT EACH ANSWER LOOKS LIKE (DECISIONS #88). Declared once per query, and the
+# instants are declared as instants: this lane keeps the bucket key as epoch
+# SECONDS on the ArcadeDB document, DuckDB and SQLite arms, epoch MILLISECONDS
+# on the ArcadeDB native arms (timeBucket takes ms), a datetime on MongoDB and
+# TimescaleDB, and a timestamp on QuestDB. Those are one instant in six
+# spellings, and without the coercion the gate would report six disagreements
+# per query and hide any real one among them.
+#
+# AND THE READING IS DECLARED A MEASURE. The TSBS cpu corpus carries its fields
+# as line-protocol INTEGERS (`usage_user=58i`), so every value here is a whole
+# number that one engine can hand back as an int and the next as a double. The
+# canonical form prints an int exactly and a float to six significant digits,
+# and the two spellings coincide only below 10**6 -- which is the only reason
+# this lane has never split on it: `uu` is a percentage and `v` its average, so
+# both sit under a hundred. It is latent rather than absent, and the same
+# latency became a real split on the TPC lane at SF1, seven engines to one
+# (2026-09-14). `num` says "this column is a measure"; the host name and the
+# bucket key stay what they are.
+Q_DIGEST = {
+    "q_last": dict(columns=(("ts", "timestamp"), "uu"),
+                   coerce={"ts": "epoch_s", "uu": "num"}),
+    "q_range": dict(columns=(("m", "_id"), "v"), coerce={"m": "epoch_s", "v": "num"}),
+    "q_global": dict(columns=(("h", "_id"), "v"), coerce={"h": "epoch_s", "v": "num"}),
+    "q_groupby": dict(columns=(("host", "_id.host"), ("h", "_id.h"), "v"),
+                      coerce={"h": "epoch_s", "v": "num"}),
+    "q_high": dict(columns=("host", ("ts", "timestamp"), "uu"),
+                   coerce={"ts": "epoch_s", "uu": "num"}),
+    "q_orderlimit": dict(columns=(("h", "_id"), "v"), coerce={"h": "epoch_s", "v": "num"},
+                         order_matters=True, order_key="h"),
+}
 
 
 def lp_path(scale):
@@ -122,6 +206,20 @@ class ArcadeTS:
             f"SELECT (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
             f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY h ORDER BY h").to_list()
 
+    def q_groupby(self):
+        return self.db.query("sql",
+            f"SELECT host, (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
+            f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h").to_list()
+
+    def q_high(self):
+        return self.db.query("sql",
+            f"SELECT host, ts, uu FROM Point WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").to_list()
+
+    def q_orderlimit(self):
+        return self.db.query("sql",
+            f"SELECT (ts - ts % 3600) AS h, max(uu) AS v FROM Point "
+            f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}").to_list()
+
     def close(self):
         self.db.close()
 
@@ -151,8 +249,12 @@ class ArcadeTSServer(ArcadeTS):
         return self._ver
 
     def _post(self, kind, command, language="sql", timeout=600):
-        r = self.rq.post(f"{self.base}/{kind}/bench",
-                         json={"language": language, "command": command}, timeout=timeout)
+        body = {"language": language, "command": command}
+        if kind == "query":
+            # Only the query endpoint takes a row cap; sending it to /command
+            # would be an unknown field on a write.
+            body["limit"] = HTTP_LIMIT
+        r = self.rq.post(f"{self.base}/{kind}/bench", json=body, timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])
 
@@ -180,6 +282,18 @@ class ArcadeTSServer(ArcadeTS):
     def q_global(self):
         return self._post("query", f"SELECT (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
                                    f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY h ORDER BY h")
+
+    def q_groupby(self):
+        return self._post("query", f"SELECT host, (ts - ts % 3600) AS h, avg(uu) AS v FROM Point "
+                                   f"WHERE ts >= {T0} AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h")
+
+    def q_high(self):
+        return self._post("query", f"SELECT host, ts, uu FROM Point WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}")
+
+    def q_orderlimit(self):
+        return self._post("query", f"SELECT (ts - ts % 3600) AS h, max(uu) AS v FROM Point "
+                                   f"WHERE ts >= {T0} AND ts < {T0+43200} "
+                                   f"GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}")
 
     def close(self):
         self.rq.close()
@@ -308,6 +422,23 @@ class ArcadeNativeTS(ArcadeTS):
             f"WHERE ts >= {a} AND ts < {b} "
             f"GROUP BY h ORDER BY h").to_list()
 
+    def q_groupby(self):
+        a, b = T0 * 1000, (T0 + 43200) * 1000
+        return self.db.query("sql",
+            f"SELECT host, ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point "
+            f"WHERE ts >= {a} AND ts < {b} GROUP BY host, h ORDER BY host, h").to_list()
+
+    def q_high(self):
+        a, b = T0 * 1000, (T0 + 43200) * 1000
+        return self.db.query("sql",
+            f"SELECT host, ts, uu FROM Point WHERE ts >= {a} AND ts < {b} AND uu > {HIGH}").to_list()
+
+    def q_orderlimit(self):
+        a, b = T0 * 1000, (T0 + 43200) * 1000
+        return self.db.query("sql",
+            f"SELECT ts.timeBucket('1h', ts) AS h, max(uu) AS v FROM Point "
+            f"WHERE ts >= {a} AND ts < {b} GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}").to_list()
+
     def settle(self):
         """OUTSIDE the ingest timer, like every other arm's settle.
 
@@ -364,8 +495,12 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
                 "ts_shards": self.SHARDS, "ts_path": "native_timeseries_http_line_protocol"}
 
     def _post(self, kind, command, language="sql", timeout=600):
-        r = self.rq.post(f"{self.base}/{kind}/bench",
-                         json={"language": language, "command": command}, timeout=timeout)
+        body = {"language": language, "command": command}
+        if kind == "query":
+            # Only the query endpoint takes a row cap; sending it to /command
+            # would be an unknown field on a write.
+            body["limit"] = HTTP_LIMIT
+        r = self.rq.post(f"{self.base}/{kind}/bench", json=body, timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])
 
@@ -397,6 +532,20 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
         return self._post("query", f"SELECT ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point "
                                    f"WHERE ts >= {T0 * 1000} AND ts < {(T0 + 43200) * 1000} GROUP BY h ORDER BY h")
 
+    def q_groupby(self):
+        return self._post("query", f"SELECT host, ts.timeBucket('1h', ts) AS h, avg(uu) AS v FROM Point "
+                                   f"WHERE ts >= {T0 * 1000} AND ts < {(T0 + 43200) * 1000} "
+                                   "GROUP BY host, h ORDER BY host, h")
+
+    def q_high(self):
+        return self._post("query", f"SELECT host, ts, uu FROM Point WHERE ts >= {T0 * 1000} "
+                                   f"AND ts < {(T0 + 43200) * 1000} AND uu > {HIGH}")
+
+    def q_orderlimit(self):
+        return self._post("query", f"SELECT ts.timeBucket('1h', ts) AS h, max(uu) AS v FROM Point "
+                                   f"WHERE ts >= {T0 * 1000} AND ts < {(T0 + 43200) * 1000} "
+                                   f"GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}")
+
     def settle(self):
         self._settled_s = 0.0
 
@@ -411,6 +560,9 @@ class DuckTS:
         import duckdb
         self._duckdb = duckdb
         self.cx = duckdb.connect("/tmp/l4_duck.db")
+        # F6: DuckDB sizes its pool from the host (20 threads) under the 12-thread
+        # cpuset; only sched_getaffinity sees the cpuset. Same fix as l1_tabular.
+        self.cx.execute(f"PRAGMA threads={len(os.sched_getaffinity(0))}")
 
     def version(self):
         return f"duckdb {self._duckdb.__version__}"
@@ -440,6 +592,20 @@ class DuckTS:
         return self.cx.execute(
             f"SELECT (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
             f"AND ts < {T0+43200} GROUP BY h ORDER BY h").fetchall()
+
+    def q_groupby(self):
+        return self.cx.execute(
+            f"SELECT host, (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
+            f"AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h").fetchall()
+
+    def q_high(self):
+        return self.cx.execute(
+            f"SELECT host, ts, uu FROM p WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").fetchall()
+
+    def q_orderlimit(self):
+        return self.cx.execute(
+            f"SELECT (ts - ts % 3600) AS h, max(uu) FROM p WHERE ts >= {T0} "
+            f"AND ts < {T0+43200} GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}").fetchall()
 
     def close(self):
         self.cx.close()
@@ -484,6 +650,20 @@ class SQLiteTS:
         return self.cx.execute(
             f"SELECT (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
             f"AND ts < {T0+43200} GROUP BY h ORDER BY h").fetchall()
+
+    def q_groupby(self):
+        return self.cx.execute(
+            f"SELECT host, (ts - ts % 3600) AS h, avg(uu) FROM p WHERE ts >= {T0} "
+            f"AND ts < {T0+43200} GROUP BY host, h ORDER BY host, h").fetchall()
+
+    def q_high(self):
+        return self.cx.execute(
+            f"SELECT host, ts, uu FROM p WHERE ts >= {T0} AND ts < {T0+43200} AND uu > {HIGH}").fetchall()
+
+    def q_orderlimit(self):
+        return self.cx.execute(
+            f"SELECT (ts - ts % 3600) AS h, max(uu) FROM p WHERE ts >= {T0} "
+            f"AND ts < {T0+43200} GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}").fetchall()
 
     def close(self):
         self.cx.close()
@@ -536,9 +716,12 @@ class MongoTS:
 
     def ingest(self, pts):
         import datetime as _dt
+        from pymongo import WriteConcern
         self.db.drop_collection("p")
         self.db.create_collection("p", timeseries={"timeField": "ts", "metaField": "host", "granularity": "seconds"})
-        col = self.db["p"]
+        # w=1, j=false (#81): the insert returns once applied in memory; the
+        # journal is flushed by the storage engine's own 100 ms interval.
+        col = self.db.get_collection("p", write_concern=WriteConcern(w=1, j=False))
         for lo in range(0, len(pts), 50_000):
             col.insert_many([{"host": p[0], "ts": _dt.datetime.fromtimestamp(p[1], _dt.timezone.utc),
                               "uu": p[2], "us": p[3], "ui": p[4]} for p in pts[lo:lo + 50_000]], ordered=False)
@@ -562,6 +745,22 @@ class MongoTS:
             {"$group": {"_id": {"$dateTrunc": {"date": "$ts", "unit": "hour"}}, "v": {"$avg": "$uu"}}},
             {"$sort": {"_id": 1}}]))
 
+    def q_groupby(self):
+        return list(self.db["p"].aggregate([
+            {"$match": {"ts": {"$gte": self._t(T0), "$lt": self._t(T0 + 43200)}}},
+            {"$group": {"_id": {"host": "$host", "h": {"$dateTrunc": {"date": "$ts", "unit": "hour"}}}, "v": {"$avg": "$uu"}}},
+            {"$sort": {"_id.host": 1, "_id.h": 1}}]))
+
+    def q_high(self):
+        return list(self.db["p"].find({"ts": {"$gte": self._t(T0), "$lt": self._t(T0 + 43200)}, "uu": {"$gt": HIGH}},
+                                      {"host": 1, "ts": 1, "uu": 1}))
+
+    def q_orderlimit(self):
+        return list(self.db["p"].aggregate([
+            {"$match": {"ts": {"$gte": self._t(T0), "$lt": self._t(T0 + 43200)}}},
+            {"$group": {"_id": {"$dateTrunc": {"date": "$ts", "unit": "hour"}}, "v": {"$max": "$uu"}}},
+            {"$sort": {"_id": -1}}, {"$limit": ORDERLIMIT_N}]))
+
     def close(self):
         self.cl.close()
 
@@ -582,6 +781,9 @@ class TimescaleTS:
             self._v = c.fetchone()[0]
             c.execute("SELECT version()")
             self._pv = c.fetchone()[0].split(" (")[0]
+            c.execute("SHOW synchronous_commit")   # read, not asserted (#81, #90)
+            _sc = c.fetchone()[0]
+        self.durability = bench_common.pg_durability_string(_sc)
 
     def version(self):
         return f"timescaledb {self._v} on {self._pv}"
@@ -613,6 +815,25 @@ class TimescaleTS:
         with self.cx.cursor() as c:
             c.execute("SELECT time_bucket('1 hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s GROUP BY h ORDER BY h",
                       (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def q_groupby(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT host, time_bucket('1 hour', ts) AS h, avg(uu) FROM p WHERE ts >= %s AND ts < %s "
+                      "GROUP BY host, h ORDER BY host, h", (self._t(T0), self._t(T0 + 43200)))
+            return c.fetchall()
+
+    def q_high(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT host, ts, uu FROM p WHERE ts >= %s AND ts < %s AND uu > %s",
+                      (self._t(T0), self._t(T0 + 43200), HIGH))
+            return c.fetchall()
+
+    def q_orderlimit(self):
+        with self.cx.cursor() as c:
+            c.execute("SELECT time_bucket('1 hour', ts) AS h, max(uu) FROM p WHERE ts >= %s AND ts < %s "
+                      "GROUP BY h ORDER BY h DESC LIMIT %s",
+                      (self._t(T0), self._t(T0 + 43200), ORDERLIMIT_N))
             return c.fetchall()
 
     def close(self):
@@ -714,16 +935,286 @@ class QuestTS:
             f"WHERE timestamp >= '2026-01-01T00:00:00Z' "
             f"AND timestamp < '2026-01-01T12:00:00Z' SAMPLE BY 1h").fetchall()
 
+    def q_groupby(self):
+        # SAMPLE BY with a key column groups per host per bucket, QuestDB's own form.
+        return self.cx.execute(
+            f"SELECT host, timestamp, avg(uu) FROM p "
+            f"WHERE timestamp >= '2026-01-01T00:00:00Z' "
+            f"AND timestamp < '2026-01-01T12:00:00Z' SAMPLE BY 1h ORDER BY host, timestamp").fetchall()
+
+    def q_high(self):
+        return self.cx.execute(
+            f"SELECT host, timestamp, uu FROM p WHERE timestamp >= '2026-01-01T00:00:00Z' "
+            f"AND timestamp < '2026-01-01T12:00:00Z' AND uu > {HIGH}").fetchall()
+
+    def q_orderlimit(self):
+        # SAMPLE BY in a subquery: QuestDB does not accept ORDER BY ... LIMIT
+        # directly after SAMPLE BY, and the ordering is the point of the query.
+        return self.cx.execute(
+            f"SELECT * FROM (SELECT timestamp, max(uu) AS v FROM p "
+            f"WHERE timestamp >= '2026-01-01T00:00:00Z' "
+            f"AND timestamp < '2026-01-01T12:00:00Z' SAMPLE BY 1h) "
+            f"ORDER BY timestamp DESC LIMIT {ORDERLIMIT_N}").fetchall()
+
     def close(self):
         self.cx.close()
+
+def _surreal_dt(epoch_s):
+    """A SurrealQL datetime literal for an epoch second. SurrealQL 2.x stopped
+    coercing a bare string to a datetime (a string compared with a datetime
+    field is a type mismatch, not a cast), so the literal carries the d prefix:
+    https://surrealdb.com/docs/surrealql/datamodel/datetimes"""
+    return "d'" + _dt.datetime.fromtimestamp(epoch_s, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "'"
+
+
+class SurrealTS:
+    """SurrealDB with no time-series type, on SQLite's footing (2026-09-15).
+
+    Embedded through the Python SDK (surrealdb==2.0.0, which carries core
+    2.3.10) on its SurrealKV disk store: one SCHEMALESS table `p` whose `ts`
+    field is a SurrealDB datetime (the SDK encodes a tz-aware Python datetime
+    as one over CBOR; read back, `SELECT ts` returns datetime objects), plus
+    the tag and the three metrics, and a composite index `DEFINE INDEX
+    p_host_ts ON p FIELDS host, ts` defined BEFORE the load (the SDK's SurrealKV
+    store writes a post-load DEFINE INDEX as one transaction record and failed
+    on it at 6.0M rows, BUGS F41). EXPLAIN on both versions shows the newest
+    reading and the one-host hour served from that index (2.3.10: `Iterate
+    Index` with prefix ['host_42'] and the two ts ranges; 3.2.4: `IndexScan`,
+    direction Backward, limit 1), and every all-host query as a table scan,
+    which is what SQLite's (host, ts) index gives it too.
+
+    Bucketing is `time::floor(ts, 1m)` / `time::floor(ts, 1h)`: truncation to
+    a multiple of the duration from the Unix epoch, which is the same bucket
+    `ts - ts % 60` and `date_trunc` produce (function reference:
+    https://surrealdb.com/docs/surrealql/functions/database/time). `time::group(ts,
+    'hour')` gives the same buckets and was measured equal; the duration form
+    covers the minute and the hour with one function.
+
+    One query is spelled as a subquery on purpose: on core 2.3.10 an `ORDER BY
+    h DESC LIMIT 5` written after `GROUP BY h` sorts by the group key
+    ASCENDING and takes the first five buckets, i.e. the wrong set (the same
+    finding as BUGS F31 on the TPC lane); wrapped in `SELECT * FROM (...)` it
+    orders correctly on both versions, and 3.2.4 answers the two spellings in
+    the same time (143 vs 145 ms, laptop probe), so both deployments run the
+    one text.
+
+    Every other SurrealDB arm loads with the SDK's insert() in batches; this
+    one does the same, 5,000 rows per call.
+    """
+    name = "surrealdb_ts"
+    URL = "surrealkv:///tmp/l4_surrealkv"
+    BATCH = 5000
+    # DECISIONS #81/#90: the string every SurrealDB embedded arm records, resolved
+    # at the cell's class before the store is opened.
+    durability = bench_common.DURABILITY_SURREAL_EMBEDDED
+
+    def _open(self):
+        self.durability = bench_common.at_class(bench_common.DURABILITY_SURREAL_EMBEDDED)
+        surreal_common.apply_durability()
+        import shutil
+        from surrealdb import Surreal
+        shutil.rmtree("/tmp/l4_surrealkv", ignore_errors=True)
+        self.db = Surreal(self.URL)
+        self.db.use("bench", "bench")
+        self._ver = surreal_common.engine_stamp(self.db)   # core version, not the SDK's (F39)
+
+    def connect(self):
+        self._open()
+        self.db.query("REMOVE TABLE IF EXISTS p")
+
+    def version(self):
+        return self._ver
+
+    def ingest(self, pts):
+        self.db.query("DEFINE TABLE p SCHEMALESS; DEFINE INDEX p_host_ts ON p FIELDS host, ts")
+        buf = []
+        for h, ts, uu, us, ui in pts:
+            buf.append({"host": h, "ts": _dt.datetime.fromtimestamp(ts, _dt.timezone.utc),
+                        "uu": uu, "us": us, "ui": ui})
+            if len(buf) >= self.BATCH:
+                self.db.insert("p", buf); buf = []
+        if buf:
+            self.db.insert("p", buf)
+
+    _A, _B1, _B12 = _surreal_dt(T0), _surreal_dt(T0 + 3600), _surreal_dt(T0 + 43200)
+    Q = {
+        "q_last": f"SELECT ts, uu FROM p WHERE host = '{HOST}' ORDER BY ts DESC LIMIT 1",
+        "q_range": (f"SELECT time::floor(ts, 1m) AS m, math::max(uu) AS v FROM p "
+                    f"WHERE host = '{HOST}' AND ts >= {_A} AND ts < {_B1} GROUP BY m ORDER BY m"),
+        "q_global": (f"SELECT time::floor(ts, 1h) AS h, math::mean(uu) AS v FROM p "
+                     f"WHERE ts >= {_A} AND ts < {_B12} GROUP BY h ORDER BY h"),
+        "q_groupby": (f"SELECT host, time::floor(ts, 1h) AS h, math::mean(uu) AS v FROM p "
+                      f"WHERE ts >= {_A} AND ts < {_B12} GROUP BY host, h ORDER BY host, h"),
+        "q_high": f"SELECT host, ts, uu FROM p WHERE ts >= {_A} AND ts < {_B12} AND uu > {HIGH}",
+        "q_orderlimit": (f"SELECT * FROM (SELECT time::floor(ts, 1h) AS h, math::max(uu) AS v FROM p "
+                         f"WHERE ts >= {_A} AND ts < {_B12} GROUP BY h) ORDER BY h DESC LIMIT {ORDERLIMIT_N}"),
+    }
+
+    @staticmethod
+    def _rows(res):
+        if isinstance(res, list) and res and isinstance(res[0], dict) and "result" in res[0]:
+            res = res[-1]["result"]
+        return res if isinstance(res, list) else ([res] if res is not None else [])
+
+    def q_last(self):
+        return self._rows(self.db.query(self.Q["q_last"]))
+
+    def q_range(self):
+        return self._rows(self.db.query(self.Q["q_range"]))
+
+    def q_global(self):
+        return self._rows(self.db.query(self.Q["q_global"]))
+
+    def q_groupby(self):
+        return self._rows(self.db.query(self.Q["q_groupby"]))
+
+    def q_high(self):
+        return self._rows(self.db.query(self.Q["q_high"]))
+
+    def q_orderlimit(self):
+        return self._rows(self.db.query(self.Q["q_orderlimit"]))
+
+    def close(self):
+        try:
+            self.db.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class SurrealTSServer(SurrealTS):
+    """The same table, index and SurrealQL against the served 3.2.4 on RocksDB,
+    through the shared reconnecting client (DECISIONS #91)."""
+    name = "surrealdb_ts_server"
+    durability = bench_common.DURABILITY_SURREAL_SERVER
+
+    def _open(self):
+        self.db = surreal_common.served_client()
+        self._ver = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
+
+
+class ArangoTS:
+    """ArangoDB 3.12.11 through python-arango, served only, on SQLite's footing
+    (2026-09-15): one collection `p`, `ts` held as epoch MILLISECONDS (AQL's
+    date functions take "numeric timestamp or ISO 8601 date time string"; the
+    number is what DATE_TIMESTAMP returns and what a range filter compares
+    cheapest), the tag and the three metrics, and a persistent index over
+    ["host", "ts"], which the explain plan uses (IndexNode on host, ts) for the
+    newest reading and the one-host hour. Bulk import API in 50,000-row
+    batches, like the other ArangoDB arms.
+
+    Bucketing is `DATE_TRUNC(d.ts, 'minute')` / `DATE_TRUNC(d.ts, 'hour')`,
+    which "truncates the given date after unit and returns the modified
+    date" as an ISO 8601 string (2026-01-01T00:00:00.000Z); the digest
+    declares the bucket an instant, so the string and everyone else's epoch
+    second are one value. DATE_ROUND(d.ts, 1, 'hour') returns the same bucket
+    and was checked equal on the probe; DATE_TRUNC is the direct spelling.
+    Reference: https://docs.arango.ai/arangodb/3.12/aql/functions/date/
+    (DATE_TRUNC, DATE_ROUND).
+
+    The collection is created with waitForSync at the cell's class
+    (DECISIONS #90) and the row records what the collection reads back, not
+    what was asked (#81): the ingest IS this lane's timed write.
+    """
+    name = "arangodb_ts"
+    durability = arango_common.DURABILITY
+    BATCH = 50_000
+
+    def connect(self):
+        self.cl, self.db, self._ver = arango_common.connect()
+
+    def version(self):
+        return self._ver
+
+    def ingest(self, pts):
+        col = self.db.create_collection("p", sync=arango_common.sync_flag())
+        col.add_index({"type": "persistent", "fields": ["host", "ts"]})
+        buf = []
+        for h, ts, uu, us, ui in pts:
+            buf.append({"host": h, "ts": ts * 1000, "uu": uu, "us": us, "ui": ui})
+            if len(buf) >= self.BATCH:
+                col.import_bulk(buf); buf = []
+        if buf:
+            col.import_bulk(buf)
+        self.durability = arango_common.durability_readback(self.db, "p")
+
+    _A, _B1, _B12 = T0 * 1000, (T0 + 3600) * 1000, (T0 + 43200) * 1000
+    Q = {
+        "q_last": "FOR d IN p FILTER d.host == @h SORT d.ts DESC LIMIT 1 RETURN {ts: d.ts, uu: d.uu}",
+        "q_range": ("FOR d IN p FILTER d.host == @h AND d.ts >= @a AND d.ts < @b "
+                    "COLLECT m = DATE_TRUNC(d.ts, 'minute') AGGREGATE v = MAX(d.uu) SORT m RETURN {m, v}"),
+        "q_global": ("FOR d IN p FILTER d.ts >= @a AND d.ts < @b "
+                     "COLLECT h = DATE_TRUNC(d.ts, 'hour') AGGREGATE v = AVG(d.uu) SORT h RETURN {h, v}"),
+        "q_groupby": ("FOR d IN p FILTER d.ts >= @a AND d.ts < @b "
+                      "COLLECT host = d.host, h = DATE_TRUNC(d.ts, 'hour') AGGREGATE v = AVG(d.uu) "
+                      "SORT host, h RETURN {host, h, v}"),
+        "q_high": ("FOR d IN p FILTER d.ts >= @a AND d.ts < @b AND d.uu > @high "
+                   "RETURN {host: d.host, ts: d.ts, uu: d.uu}"),
+        "q_orderlimit": ("FOR d IN p FILTER d.ts >= @a AND d.ts < @b "
+                         "COLLECT h = DATE_TRUNC(d.ts, 'hour') AGGREGATE v = MAX(d.uu) "
+                         "SORT h DESC LIMIT @n RETURN {h, v}"),
+    }
+    BIND = {
+        "q_last": {"h": HOST},
+        "q_range": {"h": HOST, "a": _A, "b": _B1},
+        "q_global": {"a": _A, "b": _B12},
+        "q_groupby": {"a": _A, "b": _B12},
+        "q_high": {"a": _A, "b": _B12, "high": HIGH},
+        "q_orderlimit": {"a": _A, "b": _B12, "n": ORDERLIMIT_N},
+    }
+
+    def _run(self, qn):
+        return list(self.db.aql.execute(self.Q[qn], bind_vars=self.BIND[qn], batch_size=10_000))
+
+    def q_last(self):
+        return self._run("q_last")
+
+    def q_range(self):
+        return self._run("q_range")
+
+    def q_global(self):
+        return self._run("q_global")
+
+    def q_groupby(self):
+        return self._run("q_groupby")
+
+    def q_high(self):
+        return self._run("q_high")
+
+    def q_orderlimit(self):
+        return self._run("q_orderlimit")
+
+    def close(self):
+        arango_common.close(self.cl)
 
 
 # Backends whose cell runs a SEPARATE server container, so run_conditions reads
 # the driver's cgroup and not the engine's. Kept as data beside the adapters so
 # adding a served arm cannot forget to update the role test.
-_CLIENT_SERVER = {"questdb"}
+_CLIENT_SERVER = {"questdb", "surrealdb_ts_server", "arangodb_ts"}
 
-BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS)}
+BACKENDS = {c.name: c for c in (ArcadeTS, ArcadeTSServer, ArcadeNativeTS, ArcadeNativeTSServer, DuckTS, SQLiteTS, MongoTS, TimescaleTS, QuestTS,
+                                SurrealTS, SurrealTSServer, ArangoTS)}
+
+# DECISIONS #81: what each arm runs at commit, recorded on the row. DuckDB is
+# the named exception here; TimescaleDB reads the server's own
+# synchronous_commit on connect and overrides this map. Every string, and the
+# evidence for the default it names, is in bench_common.
+DURABILITY = {
+    "arcadedb_ts_doc": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_ts_doc_server": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_ts_native": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_ts_native_server": bench_common.DURABILITY_ARCADEDB,
+    "duckdb": bench_common.DURABILITY_DUCKDB,
+    "sqlite": bench_common.DURABILITY_SQLITE,
+    "mongodb": bench_common.DURABILITY_MONGODB,
+    "questdb": bench_common.DURABILITY_QUESTDB,
+    # The three plain-table arms resolve their own string at connect (SurrealDB
+    # embedded at the class, ArangoDB read back from the collection); these are
+    # the relaxed defaults the map exists to name.
+    "surrealdb_ts": bench_common.DURABILITY_SURREAL_EMBEDDED,
+    "surrealdb_ts_server": bench_common.DURABILITY_SURREAL_SERVER,
+    "arangodb_ts": arango_common.DURABILITY,
+}
 
 
 def main():
@@ -740,8 +1231,15 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    # PHASE MARKERS (2026-09-14, same pattern as l3d_dense): a cell that dies
+    # names the phase it was in. Entered and left AROUND the timed work, never
+    # inside a timed loop. The corpus parse alone is minutes at ts100 and about
+    # half an hour at ts1000.
+    _beat = bench_common.PhaseBeat()
     lp = lp_path(args.scale)
+    _beat.mark("corpus-parse-start", lp=lp, limit=LIMIT, backend=args.backend)
     pts = parse_lp(lp)
+    _beat.mark("corpus-parsed", n_points=len(pts))
     # n_docs, not just n_points: BOTH canonical keys include n_docs
     # (make_paper_tables and merge_campaign), and PAPER_CORPUS fingerprints a
     # tier on it. Without it two TSBS corpora of different sizes would collide
@@ -756,9 +1254,11 @@ def main():
             f"holds {len(pts):,}. A tier that silently measures a different "
             f"corpus than its name claims is the sparse-pooling defect again.")
     b = BACKENDS[args.backend]()
-    b.connect()
+    with _beat.phase("connect", backend=args.backend):
+        b.connect()
     t0 = time.perf_counter()
-    b.ingest(pts)
+    with _beat.phase("ingest", n=len(pts)):
+        b.ingest(pts)
     dt = time.perf_counter() - t0
     out["ingest_s"] = round(dt, 2)
     out["ingest_pts_per_s"] = round(len(pts) / dt, 1)
@@ -768,7 +1268,8 @@ def main():
     # never be read as "settled" merely because the field is absent.
     _t = time.perf_counter()
     if hasattr(b, "settle"):
-        b.settle()
+        with _beat.phase("engine-settle"):
+            b.settle()
     out["engine_settle_s"] = round(time.perf_counter() - _t, 3)
 
     # Optional settle between ingest and query, OUTSIDE the ingest timer.
@@ -792,13 +1293,47 @@ def main():
     if settle > 0:
         time.sleep(settle)
 
-    for qn in ("q_last", "q_range", "q_global"):
+    out["query_iters"] = QITER
+    for qn in QUERIES:
         times = []
         ref = None
+        _budget_s, _budget_src = budget_lookup.budget_for(
+            "l4", args.scale, qn, QUERY_BUDGET_S, "BENCH_TS_QUERY_BUDGET_S")
+        _beat.mark(f"query-{qn}-start", iters=QITER, budget_s=_budget_s)
+        # THE BUDGET STARTS BEFORE THE COLD PASS (the graph lane's rule, #82b):
+        # the first iteration IS the cold pass and always runs, so a censored
+        # query still carries a measurement and a digest; every later
+        # iteration runs only if it starts inside the budget.
+        _budget_t0 = time.perf_counter()
+        _ran = 0
+        _aband_why = ""
         for _ in range(QITER):
+            if _ran and time.perf_counter() - _budget_t0 > _budget_s:
+                break
+            if _ran == 1:
+                _a, _aband_why = budget_lookup.abandon(
+                    time.perf_counter() - _budget_t0, _budget_s, QITER)
+                if _a:
+                    break
             t = time.perf_counter()
             ref = getattr(b, qn)()
-            times.append((time.perf_counter() - t) * 1000)
+            _ran += 1
+            # DECISIONS #91: a sample taken across a served SurrealDB reconnect
+            # is discarded; every other adapter keeps every sample.
+            surreal_common.keep(b, times, (time.perf_counter() - t) * 1000)
+        # Censored means the loop stopped short of QITER, counted on the
+        # iterations RUN rather than the samples KEPT, so a sample #91 dropped
+        # after a reconnect cannot read as a budget the engine did not hit.
+        out[f"{qn}_budget_s"] = _budget_s
+        out[f"{qn}_budget_source"] = _budget_src
+        if _aband_why:
+            out[f"{qn}_abandoned"] = _aband_why
+        out[f"{qn}_iters"] = len(times)
+        out[f"{qn}_elapsed_s"] = round(time.perf_counter() - _budget_t0, 2)
+        out[f"{qn}_censored"] = _ran < QITER
+        if out[f"{qn}_censored"]:
+            _beat.mark(f"query-{qn}-censored", iters=_ran, budget_s=_budget_s,
+                       elapsed_s=out[f"{qn}_elapsed_s"])
         # Four decimals, not two: SQLite's index-backed newest reading takes
         # about 4 us and two decimals printed it as 0.00 ms (2026-09-12).
         out[f"{qn}_ms"] = round(statistics.median(times), 4)
@@ -808,6 +1343,16 @@ def main():
         # summary figure's first-pass panel needs it (2026-09-11).
         out[f"{qn}_cold_ms"] = round(times[0], 4)
         out[f"{qn}_rows"] = len(ref) if ref is not None else 0
+        # COLD AND WARM UNDER THE SHARED NAMING (DECISIONS #89): the pooled
+        # {qn}_ms and {qn}_p99_ms above blend the first touch with the repeats;
+        # these say what that blend is made of.
+        bench_common.record_cold_warm(out, qn, times, digits=4)
+        bench_common.record_first_query(out, qn, times[0])
+        # THE ANSWER (DECISIONS #88), from the object the last timed call
+        # returned, outside the timed loop.
+        bench_common.record_result(out, qn, ref, **Q_DIGEST[qn])
+        _beat.mark(f"query-{qn}-done", p50=out[f"{qn}_ms"], rows=out[f"{qn}_rows"],
+                   digest=out[f"res_{qn}_digest"])
 
     # ASSERT THE SHAPES, do not merely record them. The lane already knew the
     # right answers -- 60 minute buckets over an hour, 12 two-hour buckets over a
@@ -830,9 +1375,32 @@ def main():
         out["q_last_windowed_rows"] = len(_ref) if _ref is not None else 0
         out["last_window_s"] = 86400 * 40
 
-    _expect = {"q_range": 60, "q_global": 12, "q_last": 1}
+    # THE SHAPE OF THE DOUBLE GROUP-BY, not just its row count. The #88 digest
+    # found arcadedb_ts_native_server returning 1,200 rows for q_groupby like
+    # everyone else while disagreeing on their contents, so the count alone
+    # could not say what was wrong. These two say whether the answer really is
+    # one row per host per hour: at the 12 h window they must be the host count
+    # and 12, and a served arm that repeats a bucket shows it here.
+    try:
+        _gb = bench_common.canonical_rows(
+            getattr(b, "q_groupby")(), **{k: v for k, v in Q_DIGEST["q_groupby"].items()
+                                          if k in ("columns", "coerce")})
+        out["q_groupby_distinct_hosts"] = len({r[0] for r in _gb if len(r) > 1})
+        out["q_groupby_distinct_buckets"] = len({r[1] for r in _gb if len(r) > 1})
+        out["q_groupby_distinct_pairs"] = len({(r[0], r[1]) for r in _gb if len(r) > 1})
+    except Exception as e:  # noqa: BLE001
+        out["q_groupby_shape_error"] = f"{e.__class__.__name__}: {e}"
+
+    _expect = {"q_range": 60, "q_global": 12, "q_last": 1,
+               "q_orderlimit": ORDERLIMIT_N}
+    # The two 2026-10 queries have data-dependent shapes (one row per host
+    # per hour; one row per reading above the threshold), so they are
+    # asserted across engines instead: the row records the count and
+    # fairness_check refuses a table whose engines disagree on it.
     _wrong = {qn: out[f"{qn}_rows"] for qn, want in _expect.items()
               if out.get(f"{qn}_rows") != want}
+    if out.get("q_groupby_rows", 0) <= 12 or out.get("q_high_rows", 0) <= 0:
+        _wrong.update({k: out.get(f"{k}_rows") for k in ("q_groupby", "q_high")})
     if _wrong:
         raise SystemExit(
             f"{args.backend}: query shapes did not match the corpus: got {_wrong}, "
@@ -848,14 +1416,26 @@ def main():
         out["backend_version"] = b.version()
     except Exception as e:
         out["backend_version"] = f"unknown ({e.__class__.__name__})"
+    # DECISIONS #90: this lane times an ingest, not a transactional write, so
+    # it runs at the relaxed class only; the row still names the class it ran
+    # under so a reader never has to infer it.
+    bench_common.stamp_durability(out, getattr(b, "durability", None)
+                                  or DURABILITY.get(args.backend))
+    out["instrument"] = bench_common.INSTRUMENT
+    # DECISIONS #89: the queries carry a cold/warm split; the ingest does not,
+    # and the row says why rather than leaving the pair blank.
+    out["ingest_cold_warm_na"] = bench_common.NA_COLD_WARM_INGEST
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
     # settles a roughly fixed 30-87 MB, against nothing at all for an
     # already-settled comparator. An unrecorded close is an unpriced one, and
     # the row cannot be told apart from a lane that never settles.
     _t = time.perf_counter()
-    b.close()
+    with _beat.phase("close"):
+        b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
+    # `reconnects` on every SurrealDB row, zero when nothing happened (#91).
+    surreal_common.stamp_reconnects(out, b)
 
     # Stamp what this actually ran under. Until now every row this lane wrote
     # carried only the backend name and the metrics, so T5's time-series block
@@ -870,7 +1450,10 @@ def main():
     # describe THIS driver process and not the questdb container. Recorded
     # under a role that says so rather than silently implying otherwise.
     try:
-        import bench_common
+        # bench_common is imported at module scope: a local import here would
+        # make the name local to main() and every earlier bench_common use in
+        # this function an UnboundLocalError (the same trap l3d_dense hit on
+        # 2026-09-14).
         # ROLE IS DERIVED FROM TOPOLOGY, not from a backend literal. The old
         # `== "questdb"` test broke the moment backends were renamed, and a
         # wrong role is invisible: it just mislabels whose cgroup was read.

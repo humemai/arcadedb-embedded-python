@@ -5,12 +5,340 @@ Stdlib-only (so every backend image can import it): latency summary stats,
 on-disk size, a raw-latency sidecar dump, and a small timing context manager.
 """
 import contextlib
+import datetime as _dt
+import decimal as _decimal
+import hashlib
 import json
 import os
 import socket
 import statistics as st
 import sys
 import time
+
+# THE INSTRUMENT VERSION. Rows measured under different query sets, timers, or
+# durability settings cannot share a table, so every row names the instrument
+# it was measured with and make_paper_tables refuses to mix them within a
+# table (DECISIONS #84). "2026-09" is the September campaign (rows without the
+# field); "2026-10" carries the #82 query set, the #81 durability rule, the
+# ingest/index timer split, and bench_host.
+INSTRUMENT = "2026-10"
+
+# DECISIONS #81: the matched durability class is "relaxed" (a commit returns
+# without waiting for the disk). An engine that cannot be relaxed declares a
+# `durability` string starting with this prefix and is the named exception on
+# its tables; fairness_check F8 refuses anything else.
+STRICT_PREFIX = "fsync at commit"
+
+# A THIRD ANSWER, because two were not enough. SurrealDB 3.2.4 has no sync
+# setting and its behaviour at commit could not be established (see the
+# evidence block below), and calling that "relaxed" would be the assertion
+# #81 exists to forbid. A string carrying this mark is its own class, and
+# fairness_check refuses it on any backend not named as an exception.
+UNVERIFIED_MARK = "not verified"
+
+
+# WHAT A DURABILITY STRING MEANS, read from the string itself. Since #90 a row
+# also carries an explicit `durability_class` field, which is what the CELL
+# asked for; this classifies what the ENGINE reported, and fairness_check
+# compares the two. A mismatch is a cell that asked for one setting and got
+# another, which is the failure mode a flag the server ignores produces.
+STRICT_MARKS = ("txWalFlush=2", "synchronous=FULL", "j=true", "commit.mode=sync",
+                "SURREAL_SYNC_DATA=true", "waitForSync=true", "synchronous_commit=on",
+                # the colon keeps "=1:" from matching the relaxed "=100000"
+                "flush-every-n-tx=1:", "appendfsync=always")
+
+
+def durability_class(text):
+    """'relaxed', 'strict', 'unverified', or None when the row recorded nothing."""
+    if not text:
+        return None
+    t = str(text)
+    if UNVERIFIED_MARK in t:
+        return "unverified"
+    if t.startswith(STRICT_PREFIX) or any(m in t for m in STRICT_MARKS):
+        return "strict"
+    return "relaxed"
+
+
+# HOW EVERY DEFAULT IN THE LANES' DURABILITY MAPS WAS CHECKED.
+#
+# DECISIONS #81 asks for the engine's own answer, not its reputation, and the
+# string a lane writes onto a row is a published claim. Measured on the laptop
+# on 2026-09-14 against the pinned images and wheels; a claim that could not be
+# established says so in the string itself instead of asserting a class.
+#
+#   ArcadeDB    GlobalConfiguration.TX_WAL_FLUSH read out of the running
+#               engine: default 0, current 0, "0 = no flush" (wheel 26.8.1).
+#   SQLite      PRAGMA journal_mode and synchronous read back (wal, 1), and
+#               strace: 50 commits -> 8 fsync, so a commit does not sync.
+#   DuckDB      strace: 50 commits -> 55 fsync, one per commit; and
+#               duckdb_settings() at 1.5.4 (the pin since DECISIONS #103d)
+#               offers no commit-sync knob at all, only checkpoint and
+#               WAL-autocheckpoint thresholds. Hence "not configurable".
+#   LadybugDB   strace: 50 auto-commit writes -> 56 fdatasync, one per
+#               commit; ladybug 0.20.4's Database() takes no sync option.
+#   PostgreSQL  read per row, not asserted: each adapter runs
+#   family      SHOW synchronous_commit on connect and records the answer.
+#   MongoDB     server 8.2.12: getParameter journalCommitInterval = 100 ms;
+#               the implicit default write concern is w:majority with
+#               writeConcernMajorityJournalDefault true, which the timed
+#               writes override with w=1, j=false.
+#   ArangoDB    server 3.12.11 /_admin/options: database.wait-for-sync false,
+#               rocksdb.use-fsync false, rocksdb.sync-interval 100 ms; a
+#               freshly created collection reads back waitForSync false.
+#   QuestDB     server 10.0.1 SHOW PARAMETERS: cairo.commit.mode = nosync,
+#               value_source = default. RE-MEASURED at the October pin
+#               (laptop, 2026-09-19) because the pin moved 9.1.1 -> 10.0.1, a
+#               major; unchanged, and line.udp.commit.mode reads nosync too.
+#   SurrealDB   embedded (SDK 2.0.0, core 2.3.10) strace A/B: with
+#   embedded    SURREAL_SYNC_DATA unset, 6 fsync at both 50 and 250 commits;
+#               with it true, 56 and 256. The default is no sync at commit.
+#   SurrealDB   3.2.4 has NO sync setting: its binary holds no "SYNC_DATA"
+#   served      and no "SURREAL_DATASTORE" token, and none of its 110
+#               SURREAL_* variables names sync, WAL, fsync, or durability.
+#               The env var this harness used to set was inert and is gone
+#               (runner.py). What it does at commit is NOT verified, and
+#               DURABILITY_SURREAL_SERVER says exactly that.
+#   Neo4j       2026.08.1 SHOW SETTINGS: no durability or sync setting exists
+#               (the tx_log settings are buffer, preallocation, and rotation
+#               only), so it cannot be relaxed; that it forces the log at
+#               commit is Neo4j's documented behaviour, not measured here.
+#               RE-MEASURED at the October pin (laptop, 2026-09-19), because
+#               this claim names a version and the pin moved 2026.07.1 ->
+#               2026.08.1. Unchanged: a SHOW SETTINGS filtered on
+#               durab|sync|fsync|flush returns only the three
+#               server.memory.pagecache.* entries, which are page-cache flush
+#               knobs and not commit durability, and db.tx_log.* is still
+#               exactly buffer.size, preallocate, rotation.retention_policy
+#               and rotation.size.
+#   Memgraph    3.13.1 SHOW CONFIG: storage_wal_enabled true,
+#               storage_wal_file_flush_every_n_tx 100000 (the image's
+#               defaults); strace on the pinned image, build plus 3,009
+#               commits: 1 fsync at the default, 3,012 with
+#               --storage-wal-file-flush-every-n-tx=1 (laptop, 2026-09-17).
+#   FalkorDB    4.20.6 on Redis 8.6.3, CONFIG GET: appendonly no, save
+#               "3600 1 300 100 60 10000" (the image's defaults, RDB only);
+#               strace, build plus 3,011 writes: 0 fsync at the default,
+#               3,011 fdatasync with --appendonly yes --appendfsync always
+#               (laptop, 2026-09-17).
+#
+# One string per engine, defined here, so two lanes cannot describe the same
+# engine differently and a re-check lands in one place.
+DURABILITY_ARCADEDB = "txWalFlush=0 (engine default): no flush at commit"
+DURABILITY_SQLITE = "WAL, synchronous=NORMAL: synced at checkpoint, not at commit"
+DURABILITY_DUCKDB = "fsync at commit, not configurable (DuckDB WAL)"
+DURABILITY_LADYBUG = "fsync at commit, not configurable (LadybugDB WAL)"
+DURABILITY_MONGODB = "write concern w=1, j=false (journal flushed every 100 ms)"
+DURABILITY_QUESTDB = "cairo.commit.mode=nosync (default): no fsync at commit"
+DURABILITY_SURREAL_EMBEDDED = "SurrealKV, SURREAL_SYNC_DATA unset (the default): no sync at commit"
+DURABILITY_SURREAL_SERVER = ("RocksDB at the engine default; SurrealDB 3.2.4 exposes no sync "
+                             "setting and the behaviour at commit is not verified")
+DURABILITY_NEO4J = ("fsync at commit, not configurable (no durability setting in "
+                    "SHOW SETTINGS at 2026.08.1)")
+DURABILITY_PG_OFF = "synchronous_commit=off"
+# Defined here, not in arango_common, so at_class() can map it like every other
+# engine's; arango_common re-exports this name as its DURABILITY.
+DURABILITY_ARANGO = "waitForSync=false (default); RocksDB WAL synced every 100 ms"
+DURABILITY_MEMGRAPH = ("storage-wal-enabled=true, storage-wal-file-flush-every-n-tx=100000 "
+                       "(image default): the WAL is fsynced every 100,000 transactions, not at commit")
+DURABILITY_FALKORDB = ("appendonly=no, RDB save '3600 1 300 100 60 10000' (image default): "
+                       "nothing is synced at commit")
+
+# ---------------------------------------------------------------------------
+# BOTH DURABILITY SETTINGS, ON THE WRITES (DECISIONS #90, superseding the
+# single-setting half of #81).
+#
+# "Every timed write operation runs twice, once with each setting: the six
+# document operations, the three graph writes, and the cross-model
+# transaction. Bulk ingest stays at one setting, because an fsync per batch at
+# ten million vectors is hours and teaches nothing the write cells do not.
+# Reads are untouched."
+#
+# Most engines cannot switch this per operation -- ArcadeDB's txWalFlush is per
+# database, SurrealDB's and QuestDB's are server flags -- so this is an AXIS on
+# the cell, not two measurements inside one: runner.py takes --durability, the
+# class reaches the lane as BENCH_DURABILITY, and the row records
+# `durability_class` beside the `durability` string the engine itself reports.
+# `durability_class` is part of the canonical key, so a strict cell cannot
+# shadow the relaxed one it sits beside.
+CLASS_RELAXED = "relaxed"
+CLASS_STRICT = "strict"
+DURABILITY_CLASS = os.environ.get("BENCH_DURABILITY", CLASS_RELAXED).strip() or CLASS_RELAXED
+if DURABILITY_CLASS not in (CLASS_RELAXED, CLASS_STRICT):
+    raise SystemExit(f"BENCH_DURABILITY must be 'relaxed' or 'strict', not {DURABILITY_CLASS!r}")
+
+DURABILITY_ARCADEDB_STRICT = "txWalFlush=2: the WAL is flushed and synced at every commit"
+DURABILITY_SQLITE_STRICT = "WAL, synchronous=FULL: synced at every commit"
+DURABILITY_MONGODB_STRICT = "write concern w=1, j=true (the journal is synced before the ack)"
+DURABILITY_QUESTDB_STRICT = "cairo.commit.mode=sync: fsync at commit"
+DURABILITY_SURREAL_EMBEDDED_STRICT = "SurrealKV, SURREAL_SYNC_DATA=true: sync at commit"
+DURABILITY_ARANGO_STRICT = "waitForSync=true: the commit waits for the WAL sync"
+DURABILITY_PG_ON = "synchronous_commit=on"
+DURABILITY_MEMGRAPH_STRICT = "storage-wal-file-flush-every-n-tx=1: the WAL is fsynced at every commit"
+DURABILITY_FALKORDB_STRICT = "appendonly=yes, appendfsync=always: the AOF is fdatasynced at every write"
+
+# THE ENGINES WITH NO KNOB. #90: "The three engines with no knob (Neo4j,
+# DuckDB, and LadybugDB, each straced rather than assumed) print one number in
+# the strict column and say so, which also puts them on an equal footing rather
+# than comparing their strict numbers against everyone else's relaxed ones."
+#
+# A FOURTH BELONGS HERE and the decision's list does not name it, so the reason
+# is written down rather than assumed: SurrealDB 3.2.4 SERVED has no sync
+# setting either. Its binary holds no "SYNC_DATA" and no "SURREAL_DATASTORE"
+# token and none of its 110 SURREAL_* variables names sync, WAL, fsync or
+# durability (#81's evidence block above). Setting an invented flag would label
+# the rows as strict while changing nothing, which is the exact failure #81 was
+# written after. It runs once and declares no setting, like the other three,
+# and its string keeps saying its behaviour at commit is not verified.
+NO_DURABILITY_SETTING = {
+    DURABILITY_NEO4J,
+    DURABILITY_DUCKDB,
+    DURABILITY_LADYBUG,
+    DURABILITY_SURREAL_SERVER,
+}
+
+# relaxed string -> strict string, for the engines that HAVE the knob.
+STRICT_OF = {
+    DURABILITY_ARCADEDB: DURABILITY_ARCADEDB_STRICT,
+    DURABILITY_SQLITE: DURABILITY_SQLITE_STRICT,
+    DURABILITY_MONGODB: DURABILITY_MONGODB_STRICT,
+    DURABILITY_QUESTDB: DURABILITY_QUESTDB_STRICT,
+    DURABILITY_SURREAL_EMBEDDED: DURABILITY_SURREAL_EMBEDDED_STRICT,
+    DURABILITY_PG_OFF: DURABILITY_PG_ON,
+    DURABILITY_ARANGO: DURABILITY_ARANGO_STRICT,
+    DURABILITY_MEMGRAPH: DURABILITY_MEMGRAPH_STRICT,
+    DURABILITY_FALKORDB: DURABILITY_FALKORDB_STRICT,
+}
+
+
+def at_class(relaxed_string, cls=None):
+    """The durability string this engine runs at the requested class.
+
+    An engine with no knob returns its own string unchanged in both classes;
+    `has_no_setting` is what tells a table to print one number and say so.
+    """
+    cls = cls or DURABILITY_CLASS
+    if cls != CLASS_STRICT:
+        return relaxed_string
+    return STRICT_OF.get(relaxed_string, relaxed_string)
+
+
+def has_no_setting(relaxed_string):
+    """Prefix match, not equality, because a composite arm's string starts with
+    its no-knob half: the composed Qdrant+Neo4j stack records Neo4j's string
+    with "; Qdrant WAL at its default" appended, and the whole operation waits
+    for Neo4j's log either way."""
+    t = str(relaxed_string or "")
+    return any(t.startswith(k) for k in NO_DURABILITY_SETTING)
+
+
+def pg_expected(cls=None):
+    """What `SHOW synchronous_commit` must answer at this class."""
+    return "on" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "off"
+
+
+def pg_durability_string(value, cls=None):
+    """Read, not asserted: the server's own answer, with a mark when it is not
+    the setting this cell asked for."""
+    want = pg_expected(cls)
+    return f"synchronous_commit={value}" + ("" if value == want
+                                            else f" (NOT the #90 {cls or DURABILITY_CLASS} setting)")
+
+
+def arcade_jvm_args(base="", cls=None):
+    """The embedded engine's JVM arguments with the durability flag appended.
+
+    ArcadeDB's setting is a system property read at database open, so it is a
+    JVM argument on this side and a JAVA_OPTS entry on the served side; the
+    runner does the served half. txWalFlush=0 is the engine default and is
+    passed EXPLICITLY at the relaxed class too, so the row's claim is a flag
+    this process set rather than a default someone remembered.
+    """
+    flush = "2" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "0"
+    arg = f"-Darcadedb.txWalFlush={flush}"
+    return f"{base} {arg}".strip() if base else arg
+
+
+# The served twin's txWalFlush is a JAVA_OPTS entry on its container, set by
+# runner.py for the strict class and recorded on the row as
+# durability_server_flags. The server exposes no read-back for it, so its
+# string says the flag was SET rather than implying the engine was asked.
+ARCADE_SERVER_DURABILITY_NOTE = (" (set on the server's JAVA_OPTS by runner.py and recorded as "
+                                 "durability_server_flags; the server exposes no read-back)")
+
+
+def arcade_durability_readback(fallback_cls=None):
+    """ASK THE ENGINE what txWalFlush it is running at, do not assert it.
+
+    #81's standard for every durability string on a row is that it was read out
+    of the engine rather than assumed, and #90 doubles the number of claims by
+    adding a second class. The flag is a JVM system property this process set,
+    which is exactly the kind of thing that can be set and not take: a typo, a
+    JVM already started by an earlier open, a binding that filters unknown
+    arguments. So the value comes back from GlobalConfiguration.
+
+    Returns the string for the value the engine reports, or the asserted string
+    with a note when the engine cannot be asked -- never silence.
+    """
+    want = at_class(DURABILITY_ARCADEDB, fallback_cls)
+    try:
+        import jpype
+        gc = jpype.JClass("com.arcadedb.GlobalConfiguration")
+        value = int(gc.TX_WAL_FLUSH.getValue())
+    except Exception as e:  # noqa: BLE001
+        return want + f" (asserted: the engine could not be asked, {e.__class__.__name__})"
+    if value == 0:
+        return DURABILITY_ARCADEDB
+    if value == 2:
+        return DURABILITY_ARCADEDB_STRICT
+    return f"txWalFlush={value}, which is neither class (DECISIONS #90)"
+
+
+def sqlite_synchronous(cls=None):
+    return "FULL" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "NORMAL"
+
+
+def journal_ack(cls=None):
+    """MongoDB's j, ArangoDB's waitForSync: True at the strict class."""
+    return (cls or DURABILITY_CLASS) == CLASS_STRICT
+
+
+def sqlite_durability_readback(cx):
+    """ASK SQLITE what it is running at, do not assert the PRAGMA took.
+
+    `PRAGMA synchronous` answers 1 for NORMAL and 2 for FULL, and
+    `PRAGMA journal_mode` answers wal; both are read back here so the row's
+    string is the database's answer rather than the statement we sent.
+    """
+    try:
+        jm = str(cx.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        sync = int(cx.execute("PRAGMA synchronous").fetchone()[0])
+    except Exception as e:  # noqa: BLE001
+        return at_class(DURABILITY_SQLITE) + f" (asserted: PRAGMA read-back failed, {e.__class__.__name__})"
+    if jm == "wal" and sync == 1:
+        return DURABILITY_SQLITE
+    if jm == "wal" and sync == 2:
+        return DURABILITY_SQLITE_STRICT
+    return f"journal_mode={jm}, synchronous={sync}, which is neither class (DECISIONS #90)"
+
+
+def stamp_durability(out, engine_string, cls=None):
+    """The three fields every 2026-10 row carries about durability.
+
+    `durability` is what the ENGINE reports, taken VERBATIM: the adapter has
+    already resolved it, by reading it back where the engine can be asked and
+    by at_class() where it cannot, and re-mapping it here would turn a flag
+    that did not take into a claim that it did -- which is the whole failure
+    #81 was written after. `durability_class` is what the CELL asked for, so
+    fairness_check can compare the two. `durability_no_setting` says the engine
+    has no knob, so a table prints its one number in both columns and says why
+    instead of comparing its strict number against everyone else's relaxed one.
+    """
+    cls = cls or DURABILITY_CLASS
+    out["durability"] = engine_string
+    out["durability_class"] = cls
+    out["durability_no_setting"] = bool(engine_string) and has_no_setting(engine_string)
+    return out["durability"]
 
 
 def _host_identity():
@@ -398,3 +726,446 @@ class SelfMemorySampler:
             "peak_anon_mib_sum": round(self.peak_anon / (1 << 20), 1),
             "end_anon_mib_sum": round((self.end_anon or 0) / (1 << 20), 1),
         }
+
+
+# ---------------------------------------------------------------------------
+# RESULT EQUIVALENCE (DECISIONS #88).
+#
+# A benchmark that never checks the answer measures how fast an engine can be
+# wrong. Until 2026-09-14 the only cross-engine correctness in this harness was
+# recall against ground truth on the vector lanes and the torn-state comparison
+# in the cross-model trial: every other lane recorded latency, throughput, and
+# for a few queries a row count. An adapter that silently dropped a filter, a
+# group, or a join condition would have shown up as a lead rather than as a bug.
+#
+# So every timed query whose answer is deterministic records a canonical digest
+# of that answer on its row, plus a short readable sample so a disagreement can
+# be READ rather than only detected, and equivalence_check.py refuses a table
+# whose engines disagree at the same scale.
+#
+# Three rules that are not negotiable, because each of them is a way to make
+# the check pass while proving nothing:
+#
+#   1. The digest is computed from the object the TIMED call returned, outside
+#      the timed section. Re-running the query to digest it would digest a
+#      second execution -- a different transaction, a different cache state,
+#      and on a lane with writes a different database.
+#   2. An engine that cannot express a query records
+#      "unexpressible: <reason>", never a blank. Silence is indistinguishable
+#      from agreement, and that is exactly the failure #88 was written after.
+#   3. Normalisation is identical for every engine. Anything that varies with
+#      the driver -- tuple versus dict, int versus double, a trailing space, a
+#      timezone-aware datetime -- is normalised away BEFORE hashing, so a
+#      digest mismatch means the ANSWERS differ and nothing else.
+
+DIGEST_VERSION = "rd1"
+NULL_TOKEN = "<null>"
+MISSING_TOKEN = "<missing>"
+UNEXPRESSIBLE_PREFIX = "unexpressible: "
+SAMPLE_MAX_CHARS = 240
+SAMPLE_ROWS = 3
+
+
+class _Missing:
+    __slots__ = ()
+
+    def __repr__(self):
+        return MISSING_TOKEN
+
+
+_MISSING = _Missing()
+
+
+def _fmt_number(v, float_digits):
+    """One number, one string, whatever driver produced it.
+
+    An int is printed EXACTLY, because a count is exact and rounding one to
+    six significant digits would let 1,234,567 and 1,234,568 collide. A float
+    is printed to `float_digits` SIGNIFICANT digits, not decimal places: two
+    correct engines summing 60,000 doubles in different orders differ in the
+    last bits, which on a sum of 1e8 is an absolute difference of ~1e-8 * 1e8,
+    and absolute decimal rounding cannot reconcile that while significant-digit
+    rounding can. Below 10**float_digits the two spellings coincide (str(60175)
+    and "%.6g" % 60175.0 are both "60175"), which is where counts live.
+    """
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    x = float(v)
+    if x != x:
+        return "nan"
+    if x == float("inf"):
+        return "inf"
+    if x == float("-inf"):
+        return "-inf"
+    s = f"{x:.{float_digits}g}"
+    return "0" if s in ("-0", "-0.0") else s
+
+
+def _fmt_value(v, float_digits):
+    """One cell of one row, canonical."""
+    if v is None or v is _MISSING:
+        return MISSING_TOKEN if v is _MISSING else NULL_TOKEN
+    if isinstance(v, (bool, int, float)):
+        return _fmt_number(v, float_digits)
+    if isinstance(v, _decimal.Decimal):
+        return _fmt_number(float(v), float_digits)
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, bytes):
+        return v.hex()
+    if isinstance(v, _dt.datetime):
+        # Aware datetimes land in UTC and lose the offset, so a driver that
+        # returns UTC+00:00 and one that returns naive UTC agree.
+        if v.tzinfo is not None:
+            v = v.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+        s = v.isoformat(sep="T")
+        return s[:-7] if s.endswith(".000000") else s
+    if isinstance(v, _dt.date):
+        return v.isoformat()
+    if isinstance(v, _dt.timedelta):
+        return _fmt_number(v.total_seconds(), float_digits)
+    # numpy scalars and anything else that knows how to become a Python scalar
+    item = getattr(v, "item", None)
+    if callable(item):
+        try:
+            return _fmt_value(item(), float_digits)
+        except Exception:  # noqa: BLE001  (not a scalar after all)
+            pass
+    if isinstance(v, dict):
+        return "{" + ",".join(f"{k}={_fmt_value(v[k], float_digits)}"
+                              for k in sorted(v, key=str)) + "}"
+    if isinstance(v, (list, tuple, set, frozenset)):
+        items = [_fmt_value(x, float_digits) for x in v]
+        if isinstance(v, (set, frozenset)):
+            items.sort()
+        return "[" + "|".join(items) + "]"
+    return str(v).strip()
+
+
+def _to_epoch_s(v):
+    """An instant, as integer seconds, however the engine spells it.
+
+    One lane, one question, six spellings: the ArcadeDB document arm buckets on
+    epoch SECONDS, its native arm on epoch MILLISECONDS (timeBucket takes ms),
+    TimescaleDB and MongoDB return datetimes, QuestDB a timestamp, and DuckDB
+    and SQLite integers. Those are the same instant in different units, and a
+    digest that called them different answers would report six disagreements
+    per query and hide any real one among them.
+
+    The seconds/milliseconds split is decided by magnitude: epoch seconds do
+    not reach 1e12 until the year 33658, so a value at or above it is
+    milliseconds. Stated rather than inferred, because it is the one rule here
+    that could in principle be wrong.
+    """
+    if isinstance(v, _dt.datetime):
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=_dt.timezone.utc)
+        return int(v.timestamp())
+    if isinstance(v, _dt.date):
+        return int(_dt.datetime(v.year, v.month, v.day, tzinfo=_dt.timezone.utc).timestamp())
+    if isinstance(v, str):
+        s = v.strip().replace("Z", "+00:00")
+        try:
+            return _to_epoch_s(_dt.datetime.fromisoformat(s))
+        except ValueError:
+            return v.strip()
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, (int, float, _decimal.Decimal)):
+        x = float(v)
+        return int(x / 1000.0) if abs(x) >= 1e12 else int(x)
+    return v
+
+
+def _to_month(v):
+    """A month key, "YYYY-MM", whether the engine grouped on a truncated date
+    (date_trunc returns 1994-01-01) or on a substring of an ISO string."""
+    if isinstance(v, (_dt.datetime, _dt.date)):
+        return f"{v.year:04d}-{v.month:02d}"
+    if isinstance(v, str):
+        return v.strip()[:7]
+    return v
+
+
+COERCIONS = {
+    "epoch_s": _to_epoch_s,
+    "month": _to_month,
+    "text": lambda v: v if v is None else str(v).strip(),
+    "num": lambda v: v if v is None else float(v),
+}
+
+
+def _coerce(v, how):
+    if v is None or v is _MISSING or how is None:
+        return v
+    fn = COERCIONS[how] if isinstance(how, str) else how
+    try:
+        return fn(v)
+    except Exception:  # noqa: BLE001  (a coercion never turns a value into a failure)
+        return v
+
+
+def _is_mapping(row):
+    return hasattr(row, "keys") and hasattr(row, "__getitem__")
+
+
+def _lookup(row, spec):
+    """One declared column out of one row.
+
+    `spec` is a column name, or a tuple of alternative names, because the same
+    question is answered under different names by different drivers: a Mongo
+    $group calls the key "_id", an AQL COLLECT calls it whatever the RETURN
+    names it, and a SQL driver hands back a positional tuple. Dotted names
+    reach into a sub-document ("_id.f"), which is how Mongo's composite group
+    keys are read without a per-engine digest.
+    """
+    for cand in (spec if isinstance(spec, (tuple, list)) else (spec,)):
+        cur = row
+        ok = True
+        for part in str(cand).split("."):
+            if _is_mapping(cur):
+                try:
+                    if part in cur.keys():
+                        cur = cur[part]
+                        continue
+                except Exception:  # noqa: BLE001  (driver row types vary)
+                    pass
+                ok = False
+                break
+            if isinstance(cur, (list, tuple)) and part.isdigit():
+                idx = int(part)
+                if idx < len(cur):
+                    cur = cur[idx]
+                    continue
+            ok = False
+            break
+        if ok:
+            return cur
+    return _MISSING
+
+
+def canonical_rows(rows, columns=None, float_digits=6, coerce=None):
+    """The engine's answer as a list of tuples of strings, driver removed.
+
+    `columns` is the query's DECLARED column order and is what makes a dict
+    row comparable with a tuple row. Without it a mapping row falls back to
+    its own keys sorted, which is deterministic but only comparable against
+    another engine that happened to use the same names; every caller in this
+    harness declares its columns.
+
+    `coerce` declares what a COLUMN IS, by name or position: {"h": "epoch_s"}
+    says the column holds an instant, so an engine returning a datetime and one
+    returning epoch milliseconds agree. It is declared once per query in the
+    lane, never per engine, so it cannot be used to make one engine's answer
+    match another's.
+    """
+    if rows is None:
+        return []
+    if _is_mapping(rows) or not hasattr(rows, "__iter__") or isinstance(rows, (str, bytes)):
+        rows = [rows]
+    out = []
+    for row in rows:
+        if columns and _is_mapping(row):
+            vals = [_lookup(row, c) for c in columns]
+        elif columns and isinstance(row, (list, tuple)):
+            # A POSITIONAL ROW ALREADY IS THE DECLARED ORDER. A SQL driver
+            # hands back a tuple whose order is the SELECT list's, which is
+            # what `columns` names; looking those names up in a tuple would
+            # find nothing and silently digest a row of sentinels.
+            vals = list(row)
+        elif columns:
+            vals = [row] + [_MISSING] * (len(columns) - 1)
+        elif _is_mapping(row):
+            vals = [row[k] for k in sorted(row.keys(), key=str)]
+        elif isinstance(row, (list, tuple)):
+            vals = list(row)
+        else:
+            vals = [row]
+        if coerce:
+            names = [c[0] if isinstance(c, (tuple, list)) else str(c) for c in (columns or ())]
+            for i in range(len(vals)):
+                how = coerce.get(i)
+                if how is None and i < len(names):
+                    how = coerce.get(names[i])
+                if how is not None:
+                    vals[i] = _coerce(vals[i], how)
+        out.append(tuple(_fmt_value(v, float_digits) for v in vals))
+    return out
+
+
+def _key_positions(columns, key):
+    if key is None:
+        return None
+    keys = key if isinstance(key, (tuple, list)) else (key,)
+    pos = []
+    for k in keys:
+        if isinstance(k, int):
+            pos.append(k)
+        elif columns:
+            names = [c[0] if isinstance(c, (tuple, list)) else c for c in columns]
+            pos.append(names.index(k))
+        else:
+            raise ValueError(f"order_key {k!r} needs `columns` to resolve to a position")
+    return tuple(pos)
+
+
+def result_digest(rows, columns=None, order_matters=False, float_digits=6,
+                  order_key=None, id_key=None, sample_rows=SAMPLE_ROWS,
+                  coerce=None):
+    """Canonical digest of one query's answer: {"digest", "sample", "n"}.
+
+    `digest` is a short stable hash (16 hex characters of SHA-256 over the
+    canonical form, the declared column names, and the ordering flags), `n` is
+    the row count, and `sample` is the first few canonical rows as one short
+    CSV-safe line, so a gate can print both sides of a disagreement instead of
+    only announcing one.
+
+    ORDER. Sorted unless `order_matters`, because a query without an ORDER BY
+    does not define one and two engines returning the same set in different
+    orders agree. When the query DOES define an order, the canonical form is a
+    stable sort on the declared key with `id_key` as tie-break: engines break
+    ties arbitrarily and identically-ranked rows in a different order are not a
+    disagreement, while the membership of an ORDER BY ... LIMIT still is,
+    because a wrong order returns a different SET of rows. The sort is applied
+    to every engine identically, so it is a canonicalisation, not a relaxation.
+    """
+    canon = canonical_rows(rows, columns=columns, float_digits=float_digits, coerce=coerce)
+    if order_matters:
+        pos = _key_positions(columns, order_key)
+        idp = _key_positions(columns, id_key)
+        if pos is not None:
+            def _k(r):
+                head = tuple(r[i] for i in pos if i < len(r))
+                tail = tuple(r[i] for i in idp if i < len(r)) if idp else r
+                return (head, tail)
+            canon = sorted(canon, key=_k)
+        # order_key not declared: the engine's own order is the canonical one.
+    else:
+        canon = sorted(canon)
+    names = [c[0] if isinstance(c, (tuple, list)) else str(c) for c in (columns or ())]
+    marks = ",".join(f"{k}:{v if isinstance(v, str) else 'fn'}"
+                     for k, v in sorted((coerce or {}).items(), key=lambda kv: str(kv[0])))
+    blob = "\x1d".join([DIGEST_VERSION, ",".join(names), marks,
+                        "ordered" if order_matters else "unordered",
+                        str(float_digits), str(len(canon))]
+                       + ["\x1f".join(r) for r in canon])
+    h = hashlib.sha256(blob.encode("utf-8", "replace")).hexdigest()[:16]
+    shown = " ; ".join("(" + ",".join(r) + ")" for r in canon[:sample_rows])
+    if len(shown) > SAMPLE_MAX_CHARS:
+        shown = shown[:SAMPLE_MAX_CHARS - 1] + "…"
+    return {"digest": h, "sample": shown, "n": len(canon)}
+
+
+def record_result(out, name, rows, **kw):
+    """Stamp res_<name>_digest / _sample / _n onto a lane's output dict.
+
+    Call it OUTSIDE the timed section with the object the timed call returned.
+    Returns the digest dict so a caller can assert on it.
+    """
+    d = result_digest(rows, **kw)
+    out[f"res_{name}_digest"] = d["digest"]
+    out[f"res_{name}_sample"] = d["sample"]
+    out[f"res_{name}_n"] = d["n"]
+    return d
+
+
+def record_unexpressible(out, name, reason):
+    """This engine cannot ask this question, and the row says so.
+
+    DECISIONS #88: "Queries that an engine cannot express are declared absent
+    in its adapter, never silently skipped, and the gate names them." A blank
+    is indistinguishable from agreement; this string is not.
+    """
+    text = UNEXPRESSIBLE_PREFIX + str(reason)
+    out[f"res_{name}_digest"] = text
+    out[f"res_{name}_sample"] = text
+    out[f"res_{name}_n"] = None
+    return text
+
+
+def is_unexpressible(value):
+    return isinstance(value, str) and value.startswith(UNEXPRESSIBLE_PREFIX)
+
+
+# WHERE A MEASUREMENT DOES NOT APPLY, THE ROW SAYS SO (DECISIONS #89). "A
+# table that omits one of these carries a stated reason, which page_check
+# enforces the way it enforces the other page invariants." A blank cell is
+# read as "not measured"; these strings say which of the two it is, and they
+# live here so two lanes cannot phrase the same exemption differently.
+NA_COLD_WARM_TXN = ("no cold/warm split: each operation runs against an "
+                    "already-built, already-warm database by construction "
+                    "(DECISIONS #89)")
+NA_COLD_WARM_LIFECYCLE = ("no cold/warm split: this lane IS the cold "
+                          "measurement -- it times opening a database "
+                          "(DECISIONS #89)")
+NA_COLD_WARM_INGEST = ("no cold/warm split: the timed work is a single "
+                       "ingest, which happens once (DECISIONS #89)")
+NA_INDEX_SPLIT_NONE = ("ingest and index are one timer: this engine indexes "
+                       "while it ingests and has no boundary to split "
+                       "(DECISIONS #66, #74 item 2)")
+NA_COLD_WARM_DENSE_LANE = ("no cold/warm split on this row: the lane warms on a "
+                           "held-out query slice before it times anything, so "
+                           "every timed query here is warm. The dense table's "
+                           "cold and warm columns come from the multipass "
+                           "driver, whose pass 0 is the cold pass and whose "
+                           "passes 1 to 5 are the warm ones (DECISIONS #89)")
+NA_COLD_WARM_SPARSE_LANE = ("no cold/warm split on this row: the lane warms "
+                            "before it times, so every timed query here is "
+                            "warm. The sparse table's cold and warm columns "
+                            "come from the multipass driver (DECISIONS #89)")
+
+
+def record_first_query(out, name, ms):
+    """THE CELL'S ONE COLD NUMBER (DECISIONS #89, as amended).
+
+    "One cold column for the first query after the database opens rather than a
+    cold number per query (the cold question is about the session, and the
+    session-cost table covers the rest)." The per-query cold fields stay on the
+    row -- a row carrying more than the page prints is fine and useful -- and
+    this is the one the page reads.
+
+    setdefault, not assignment, so a lane can call it at the top of every query
+    and only the FIRST call sticks. That makes the field mean what it says
+    however the lane's loops are arranged, instead of depending on someone
+    remembering to call it once.
+    """
+    if ms is None:
+        return
+    out.setdefault("cold_first_query_name", name)
+    out.setdefault("cold_first_query_ms", round(float(ms), 4))
+
+
+def record_cold_warm(out, name, warm_ms, cold_ms=None, digits=3):
+    """COLD AND WARM, on every timed query (DECISIONS #89).
+
+    "The first iteration after the database is opened is the cold number and
+    the remaining iterations are the warm number, which costs nothing because
+    those iterations already run, and it answers the question a reader actually
+    has, which is what the first query of a session costs against the
+    hundredth."
+
+    Two call shapes, because the lanes differ in whether the cold pass is
+    already separate:
+
+        record_cold_warm(out, "q1", times)               # times[0] is cold
+        record_cold_warm(out, "top_degree", warm, cold)  # cold measured apart
+
+    One naming convention for all of them, so a table reads one field per lane
+    instead of six spellings: cold_<q>_ms, warm_<q>_p50_ms, warm_<q>_p99_ms,
+    warm_<q>_n. A lane keeps whatever pooled field it published before; these
+    say what that pooled number is made of.
+    """
+    if cold_ms is None:
+        if not warm_ms:
+            return
+        cold_ms, warm = warm_ms[0], list(warm_ms[1:])
+    else:
+        warm = list(warm_ms)
+    out[f"cold_{name}_ms"] = round(float(cold_ms), digits)
+    if warm:
+        w = sorted(float(x) for x in warm)
+        out[f"warm_{name}_p50_ms"] = round(_pct(w, 50), digits)
+        out[f"warm_{name}_p99_ms"] = round(_pct(w, 99), digits)
+        out[f"warm_{name}_n"] = len(w)

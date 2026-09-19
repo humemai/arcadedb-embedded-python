@@ -40,7 +40,7 @@ Fitting the pool is resource fitting, the first of the four sanctioned override 
 
 | runtime | evidence | verdict |
 |---|---|---|
-| **DuckDB** | default `threads`=20 under a 12-CPU cpuset in the real bench image | **HOST-DERIVED.** Fixed in `l1_tabular.py` only; l1_tpc, l3d and l4 still run oversubscribed on the September instrument (October fits every lane). The DuckPGQ graph arm, new on 2026-09-17, sets `PRAGMA threads` from `sched_getaffinity` and records it as `duckpgq_threads` |
+| DuckDB | default `threads`=20 under a 12-CPU cpuset in the real bench image; every lane now sets `PRAGMA threads` from `sched_getaffinity` (l1_tabular first, then l1_tpc, l3d, and l4 on the October instrument, 2026-09-15; the l2 DuckPGQ graph arm carries the same fix, 2026-09-17, and records it as `duckpgq_threads`) | cpuset |
 | Qdrant | `actix-rt` runtime 11 threads, update pool ~11, from `/proc/<pid>/task` | cpuset |
 | Elasticsearch | `_nodes/os` reports `available_processors: 12`, `allocated_processors: 12` | cpuset |
 | Neo4j | 10 `GC Thread#N`; G1 derives `8 + (N-8)*5/8` above 8, so 12 CPUs gives 10 | cpuset |
@@ -78,21 +78,188 @@ The DuckDB bias runs **against** DuckDB, which wins that lane regardless, so not
 
 Scope, and it is narrow. One tier, k=10, one query in flight at a time, embedded backends only. It says nothing about concurrent query load, and nothing about Qdrant or Milvus, which run as servers and are the ones most likely to hold per-query pools. Re-measure before extending the claim.
 
-**F9. A kept row needs a control, because the host is not an invariant.** F1 to F8 and F10 to F12 constrain a cell's *configuration*; none constrains *when* it ran. A row printed tonight beside one measured five weeks ago is fully compliant and still potentially wrong, because the kernel, the docker version and the machine's thermal history all moved and, apart from the thermal fields every row has carried since the queue scripts pulled them on 2026-09-14 (BUGS.md F45), none of that is recorded as a run condition.
+**F9. A kept row needs a control, because the host is not an invariant.** F1 to F8 and F10 constrain a cell's *configuration*; none constrains *when* it ran. A row printed tonight beside one measured five weeks ago is fully compliant and still potentially wrong, because the kernel, the docker version and the machine's thermal history all moved and none of that is recorded as a run condition.
 
 So when a campaign re-measures one engine and carries the others forward, **re-run one untouched comparator as a control and show it reproduces its kept numbers within run-to-run spread.** One extra cell buys evidence for every row that was not re-run. If the control does not reproduce, the carried-forward rows are not usable and the whole tier is re-measured. Record the control's old-against-new delta next to the table it licenses, so a reader can see the carry-forward was checked rather than assumed.
 
-**F10. Same durability class per table, and one instrument.** A commit that waits for the disk and one that does not are different operations, so a write latency is a comparison only if every engine in the table committed the same way. From the 2026-10 instrument (DECISIONS #81) the matched class is **relaxed**: a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which loses the last committed transactions on a power cut but does not corrupt the store. That is ArcadeDB's own default at `txWalFlush=0`, so the comparators are matched to it rather than it to them: SQLite and sqlite-vec run WAL with `synchronous=NORMAL`, the PostgreSQL family runs `synchronous_commit=off`, MongoDB's timed writes run at `w=1, j=false`, and ArangoDB, QuestDB, and SurrealDB embedded run their own defaults, which are already in this class. Every one of those settings is read out of the engine rather than assumed, and each row records what it ran as `durability`.
+**F10. Same durability class per table, and one instrument.** A commit that
+waits for the disk and one that does not are different operations, and a write
+latency compares them only if every engine in the table waited the same way.
+Since the 2026-10 instrument (DECISIONS #81) the matched class is *relaxed*: a
+commit returns without waiting for the disk and the log is flushed by the
+engine's own background policy.
 
-**Neo4j is the exception the decision names**: it flushes its log at every commit, has no setting to relax it, so it runs as it is and its graph and cross-model tables say it is the one engine waiting for the disk, rather than leaving it silently advantaged or disadvantaged. The same read-out-of-the-engine check put LadybugDB and DuckDB in the strict class too, and each table's durability condition is generated from the engines that table shows. SurrealDB served 3.2.4 exposes no durability setting at all, so it is in neither class and its row says so instead of claiming one.
+**Every default below was read out of the engine, not assumed** (laptop,
+2026-09-14; the evidence for each is in `bench_common.py` above the
+`DURABILITY_*` strings, which are defined once there so two lanes cannot
+describe one engine differently). In the relaxed class: ArcadeDB at
+`txWalFlush=0`, which `GlobalConfiguration.TX_WAL_FLUSH` reports as its default
+and current value; SQLite and sqlite-vec under WAL with `synchronous=NORMAL`,
+read back by `PRAGMA` and confirmed by `strace` (50 commits, 8 `fsync`);
+PostgreSQL, pgvector, PG+AGE, and TimescaleDB, whose adapters run
+`SHOW synchronous_commit` on connect and record the server's own answer;
+MongoDB's timed writes at `w=1, j=false` against a server reporting
+`journalCommitInterval` 100 ms; ArangoDB's default, with the 3.12.11 server
+answering `database.wait-for-sync` false, `rocksdb.use-fsync` false, and
+`rocksdb.sync-interval` 100 ms; QuestDB's default, with the 9.1.1 server
+answering `cairo.commit.mode` `nosync` from `SHOW PARAMETERS`; and SurrealDB
+embedded, where an A/B under `strace` shows 6 `fsync` calls at both 50 and 250
+commits with `SURREAL_SYNC_DATA` unset against 56 and 256 with it set.
 
-`fairness_check.check_durability` refuses a 2026-10 row carrying no `durability`, a strict string on an engine that has the knob, an unverified string on an engine not named above, and two `instrument` values in one table. The relaxed setting is a real deployment mode every one of these engines documents, it is matched on every engine that has the knob, and the one that cannot match is named: that is the whole fairness argument, and it is not re-litigated per table.
+Three engines cannot be relaxed and are the named exceptions on their tables.
+Neo4j: `SHOW SETTINGS` at 2026.07.1 offers no durability or sync setting at all
+(its `tx_log` settings cover buffer, preallocation, and rotation), and forcing
+the log at commit is its documented behaviour. LadybugDB: `strace` counts 56
+`fdatasync` calls for 50 auto-commit writes, and `ladybug` 0.20.4's `Database()`
+takes no sync option. DuckDB: `strace` counts 55 `fsync` calls for 50 commits,
+and `duckdb_settings()` at 1.5.4 (the pin since DECISIONS #103d) exposes only
+checkpoint and WAL-autocheckpoint thresholds, no commit-sync knob.
 
-Since DECISIONS #90 every timed write runs at both settings and the page carries both classes rather than choosing one, so the invariant is that a table's engines share a class and not that only the relaxed one is measured; ingest stays at a single setting on every lane (#90a).
+**One engine is in neither class, and says so.** SurrealDB 3.2.4 served has no
+durability setting to match: its binary contains no `SYNC_DATA` and no
+`SURREAL_DATASTORE` token, and none of the 110 `SURREAL_*` variables it does
+expose names sync, WAL, fsync, or durability. This harness used to start it with
+`SURREAL_DATASTORE_SYNC_DATA=never`, which the server never read, so the flag
+labelled those rows as relaxed while changing nothing; it is gone. What 3.2.4
+does at commit was not established, and the row says
+"behaviour at commit is not verified" rather than claiming a class.
+`bench_common.durability_class` returns `unverified` for it, and
+`fairness_check` refuses that on any backend not listed as an exception, so it
+cannot spread silently to another engine.
 
-**F11. Close cost is an invariant, not a column.** Close should be O(what was written), not O(what is stored), and on the order of 100 ms; the reasoning, the situations, and the numbers are PAGE-SPEC.md section 4 (DECISIONS #50). Checked by `fairness_check.check_close_cost`, which prints under this number.
+Every row records what it ran as `durability`; `fairness_check.check_durability`
+refuses a 2026-10 row with none, a strict string on an engine that has the knob,
+an unverified string on an engine not named above, or a PostgreSQL row whose
+server answered anything but `off`. The same check refuses two `instrument`
+values in one table (rows before 2026-10 carry none and are the September
+instrument), and it refuses a time-series table whose engines disagree on the
+row counts of the two data-dependent queries (`q_groupby_rows`, `q_high_rows`),
+because a query that returned a different number of rows measured a different
+question.
 
-**F12. Equivalent queries must return equivalent answers.** A benchmark that never checks the answer measures how fast an engine can be wrong, and an adapter that silently drops a filter, a join condition, or a group reads as a lead rather than as a bug. So every timed query with a deterministic answer records a canonical digest of it (order-insensitive unless the query defines an order, floats rounded before hashing, a readable sample kept beside the digest), and `equivalence_check` refuses a table whose engines disagree at one scale. A query an engine cannot express is declared absent in its adapter and named by the gate, never skipped. The vector lanes keep recall against ground truth, which is the stronger check for an approximate index, and the cross-model lane keeps its torn-state comparison; its two read paths are checked by recall against a brute-force answer over the same filtered candidate set, with the graph and document halves digest-compared exactly (DECISIONS #82c, #88).
+**F10b. Both durability classes on every timed write (DECISIONS #90,
+superseding the single-setting half of #81).** F10 fixes the class within a
+table; #90 adds the second table. Every timed write operation runs twice, once
+at each setting: the six document operations, the three graph writes, and the
+cross-model transaction. Bulk ingest stays at one setting, because an fsync per
+batch at ten million vectors is hours and teaches nothing the write cells do
+not, and every read path is untouched.
+
+Most engines cannot switch this per operation -- ArcadeDB's `txWalFlush` is per
+database, SurrealDB's and QuestDB's are server flags -- so the class is a
+property of the CELL. `runner.py --durability strict` sets the flags that live
+on a server and puts the class in the container's environment for the ones that
+live on the client; `bench_common` holds one strict string per engine beside
+its relaxed one; the row records `durability` (what the engine reports),
+`durability_class` (what the cell asked for), `durability_no_setting`, and
+`durability_server_flags`. The class is part of the canonical key, so a strict
+cell cannot shadow the relaxed one beside it.
+
+**Read back, not asserted, on both sides.** ArcadeDB's value comes from
+`GlobalConfiguration.TX_WAL_FLUSH` after the database is open; SQLite's from
+`PRAGMA journal_mode` and `PRAGMA synchronous`; ArangoDB's from the collection's
+own `properties()["sync"]`; the PostgreSQL family's from `SHOW
+synchronous_commit`. `fairness_check` fails a row whose engine reports a
+different class from the one the cell asked for, which is what a flag that did
+not take looks like.
+
+**Four engines have no knob** and are the named exceptions: Neo4j, DuckDB and
+LadybugDB, each straced rather than assumed, and the SurrealDB 3.2.4 server,
+whose binary exposes no sync setting at all. They run once, declare
+`durability_no_setting`, and the page prints their one number in both columns,
+which puts them on an equal footing instead of comparing their strict numbers
+against everyone else's relaxed ones.
+
+**The answer must not change with the class.** A strict commit changes when a
+write becomes durable, not what it wrote, so the #88 digests of one engine must
+match across its two classes; `equivalence_check` E2 fails a backend that gives
+two answers across its own repetitions and classes.
+
+Laptop, micro, one repetition, both classes, the ratio of strict to relaxed on
+new-order p50: SQLite 48.4x, PostgreSQL 9.8x, SurrealDB embedded 9.0x, ArcadeDB
+embedded 4.6x, MongoDB 1.8x, ArangoDB 1.7x, DuckDB 1.00x (no knob, as
+predicted). On the single-record insert the spread is wider still: SQLite 98x,
+ArcadeDB 33.6x, PostgreSQL 28.5x.
+
+**F11. Equivalent queries must return equivalent answers.** A benchmark that
+never checks the answer measures how fast an engine can be wrong, and until
+2026-09-14 this one never checked: recall against ground truth on the two
+vector lanes and the torn-state comparison in the cross-model trial were the
+only cross-engine correctness anywhere, so an adapter that dropped a filter, a
+group or a join condition would have printed a lead rather than a bug
+(DECISIONS #88).
+
+Every timed query whose answer is deterministic now records a canonical digest
+of that answer, a row count, and a short readable sample, written by
+`bench_common.result_digest`. Three rules make the check mean something:
+
+* The digest is computed from the object the **timed call returned**, outside
+  the timed section. Re-running the query to digest it would digest a second
+  execution against a different cache state, and on a lane with writes a
+  different database.
+* An engine that cannot express a query records
+  `unexpressible: <reason>`, never a blank, because silence is
+  indistinguishable from agreement.
+* Normalisation is identical for every engine and is declared once per query,
+  never per engine: the column order is the query's, alternative column names
+  cover the dialects (`_id`, `_id.f`, an AQL `RETURN` name, a positional SQL
+  tuple), integers print exactly, floats to six significant digits, strings are
+  stripped, dates are ISO, aware datetimes land in UTC, and a column that holds
+  an instant, a month or a MEASURE is declared as such so epoch seconds, epoch
+  milliseconds, a datetime and a truncated date are one value, and so are an
+  integral sum and the same sum as a double.
+* A column that holds a **measure** is declared `num`; a column that holds a
+  **count or an identifier** is not. The two spellings of a whole number --
+  exact for an int, six significant digits for a double -- coincide only below
+  a million, so an engine whose `SUM` returns an integer agrees with its
+  neighbours at SF0.01 and disagrees at SF1 on the same correct answer. That
+  happened, seven engines to one (2026-09-14, TPC-H Q1, ArangoDB). Counts stay
+  exact in the other direction: rounding a count to six significant digits
+  would let 1,234,567 and 1,234,568 agree.
+
+A write has no answer to digest, so what is digested is the state it left: the
+whole CRUD table read back after each phase, the orders after the new-order and
+payment loops, the persons the graph writes created. An insert that wrote
+nothing, an update that matched nothing and a delete that deleted nothing each
+fail the gate instead of printing a fast number.
+
+`equivalence_check.py` groups the digests by lane, scale, workload and query
+and refuses a publish when two engines disagree, printing both samples. A group
+with one engine is reported as UNCHECKED and never counted as a pass; a backend
+that ran the cell and recorded neither a digest nor a declared absence fails; a
+lane that recorded nothing at all fails unless it is declared as checked
+otherwise, which the two vector lanes are, by recall.
+
+**F12. Every table reports the same measurement set, or says why not.** One
+warm median per query, a ninety-ninth percentile for the table's headline
+query, ONE cold column per table, throughput where the operation has a natural
+rate, recall where the index is approximate, peak memory, on-disk size after
+the workload, and for the vector tables ingest and index build as separate
+timers (DECISIONS #89, as amended). About nine columns on the widest table
+rather than twenty-one, and **no aggregated per-table statistic**: no mean, no
+median, and no geometric mean across query types. An arithmetic mean across
+queries whose times span five orders of magnitude is the slowest query in
+disguise, a median across them moves when a query is added, and the summary
+figure already carries the cross-table ratio view.
+
+The cold number is one per CELL, not one per query, because the cold question
+is about the session: `cold_first_query_ms` and `cold_first_query_name`, from
+the first query the cell ran after the database opened. On the two vector lanes
+that is a WARMUP query rather than the first timed one, which is exactly why it
+is the cold one. The rows also keep `cold_<q>_ms`, `warm_<q>_p50_ms` and
+`warm_<q>_p99_ms` per query under one naming convention across every lane -- a
+row carrying more than the page prints is useful, and it is what lets a table
+ask every lane the same question without knowing which lane it is asking.
+
+Where a measurement genuinely does not apply the row carries a stated reason in
+`cold_warm_na` rather than a blank cell, and the strings are defined once in
+`bench_common` so two lanes cannot phrase one exemption differently: a
+transactional cell has no cold and warm split because every operation runs
+against an already-warm database by construction; the lifecycle lane is itself
+the cold measurement; the two vector lanes warm on a held-out slice before they
+time anything, and their cold and warm columns come from the multipass driver.
+
+**F13. Close cost is an invariant, not a column.** Close should be O(what was written), not O(what is stored), and on the order of 100 ms; the reasoning, the situations, and the numbers are PAGE-SPEC.md section 4 (DECISIONS #50). Checked by `fairness_check.check_close_cost`, which prints under this number. Renumbered from F11 here because F11 and F12 are the October instrument's two rules above; `fairness_check.check_close_cost` still prints its section header as F11, and that mismatch is recorded rather than silently renamed in a gate's output.
 
 ## Parallelism policy: maximise it, but never inside a published absolute
 

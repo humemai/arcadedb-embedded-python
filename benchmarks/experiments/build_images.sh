@@ -20,7 +20,8 @@ fi
 
 declare -A PKGS=(
   # EVERY package pinned, and every pin at the current release as of
-  # 2026-08-15. Two rules, both learned the hard way:
+  # 2026-09-19 (the October re-pin survey, DECISIONS #87/#103d). Two rules,
+  # both learned the hard way:
   #
   # NOTHING UNPINNED. duckdb was bare here while [dense] pinned 1.5.4, so the
   # two images resolved differently on different build days and the SAME PAPER
@@ -34,12 +35,14 @@ declare -A PKGS=(
   # 1.5.4, NOT 1.5.5 (DECISIONS #103d, #103e): the community-extensions
   # registry has a DuckPGQ build for 1.5.4 and none for 1.5.5 (or 1.6.0), and
   # the graph arm cannot be measured on a version whose graph extension 404s.
-  # One DuckDB version wears the page (the two-version trap this file guards
-  # against below), so documents, time series, dense VSS and the DuckPGQ
-  # graph arm all pin here, and September's DuckDB rows are re-measured at it.
+  # One DuckDB version wears the page (#103c's sibling rule, the two-version
+  # trap this file guards against below), so documents, time series, dense VSS
+  # and the DuckPGQ graph arm all pin here, and September's DuckDB rows are
+  # re-measured at it. The client and dense lines carry the OCTOBER RE-PIN of
+  # 2026-09-19 (COMPARATORS.md, "The October re-pin").
   [duckdb]="duckdb==1.5.4 pandas pyarrow"
-  [client]="requests psycopg[binary] pandas pyarrow numpy surrealdb==2.0.0 qdrant-client==1.19.0 pymilvus==3.0.1 elasticsearch==9.5.0 neo4j==6.2.0 ladybug==0.19.1 pymongo==4.18.1 python-arango==8.3.5 falkordb==1.7.1 redis==8.1.0"
-  [dense]="chromadb==1.5.9 lancedb==0.37.1 sqlite-vec==0.1.9 duckdb==1.5.4 numpy pandas pyarrow"
+  [client]="requests psycopg[binary] pandas pyarrow numpy surrealdb==2.0.0 qdrant-client==1.19.1 pymilvus==3.0.1 elasticsearch==9.5.1 neo4j==6.3.1 ladybug==0.20.4 pymongo==4.18.1 python-arango==8.3.5 falkordb==1.7.1 redis==8.1.0"
+  [dense]="chromadb==1.5.9 lancedb==0.39.0 sqlite-vec==0.1.9 duckdb==1.5.4 numpy pandas pyarrow"
 )
 # A GUARD, not a comment. The dev pin above survived because nothing checked
 # it. BENCH_ALLOW_DEV=1 is the deliberate escape hatch for engine debugging.
@@ -83,8 +86,17 @@ case "$_pin" in
 esac
 echo "arcadedb pin: $_pin"
 
-targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age)
+targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age mongo-search)
 for be in "${targets[@]}"; do
+  if [ "$be" = "mongo-search" ]; then
+    # MongoDB Community 8.2.12 + mongot (MongoDB Search Community) 1.70.4 in
+    # one container (Dockerfile.mongosearch), the dense and cross-model arms'
+    # server. Both halves pinned by digest inside the Dockerfile, so a local
+    # build has the same provenance a pulled image would.
+    echo "=== dbbench:mongo-search (Dockerfile.mongosearch)"
+    docker build -q -t dbbench:mongo-search -f Dockerfile.mongosearch . >/dev/null && echo "  ok"
+    continue
+  fi
   if [ "$be" = "pg-age" ]; then
     # PostgreSQL 17 + pgvector + Apache AGE, a server image (Dockerfile.pgage),
     # the cross-model lane's "one engine" rival (2026-09-11).

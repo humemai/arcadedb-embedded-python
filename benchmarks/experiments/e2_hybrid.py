@@ -26,10 +26,12 @@ import os
 import random
 import statistics
 import time
+import bench_common
 
 import numpy as np
 import surreal_common
 import arango_common
+import mongo_common
 
 # THE TIERS. e2 is the 50k catalog every cross-model row was measured on;
 # e2_500k is the same generator at 500,000 products (DECISIONS #103: cross-
@@ -48,6 +50,128 @@ OPS = int(os.environ.get("E2_OPS", "300"))
 WARMUP = 20
 SEED = 20260721
 BATCH = 5_000
+# NO ROW CAP ON THE SERVED ARM (2026-09-14). The ArcadeDB HTTP API truncates a
+# result at 20,000 rows unless the request says otherwise, and the #88 digests
+# caught both served time-series arms returning exactly 20,000 where every
+# other engine returned 32,944. Nothing on this lane returns that many rows
+# today, which is precisely why it would have gone unnoticed the day one did.
+# -1 means no cap.
+HTTP_LIMIT = -1
+
+
+
+# ---------------------------------------------------------------------------
+# THE TWO READ PATHS (DECISIONS #82c). The table measured one write path, which
+# argues atomicity well and says nothing about the shape most people run, which
+# is retrieval. Both are read-only and run on the same corpus, BEFORE the write
+# loop, so every views counter is still zero and the document half of the
+# answer is deterministic on every engine.
+#
+#   retrieval        vector top-k, a one-hop expansion, a projection of the
+#                    documents found.
+#   filtered search  a top-k restricted to the neighbourhood of a start node:
+#                    "the case that separates a single engine from a composed
+#                    stack, because the engine can push the filter into the
+#                    index while the stack has to move a candidate set between
+#                    two systems".
+#
+# HOW THE HALVES ARE CHECKED, and this is the part #82c is explicit about: the
+# vector half is approximate, so it is checked by RECALL against a brute-force
+# answer over the same candidate set, exactly as the vector lanes are; the
+# graph and document halves are deterministic and are digest-compared exactly.
+# A number that comes out of an approximate index is never fed into a digest,
+# because a gate that fires on the index's own approximation is a gate people
+# learn to ignore.
+#
+# The expansion anchors on a FIXED start product per query rather than on the
+# engine's own best hit, for the same reason: the best hit is the approximate
+# half's output, and anchoring on it would make the exactly-comparable half
+# depend on the half that is not.
+READ_OPS = int(os.environ.get("E2_READ_OPS", "200"))
+FILTER_HOPS = 3
+# How wide a post-filtering engine searches before dropping non-neighbours.
+# Recorded on the row: it is the only knob in this measurement and it decides
+# what a post-filter arm's recall can possibly be.
+FILTER_OVERFETCH = int(os.environ.get("E2_FILTER_OVERFETCH", "1000"))
+RETRIEVAL_DIGEST = dict(columns=("pid", "views"))
+FILTER_CAND_DIGEST = dict(columns=("start", "n_candidates"))
+
+
+def build_adjacency(edges, n):
+    adj = [[] for _ in range(n)]
+    for a, b in edges:
+        adj[a].append(b)
+    return adj
+
+
+def neighbourhood(adj, start, hops):
+    """The harness's own answer for the candidate set, from the generated
+    edges. The engines derive theirs by traversing; comparing the two is what
+    checks the graph half of the filtered search."""
+    seen, frontier = set(), [start]
+    for _ in range(hops):
+        nxt = []
+        for p in frontier:
+            for q in adj[p]:
+                if q != start and q not in seen:
+                    seen.add(q)
+                    nxt.append(q)
+        frontier = nxt
+        if not frontier:
+            break
+    return sorted(seen)
+
+
+def brute_topk(vecs, q, k, candidates=None):
+    """Exact nearest neighbours, over every vector or over a candidate set."""
+    if candidates is None:
+        d = np.linalg.norm(vecs - q, axis=1)
+        idx = np.argsort(d, kind="stable")[:k]
+        return [int(i) for i in idx]
+    if not candidates:
+        return []
+    cand = np.asarray(candidates, dtype=np.int64)
+    d = np.linalg.norm(vecs[cand] - q, axis=1)
+    order = np.argsort(d, kind="stable")[:k]
+    return [int(cand[i]) for i in order]
+
+
+def recall_at_k(got, want):
+    if not want:
+        return 1.0
+    return round(len(set(int(g) for g in got) & set(int(w) for w in want)) / float(len(want)), 4)
+
+
+def engine_neighbourhood(ad, start, hops):
+    """The candidate set as the ENGINE sees it: one traversal query per hop.
+
+    One query per hop rather than a variable-length path, because a
+    variable-length path is spelled four different ways across these engines
+    and two of them cannot express it at all; a hop is a hop everywhere, and
+    every arm pays the same number of round trips.
+    """
+    seen, frontier = set(), [start]
+    for _ in range(hops):
+        nxt = [int(p) for p in ad._hop(frontier) if p != start and p not in seen]
+        seen.update(nxt)
+        frontier = sorted(set(nxt))
+        if not frontier:
+            break
+    return sorted(seen)
+
+
+def do_retrieval(ad, qvec, start_pid):
+    """vector top-k -> one-hop expansion -> document projection, one read path."""
+    pids = ad._vec_topk(qvec, K)
+    nbrs = sorted(set(int(p) for p in ad._hop([start_pid])))
+    docs = ad._docs(nbrs) if nbrs else []
+    return pids, docs
+
+
+def do_filtered(ad, qvec, start_pid):
+    """top-k restricted to the start node's neighbourhood."""
+    cands = engine_neighbourhood(ad, start_pid, FILTER_HOPS)
+    return ad._rank_candidates(qvec, cands, K), cands
 
 
 def gen_data():
@@ -77,11 +201,14 @@ class ArcadeE2:
             # __size pinned, so under a protocol the paper says applies to
             # everyone, the comparator got the committed, latency-stable
             # heap and ArcadeDB got one that grows.
-            jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
+            # txWalFlush explicit at both classes (DECISIONS #90).
+            jvm_kwargs={"heap_size": heap,
+                        "jvm_args": bench_common.arcade_jvm_args(f"-Xms{heap}")})
         # THE WHEEL'S version, not its name (#156). A row stamped
         # "arcadedb-embedded" cannot be re-measured by anyone including us.
         from importlib.metadata import version as _v
         self.version = _v("arcadedb-embedded")
+        self.durability = bench_common.arcade_durability_readback()
 
     def build(self, vecs, edges):
         db, a = self.db, self._a
@@ -124,6 +251,50 @@ class ArcadeE2:
                 raise RuntimeError("injected-crash")  # txn context rolls back
         return len(touched)
 
+    # THE TWO READ PATHS (DECISIONS #82c).
+    #
+    # POST-FILTER, AND IT IS NOT A CHOICE. ArcadeDB 26.8.1 exposes no scalar
+    # vector-distance function in SQL -- vectorDistance, similarity,
+    # cosineSimilarity, euclideanDistance and vector_distance are all "Unknown
+    # function name" (laptop probe, 2026-09-14) -- so a candidate set cannot be
+    # ranked by distance and the graph filter cannot be pushed into the index.
+    # The arm over-fetches a global search and drops the non-neighbours, and
+    # its recall says what that costs. Every other engine on this table ranks
+    # the candidate set directly.
+    FILTER_MODE = ("post-filter: no scalar vector-distance function in SQL at 26.8.1, "
+                   "so an over-fetched global search is filtered afterwards")
+
+    def _vec_topk(self, qvec, k, ef=100):
+        rows = self.db.query(
+            "sql", "SELECT pid FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?)))",
+            "Product[embedding]", self._a.to_java_float_array(qvec), k, max(ef, k)).to_list()
+        return [int(r["pid"]) for r in rows]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        lst = ",".join(str(int(p)) for p in pids)
+        rows = self.db.query("sql", f"SELECT pid FROM (SELECT expand(out('RELATED')) "
+                                    f"FROM Product WHERE pid IN [{lst}])").to_list()
+        return [int(r["pid"]) for r in rows]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        lst = ",".join(str(int(p)) for p in pids)
+        return self.db.query("sql", f"SELECT pid, views FROM Product WHERE pid IN [{lst}]").to_list()
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        lst = ",".join(str(int(p)) for p in cands)
+        rows = self.db.query(
+            "sql", f"SELECT pid FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?))) "
+                   f"WHERE pid IN [{lst}] LIMIT {k}",
+            "Product[embedding]", self._a.to_java_float_array(qvec),
+            FILTER_OVERFETCH, max(100, FILTER_OVERFETCH)).to_list()
+        return [int(r["pid"]) for r in rows]
+
     def total_views(self):
         r = self.db.query("sql", "SELECT sum(views) AS s FROM Product").to_list()
         return int(r[0]["s"] or 0)
@@ -148,6 +319,8 @@ class ArcadeE2Server(ArcadeE2):
     name = "arcadedb_e2_server"
 
     def __init__(self):
+        self.durability = (bench_common.at_class(bench_common.DURABILITY_ARCADEDB)
+                           + bench_common.ARCADE_SERVER_DURABILITY_NOTE)
         import requests
         self.rq = requests.Session()
         self.rq.auth = ("root", "dbbenchpass")
@@ -162,6 +335,8 @@ class ArcadeE2Server(ArcadeE2):
 
     def _post(self, kind, command, params=None, language="sql", sid=None, timeout=600):
         payload = {"language": language, "command": command}
+        if kind == "query":
+            payload["limit"] = HTTP_LIMIT   # only the query endpoint takes a row cap
         if params:
             payload["params"] = params
         headers = {"arcadedb-session-id": sid} if sid else None
@@ -220,6 +395,39 @@ class ArcadeE2Server(ArcadeE2):
             raise
         return len(touched)
 
+    # The same two read paths over HTTP; the same post-filter, for the same
+    # reason (the SQL is the server's, and the function is missing there too).
+    def _vec_topk(self, qvec, k, ef=100):
+        rows = self._post("query", "SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef)))",
+                          {"idx": "Product[embedding]", "q": [float(x) for x in qvec],
+                           "k": k, "ef": max(ef, k)})
+        return [int(r["pid"]) for r in rows]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        lst = ",".join(str(int(p)) for p in pids)
+        rows = self._post("query", f"SELECT pid FROM (SELECT expand(out('RELATED')) "
+                                   f"FROM Product WHERE pid IN [{lst}])")
+        return [int(r["pid"]) for r in rows]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        lst = ",".join(str(int(p)) for p in pids)
+        return self._post("query", f"SELECT pid, views FROM Product WHERE pid IN [{lst}]")
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        lst = ",".join(str(int(p)) for p in cands)
+        rows = self._post("query",
+                          f"SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef))) "
+                          f"WHERE pid IN [{lst}] LIMIT {k}",
+                          {"idx": "Product[embedding]", "q": [float(x) for x in qvec],
+                           "k": FILTER_OVERFETCH, "ef": max(100, FILTER_OVERFETCH)})
+        return [int(r["pid"]) for r in rows]
+
     def total_views(self):
         r = self._post("query", "SELECT sum(views) AS s FROM Product")
         return int(r[0]["s"] or 0)
@@ -245,6 +453,9 @@ class SurrealE2:
     URL = "surrealkv:///tmp/e2_surrealkv"
 
     def __init__(self):
+        # SURREAL_SYNC_DATA before the datastore opens (DECISIONS #90).
+        self.durability = bench_common.at_class(bench_common.DURABILITY_SURREAL_EMBEDDED)
+        surreal_common.apply_durability()
         import shutil
         from surrealdb import Surreal
         shutil.rmtree("/tmp/e2_surrealkv", ignore_errors=True)
@@ -304,6 +515,39 @@ class SurrealE2:
             q(f"BEGIN; {upd}; COMMIT;")
         return len(touched)
 
+    FILTER_MODE = ("pre-filter: the candidate set is restricted first and ranked by "
+                   "vector::distance::euclidean")
+
+    def _vec_topk(self, qvec, k, ef=100):
+        vec = json.dumps([float(x) for x in qvec])
+        rows = _srows(self.db.query(f"SELECT pid FROM product WHERE embedding <|{k},{max(ef, k)}|> {vec}"))
+        return [int(r["pid"]) for r in rows]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        lst = ",".join(f"product:{int(p)}" for p in pids)
+        out = []
+        for r in _srows(self.db.query(f"SELECT VALUE ->related->product.pid FROM [{lst}]")):
+            out.extend(r if isinstance(r, list) else [r])
+        return [int(x) for x in out if x is not None]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        lst = ",".join(f"product:{int(p)}" for p in pids)
+        return _srows(self.db.query(f"SELECT pid, views FROM [{lst}]"))
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        vec = json.dumps([float(x) for x in qvec])
+        lst = ",".join(str(int(p)) for p in cands)
+        rows = _srows(self.db.query(
+            f"SELECT pid, vector::distance::euclidean(embedding, {vec}) AS d FROM product "
+            f"WHERE pid INSIDE [{lst}] ORDER BY d ASC LIMIT {k}"))
+        return [int(r["pid"]) for r in rows]
+
     def total_views(self):
         r = self.db.query("SELECT math::sum(views) AS s FROM product GROUP ALL")
         rows = _srows(r)
@@ -324,11 +568,11 @@ class SurrealServedE2(SurrealE2):
     name = "surrealdb_e2_server"
 
     def __init__(self):
-        from surrealdb import Surreal
-        host = os.environ.get("BENCH_SERVER_HOST", "localhost")
-        self.db = Surreal(f"ws://{host}:8000/rpc")
-        self.db.signin({"username": "root", "password": "root"})
-        self.db.use("bench", "bench")
+        # One shared client for every served arm (DECISIONS #91): it sets the
+        # WebSocket options the SDK leaves at the library's defaults, and it
+        # reconnects, re-authenticates and re-selects the namespace once when
+        # the socket dies mid-query.
+        self.db = surreal_common.served_client()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
@@ -344,8 +588,11 @@ class ArangoE2:
         self.cl, self.db, self.version = arango_common.connect()
 
     def build(self, vecs, edges):
-        prod = self.db.create_collection("product")
+        # waitForSync on the collection the timed transaction writes (#90).
+        _sync = arango_common.sync_flag()
+        prod = self.db.create_collection("product", sync=_sync)
         rel = self.db.create_collection("related", edge=True)
+        self.durability = arango_common.durability_readback(self.db, "product")
         for s in range(0, len(vecs), BATCH):
             prod.import_bulk([{"_key": str(i), "pid": i, "views": 0, "embedding": vecs[i].tolist()}
                               for i in range(s, min(s + BATCH, len(vecs)))])
@@ -372,6 +619,35 @@ class ArangoE2:
         txn.commit_transaction()
         return len(touched)
 
+    FILTER_MODE = "pre-filter: FILTER on the candidate set, SORT by L2_DISTANCE"
+
+    def _vec_topk(self, qvec, k, ef=None):
+        return [int(x) for x in self.db.aql.execute(
+            "FOR d IN product LET s = APPROX_NEAR_L2(d.embedding, @q, {nProbe: @np}) SORT s LIMIT @k RETURN d.pid",
+            bind_vars={"q": [float(x) for x in qvec], "np": self.ivf_nprobe, "k": k})]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        return [int(x) for x in self.db.aql.execute(
+            "FOR p IN @ps FOR r IN 1..1 OUTBOUND CONCAT('product/', p) related RETURN r.pid",
+            bind_vars={"ps": [str(int(p)) for p in pids]})]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        return list(self.db.aql.execute(
+            "FOR p IN product FILTER p.pid IN @ids RETURN {pid: p.pid, views: p.views}",
+            bind_vars={"ids": [int(p) for p in pids]}))
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        return [int(x) for x in self.db.aql.execute(
+            "FOR p IN product FILTER p.pid IN @ids SORT L2_DISTANCE(p.embedding, @q) LIMIT @k RETURN p.pid",
+            bind_vars={"ids": [int(p) for p in cands],
+                       "q": [float(x) for x in qvec], "k": k})]
+
     def total_views(self):
         rows = list(self.db.aql.execute("FOR p IN product COLLECT AGGREGATE s = SUM(p.views) RETURN s"))
         if not rows or rows[0] is None:
@@ -380,6 +656,157 @@ class ArangoE2:
 
     def close(self):
         arango_common.close(self.cl)
+
+
+class MongoE2:
+    """MongoDB 8.2.12 with MongoDB Search (mongot) Community 1.70.4, served
+    (2026-09-15): product documents with an embedding under a `vectorSearch`
+    index, `related` as an edge collection, the vector hit through
+    $vectorSearch, the hop through $lookup, and the document updates inside
+    one multi-document transaction that the crash trial aborts before commit.
+
+    THE INTERESTING ANSWER ON THIS TABLE, and it is a refusal rather than a
+    number: **$vectorSearch cannot run inside a multi-document transaction.**
+    mongod answers
+
+        Operation not permitted in transaction :: caused by :: Aggregation
+        stage $vectorSearch cannot run within a multi-document transaction.
+
+    which is measured on this pin at connect time, not quoted from a manual,
+    and lands on the row as `txn_scope`. So the composed operation is NOT one
+    transaction over three models on MongoDB: the vector read is outside it by
+    engine rule, the graph hop is inside one if asked (it is $lookup and
+    $graphLookup, both of which ARE permitted -- also measured), and the
+    document write is inside. The atomicity trial still runs and still means
+    something -- the document half must roll back cleanly -- but what it
+    demonstrates is document atomicity, not the three-model atomicity this
+    lane exists to test, and the row says so rather than letting a torn_count
+    of zero imply the stronger claim.
+
+    THE SECOND HALF OF THE SAME BOUNDARY: mongot maintains the vector index
+    from the oplog, asynchronously, so a committed write is visible to $match
+    before it is visible to $vectorSearch. Nothing in this lane writes an
+    embedding, so no measurement here depends on that lag; it is recorded
+    because it is the reason a MongoDB vector index cannot be transactional
+    even in principle.
+    """
+    name = "mongodb_e2"
+
+    def __init__(self):
+        self.cl, self.db, mongod = mongo_common.connect(auth=True)
+        self.version = mongod + " + " + mongo_common.search_version(self.cl)
+        self.durability = bench_common.at_class(mongo_common.DURABILITY)
+        self._wc = mongo_common.write_concern()
+
+    def build(self, vecs, edges):
+        prod = self.db.get_collection("product", write_concern=self._wc)
+        rel = self.db.get_collection("related", write_concern=self._wc)
+        for s in range(0, len(vecs), BATCH):
+            prod.insert_many([{"_id": i, "pid": i, "views": 0, "embedding": vecs[i].tolist()}
+                              for i in range(s, min(s + BATCH, len(vecs)))], ordered=False)
+        for s in range(0, len(edges), BATCH):
+            rel.insert_many([{"src": a, "dst": b} for a, b in edges[s:s + BATCH]], ordered=False)
+        rel.create_index("src")
+        # `pid` as a filter field so the filtered search is a PRE-filter: the
+        # candidate set goes into the index, not around it.
+        mongo_common.create_vector_index(prod, "embedding", DIM, 16, 100,
+                                         similarity="euclidean", filter_paths=("pid",))
+        mongo_common.wait_queryable(prod)
+        self.prod, self.rel = prod, rel
+        self.TXN_SCOPE = self._probe_txn_scope()
+
+    def _probe_txn_scope(self):
+        """ASK THE ENGINE what it will let inside a transaction, on this pin.
+
+        A sentence in a doc page is a claim with an expiry date; the string on
+        the row is what this build answered today.
+        """
+        def _try(stage_name, pipeline, coll):
+            with self.cl.start_session() as s:
+                try:
+                    with s.start_transaction():
+                        list(coll.aggregate(pipeline, session=s))
+                    return f"{stage_name}: allowed"
+                except Exception as e:                      # noqa: BLE001
+                    return f"{stage_name}: refused ({str(e).split(', full error')[0][:160]})"
+        qv = [0.0] * DIM
+        qv[0] = 1.0
+        vec = _try("$vectorSearch", [
+            {"$vectorSearch": {"index": mongo_common.VECTOR_INDEX, "path": "embedding",
+                               "queryVector": qv, "numCandidates": 10, "limit": 1}},
+            {"$project": {"_id": 0, "pid": 1}}], self.prod)
+        hop = _try("$lookup", [
+            {"$limit": 1},
+            {"$lookup": {"from": "related", "localField": "src",
+                         "foreignField": "src", "as": "h"}}], self.rel)
+        glk = _try("$graphLookup", [
+            {"$limit": 1},
+            {"$graphLookup": {"from": "related", "startWith": "$dst",
+                              "connectFromField": "dst", "connectToField": "src",
+                              "as": "p", "maxDepth": 1}}], self.rel)
+        return ("document update inside one multi-document transaction; the graph hop "
+                f"may be inside ({hop}; {glk}); the vector hit CANNOT be ({vec})")
+
+    def hybrid_op(self, qvec, crash=False, mirror=False):
+        pids = self._vec_topk(qvec, K)
+        rel = self._hop(pids[:1])
+        touched = list(pids[:3]) + list(rel[:3])
+        with self.cl.start_session() as s:
+            with s.start_transaction(write_concern=self._wc):
+                self.db["product"].update_many(
+                    {"_id": {"$in": sorted({int(p) for p in touched})}},
+                    {"$inc": {"views": 1}}, session=s)
+                if crash:
+                    # Injected failure inside the transaction: leaving the
+                    # context by exception aborts it, which is the rollback
+                    # the trial is measuring.
+                    raise RuntimeError("injected-crash")
+        return len(touched)
+
+    FILTER_MODE = ("pre-filter: the candidate ids go into $vectorSearch's own `filter` "
+                   "on an indexed field, with exact:true so the filtered set is scanned "
+                   "rather than approximated")
+
+    def _vec_topk(self, qvec, k, ef=100):
+        return [int(d["pid"]) for d in self.prod.aggregate([
+            {"$vectorSearch": {"index": mongo_common.VECTOR_INDEX, "path": "embedding",
+                               "queryVector": [float(x) for x in qvec],
+                               "numCandidates": max(k, ef), "limit": k}},
+            {"$project": {"_id": 0, "pid": 1}}])]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        return [int(d["dst"]) for d in self.rel.find(
+            {"src": {"$in": [int(p) for p in pids]}}, {"_id": 0, "dst": 1})]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        return list(self.prod.find({"_id": {"$in": [int(p) for p in pids]}},
+                                   {"_id": 0, "pid": 1, "views": 1}))
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        # exact:true is ENN over the filtered set, which is what "rank this
+        # candidate set" means; numCandidates is not accepted beside it.
+        return [int(d["pid"]) for d in self.prod.aggregate([
+            {"$vectorSearch": {"index": mongo_common.VECTOR_INDEX, "path": "embedding",
+                               "queryVector": [float(x) for x in qvec],
+                               "filter": {"pid": {"$in": [int(p) for p in cands]}},
+                               "exact": True, "limit": k}},
+            {"$project": {"_id": 0, "pid": 1}}])]
+
+    def total_views(self):
+        rows = list(self.prod.aggregate([
+            {"$group": {"_id": None, "s": {"$sum": "$views"}}}]))
+        if not rows:
+            raise RuntimeError("mongodb: total_views read returned no rows")
+        return int(rows[0]["s"] or 0)
+
+    def close(self):
+        mongo_common.close(self.cl)
 
 
 class PgAgeE2:
@@ -396,6 +823,8 @@ class PgAgeE2:
         self.cx = psycopg.connect(f"host={host} dbname=bench user=postgres password=dbbenchpass",
                                   autocommit=False)
         with self.cx.cursor() as c:
+            c.execute("SHOW synchronous_commit")   # read, not asserted (#81, #90)
+            self.durability = bench_common.pg_durability_string(c.fetchone()[0])
             c.execute("CREATE EXTENSION IF NOT EXISTS vector")
             c.execute("CREATE EXTENSION IF NOT EXISTS age")
             c.execute("SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector','age')")
@@ -461,6 +890,51 @@ class PgAgeE2:
         self.cx.commit()
         return len(touched)
 
+    FILTER_MODE = "pre-filter: WHERE pid = ANY(...) then ORDER BY the pgvector <-> operator"
+
+    def _v(self, qvec):
+        return "[" + ",".join("%.9g" % float(x) for x in qvec) + "]"
+
+    def _vec_topk(self, qvec, k, ef=100):
+        c = self._cur()
+        # SET LOCAL takes no bound parameter ("syntax error at or near $1",
+        # laptop 2026-09-14); the value is a literal, as it is in hybrid_op.
+        c.execute(f"SET LOCAL hnsw.ef_search = {int(max(ef, k))}")
+        c.execute("SELECT pid FROM product ORDER BY embedding <-> %s::vector LIMIT %s", (self._v(qvec), k))
+        r = [int(x[0]) for x in c.fetchall()]
+        self.cx.commit()
+        return r
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        c = self._cur()
+        lst = ",".join(str(int(p)) for p in pids)
+        c.execute(f"SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) "
+                  f"WHERE a.pid IN [{lst}] RETURN b.pid $$) AS (pid agtype)")
+        r = [int(str(x[0])) for x in c.fetchall()]
+        self.cx.commit()
+        return r
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        c = self._cur()
+        c.execute("SELECT pid, views FROM product WHERE pid = ANY(%s)", (list(int(p) for p in pids),))
+        r = c.fetchall()
+        self.cx.commit()
+        return r
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        c = self._cur()
+        c.execute("SELECT pid FROM product WHERE pid = ANY(%s) ORDER BY embedding <-> %s::vector LIMIT %s",
+                  (list(int(p) for p in cands), self._v(qvec), k))
+        r = [int(x[0]) for x in c.fetchall()]
+        self.cx.commit()
+        return r
+
     def total_views(self):
         c = self._cur()
         c.execute("SELECT sum(views) FROM product")
@@ -473,7 +947,7 @@ class PgAgeE2:
 
 
 class Neo4jE2:
-    """Neo4j 2026.07 alone: Product nodes with an embedding property under its
+    """Neo4j 2026.08 alone: Product nodes with an embedding property under its
     vector index, RELATED edges, the views counter on the node; the hit, the
     hop and the update run in one explicit transaction (2026-09-11)."""
     name = "neo4j_e2"
@@ -519,6 +993,41 @@ class Neo4jE2:
             finally:
                 tx.close()
         return len(touched)
+
+    FILTER_MODE = ("pre-filter: WHERE p.pid IN $ids then ORDER BY "
+                   "vector.similarity.euclidean")
+
+    def _vec_topk(self, qvec, k, ef=100):
+        with self.drv.session() as s:
+            hits = s.run("CYPHER 25 MATCH (p:Product) SEARCH p IN (VECTOR INDEX prod_emb FOR $q LIMIT $ef) "
+                         "SCORE AS sc RETURN p.pid AS pid ORDER BY sc DESC LIMIT $k",
+                         q=[float(x) for x in qvec], k=k, ef=max(ef, k)).data()
+        return [int(h["pid"]) for h in hits]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        with self.drv.session() as s:
+            return [int(r["pid"]) for r in s.run(
+                "MATCH (p:Product)-[:RELATED]->(q) WHERE p.pid IN $ps RETURN q.pid AS pid",
+                ps=[int(p) for p in pids]).data()]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        with self.drv.session() as s:
+            return s.run("MATCH (p:Product) WHERE p.pid IN $ids "
+                         "RETURN p.pid AS pid, p.views AS views",
+                         ids=[int(p) for p in pids]).data()
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        with self.drv.session() as s:
+            return [int(r["pid"]) for r in s.run(
+                "MATCH (p:Product) WHERE p.pid IN $ids RETURN p.pid AS pid "
+                "ORDER BY vector.similarity.euclidean(p.embedding, $q) DESC LIMIT $k",
+                ids=[int(p) for p in cands], q=[float(x) for x in qvec], k=k).data()]
 
     def total_views(self):
         with self.drv.session() as s:
@@ -622,6 +1131,44 @@ class ComposedE2:
                                 points=tp)
         return len(touched)
 
+    # THE COMPOSED STACK'S VERSION OF THE SAME TWO PATHS. The filter is a
+    # pre-filter, as on the single engines that can express one, but the
+    # candidate set has to cross a process boundary: Neo4j answers the
+    # traversal, the ids are serialised into a Qdrant filter, and Qdrant
+    # ranks. That crossing is the quantity this arm exists to price.
+    FILTER_MODE = ("cross-system pre-filter: the candidate ids are read from Neo4j "
+                   "and sent to Qdrant as a filter")
+
+    def _vec_topk(self, qvec, k, ef=100):
+        hits = self.qc.query_points("product", query=list(map(float, qvec)), limit=k).points
+        return [int(h.payload["pid"]) for h in hits]
+
+    def _hop(self, pids):
+        if not pids:
+            return []
+        with self.neo.session() as s:
+            return [int(r["pid"]) for r in s.run(
+                "MATCH (p:Product)-[:RELATED]->(q) WHERE p.pid IN $ps RETURN q.pid AS pid",
+                ps=[int(p) for p in pids]).data()]
+
+    def _docs(self, pids):
+        if not pids:
+            return []
+        with self.neo.session() as s:
+            return s.run("MATCH (p:Product) WHERE p.pid IN $ids "
+                         "RETURN p.pid AS pid, p.views AS views",
+                         ids=[int(p) for p in pids]).data()
+
+    def _rank_candidates(self, qvec, cands, k):
+        if not cands:
+            return []
+        from qdrant_client import models as qm
+        flt = qm.Filter(must=[qm.FieldCondition(
+            key="pid", match=qm.MatchAny(any=[int(p) for p in cands]))])
+        hits = self.qc.query_points("product", query=list(map(float, qvec)),
+                                    query_filter=flt, limit=k).points
+        return [int(h.payload["pid"]) for h in hits]
+
     def total_views(self):
         """Both subsystems' view of the SAME counter, plus how many products
         they actually disagree about. The disagreement count is the torn-state
@@ -650,7 +1197,26 @@ class ComposedE2:
         self.neo.close()
 
 
-BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, ArangoE2, PgAgeE2, Neo4jE2, ComposedE2)}
+BACKENDS = {c.name: c for c in (ArcadeE2, ArcadeE2Server, SurrealE2, SurrealServedE2, ArangoE2,
+                                MongoE2, PgAgeE2, Neo4jE2, ComposedE2)}
+
+
+# DECISIONS #81, recorded on every row. PG+AGE reads the server's
+# synchronous_commit on connect (see PgAgeE2); the composed stack's document
+# and graph half is Neo4j, which cannot be relaxed.
+# Every string, and the evidence for the default it names, is in bench_common.
+DURABILITY = {
+    "arcadedb_e2": bench_common.DURABILITY_ARCADEDB,
+    "arcadedb_e2_server": bench_common.DURABILITY_ARCADEDB,
+    "surrealdb_e2": bench_common.DURABILITY_SURREAL_EMBEDDED,
+    "surrealdb_e2_server": bench_common.DURABILITY_SURREAL_SERVER,
+    "arangodb_e2": arango_common.DURABILITY,
+    "mongodb_e2": mongo_common.DURABILITY,
+    "neo4j_e2": bench_common.DURABILITY_NEO4J,
+    # The composed stack's document and graph half is Neo4j, so the whole
+    # operation waits for Neo4j's log; Qdrant's WAL runs at its own default.
+    "composed_qdrant_neo4j": bench_common.DURABILITY_NEO4J + "; Qdrant WAL at its default",
+}
 
 
 def main():
@@ -666,29 +1232,138 @@ def main():
     global PRODUCTS
     if not os.environ.get("E2_PRODUCTS"):
         PRODUCTS = SCALE_PRODUCTS[args.scale]
+    # PHASE MARKERS (2026-09-14, same pattern as l3d_dense): a cell that dies
+    # names the phase it was in. Entered and left AROUND the timed work, never
+    # inside a timed loop.
+    _beat = bench_common.PhaseBeat()
+    _beat.mark("data-gen-start", backend=args.backend, workload=args.workload,
+               scale=args.scale, n_products=PRODUCTS)
     vecs, edges, queries = gen_data()
+    _beat.mark("data-generated", n_products=PRODUCTS, n_edges=len(edges),
+               n_queries=len(queries))
     out = {"n_products": PRODUCTS, "n_edges": len(edges), "dim": DIM, "k": K,
            "scale": args.scale}
 
-    b = BACKENDS[args.backend]()
+    # A cross-model adapter connects in its constructor (every class here
+    # does), so the connect phase wraps the construction, not a connect call.
+    with _beat.phase("connect", backend=args.backend):
+        b = BACKENDS[args.backend]()
     out["engine_version"] = b.version
+    out["instrument"] = bench_common.INSTRUMENT
     t0 = time.perf_counter()
-    b.build(vecs, edges)
+    with _beat.phase("build", n=PRODUCTS, n_edges=len(edges)):
+        b.build(vecs, edges)
     out["build_s"] = round(time.perf_counter() - t0, 2)
+    # AFTER THE BUILD, not before it. ArangoDB's waitForSync lives on the
+    # collection, so the adapter can only read it back once build() has created
+    # one; stamping before the build took the map's relaxed constant and a
+    # strict cell recorded the relaxed string. fairness_check F10b caught it,
+    # which is what it is for (laptop, 2026-09-14).
+    bench_common.stamp_durability(out, getattr(b, "durability", None)
+                                  or DURABILITY.get(args.backend))
+    # WHAT THE ENGINE LETS INSIDE THE TRANSACTION (2026-10). This lane's
+    # whole argument is that one operation over three models is one
+    # transaction, and until now no row said which parts of the operation
+    # an engine actually admits into one. MongoDB's answer is a refusal --
+    # $vectorSearch is not permitted in a multi-document transaction -- and
+    # a row that recorded only its torn_count of zero would read as the
+    # strong claim while demonstrating the weak one. Declared per adapter;
+    # "not declared" is honest about the ones that have not been asked yet.
+    out["txn_scope"] = getattr(b, "TXN_SCOPE", "not declared")
 
     if args.workload == "hybrid":
+        # ------------------------------------------------------------------
+        # THE TWO READ PATHS (DECISIONS #82c), BEFORE the write loop, because
+        # they are read-only and because every views counter is still zero
+        # here, which is what makes the document half of the answer
+        # deterministic and therefore digest-comparable across engines.
+        adj = build_adjacency(edges, PRODUCTS)
+        srng = random.Random(SEED + 7)
+        starts = [srng.randrange(PRODUCTS) for _ in range(READ_OPS)]
+        out["filtered_mode"] = getattr(b, "FILTER_MODE", "not declared")
+        out["filtered_overfetch"] = FILTER_OVERFETCH
+        out["filtered_hops"] = FILTER_HOPS
+        out["read_ops"] = READ_OPS
+
+        _beat.mark("retrieval-start", n=READ_OPS)
+        rlat, rrec, rdocs, rhops = [], [], [], []
+        for i in range(READ_OPS):
+            q, sp = queries[i % len(queries)], starts[i]
+            t = time.perf_counter()
+            pids, docs = do_retrieval(b, q, sp)
+            _dt = (time.perf_counter() - t) * 1000
+            surreal_common.keep(b, rlat, _dt)
+            if i == 0:
+                # _dt, not rlat[0]: the sample above is dropped when the
+                # connection broke during it (DECISIONS #91), and the cold
+                # number is still what that first query cost.
+                bench_common.record_first_query(out, "retrieval", _dt)
+            # Recall of the VECTOR half against an exact answer, computed
+            # outside the clock. The graph and document halves are digested.
+            rrec.append(recall_at_k(pids, brute_topk(vecs, q, K)))
+            rdocs.extend(docs or [])
+            rhops.append((sp, len(docs or [])))
+        _rl = sorted(rlat)
+        out["retrieval_p50_ms"] = round(statistics.median(_rl), 3)
+        out["retrieval_p95_ms"] = round(_rl[int(len(_rl) * 0.95)], 3)
+        out["retrieval_p99_ms"] = round(_rl[int(len(_rl) * 0.99)], 3)
+        bench_common.record_cold_warm(out, "retrieval", rlat)
+        out["recall_retrieval"] = round(sum(rrec) / len(rrec), 4)
+        bench_common.record_result(out, "retrieval_docs", rdocs, **RETRIEVAL_DIGEST)
+        bench_common.record_result(out, "retrieval_hops", rhops,
+                                   columns=("start", "n_docs"))
+        _beat.mark("retrieval-done", p50=out["retrieval_p50_ms"],
+                   recall=out["recall_retrieval"])
+
+        _beat.mark("filtered-start", n=READ_OPS)
+        flat, frec, fcand, fmatch = [], [], [], 0
+        for i in range(READ_OPS):
+            q, sp = queries[i % len(queries)], starts[i]
+            t = time.perf_counter()
+            got, cands = do_filtered(b, q, sp)
+            surreal_common.keep(b, flat, (time.perf_counter() - t) * 1000)
+            # RECALL AGAINST BRUTE FORCE OVER THE SAME FILTERED CANDIDATE SET
+            # (#82c): an engine that filters after the search instead of
+            # before shows it here rather than in latency alone.
+            want = brute_topk(vecs, q, K, neighbourhood(adj, sp, FILTER_HOPS))
+            frec.append(recall_at_k(got, want))
+            fcand.append((sp, len(cands)))
+            if sorted(int(x) for x in cands) == neighbourhood(adj, sp, FILTER_HOPS):
+                fmatch += 1
+        _fl = sorted(flat)
+        out["filtered_p50_ms"] = round(statistics.median(_fl), 3)
+        out["filtered_p95_ms"] = round(_fl[int(len(_fl) * 0.95)], 3)
+        out["filtered_p99_ms"] = round(_fl[int(len(_fl) * 0.99)], 3)
+        bench_common.record_cold_warm(out, "filtered", flat)
+        out["recall_filtered"] = round(sum(frec) / len(frec), 4)
+        _ns = sorted(n for _s, n in fcand)
+        out["filtered_cand_p50"] = _ns[len(_ns) // 2]
+        # Did the engine's own traversal find the same candidate set the
+        # harness derives from the generated edges? A recall of zero means
+        # nothing if the candidate set was wrong to begin with.
+        out["filtered_candset_match"] = round(fmatch / float(READ_OPS), 4)
+        bench_common.record_result(out, "filtered_candidates", fcand, **FILTER_CAND_DIGEST)
+        _beat.mark("filtered-done", p50=out["filtered_p50_ms"],
+                   recall=out["recall_filtered"])
+
         lat = []
+        _beat.mark("hybrid-start", n=len(queries), warmup=WARMUP)
         for i, q in enumerate(queries):
             t = time.perf_counter()
             b.hybrid_op(q)
             if i >= WARMUP:
-                lat.append((time.perf_counter() - t) * 1000)
+                surreal_common.keep(b, lat, (time.perf_counter() - t) * 1000)
         lat.sort()
         out["ops"] = len(lat)
         out["hybrid_p50_ms"] = round(statistics.median(lat), 3)
         out["hybrid_p95_ms"] = round(lat[int(len(lat) * 0.95)], 3)
         out["hybrid_p99_ms"] = round(lat[int(len(lat) * 0.99)], 3)
         out["hybrid_mean_ms"] = round(statistics.mean(lat), 3)
+        # DECISIONS #89: the composed write is a transaction against a warm
+        # database by construction, so it carries the reason rather than a
+        # blank cold/warm pair. The two read paths above DO carry the split.
+        out["cold_warm_na"] = bench_common.NA_COLD_WARM_TXN
+        _beat.mark("hybrid-done", n=len(lat), p50=out["hybrid_p50_ms"])
     else:
         # atomicity: run clean ops, then ONE op with an injected failure
         # between the doc/graph write and the vector-side write, then verify.
@@ -702,8 +1377,16 @@ def main():
         warm_clean = 50            # establishes a non-zero baseline once
         per_trial_clean = 5        # fresh clean work before each injection
 
+        # DECISIONS #89 as amended: this workload times no query. Its own
+        # first operation is a clean composed WRITE, and the cold column the
+        # page prints comes from the hybrid cell beside it.
+        out["cold_first_query_na"] = ("this workload times an interrupted write, not a "
+                                      "query; the cold column comes from the hybrid cell "
+                                      "(DECISIONS #89)")
+        _beat.mark("atomicity-warmup-start", n=warm_clean, trials=trials)
         for q in queries[:warm_clean]:
             b.hybrid_op(q, mirror=True)
+        _beat.mark("atomicity-trials-start", trials=trials)
 
         # VALIDITY GUARD, and it is not optional. The previous version of this
         # block decided the result from `isinstance(state, dict)` -- i.e. from
@@ -749,6 +1432,7 @@ def main():
             if t_torn and len(evidence) < 3:
                 evidence.append({"trial": t, "pre": pre, "post": post})
 
+        _beat.mark("atomicity-trials-done", trials=trials, torn=torn, raised=raised)
         out["trials"] = trials
         out["torn_count"] = torn
         out["crash_raised_count"] = raised
@@ -764,8 +1448,13 @@ def main():
     # on 26.8.1 it settles a roughly fixed 30-87 MB, against nothing at all for
     # an already-settled comparator. An unrecorded close is an unpriced one.
     _t = time.perf_counter()
-    b.close()
+    with _beat.phase("close"):
+        b.close()
     out["close_s"] = round(time.perf_counter() - _t, 3)
+    # `reconnects` on every SurrealDB row, zero when nothing happened
+    # (DECISIONS #91): a dropped connection has to be visible as a number on
+    # the row, not as a traceback in a log nobody reads until a cell dies.
+    surreal_common.stamp_reconnects(out, b)
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT " + json.dumps(out))

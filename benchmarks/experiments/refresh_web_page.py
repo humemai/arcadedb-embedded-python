@@ -79,7 +79,67 @@ PAGE_IMAGES = TARGETS["live"]["images"]
 IMAGE_URL_RE = TARGETS["live"]["image_re"]
 PREVIEW_INVENTORY = HERE / "results" / "generated" / "preview-tables.md"
 
-GATES = ["provenance_check", "fairness_check", "page_check"]
+# EQUIVALENCE RUNS BEFORE THE OTHERS (DECISIONS #88). provenance_check asks
+# which engine produced a number, fairness_check asks whether the row beside it
+# was given the same treatment, page_check asks whether the page says what the
+# rows say. None of them asks whether the two engines answered the same
+# question, which is the check that decides whether a fast number is also a
+# right one, so it is the first gate a publish has to pass.
+GATES = ["equivalence_check", "provenance_check", "fairness_check", "page_check"]
+
+# THE SKELETON GUARDS (DECISIONS #86). A skeleton publish fills the preview
+# route with placeholder cells from a one-repetition laptop run so the October
+# page's shape can be read early. A skeleton that looks like a measurement is
+# worse than no skeleton, so the guards below are the decision, not options:
+#
+#   * every frozen row must carry a bench_host that is NOT mini, and the
+#     sweep tier -- a skeleton measured on the bench host would be a campaign
+#     cell wearing a placeholder label;
+#   * a live publish refuses a payload the exporter stamped skeleton;
+#   * --skeleton implies --preview, and cannot be combined with a live target.
+BENCH_HOST_FORBIDDEN = {"mini"}
+FROZEN_CSV = HERE / "results" / "runs_skeleton_laptop.csv"
+
+
+def _assert_skeleton_rows():
+    """Every frozen row is a laptop sweep row, or nothing is published."""
+    import csv
+    if not FROZEN_CSV.exists():
+        raise SystemExit(f"  --skeleton: no {FROZEN_CSV}; freeze the skeleton run first")
+    rows = list(csv.DictReader(FROZEN_CSV.open()))
+    if not rows:
+        raise SystemExit("  --skeleton: the frozen set is empty")
+    bad_host = [r for r in rows
+                if not str(r.get("bench_host") or "").strip()
+                or str(r.get("bench_host")).strip() in BENCH_HOST_FORBIDDEN]
+    bad_tier = [r for r in rows if str(r.get("tier") or "") != "sweep"]
+    if bad_host or bad_tier:
+        def _where(r):
+            return (f"{r.get('lane')}/{r.get('scale')}/{r.get('backend')} "
+                    f"bench_host={r.get('bench_host')!r} tier={r.get('tier')!r}")
+        print(f"  REFUSING a skeleton publish: {len(bad_host)} row(s) carry no "
+              f"bench_host or name a bench host, {len(bad_tier)} row(s) are not "
+              f"sweep tier.", file=sys.stderr)
+        for r in (bad_host + bad_tier)[:10]:
+            print(f"    {_where(r)}", file=sys.stderr)
+        raise SystemExit(
+            "  A skeleton is a laptop placeholder (DECISIONS #86). A row from "
+            "the bench host, or a paper-tier row, is a campaign cell and does "
+            "not belong on the preview route under a placeholder banner.")
+    hosts = sorted({str(r.get("bench_host")) for r in rows})
+    print(f"  skeleton rows: {len(rows)}, bench_host {hosts}, tier sweep")
+
+
+def _refuse_skeleton_payload_on_live(exported):
+    """A live publish never carries a placeholder cell."""
+    import json
+    payload = json.loads(exported.read_text(encoding="utf-8"))
+    if payload.get("skeleton"):
+        raise SystemExit(
+            "  REFUSING a LIVE publish: the exported payload is stamped "
+            "skeleton (DECISIONS #86), so its cells are laptop placeholders. "
+            "Re-freeze from campaign rows, or publish with --skeleton to the "
+            "preview route.")
 
 
 def run(cmd, **kw):
@@ -150,7 +210,18 @@ def main() -> int:
     ap.add_argument("--preview", action="store_true",
                     help="publish to /projects/arcadedb/next (its own payload, images, and "
                          "prose file; PAGE-SPEC untouched); the live page is never written")
+    ap.add_argument("--skeleton", action="store_true",
+                    help="publish the laptop micro-scale placeholder run to the preview "
+                         "route (DECISIONS #86). Implies --preview. Refuses any row from "
+                         "the bench host or at paper tier; stamps the payload and every "
+                         "table's conditions as placeholders; waives FAIRNESS F1 and F3 "
+                         "(both describe the bench host) and runs every other gate.")
     args = ap.parse_args()
+    if args.skeleton:
+        args.preview = True
+        os.environ["BENCH_SKELETON"] = "1"
+        print("  target: SKELETON (DECISIONS #86) -> preview route; placeholder numbers")
+        _assert_skeleton_rows()
     target_paths = TARGETS["preview" if args.preview else "live"]
     global PAGE_SOURCE, PAGE_DATA, PAGE_IMAGES, IMAGE_URL_RE
     PAGE_SOURCE, PAGE_DATA = target_paths["source"], target_paths["data"]
@@ -166,6 +237,11 @@ def main() -> int:
     figs = Path(paper_dir) / "figures"
 
     site = Path(args.site).resolve()
+    # The gates read the page's prose out of this checkout too, and they used
+    # to find it by assuming the two repositories are siblings. That is true of
+    # a clone and false of a worktree, so page_check looked at a path that does
+    # not exist and reported the prose as unchecked.
+    os.environ["BENCH_SITE_DIR"] = str(site)
     page_source = site / PAGE_SOURCE
     if not page_source.exists():
         print(f"no page source at {page_source}; pass --site", file=sys.stderr)
@@ -177,11 +253,26 @@ def main() -> int:
     # make_paper_figures refuses to emit a figure no .tex includes, so this
     # step is also what fails if a retired figure is still being drawn.
     run(py + [str(HERE / "make_paper_tables.py")], cwd=HERE.parents[1])
-    run(py + [str(HERE / "make_paper_figures.py")], cwd=HERE.parents[1])
+    if args.skeleton:
+        # NOT RUN, rather than run and discarded (DECISIONS #86). Every figure
+        # is a ratio against the best comparator or reads a pinned bench-host
+        # artifact, so at one repetition on micro corpora there is nothing
+        # honest to draw; the skeleton page references no figure and names the
+        # summary figure as absent in its own banner. Skipped HERE and not
+        # only inside the generator, because the generator imports matplotlib
+        # at module scope and a guard underneath that import cannot run on a
+        # machine that has no matplotlib, which is every machine that is not
+        # the bench host.
+        print("  figures: skipped for a skeleton publish; the page references none")
+    else:
+        run(py + [str(HERE / "make_paper_figures.py")], cwd=HERE.parents[1])
 
     step(2, "Export the page data")
     run(py + [str(HERE / "export_web.py")], cwd=HERE.parents[1])
-    exported = HERE / "results" / "web_benchmarks.json"
+    exported = HERE / "results" / (
+        "web_benchmarks_skeleton.json" if args.skeleton else "web_benchmarks.json")
+    if not args.preview:
+        _refuse_skeleton_payload_on_live(exported)
     _rewrite_page_spec_inventory(exported, PREVIEW_INVENTORY if args.preview else None)
 
     step(3, "Gates: nothing is published until every gate agrees")
