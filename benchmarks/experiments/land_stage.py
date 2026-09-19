@@ -85,6 +85,10 @@ def main():
                     help="dense multipass arm token to pull at both sizes (e.g. neo4jvec, pgvector)")
     ap.add_argument("--message", required=True, help="one-line commit subject for both repos")
     ap.add_argument("--apply", action="store_true", help="build, commit and push; default stops after the diff")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="pull and filter, then STOP before the merge. Without this, "
+                         "a run with no --apply still merges: --apply governs the "
+                         "publish, not the merge.")
     ap.add_argument("--preview", action="store_true",
                     help="land on the preview page (/projects/arcadedb/next); the live page is not touched")
     args = ap.parse_args()
@@ -147,6 +151,19 @@ def main():
     if errs:
         print(f"  NOTE {len(errs)} rows carry an error and will merge as failures: "
               f"{sorted({(r.get('lane'), r.get('backend')) for r in errs})}")
+
+    if args.dry_run:
+        # STOP BEFORE ANYTHING WRITES. Without --apply this script still runs
+        # steps 2 and 3, and step 3 MERGES: "dry run" in the docstring above
+        # describes the PUBLISH, not the merge, and on 2026-09-19 I read it as
+        # covering both and came within a closed pipe of merging an
+        # in-progress stage's rows into the canonical log while testing an
+        # unrelated guard. A pipeline that writes needs a mode that does not.
+        n = sum(1 for _ in open(filtered)) if filtered.exists() else 0
+        print(f"\n  DRY RUN: {n} row(s) would be merged into results/runs.jsonl,"
+              f"\n           then the gates would run and the diff would print."
+              f"\n           Nothing was written. Drop --dry-run to proceed.")
+        return 0
 
     step(3, "merge into results/runs.jsonl")
     before = SITE_PAYLOAD.read_text() if SITE_PAYLOAD.exists() else "{}"
