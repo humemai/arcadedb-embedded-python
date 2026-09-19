@@ -409,7 +409,24 @@ import zipfile
 from pathlib import Path
 
 ARCADEDB_VERSION = os.environ["ARCADEDB_VERSION"]
-wheel = sorted(Path("dist").glob("arcadedb_embedded-*.whl"))[-1]
+# NOT sorted()[-1]: that is a LEXICOGRAPHIC sort over filenames, where
+# "26.9.1" ranks above "26.10.1" because '9' > '1'. On 2026-09-19 that made
+# this check open September's 26.9.1 wheel, look for October's
+# arcadedb-integration-26.10.1-SNAPSHOT.jar inside it, and fail a wheel that
+# was in fact correct and complete. Take the wheel this build just wrote --
+# the newest by mtime -- and then assert its version is the one we asked for,
+# so picking the wrong file fails loudly instead of validating a stale one.
+wheels = sorted(Path("dist").glob("arcadedb_embedded-*.whl"),
+                key=lambda p: p.stat().st_mtime)
+if not wheels:
+    print("❌ no wheel in dist/", file=sys.stderr)
+    sys.exit(1)
+wheel = wheels[-1]
+_want = ARCADEDB_VERSION.replace("-SNAPSHOT", "").replace("-", ".")
+if not wheel.name.startswith(f"arcadedb_embedded-{_want}"):
+    print(f"❌ newest wheel is {wheel.name}, which is not the "
+          f"{ARCADEDB_VERSION} build this run produced", file=sys.stderr)
+    sys.exit(1)
 local_jar_name = f"arcadedb-integration-{ARCADEDB_VERSION}.jar"
 local_jar = Path(f"local-jars/lib/{local_jar_name}")
 
