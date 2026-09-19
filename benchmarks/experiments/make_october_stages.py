@@ -30,6 +30,30 @@ import runner
 
 SHA = "417314c18da782620463bc7c09ac6bd34ac6fbda"
 
+# THE OVERLAY LANES. The dense and sparse TABLES do not read the lane's own
+# search rows: they read a multipass overlay produced by a bespoke driver run
+# through `runner.py --driver`, which builds once and then times five passes,
+# so cold and warm exist for every engine under one protocol. The lane row is
+# still needed (it carries ingest, build, memory and disk), so BOTH run, into
+# different results files. A stage that ran only the lane would spend its
+# whole budget producing rows no page table reads: 122 h for dense and 31 h
+# for sparse, 44% of the campaign. Forms copied from the September stages
+# that produced today's overlays (qDV dense, qDP sparse), not reconstructed.
+OVERLAY = {
+    "l3d": ("dense_multipass_driver.py", "$REPS", {
+        "small":   ("dense_mp5_small_${PIN}", "mp_rows_small_${PIN}.jsonl"),
+        "deep10m": ("dense_mp5_${PIN}",       "mp_rows_${PIN}.jsonl"),
+    }),
+    # the sparse overlay takes its repetitions INSIDE the driver, so the runner
+    # runs it once per arm; qDP used --reps 1 and its arms land as
+    # sp_<arm>_<scale>.json under one directory for all three sizes.
+    "l3s": ("sparse_multipass_driver.py", "1", {
+        "tiny":   ("sparse_mp_${PIN}", "mp_rows_sparse_${PIN}.jsonl"),
+        "small":  ("sparse_mp_${PIN}", "mp_rows_sparse_${PIN}.jsonl"),
+        "medium": ("sparse_mp_${PIN}", "mp_rows_sparse_${PIN}.jsonl"),
+    }),
+}
+
 # id, title, lane, workloads, scales, extra guards, extra arms {backend: [env]}
 STAGES = [
     ("qOA", "graph INTERACTIVE at both sizes", "l2", ["oltp"], ["sf1", "sf10"],
@@ -117,6 +141,15 @@ export BENCH_CPUSET=0-11 BENCH_GRAPH_SOURCE=ldbc
 BACKENDS="{backends}"
 say "$ID START: {title}, {nbe} engines, REPS=$REPS, pin $PIN, instrument 2026-10"
 
+run_overlay() {{  # <label> <scale> <cap> <backend> <wl> <driver> <outdir> <rf> <reps>
+  local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9
+  python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \
+    --workloads "$wl" --tier paper --workers 1 --timeout "$cap" \
+    --reps "$oreps" --driver "$drv" --driver-out-dir "$outdir" \
+    --results-file "$orf" >> "$S" 2>&1 \
+    || say "$ID: $label OVERLAY failed (the table reads this, not the lane row)"
+}}
+
 run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-empty>
   local label=$1 scale=$2 cap=$3 be=$4 wl=$5 envset=$6
   env $envset python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \\
@@ -152,7 +185,19 @@ def emit(idx: int, spec) -> str:
                 for e in envs:
                     body += (f'  [ "$BE" = "{be}" ] && run_cell '
                              f'"{lane}/{scale}/$BE/{wl} {e}" {scale} {cap} "$BE" {wl} "{e}"\n')
+            if lane in OVERLAY:
+                drv, oreps, dirs = OVERLAY[lane]
+                outdir, orf = dirs[scale]
+                body += (f'  run_overlay "{lane}/{scale}/$BE/{wl} multipass" {scale} {cap} '
+                         f'"$BE" {wl} {drv} "{outdir}" "{orf}" {oreps}\n')
         body += 'done\n'
+        if lane in OVERLAY:
+            _, _, dirs = OVERLAY[lane]
+            outdir, _ = dirs[scale]
+            body += (f'N=$(ls results/{outdir}/ 2>/dev/null | wc -l)\n'
+                     f'say "$ID: {scale} overlay dir holds $N file(s)"\n'
+                     f'[ "$N" -gt 0 ] || say "$ID WARNING: {scale} overlay produced NO files; '
+                     f'the table reads this directory and would publish nothing"\n')
         body += f'say "$ID: {scale} done"\n'
     body += 'say "$ID ALL-DONE"\n'
     return body
