@@ -205,7 +205,7 @@ def check_cycles(scripts):
         # the ALL-DONE line is the artifact that actually says a stage
         # finished. The wait graph has to see both, or a marker-waiting stage
         # reads as waiting on nothing and no cycle or orphan can be detected.
-        for m in re.finditer(r"grep\s+-q\s+[\"'](q[A-Z]+) ALL-DONE[\"']", body):
+        for m in re.finditer(r"grep\s+-q\s+[\"'](q[A-Z]+[0-9]*) ALL-DONE[\"']", body):
             waits.add(m.group(1))
         for m in re.finditer(r"(?m)^\s*for q in ([^\n;]*?);\s*do", body):
             waits.update(q for q in m.group(1).split() if q.startswith("q") and q[1:2].isupper())

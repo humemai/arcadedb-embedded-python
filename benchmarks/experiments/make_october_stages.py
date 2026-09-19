@@ -76,6 +76,16 @@ STAGES = [
     ("qOA", "graph INTERACTIVE at both sizes", "l2", ["oltp"], ["sf1", "sf10"],
      ['[ -d "$HOME/bench-data/ldbc/sf1" ] && [ -d "$HOME/bench-data/ldbc/sf10" ]'
       ' || { say \'$ID ABORT: ldbc sf1/sf10 missing\'; exit 1; }'], {}, []),
+    # DuckPGQ ALONE, because qOA loses it: the merge left two DuckpgqGraph
+    # classes and the stale one crashed every cell, so qOA's probe rule
+    # correctly declined to repeat a failed rep and that engine has no rows.
+    # Fixed in the tree qOA2 pulls; the other ten arms are already measured
+    # and are not re-run. A stage between qOA and qOB rather than at the end,
+    # so the interactive table is complete before anything lands.
+    ("qOA2", "DuckPGQ alone on the interactive table (qOA patch)", "l2", ["oltp"],
+     ["sf1", "sf10"],
+     ['grep -q "class DuckpgqGraph" l2_graph.py || { say "$ID ABORT: no DuckPGQ arm"; exit 1; }'],
+     {}, [], ["duckpgq_graph"]),
     ("qOB", "graph ANALYTICS on the full SF1 network", "l2", ["olap"], ["sf1full"],
      ['grep -q "sf1full" ldbc_snb.py || { say \'$ID ABORT: ldbc_snb.py lacks the sf1full tier\'; exit 1; }',
       '[ -f "$HOME/bench-data/ldbc/sf1/social_network-sf1-CsvCompositeMergeForeign-LongDateFormatter/dynamic/comment_0_0.csv" ]'
@@ -271,8 +281,9 @@ run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-em
 
 
 def emit(idx: int, spec) -> str:
-    sid, title, lane, workloads, scales, guards, extra, stage_env = spec
-    backends = list(runner.LANES[lane][1])
+    sid, title, lane, workloads, scales, guards, extra, stage_env = spec[:8]
+    only = spec[8] if len(spec) > 8 else None
+    backends = list(only) if only else list(runner.LANES[lane][1])
     caps = [(s, runner.TIMEOUT_BY_SCALE[s]) for s in scales]
     wait = ("" if idx == 0 else
             f'\nwhile ! grep -q "{STAGES[idx - 1][0]} ALL-DONE" "$S" 2>/dev/null; do sleep 300; done\n'
@@ -322,7 +333,8 @@ def main() -> int:
             fh.write(emit(i, spec))
         os.chmod(p, 0o755)
         print(f"  {spec[0]}.sh  lane={spec[2]:9} "
-              f"backends={len(runner.LANES[spec[2]][1]):2}  scales={','.join(spec[4])}")
+              f"backends={len(spec[8]) if len(spec) > 8 and spec[8] else len(runner.LANES[spec[2]][1]):2}"
+              f"  scales={','.join(spec[4])}")
     return 0
 
 
