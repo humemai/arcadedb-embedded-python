@@ -69,9 +69,13 @@ def step(n, title):
     print(f"\n[{n}] {title}", flush=True)
 
 
+# September's campaign pin: the right default for a LIVE landing, refused for a
+# preview one (see main()).
+PIN_DEFAULT = "8d6af9475"
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--pin", default=os.environ.get("BENCH_ENGINE_COMMIT", "8d6af9475"))
+    ap.add_argument("--pin", default=os.environ.get("BENCH_ENGINE_COMMIT", PIN_DEFAULT))
     ap.add_argument("--exclude-backends", default="",
                     help="comma list of backends still running on the host; their rows are dropped")
     ap.add_argument("--exclude-since", default="",
@@ -84,6 +88,19 @@ def main():
     ap.add_argument("--preview", action="store_true",
                     help="land on the preview page (/projects/arcadedb/next); the live page is not touched")
     args = ap.parse_args()
+
+    # --pin DEFAULTS TO SEPTEMBER'S COMMIT, which is right for a live landing
+    # and wrong for every preview one. Step 1 pulls `runs_page_<pin>.jsonl` by
+    # exact name, so a preview landing that took the default would fetch
+    # SEPTEMBER's rows, merge them, and then fail somewhere downstream when
+    # October's freeze filtered them all out -- an obscure failure a long way
+    # from its cause. Refuse instead of guessing an October pin: the campaign
+    # names its own, and a wrong one here is a wrong page.
+    if args.preview and args.pin == PIN_DEFAULT and not os.environ.get("BENCH_ENGINE_COMMIT"):
+        sys.exit("REFUSING: --preview lands an OCTOBER stage, and --pin is still "
+                 f"the September default ({PIN_DEFAULT}). Pass --pin <october commit> "
+                 "or set BENCH_ENGINE_COMMIT.")
+
     global SITE_PAYLOAD
     if args.preview:
         SITE_PAYLOAD = PREVIEW_PAYLOAD
