@@ -175,6 +175,44 @@ for n in ast.walk(tree):
 else:
     sys.exit("no TIMEOUT_BY_SCALE")
 PY
+# NO SHADOWED DEFINITION ANYWHERE IN THE LANE MODULES. A merge that keeps
+# both sides of a class, function or module-level name leaves the LAST one
+# winning, and nothing notices: it compiles, it imports, every gate passes,
+# and the defect surfaces only when a real cell exercises that code. The
+# October merge did this three times -- two duplicate dict keys, a duplicate
+# NOT_PRINTED binding, and two DuckpgqGraph classes where the stale one
+# returned row COUNTS instead of rows, which crashed every DuckPGQ cell in
+# the first stage. Checking the effective value cannot see any of them.
+python3 - <<'PY' || {{ say "$ID ABORT: a shadowed definition is back"; exit 1; }}
+import ast, collections, glob, sys
+bad = []
+for f in sorted(glob.glob("*.py")):
+    try:
+        tree = ast.parse(open(f, errors="replace").read())
+    except SyntaxError as exc:
+        sys.exit(f"{{f}} does not parse: {{exc}}")
+    names = collections.defaultdict(list)
+    for n in tree.body:
+        if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            names[n.name].append(n.lineno)
+        elif isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name):
+                    names[t.id].append(n.lineno)
+    for k, v in names.items():
+        if len(v) > 1:
+            bad.append(f"{{f}}:{{k}} at lines {{v}}")
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Dict):
+            ks = [k.value for k in n.keys if isinstance(k, ast.Constant)]
+            dup = [k for k, c in collections.Counter(ks).items() if c > 1]
+            if dup:
+                bad.append(f"{{f}}:{{n.lineno}} dict literal repeats {{dup}}")
+if bad:
+    for _b in bad:
+        print("  shadowed:", _b)
+    sys.exit(1)
+PY
 {guards}
 # --- images and the pinned pair -------------------------------------------
 # THE WHEEL IS BAKED AT IMAGE BUILD TIME, so it has to be exported BEFORE
