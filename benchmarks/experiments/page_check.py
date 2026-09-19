@@ -1009,6 +1009,14 @@ NOT_PRINTED = [
      "differ 3-7x, and that difference is NOT an ordering artefact -- cells "
      "do not start hotter later in a stage -- so it tracks how hard each "
      "engine drives the CPU, which is the engine's own property"),
+    (r"^\w+_excluded_at_tier$",
+     "the reason a query does not run at THIS corpus size, for every engine "
+     "(graph_common.TIER_EXCLUDED, BUGS F74). Not an engine's inability -- "
+     "that is UNEXPRESSIBLE -- and not a blank: the column is absent at this "
+     "size and the table says why, while the same query publishes normally at "
+     "the sizes where it is measurable. OWED at the October freeze: the "
+     "exporter should turn this field into a declared absence on the table "
+     "rather than leaving it only on the row"),
     (r"^host_throttled_ms$",
      "milliseconds the host spent throttled during a cell, from the same "
      "counters; a non-zero value invalidates the cell rather than becoming "

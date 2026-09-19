@@ -139,6 +139,42 @@ VISITED_SAMPLE = 20
 # ambiguous cannot be compared across engines and should not be published as
 # "the top ten" either, so the second sort key is part of the question now. It
 # costs one comparison per row and it is added on every engine at once.
+# QUERIES THAT DO NOT RUN AT A GIVEN TIER, with the measurement that says why.
+#
+# Not "this engine cannot express it" (that is each adapter's UNEXPRESSIBLE,
+# DECISIONS #88) but "at this corpus size this question is not measurable
+# under the protocol, for anybody". October's first analytics cell was
+# censored at the two-hour cap with our OWN engine, and the cause was one
+# query's FIRST TOUCH: lsqb_q6 took 1,384 s on the full SF1 network against
+# 14 s on the skeleton slice, a 98x blow-up, and a budget caps ITERATIONS,
+# never the first touch (BUGS F74).
+#
+# Projecting every engine's skeleton numbers through that same 98x says all
+# fourteen queries put 3 of 11 engines over the cap on first touches alone and
+# these two dominate: dropping them brings eight engines home, including both
+# of ours. The three that remain over are censored with the cap named, which
+# is a true statement about those engines at that size.
+#
+# The row records the exclusion so the page declares it rather than printing a
+# silent blank, and it is keyed by TIER: both queries still run, and are
+# published, at sf1 and sf10.
+TIER_EXCLUDED = {
+    ("sf1full", "lsqb_q6"):
+        "not measurable at this size: its first touch alone took 1,384 s on "
+        "ArcadeDB embedded against a 7,200 s whole-cell cap, and a per-query "
+        "budget bounds iterations rather than the first touch",
+    ("sf1full", "lsqb_q9"):
+        "not measurable at this size: 602 s on a laptop skeleton slice for "
+        "ArcadeDB embedded and 2,146 s for SurrealDB, which the measured 98x "
+        "slice-to-full-network blow-up puts far past the whole-cell cap",
+}
+
+
+def tier_excluded(scale, qname):
+    """The reason this query does not run at this tier, or None."""
+    return TIER_EXCLUDED.get((str(scale), str(qname)))
+
+
 OLAP_QUERIES = {
     "top_degree": ("MATCH (p:Person)-[:KNOWS]->(:Person) "
                    "RETURN p.id AS id, count(*) AS d ORDER BY d DESC, id ASC LIMIT 10"),

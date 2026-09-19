@@ -22,6 +22,7 @@ import arango_common
 import mongo_common
 
 import budget_lookup
+import graph_common
 from graph_common import (HOP3_VISITED, LSQB_QUERIES, NA_LSQB_NO_MESSAGE_HALF,
                           OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
                           OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
@@ -3100,6 +3101,15 @@ def main():
             # measured medians (DECISIONS #106, budget_lookup/derive_budgets);
             # where a tier has no measurement yet it falls back to the lane's
             # flat constant and the row records which it was.
+            # A QUERY THE TIER EXCLUDES IS NOT RUN AND NOT BLANK. The reason
+            # goes on the row so the page declares it, the same way an
+            # engine's UNEXPRESSIBLE is declared -- except this one is about
+            # the SIZE and applies to every engine, so no engine looks worse
+            # for it (graph_common.TIER_EXCLUDED, BUGS F74).
+            _excl = graph_common.tier_excluded(args.scale, qname)
+            if _excl:
+                out[f"{qname}_excluded_at_tier"] = _excl
+                continue
             _budget_s, _budget_src = budget_lookup.budget_for(
                 "l2", args.scale, qname, OLAP_BUDGET_S, "BENCH_GRAPH_OLAP_BUDGET_S")
             _budget_t0 = time.perf_counter()
