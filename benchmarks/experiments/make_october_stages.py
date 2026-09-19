@@ -81,9 +81,18 @@ STAGES = [
       '[ -f "$HOME/bench-data/ldbc/sf1/social_network-sf1-CsvCompositeMergeForeign-LongDateFormatter/dynamic/comment_0_0.csv" ]'
       ' || { say \'$ID ABORT: no full SF1 network (the message half)\'; exit 1; }'],
      {"arcadedb_graph_embedded": ["BENCH_GAV=0"], "arcadedb_graph_server": ["BENCH_GAV=0"]}, []),
+    # BENCH_TS_SETTLE_S: the served ArcadeDB time-series aggregate only sees
+    # SEALED data, so for ~58 s after an ingest returns it answers with whole
+    # hours missing while count(*) over the same predicate is complete
+    # (BUGS F68, reproduced 9 times and in a pure-Java server repro). The
+    # lane's default settle is 0, applied outside the ingest timer to EVERY
+    # backend, so raising it is symmetric and recorded on the row. Without it
+    # every served ArcadeDB TS latency was measured against a partly sealed
+    # store, ts100 included, where the shapes happened to match.
     ("qOC", "time series at both sizes", "l4", ["ingest"], ["ts100", "ts1000"],
      ['[ -f "$HOME/bench-data/tsbs/cpu_influx.lp" ] && [ -f "$HOME/bench-data/tsbs/cpu_influx_s1000.lp" ]'
-      ' || { say \'$ID ABORT: tsbs corpora missing\'; exit 1; }'], {}, []),
+      ' || { say \'$ID ABORT: tsbs corpora missing\'; exit 1; }'], {},
+     ["BENCH_TS_SETTLE_S=90"]),
     ("qOD", "cross-model at both sizes", "e2", ["hybrid", "atomicity"], ["e2", "e2_500k"],
      ['python3 -c "import e2_hybrid,sys; sys.exit(0 if e2_hybrid.SCALE_PRODUCTS.get(\'e2_500k\')==500000 else 1)"'
       ' || { say \'$ID ABORT: e2_500k is not 500k products\'; exit 1; }'], {}, []),
@@ -168,11 +177,26 @@ else:
 PY
 {guards}
 # --- images and the pinned pair -------------------------------------------
-BENCH_ALLOW_DEV=1 ./build_images.sh duckdb client >> "$S" 2>&1 || {{ say "$ID ABORT: image build"; exit 1; }}
-~/verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the October pin"; exit 1; }}
+# THE WHEEL IS BAKED AT IMAGE BUILD TIME, so it has to be exported BEFORE
+# build_images.sh, and the arcadedb image has to be rebuilt. Without both,
+# build_images.sh falls back to `arcadedb-embedded==26.8.1` from PyPI and
+# every EMBEDDED arm runs that while every SERVED arm runs the pinned image:
+# two ArcadeDB versions on one table. That is exactly what last night's
+# calibration did -- its embedded arms ran 26.8.1 against served
+# 26.9.1-SNAPSHOT -- and verify_pair_c25.sh does not catch it, because it
+# compares the newest wheel FILE in dist/ against the server image and never
+# looks inside dbbench:arcadedb.
 W=$(ls -t "$REPO"/bindings/python/dist/*.whl | head -1)
-[ -n "$W" ] || {{ say "$ID ABORT: no wheel"; exit 1; }}
+[ -n "$W" ] || {{ say "$ID ABORT: no wheel in dist/"; exit 1; }}
 export ARCADEDB_WHEEL="$W" ARCADEDB_SERVER_IMAGE=arcadedb-c25:$PIN
+WV=$(basename "$W" | cut -d- -f2)
+BENCH_ALLOW_DEV=1 ./build_images.sh arcadedb duckdb client >> "$S" 2>&1 || {{ say "$ID ABORT: image build"; exit 1; }}
+# VERIFY THE ARM, NOT THE FILE: read the version out of the built image.
+IV=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c \
+     'import importlib.metadata as m; print(m.version("arcadedb-embedded"))' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
+[ "$IV" = "$WV" ] || {{ say "$ID ABORT: dbbench:arcadedb carries wheel $IV, dist has $WV"; exit 1; }}
+say "$ID: dbbench:arcadedb carries wheel $IV, matching dist"
+~/verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the October pin"; exit 1; }}
 export ARCADEDB_ENGINE_COMMIT=$PIN BENCH_DATA=$HOME/bench-data BENCH_HOST=mini
 export BENCH_CPUSET=0-11 BENCH_GRAPH_SOURCE=ldbc
 {stage_env}
