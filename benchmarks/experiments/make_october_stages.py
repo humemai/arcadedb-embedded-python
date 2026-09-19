@@ -58,26 +58,36 @@ OVERLAY = {
 STAGES = [
     ("qOA", "graph INTERACTIVE at both sizes", "l2", ["oltp"], ["sf1", "sf10"],
      ['[ -d "$HOME/bench-data/ldbc/sf1" ] && [ -d "$HOME/bench-data/ldbc/sf10" ]'
-      ' || { say \'$ID ABORT: ldbc sf1/sf10 missing\'; exit 1; }'], {}),
+      ' || { say \'$ID ABORT: ldbc sf1/sf10 missing\'; exit 1; }'], {}, []),
     ("qOB", "graph ANALYTICS on the full SF1 network", "l2", ["olap"], ["sf1full"],
      ['grep -q "sf1full" ldbc_snb.py || { say \'$ID ABORT: ldbc_snb.py lacks the sf1full tier\'; exit 1; }',
       '[ -f "$HOME/bench-data/ldbc/sf1/social_network-sf1-CsvCompositeMergeForeign-LongDateFormatter/dynamic/comment_0_0.csv" ]'
       ' || { say \'$ID ABORT: no full SF1 network (the message half)\'; exit 1; }'],
-     {"arcadedb_graph_embedded": ["BENCH_GAV=0"], "arcadedb_graph_server": ["BENCH_GAV=0"]}),
+     {"arcadedb_graph_embedded": ["BENCH_GAV=0"], "arcadedb_graph_server": ["BENCH_GAV=0"]}, []),
     ("qOC", "time series at both sizes", "l4", ["ingest"], ["ts100", "ts1000"],
      ['[ -f "$HOME/bench-data/tsbs/cpu_influx.lp" ] && [ -f "$HOME/bench-data/tsbs/cpu_influx_s1000.lp" ]'
-      ' || { say \'$ID ABORT: tsbs corpora missing\'; exit 1; }'], {}),
+      ' || { say \'$ID ABORT: tsbs corpora missing\'; exit 1; }'], {}, []),
     ("qOD", "cross-model at both sizes", "e2", ["hybrid", "atomicity"], ["e2", "e2_500k"],
      ['python3 -c "import e2_hybrid,sys; sys.exit(0 if e2_hybrid.SCALE_PRODUCTS.get(\'e2_500k\')==500000 else 1)"'
-      ' || { say \'$ID ABORT: e2_500k is not 500k products\'; exit 1; }'], {}),
+      ' || { say \'$ID ABORT: e2_500k is not 500k products\'; exit 1; }'], {}, []),
     ("qOE", "documents, both tables, at both sizes", "l1tpc", ["oltp", "olap"], ["tpch1", "tpch10"],
      ['ls "$HOME"/bench-data/tpch/sf10_lineitem.parquet >/dev/null 2>&1'
-      ' || { say \'$ID ABORT: tpch sf10 parquet missing\'; exit 1; }'], {}),
-    ("qOF", "sparse vector at three sizes", "l3s", ["search"], ["tiny", "small", "medium"], [], {}),
+      ' || { say \'$ID ABORT: tpch sf10 parquet missing\'; exit 1; }'], {}, []),
+    ("qOF", "sparse vector at three sizes", "l3s", ["search"], ["tiny", "small", "medium"], [], {}, []),
+    # BENCH_LC_ITERS/WARMUP are set EXPLICITLY, and this is the only stage that
+    # needs it. The lane's in-script defaults are ITERS=3 and WARMUP=1; the
+    # frozen September rows are 105 at (5, 2) against 12 at (3, 1), so the
+    # campaign's protocol is 5 and 2 and the lane's default is not it. Left
+    # unset, October's lifecycle rows would carry a different protocol from
+    # September's on the same table. Checked the same way for every other
+    # lane -- graph 100 iterations, documents 100, time series 100,
+    # cross-model 300 operations -- and in each of those the in-script default
+    # is exactly what the frozen rows recorded, so no other stage sets one.
     ("qOG", "lifecycle at four sizes", "lifecycle",
      ["empty", "doc", "doc_idx10", "graph", "graph_gav", "vector", "sparse", "ts"],
-     ["lc10k", "lc100k", "lc1m", "lc10m"], [], {}),
-    ("qOH", "dense vector at both sizes", "l3d", ["search"], ["small", "deep10m"], [], {}),
+     ["lc10k", "lc100k", "lc1m", "lc10m"], [], {},
+     ["BENCH_LC_ITERS=5", "BENCH_LC_WARMUP=2"]),
+    ("qOH", "dense vector at both sizes", "l3d", ["search"], ["small", "deep10m"], [], {}, []),
 ]
 
 HEAD = '''#!/bin/bash
@@ -137,6 +147,7 @@ W=$(ls -t "$REPO"/bindings/python/dist/*.whl | head -1)
 export ARCADEDB_WHEEL="$W" ARCADEDB_SERVER_IMAGE=arcadedb-c25:$PIN
 export ARCADEDB_ENGINE_COMMIT=$PIN BENCH_DATA=$HOME/bench-data BENCH_HOST=mini
 export BENCH_CPUSET=0-11 BENCH_GRAPH_SOURCE=ldbc
+{stage_env}
 
 BACKENDS="{backends}"
 say "$ID START: {title}, {nbe} engines, REPS=$REPS, pin $PIN, instrument 2026-10"
@@ -167,7 +178,7 @@ run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-em
 
 
 def emit(idx: int, spec) -> str:
-    sid, title, lane, workloads, scales, guards, extra = spec
+    sid, title, lane, workloads, scales, guards, extra, stage_env = spec
     backends = list(runner.LANES[lane][1])
     caps = [(s, runner.TIMEOUT_BY_SCALE[s]) for s in scales]
     wait = ("" if idx == 0 else
@@ -176,6 +187,7 @@ def emit(idx: int, spec) -> str:
     body = HEAD.format(id=sid, n=idx + 1, total=len(STAGES), title=title, lane=lane,
                        nbe=len(backends), sha=SHA, wait=wait,
                        caps=caps, guards="\n".join(guards) + ("\n" if guards else ""),
+                       stage_env=("export " + " ".join(stage_env) if stage_env else "# (this lane's in-script defaults are what the frozen rows ran)"),
                        backends=" ".join(backends))
     for scale, cap in caps:
         body += f'\nfor BE in $BACKENDS; do\n'
