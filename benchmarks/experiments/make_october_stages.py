@@ -192,11 +192,14 @@ export ARCADEDB_WHEEL="$W" ARCADEDB_SERVER_IMAGE=arcadedb-c25:$PIN
 WV=$(basename "$W" | cut -d- -f2)
 BENCH_ALLOW_DEV=1 ./build_images.sh arcadedb duckdb client >> "$S" 2>&1 || {{ say "$ID ABORT: image build"; exit 1; }}
 # VERIFY THE ARM, NOT THE FILE: read the version out of the built image.
+# The pair check below is the REPO copy, not ~/verify_pair_c25.sh: that
+# one is a stale copy from 2026-08-30 and would miss its own fourth
+# check. A script pulled with the tree cannot drift from it.
 IV=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c \
      'import importlib.metadata as m; print(m.version("arcadedb-embedded"))' 2>/dev/null | tr -dc "0-9a-zA-Z.-")
 [ "$IV" = "$WV" ] || {{ say "$ID ABORT: dbbench:arcadedb carries wheel $IV, dist has $WV"; exit 1; }}
 say "$ID: dbbench:arcadedb carries wheel $IV, matching dist"
-~/verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the October pin"; exit 1; }}
+./verify_pair_c25.sh "$SHA" >> "$S" 2>&1 || {{ say "$ID ABORT: pair unverified at the October pin"; exit 1; }}
 export ARCADEDB_ENGINE_COMMIT=$PIN BENCH_DATA=$HOME/bench-data BENCH_HOST=mini
 export BENCH_CPUSET=0-11 BENCH_GRAPH_SOURCE=ldbc
 {stage_env}
