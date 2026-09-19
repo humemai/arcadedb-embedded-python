@@ -72,7 +72,10 @@ REPO=$HOME/repos/humemai/arcadedb-embedded-python
 R=$REPO/benchmarks/experiments
 SHA={sha}
 PIN=${{SHA:0:9}}
-RF="runs_oct_${{PIN}}.jsonl"
+RF="runs_page_${{PIN}}.jsonl"   # land_stage.py pulls this exact name; the
+                              # PIN separates October from September, so
+                              # a second convention would only mean
+                              # land_stage silently pulls nothing.
 REPS=${{REPS:-5}}
 say() {{ echo "[$(date -Is)] $*" >> "$S"; }}
 {wait}
