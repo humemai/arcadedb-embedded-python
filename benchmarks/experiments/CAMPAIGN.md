@@ -225,7 +225,7 @@ A long-lived branch is what made "the instrument is ready" true of two trees and
 
 | stage | table | sizes | hours | cumulative |
 |---|---|---|---|---|
-| qOA | graph interactive | SF1 + SF10 | 17.9 | 0.7 d |
+| qOA | graph interactive | SF1 + SF10 | ~7.8 (was 17.9, see below) | 0.3 d |
 | qOB | graph analytics | full SF1 | 18.8 | 1.5 d |
 | qOC | time series | 100 + 1,000 hosts | 18.0 | 2.3 d |
 | qOD | cross-model | 50k + 500k | 20.7 | 3.1 d |
@@ -233,6 +233,29 @@ A long-lived branch is what made "the instrument is ready" true of two trees and
 | qOF | sparse vector | three sizes | 31.2 | 8.7 d |
 | qOG | lifecycle | four sizes | 15.9 | 9.4 d |
 | qOH | dense vector | 1M + 9.99M | 122.3 | 14.5 d |
+
+**The uplift factors above were ASSUMPTIONS, and the first stage measured one of them.** I gave graph
+interactive a 1.0x uplift on the reasoning that October adds analytics queries rather than interactive ones.
+That is wrong: October's interactive workload measures SEVEN operations where September measured four, adding a
+three-hop traversal, an update and a delete. Measured per arm on `sf1`, October against September:
+
+| arm | September | October | x |
+|---|---|---|---|
+| ArcadeDB (embedded) | 6.2 s | 29.0 s | 4.7 |
+| ArcadeDB (server) | 26.2 s | 52.8 s | 2.0 |
+| LadybugDB | 7.7 s | 44.3 s | 5.8 |
+| Neo4j | 34.4 s | 64.6 s | 1.9 |
+| SurrealDB (embedded) | 48.0 s | 747.5 s | 15.6 |
+
+**It is not a regression, checked before recording it as one.** The per-operation latencies are September's to
+within noise (point 0.044 against 0.044 ms, hop1 0.751 against 0.699, hop2 15.266 against 15.126); the cell is
+longer because it measures more. SurrealDB's 15.6x is the new three-hop traversal on the engine that was already
+slowest at two hops, at ~184 ms cold per operation.
+
+The qOA row above was ALSO wrong in composition, in the other direction: its 17.9 h came from September cells
+that included the `olap` arms, which qOA does not run -- those are qOB's, at `sf1full`. So qOA is oltp only,
+about 7.8 h with the measured uplift applied, and the two errors partly cancelled. Every other stage's uplift in
+this table is still an assumption, and each will be corrected the same way as its stage measures it.
 
 The order is by UNCERTAINTY, not by size. qOD runs fourth because 500k products has never been measured and its figure is the only projection on the board: if it is wrong, it is wrong on day three rather than day thirteen. qOC runs third because its large size is the one an open diagnosis can block, and a stage that cannot run should discover that early. The three long stages are back-loaded because each is well characterised and none can teach us anything that changes the plan.
 
