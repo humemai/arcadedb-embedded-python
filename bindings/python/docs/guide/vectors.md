@@ -127,7 +127,7 @@ post-GC heap figure that included the page cache and could pick a fraction of
 the corpus on a large heap (a 10M build took 7,000 s that way against 2,300 s
 with the corpus cached); upstream fixed the sizing, so nothing in the bindings'
 tests or examples sets it. See the
-[Memory & Heap](#memory--heap-requirements-1024-dim-vectors) section for the
+[Memory & Heap](#memory-heap-requirements-1024-dim-vectors) section for the
 heap side.
 
 ## Memory & Heap Requirements (1024-dim vectors)
