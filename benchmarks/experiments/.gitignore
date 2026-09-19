@@ -5,3 +5,7 @@ __pycache__/
 # .gitignore: everything under it is ignored except the artifacts named there.
 # Nothing about results/ belongs in this file -- two ignore files with two
 # conventions for one directory is how the strays got in.
+
+# Generated queue scripts (make_october_stages.py). The generator is tracked;
+# its output is not -- the scripts live in the bench host's home, not the repo.
+october_stages/
