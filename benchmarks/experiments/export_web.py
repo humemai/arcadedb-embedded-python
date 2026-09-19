@@ -1958,13 +1958,54 @@ SKELETON_CONDITION_SWAPS = {
 }
 
 
+def _thermal_note():
+    """The bench host throttles, and the page has to say so (PAGE-SPEC 7).
+
+    The September page does NOT carry this: the spec required it and the
+    payload never had it, in any phrasing (BUGS.md F71). Generated from the
+    rows rather than typed, so the numbers describe the campaign that is
+    publishing rather than a measurement taken once in September: a row that
+    records no throttle counter contributes nothing, and if no row records
+    one the sentence is omitted instead of guessed.
+    """
+    ms = []
+    for r in _FROZEN_ROWS:
+        v = r.get("host_throttled_ms")
+        try:
+            if v not in (None, ""):
+                ms.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if not ms:
+        return None
+    ms.sort()
+    med = ms[len(ms) // 2] / 1000.0
+    worst = ms[-1] / 1000.0
+    return _gen(
+        "The bench host is a mobile-class part in a small chassis and it "
+        "throttles under sustained load. The power mode is left exactly as the "
+        "machine ships -- governor `powersave`, turbo enabled -- because "
+        "pinning the clock would lower every absolute number here, so a long "
+        "build and a short query do not see the same clock. That is also why "
+        f"every cell runs one at a time. Of the {len(ms)} cells on this page "
+        "that record the kernel's throttle counters, the median spent "
+        f"{med:.1f} s throttled and the worst {worst:.0f} s; every row carries "
+        "its package temperature and both counters either side of the cell, so "
+        "a slow run can be told from a throttled machine.",
+        len(ms), f"{med:.1f}", f"{worst:.0f}")
+
+
 def _global_conditions(tables, october):
     reps = _reps_note(tables)
     if october:
         out = [_R("GLOBAL", "docker_skeleton" if SKELETON else "docker"), _R("GLOBAL", "memory")]
         if reps:
             out.append(reps)
-        return out + [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest")]
+        out += [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest")]
+        therm = _thermal_note()
+        if therm:
+            out.append(therm)
+        return out
     out = []
     for c in GLOBAL_CONDITIONS:
         if c.startswith("Each printed cell is the median of") and reps:
