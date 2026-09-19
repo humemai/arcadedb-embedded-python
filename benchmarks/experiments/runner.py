@@ -207,20 +207,7 @@ TIMEOUT_BY_SCALE = {"micro": 900, "tiny": 1800, "small": 7200,
                     # measured requirement -- and a watchdog that only fires on
                     # a real hang is the point of having one.
                     "sf1": 3600, "sf10": 8 * 3600, "deep10m": 8 * 3600,
-                    "e2": 3600, "tpch1": 3 * 3600,
-                    "tpch10": 8 * 3600,
-                    # The raised tiers (see MEM_BY_SCALE). sf1full: 17M
-                    # records through index lookups, and a single-threaded
-                    # SurrealDB SDK that took 2 h on sf10's 2M, so 8h is the
-                    # budget a censored cell is named against. ts1000: the
-                    # slowest ts100 arm ingests in 65 s and parses in
-                    # seconds; ten times that plus the 100-iteration queries
-                    # over a 12-hour window across 1,000 hosts is well under
-                    # an hour, so 4 h is generous without being unable to
-                    # fail. e2_500k: SurrealDB embedded builds its HNSW in
-                    # 334 s at 50k on one core, so ten times the corpus is an
-                    # hour or more before the 300 timed operations; 4 h.
-                    "sf1full": 8 * 3600, "ts1000": 4 * 3600, "e2_500k": 4 * 3600}
+                    "e2": 3600, "tpch1": 3 * 3600}
 HEAP_BY_SCALE = {"micro": "4g", "tiny": "4g", "small": "8g", "medium": "16g",
                  "large": "24g",
                  # Lifecycle tiers (l5): small heaps on purpose. The lane times
