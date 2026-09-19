@@ -606,6 +606,13 @@ benchmarks/python-bindings/jpype_overhead/dbs_*/
 benchmarks/python-bindings/jpype_overhead/data_*/
 benchmarks/python-bindings/jpype_overhead/results/*.log
 benchmarks/python-bindings/jpype_overhead/*.class
+# build_images.sh stages the pinned wheel here before baking it into an
+# image, and leaves it. Nothing in this directory is tracked except .gitkeep,
+# so ignore the wheels and keep the directory: an untracked file under a path
+# a future commit adds is what makes `git pull --ff-only` refuse, and on the
+# bench host that aborts the queue.
+benchmarks/experiments/docker-wheels/*.whl
+
 # --- benchmarks/experiments/results: an ALLOWLIST, finally ---------------
 # This file says twice above to "ignore the CONVENTION, not each instance",
 # and then twice again listed instances. It drifted a third time: on
