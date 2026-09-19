@@ -320,6 +320,7 @@ A condition sentence on an October payload that is neither generated nor registe
 | mixed instrument | one table holds rows measured under two instruments |
 | durability class | a table's engines committed under different rules, or a row carries no `durability` |
 | disagreeing answers | two engines of one table answer the same query differently at one scale, or an engine skipped an operation without declaring it unexpressible |
+| one engine, two versions | a comparator wears two version strings across the page's tables, or an ArcadeDB release number appears on a comparator's row. Declared splits name two genuinely different artifacts and carry their reason; a skeleton is exempt for ArcadeDB alone |
 | missing measurement | a table omits one of the standard measurements and states no reason |
 
 ---

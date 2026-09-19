@@ -153,7 +153,7 @@ The invariant it enforces: **every page table and figure is generated from froze
 listed in the page manifest, pinned by a gate, and carries a source link to a tracked
 artifact.**
 
-Four gates run, and they answer different questions. `equivalence_check` is the newest of them: it arrived with the 2026-10 instrument, which is also the instrument whose lanes stamp the answer digests it compares. **The rows behind the CURRENT page carry no digest field**, so the gate has nothing to compare there and the answers behind the published cells were never compared across engines. That is worth knowing when you read one of today's latencies: with no answer check behind a number, a fast number and a wrong answer look alike. It is the 2026-10 rows that this gate holds to each other.
+Five gates run, and they answer different questions. `equivalence_check` is the newest of them: it arrived with the 2026-10 instrument, which is also the instrument whose lanes stamp the answer digests it compares. **The rows behind the CURRENT page carry no digest field**, so the gate has nothing to compare there and the answers behind the published cells were never compared across engines. That is worth knowing when you read one of today's latencies: with no answer check behind a number, a fast number and a wrong answer look alike. It is the 2026-10 rows that this gate holds to each other.
 
 | Gate | Asks |
 |---|---|
@@ -161,6 +161,7 @@ Four gates run, and they answer different questions. `equivalence_check` is the 
 | `fairness_check` | Were the rows in one table given the same thing? F1 to F12. |
 | `page_check` | Does every cell and every typed number on the page still agree with the generated tables? |
 | `equivalence_check` | Did the engines of a table give the same answers? |
+| `version_consistency_check` | Does each engine wear ONE version across the page? It also refuses an ArcadeDB release number on a comparator's row, which the dense table published for months. |
 
 Some specifics that matter if you ever compare the page against the data yourself:
 
