@@ -190,6 +190,12 @@ def _write_withheld_recall():
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w") as fh:
         json.dump(sorted(WITHHELD_RECALL, key=str), fh, indent=1)
+        # json.dump writes no trailing newline; the repo's end-of-file hook
+        # adds one, so every gate run left this tracked file modified by a
+        # single byte. A dirty tree on the bench host aborts every queue
+        # script, which is an outage, so the generator emits what the hook
+        # wants rather than fighting it once a day.
+        fh.write("\n")
 
 
 def load_canonical(apply_corpus=True):
