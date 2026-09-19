@@ -29,11 +29,43 @@ MEASURED = "measured"
 FALLBACK = "lane default (no measurement at this tier yet)"
 
 
-def budget_for(lane, tier, query, default_s, env_var=None):
+# A FALLBACK MUST FIT THE CAP IT RUNS INSIDE. The lane constants were each
+# chosen for one query and never multiplied by the number of queries in the
+# lane, so the product could exceed the whole-cell cap and censor a cell by
+# arithmetic before any engine did anything slow. Read off the documents lane
+# on 2026-09-20: five queries, all on the 1,800 s flat default, is 9,000 s
+# against a 7,200 s cap -- 125%, so every engine that used its budgets was
+# already censored. The graph lane was fine only because its constant happens
+# to be 300 s.
+#
+# So an UNMEASURED query gets at most an equal share of the cell's budget
+# envelope. Measured budgets are NOT clamped: they come from the bench host's
+# own rows and a cell whose measured budgets exceed its cap is telling you the
+# cap is wrong, which is a finding rather than something to paper over.
+CAP_SHARE = 0.60   # of the whole-cell cap, left to the queries' iterations;
+                   # the rest is ingest, build, first touches and teardown.
+
+
+def fallback_budget_s(lane, tier, n_queries, lane_default_s):
+    """The most an UNMEASURED query may take, given the cap it runs inside."""
+    try:
+        import runner
+        cap = float(runner.TIMEOUT_BY_SCALE[str(tier)])
+    except Exception:  # noqa: BLE001
+        return float(lane_default_s)
+    if not n_queries:
+        return float(lane_default_s)
+    return min(float(lane_default_s), cap * CAP_SHARE / float(n_queries))
+
+
+def budget_for(lane, tier, query, default_s, env_var=None, n_queries=None):
     """(seconds, source). `default_s` is the lane's old flat constant.
 
     An explicit environment override always wins and is labelled as such, so a
     probe run cannot be mistaken for a campaign cell.
+
+    `n_queries` lets an unmeasured query be clamped to its share of the cell
+    cap; without it the old flat constant applies unchanged.
     """
     if env_var:
         raw = os.environ.get(env_var)
@@ -45,6 +77,9 @@ def budget_for(lane, tier, query, default_s, env_var=None):
     got = MEASURED_BUDGETS_S.get((lane, str(tier), query))
     if got is not None:
         return float(got), MEASURED
+    capped = fallback_budget_s(lane, tier, n_queries, default_s)
+    if capped < float(default_s):
+        return capped, f"{FALLBACK}, clamped to this tier's cap share"
     return float(default_s), FALLBACK
 
 

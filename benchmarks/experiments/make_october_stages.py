@@ -135,6 +135,18 @@ STAGES = [
     # deep10m without this runs the 1M corpus and labels it deep10m. I made
     # exactly this mistake on a probe earlier in the campaign.
     ("qOH", "dense vector at both sizes", "l3d", ["search"], ["small", "deep10m"], [], {}, []),
+    # qOB RE-RUN, at the end. Its first attempt was censored on our own engine
+    # and it was stopped (BUGS F74); DECISIONS #109 excludes lsqb_q6 and
+    # lsqb_q9 at this tier, which cell_cost_check puts at 9-11% of the cap for
+    # both ArcadeDB arms. It goes LAST rather than back into its old slot
+    # because the five stages behind it are already running and inserting into
+    # a live chain costs a kill-and-relaunch of each.
+    ("qOB2", "graph ANALYTICS on the full SF1 network (qOB re-run, #109)", "l2",
+     ["olap"], ["sf1full"],
+     ['grep -q "sf1full" ldbc_snb.py || { say "$ID ABORT: no sf1full tier"; exit 1; }',
+      'python3 -c "import graph_common as G, sys; sys.exit(0 if G.tier_excluded(\'sf1full\',\'lsqb_q6\') else 1)"'
+      ' || { say "$ID ABORT: #109 exclusions are not in this tree"; exit 1; }'],
+     {"arcadedb_graph_embedded": ["BENCH_GAV=0"], "arcadedb_graph_server": ["BENCH_GAV=0"]}, []),
 ]
 
 HEAD = '''#!/bin/bash
@@ -223,6 +235,38 @@ if bad:
         print("  shadowed:", _b)
     sys.exit(1)
 PY
+# THE BUDGETS MUST FIT THE CAP. Each lane's flat fallback was chosen for ONE
+# query and never multiplied by the number of queries in the lane: on
+# 2026-09-20 the documents lane's five queries at 1,800 s each came to 9,000 s
+# against a 7,200 s cap -- 125%, so every engine that used its budgets was
+# censored by arithmetic before anything ran slowly. Fallbacks are clamped to
+# a share of the cap now; this refuses anyway, because a MEASURED budget is
+# deliberately not clamped and a tier whose measured budgets exceed its cap is
+# telling you the cap is wrong.
+python3 - <<'PY' || {{ say "$ID ABORT: this tier's budgets do not fit its cap"; exit 1; }}
+import sys
+import runner, budget_lookup as B
+LANE = {lane!r}
+for tier in {scales!r}:
+    cap = float(runner.TIMEOUT_BY_SCALE[tier])
+    if LANE == "l2":
+        import graph_common as G
+        qs = [q for q in G.OLAP_QUERIES if not G.tier_excluded(tier, q)]
+        dflt = G.OLAP_BUDGET_S
+    elif LANE == "l1tpc":
+        import l1_tpc
+        qs, dflt = list(l1_tpc.OLAP_QUERIES), l1_tpc.OLAP_BUDGET_S
+    elif LANE == "l4":
+        import l4_tsbs
+        qs, dflt = list(l4_tsbs.QUERIES), l4_tsbs.QUERY_BUDGET_S
+    else:
+        continue
+    tot = sum(B.budget_for(LANE, tier, q, dflt, None, n_queries=len(qs))[0] for q in qs)
+    pct = tot / cap * 100
+    print(f"  budgets {{LANE}}/{{tier}}: {{tot:.0f}}s = {{pct:.0f}}% of the {{cap:.0f}}s cap")
+    if tot >= cap:
+        sys.exit(f"{{LANE}}/{{tier}}: budgets alone are {{pct:.0f}}% of the cap")
+PY
 {guards}
 # --- images and the pinned pair -------------------------------------------
 # THE WHEEL IS BAKED AT IMAGE BUILD TIME, so it has to be exported BEFORE
@@ -290,7 +334,7 @@ def emit(idx: int, spec) -> str:
             f'say "$ID: {STAGES[idx - 1][0]} finished, taking the machine"\n')
     body = HEAD.format(id=sid, n=idx + 1, total=len(STAGES), title=title, lane=lane,
                        nbe=len(backends), sha=SHA, wait=wait,
-                       caps=caps, guards="\n".join(guards) + ("\n" if guards else ""),
+                       caps=caps, scales=list(scales), guards="\n".join(guards) + ("\n" if guards else ""),
                        stage_env=("export " + " ".join(stage_env) if stage_env else "# (this lane's in-script defaults are what the frozen rows ran)"),
                        backends=" ".join(backends))
     for scale, cap in caps:

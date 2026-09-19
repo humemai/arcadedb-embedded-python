@@ -1372,7 +1372,8 @@ def main():
             times = []
             ref = None
             _budget_s, _budget_src = budget_lookup.budget_for(
-                "l1tpc", args.scale, which, OLAP_BUDGET_S, "BENCH_DOCS_OLAP_BUDGET_S")
+                "l1tpc", args.scale, which, OLAP_BUDGET_S, "BENCH_DOCS_OLAP_BUDGET_S",
+                n_queries=len(OLAP_QUERIES))
             _beat.mark(f"query-{which}-start", iters=OLAP_ITER, budget_s=_budget_s)
             # THE BUDGET STARTS BEFORE THE COLD PASS (#82b, #100): the first
             # iteration IS the cold pass and always runs, so a censored query

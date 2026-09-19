@@ -3106,12 +3106,19 @@ def main():
             # engine's UNEXPRESSIBLE is declared -- except this one is about
             # the SIZE and applies to every engine, so no engine looks worse
             # for it (graph_common.TIER_EXCLUDED, BUGS F74).
+            # The count a fallback budget is divided by is the queries this
+            # TIER runs, not every query the lane defines: dividing by the
+            # excluded ones would hand the survivors a smaller share than the
+            # cell actually has to give.
+            _QUERIES_THIS_TIER = [q for q in OLAP_QUERIES
+                                  if not graph_common.tier_excluded(args.scale, q)]
             _excl = graph_common.tier_excluded(args.scale, qname)
             if _excl:
                 out[f"{qname}_excluded_at_tier"] = _excl
                 continue
             _budget_s, _budget_src = budget_lookup.budget_for(
-                "l2", args.scale, qname, OLAP_BUDGET_S, "BENCH_GRAPH_OLAP_BUDGET_S")
+                "l2", args.scale, qname, OLAP_BUDGET_S, "BENCH_GRAPH_OLAP_BUDGET_S",
+                n_queries=len(_QUERIES_THIS_TIER))
             _budget_t0 = time.perf_counter()
             _c0 = time.perf_counter()
             rows0 = ad.run_olap(qname)  # first touch, now measured

@@ -1298,7 +1298,8 @@ def main():
         times = []
         ref = None
         _budget_s, _budget_src = budget_lookup.budget_for(
-            "l4", args.scale, qn, QUERY_BUDGET_S, "BENCH_TS_QUERY_BUDGET_S")
+            "l4", args.scale, qn, QUERY_BUDGET_S, "BENCH_TS_QUERY_BUDGET_S",
+            n_queries=len(QUERIES))
         _beat.mark(f"query-{qn}-start", iters=QITER, budget_s=_budget_s)
         # THE BUDGET STARTS BEFORE THE COLD PASS (the graph lane's rule, #82b):
         # the first iteration IS the cold pass and always runs, so a censored
