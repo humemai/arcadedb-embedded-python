@@ -50,4 +50,25 @@ EJ=$("$REPO"/.venv/lib/python3.12/site-packages/arcadedb_embedded/jre/bin/java -
 [ -n "$IJ" ] && [ -n "$EJ" ] || fail "could not read a JVM version (image='$IJ' embedded='$EJ')"
 [ "$IJ" = "$EJ" ] || fail "JVM major differs: image=$IJ embedded=$EJ"
 
-echo "PAIR VERIFIED $SHORT  jars=both  jvm=$IJ  image=$IMG"
+# 4. THE WHEEL THE EMBEDDED ARM ACTUALLY RUNS, which is baked into
+# dbbench:arcadedb at build time and is NOT the wheel file checked above.
+# Checks 2 and 3 pass while the embedded arm runs a different engine: on
+# 2026-09-19 dbbench:arcadedb carried arcadedb-embedded 26.8.1 from PyPI
+# (build_images.sh's fallback when ARCADEDB_WHEEL is unset) while every
+# served arm ran 26.9.1-SNAPSHOT, and the whole l4 table compared two
+# ArcadeDB versions with this script reporting PAIR VERIFIED. A wheel FILE on
+# disk is not the engine a cell ran; the image is.
+if docker image inspect dbbench:arcadedb >/dev/null 2>&1; then
+  BSHA=$(docker run --rm --entrypoint python3 dbbench:arcadedb -c "
+import importlib.metadata as m, pathlib, zipfile, io, sys
+d = pathlib.Path(m.distribution('arcadedb-embedded').locate_file('arcadedb_embedded'))
+j = next(x for x in (d / 'jars').glob('arcadedb-engine-*.jar'))
+z = zipfile.ZipFile(j)
+p = z.read('com/arcadedb/arcadedb.properties').decode()
+print(next(l.split('=',1)[1].strip() for l in p.splitlines() if l.strip().startswith('buildNumber')))" 2>/dev/null)
+  [ "$BSHA" = "$SHA" ] || fail "dbbench:arcadedb bakes jars ${BSHA:0:9}, expected $SHORT (rebuild it with ARCADEDB_WHEEL set)"
+else
+  fail "no dbbench:arcadedb image; the embedded arm has nothing to run"
+fi
+
+echo "PAIR VERIFIED $SHORT  jars=image+wheel+embedded-image  jvm=$IJ  image=$IMG"
