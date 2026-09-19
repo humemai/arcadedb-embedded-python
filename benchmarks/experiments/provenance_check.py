@@ -1007,6 +1007,35 @@ def main():
         print(f"  NOT CHECKED: {_e.__class__.__name__}: {_e}")
     bad += bad_schema
 
+    # CARRIED-FORWARD ROWS ARE PROVENANCE, and until 2026-09-19 nothing said
+    # so. `carried_forward_from` and `carried_forward_reason` are written by
+    # the merge and read by NOTHING (BUGS F72's sweep): 79 frozen rows were
+    # measured in an earlier campaign file and carried across an ArcadeDB
+    # re-pin under DECISIONS #42, which is sound -- a comparator's number does
+    # not change because OUR engine did, and its image digest is unchanged --
+    # but a reader of the page cannot tell, and this gate is the one that
+    # exists to ask whether a cell traces to a run. Reported, not failed: #42
+    # blesses it and the rows are honest about themselves.
+    try:
+        import csv as _csv
+        _carried = {}
+        with open(os.path.join(_repo_root(), "benchmarks", "experiments",
+                               "results", "runs_paper.csv"), newline="") as _fh:
+            for _r in _csv.DictReader(_fh):
+                _src = _r.get("carried_forward_from")
+                if _src:
+                    _carried.setdefault(_src, []).append(
+                        f'{_r.get("lane")}/{_r.get("backend")}')
+        if _carried:
+            print("\ncarried-forward rows (DECISIONS #42; reported, not a finding)")
+            for _src, _who in sorted(_carried.items()):
+                _u = sorted(set(_who))
+                print(f"  {len(_who):4} row(s) from {_src}")
+                print(f"       {len(_u)} arm(s): {', '.join(_u[:8])}"
+                      + (" ..." if len(_u) > 8 else ""))
+    except OSError:
+        pass
+
     print(f"\n{bad} BAD finding(s)"
           + (f": {'0 (NOT CHECKED)' if not _CAPTION_CHECK_RAN else bad_caption}"
              f" caption, {bad_cond} missing run conditions, "
