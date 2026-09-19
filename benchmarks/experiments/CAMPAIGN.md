@@ -203,4 +203,25 @@ October's campaign is DECISIONS #74 as amended through #108, and it starts with 
 
 **Comparators next, before 26.10.1 ships.** On the user's go, every comparator is checked against its own release feed, re-pinned where it moved, and smoked where the jump needs it (COMPARATORS.md, October re-pins), and the comparator stages run first. When the user reports 26.10.1, the pair is built and verified and every ArcadeDB arm is queued behind the running comparator stages (DECISIONS #84).
 
+**The stage order and what it costs, measured rather than planned.** From mini's own STATUS.txt, 3,202 timed cells, plus the query uplift October adds (graph analytics fourteen columns against five, documents five OLAP queries against two, time series six against three). The one PROJECTION is cross-model at 500k, which has never run and is taken at ten times the 50k tier; every other figure is measured.
+
+| stage | table | sizes | hours | cumulative |
+|---|---|---|---|---|
+| qOA | graph interactive | SF1 + SF10 | 17.9 | 0.7 d |
+| qOB | graph analytics | full SF1 | 18.8 | 1.5 d |
+| qOC | time series | 100 + 1,000 hosts | 18.0 | 2.3 d |
+| qOD | cross-model | 50k + 500k | 20.7 | 3.1 d |
+| qOE | documents, both tables | SF1 + SF10 | 103.1 | 7.4 d |
+| qOF | sparse vector | three sizes | 31.2 | 8.7 d |
+| qOG | lifecycle | four sizes | 15.9 | 9.4 d |
+| qOH | dense vector | 1M + 9.99M | 122.3 | 14.5 d |
+
+The order is by UNCERTAINTY, not by size. qOD runs fourth because 500k products has never been measured and its figure is the only projection on the board: if it is wrong, it is wrong on day three rather than day thirteen. qOC runs third because its large size is the one an open diagnosis can block, and a stage that cannot run should discover that early. The three long stages are back-loaded because each is well characterised and none can teach us anything that changes the plan.
+
+Dense last is deliberate. It is 35% of the campaign alone, and the page is otherwise complete at day 8.4; a table may publish at the previous pin with a generated sentence naming what it was measured at, which disappears when the pinned artifact arrives (BUGS F17). The one designated trim, documents transactional at SF10 (#108), brings the whole campaign to 13.5 days.
+
+**What the budgets do and do not bound.** The per-query budgets (#106) cover graph, documents, and time series, which is 45% of the campaign. Dense, sparse, and lifecycle have no budget mechanism and are 49%. Dense is the wrong SHAPE for a query budget in any case: about four fifths of a dense cell is the index build, and #106 budgets queries. At `deep10m` the only thing bounding it is the whole-cell cap, which at 8 h against a healthy 40-62 min build bounds a hang rather than a tail.
+
+**Checked before the first cell, 2026-09-19.** Every corpus October needs is already on mini (LDBC SF1 and SF10, TPC-H SF1 and SF10, TSBS 100 and 1,000 hosts, deep10m, bigann, dense), so no generation time is hidden in the figures above; cross-model needs no corpus file, as `e2_hybrid` generates its catalogue from a fixed seed. The `e2_500k` tier is wired: `PRODUCTS` reads an env var the runner does NOT forward, which is the shape of several past latent-knob defects, but `runner.py` passes `--scale` to every lane and `e2_hybrid.main()` sets the size from it, recording `n_products` on the row so a mismatch is visible rather than silent.
+
 **One switch at the end.** The live page stays on the September freeze at pin `8d6af9475`, untouched, for the whole campaign; October rows accumulate in their own per-pin file and land table by table on the preview route through `land_stage.py --preview`; when the freeze is complete and every gate is green, one commit copies the preview payload, images, and prose over the live ones and deletes the route (DECISIONS #83). The new columns have no September counterpart, so a partial landing on the live page would seat them beside old rows and the gates would refuse it. The route and the flag are exercised on real October stages, not written on switch day.
