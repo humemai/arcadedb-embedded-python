@@ -578,30 +578,9 @@ notes.txt
 /server/profiler
 /server/chats
 config/ai.json
-benchmarks/experiments/results/runs.jsonl
-benchmarks/experiments/results/runs-*.csv
-# Backups taken before a risky operation. The rules above are exact paths, so
-# runs.jsonl.pre-merge-20260807T2215Z (1.3 MB) matched none of them and one
-# `git add -A` would have committed raw results. Naming the runs.jsonl case
-# alone was not enough either: l4_tsbs.jsonl.pre-qfix3 staged itself the very
-# next time a feed was replaced. Ignore the CONVENTION, not each instance.
-benchmarks/experiments/results/*.pre-*
-benchmarks/experiments/results/runs.jsonl.*
-# THE CONVENTION, not the instance -- which is what the comment above already
-# said and this file then failed to do. Every scratch and derived feed added
-# since matched none of the exact paths above: runs_smoke.jsonl,
-# runs_smoke_pass2.jsonl, runs_smoke_prefix.jsonl, runs_cacheab.jsonl,
-# runs_cachesweep.jsonl, runs_backfill.jsonl. On the bench host that left 528
-# untracked files under results/, one `git add -A` from being committed.
-#
-# runs_paper.csv is the frozen canonical selection and IS tracked; it ends in
-# .csv, so this rule cannot reach it. Verified: no tracked file matches
-# runs_*.jsonl.
-benchmarks/experiments/results/runs_*.jsonl
-# Per-cell driver output. Regenerable, and the row in runs.jsonl is the record.
-benchmarks/experiments/results/raw/
-# Written by a queue script to scope the monitor's window.
-benchmarks/experiments/results/.campaign_start
+# results/ rules live in ONE place now, the allowlist at the end of this file.
+# Three generations of exact-path rules used to sit here and each was outrun by
+# the next artifact someone added.
 
 # --- benchmarks/python-bindings ---------------------------------------------
 # The binding-level suite (graph/vector/tabular through the Python API, plus
@@ -627,7 +606,33 @@ benchmarks/python-bindings/jpype_overhead/dbs_*/
 benchmarks/python-bindings/jpype_overhead/data_*/
 benchmarks/python-bindings/jpype_overhead/results/*.log
 benchmarks/python-bindings/jpype_overhead/*.class
+# --- benchmarks/experiments/results: an ALLOWLIST, finally ---------------
+# This file says twice above to "ignore the CONVENTION, not each instance",
+# and then twice again listed instances. It drifted a third time: on
+# 2026-09-19 the bench host carried probe_f55.jsonl, probe_f55/,
+# thermal_calibration_<pin>.jsonl and lifecycle/ as untracked files, none of
+# them matched by any rule above. An untracked stray is not harmless there --
+# every queue script starts with `git pull --ff-only`, and one file in the way
+# aborts the chain and idles the machine, which has happened.
+#
+# So the rule is inverted. Everything under results/ is raw output and is
+# ignored; the handful of artifacts that ARE tracked are named below and
+# nothing else can be added by accident. A new artifact that genuinely belongs
+# in the repo needs `git add -f` and a line here, which is the right amount of
+# friction for putting results under version control.
+benchmarks/experiments/results/**
+!benchmarks/experiments/results/runs_paper.csv
+!benchmarks/experiments/results/sparse_cliff.jsonl
+!benchmarks/experiments/results/web_benchmarks.json
+!benchmarks/experiments/results/e3_q17/
+!benchmarks/experiments/results/e3_q17/*.json
+!benchmarks/experiments/results/ingest_ab/
+!benchmarks/experiments/results/ingest_ab/*.json
+!benchmarks/experiments/results/tentag/
+!benchmarks/experiments/results/tentag/*.json
+!benchmarks/experiments/results/generated/
+!benchmarks/experiments/results/generated/**
+# ...except these three under generated/, which are rebuilt at every freeze.
 benchmarks/experiments/results/generated/figures/*.pdf
-benchmarks/experiments/results/dense_mp5_*/
-benchmarks/experiments/results/sparse_mp_*/
-benchmarks/experiments/results/manifest-*.json
+benchmarks/experiments/results/generated/results_manifest.json
+benchmarks/experiments/results/generated/benchmark-results-*.tar.gz

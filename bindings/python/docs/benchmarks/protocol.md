@@ -139,7 +139,13 @@ table, by corpus size and by query, because a whole-graph aggregation grows with
 while an indexed lookup does not, and never by engine, because the engine is what the table
 compares. Where a corpus size has not been measured yet the budget falls back to the lane's
 older flat value and the row records which of the two applied, so a projection cannot be
-read as a measurement. A query that
+read as a measurement. A budget is also withheld where the rows it would come from are the
+SURVIVORS of a looser bound: if fewer than half the engines that answer a query anywhere
+left a row for it at that size, the median describes the engines fast enough to finish
+rather than the work, and deriving from it would hand the larger corpus a smaller budget
+than the smaller one and then censor everything outside the set it came from. That is not
+hypothetical. At TPC-H SF10 three engines of ten left a row, and their median was a quarter
+of the ten-engine median one size down. A query that
 exceeds it stops at the iteration it reached, its numbers are over those iterations, the
 table says so in a sentence naming the budget and the count, and the cell's other queries
 keep theirs. Without this a slow scan on one engine took the whole cell past the timeout

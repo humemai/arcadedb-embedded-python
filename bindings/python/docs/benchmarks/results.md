@@ -1,7 +1,7 @@
 # Reading the Output
 
 A row is not a result. It becomes one by surviving an admission filter, a freeze, an export,
-and four gates, and several of its fields mean something other than what their names
+and its gates, and several of its fields mean something other than what their names
 suggest. This page covers the path from a written row to a published cell, and the fields
 that have actually misled people.
 
@@ -153,7 +153,7 @@ The invariant it enforces: **every page table and figure is generated from froze
 listed in the page manifest, pinned by a gate, and carries a source link to a tracked
 artifact.**
 
-Four gates run, and they answer different questions:
+Four gates run, and they answer different questions. `equivalence_check` is the newest of them: it arrived with the 2026-10 instrument, which is also the instrument whose lanes stamp the answer digests it compares. **The rows behind the CURRENT page carry no digest field**, so the gate has nothing to compare there and the answers behind the published cells were never compared across engines. That is worth knowing when you read one of today's latencies: with no answer check behind a number, a fast number and a wrong answer look alike. It is the 2026-10 rows that this gate holds to each other.
 
 | Gate | Asks |
 |---|---|
