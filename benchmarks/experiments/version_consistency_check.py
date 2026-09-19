@@ -148,14 +148,26 @@ def check(path: str) -> list[str]:
 # refresh_web_page.py invokes every other gate.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 LIVE = os.path.join(_HERE, "results", "web_benchmarks.json")
+# TWO PAYLOADS REACH THE PREVIEW ROUTE, and they are not the same file. A
+# skeleton publish (DECISIONS #86) exports web_benchmarks_skeleton.json; the
+# October campaign (DECISIONS #84, BENCH_INSTRUMENT=2026-10) exports
+# web_benchmarks_next.json. Both land on /projects/arcadedb/next, so
+# --preview alone does not say which, and the env switch does. Naming only the
+# skeleton here would have this gate report "no payload at
+# .../web_benchmarks_skeleton.json; nothing to check" and RETURN 0 on every
+# October publish: a gate that passes by not running is worse than one that
+# fails, because the publish reads it as agreement.
 PREVIEW = os.path.join(_HERE, "results", "web_benchmarks_skeleton.json")
+PREVIEW_OCT = os.path.join(_HERE, "results", "web_benchmarks_next.json")
 
 
 def main(argv: list[str]) -> int:
     args = [a for a in argv[1:] if a != "--preview"]
     if not args:
         # Default to the payload this publish is about, like page_check.
-        want = PREVIEW if "--preview" in argv[1:] else LIVE
+        preview = (PREVIEW_OCT if os.environ.get("BENCH_INSTRUMENT") == "2026-10"
+                   and os.environ.get("BENCH_SKELETON") != "1" else PREVIEW)
+        want = preview if "--preview" in argv[1:] else LIVE
         if not os.path.exists(want):
             print(f"  no payload at {want}; nothing to check")
             return 0

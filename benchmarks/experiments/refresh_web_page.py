@@ -210,7 +210,9 @@ def main() -> int:
                          "page referencing an asset this script did not write")
     ap.add_argument("--preview", action="store_true",
                     help="publish to /projects/arcadedb/next (its own payload, images, and "
-                         "prose file; PAGE-SPEC untouched); the live page is never written")
+                         "prose file; PAGE-SPEC untouched); the live page is never written. "
+                         "On its own it is the October campaign: BENCH_INSTRUMENT=2026-10, "
+                         "runs_paper_oct.csv, web_benchmarks_next.json (DECISIONS #84)")
     ap.add_argument("--skeleton", action="store_true",
                     help="publish the laptop micro-scale placeholder run to the preview "
                          "route (DECISIONS #86). Implies --preview. Refuses any row from "
@@ -223,6 +225,20 @@ def main() -> int:
         os.environ["BENCH_SKELETON"] = "1"
         print("  target: SKELETON (DECISIONS #86) -> preview route; placeholder numbers")
         _assert_skeleton_rows()
+    elif args.preview:
+        # THE PREVIEW ROUTE IS THE OCTOBER CAMPAIGN (DECISIONS #83, #84). Set
+        # before anything is generated, because every step below inherits this
+        # environment: make_paper_tables freezes October's rows to
+        # runs_paper_oct.csv, export_web reads that freeze and writes
+        # web_benchmarks_next.json, and the gates read the same two files.
+        #
+        # Without this line a preview publish regenerated from
+        # runs_paper.csv -- September's freeze -- and published September's
+        # numbers to October's route, gates and all, because every gate would
+        # have agreed: they would all have been reading September.
+        os.environ["BENCH_INSTRUMENT"] = "2026-10"
+        print("  instrument: 2026-10 (DECISIONS #84); September's freeze and "
+              "payload are not read or written")
     target_paths = TARGETS["preview" if args.preview else "live"]
     global PAGE_SOURCE, PAGE_DATA, PAGE_IMAGES, IMAGE_URL_RE
     PAGE_SOURCE, PAGE_DATA = target_paths["source"], target_paths["data"]
@@ -270,8 +286,13 @@ def main() -> int:
 
     step(2, "Export the page data")
     run(py + [str(HERE / "export_web.py")], cwd=HERE.parents[1])
+    # export_web.OUT_NAME, in the same order of precedence. This path is what
+    # step 4 copies to the site and what step 3's gates were told to read, so
+    # it must name the file the exporter just wrote and not the one before it.
     exported = HERE / "results" / (
-        "web_benchmarks_skeleton.json" if args.skeleton else "web_benchmarks.json")
+        "web_benchmarks_skeleton.json" if args.skeleton
+        else "web_benchmarks_next.json" if args.preview
+        else "web_benchmarks.json")
     if not args.preview:
         _refuse_skeleton_payload_on_live(exported)
     _rewrite_page_spec_inventory(exported, PREVIEW_INVENTORY if args.preview else None)

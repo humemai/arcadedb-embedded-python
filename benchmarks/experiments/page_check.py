@@ -33,9 +33,17 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 # The skeleton publish exports to its own file (export_web.OUT_NAME), so this
-# gate reads the payload that was just written rather than the live one.
+# gate reads the payload that was just written rather than the live one. The
+# October campaign does too (DECISIONS #84): under BENCH_INSTRUMENT=2026-10
+# the exporter writes web_benchmarks_next.json, and a gate left pointing at
+# web_benchmarks.json would pass October's publish by checking September's
+# payload -- green, and about a file the publish never touched.
+#
+# These three names are export_web.OUT_NAME, in the same order of precedence.
+OCTOBER = os.environ.get("BENCH_INSTRUMENT") == "2026-10"
 DEFAULT_JSON = HERE / "results" / (
     "web_benchmarks_skeleton.json" if os.environ.get("BENCH_SKELETON") == "1"
+    else "web_benchmarks_next.json" if OCTOBER
     else "web_benchmarks.json")
 
 # SKELETON (DECISIONS #86). The laptop placeholder publish. Two sections of
@@ -49,6 +57,21 @@ DEFAULT_JSON = HERE / "results" / (
 # the payload (export_web.SKELETON_WAIVERS); nothing here is silent, and
 # BENCH_SKELETON is set by the skeleton publish alone.
 SKELETON = os.environ.get("BENCH_SKELETON") == "1"
+
+
+def _frozen_name():
+    """make_paper_tables.FROZEN_NAME, read at CALL time.
+
+    Not a module constant: --skeleton sets the global SKELETON inside main(),
+    after this module was imported, so a constant computed here would name the
+    campaign freeze for a skeleton publish. Two callers below default their
+    frozen CSV from this, and they had the same conditional expression written
+    out twice -- which is how one of them would have been given the October
+    branch and the other left on runs_paper.csv."""
+    if SKELETON:
+        return "runs_skeleton_laptop.csv"
+    return "runs_paper_oct.csv" if OCTOBER else "runs_paper.csv"
+
 
 # The rows the atomicity counts are read from. A skeleton publishes from its
 # own results file, so those counts are checked for real rather than waived.
@@ -627,7 +650,8 @@ def main() -> int:
                     help="check the preview page's prose and payload instead of the live page's")
     ap.add_argument("--rows", default=None,
                     help="the frozen CSV the condition pins are evaluated against "
-                         "(default: results/runs_paper.csv, or the skeleton's own file)")
+                         "(default: results/runs_paper.csv, or the October "
+                         "campaign's or the skeleton's own file)")
     ap.add_argument("--skeleton", action="store_true",
                     help="the payload is the laptop placeholder run (DECISIONS #86): pinned "
                          "prose sentences must still be present, their values are not compared, "
@@ -691,8 +715,7 @@ def main() -> int:
     print("\nconditions: every sentence under every table has a source for its numbers"
           " (October: for itself)")
     import csv as _csv
-    rows_path = Path(args.rows) if args.rows else HERE / "results" / (
-        "runs_skeleton_laptop.csv" if SKELETON else "runs_paper.csv")
+    rows_path = Path(args.rows) if args.rows else HERE / "results" / _frozen_name()
     rows = list(_csv.DictReader(rows_path.open())) if rows_path.exists() else []
     if not rows:
         print(f"  (no frozen rows at {rows_path}; row-derived pins will read as STALE)")
@@ -1087,8 +1110,7 @@ def _check_coverage(payload):
 
     print("\ncoverage A2: every measured field is printed or declared "
           "not-printed, with a reason")
-    frozen = HERE / "results" / (
-        "runs_skeleton_laptop.csv" if SKELETON else "runs_paper.csv")
+    frozen = HERE / "results" / _frozen_name()
     if not frozen.exists():
         print(f"  (no {frozen.name}; field coverage skipped)")
         return bad, (expected, present, declared, undeclared)

@@ -151,7 +151,35 @@ SKELETON_SCALES = {"l1tpc": ["micro"], "l2": ["micro", "sf1"], "l3s": ["micro"],
 SKELETON = os.environ.get("BENCH_SKELETON") == "1"
 if SKELETON:
     PAPER_SCALES = dict(SKELETON_SCALES)
-FROZEN_NAME = "runs_skeleton_laptop.csv" if SKELETON else "runs_paper.csv"
+
+# ONE CAMPAIGN PER FREEZE (DECISIONS #84). BENCH_INSTRUMENT=2026-10 freezes
+# October's rows to October's own file; unset freezes everything that is NOT
+# October -- rows before 2026-10 carry no instrument field and are September's
+# -- and keeps writing runs_paper.csv.
+#
+# BOTH DIRECTIONS MATTER, and the default one is the surprising half. The
+# refusal at the end of load_canonical fires when two instruments share a
+# (lane, scale), and October's first stage is l2 at sf1 and sf10, two tiers
+# September already publishes. Without the default filter, September's publish
+# starts refusing the moment the first October row is merged into runs.jsonl,
+# which is before anyone has asked October to publish anything. Selecting the
+# campaign here lets one append log feed two freezes, each complete and
+# neither able to see the other's rows.
+#
+# Same shape as the skeleton switch above, for the same reason: the freeze
+# names the file it wrote, so a payload can be traced back to the rows it came
+# from, and October's freeze can never be committed as September's.
+INSTRUMENT = os.environ.get("BENCH_INSTRUMENT") or ""
+if INSTRUMENT and INSTRUMENT != "2026-10":
+    raise SystemExit(f"BENCH_INSTRUMENT={INSTRUMENT!r} is not a campaign this "
+                     "freeze knows. Set it to 2026-10, or leave it unset for "
+                     "September.")
+OCTOBER = INSTRUMENT == "2026-10"
+# A SKELETON KEEPS ITS OWN NAMES (DECISIONS #86) whatever else is exported: it
+# is a laptop placeholder run, not a campaign, so it is tested first.
+FROZEN_NAME = ("runs_skeleton_laptop.csv" if SKELETON
+               else "runs_paper_oct.csv" if OCTOBER
+               else "runs_paper.csv")
 
 NAMES = {
     "arcadedb_embedded": "ArcadeDB (emb)", "arcadedb_server": "ArcadeDB (srv)",
@@ -238,6 +266,14 @@ def load_canonical(apply_corpus=True):
             if l.strip()]
     best = {}
     for r in rows:
+        # THE ROW'S CAMPAIGN, FIRST, BEFORE ANY OTHER TEST. See INSTRUMENT
+        # above. A row from the other campaign is not a worse row to be
+        # excluded and counted; it belongs to a freeze that is not this one, so
+        # it must not reach the corpus counters, the withheld-recall sidecar,
+        # or the dedupe, where a later October row would otherwise outrank a
+        # September one on ts_utc and shadow a published cell.
+        if (str(r.get("instrument") or "") == "2026-10") != OCTOBER:
+            continue
         if r.get("rc") != 0:
             continue
         if r["scale"] not in PAPER_SCALES.get(r["lane"], []):
@@ -450,6 +486,13 @@ def load_canonical(apply_corpus=True):
     # (lane, scale) would seat a five-query OLAP row beside a two-query one,
     # or a relaxed-durability write beside an fsync one, under one header.
     # Refused here, at the freeze, rather than left for a reader to notice.
+    #
+    # KEPT AS AN ASSERTION, not as the selector it used to be. The campaign
+    # filter at the top of the loop admits one instrument by construction, so
+    # this can no longer fire on a mixed log -- which is the whole point of the
+    # filter. What it still catches is a row stamped with the wrong instrument:
+    # a queue script that ran an October lane against a September wheel, or a
+    # value neither branch of the filter expected. That is worth a refusal.
     mixed = {}
     for r in out:
         mixed.setdefault((r["lane"], r["scale"]), set()).add(str(r.get("instrument") or "2026-09"))

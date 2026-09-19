@@ -76,8 +76,18 @@ def _l2_full_network(scale: str) -> str:
 # The frozen selection this payload is built from. A skeleton publish reads
 # its own freeze (DECISIONS #86), so the campaign's tracked runs_paper.csv is
 # never touched and the page's source link names the file it really used.
-FROZEN_NAME = ("runs_skeleton_laptop.csv"
-               if os.environ.get("BENCH_SKELETON") == "1" else "runs_paper.csv")
+#
+# The October campaign reads its own freeze for the same reason (DECISIONS
+# #84): make_paper_tables writes runs_paper_oct.csv under BENCH_INSTRUMENT
+# =2026-10, and these two names must move together or the exporter reads one
+# campaign's rows while the freeze step wrote the other's. Skeleton is tested
+# first: it is a laptop placeholder run and keeps its own names whatever
+# campaign is selected.
+_SKELETON_ENV = os.environ.get("BENCH_SKELETON") == "1"
+_OCTOBER_ENV = os.environ.get("BENCH_INSTRUMENT") == "2026-10"
+FROZEN_NAME = ("runs_skeleton_laptop.csv" if _SKELETON_ENV
+               else "runs_paper_oct.csv" if _OCTOBER_ENV
+               else "runs_paper.csv")
 FROZEN = HERE / "results" / FROZEN_NAME
 # A SKELETON WRITES ITS OWN PAYLOAD, for the same reason it writes its own
 # freeze. web_benchmarks.json is the tracked record of what the LIVE page
@@ -85,8 +95,16 @@ FROZEN = HERE / "results" / FROZEN_NAME
 # laptop placeholder payload as the published one, with the live page still
 # serving the campaign's. Same name, two meanings, and nothing to tell them
 # apart after the fact.
-OUT_NAME = ("web_benchmarks_skeleton.json"
-            if os.environ.get("BENCH_SKELETON") == "1" else "web_benchmarks.json")
+#
+# THE OCTOBER CAMPAIGN WRITES ITS OWN PAYLOAD, for the third time for the same
+# reason. web_benchmarks.json is what the LIVE page serves and stays
+# September's until the preview route is promoted; October fills
+# web_benchmarks_next.json, which is what /projects/arcadedb/next is served
+# from (DECISIONS #83). One name per published thing, so a stale copy is
+# always identifiable as one.
+OUT_NAME = ("web_benchmarks_skeleton.json" if _SKELETON_ENV
+            else "web_benchmarks_next.json" if _OCTOBER_ENV
+            else "web_benchmarks.json")
 OUT = HERE / "results" / OUT_NAME
 
 # Version names live as trailing comments beside each pin in runner.py; the

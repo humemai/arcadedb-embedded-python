@@ -93,6 +93,14 @@ def main():
     SCRATCH.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, BENCH_ENGINE_COMMIT=args.pin)
     env.pop("BENCH_PAPER_DIR", None)
+    if args.preview:
+        # THE SWITCH TRAVELS WITH THE PUBLISH (DECISIONS #84). `env` is what
+        # step 4 hands refresh_web_page.py, and that script sets the same
+        # variable for itself from --preview -- but this is the only dict a
+        # step added here would inherit, and a second landing step that shells
+        # out without it would silently regenerate from September's freeze.
+        # Stated where the environment is built, not left to one callee.
+        env["BENCH_INSTRUMENT"] = "2026-10"
 
     step(1, f"pull runs_page_{args.pin}.jsonl from {HOST}")
     pulled = SCRATCH / "runs_page_host.jsonl"
@@ -174,8 +182,16 @@ def main():
     sh(["git", "add"] + site_files, cwd=SITE)
     sh(["git", "commit", "-q", "-m", f"arcadedb{' preview' if args.preview else ''}: {args.message}{TRAILER}"], cwd=SITE, check=False)
     sh(["git", "push", "-q", "origin", "main"], cwd=SITE)
-    tracked = ["benchmarks/experiments/results/runs_paper.csv",
-               "benchmarks/experiments/results/web_benchmarks.json",
+    # COMMIT THE ARTIFACTS THIS PUBLISH WROTE, not September's. A preview
+    # landing regenerates runs_paper_oct.csv and web_benchmarks_next.json and
+    # leaves the live pair exactly as it found them (DECISIONS #84), so
+    # committing the live pair here would add nothing and the October freeze
+    # would stay untracked -- the page serving numbers whose frozen rows are
+    # in no commit.
+    _frozen, _payload = (("runs_paper_oct.csv", "web_benchmarks_next.json") if args.preview
+                         else ("runs_paper.csv", "web_benchmarks.json"))
+    tracked = [f"benchmarks/experiments/results/{_frozen}",
+               f"benchmarks/experiments/results/{_payload}",
                "benchmarks/experiments/results/generated",
                "benchmarks/experiments/results/generated/preview-tables.md" if args.preview
                else "benchmarks/experiments/PAGE-SPEC.md"]

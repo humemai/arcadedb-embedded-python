@@ -60,6 +60,24 @@ DISCLOSED = {}
 # skeleton has no bench-host overlay to open.
 SKELETON = os.environ.get("BENCH_SKELETON") == "1"
 
+# DECISIONS #84: this gate opens no payload and no freeze, so the campaign
+# switch reaches it in one place and one place only -- _canonical() below,
+# which is load_canonical() and therefore filtered on BENCH_INSTRUMENT
+# already. Nothing here needed a branch.
+#
+# ONE KNOWN CROSS-CAMPAIGN HAZARD IS LEFT STANDING, deliberately, because
+# closing it would fail October's first publish rather than protect it.
+# _served_envelopes() below reads runs.jsonl directly and takes the NEWEST
+# l3d deep10m row per backend, with no instrument term. Filtering it to the
+# selected campaign was tried and reverted: the dense lane's envelopes come
+# from a PIN-keyed overlay directory (dense_mp5_<pin>), not from an
+# instrument-stamped row, so under BENCH_INSTRUMENT=2026-10 the map came back
+# EMPTY and F3 failed every dense backend at deep10m -- on a stage (l2 sf1,
+# sf10) that has nothing to do with the dense lane. The dense overlay has no
+# campaign concept yet; giving it one is its own decision, not a side effect
+# of the freeze switch. Until then October reads September's envelopes here,
+# which is wrong only once October re-runs l3d deep10m.
+
 
 def _canonical():
     sys.path.insert(0, HERE)

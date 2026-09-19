@@ -624,6 +624,14 @@ benchmarks/experiments/results/**
 !benchmarks/experiments/results/runs_paper.csv
 !benchmarks/experiments/results/sparse_cliff.jsonl
 !benchmarks/experiments/results/web_benchmarks.json
+# The October campaign's freeze and payload (DECISIONS #84). Tracked for the
+# same reason the September pair is: the page serves the payload and the
+# freeze is the rows it was built from, and neither can be re-derived later
+# from an append log that keeps growing. Named here because the allowlist
+# above means `git add` REFUSES an unnamed path, which is where a landing
+# would stop: the site pushed, the frozen rows in no commit.
+!benchmarks/experiments/results/runs_paper_oct.csv
+!benchmarks/experiments/results/web_benchmarks_next.json
 !benchmarks/experiments/results/e3_q17/
 !benchmarks/experiments/results/e3_q17/*.json
 !benchmarks/experiments/results/ingest_ab/
