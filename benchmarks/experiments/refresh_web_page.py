@@ -85,7 +85,8 @@ PREVIEW_INVENTORY = HERE / "results" / "generated" / "preview-tables.md"
 # rows say. None of them asks whether the two engines answered the same
 # question, which is the check that decides whether a fast number is also a
 # right one, so it is the first gate a publish has to pass.
-GATES = ["equivalence_check", "provenance_check", "fairness_check", "page_check"]
+GATES = ["equivalence_check", "provenance_check", "fairness_check", "page_check",
+         "version_consistency_check"]
 
 # THE SKELETON GUARDS (DECISIONS #86). A skeleton publish fills the preview
 # route with placeholder cells from a one-repetition laptop run so the October
@@ -277,7 +278,8 @@ def main() -> int:
 
     step(3, "Gates: nothing is published until every gate agrees")
     for gate in GATES:
-        extra = ["--preview"] if (args.preview and gate == "page_check") else []
+        extra = (["--preview"] if (args.preview and gate in
+                 ("page_check", "version_consistency_check")) else [])
         proc = subprocess.run(py + [str(HERE / f"{gate}.py")] + extra,
                               cwd=HERE.parents[1], capture_output=True,
                               text=True)

@@ -344,6 +344,24 @@ def _engine_version(label: str, raw: str | None,
         _sha = (commit or "").strip() or (_m.group(1) if _m else None)
         _ver = re.sub(r"^server:", "", _raw.split(" (build")[0]).strip() or None
         return _engine_identity(_ver, _sha)
+    # A COMPOSED STACK NAMES EVERY MEMBER. The row already carries them
+    # ("qdrant-local:1.19.0+neo4j:2026.07.1"); what reduced it to one was this
+    # function taking a single engine name and finding a single version. On the
+    # table reached without an image that produced "qdrant + neo4j 1.19.1",
+    # which reads as the pair at Qdrant's version, and on the table reached
+    # WITH one it produced "neo4j 2026.08.1", which names half the stack. Two
+    # tables, one row, two version strings, neither complete (BUGS F63c).
+    # This is the rendering the dbbench branch below already used; it just was
+    # not reachable unless the image happened to be one we built.
+    # The version class must EXCLUDE "+", or it swallows the separator and the
+    # next member's name with it: "qdrant-local:1.19.0+neo4j:2026.07.1" then
+    # yields one pair whose version is "1.19.0+neo4j" and this branch never
+    # fires. A build-metadata "+" inside a single version (surrealdb-server's
+    # 3.2.4+20260803) is unaffected: one pair does not reach here.
+    _pairs = re.findall(r"([A-Za-z][A-Za-z0-9_.-]*):(\d[\w.-]*)", str(raw or ""))
+    if len(_pairs) > 1 and "+" in str(raw or ""):
+        return " + ".join(f"{n.replace('-local', '')} {_short_version(v) or v}"
+                          for n, v in _pairs)
     if image:
         repo = image.split("@")[0].split(":")[0]
         engine = repo.rsplit("/", 1)[-1].lower()

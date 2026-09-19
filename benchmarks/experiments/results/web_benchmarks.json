@@ -8000,7 +8000,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "dbbench:pg-age",
-          "version_name": "PostgreSQL 17.11 + pgvector 0.8.6 + age 1.7.0",
+          "version_name": "pgvector 0.8.6 + age 1.7.0",
           "host": null,
           "metrics": {
             "trials": {
@@ -8028,7 +8028,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",
-          "version_name": "neo4j 2026.07.1",
+          "version_name": "qdrant 1.19.0 + neo4j 2026.07.1",
           "host": null,
           "metrics": {
             "trials": {
@@ -8359,7 +8359,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "dbbench:pg-age",
-          "version_name": "PostgreSQL 17.11 + pgvector 0.8.6 + age 1.7.0",
+          "version_name": "pgvector 0.8.6 + age 1.7.0",
           "host": null,
           "metrics": {
             "p50 ms": {
@@ -8411,7 +8411,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "neo4j@sha256:1ee8f6fa220f9a4f194d07caa82e12120ee501c06cb38eb245e530737cbdb15b",
-          "version_name": "neo4j 2026.07.1",
+          "version_name": "qdrant 1.19.0 + neo4j 2026.07.1",
           "host": null,
           "metrics": {
             "p50 ms": {

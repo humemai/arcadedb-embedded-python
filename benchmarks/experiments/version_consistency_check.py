@@ -20,6 +20,7 @@ Exit 0 when every family wears one version, 1 otherwise.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from collections import defaultdict
@@ -42,6 +43,14 @@ ALLOWED_SPLITS: dict[str, str] = {
         "standalone server binary (surrealdb-server:3.2.4). The embedded arm "
         "can only be as new as the wheel ships, which is an asymmetry the "
         "page states rather than hides, and every row names its deployment",
+    "qdrant":
+        "the composed cross-model stack's vector half is qdrant-local, the "
+        "client library's IN-PROCESS engine, not the served qdrant/qdrant "
+        "image the vector tables run; two artifacts with their own version "
+        "lines. It is also an unsanctioned fairness gap -- that half still "
+        "opens location=':memory:' while ArcadeDB runs on disk -- disclosed "
+        "on the table in PROTOCOL section 7 and retired in October, at which "
+        "point this entry should go rather than be renewed",
 }
 
 _VER = r"[ :=v]*([0-9]+(?:\.[0-9]+)+)"
@@ -70,6 +79,13 @@ def _rows(node, table=None):
 
 def check(path: str) -> list[str]:
     payload = json.load(open(path))
+    # A SKELETON is declared placeholder data: laptop timings, one repetition,
+    # the smallest corpus, and an `arcadedb_version` of null precisely because
+    # it cannot name one. Arms re-measured on the new build sit beside arms
+    # that have not been, and that is the point of the route rather than a
+    # defect. Comparators are still held: a skeleton may be rough, not wrong
+    # about whose engine it ran.
+    skeleton = bool(payload.get("skeleton"))
     seen: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
     for table, backend, version in _rows(payload):
         low = version.lower()
@@ -111,6 +127,11 @@ def check(path: str) -> list[str]:
     for family, versions in sorted(seen.items()):
         if len(versions) < 2:
             continue
+        if family == "arcadedb" and skeleton:
+            print(f"  ALLOWED arcadedb: {', '.join(sorted(versions))} -- a "
+                  f"skeleton payload, which declares arcadedb_version null and "
+                  f"mixes re-measured arms with placeholders by design")
+            continue
         if family in ALLOWED_SPLITS:
             print(f"  ALLOWED {family}: {', '.join(sorted(versions))}"
                   f" -- {ALLOWED_SPLITS[family]}")
@@ -123,12 +144,24 @@ def check(path: str) -> list[str]:
     return failures
 
 
+# Where the payloads live, so the gate can run with no arguments the way
+# refresh_web_page.py invokes every other gate.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+LIVE = os.path.join(_HERE, "results", "web_benchmarks.json")
+PREVIEW = os.path.join(_HERE, "results", "web_benchmarks_skeleton.json")
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        print(__doc__)
-        return 2
+    args = [a for a in argv[1:] if a != "--preview"]
+    if not args:
+        # Default to the payload this publish is about, like page_check.
+        want = PREVIEW if "--preview" in argv[1:] else LIVE
+        if not os.path.exists(want):
+            print(f"  no payload at {want}; nothing to check")
+            return 0
+        args = [want]
     bad = 0
-    for path in argv[1:]:
+    for path in args:
         print(f"== {path}")
         failures = check(path)
         for failure in failures:
