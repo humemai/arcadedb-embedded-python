@@ -256,6 +256,8 @@ What belongs beside the pinned ratio: the view's cost per session is real. Its b
 
 `refresh_web_page.py`'s invariant: *every page table and figure is generated from frozen rows, listed in the page manifest, pinned by `page_check`, and carries a source link to a tracked artifact.* `page_check.PROSE` pins every typed number in `arcadedb.ts`, including page-only tables through `lambda P:` references over the exported JSON; a reworded sentence fails ABSENT. `page_check` also fails if any table loses its ArcadeDB row against the live page. `land_stage.py` is the publish-after-a-stage procedure: merge, regenerate, gates, then the diff, and with `--apply` the build, the commit in both repositories, and the push. Both scripts take `--preview` to publish to the hidden October route instead of the live page (DECISIONS #83), and `refresh_web_page.py --skeleton` fills that route from the laptop placeholder freeze, refusing any row from the bench host or at paper tier, stamping every table's conditions as placeholders, and waiving F1 and F3 by name because both describe the bench host (DECISIONS #86); PUBLISHING.md holds all three. After a re-pin, the SERVED page is grepped for the previous pin's strings in every field, not just the labels (BUGS.md F16).
 
+**Three gates run on `main`, four on the October instrument.** `refresh_web_page.GATES` on `main` is `provenance_check`, `fairness_check`, `page_check`. `equivalence_check` exists only on `october-instrument`, along with the answer digests its lanes stamp and the `*_digest` fields the frozen rows would need; no row in `runs_paper.csv` carries one. So the SEPTEMBER page was published without any cross-engine answer comparison, which is a stated design fact and not an oversight -- nothing asked that question before 2026-09-14, and the September rows are built on adapters that were never checked for a dropped filter, group, or join condition. Until the branch integration lands, a publish from `main` cannot check answers, and the row below marked OCTOBER ONLY does not apply to the live page.
+
 | gate | fails when |
 |---|---|
 | mixed corpus | rows in one table disagree on `n_docs` while sharing a `scale_label` |
@@ -267,7 +269,7 @@ What belongs beside the pinned ratio: the view's cost per session is real. Its b
 | close cost | a clean close exceeds 100 ms, or grows with rows while nothing was written |
 | mixed instrument | one table holds rows measured under two instruments |
 | durability class | a table's engines committed under different rules, or a row carries no `durability` |
-| disagreeing answers | two engines of one table answer the same query differently at one scale, or an engine skipped an operation without declaring it unexpressible |
+| disagreeing answers (OCTOBER ONLY) | two engines of one table answer the same query differently at one scale, or an engine skipped an operation without declaring it unexpressible |
 | missing measurement | a table omits one of the standard measurements and states no reason |
 
 ---
