@@ -30,9 +30,19 @@ FAMILIES = ("arcadedb", "duckdb", "postgres", "neo4j", "mongo", "surrealdb",
             "arangodb", "qdrant", "milvus", "sqlite", "chroma", "lancedb",
             "memgraph", "falkordb", "timescaledb", "questdb", "elasticsearch")
 
-# Deliberate splits: family -> why more than one version is correct here. Empty
-# by design. An entry is a decision, not a way to quiet the gate.
-ALLOWED_SPLITS: dict[str, str] = {}
+# Deliberate splits: family -> why more than one version is correct here. An
+# entry is a DECISION, not a way to quiet the gate, and it must name two
+# genuinely different artifacts rather than two measurements of one.
+ALLOWED_SPLITS: dict[str, str] = {
+    "surrealdb":
+        "embedded and served SurrealDB are two artifacts with independent "
+        "version lines, not one engine measured twice: the embedded arm runs "
+        "the Rust core bundled inside the pinned SDK wheel "
+        "(surrealdb-embedded:2.3.10, sdk 2.0.0) and the served arm runs the "
+        "standalone server binary (surrealdb-server:3.2.4). The embedded arm "
+        "can only be as new as the wheel ships, which is an asymmetry the "
+        "page states rather than hides, and every row names its deployment",
+}
 
 _VER = r"[ :=v]*([0-9]+(?:\.[0-9]+)+)"
 

@@ -115,13 +115,13 @@
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
     "surrealdb_e2": [
-      "surrealdb-embedded:2.0.0"
+      "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
     ],
     "surrealdb_e2_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ],
     "surrealdb_graph": [
-      "surrealdb-embedded:2.0.0"
+      "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
     ],
     "surrealdb_graph_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
@@ -3281,7 +3281,7 @@
           "n_docs": "1,000,000",
           "deployment": "server",
           "image": null,
-          "version_name": "pgvector 26.9.1",
+          "version_name": "pgvector 0.8.6",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -3503,7 +3503,7 @@
           "n_docs": "1,000,000",
           "deployment": "server",
           "image": null,
-          "version_name": "surrealdb 26.9.1",
+          "version_name": "surrealdb 3.2.4",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -4273,7 +4273,7 @@
           "n_docs": "9,990,000",
           "deployment": "server",
           "image": null,
-          "version_name": "pgvector 26.9.1",
+          "version_name": "pgvector 0.8.6",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -5414,7 +5414,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.0.0",
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -6294,7 +6294,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.0.0",
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -7070,7 +7070,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.0.0",
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "ingest vertices+edges/s": {
@@ -8056,7 +8056,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.0.0",
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "trials": {
@@ -8463,7 +8463,7 @@
           "n_docs": null,
           "deployment": "embedded",
           "image": null,
-          "version_name": "surrealdb 2.0.0",
+          "version_name": "surrealdb 2.3.10",
           "host": null,
           "metrics": {
             "p50 ms": {
@@ -12543,7 +12543,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",
-          "version_name": "mongo 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": null,
           "metrics": {
             "new-order p50 ms": {
@@ -12601,7 +12601,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
-          "version_name": "postgres 17.10",
+          "version_name": "postgresql 17.10",
           "host": null,
           "metrics": {
             "new-order p50 ms": {
@@ -13012,7 +13012,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",
-          "version_name": "mongo 8.2.12",
+          "version_name": "mongodb 8.2.12",
           "host": null,
           "metrics": {
             "Q1 p50 ms": {
@@ -13076,7 +13076,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "postgres@sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
-          "version_name": "postgres 17.10",
+          "version_name": "postgresql 17.10",
           "host": null,
           "metrics": {
             "Q1 p50 ms": {

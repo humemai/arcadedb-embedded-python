@@ -313,6 +313,14 @@ def _overlay_commit() -> str | None:
     return os.environ.get("BENCH_ENGINE_COMMIT", "").strip() or None if _dense_overlay_is_pinned() else None
 
 
+# Canonical spelling per engine, so an image repo name and a row label cannot
+# publish one build under two names. Keys are what the derivation produces.
+_ENGINE_SPELLING = {
+    "mongo": "mongodb",
+    "postgres": "postgresql",
+}
+
+
 def _engine_version(label: str, raw: str | None,
                     image: str | None = None, commit: str | None = None) -> str | None:
     """"<engine> <version>", from a row label and whatever the adapter stamped.
@@ -354,6 +362,13 @@ def _engine_version(label: str, raw: str | None,
     ver = _short_version(_raw[_k + len(engine) + 1:] if _k >= 0 else _raw)
     if not ver:
         return None
+    # ONE ENGINE, ONE SPELLING. The name comes from the image repo where there
+    # is one and from the row label where there is not, and the two disagree:
+    # MongoDB's image is "mongo" and its label is "MongoDB", so the same build
+    # published as "mongo 8.2.12" on one table and "mongodb 8.2.12" on another.
+    # Every string comparison across tables -- including the version gate --
+    # then reads one engine as two (BUGS F63d).
+    engine = _ENGINE_SPELLING.get(engine, engine)
     return f"{engine} {ver}"
 
 
@@ -935,11 +950,27 @@ def _dense_overlay_entries(scale="deep10m"):
                 continue
             _ev = passes[0].get("engine_version")
             # engine_version on an overlay pass names the harness's ArcadeDB
-            # wheel ("unknown (PackageNotFoundError)" in the client image);
-            # a comparator's own version is lib_version ("neo4j:2026.07.1"),
-            # and our served arm's is lib_version too ("server:26.9.1...").
-            if str(_ev or "").startswith("unknown") and passes[0].get("lib_version"):
-                _ev = passes[0]["lib_version"]
+            # wheel; a comparator's own version is lib_version
+            # ("neo4j:2026.07.1"), and our served arm's is lib_version too
+            # ("server:26.9.1...").
+            #
+            # That is what the comment said before 2026-09-19 and NOT what the
+            # code did: it substituted lib_version only when engine_version
+            # began "unknown", on the assumption that the client image always
+            # fails to resolve the wheel. It does not always fail. Where the
+            # wheel IS importable the overlay stamps its version on every row,
+            # comparators included, so the dense table published
+            # "surrealdb 26.9.1" -- an ArcadeDB release number worn by
+            # SurrealDB, formed by _engine_version taking the NAME from the row
+            # label and the NUMBER from this field (BUGS F63a).
+            #
+            # For a comparator, lib_version wins whenever it exists. Only our
+            # own arms may take engine_version, and theirs is the same wheel.
+            _lib = passes[0].get("lib_version") or passes[0].get("backend_version")
+            if _lib and (not ours or str(_ev or "").startswith("unknown")):
+                _ev = _lib
+            elif str(_ev or "").startswith("unknown") and _lib:
+                _ev = _lib
             ver.add(_ev)
             # build_s, and the two timers beside it where the engine has the
             # boundary (DECISIONS #74 item 2). The overlay is what the dense

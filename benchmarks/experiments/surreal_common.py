@@ -13,6 +13,8 @@ and is never typed.
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -78,12 +80,55 @@ def apply_durability(cls: str | None = None) -> str:
     return cls
 
 
+def _core_from_campaign_rows(sdk: str) -> str | None:
+    """The engine version a campaign row recorded beside this SDK version.
+
+    `legacy_stamp_fixup` below resolves an old stamp by importing the pinned
+    SDK wheel. On a host without that package -- the PUBLISH host is one --
+    `core_version()` and `sdk_version()` both return None, the guard fails
+    closed, and the stale stamp is returned unchanged. The September page
+    published SurrealDB embedded as 2.0.0, the SDK, on four tables for exactly
+    that reason (BUGS F63b), while the one lane stamped after 2026-09-13
+    printed 2.3.10 beside it.
+
+    The mapping does not need the wheel: the campaign's own rows carry it, in
+    the rows that DO have the rich form. Same reasoning as
+    `export_web._campaign_engine_string` -- one campaign, one pinned wheel, so
+    a row recording "engine E (sdk S)" resolves every bare S in that file.
+    Returns None rather than guessing when no row carries the pair.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "results", "runs.jsonl")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "(sdk " not in line:
+                    continue
+                try:
+                    ev = str(json.loads(line).get("engine_version") or "")
+                except Exception:  # noqa: BLE001
+                    continue
+                m = re.fullmatch(
+                    r"surrealdb-embedded:(\d+\.\d+\.\d+) \(sdk (\d+\.\d+\.\d+)\)", ev)
+                if m and m.group(2) == sdk:
+                    return m.group(1)
+    except OSError:
+        return None
+    return None
+
+
 def legacy_stamp_fixup(engine_version: str) -> str:
     """Rows stamped before 2026-09-13 read "surrealdb-embedded:<sdk>". The core
-    is a function of the pinned SDK wheel, so the same wheel resolves it."""
+    is a function of the pinned SDK wheel, so the same wheel resolves it --
+    and where the wheel is not importable, the campaign's own rows do."""
     m = re.fullmatch(r"surrealdb-embedded:(\d+\.\d+\.\d+)", str(engine_version or ""))
-    if m and core_version() and m.group(1) == sdk_version():
+    if not m:
+        return engine_version
+    if core_version() and m.group(1) == sdk_version():
         return engine_stamp()
+    core = _core_from_campaign_rows(m.group(1))
+    if core:
+        return f"surrealdb-embedded:{core} (sdk {m.group(1)})"
     return engine_version
 
 
