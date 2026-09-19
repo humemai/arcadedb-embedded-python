@@ -99,14 +99,29 @@ def main() -> int:
     # and October runs FOURTEEN. A check that silently measures a subset of
     # the work is worse than no check: it answers a question nobody asked and
     # sounds like the one they did.
+    # EVERY LANE'S QUERY SET, or the coverage check protects one lane and
+    # leaves the rest to the same false "ok". Read from the lane module, never
+    # typed here: a query added to a lane must reach this check on its own.
     want = set()
     try:
         if a.lane == "l2":
             import graph_common
             want = {q for q in graph_common.OLAP_QUERIES
                     if not graph_common.tier_excluded(a.tier, q)}
+        elif a.lane == "l1tpc":
+            import l1_tpc
+            want = set(l1_tpc.OLAP_QUERIES)
+        elif a.lane == "l4":
+            import l4_tsbs
+            want = set(l4_tsbs.QUERIES)
     except Exception as exc:  # noqa: BLE001
         print(f"  (could not read the lane's query set: {exc})")
+    if not want:
+        # The vector, cross-model and lifecycle lanes time one operation per
+        # cell rather than a query set, so there is no roster to hold rows
+        # against. Say so rather than scoring a subset in silence.
+        print(f"  NOTE: no query roster known for lane {a.lane!r}; scoring whatever "
+              f"cold_* fields the rows carry, which may be a SUBSET of the work.")
     have = set()
     for d in per.values():
         have |= set(d)
