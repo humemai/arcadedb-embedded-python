@@ -30,6 +30,23 @@ import runner
 
 SHA = "417314c18da782620463bc7c09ac6bd34ac6fbda"
 
+# PER-SIZE environment. These are corpus selectors that are NOT derived from
+# --scale, so a stage that omits one measures the wrong data under the right
+# label -- the exact shape of BUGS F6. Verified against the frozen rows:
+# tpch1/tpch10 carry SF 1 and 10, l3d small/deep10m carry n_docs 1,000,000 and
+# 9,990,000, l3s tiny/small/medium carry 100,000 / 1,000,000 / 8,841,823.
+SCALE_ENV = {
+    ("l1tpc", "tpch1"): ["BENCH_TPC_SF=1"],
+    ("l1tpc", "tpch10"): ["BENCH_TPC_SF=10"],
+    ("l3d", "small"): ["BENCH_DENSE_DATA=/data/dense"],
+    ("l3d", "deep10m"): ["BENCH_DENSE_DATA=/data/deep10m"],
+}
+
+# The sparse overlay names its files per scale; the dense one uses the
+# runner's default mp_{label}_b{rep}.json, which is what the dense resolver
+# looks for.
+OVERLAY_ENV = {"l3s": 'BENCH_DRIVER_OUT_FMT=sp_{label}_{scale}.json'}
+
 # THE OVERLAY LANES. The dense and sparse TABLES do not read the lane's own
 # search rows: they read a multipass overlay produced by a bespoke driver run
 # through `runner.py --driver`, which builds once and then times five passes,
@@ -70,10 +87,17 @@ STAGES = [
     ("qOD", "cross-model at both sizes", "e2", ["hybrid", "atomicity"], ["e2", "e2_500k"],
      ['python3 -c "import e2_hybrid,sys; sys.exit(0 if e2_hybrid.SCALE_PRODUCTS.get(\'e2_500k\')==500000 else 1)"'
       ' || { say \'$ID ABORT: e2_500k is not 500k products\'; exit 1; }'], {}, []),
+    # BENCH_TPC_SF is NOT derived from --scale: `SF = os.environ.get("BENCH_TPC_SF", "1")`
+    # is a module constant, so --scale tpch10 without it loads SF1 and records
+    # it as tpch10. September's stages set it per scale; so does this one.
     ("qOE", "documents, both tables, at both sizes", "l1tpc", ["oltp", "olap"], ["tpch1", "tpch10"],
      ['ls "$HOME"/bench-data/tpch/sf10_lineitem.parquet >/dev/null 2>&1'
       ' || { say \'$ID ABORT: tpch sf10 parquet missing\'; exit 1; }'], {}, []),
-    ("qOF", "sparse vector at three sizes", "l3s", ["search"], ["tiny", "small", "medium"], [], {}, []),
+    # BENCH_SPARSE_SOURCE defaults to a SYNTHETIC corpus. Omitting it is BUGS
+    # F6 -- the sparse lane running synthetic data under a paper label -- and
+    # the omission of this exact knob already cost this campaign 94 rows.
+    ("qOF", "sparse vector at three sizes", "l3s", ["search"], ["tiny", "small", "medium"], [], {},
+     ["BENCH_SPARSE_SOURCE=bigann", "BENCH_SPARSE_DATA=/data/bigann"]),
     # BENCH_LC_ITERS/WARMUP are set EXPLICITLY, and this is the only stage that
     # needs it. The lane's in-script defaults are ITERS=3 and WARMUP=1; the
     # frozen September rows are 105 at (5, 2) against 12 at (3, 1), so the
@@ -87,6 +111,10 @@ STAGES = [
      ["empty", "doc", "doc_idx10", "graph", "graph_gav", "vector", "sparse", "ts"],
      ["lc10k", "lc100k", "lc1m", "lc10m"], [], {},
      ["BENCH_LC_ITERS=5", "BENCH_LC_WARMUP=2"]),
+    # BENCH_DENSE_DATA is per SIZE: /data/dense is the 1M fixture and
+    # /data/deep10m the 9.99M one. The lane's default is /data/dense, so
+    # deep10m without this runs the 1M corpus and labels it deep10m. I made
+    # exactly this mistake on a probe earlier in the campaign.
     ("qOH", "dense vector at both sizes", "l3d", ["search"], ["small", "deep10m"], [], {}, []),
 ]
 
@@ -152,9 +180,9 @@ export BENCH_CPUSET=0-11 BENCH_GRAPH_SOURCE=ldbc
 BACKENDS="{backends}"
 say "$ID START: {title}, {nbe} engines, REPS=$REPS, pin $PIN, instrument 2026-10"
 
-run_overlay() {{  # <label> <scale> <cap> <backend> <wl> <driver> <outdir> <rf> <reps>
-  local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9
-  python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \
+run_overlay() {{  # <label> <scale> <cap> <be> <wl> <driver> <outdir> <rf> <reps> <env>
+  local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9 oenv=${{10}}
+  env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \
     --workloads "$wl" --tier paper --workers 1 --timeout "$cap" \
     --reps "$oreps" --driver "$drv" --driver-out-dir "$outdir" \
     --results-file "$orf" >> "$S" 2>&1 \
@@ -190,9 +218,11 @@ def emit(idx: int, spec) -> str:
                        stage_env=("export " + " ".join(stage_env) if stage_env else "# (this lane's in-script defaults are what the frozen rows ran)"),
                        backends=" ".join(backends))
     for scale, cap in caps:
+        senv = " ".join(SCALE_ENV.get((lane, scale), []))
         body += f'\nfor BE in $BACKENDS; do\n'
         for wl in workloads:
-            body += f'  run_cell "{lane}/{scale}/$BE/{wl}" {scale} {cap} "$BE" {wl} ""\n'
+            body += (f'  run_cell "{lane}/{scale}/$BE/{wl}" {scale} {cap} '
+                     f'"$BE" {wl} "{senv}"\n')
             for be, envs in sorted(extra.items()):
                 for e in envs:
                     body += (f'  [ "$BE" = "{be}" ] && run_cell '
@@ -200,8 +230,9 @@ def emit(idx: int, spec) -> str:
             if lane in OVERLAY:
                 drv, oreps, dirs = OVERLAY[lane]
                 outdir, orf = dirs[scale]
+                oenv = " ".join(x for x in [senv, OVERLAY_ENV.get(lane, "")] if x)
                 body += (f'  run_overlay "{lane}/{scale}/$BE/{wl} multipass" {scale} {cap} '
-                         f'"$BE" {wl} {drv} "{outdir}" "{orf}" {oreps}\n')
+                         f'"$BE" {wl} {drv} "{outdir}" "{orf}" {oreps} "{oenv}"\n')
         body += 'done\n'
         if lane in OVERLAY:
             _, _, dirs = OVERLAY[lane]

@@ -116,9 +116,41 @@ def logical_lines(body):
 
 def check_paths_and_python(name, body):
     problems = []
+    # SHELL FUNCTIONS THAT WRAP A CELL RUNNER are cell-bound, and so are their
+    # call sites. Without this the container-path rule cannot see through a
+    # helper: October's stages call run_cell/run_overlay, which invoke
+    # runner.py inside, and every BENCH_DENSE_DATA=/data/deep10m argument read
+    # as a host-side command. Resolving the callee keeps the rule strong
+    # rather than widening it -- a helper that does NOT contain a cell runner
+    # still counts as host-side, which is the case the rule exists for.
+    # Brace-DEPTH scan, not a regex: `say() { echo ...; }` closes on its own
+    # line, and a non-greedy match to the next `^}` swallowed the function
+    # AFTER it -- which made `say` look cell-bound and hid `run_overlay`
+    # entirely. Getting this wrong in the permissive direction is the bad
+    # direction, since it marks a host-side helper as safe.
+    cell_fns = set()
+    lines = body.splitlines()
+    for idx, ln in enumerate(lines):
+        m = re.match(r"^\s*([a-z_][a-z0-9_]*)\s*\(\)\s*\{", ln)
+        if not m:
+            continue
+        depth, chunk = 0, []
+        for ln2 in lines[idx:]:
+            depth += ln2.count("{") - ln2.count("}")
+            chunk.append(ln2)
+            if depth <= 0:
+                break
+        if any(r in "\n".join(chunk) for r in CELL_RUNNERS):
+            cell_fns.add(m.group(1))
+
     for i, line in logical_lines(body):
         s = line.strip()
         if not s or s.startswith("#"):
+            continue
+        # An `export` that only sets variables executes nothing, so a container
+        # path in it is not a host-side command; the line that USES it is what
+        # the rule must judge, and a host-side probe is caught by its own check.
+        if re.match(r"^export\s+[A-Za-z_][A-Za-z0-9_]*=", s) and "$(" not in s:
             continue
         # build_images.sh refuses a pre-release wheel unless BENCH_ALLOW_DEV=1,
         # which every commit-pinned campaign needs; qDJ aborted on its first
@@ -126,7 +158,8 @@ def check_paths_and_python(name, body):
         # started at once because its wait target had vanished.
         if "build_images.sh" in line and "BENCH_ALLOW_DEV=1" not in line:
             problems.append((i, "build_images.sh without BENCH_ALLOW_DEV=1 refuses the commit-pinned wheel"))
-        in_cell = any(r in line for r in CELL_RUNNERS)
+        in_cell = any(r in line for r in CELL_RUNNERS) or any(
+            re.search(rf"(?:^|\s|\|\||&&)\s*{re.escape(fn)}\b", line) for fn in cell_fns)
         if not in_cell:
             for cp in CONTAINER_PATHS:
                 if cp in line and "=" in line:
