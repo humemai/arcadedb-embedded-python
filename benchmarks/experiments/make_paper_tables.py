@@ -268,6 +268,11 @@ NAMES = {
 
 RECALL_FLOOR = 0.5   # below this an ANN row is a broken index, not a slow one
 WITHHELD_RECALL = []
+# Rows dropped for an unsettled disk reading (October), and the September rows
+# that would have been dropped had the rule been enforced when they published.
+UNSETTLED_DISK = []
+SEPT_UNSETTLED = []
+_SEPT_UNSETTLED_SAID = []   # load_canonical runs several times per invocation
 
 
 def _write_withheld_recall():
@@ -292,6 +297,8 @@ def _write_withheld_recall():
 
 def load_canonical(apply_corpus=True):
     del WITHHELD_RECALL[:]   # per call, or the sidecar counts every earlier call's rows again
+    del UNSETTLED_DISK[:]
+    del SEPT_UNSETTLED[:]
     CORPUS_EXCLUDED.clear()
     # Dedupe on PAYLOAD fields, never run_id: pre-2026-07-21 run_ids were not
     # scale-qualified, so different scales collided under one id (the 100k
@@ -397,6 +404,28 @@ def load_canonical(apply_corpus=True):
                 WITHHELD_RECALL.append({"lane": r["lane"], "backend": r["backend"], "scale": r["scale"],
                                         "rep": r.get("rep"), "recall_at_10": _rec})
                 continue
+        # AN UNSETTLED DISK READING IS NOT A MEASUREMENT (PAGE-SPEC 4a rule 3:
+        # "settled=False blocks publication"). `container_disk()` samples until
+        # two readings agree within a tolerance and returns settled=False with
+        # both readings rather than a bare number, precisely so this can be
+        # refused -- and until 2026-09-19 NOTHING read the field. It is written
+        # by runner.py and appears in no gate, no exporter and no table builder,
+        # so three Milvus sparse rows at the 1M tier published disk numbers
+        # taken while the store was still compacting, and the median the page
+        # prints (4.6157 GiB) is itself one of them (BUGS.md F72).
+        #
+        # OCTOBER ONLY, deliberately. Dropping these from September's freeze
+        # would change a PUBLISHED page without a decision, and page_check
+        # would then fail the live page it is meant to protect. September's
+        # rows are reported instead, once per freeze, so the gap is visible
+        # while the fix stays October's.
+        if str(r.get("server_disk_settled")) == "False":
+            if OCTOBER:
+                UNSETTLED_DISK.append({"lane": r["lane"], "backend": r["backend"],
+                                       "scale": r["scale"], "rep": r.get("rep"),
+                                       "disk_data_mb": r.get("disk_data_mb")})
+                continue
+            SEPT_UNSETTLED.append(f'{r["lane"]}/{r["scale"]}/{r["backend"]} rep {r.get("rep")}')
         # THE ROW MUST BE ON THE CORPUS ITS TIER PUBLISHES. See PAPER_CORPUS:
         # a retired synthetic corpus shares scale names with the real one, and
         # both survive the canonical key because that key contains n_docs and
@@ -519,6 +548,14 @@ def load_canonical(apply_corpus=True):
         if k not in best or r["ts_utc"] > best[k]["ts_utc"]:
             best[k] = r
     _write_withheld_recall()
+    if SEPT_UNSETTLED and not _SEPT_UNSETTLED_SAID:
+        _SEPT_UNSETTLED_SAID.append(1)
+        print(f"  NOTE: {len(set(SEPT_UNSETTLED))} September cell(s) carry an unsettled "
+              f"disk reading and are published anyway (PAGE-SPEC 4a rule 3 was "
+              f"unenforced until 2026-09-19; BUGS F72): "
+              + ", ".join(sorted(set(SEPT_UNSETTLED))))
+    if UNSETTLED_DISK:
+        print(f"  dropped {len(UNSETTLED_DISK)} row(s) for an unsettled disk reading")
     out = list(best.values())
     # ONE INSTRUMENT PER TABLE (DECISIONS #84). A row names the instrument it
     # was measured under (bench_common.INSTRUMENT; rows before 2026-10 carry
