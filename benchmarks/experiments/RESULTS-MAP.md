@@ -35,6 +35,19 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `raw/` | one server and client log per cell, written by the runner. Untracked. | nothing on the page; read by hand when a cell needs explaining |
 **What is tracked under `results/` is an allowlist** (repo-root `.gitignore`, end of file): everything under `results/` is ignored, and the artifacts that ARE tracked are named there one by one. Three earlier generations of exact-path rules each got outrun by the next artifact someone added, and on 2026-09-19 the bench host carried four untracked strays that no rule matched. An untracked stray there is not harmless, for two reasons, and it is worth being exact about which. Every queue script begins `git pull -q --ff-only || abort` and has no clean-tree check, so a MODIFIED TRACKED file aborts the chain and idles the machine, which is what happened once before. An untracked file does not abort a pull by existing; it aborts one the moment a commit adds that same path, because git refuses to overwrite an untracked working-tree file. An IGNORED file at that path does not refuse. That is the failure the allowlist closes, alongside the one the rules above it were written for: `git add -A` sweeping raw results into a commit. A new tracked artifact therefore needs `git add -f` and a line in that allowlist.
 
+**The tracked artifacts, and what made each one.** The allowlist says WHICH files are tracked; this says why, and what would have to be re-run to rebuild them. A one-shot probe's script looks unreferenced to any "who calls this?" sweep -- nothing imports it, it ran once -- so the link is written down here rather than inferred. Do not delete a producer because nothing calls it.
+
+| tracked artifact | produced by | read by |
+|---|---|---|
+| `runs_paper.csv` | `make_paper_tables.py` (the freeze) | every gate, the exporter, the release asset |
+| `web_benchmarks.json` | `export_web.py` | `page_check`, `version_consistency_check`, `refresh_web_page` |
+| `generated/tables/*`, `generated/*.md`, `withheld_recall.json` | `make_paper_tables.py` | `page_check`, the exporter's withheld-cell notes |
+| `generated/memo_bottlenecks.html` | `memo_bottlenecks.py` | the maintainers' memo, not the page |
+| `sparse_cliff.jsonl` | `sparse_cliff_probe.py`, one shot | `make_paper_figures.py`, figure f3 |
+| `e3_q17/*.json` | `e3_recovery.py`, one shot per trial | `claims_check.py`; the recovery table is planned, not built |
+| `ingest_ab/ab_r*.json` | `async_ingest_probe.py`, one shot per repetition | `claims_check.py` |
+| `tentag/tentag_ab.json` | `ts_stride_probe.py`, one shot | `claims_check.py` |
+
 | `manifest-*.json` | per-invocation image digests, cpuset, heap, reps; every row names its manifest by timestamp | nothing opens them; kept as provenance by reference |
 | `runs-*.csv` | per-invocation summary written by `runner.py` | nothing. Delete them when they pile up; the writer stays. Swept 2026-09-19: 103 files, all 106 rows `tier=sweep` and 88 of them `bench_host=laptop`, zero paper-tier rows, so none could ever reach a page. Check that before deleting, not after |
 | `runs.jsonl.before-merge-<stamp>` | `merge_campaign.py`'s rollback copy of the canonical file | nothing reads them. ONE is kept, the copy of the most recent merge; the script now prunes the rest itself. Eleven had reached 73 MB by 2026-09-19 before this. Verify containment line by line before deleting any: `runs.jsonl` has lost rows once, to a git checkout during a live campaign |
