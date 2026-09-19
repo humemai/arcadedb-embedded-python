@@ -203,6 +203,10 @@ October's campaign is DECISIONS #74 as amended through #108, and it starts with 
 
 **Comparators next, before 26.10.1 ships.** On the user's go, every comparator is checked against its own release feed, re-pinned where it moved, and smoked where the jump needs it (COMPARATORS.md, October re-pins), and the comparator stages run first. When the user reports 26.10.1, the pair is built and verified and every ArcadeDB arm is queued behind the running comparator stages (DECISIONS #84).
 
+**ONE LINE OF DEVELOPMENT, and this is why.** The instrument is developed on `main`. Between 2026-09-14 and 2026-09-19 it was developed on two branches at once, and on 2026-09-19 neither could run the campaign: `october-instrument` had the per-query budgets, the abandonment rule and the expanded query sets but none of the raised tiers in `TIMEOUT_BY_SCALE`; `main` had the raised tiers, the publish verification and the coverage rules but no budget mechanism at all. Each half looked finished from inside itself. Assembling them took a 23-file, ~75-hunk merge that had to be redone three times as `main` moved underneath it, and the merge itself introduced two duplicate dict keys and a duplicate module-level binding that silently killed four declarations (BUGS F65).
+
+A long-lived branch is what made "the instrument is ready" true of two trees and false of both. `october-instrument` is fully merged as of `631450fb3f` (0 commits outside `main`; its tip was `3bc6a353c5`) and is to be deleted rather than kept. If a change genuinely cannot land on `main`, it is small enough to land behind a flag or it waits.
+
 **The stage order and what it costs, measured rather than planned.** From mini's own STATUS.txt, 3,202 timed cells, plus the query uplift October adds (graph analytics fourteen columns against five, documents five OLAP queries against two, time series six against three). The one PROJECTION is cross-model at 500k, which has never run and is taken at ten times the 50k tier; every other figure is measured.
 
 | stage | table | sizes | hours | cumulative |
