@@ -237,6 +237,17 @@ def check_cycles(scripts):
 
 
 def main():
+    # THE LINT'S OWN TESTS RUN FIRST, on test_result_digest.py's reasoning: a
+    # test that only runs when someone remembers is a comment. Twice on
+    # 2026-09-19 this lint reported a queue it could not see -- a marker-waiting
+    # stage read as waiting on nothing, and then a stage id with a digit did
+    # the same -- and both times the scripts were correct while the lint was
+    # blind, which is the worst shape a check can take.
+    import test_queue_lint
+    if test_queue_lint.main() != 0:
+        print("REFUSING to lint: queue_lint's own tests fail", file=sys.stderr)
+        return 1
+
     ap = argparse.ArgumentParser()
     ap.add_argument("scripts", nargs="*")
     ap.add_argument("--host")
