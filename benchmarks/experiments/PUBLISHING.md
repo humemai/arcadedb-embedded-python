@@ -81,11 +81,15 @@ One command, the same order every time, refuses by default:
 ```
 .venv/bin/python benchmarks/experiments/land_stage.py \
     --exclude-backends <backends still running on mini, comma list> \
-    [--overlay neo4jvec] [--exclude-since 2026-09-12T12:00] [--preview] \
-    --message "<one line: what joined>" [--apply]
+    [--overlay neo4jvec] [--exclude-since 2026-09-12T12:00] [--preview --pin <commit>] \
+    --message "<one line: what joined>" [--dry-run | --apply]
 ```
 
-It pulls `runs_page_<pin>.jsonl` (and, with `--overlay`, an arm's dense multipass files at both sizes), drops the rows of the backends named as still running so a stage in progress never reaches the freeze, merges, publishes through the gates, and prints which page tables changed. Without `--apply` it stops there and restores the site's payload; with `--apply` it builds the site, commits both repositories, and pushes. The merge into `runs.jsonl` is idempotent, so a dry run followed by `--apply` is the normal sequence.
+It pulls `runs_page_<pin>.jsonl` (and, with `--overlay`, an arm's dense multipass files at both sizes), drops the rows of the backends named as still running so a stage in progress never reaches the freeze, merges, publishes through the gates, and prints which page tables changed. Without `--apply` it stops there and restores the site's payload; with `--apply` it builds the site, commits both repositories, and pushes. The merge into `runs.jsonl` is idempotent, so a run without `--apply` followed by one with it is the normal sequence.
+
+**`--apply` governs the PUBLISH, not the merge, and `--dry-run` is the flag that writes nothing.** A run without `--apply` still performs steps 2 and 3, and step 3 merges. That reading cost nothing only by luck on 2026-09-19, when a test of an unrelated guard was killed by a closed pipe one step before the merge. Use `--dry-run` to pull, filter, and stop: it prints how many rows WOULD merge and which of them carry errors, and leaves `runs.jsonl` byte-identical. It is also the mode a pre-campaign rehearsal wants -- the rehearsal that found six defects before October's first cell was assembled by hand with `BENCH_RUNS_JSONL` and a scratch log, which nobody should have to reconstruct.
+
+**`--pin` defaults to SEPTEMBER's commit**, which is right for a live landing and wrong for every preview one, since step 1 pulls `runs_page_<pin>.jsonl` by exact name. A preview landing without an explicit `--pin` (or `BENCH_ENGINE_COMMIT`) is REFUSED rather than guessed: a wrong pin there fetches the other campaign's rows and fails much later, with the merge already done.
 
 Never `git add` a raw directory (`results/runs.jsonl`, `dense_mp5_*`, `sparse_mp_*`): the bench host writes them, and a tracked copy makes its `git pull --ff-only` refuse, which aborts every queued script. They are ignored by `.gitignore`; keep it that way.
 
