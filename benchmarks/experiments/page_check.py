@@ -1001,8 +1001,14 @@ NOT_PRINTED = [
     # one, and FAIRNESS.md is where it is audited.
     (r"^host_(temp_c|throttle_count|throttle_total_ms)_(start|end)$",
      "the host's package temperature and throttle counters either side of a "
-     "cell, so a slow run can be told apart from a throttled machine; "
-     "FAIRNESS audits them rather than the page printing them"),
+     "cell, so a slow run can be told apart from a throttled machine. NOT "
+     "gated: no fairness invariant reads them today, and saying otherwise "
+     "here was false when this entry was written (2026-09-19). The analysis "
+     "that justifies publishing anyway is in BUGS.md F71: mini throttles "
+     "13-26% of wall time, engines within one table throttle at rates that "
+     "differ 3-7x, and that difference is NOT an ordering artefact -- cells "
+     "do not start hotter later in a stage -- so it tracks how hard each "
+     "engine drives the CPU, which is the engine's own property"),
     (r"^host_throttled_ms$",
      "milliseconds the host spent throttled during a cell, from the same "
      "counters; a non-zero value invalidates the cell rather than becoming "
