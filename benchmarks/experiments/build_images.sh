@@ -104,6 +104,12 @@ for be in "${targets[@]}"; do
     docker build -q -t dbbench:pg-age -f Dockerfile.pgage . >/dev/null && echo "  ok"
     continue
   fi
+  # AN UNKNOWN TARGET IS AN ABORT, NOT AN EMPTY IMAGE. ${PKGS[$be]} expands
+  # to nothing for a name that is not a key here, so the build below used to
+  # succeed, tag dbbench:<typo> with no packages in it, and print "ok". A
+  # caller deriving target names from runner.BACKENDS deserves to be told
+  # when a name does not exist rather than handed a hollow image.
+  [ -n "${PKGS[$be]+set}" ] || { echo "  unknown target '$be' (not a PKGS key and not a special case)" >&2; exit 1; }
   echo "=== dbbench:$be (${PKGS[$be]})"
   docker build -q -t "dbbench:$be" --build-arg PIP_PACKAGES="${PKGS[$be]}" \
     -f Dockerfile.bench . >/dev/null && echo "  ok"

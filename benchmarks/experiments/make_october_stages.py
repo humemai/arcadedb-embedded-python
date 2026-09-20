@@ -289,7 +289,14 @@ W=$(ls -t "$REPO"/bindings/python/dist/*.whl | head -1)
 [ -n "$W" ] || {{ say "$ID ABORT: no wheel in dist/"; exit 1; }}
 export ARCADEDB_WHEEL="$W" ARCADEDB_SERVER_IMAGE=arcadedb-c25:$PIN
 WV=$(basename "$W" | cut -d- -f2)
-BENCH_ALLOW_DEV=1 ./build_images.sh arcadedb duckdb client >> "$S" 2>&1 || {{ say "$ID ABORT: image build"; exit 1; }}
+BENCH_ALLOW_DEV=1 ./build_images.sh {images} >> "$S" 2>&1 || {{ say "$ID ABORT: image build"; exit 1; }}
+# ARTIFACT EXISTS IS NOT ARTIFACT BUILT: a target that silently did
+# nothing leaves no image, and the first cell to want it reports
+# server_not_ready. Check here, where the message can name the cause.
+for _img in {images}; do
+  docker image inspect "dbbench:$_img" >/dev/null 2>&1 || {{ say "$ID ABORT: dbbench:$_img missing after build"; exit 1; }}
+done
+say "$ID: images present: {images}"
 # VERIFY THE ARM, NOT THE FILE: read the version out of the built image.
 # The pair check below is the REPO copy, not ~/verify_pair_c25.sh: that
 # one is a stale copy from 2026-08-30 and would miss its own fourth
@@ -338,6 +345,28 @@ run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-em
 '''
 
 
+def _images_for(backends):
+    """The dbbench:* images these backends actually name, as build targets.
+
+    TYPED IMAGE LISTS GO STALE SILENTLY. Every stage built `arcadedb duckdb
+    client` because that was true when the first stage was written; the
+    cross-model lane then gained MongoDB (#98), whose arm runs the purpose-
+    built dbbench:mongo-search, and nothing built it. The cell did not say
+    "missing image" -- it waited for a readiness line from a container that
+    could not start and recorded `server_not_ready`, which reads like a slow
+    engine. Deriving the list from runner.BACKENDS means a new arm brings its
+    image with it.
+    """
+    out = set()
+    for be in backends:
+        d = runner.BACKENDS.get(be, {})
+        for key in ("image", "server_image"):
+            img = d.get(key, "")
+            if img.startswith("dbbench:"):
+                out.add(img.split(":", 1)[1])
+    return sorted(out)
+
+
 def emit(idx: int, spec) -> str:
     sid, title, lane, workloads, scales, guards, extra, stage_env = spec[:8]
     only = spec[8] if len(spec) > 8 else None
@@ -350,7 +379,8 @@ def emit(idx: int, spec) -> str:
                        nbe=len(backends), sha=SHA, wait=wait,
                        caps=caps, scales=list(scales), guards="\n".join(guards) + ("\n" if guards else ""),
                        stage_env=("export " + " ".join(stage_env) if stage_env else "# (this lane's in-script defaults are what the frozen rows ran)"),
-                       backends=" ".join(backends))
+                       backends=" ".join(backends),
+                       images=" ".join(_images_for(backends)))
     for scale, cap in caps:
         senv = " ".join(SCALE_ENV.get((lane, scale), []))
         body += f'\nfor BE in $BACKENDS; do\n'
