@@ -134,9 +134,56 @@ def main() -> int:
               f"where these ran, with the measured --scale-by, or run them once.")
         return 2
 
-    print(f"{a.lane}/{a.tier}: FIRST-TOUCH cost per engine, cap {cap:.0f} s"
+    # THE WHOLE CELL, not just its first touches. A cell is
+    #     ingest + first touches + iterations (bounded by the budgets)
+    # and estimating any one term alone gets the answer wrong. Three attempts
+    # on 2026-09-20 to project the time-series lane from a RATIO between
+    # campaigns were wrong twice (8.2x from one arm, then a "fixed overhead"
+    # from two) because what changes between campaigns is not a scale factor,
+    # it is which work each cell does. Adding the terms up from measured rows
+    # predicted the first cell of the next tier to within 4% (2,674 s against
+    # an observed 2,793 s) on an engine it had never seen at that size.
+    ingest = collections.defaultdict(list)
+    for r in rows:
+        v = r.get("ingest_s")
+        if v not in (None, ""):
+            try:
+                ingest[str(r.get("backend"))].append(float(v))
+            except (TypeError, ValueError):
+                pass
+    budget_ceiling = 0.0
+    if want:
+        try:
+            import budget_lookup as _B
+            # READ THE LANE'S OWN CONSTANT, never a copy here. A typed table
+            # of defaults was wrong for l4 on its first run -- 300 against the
+            # lane's real 300... no: the lane's QUERY_BUDGET_S, which the
+            # stage preflight reads and this did not, so the two disagreed by
+            # 900 s on the same tier. Two places holding the same number is
+            # one place too many.
+            dflt = None
+            if a.lane == "l2":
+                import graph_common as _G
+                dflt = _G.OLAP_BUDGET_S
+            elif a.lane == "l1tpc":
+                import l1_tpc as _L
+                dflt = _L.OLAP_BUDGET_S
+            elif a.lane == "l4":
+                import l4_tsbs as _T
+                dflt = _T.QUERY_BUDGET_S
+            if dflt is None:
+                raise RuntimeError(f"no lane default known for {a.lane}")
+            budget_ceiling = sum(
+                _B.budget_for(a.lane, a.tier, q, dflt, None, n_queries=len(want))[0]
+                for q in want)
+        except Exception:  # noqa: BLE001
+            pass
+
+    print(f"{a.lane}/{a.tier}: WHOLE-CELL estimate per engine, cap {cap:.0f} s"
           + (f", projected from {src_tier} x{a.scale_by:g}" if a.scale_by != 1 else ""))
-    print(f"  {'engine':28} {'first touches':>14}  {'% of cap':>9}  verdict")
+    print(f"  budget ceiling at this tier: {budget_ceiling:.0f} s"
+          if budget_ceiling else "  (no budget ceiling known for this lane)")
+    print(f"  {'engine':26} {'ingest':>9} {'1st touch':>11} {'total':>9}  {'% cap':>7}  verdict")
     over = 0
     for be in sorted(per):
         # ONLY THE QUERIES THIS TIER WILL RUN. The first version summed every
@@ -144,14 +191,17 @@ def main() -> int:
         # -- so it scored the excluded work and reported six engines over the
         # cap when the whole point of the exclusion was to bring them under.
         qs = {q: v for q, v in per[be].items() if not want or q in want}
-        tot = sum(statistics.median(v) for v in qs.values()) / 1000.0 * a.scale_by
+        cold = sum(statistics.median(v) for v in qs.values()) / 1000.0 * a.scale_by
+        ing = (statistics.median(ingest[be]) * a.scale_by) if ingest.get(be) else 0.0
+        tot = cold + ing + budget_ceiling
         pct = tot / cap * 100
-        verdict = "OVER THE CAP" if tot >= cap else ("tight" if pct > 50 else "ok")
+        verdict = "OVER THE CAP" if tot >= cap else ("tight" if pct > 60 else "ok")
         if tot >= cap:
             over += 1
-        print(f"  {be:28} {tot:11.0f} s  {pct:8.0f}%  {verdict}")
-    print(f"\n  {len(per)} engine(s), {over} over the cap on FIRST TOUCHES ALONE")
-    print("  (iterations add on top, bounded by each query's budget)")
+        print(f"  {be:26} {ing:7.0f}s {cold:10.0f}s {tot:8.0f}s  {pct:6.0f}%  {verdict}")
+    print(f"\n  {len(per)} engine(s), {over} over the cap")
+    print("  total = ingest + first touches + the budget ceiling; the ceiling is")
+    print("  what iterations cost if every query uses its whole budget.")
     return 1 if over else 0
 
 
