@@ -2849,7 +2849,8 @@ def _durability_table(all_rows):
 MULTIMODEL_ENGINES = ("ArcadeDB", "ArangoDB", "MongoDB", "SurrealDB")
 MULTIMODEL_CELLS = {"measured": "measured", "declared": "declared", "none": "no arm"}
 MULTIMODEL_KINDS = {"censored": "censored", "withheld": "withheld",
-                    "unexpressible": "cannot express"}
+                    "unexpressible": "cannot express", "envelope": "out of memory",
+                    "failed": "failed"}
 
 
 def engine_family(backend, is_arcadedb=False):
@@ -2955,9 +2956,21 @@ def _multimodel_table(finished):
         "censored": "censored, the cell exceeded the budget every engine had",
         "withheld": "withheld, the answer disagreed and the number was taken off the page",
         "unexpressible": "cannot express, the engine's own language cannot ask the query",
+        "envelope": "out of memory, the cell reached the memory envelope every engine "
+                    "on that table had and was killed by the kernel",
+        "failed": "failed, the cell reported an error inside its budget",
     }
-    kinds_text = "; ".join(legend[k] for k in ("censored", "withheld", "unexpressible")
-                           if k in kinds_seen)
+    # ITERATE THE KINDS THAT ARE PRESENT, not a list typed beside the legend.
+    # The tuple this replaces named three, so "failed" -- a kind
+    # _censored_notes has always been able to declare -- appeared in the cells
+    # above with nothing in the legend explaining it, and any kind added later
+    # would have joined it silently.
+    _unknown = sorted(k for k in kinds_seen if k not in legend)
+    if _unknown:
+        raise SystemExit(f"REFUSING: the capability table declares {_unknown} "
+                         "with no legend entry; a reader would see a word the "
+                         "page never defines")
+    kinds_text = "; ".join(legend[k] for k in sorted(kinds_seen) if k in legend)
     n_tables = _WORDS.get(len(sources), str(len(sources))).lower()
     sentence = _gen(
         f"This table is derived from the {n_tables} tables above and carries no "
@@ -3933,6 +3946,21 @@ def _censored_cells():
                         timeouts[key] = int(err.split("_")[-1].rstrip("s"))
                     except ValueError:
                         timeouts[key] = None
+                elif r.get("oom_killed"):
+                    # AN ENVELOPE FAILURE IS NOT A TIMEOUT (DECISIONS #103g).
+                    # The cell was killed by the kernel at the memory cap; it
+                    # did not run out of TIME, and "failed inside its budget"
+                    # -- what the branch below would have said -- is false
+                    # about it. `oom_killed` has been on 943 rows since the
+                    # runner started setting it and nothing read it, so the
+                    # classification fell through to parsing the error text,
+                    # which for two of the three real cases is a phase marker
+                    # or a log tail that tells a reader nothing.
+                    _cap = str(r.get("mem_cap") or (f"{r.get('server_mem_cap_g')}g"
+                                                    if r.get("server_mem_cap_g") else "") or "")
+                    _peak = (r.get("peak_mib_sum") or r.get("client_peak_mib")
+                             or r.get("server_peak_mib"))
+                    timeouts[key] = ("envelope", _cap, _peak)
                 else:
                     # A CELL THAT FAILED FOR ANOTHER REASON IS STILL A CENSORED
                     # OBSERVATION. 2026-09-14: the served SurrealDB cells at
@@ -3964,7 +3992,16 @@ def _censored_notes(table_id):
         # cell that ran past the tier's cap; anything else is what the cell
         # reported when it failed inside its budget, and a lost connection
         # must not read as slowness.
-        if isinstance(secs, int) or secs is None:
+        if isinstance(secs, tuple) and secs and secs[0] == "envelope":
+            _, _cap, _peak = secs
+            _cap_txt = f"{_cap} memory envelope" if _cap else "cell's memory envelope"
+            _peak_txt = f" (peak {_peak:,.0f} MiB)" if isinstance(_peak, (int, float)) else ""
+            why = _gen(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell reached "
+                       f"the {_cap_txt}{_peak_txt} and was killed by the kernel, the same envelope every "
+                       f"engine on this table had; it did not run out of time, and there is no row.",
+                       display_name(backend), scale_label(lane, scale), _cap_txt)
+            kind = "envelope"
+        elif isinstance(secs, int) or secs is None:
             budget = f"{secs / 3600:g} hour" if secs else "its"
             why = _gen(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell exceeded "
                        f"its {budget} budget, the same budget every engine on this table had, on its first "
