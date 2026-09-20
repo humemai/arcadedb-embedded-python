@@ -354,6 +354,14 @@ _ENGINE_SPELLING = {
 # different pattern with no capture group, and defining it twice would
 # silently hand every earlier caller this one instead.
 _MEMBER_VERSION = re.compile(r"\b(\d+(?:\.\d+)+(?:[.-]?\w+)?)\b")
+# A MEMBER MAY BE IDENTIFIED BY COMMIT rather than by a release number,
+# which is the identifier DECISIONS #49 chose for our own engine and is
+# the only one DuckPGQ publishes. "duckdb:1.5.4 + duckpgq:f386a6c" used
+# to render as None -- one member with a version is one member, so the
+# composed branch never fired and the single-engine path then looked for
+# a release number after "duckpgq:" and found a sha. A row that says
+# nothing about its engine is worse than one that says a commit.
+_MEMBER_COMMIT = re.compile(r":([0-9a-f]{7,40})\b")
 
 
 def _composed_members(raw):
@@ -367,7 +375,7 @@ def _composed_members(raw):
     """
     out = []
     for part in str(raw or "").split("+"):
-        found = _MEMBER_VERSION.search(part)
+        found = _MEMBER_VERSION.search(part) or _MEMBER_COMMIT.search(part)
         if not found:
             continue
         name = part[:found.start()].strip().rstrip(":").strip()
@@ -2929,7 +2937,17 @@ def _multimodel_table(finished):
             "deployment": ", ".join(modes) if modes else "none",
             "precision": None,
             "image": None,
-            "version_name": None,
+            # DERIVED, not None. This table publishes one row per engine
+            # summarising every other October table, and a reader needs to
+            # know which build that coverage describes. The sources carry it;
+            # if they disagree the join makes the disagreement visible and
+            # version_consistency_check's family rules then refuse it, which
+            # is the behaviour wanted over a silent None.
+            "version_name": " / ".join(sorted({
+                str(e["version_name"]) for t in sources
+                for e in t.get("entries", [])
+                if entry_engine(e) == engine and isinstance(e.get("version_name"), str)
+                and e["version_name"].strip()})) or None,
             "host": None,
             "metrics": metrics,
         })

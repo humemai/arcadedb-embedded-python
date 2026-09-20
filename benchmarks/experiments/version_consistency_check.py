@@ -106,6 +106,30 @@ def _rows(node, table=None):
             yield from _rows(value, table)
 
 
+def _versionless_measurements(node, table=None):
+    """Rows that PUBLISH A NUMBER without naming the engine that produced it.
+
+    `_rows` above can only reason about version strings that exist, so a row
+    with no `version_name` at all was invisible to every check in this file --
+    one level below the unreadable-string hole and with the same consequence.
+    A DECLARED OUTCOME is exempt and must be: a censored or failed cell
+    carries `kind`/`why` and no metrics, names no engine because it measured
+    nothing, and saying so is the point of it. A row with metrics is a
+    measurement, and a measurement that cannot say which engine produced it
+    is not publishable.
+    """
+    if isinstance(node, dict):
+        tid = node.get("id", table) if "entries" in node else table
+        if "backend" in node and node.get("metrics"):
+            if not isinstance(node.get("version_name"), str) or not node["version_name"].strip():
+                yield tid, node.get("backend", "?")
+        for value in node.values():
+            yield from _versionless_measurements(value, tid)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _versionless_measurements(value, table)
+
+
 def check(path: str) -> list[str]:
     payload = json.load(open(path))
     # A SKELETON is declared placeholder data: laptop timings, one repetition,
@@ -136,6 +160,13 @@ def check(path: str) -> list[str]:
     # for nor flagged, and the gate reported green having examined nothing.
     # A new engine, or an old one that changes how it spells itself, lands
     # here and says so rather than quietly leaving the instrument.
+    for table, backend in sorted(set(_versionless_measurements(payload)),
+                                 key=lambda w: (str(w[0]), str(w[1]))):
+        failures.append(
+            f"{backend} publishes a measurement on table {table} with no "
+            f"engine version at all: the row carries numbers and names "
+            f"nothing that produced them")
+
     for table, backend, version in unparsed:
         failures.append(
             f"no engine version could be read from {version!r} "
