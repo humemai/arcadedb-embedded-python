@@ -104,8 +104,15 @@ STAGES = [
       ' || { say \'$ID ABORT: tsbs corpora missing\'; exit 1; }'], {},
      ["BENCH_TS_SETTLE_S=90"]),
     ("qOD", "cross-model at both sizes", "e2", ["hybrid", "atomicity"], ["e2", "e2_500k"],
-     ['python3 -c "import e2_hybrid,sys; sys.exit(0 if e2_hybrid.SCALE_PRODUCTS.get(\'e2_500k\')==500000 else 1)"'
-      ' || { say \'$ID ABORT: e2_500k is not 500k products\'; exit 1; }'], {}, []),
+     # READ the constant, do not IMPORT the lane: e2_hybrid imports numpy and
+      # the host python3 has none, so an importing guard aborts a healthy stage
+      # for a reason that has nothing to do with the stage (2026-09-20).
+      ['python3 -c "import ast,sys;'
+      ' t=ast.parse(open(\'e2_hybrid.py\').read());'
+      ' d=[n for n in t.body if isinstance(n,ast.Assign) and getattr(n.targets[0],\'id\',None)==\'SCALE_PRODUCTS\'];'
+      ' v=dict(zip([k.value for k in d[0].value.keys],[ast.literal_eval(x) for x in d[0].value.values]));'
+      ' sys.exit(0 if v.get(\'e2_500k\')==500000 else 1)"'
+      ' || { say "$ID ABORT: e2_500k is not 500k products"; exit 1; }'], {}, []),
     # BENCH_TPC_SF is NOT derived from --scale: `SF = os.environ.get("BENCH_TPC_SF", "1")`
     # is a module constant, so --scale tpch10 without it loads SF1 and records
     # it as tpch10. September's stages set it per scale; so does this one.
@@ -297,6 +304,13 @@ export BENCH_CPUSET=0-11 BENCH_GRAPH_SOURCE=ldbc
 {stage_env}
 
 BACKENDS="{backends}"
+# AN ABORT MUST NOT STRAND THE CHAIN. Every guard above exits 1 without a
+# marker, so the stages waiting on this one wait forever -- which is what
+# happened on 2026-09-20 when a guard of mine aborted a healthy stage and left
+# the host idle. From the START line on, the marker is written by a trap
+# whatever happens: the ABORT is already in STATUS.txt and loud, and the rest
+# of the campaign is worth more than making a human notice sooner.
+trap 'echo "$ID ALL-DONE" >> "$S"' EXIT
 say "$ID START: {title}, {nbe} engines, REPS=$REPS, pin $PIN, instrument 2026-10"
 
 run_overlay() {{  # <label> <scale> <cap> <be> <wl> <driver> <outdir> <rf> <reps> <env>
@@ -362,7 +376,7 @@ def emit(idx: int, spec) -> str:
                      f'[ "$N" -gt 0 ] || say "$ID WARNING: {scale} overlay produced NO files; '
                      f'the table reads this directory and would publish nothing"\n')
         body += f'say "$ID: {scale} done"\n'
-    body += 'say "$ID ALL-DONE"\n'
+    body += 'say "$ID finished"   # the EXIT trap writes the ALL-DONE marker\n'
     return body
 
 
