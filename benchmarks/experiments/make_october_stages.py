@@ -154,6 +154,26 @@ STAGES = [
       'python3 -c "import graph_common as G, sys; sys.exit(0 if G.tier_excluded(\'sf1full\',\'lsqb_q6\') else 1)"'
       ' || { say "$ID ABORT: #109 exclusions are not in this tree"; exit 1; }'],
      {"arcadedb_graph_embedded": ["BENCH_GAV=0"], "arcadedb_graph_server": ["BENCH_GAV=0"]}, []),
+    # qOD ran two of its nine arms against images nobody was rebuilding, both
+    # for the same reason: the stage built a typed list of three images, so an
+    # image outside that list was whatever happened to be on the host.
+    # dbbench:mongo-search did not exist at all, and its cells recorded
+    # `server_not_ready` -- a readiness timeout against a container that could
+    # not start, which reads like a slow engine. dbbench:pg-age was built
+    # 2026-09-12, before the re-pin, and its rows say
+    # `PostgreSQL 17.11 + pgvector:0.8.6 + age:1.7.0` against a declared
+    # PG 18 + AGE 1.8.0.
+    #
+    # A REPAIR, NOT A DELETION. The canonical key is (lane, scale, n_docs,
+    # workload, backend, gav, rep, durability_class) and the newest ts_utc
+    # wins, so re-running the same cells supersedes the bad rows where they
+    # stand. Both arms are client_server, so this stage derives exactly
+    # client + pg-age + mongo-search and rebuilds all three.
+    ("qOD2", "cross-model: the two arms qOD ran on unbuilt images (#110)", "e2",
+     ["hybrid", "atomicity"], ["e2", "e2_500k"],
+     ['docker image inspect dbbench:mongo-search >/dev/null 2>&1 && '
+      '{ say "$ID: dbbench:mongo-search already present, will be rebuilt"; } || true'],
+     {}, [], ["pg_age_e2", "mongodb_e2"]),
 ]
 
 HEAD = '''#!/bin/bash
