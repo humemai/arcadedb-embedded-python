@@ -29,7 +29,12 @@ from collections import defaultdict
 # family is a substring matched case-insensitively inside the version string.
 FAMILIES = ("arcadedb", "duckdb", "postgres", "neo4j", "mongo", "surrealdb",
             "arangodb", "qdrant", "milvus", "sqlite", "chroma", "lancedb",
-            "memgraph", "falkordb", "timescaledb", "questdb", "elasticsearch")
+            "memgraph", "falkordb", "timescaledb", "questdb", "elasticsearch",
+            # Each of these ships its own version line on a row that also
+            # names another engine -- pgvector and AGE are PostgreSQL
+            # extensions, DuckPGQ a DuckDB one, ladybug its own engine -- so
+            # each is a family in its own right rather than a qualifier.
+            "pgvector", "age", "duckpgq", "ladybug", "sqlite-vec")
 
 # Deliberate splits: family -> why more than one version is correct here. An
 # entry is a DECISION, not a way to quiet the gate, and it must name two
@@ -54,6 +59,30 @@ ALLOWED_SPLITS: dict[str, str] = {
 }
 
 _VER = r"[ :=v]*([0-9]+(?:\.[0-9]+)+)"
+
+# HOW AN ENGINE SPELLS ITSELF IS NOT ITS FAMILY NAME, and for twelve of the
+# seventeen families it never was. The scan below wants the version to follow
+# the family token immediately, so "mongo" never matched `mongodb 8.2.12`,
+# "postgres" never matched `postgresql 18.6`, and "duckdb" never matched
+# `duckdb vss 1.5.5`. 23 of the 191 rows on the live September payload carried
+# a version string this gate could not read, and an unreadable string was
+# silently dropped rather than flagged -- so the gate passed by seeing almost
+# nothing. That is how a cross-model arm ran PostgreSQL 17.11 + age 1.7.0
+# under an October instrument declaring 18.6 + 1.8.0 with every gate green.
+#
+# The qualifiers here are part of a product's NAME (DuckDB VSS, sqlite-vec),
+# never a second component with its own version line. Nothing skips a space
+# into arbitrary words, and that restraint is load-bearing: MongoDB's row
+# reads `mongodb 8.2.12 + MongoDb Search Community Version 1.70.4`, and a
+# pattern loose enough to reach across " search community version " would
+# read mongot's version as a second MongoDB and report a split that is not
+# there. Components that DO have their own version line get their own family.
+SPELLINGS = {
+    "postgres": r"postgres(?:ql)?",
+    "mongo": r"mongo(?:db)?",
+    "ladybug": r"ladybug(?:db)?",
+    "duckdb": r"duckdb(?:[ -]vss)?",
+}
 
 # An ArcadeDB release is YY.M.P with a two-digit year in the twenties. A
 # comparator row wearing one of these is not a version disagreement, it is OUR
@@ -87,13 +116,31 @@ def check(path: str) -> list[str]:
     # about whose engine it ran.
     skeleton = bool(payload.get("skeleton"))
     seen: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
+    unparsed: list[tuple] = []
     for table, backend, version in _rows(payload):
         low = version.lower()
+        hit = False
         for family in FAMILIES:
-            for match in re.finditer(re.escape(family) + _VER, low):
+            pat = SPELLINGS.get(family, re.escape(family))
+            for match in re.finditer(r"\b" + pat + _VER, low):
                 seen[family][match.group(1)].add((table, backend))
+                hit = True
+        if not hit:
+            unparsed.append((table, backend, version))
 
     failures = []
+
+    # (0) A VERSION STRING THIS GATE CANNOT READ IS A FAILURE, not a row to
+    # skip. Everything below reasons about versions it managed to parse, so
+    # an unreadable string used to buy silence: the arm was neither vouched
+    # for nor flagged, and the gate reported green having examined nothing.
+    # A new engine, or an old one that changes how it spells itself, lands
+    # here and says so rather than quietly leaving the instrument.
+    for table, backend, version in unparsed:
+        failures.append(
+            f"no engine version could be read from {version!r} "
+            f"({backend}, table {table}): the gate cannot tell which engine "
+            f"this names, so it can vouch for nothing on this row")
 
     # (a) our version on somebody else's row
     for family, versions in sorted(seen.items()):

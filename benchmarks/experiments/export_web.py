@@ -350,6 +350,32 @@ _ENGINE_SPELLING = {
 }
 
 
+# NOT _VERSION_TOKEN: that name is taken at the top of this file by a
+# different pattern with no capture group, and defining it twice would
+# silently hand every earlier caller this one instead.
+_MEMBER_VERSION = re.compile(r"\b(\d+(?:\.\d+)+(?:[.-]?\w+)?)\b")
+
+
+def _composed_members(raw):
+    """(name, version) for each "+"-separated member that carries a version.
+
+    A member is "<name><sep><version>" with the separator either a colon
+    ("pgvector:0.8.6") or a space ("PostgreSQL 17.11"); the version is the
+    member's FIRST version-shaped token, so trailing prose after it -- the
+    "at localhost 27028" MongoDB's search node appends -- is left off rather
+    than published as part of the stack's identity.
+    """
+    out = []
+    for part in str(raw or "").split("+"):
+        found = _MEMBER_VERSION.search(part)
+        if not found:
+            continue
+        name = part[:found.start()].strip().rstrip(":").strip()
+        if name:
+            out.append((name, found.group(1)))
+    return out
+
+
 def _engine_version(label: str, raw: str | None,
                     image: str | None = None, commit: str | None = None) -> str | None:
     """"<engine> <version>", from a row label and whatever the adapter stamped.
@@ -387,10 +413,23 @@ def _engine_version(label: str, raw: str | None,
     # yields one pair whose version is "1.19.0+neo4j" and this branch never
     # fires. A build-metadata "+" inside a single version (surrealdb-server's
     # 3.2.4+20260803) is unaffected: one pair does not reach here.
-    _pairs = re.findall(r"([A-Za-z][A-Za-z0-9_.-]*):(\d[\w.-]*)", str(raw or ""))
-    if len(_pairs) > 1 and "+" in str(raw or ""):
+    # A MEMBER MAY SPELL ITSELF WITH A SPACE, and the colon-only pair regex
+    # this replaces dropped every one that did. The cross-model arm's row
+    # reads "PostgreSQL 17.11 + pgvector:0.8.6 + age:1.7.0" -- PostgreSQL, the
+    # arm's PRIMARY engine, separated by a space -- so the live September page
+    # published that stack as "pgvector 0.8.6 + age 1.7.0" under a label
+    # reading "PostgreSQL + pgvector + AGE": the one engine the row is named
+    # for was the one engine the version line did not name. Splitting on "+"
+    # and taking each member's own first version reads both spellings.
+    #
+    # Splitting on "+" FIRST is also what keeps build metadata intact:
+    # surrealdb-server's "3.2.4+20260803" yields a single member carrying a
+    # version and one member never reaches this branch, so it renders through
+    # the single-engine path below exactly as before.
+    _members = _composed_members(raw)
+    if len(_members) > 1 and "+" in str(raw or ""):
         return " + ".join(f"{n.replace('-local', '')} {_short_version(v) or v}"
-                          for n, v in _pairs)
+                          for n, v in _members)
     if image:
         repo = image.split("@")[0].split(":")[0]
         engine = repo.rsplit("/", 1)[-1].lower()
