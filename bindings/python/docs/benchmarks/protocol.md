@@ -153,7 +153,10 @@ and left nothing, which is the worse outcome: a censored cell is a measurement, 
 one is a story.
 
 **A whole cell has a time cap, and exceeding it is a published outcome.** The cap belongs to
-the corpus size and is identical for every engine at that size. An engine that cannot finish
+the corpus size and is identical for every engine at that size. Its value comes from the
+fastest engine's measured cell and the median engine's projected one at that size, never
+from the slowest -- the same reasoning as the per-query budget, since the slowest engine is
+exactly what the cap exists to bound. An engine that cannot finish
 inside it is censored with the cap named, which is a true statement about that engine at
 that size rather than a gap, and the remaining repetitions are skipped, because repeating a
 timeout measures nothing and the table should show one censored cell instead of five.
