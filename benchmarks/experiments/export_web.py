@@ -263,6 +263,35 @@ def _IS_PRERELEASE(ver: str) -> bool:
     return "dev" in v or "snapshot" in v or "-rc" in v
 
 
+def _one_version(rs, where):
+    """The version an entry prints must be the version EVERY row in it ran.
+
+    An entry pools a group's rows into one median and prints one version
+    beside it, read off rs[0]. That is safe only while a group cannot hold two
+    versions, and the guarantee comes from the canonical dedupe upstream, not
+    from anything here -- a different mechanism, one layer away, which is the
+    kind of distance a defect lives in.
+
+    It is not hypothetical either. `runs_page_417314c18.jsonl` holds pg_age_e2
+    rows at "PostgreSQL 17.11 + age:1.7.0" AND "PostgreSQL 18.6 + age:1.8.0",
+    the stale-image incident behind BUGS F90, where AGE 1.7.0 builds edges 65x
+    slower. Measured after dedupe: zero groups disagree, so this refuses
+    nothing today. It is here because the consequence of the day it does is a
+    published version that names a build the numbers did not come from, which
+    is indistinguishable from a correct row to every other gate -- the payload
+    carries one string either way, so version_consistency_check sees nothing.
+    """
+    seen = {str(r.get("engine_version")) for r in rs if r.get("engine_version")}
+    if len(seen) > 1:
+        raise SystemExit(
+            f"REFUSING: {where} pools rows that ran on different engine versions "
+            f"{sorted(seen)}, and the entry prints one of them beside a median over "
+            f"all of them. Whichever is printed, the cell names a build some of its "
+            f"own numbers did not come from. Supersede the stale rows rather than "
+            f"publishing across them.")
+    return rs[0]
+
+
 def _engine_identity(raw: str | None, commit: str | None) -> str | None:
     """How an ArcadeDB cell says which engine produced it.
 
@@ -2792,7 +2821,7 @@ def _lifecycle_table(all_rows):
             "workload": "session",
             "n_docs": str(rs[0].get("n_rows") or ""),
             "deployment": _mode,
-            "image": rs[0].get("image"),
+            "image": _one_version(rs, f"lifecycle/{rs[0].get('backend')}/{scale}").get("image"),
             "version_name": (_engine_identity(rs[0].get("engine_version"),
                                               rs[0].get("engine_commit")) if _ours
                              else _engine_version(f"{engine} ({_mode})",
@@ -2978,7 +3007,7 @@ def _durability_table(all_rows):
                 "workload": "write",
                 "n_docs": None,
                 "deployment": deployment_of(backend),
-                "image": rs[0].get("image"),
+                "image": _one_version(rs, f"durability/{backend}/{op_key}").get("image"),
                 # ArcadeDB is identified by commit (#49); a comparator by its
                 # own stamp, else its row read "arcadedb surrealdb-embedded:...".
                 "version_name": (_engine_identity(rs[0].get("engine_version"),
