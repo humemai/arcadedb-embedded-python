@@ -1414,7 +1414,30 @@ def freeze_paper_rows(rows):
     # the campaign's tracked freeze and the live page publishes from it; a
     # laptop placeholder run must not be able to overwrite it, not even for
     # the minutes a publish takes.
+    #
+    # AND THE SAME PROTECTION IN THE OTHER DIRECTION (BUGS F93). Having its
+    # own file did not stop a skeleton freeze being FILLED with campaign
+    # rows: `refresh_web_page --skeleton` validates its input and then step 1
+    # re-freezes from whatever canonical rows the laptop holds, which are now
+    # October's. It wrote 198 paper-tier rows with no bench host over 164
+    # sweep-tier laptop rows, twice on 2026-09-21, and the failure is silent
+    # on the run that causes it: the NEXT run fails the input guard and reads
+    # as "the skeleton was never valid" rather than "the last run ate it".
+    # A skeleton freeze holds skeleton rows or it is not written.
     path = os.path.join(RESULTS, FROZEN_NAME)
+    if SKELETON:
+        _bad = [r for r in rows
+                if str(r.get("tier") or "") != "sweep"
+                or not str(r.get("bench_host") or "").strip()]
+        if _bad:
+            _w = _bad[0]
+            raise SystemExit(
+                f"REFUSING to write {FROZEN_NAME}: {len(_bad)} of {len(rows)} rows are not "
+                f"skeleton rows (first: {_w.get('lane')}/{_w.get('scale')}/{_w.get('backend')} "
+                f"tier={_w.get('tier')!r} bench_host={_w.get('bench_host')!r}). A skeleton "
+                f"freeze holds laptop sweep rows; writing campaign rows into it destroys the "
+                f"placeholder run the preview publishes from, and the loss shows up only on "
+                f"the next publish. Restore it with `git checkout -- results/{FROZEN_NAME}`.")
     with open(path, "w", newline="") as f:
         w = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
