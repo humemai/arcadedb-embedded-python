@@ -4390,23 +4390,58 @@ def _query_budget_notes(table_id):
             el = r.get(f"{q}_elapsed_s")
             hits[(_row_label_for(table_id, r), str(r.get("scale")), col)].append(
                 (iters, float(el) if el not in (None, "") else None, budget))
-    notes = []
+    # ONE SENTENCE PER ENGINE, NOT PER QUERY. This emitted a separate
+    # sentence for every censored (engine, query) pair, so MongoDB alone
+    # printed nine of them differing in two tokens each -- forty-four under
+    # one table on the preview. A loop's output reads like a loop's output,
+    # and nobody writes the same clause nine times. The shared half (the
+    # budget, what the percentiles are over, what happens to the other
+    # queries) is stated ONCE for the table; each engine then gets one line
+    # naming its queries and how far each got.
+    by_engine = collections.defaultdict(list)
     for (label, scale, col), occ in sorted(hits.items(), key=str):
+        by_engine[(label, scale)].append((col, occ))
+    if not by_engine:
+        return []
+
+    budgets = {o[2] for occs in hits.values() for o in occs}
+    one_budget = budgets.pop() if len(budgets) == 1 else None
+    total = sum(len(v) for v in by_engine.values())
+
+    def _span(occ):
         its = sorted(o[0] for o in occ)
         span = f"{its[0]}" if its[0] == its[-1] else f"{its[0]} to {its[-1]}"
-        of = f" of {asked}" if asked else ""
-        budget = occ[0][2]
         els = [o[1] for o in occ if o[1] is not None]
         reached = (f", reaching {min(els):.0f} s" if len(els) == 1 or min(els) == max(els)
                    else f", reaching {min(els):.0f} to {max(els):.0f} s") if els else ""
-        notes.append(_gen(
-            f"{label} at {scale_label(lane, scale)}: the {col} query exceeded its "
-            f"{budget:g} s budget, the same budget every engine on this table had, "
-            f"after {span}{of} iterations{reached}; its p50 and p99 are over those "
-            f"{counted}, and the cell's other queries keep their numbers "
-            f"(DECISIONS #82b, #100).",
-            label, scale_label(lane, scale), col, f"{budget:g} s budget",
-            f"after {span}{of} iterations{reached}"))
+        return span, reached
+
+    notes = []
+    of = f" of {asked}" if asked else ""
+    lead = (f"{total} query cells on this table stopped at "
+            + (f"the {one_budget:g} s budget every engine here is given"
+               if one_budget else "their per-query budget, the same for every engine here")
+            # "over THOSE <counted>" and not "over the <counted> it reached":
+            # `counted` is a noun phrase that already carries its own clause on
+            # the document table ("iterations, the first of which is the cold
+            # pass"), and anything appended to it lands inside that clause.
+            + f"; each one's p50 and p99 are over those {counted}, and every "
+              f"other query in those cells keeps its numbers.")
+    notes.append(_gen(lead, str(total),
+                      f"{one_budget:g} s budget" if one_budget else "per-query budget"))
+
+    for (label, scale), cols in sorted(by_engine.items(), key=str):
+        parts, first = [], True
+        for col, occ in cols:
+            span, reached = _span(occ)
+            # "of 100 iterations" once, on the first query; the rest are bare
+            # counts against the same denominator.
+            parts.append(f"{col} ({span}{of if first else ''}"
+                         + (" iterations" if first else "") + f"{reached})")
+            first = False
+        notes.append(_gen(f"{label} at {scale_label(lane, scale)}: "
+                          + ", ".join(parts) + ".",
+                          label, scale_label(lane, scale), ", ".join(parts)))
     return notes
 
 
