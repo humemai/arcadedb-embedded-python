@@ -858,6 +858,7 @@
         "ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not HNSW, so the degree match above does not apply to it; its rows record nLists (about the square root of the corpus) and nProbe (an eighth of the lists) instead.",
         "Milvus's dense rows run with segments sealed at 50% of the maximum segment size, where the image default is 12%, so a large ingest lands in the few-large-segments layout that Milvus's own compaction otherwise reaches at an unpredictable moment. One line changed from the image's configuration; sparse rows are at the default.",
         "Each timed pass answers 1,000 queries.",
+        "`ingest+index total s` is the whole of building this corpus. `ingest s` and `index s` are the two phases timed inside it -- writing the data, then building whatever index the engine was given -- and they are not a division of it: each engine's ingest clock starts after the setup it does first, creating a schema or a collection, which neither phase counts. How much is left over depends on the engine: nothing on some of the ones here, up to about 39 per cent on others. Read the two as what each phase cost, and the total as what the whole of it cost.",
         "SurrealDB (server) at 5k vectors (skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
         "ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8), LanceDB (int8), Milvus (fp32), Milvus (int8), MongoDB (fp32), Neo4j (fp32) and pgvector (fp32) print no warm p50 ms and warm p99 ms here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both.",
         "ArangoDB (fp32), Chroma (fp32), DuckDB VSS (fp32), Qdrant (fp32), Qdrant (int8), sqlite-vec (fp32), sqlite-vec (int8), SurrealDB (embedded, fp32) and SurrealDB (server, fp32) print no warm p50 ms, warm p99 ms, ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both.",
@@ -14179,6 +14180,13 @@
           "SurrealDB (server, fp32)",
           "sqlite-vec (fp32)",
           "sqlite-vec (int8)"
+        ]
+      },
+      {
+        "text": "`ingest+index total s` is the whole of building this corpus. `ingest s` and `index s` are the two phases timed inside it -- writing the data, then building whatever index the engine was given -- and they are not a division of it: each engine's ingest clock starts after the setup it does first, creating a schema or a collection, which neither phase counts. How much is left over depends on the engine: nothing on some of the ones here, up to about 39 per cent on others. Read the two as what each phase cost, and the total as what the whole of it cost.",
+        "values": [
+          "ingest+index total s",
+          "39"
         ]
       },
       {
