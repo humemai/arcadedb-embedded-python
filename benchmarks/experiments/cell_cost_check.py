@@ -185,6 +185,7 @@ def main() -> int:
           if budget_ceiling else "  (no budget ceiling known for this lane)")
     print(f"  {'engine':26} {'ingest':>9} {'1st touch':>11} {'total':>9}  {'% cap':>7}  verdict")
     over = 0
+    no_ingest = []
     for be in sorted(per):
         # ONLY THE QUERIES THIS TIER WILL RUN. The first version summed every
         # cold_ field in the row, which includes the ones TIER_EXCLUDED drops
@@ -192,14 +193,31 @@ def main() -> int:
         # cap when the whole point of the exclusion was to bring them under.
         qs = {q: v for q, v in per[be].items() if not want or q in want}
         cold = sum(statistics.median(v) for v in qs.values()) / 1000.0 * a.scale_by
-        ing = (statistics.median(ingest[be]) * a.scale_by) if ingest.get(be) else 0.0
+        # NO INGEST DATA IS NOT ZERO INGEST, and printing it as 0 makes every
+        # total a lower bound wearing the face of an estimate. The skeleton's
+        # graph rows carry n_persons_ingested but no ingest_s, so a projection
+        # of l2/sf1full from them silently omitted the load of 3.16M vertices
+        # and 13.6M edges and still said "ok" for seven engines. Marked per
+        # row and counted, the same way this tool already refuses to score a
+        # query roster it cannot see.
+        _has_ing = bool(ingest.get(be))
+        ing = (statistics.median(ingest[be]) * a.scale_by) if _has_ing else 0.0
+        if not _has_ing:
+            no_ingest.append(be)
         tot = cold + ing + budget_ceiling
         pct = tot / cap * 100
         verdict = "OVER THE CAP" if tot >= cap else ("tight" if pct > 60 else "ok")
         if tot >= cap:
             over += 1
-        print(f"  {be:26} {ing:7.0f}s {cold:10.0f}s {tot:8.0f}s  {pct:6.0f}%  {verdict}")
+        print(f"  {be:26} {'   --  ' if not _has_ing else f'{ing:6.0f}s'} "
+              f"{cold:10.0f}s {tot:8.0f}s  {pct:6.0f}%  {verdict}"
+              f"{'  (no ingest data: LOWER BOUND)' if not _has_ing else ''}")
     print(f"\n  {len(per)} engine(s), {over} over the cap")
+    if no_ingest:
+        print(f"  {len(no_ingest)} of them carry NO ingest time in these rows, so their "
+              f"totals are LOWER BOUNDS:")
+        print(f"    {', '.join(sorted(no_ingest))}")
+        print("  An engine marked ok on a lower bound is not known to fit.")
     print("  total = ingest + first touches + the budget ceiling; the ceiling is")
     print("  what iterations cost if every query uses its whole budget.")
     return 1 if over else 0
