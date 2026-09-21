@@ -4266,18 +4266,25 @@ def _mutation_note(rows):
     # so silence means "not recorded", never "did not rebuild".
     _rb = _mutation_rebuilds(rows)
     if _rb:
+        _said = []
+        for _b, _n, _d in _rb:
+            if _n > 0:
+                _said.append("%s rebuilt its whole graph %d time%s to absorb them"
+                             % (display_name(_b), _n, "" if _n == 1 else "s"))
+            else:
+                _said.append("%s left %s of them in its delta buffer, to be merged by a "
+                             "later full rebuild this cell does not pay for"
+                             % (display_name(_b), f"{_d:,}"))
         parts.append(
             "These engines do not all maintain an index the same way: "
-            + "; ".join("%s rebuilt its graph %d time%s" % (display_name(b), n, "" if n == 1 else "s")
-                        for b, n in _rb)
-            + ". A full rebuild touches every vector in the index while an "
-              "incremental insert touches only the new ones, so the per-vector "
-              "costs here price different amounts of work and are not a "
-              "straight speed comparison.")
+            + "; ".join(_said)
+            + ". A full rebuild touches every vector in the index and an incremental "
+              "insert touches only the new ones, so the per-vector costs here price "
+              "different amounts of work and are not a straight speed comparison.")
     return _gen(" ".join(parts),
                 *[scale_label("l3d", s) for s in sorted(set(ran) | set(skipped))],
                 *sorted(set(ran.values()) | set(skipped.values())),
-                *[str(n) for _b, n in (_rb or ())])
+                *[str(v) for _b, _n, _d in (_rb or ()) for v in (_n, f"{_d:,}") if v])
 
 
 def _stats_int(row, field, key):
@@ -4301,12 +4308,21 @@ def _stats_int(row, field, key):
 
 
 def _mutation_rebuilds(rows):
-    """[(backend, rebuilds caused by the mutation phase)], from the rows.
+    """[(backend, rebuilds, vectors left in the delta)], from the rows.
 
-    The graph-rebuild counter AFTER the mutation phase minus the one after the
-    build, so it counts what the MUTATION caused and not the initial build.
-    Only engines reporting a positive count appear: zero is the ordinary case
-    (an incremental insert) and needs no sentence.
+    REPORTING ONLY REBUILDS WOULD BE SILENT WHERE IT MATTERS MOST. The rebuild
+    threshold at the pin is max(100, min(graphSize * 0.2, 50_000)), so the
+    1,000 deletes and 1,000 re-inserts of the mutation pass cross it at 5,000
+    vectors (threshold 1,000, and a micro cell showed exactly two rebuilds)
+    and come nowhere near it at the 1M tier the page publishes (threshold
+    50,000). At 1M the work is DEFERRED into the delta buffer instead -- which
+    is precisely the case a reader needs told, and a rebuild-only sentence
+    would say nothing about it.
+
+    So both halves are reported: what a rebuild absorbed, and what is still
+    pending. An engine appears if either is positive; an engine whose counters
+    are absent does not appear at all, because silence must read as "not
+    recorded" rather than "nothing happened".
     """
     best = {}
     for r in rows:
@@ -4316,11 +4332,14 @@ def _mutation_rebuilds(rows):
             continue
         before = _stats_int(r, "engine_stats_after_build", "graphRebuildCount")
         after = _stats_int(r, "engine_stats_after_mutate", "graphRebuildCount")
-        if before is None or after is None or after <= before:
+        delta = _stats_int(r, "engine_stats_after_mutate", "deltaVectorsCount")
+        if after is None and delta is None:
             continue
+        rebuilds = (after - before) if (before is not None and after is not None) else 0
         b = str(r.get("backend"))
-        best[b] = max(after - before, best.get(b, 0))
-    return sorted(best.items())
+        prev = best.get(b, (0, 0))
+        best[b] = (max(rebuilds, prev[0]), max(delta or 0, prev[1]))
+    return sorted((b, n, d) for b, (n, d) in best.items() if n > 0 or d > 0)
 
 
 _UNEXPRESSIBLE_CACHE = None
