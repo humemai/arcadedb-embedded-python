@@ -2180,6 +2180,23 @@ def main():
         out["mutate_insert_recall_at_10"] = _rec
         out["mutate_reinserted_hits"] = _hits
         _beat.mark("mutate-insert-done", recall=_rec, returned=_hits)
+        # WHAT THE MUTATION LEFT BEHIND, which the other two snapshots cannot
+        # say. `engine_stats_after_build` and `_after_search` are both taken
+        # BEFORE this phase, so until now no row could answer the obvious
+        # question about these columns: did the 1,000 inserts and deletes land
+        # in the index, or in a buffer the engine will merge later?
+        #
+        # THAT DISTINCTION IS A FAIRNESS AXIS, NOT A CURIOSITY. Insert cost
+        # spans 330x across the dense engines (0.026 ms/vector for sqlite-vec
+        # against 8.7 for DuckDB VSS), and the cheap end is cheap partly
+        # because the work is DEFERRED. An engine that appends to a delta and
+        # rebuilds later is measured here at its buffered cost while an engine
+        # that maintains its index eagerly pays in full, and ArcadeDB's
+        # LSM_VECTOR is a deferring design -- so the silence flattered US.
+        # `deltaVectorsCount` and `graphRebuildCount` after the phase say how
+        # much was deferred and whether a rebuild ran, per engine, from the
+        # engine's own counters rather than from our assumption.
+        out["engine_stats_after_mutate"] = b.engine_stats()
 
     # TIME THE CLOSE, do not merely perform it (#155). A clean close is when
     # compaction, writeback and WAL truncation happen: measured on 26.8.1 it
