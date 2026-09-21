@@ -3948,6 +3948,9 @@ def _table_scales(table_id):
 _CENSORED_CACHE = None
 
 
+_CENSORED_PHASE = {}   # (lane, scale, backend, workload) -> phase phrase
+
+
 def _censored_cells():
     """Cells at the pin whose every attempt ended in a timeout: (lane, scale,
     backend, workload) -> budget seconds. A timeout is a censored observation
@@ -3982,6 +3985,14 @@ def _censored_cells():
                         timeouts[key] = int(err.split("_")[-1].rstrip("s"))
                     except ValueError:
                         timeouts[key] = None
+                    # WHICH PHASE THE CAP INTERRUPTED, kept beside the seconds
+                    # rather than folded into them, because the branch below
+                    # tells a censored cell from a failed one by the TYPE of
+                    # this value and changing that would silently reclassify
+                    # every timeout as an error string.
+                    _ph = _timeout_phase(r.get("timeout_phase_hint"))
+                    if _ph:
+                        _CENSORED_PHASE[key] = _ph
                 elif r.get("oom_killed"):
                     # AN ENVELOPE FAILURE IS NOT A TIMEOUT (DECISIONS #103g).
                     # The cell was killed by the kernel at the memory cap; it
@@ -4007,6 +4018,49 @@ def _censored_cells():
                     timeouts[key] = err.strip().splitlines()[-1][:90] or "an error"
     _CENSORED_CACHE = {k: v for k, v in timeouts.items() if k not in clean}
     return _CENSORED_CACHE
+
+
+_PHASE_WORDS = (
+    # (match in the phase token, how the page says it). Ordered: the first
+    # match wins, so "build-messages" is read as the build it is.
+    ("ingest", "the ingest"),
+    ("build", "the index build"),
+    ("load", "the corpus load"),
+    ("warmup", "the warm-up"),
+    ("connect", "connecting to the engine"),
+    ("close", "closing the database"),
+)
+
+
+def _timeout_phase(hint):
+    """Which phase was running when the cap hit, as a phrase, or None.
+
+    THE ROW HAS ALWAYS KNOWN AND THE PAGE NEVER SAID. `timeout_phase_hint` is
+    the cell's last three PHASE markers, written by the runner since the
+    cypherglot audit standard, and read by nothing -- so a censored cell said
+    only "exceeded its budget", leaving a reader unable to tell an engine that
+    spent two hours ingesting from one that reached the queries and stalled on
+    the ninth. The two censored cells of the October campaign are exactly that
+    pair: SurrealDB at 500k was `build-running t=7046.8s` and never queried,
+    while ArcadeDB's graph analytics cell was on `olap-lsqb_q9-start` after
+    lsqb_q8 returned a p50 of 77,857 ms.
+
+    Returns None when the hint cannot be read, so the sentence simply omits
+    the clause rather than guessing a phase.
+    """
+    text = str(hint or "")
+    marks = re.findall(r"PHASE\s+([A-Za-z0-9_.-]+)", text)
+    if not marks:
+        return None
+    last = marks[-1].lower()
+    # a query phase names the query: "olap-lsqb_q9-start", "search-q_high-done"
+    q = re.match(r"^(?:olap|oltp|search|hybrid|ts)-([a-z0-9_]+?)-(?:start|done|censored|abandoned)$", last)
+    if q:
+        return f"query {q.group(1)}"
+    for needle, phrase in _PHASE_WORDS:
+        if needle in last:
+            return phrase
+    return None
 
 
 def _censored_notes(table_id):
@@ -4045,9 +4099,11 @@ def _censored_notes(table_id):
             kind = "envelope"
         elif isinstance(secs, int) or secs is None:
             budget = f"{secs / 3600:g} hour" if secs else "its"
+            _phase = _CENSORED_PHASE.get((lane, str(scale), backend, w))
+            _in = f" It was still in {_phase} when the budget ran out." if _phase else ""
             why = _gen(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell exceeded "
                        f"its {budget} budget, the same budget every engine on this table had, on its first "
-                       f"attempt and was not retried; there is no row.",
+                       f"attempt and was not retried; there is no row.{_in}",
                        display_name(backend), scale_label(lane, scale), budget)
             kind = "censored"
         else:
