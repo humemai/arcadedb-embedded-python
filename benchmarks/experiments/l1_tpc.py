@@ -1255,7 +1255,22 @@ class ArangoTPC:
             lc.import_bulk(buf)
         pc.import_bulk([{"_key": str(int(k)), "p_partkey": int(k), "p_retailprice": float(v), "stock": 100}
                         for k, v in part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)])
-        lc.add_index({"type": "persistent", "fields": ["l_shipdate"]})
+        # NO l_shipdate INDEX HERE, and like SQLite's this is a measurement
+        # rather than an omission (BUGS F98). ArangoDB had a persistent index
+        # on that field, and its planner takes it: the plan goes from an
+        # EnumerateCollectionNode to an IndexNode and Q6 gets SLOWER, 684 ms
+        # against 881 ms at 1M documents on 2026-09-22. At 14% selectivity on
+        # shipdate the index lookup plus a document fetch per candidate costs
+        # more than the scan it replaces, and ArangoDB has no hint-free way to
+        # decline an index it owns. The OLTP path is untouched: those lookups
+        # go through _key, which is the primary index.
+        #
+        # This one was missed in the first pass of the audit because ArangoDB
+        # spells it `add_index` and the scan looked for `create_index`, so the
+        # arm read as having none. The measurement was taken against a
+        # collection with no index and compared to one with it, which is the
+        # right experiment for the wrong reason: the lane was running the slow
+        # side of it the whole time.
         # Read back from the collection the timed writes touch (#90).
         self.durability = arango_common.durability_readback(self.db, "orders_new")
 

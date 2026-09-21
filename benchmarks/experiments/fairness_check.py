@@ -824,7 +824,7 @@ INDEX_DECISIONS = {
         "surrealdb_tpc_server": "l_shipdate: inherits SurrealTPC",
         "mongodb":              "l_shipdate: 280.3 -> 178.1 ms, 1.6x",
         "sqlite":               "NONE: the index costs it, 53.4 -> 63.3 ms (removed 2026-09-22)",
-        "arangodb_tpc":         "NONE: the index costs it, 684 -> 881 ms",
+        "arangodb_tpc":         "NONE: the index costs it, 684 -> 881 ms (removed 2026-09-22)",
         "duckdb":               "NONE: no effect, 6.0 -> 6.2 ms; columnar with zone maps",
     },
     "l4": {
