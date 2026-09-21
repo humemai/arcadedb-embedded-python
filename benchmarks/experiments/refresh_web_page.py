@@ -237,7 +237,21 @@ def main() -> int:
     if args.skeleton:
         args.preview = True
         os.environ["BENCH_SKELETON"] = "1"
+        # THE SKELETON IS AN OCTOBER RUN (BUGS F93). Every one of its 164 rows
+        # is stamped `instrument: 2026-10`, because the placeholder sweep runs
+        # the October lanes on the laptop -- so leaving the instrument unset
+        # here put make_paper_tables in SEPTEMBER, where the first thing
+        # load_canonical does is drop every row of the other campaign. All 164
+        # went, the September-side campaign rows that happen to sit at a
+        # skeleton scale stayed, and the freeze was rewritten from those:
+        # 198 paper-tier rows over the 164 placeholders, twice on 2026-09-21.
+        #
+        # `if OCTOBER and not SKELETON` in make_paper_tables is the tell that
+        # this was always the intent -- that clause has no meaning unless a
+        # skeleton can be October, and until now it could not be.
+        os.environ["BENCH_INSTRUMENT"] = "2026-10"
         print("  target: SKELETON (DECISIONS #86) -> preview route; placeholder numbers")
+        print("  instrument: 2026-10; the skeleton's own rows carry it")
         _assert_skeleton_rows()
     elif args.preview:
         # THE PREVIEW ROUTE IS THE OCTOBER CAMPAIGN (DECISIONS #83, #84). Set

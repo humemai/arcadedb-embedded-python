@@ -344,6 +344,16 @@ def _assert_lanes_registered():
     an unregistered lane produces an empty freeze and a table built from
     nothing, which is exactly what the first October landing did.
     """
+    # THE SKELETON COVERS FEWER LANES ON PURPOSE, so this check does not apply
+    # to it. SKELETON_SCALES replaces PAPER_SCALES wholesale, and the lanes it
+    # leaves out are ones the LAPTOP cannot produce: `e4` is assembled from a
+    # bench-host overlay and `l1` is retired (#67, #72). The skeleton already
+    # declares what it is missing, by table, in `skeleton_absent_tables`, and
+    # that declaration is what the preview route reads -- so a second, cruder
+    # refusal here bought nothing and cost the whole preview publish. Found by
+    # this check blocking the first `--preview --skeleton` run after it landed.
+    if SKELETON:
+        return
     try:
         import runner
     except Exception:  # noqa: BLE001 - the freeze must still run without it
@@ -1463,18 +1473,29 @@ def freeze_paper_rows(rows):
     # A skeleton freeze holds skeleton rows or it is not written.
     path = os.path.join(RESULTS, FROZEN_NAME)
     if SKELETON:
-        _bad = [r for r in rows
-                if str(r.get("tier") or "") != "sweep"
-                or not str(r.get("bench_host") or "").strip()]
-        if _bad:
-            _w = _bad[0]
-            raise SystemExit(
-                f"REFUSING to write {FROZEN_NAME}: {len(_bad)} of {len(rows)} rows are not "
-                f"skeleton rows (first: {_w.get('lane')}/{_w.get('scale')}/{_w.get('backend')} "
-                f"tier={_w.get('tier')!r} bench_host={_w.get('bench_host')!r}). A skeleton "
-                f"freeze holds laptop sweep rows; writing campaign rows into it destroys the "
-                f"placeholder run the preview publishes from, and the loss shows up only on "
-                f"the next publish. Restore it with `git checkout -- results/{FROZEN_NAME}`.")
+        # A SKELETON FREEZE IS AN INPUT, NOT A DERIVATION (BUGS F93). The
+        # earlier guard here refused to OVERWRITE it with campaign rows, which
+        # stopped the damage and left `--skeleton` unable to publish at all --
+        # a wall, not a fix. The reason it cannot be re-derived is simply that
+        # its rows are not on this host to derive from: the freeze holds 164
+        # laptop sweep rows and the laptop's runs.jsonl holds none of them
+        # (its only sweep rows are 166 undated ones from before bench_host
+        # existed; runs_oct_smoke_laptop.jsonl has 88 of the 164). The
+        # placeholder sweep wrote its rows, they were frozen, the freeze was
+        # committed, and THAT tracked file is the artifact the preview
+        # publishes from -- which is exactly how _assert_skeleton_rows in
+        # refresh_web_page already treats it, by validating it as input.
+        #
+        # So this step reads it and leaves it alone. Re-deriving it is not a
+        # thing that can succeed here, and a step that cannot succeed should
+        # not run: every attempt so far has either destroyed the file or been
+        # refused. To REPLACE the skeleton, run the laptop sweep again and
+        # freeze that, which writes this file deliberately rather than as the
+        # side effect of a publish.
+        print(f"skeleton: {FROZEN_NAME} is the placeholder run's own artifact and is "
+              f"read, not rewritten (BUGS F93); {len(rows)} canonical rows on this host "
+              f"are not its source")
+        return
     with open(path, "w", newline="") as f:
         w = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()

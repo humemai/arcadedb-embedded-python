@@ -300,6 +300,24 @@ def _engine_identity(raw: str | None, commit: str | None) -> str | None:
         ver = re.sub(r"^server:", "", ver).split(" (build")[0].strip()
         # 26.9.1.dev0 / 26.8.1.dev25 / 26.9.1-SNAPSHOT -> 26.9.1-dev
         ver = re.sub(r"[.\-]?(dev\d*|SNAPSHOT)$", "-dev", ver, flags=re.I)
+    # ONE ENGINE, ONE SPELLING OF ITS COMMIT -- the same rule _one_spelling
+    # applies to a version string, and for the same reason. `engine_commit` is
+    # stamped verbatim from ARCADEDB_ENGINE_COMMIT (bench_common), so its
+    # length is whatever the stage that exported it happened to use. Two l4
+    # stages exported the full 40 characters and every other stage nine, which
+    # put BOTH spellings of one identifier on the /next page at once: 27 cells
+    # reading `417314c18` and two reading
+    # `417314c18da782620463bc7c09ac6bd34ac6fbda`. A reader comparing two rows
+    # cannot see that those name the same engine, which is the whole job of the
+    # identifier (#49).
+    #
+    # Nine, because that is the width already published across September's
+    # page, and because a render-time normalisation must not change what a
+    # settled page says. Truncating here rather than at the stamp fixes the
+    # rows ALREADY frozen as well as future ones; per this function's contract
+    # callers have compared the raw strings long before reaching it.
+    if sha and re.fullmatch(r"[0-9a-f]{9,40}", sha):
+        sha = sha[:9]
     if ver and sha:
         return f"arcadedb {ver} \u00b7 {sha}"
     return f"arcadedb {ver}" if ver else (f"arcadedb {sha}" if sha else None)

@@ -173,7 +173,7 @@
     "sqlite"
   ],
   "arcadedb_engines": [
-    "arcadedb 26.10.1-dev \u00b7 417314c18da782620463bc7c09ac6bd34ac6fbda",
+    "arcadedb 26.10.1-dev \u00b7 417314c18",
     "arcadedb 26.8.1",
     "arcadedb 26.8.1 \u00b7 727aa4568"
   ],
@@ -6125,6 +6125,8 @@
         "Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:), so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
         "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
         "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
+        "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) build one. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
+        "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both.",
         "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; Neo4j and the composed stack load the graph with UNWIND over bolt, and the composed stack upserts its vectors into Qdrant; PostgreSQL + pgvector + AGE loads the products with COPY under a pgvector HNSW index and creates the graph with UNWIND inside Cypher; ArangoDB import_bulk; MongoDB insert_many."
       ],
       "columns": [
@@ -6838,7 +6840,116 @@
         "peak memory GiB": "down",
         "disk GiB": "down"
       },
-      "declared_absences": [],
+      "declared_absences": [
+        {
+          "backend": "ArangoDB",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArangoDB",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (one transaction)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (one transaction)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (server, one transaction)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (server, one transaction)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "Qdrant + Neo4j (no shared transaction)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "Qdrant + Neo4j (no shared transaction)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "MongoDB",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "MongoDB",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "Neo4j (vector index)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "Neo4j (vector index)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "PostgreSQL + pgvector + AGE",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "PostgreSQL + pgvector + AGE",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        }
+      ],
       "source_paths": [
         "benchmarks/experiments/results/runs_skeleton_laptop.csv"
       ],
@@ -6861,6 +6972,8 @@
         "The cold column is the very first query of a session, the newest reading, timed once on a database that has just been opened; every other latency column is the warm median of the iterations that follow it. It answers what the first query of a session costs against the hundredth, which is a different question from the steady-state one and is the one an application that opens a database per request actually asks.",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
+        "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB, DuckDB, MongoDB, SQLite, SurrealDB (embedded), SurrealDB (server) and TimescaleDB build one; QuestDB builds none, because measuring it showed the index costs it or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
+        "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both.",
         "Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP; SQLite executemany in batched transactions; MongoDB insert_many in batches into a time-series collection; TimescaleDB COPY; ArangoDB import_bulk; SurrealDB inserts through its Python SDK."
       ],
       "columns": [
@@ -7051,7 +7164,7 @@
           "n_docs": "2592000",
           "deployment": "server",
           "image": null,
-          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18da782620463bc7c09ac6bd34ac6fbda",
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
           "host": "container:ba145b6b12dd (host unknown)",
           "metrics": {
             "newest reading p50 ms": {
@@ -7132,7 +7245,7 @@
           "n_docs": "2592000",
           "deployment": "server",
           "image": null,
-          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18da782620463bc7c09ac6bd34ac6fbda",
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
           "host": "container:add7448839c2 (host unknown)",
           "metrics": {
             "newest reading p50 ms": {
@@ -7866,7 +7979,152 @@
         "peak memory GiB": "down",
         "disk GiB": "down"
       },
-      "declared_absences": [],
+      "declared_absences": [
+        {
+          "backend": "ArcadeDB (embedded, native time series)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (embedded, native time series)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (embedded, document path)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (embedded, document path)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "QuestDB",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "QuestDB",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "DuckDB",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "DuckDB",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "SQLite",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "SQLite",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "MongoDB",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "MongoDB",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "TimescaleDB",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "TimescaleDB",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArangoDB",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArangoDB",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (server, document path)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (server, document path)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (server, native time series)",
+          "column": "ingest s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        },
+        {
+          "backend": "ArcadeDB (server, native time series)",
+          "column": "index s",
+          "kind": "unrun",
+          "why": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both."
+        }
+      ],
       "source_paths": [
         "benchmarks/experiments/results/runs_skeleton_laptop.csv"
       ],
@@ -12876,6 +13134,7 @@
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckDB, which has no setting to relax and waits for the disk at every commit; its write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF0.01 (60k line items, skeleton), of the 0.13 GiB shown, 0.131 GiB is our Python client and 0.008 GiB is the database.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
+        "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, PostgreSQL (tuned), SurrealDB (embedded) and SurrealDB (server) build one; ArangoDB, DuckDB and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
         "SurrealDB (server) at TPC-H SF0.01 (60k line items, skeleton): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 74 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.07 GiB, not as a size.",
         "ArcadeDB (embedded), ArcadeDB (server) and PostgreSQL (tuned) have no row on this table: the skeleton is a laptop placeholder and did not run this workload for them. The campaign does.",
         "SurrealDB (embedded) prints no Q1 p50 ms, Q1 p99 ms, Q6 p50 ms, top parts p50 ms, ship mode p50 ms and by month p50 ms here: the skeleton is a laptop placeholder and did not run that workload for this arm, though it ran the ingest the other columns come from. The campaign runs both.",
@@ -13537,17 +13796,17 @@
         "This table is derived from the eleven tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there (cannot express, the engine's own language cannot ask the query; not run, the skeleton's laptop placeholder did not run this workload for that engine; withdrawn, the query it answered was not the one the other engines answered, so the row came down); no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page."
       ],
       "columns": [
-        "Sparse vector search",
-        "Dense vector search",
+        "Document OLTP",
+        "Document OLAP",
         "Graph OLTP",
         "Graph OLAP",
-        "Cross-model transaction: what survives a crash",
-        "Cross-model transaction",
+        "Sparse vector search",
+        "Dense vector search",
         "Time series",
-        "Session cost, open to close",
+        "Cross-model transaction",
+        "Cross-model transaction: what survives a crash",
         "What waiting for the disk costs",
-        "Document OLTP",
-        "Document OLAP"
+        "Session cost, open to close"
       ],
       "directions": {},
       "withheld_scales": [],
@@ -13564,14 +13823,14 @@
           "deployment": "embedded, server",
           "precision": null,
           "image": null,
-          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18da782620463bc7c09ac6bd34ac6fbda / arcadedb 26.8.1 / arcadedb 26.8.1 \u00b7 727aa4568",
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18 / arcadedb 26.8.1 / arcadedb 26.8.1 \u00b7 727aa4568",
           "host": null,
           "metrics": {
-            "Sparse vector search": {
+            "Document OLTP": {
               "text": "measured"
             },
-            "Dense vector search": {
-              "text": "measured"
+            "Document OLAP": {
+              "text": "declared, unrun; withdrawn"
             },
             "Graph OLTP": {
               "text": "measured"
@@ -13579,26 +13838,26 @@
             "Graph OLAP": {
               "text": "measured"
             },
-            "Cross-model transaction: what survives a crash": {
+            "Sparse vector search": {
               "text": "measured"
             },
-            "Cross-model transaction": {
+            "Dense vector search": {
               "text": "measured"
             },
             "Time series": {
               "text": "measured"
             },
-            "Session cost, open to close": {
+            "Cross-model transaction": {
+              "text": "measured"
+            },
+            "Cross-model transaction: what survives a crash": {
               "text": "measured"
             },
             "What waiting for the disk costs": {
               "text": "measured"
             },
-            "Document OLTP": {
+            "Session cost, open to close": {
               "text": "measured"
-            },
-            "Document OLAP": {
-              "text": "declared, unrun; withdrawn"
             }
           }
         },
@@ -13615,10 +13874,10 @@
           "version_name": "arangodb 3.12.11",
           "host": null,
           "metrics": {
-            "Sparse vector search": {
-              "text": "declared, cannot express"
+            "Document OLTP": {
+              "text": "measured"
             },
-            "Dense vector search": {
+            "Document OLAP": {
               "text": "measured"
             },
             "Graph OLTP": {
@@ -13627,26 +13886,26 @@
             "Graph OLAP": {
               "text": "measured"
             },
-            "Cross-model transaction: what survives a crash": {
-              "text": "measured"
+            "Sparse vector search": {
+              "text": "declared, cannot express"
             },
-            "Cross-model transaction": {
+            "Dense vector search": {
               "text": "measured"
             },
             "Time series": {
               "text": "measured"
             },
-            "Session cost, open to close": {
-              "text": "no arm"
+            "Cross-model transaction": {
+              "text": "measured"
+            },
+            "Cross-model transaction: what survives a crash": {
+              "text": "measured"
             },
             "What waiting for the disk costs": {
               "text": "measured"
             },
-            "Document OLTP": {
-              "text": "measured"
-            },
-            "Document OLAP": {
-              "text": "measured"
+            "Session cost, open to close": {
+              "text": "no arm"
             }
           }
         },
@@ -13663,10 +13922,10 @@
           "version_name": "mongodb 8.2.12 / mongodb 8.2.12 + MongoDb Search Community Version 1.70.4",
           "host": null,
           "metrics": {
-            "Sparse vector search": {
-              "text": "declared, cannot express"
+            "Document OLTP": {
+              "text": "measured"
             },
-            "Dense vector search": {
+            "Document OLAP": {
               "text": "measured"
             },
             "Graph OLTP": {
@@ -13675,26 +13934,26 @@
             "Graph OLAP": {
               "text": "measured"
             },
-            "Cross-model transaction: what survives a crash": {
-              "text": "measured"
+            "Sparse vector search": {
+              "text": "declared, cannot express"
             },
-            "Cross-model transaction": {
+            "Dense vector search": {
               "text": "measured"
             },
             "Time series": {
               "text": "measured"
             },
-            "Session cost, open to close": {
-              "text": "no arm"
+            "Cross-model transaction": {
+              "text": "measured"
+            },
+            "Cross-model transaction: what survives a crash": {
+              "text": "measured"
             },
             "What waiting for the disk costs": {
               "text": "measured"
             },
-            "Document OLTP": {
-              "text": "measured"
-            },
-            "Document OLAP": {
-              "text": "measured"
+            "Session cost, open to close": {
+              "text": "no arm"
             }
           }
         },
@@ -13711,10 +13970,10 @@
           "version_name": "surrealdb 2.3.10 / surrealdb 3.2.4 / surrealdb 3.2.4",
           "host": null,
           "metrics": {
-            "Sparse vector search": {
-              "text": "declared, cannot express"
+            "Document OLTP": {
+              "text": "measured"
             },
-            "Dense vector search": {
+            "Document OLAP": {
               "text": "measured"
             },
             "Graph OLTP": {
@@ -13723,25 +13982,25 @@
             "Graph OLAP": {
               "text": "measured"
             },
-            "Cross-model transaction: what survives a crash": {
-              "text": "measured"
+            "Sparse vector search": {
+              "text": "declared, cannot express"
             },
-            "Cross-model transaction": {
+            "Dense vector search": {
               "text": "measured"
             },
             "Time series": {
               "text": "measured"
             },
-            "Session cost, open to close": {
+            "Cross-model transaction": {
+              "text": "measured"
+            },
+            "Cross-model transaction: what survives a crash": {
               "text": "measured"
             },
             "What waiting for the disk costs": {
               "text": "measured"
             },
-            "Document OLTP": {
-              "text": "measured"
-            },
-            "Document OLAP": {
+            "Session cost, open to close": {
               "text": "measured"
             }
           }
@@ -14068,6 +14327,48 @@
         ]
       },
       {
+        "text": "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) build one. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
+        "values": [
+          "ArangoDB",
+          "ArcadeDB (one transaction)",
+          "ArcadeDB (server, one transaction)",
+          "MongoDB",
+          "Neo4j (vector index)",
+          "PostgreSQL + pgvector + AGE",
+          "Qdrant + Neo4j (no shared transaction)",
+          "SurrealDB (embedded)",
+          "SurrealDB (server)"
+        ]
+      },
+      {
+        "text": "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both.",
+        "values": [
+          "ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), Qdrant + Neo4j (no shared transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, SurrealDB (embedded) and SurrealDB (server)",
+          "ingest s and index s"
+        ]
+      },
+      {
+        "text": "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB, DuckDB, MongoDB, SQLite, SurrealDB (embedded), SurrealDB (server) and TimescaleDB build one; QuestDB builds none, because measuring it showed the index costs it or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
+        "values": [
+          "ArangoDB",
+          "ArcadeDB",
+          "DuckDB",
+          "MongoDB",
+          "SQLite",
+          "SurrealDB (embedded)",
+          "SurrealDB (server)",
+          "TimescaleDB",
+          "QuestDB"
+        ]
+      },
+      {
+        "text": "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series) print no ingest s and index s here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both.",
+        "values": [
+          "ArcadeDB (embedded, native time series), ArcadeDB (embedded, document path), QuestDB, DuckDB, SQLite, MongoDB, TimescaleDB, SurrealDB (embedded), SurrealDB (server), ArangoDB, ArcadeDB (server, document path) and ArcadeDB (server, native time series)",
+          "ingest s and index s"
+        ]
+      },
+      {
         "text": "Documents (server), Documents, ten indexes (server), Empty database (server), Graph (server), Sparse vectors (server), Time series (server) and Dense vectors (server) print no JVM start ms, first open ms and cold process ms here: the skeleton is a laptop placeholder and did not run that workload for those arms, though it ran the ingest the other columns come from. The campaign runs both.",
         "values": [
           "Documents (server), Documents, ten indexes (server), Empty database (server), Graph (server), Sparse vectors (server), Time series (server) and Dense vectors (server)",
@@ -14120,6 +14421,21 @@
       {
         "text": "Five analytical queries, each over the whole line-item table. Q1: TPC-H's own Q1, the pricing summary: it groups and aggregates every line item, so it measures a full scan. Q6: TPC-H's own Q6, the forecasting revenue change: it sums one column under a narrow filter, so it measures how well an engine skips what it does not need. Top parts: the ten parts with the highest revenue, a group-by over every line item with a sort and a limit. Ship mode: how many line items went by each ship mode, a group-by over the whole table. By month: revenue by month of shipment, a group-by on a date expression. All times are milliseconds.",
         "values": []
+      },
+      {
+        "text": "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, PostgreSQL (tuned), SurrealDB (embedded) and SurrealDB (server) build one; ArangoDB, DuckDB and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
+        "values": [
+          "ArcadeDB (embedded)",
+          "ArcadeDB (server)",
+          "MongoDB",
+          "PostgreSQL",
+          "PostgreSQL (tuned)",
+          "SurrealDB (embedded)",
+          "SurrealDB (server)",
+          "ArangoDB",
+          "DuckDB",
+          "SQLite"
+        ]
       },
       {
         "text": "ArcadeDB (embedded), ArcadeDB (server) and PostgreSQL (tuned) have no row on this table: the skeleton is a laptop placeholder and did not run this workload for them. The campaign does.",

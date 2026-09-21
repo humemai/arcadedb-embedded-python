@@ -8339,6 +8339,7 @@
         "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
+        "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) build one. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
         "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
       ],
       "columns": [
@@ -8798,6 +8799,7 @@
         "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound; the same query bounded to the past hour is measured beside it and stays on the row (ArcadeDB embedded, native time series: 0.333 ms bounded against 0.426 unbounded).",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
+        "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB, DuckDB, MongoDB, SQLite, SurrealDB (embedded), SurrealDB (server) and TimescaleDB build one; QuestDB builds none, because measuring it showed the index costs it or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
         "Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP."
       ],
       "columns": [
@@ -13068,6 +13070,7 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF1 (6.0M line items), of the 3.35 GiB shown, 3.344 GiB is our Python client and 0.008 GiB is the database.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
+        "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, PostgreSQL (tuned), SurrealDB (embedded) and SurrealDB (server) build one; ArangoDB, DuckDB and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
         "ArangoDB, MongoDB and SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell reached the 32g memory envelope (peak 32,768 MiB) and was killed by the kernel, the same envelope every engine on this table had; it did not run out of time, and there is no row.",
         "SurrealDB (server) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent"
@@ -13784,6 +13787,34 @@
         ]
       },
       {
+        "text": "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) build one. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
+        "values": [
+          "ArangoDB",
+          "ArcadeDB (one transaction)",
+          "ArcadeDB (server, one transaction)",
+          "MongoDB",
+          "Neo4j (vector index)",
+          "PostgreSQL + pgvector + AGE",
+          "Qdrant + Neo4j (no shared transaction)",
+          "SurrealDB (embedded)",
+          "SurrealDB (server)"
+        ]
+      },
+      {
+        "text": "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB, DuckDB, MongoDB, SQLite, SurrealDB (embedded), SurrealDB (server) and TimescaleDB build one; QuestDB builds none, because measuring it showed the index costs it or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
+        "values": [
+          "ArangoDB",
+          "ArcadeDB",
+          "DuckDB",
+          "MongoDB",
+          "SQLite",
+          "SurrealDB (embedded)",
+          "SurrealDB (server)",
+          "TimescaleDB",
+          "QuestDB"
+        ]
+      },
+      {
         "text": "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF1 (6.0M line items), of the 3.35 GiB shown, 3.344 GiB is our Python client and 0.008 GiB is the database.",
         "values": [
           "3.35",
@@ -13796,6 +13827,21 @@
         "text": "Each repetition runs 1,000 new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate.",
         "values": [
           "1,000"
+        ]
+      },
+      {
+        "text": "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, PostgreSQL (tuned), SurrealDB (embedded) and SurrealDB (server) build one; ArangoDB, DuckDB and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
+        "values": [
+          "ArcadeDB (embedded)",
+          "ArcadeDB (server)",
+          "MongoDB",
+          "PostgreSQL",
+          "PostgreSQL (tuned)",
+          "SurrealDB (embedded)",
+          "SurrealDB (server)",
+          "ArangoDB",
+          "DuckDB",
+          "SQLite"
         ]
       },
       {

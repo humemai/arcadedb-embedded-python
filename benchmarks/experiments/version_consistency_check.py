@@ -201,6 +201,29 @@ def check(path: str) -> list[str]:
             f"({backend}, table {table}): the gate cannot tell which engine "
             f"this names, so it can vouch for nothing on this row")
 
+    # (0b) ONE IDENTIFIER, ONE WIDTH. DECISIONS #49 makes the upstream commit
+    # THE identifier for an ArcadeDB row, because our build line prints the
+    # same release number for every commit we build. `engine_commit` is
+    # stamped verbatim from ARCADEDB_ENGINE_COMMIT, so its width is whatever
+    # the stage that exported it used, and the /next page carried both: 27
+    # cells at nine characters and two of the l4 served arms at forty. One
+    # engine, two spellings, on one page -- a reader comparing those rows
+    # cannot see they name the same build, which is the identifier's whole
+    # job, and it is the same defect this gate already refuses for a version
+    # string. Checked on the RENDERED payload rather than the rows, because
+    # this is about what the page says.
+    widths = defaultdict(set)
+    for table, backend, version in _rows(payload):
+        m = re.search(r"\barcadedb\b[^\u00b7]*\u00b7\s*([0-9a-f]{7,40})\b", version.lower())
+        if m:
+            widths[len(m.group(1))].add((table, backend))
+    if len(widths) > 1:
+        _w = ", ".join(f"{n} characters on {len(v)} row(s)" for n, v in sorted(widths.items()))
+        failures.append(
+            f"the ArcadeDB commit is printed at more than one width ({_w}); it is "
+            f"THE identifier for our rows (#49) and two spellings of it read as "
+            f"two engines")
+
     # (a) our version on somebody else's row
     for family, versions in sorted(seen.items()):
         if family == "arcadedb":
