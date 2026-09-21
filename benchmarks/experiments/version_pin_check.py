@@ -202,7 +202,46 @@ def check_runtime(code):
     return bad
 
 
+def list_pins() -> int:
+    """Print what every engine is pinned to, from the code that pins it.
+
+    Added because the question "what version is X?" kept being answered from
+    `docker images`, and a host's image list is a cache, not a record: it
+    holds whatever was pulled, including builds no longer pinned and tags that
+    moved. Answering from it produced three wrong calls in one session -- most
+    plainly running `mongo:8` instead of the pinned digest and concluding the
+    engine could not start on this kernel.
+
+    Deleting stale images does not fix that, which is the point worth keeping:
+    docker re-pulls whatever name it is given, so an empty cache reaches the
+    same wrong answer one download later. The fix is to read the pin, and this
+    makes reading the pin the easy thing to do.
+    """
+    import runner
+    rows = []
+    for name, spec in sorted(getattr(runner, "BACKENDS", {}).items()):
+        img = None
+        if isinstance(spec, dict):
+            img = spec.get("server_image") or spec.get("image")
+        if not img:
+            continue
+        rows.append((name, str(img)))
+    if not rows:
+        print("runner.BACKENDS names no images; nothing to list")
+        return 1
+    w = max(len(n) for n, _ in rows)
+    print(f"{len(rows)} pinned image(s), read from runner.BACKENDS:\n")
+    for name, img in rows:
+        repo, _, ref = img.partition("@")
+        print(f"  {name:<{w}}  {repo}" + (f"\n  {'':<{w}}  {ref}" if ref else ""))
+    print("\nThis is the pin. A host's `docker images` is a cache and may hold "
+          "builds that are\nno longer pinned; never read a version from it.")
+    return 0
+
+
 def main() -> int:
+    if "--list" in sys.argv:
+        return list_pins()
     code = {f: _read(f) for f in CODE_FILES if os.path.isfile(os.path.join(HERE, f))}
     doc = _strip_history(_read(DOC))
     code_digests = set()
