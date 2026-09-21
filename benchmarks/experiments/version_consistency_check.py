@@ -40,6 +40,18 @@ FAMILIES = ("arcadedb", "duckdb", "postgres", "neo4j", "mongo", "surrealdb",
 # entry is a DECISION, not a way to quiet the gate, and it must name two
 # genuinely different artifacts rather than two measurements of one.
 ALLOWED_SPLITS: dict[str, str] = {
+    "postgres":
+        "two upstream images, each pinned at the latest of its own line "
+        "(DECISIONS #87), not one engine measured twice: the document arms "
+        "run the official `postgres` image (17.10) and every arm built on "
+        "`pgvector/pgvector` runs the PostgreSQL that image vendors (17.11) "
+        "-- pgvector_dense, pgvector_sparse, and the PostgreSQL+pgvector+AGE "
+        "cross-model stack. The split is a patch level and was INVISIBLE "
+        "until 2026-09-21, because the composed rows named pgvector and AGE "
+        "and not the PostgreSQL underneath them (BUGS F77); the page now "
+        "prints both versions, so a reader can see it rather than be told. "
+        "October removes it: the re-pin moves every PostgreSQL arm to 18.6 "
+        "together, at which point this entry should go rather than be renewed",
     "surrealdb":
         "embedded and served SurrealDB are two artifacts with independent "
         "version lines, not one engine measured twice: the embedded arm runs "

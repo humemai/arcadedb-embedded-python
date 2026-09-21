@@ -1196,6 +1196,15 @@ def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
                     continue
                 if r.get("backend") != backend or r.get("scale") != scale or r.get("error"):
                     continue
+                # PAGE-SPEC 4a rule 3: settled=False blocks publication of
+                # the DISK reading. This path feeds the dense and sparse disk
+                # columns straight from the campaign log, bypassing
+                # load_canonical, which is why F72's 26 unsettled Milvus rows
+                # reached the page. Scoped to the disk field: the same row's
+                # peak-memory reading did converge and is still wanted.
+                if ("disk" in field.lower()
+                        and str(r.get("server_disk_settled")) == "False"):
+                    continue
                 if r.get("lane") not in lanes or r.get("rc", 0) not in (0, None):
                     continue
                 k = (r.get("workload"), r.get("rep"))
@@ -2015,7 +2024,15 @@ SKELETON_CONDITION_SWAPS = {
 
 
 def _thermal_note():
-    """The bench host throttles, and the page has to say so (PAGE-SPEC 7).
+    """NOT PUBLISHED since 2026-09-21, by the user's decision: the throttle
+    data is internal documentation, so no page carries it in any phrasing.
+
+    Kept, not deleted: every row still records `host_temp_c_*`,
+    `host_throttle_count_*` and `host_throttled_ms` (and since BUGS F80 the
+    embedded arms record them too), and this is the reader for that evidence
+    when a question about the host needs answering off the page.
+
+    Was: the bench host throttles, and the page has to say so (PAGE-SPEC 7).
 
     The September page does NOT carry this: the spec required it and the
     payload never had it, in any phrasing (BUGS.md F71). Generated from the
@@ -2058,9 +2075,6 @@ def _global_conditions(tables, october):
         if reps:
             out.append(reps)
         out += [_R("GLOBAL", "defaults"), _R("GLOBAL", "digest")]
-        therm = _thermal_note()
-        if therm:
-            out.append(therm)
         return out
     out = []
     for c in GLOBAL_CONDITIONS:
@@ -4005,10 +4019,16 @@ def _censored_notes(table_id):
             _, _cap, _peak = secs
             _cap_txt = f"{_cap} memory envelope" if _cap else "cell's memory envelope"
             _peak_txt = f" (peak {_peak:,.0f} MiB)" if isinstance(_peak, (int, float)) else ""
+            # EVERY DIGIT IN THE SENTENCE IS PINNED TO ITS SOURCE, including
+            # the peak. page_check refuses an unpinned number in a generated
+            # condition, and the peak comes off the row the same way the
+            # envelope does -- passing one and not the other is how a real
+            # number ends up looking typed.
             why = _gen(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell reached "
                        f"the {_cap_txt}{_peak_txt} and was killed by the kernel, the same envelope every "
                        f"engine on this table had; it did not run out of time, and there is no row.",
-                       display_name(backend), scale_label(lane, scale), _cap_txt)
+                       display_name(backend), scale_label(lane, scale), _cap_txt,
+                       _peak_txt.strip(" ()").replace("peak ", "") if _peak_txt else None)
             kind = "envelope"
         elif isinstance(secs, int) or secs is None:
             budget = f"{secs / 3600:g} hour" if secs else "its"

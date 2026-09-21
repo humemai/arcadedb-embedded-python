@@ -1713,10 +1713,10 @@
               "n": 5
             },
             "disk GiB": {
-              "median": 4.6157,
-              "min": 4.4495,
-              "max": 4.6478,
-              "n": 5
+              "median": 4.5587,
+              "min": 4.4765,
+              "max": 4.6409,
+              "n": 2
             },
             "cold p50 ms": {
               "median": 9.401,
@@ -8000,7 +8000,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "dbbench:pg-age",
-          "version_name": "pgvector 0.8.6 + age 1.7.0",
+          "version_name": "PostgreSQL 17.11 + pgvector 0.8.6 + age 1.7.0",
           "host": null,
           "metrics": {
             "trials": {
@@ -8359,7 +8359,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "dbbench:pg-age",
-          "version_name": "pgvector 0.8.6 + age 1.7.0",
+          "version_name": "PostgreSQL 17.11 + pgvector 0.8.6 + age 1.7.0",
           "host": null,
           "metrics": {
             "p50 ms": {
@@ -12859,7 +12859,7 @@
         "ArangoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "MongoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: container exited 137 with no output (cgroup OOM kill: raise the envelope or bound the harn",
+        "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell reached the 32g memory envelope (peak 32,768 MiB) and was killed by the kernel, the same envelope every engine on this table had; it did not run out of time, and there is no row.",
         "SurrealDB (server) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent"
       ],
       "columns": [
@@ -13363,8 +13363,8 @@
         {
           "backend": "SurrealDB (embedded)",
           "column": null,
-          "kind": "failed",
-          "why": "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: container exited 137 with no output (cgroup OOM kill: raise the envelope or bound the harn"
+          "kind": "envelope",
+          "why": "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell reached the 32g memory envelope (peak 32,768 MiB) and was killed by the kernel, the same envelope every engine on this table had; it did not run out of time, and there is no row."
         },
         {
           "backend": "SurrealDB (server)",
@@ -13581,11 +13581,12 @@
         ]
       },
       {
-        "text": "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: container exited 137 with no output (cgroup OOM kill: raise the envelope or bound the harn",
+        "text": "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell reached the 32g memory envelope (peak 32,768 MiB) and was killed by the kernel, the same envelope every engine on this table had; it did not run out of time, and there is no row.",
         "values": [
           "SurrealDB (embedded)",
           "TPC-H SF10 (60.0M line items)",
-          "container exited 137 with no output (cgroup OOM kill: raise the envelope or bound the harn"
+          "32g memory envelope",
+          "32,768 MiB"
         ]
       },
       {

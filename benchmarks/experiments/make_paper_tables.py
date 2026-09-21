@@ -415,17 +415,30 @@ def load_canonical(apply_corpus=True):
         # prints (4.6157 GiB) is itself one of them (BUGS.md F72).
         #
         # OCTOBER ONLY, deliberately. Dropping these from September's freeze
-        # would change a PUBLISHED page without a decision, and page_check
-        # would then fail the live page it is meant to protect. September's
-        # rows are reported instead, once per freeze, so the gap is visible
-        # while the fix stays October's.
+        # SEPTEMBER NOW DROPS THEM TOO (user decision, 2026-09-21). The rule
+        # was October-only because applying it would change a published page
+        # without a decision; the decision has been given. No cell is lost by
+        # it: the three affected cells keep 20, 12 and 33 settled rows, so the
+        # disk medians move slightly and nothing goes blank. SEPT_UNSETTLED
+        # still records which rows went, so the change is auditable.
         if str(r.get("server_disk_settled")) == "False":
-            if OCTOBER:
-                UNSETTLED_DISK.append({"lane": r["lane"], "backend": r["backend"],
-                                       "scale": r["scale"], "rep": r.get("rep"),
-                                       "disk_data_mb": r.get("disk_data_mb")})
-                continue
-            SEPT_UNSETTLED.append(f'{r["lane"]}/{r["scale"]}/{r["backend"]} rep {r.get("rep")}')
+            UNSETTLED_DISK.append({"lane": r["lane"], "backend": r["backend"],
+                                   "scale": r["scale"], "rep": r.get("rep"),
+                                   "disk_data_mb": r.get("disk_data_mb")})
+            if not OCTOBER:
+                SEPT_UNSETTLED.append(f'{r["lane"]}/{r["scale"]}/{r["backend"]} rep {r.get("rep")}')
+            # BLANK THE DISK READING, KEEP THE ROW. PAGE-SPEC 4a rule 3 sits
+            # in a paragraph entirely about `disk GiB`: what failed to
+            # converge is the disk sampling, so the disk number is not
+            # publishable and the latencies measured in the same cell are
+            # untouched. Dropping the whole row was over-broad and had a
+            # knock-on that proved it: at l3s/small/milvus_sparse the
+            # unsettled rows are the NEWEST for reps 2, 4 and 5, so dropping
+            # them promoted rows from an older harness generation and
+            # provenance_check refused the cell for a SPLIT SCHEMA -- a real
+            # defect manufactured by the fix rather than found by it.
+            for _k in [k for k in r if "disk" in k.lower() and k != "server_disk_settled"]:
+                r[_k] = None
         # THE ROW MUST BE ON THE CORPUS ITS TIER PUBLISHES. See PAPER_CORPUS:
         # a retired synthetic corpus shares scale names with the real one, and
         # both survive the canonical key because that key contains n_docs and
