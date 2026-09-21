@@ -43,7 +43,7 @@ def _vec(i):
     kind. Distinct directions, and unit length because DOT_PRODUCT documents
     unit vectors as its expectation and warns otherwise.
     """
-    rnd = _random.Random(i)
+    rnd = _random.Random(i)  # nosec B311 - deterministic test corpus, not security
     v = [rnd.uniform(-1.0, 1.0) for _ in range(DIM)]
     norm = _math.sqrt(sum(x * x for x in v)) or 1.0
     return [x / norm for x in v]
