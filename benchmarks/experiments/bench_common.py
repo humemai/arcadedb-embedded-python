@@ -294,6 +294,43 @@ def arcade_durability_readback(fallback_cls=None):
     return f"txWalFlush={value}, which is neither class (DECISIONS #90)"
 
 
+# INDEX BUILD IS ITS OWN NUMBER (FAIRNESS F14, DECISIONS #112), and ONE
+# implementation of the timer for every lane that wants it. The document lane
+# had its own copy for two hours; this file exists so the second lane does not
+# start a second version that slowly disagrees with the first, which is the
+# defect this repository keeps finding in typed lists and duplicated helpers.
+#
+# WHAT IT DOES NOT DO is restructure a lane's load. Every lane already times
+# its build or ingest end to end, so timing only the index DDL gives the split
+# by subtraction and cannot move the total it divides.
+@contextlib.contextmanager
+def index_timer(adapter):
+    """Accumulate the time an adapter spends building indexes."""
+    _t = time.perf_counter()
+    try:
+        yield
+    finally:
+        # PARENTHESISED ON PURPOSE: `a or 0.0 + b` parses as `a or (0.0 + b)`,
+        # so an adapter that builds two indexes would keep the first timing
+        # and discard the second. MongoDB's document arm builds four.
+        _prev = getattr(adapter, "index_s", 0.0) or 0.0
+        adapter.index_s = round(_prev + (time.perf_counter() - _t), 3)
+
+
+def index_split(adapter, total_s):
+    """(load_s, index_s, index_before_load) for a row, from one timed total.
+
+    `index_before_load` is the arm the split cannot describe: SurrealDB has to
+    DEFINE its index before the first row lands on the SDK's SurrealKV store,
+    so its index work is spread through the load by construction and the DDL
+    itself times as nearly nothing. The flag lets a table say that rather than
+    print a near-zero that reads as free.
+    """
+    idx = round(getattr(adapter, "index_s", 0.0) or 0.0, 2)
+    return (round(max(total_s - idx, 0.0), 2), idx,
+            bool(getattr(adapter, "index_before_load", False)))
+
+
 def sqlite_synchronous(cls=None):
     return "FULL" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "NORMAL"
 

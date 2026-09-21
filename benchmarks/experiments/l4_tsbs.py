@@ -182,7 +182,8 @@ class ArcadeTS:
         for c, t in (("host", "STRING"), ("ts", "LONG"), ("uu", "DOUBLE"),
                      ("us", "DOUBLE"), ("ui", "DOUBLE")):
             db.command("sql", f"CREATE PROPERTY Point.{c} {t}")
-        db.command("sql", "CREATE INDEX ON Point (host, ts) UNIQUE")
+        with bench_common.index_timer(self):
+            db.command("sql", "CREATE INDEX ON Point (host, ts) UNIQUE")
         db.begin()
         for n, (h, ts, uu, us, ui) in enumerate(pts):
             db.command("sql", "INSERT INTO Point SET host=:h, ts=:t, uu=:a, us=:b, ui=:c",
@@ -263,7 +264,8 @@ class ArcadeTSServer(ArcadeTS):
         for c, t in (("host", "STRING"), ("ts", "LONG"), ("uu", "DOUBLE"),
                      ("us", "DOUBLE"), ("ui", "DOUBLE")):
             self._post("command", f"CREATE PROPERTY Point.{c} {t}")
-        self._post("command", "CREATE INDEX ON Point (host, ts) UNIQUE")
+        with bench_common.index_timer(self):
+            self._post("command", "CREATE INDEX ON Point (host, ts) UNIQUE")
         buf = []
         for h, ts, uu, us, ui in pts:
             buf.append(f"INSERT INTO Point SET host='{h}', ts={ts}, uu={uu}, us={us}, ui={ui}")
@@ -594,7 +596,8 @@ class DuckTS:
         # margin grows with the corpus, because without an index the last
         # point of one host is found by reading every row of every host, and
         # the published tier is 25.9M rows over 1,000 hosts.
-        self.cx.execute("CREATE INDEX p_host_ts ON p (host, ts)")
+        with bench_common.index_timer(self):
+            self.cx.execute("CREATE INDEX p_host_ts ON p (host, ts)")
 
     def q_last(self):
         return self.cx.execute(
@@ -651,7 +654,8 @@ class SQLiteTS:
         for lo in range(0, len(pts), 50_000):
             self.cx.executemany("INSERT INTO p VALUES (?,?,?,?,?)", pts[lo:lo + 50_000])
             self.cx.commit()
-        self.cx.execute("CREATE INDEX p_host_ts ON p (host, ts)")
+        with bench_common.index_timer(self):
+            self.cx.execute("CREATE INDEX p_host_ts ON p (host, ts)")
         self.cx.commit()
 
     def q_last(self):
@@ -812,7 +816,8 @@ class TimescaleTS:
             with c.copy("COPY p (host, ts, uu, us, ui) FROM STDIN") as cp:
                 for h, t, uu, us, ui in pts:
                     cp.write_row((h, _dt.datetime.fromtimestamp(t, _dt.timezone.utc), uu, us, ui))
-            c.execute("CREATE INDEX p_host_ts ON p (host, ts DESC)")
+            with bench_common.index_timer(self):
+                c.execute("CREATE INDEX p_host_ts ON p (host, ts DESC)")
 
     def _t(self, s):
         return _dt.datetime.fromtimestamp(s, _dt.timezone.utc)
@@ -1043,7 +1048,12 @@ class SurrealTS:
         return self._ver
 
     def ingest(self, pts):
-        self.db.query("DEFINE TABLE p SCHEMALESS; DEFINE INDEX p_host_ts ON p FIELDS host, ts")
+        # BEFORE THE LOAD, so the split cannot describe this arm: the index
+        # work is spread through ingest by construction and the DDL itself
+        # times as nearly nothing. Flagged so the table says so.
+        self.index_before_load = True
+        with bench_common.index_timer(self):
+            self.db.query("DEFINE TABLE p SCHEMALESS; DEFINE INDEX p_host_ts ON p FIELDS host, ts")
         buf = []
         for h, ts, uu, us, ui in pts:
             buf.append({"host": h, "ts": _dt.datetime.fromtimestamp(ts, _dt.timezone.utc),
@@ -1144,7 +1154,8 @@ class ArangoTS:
 
     def ingest(self, pts):
         col = self.db.create_collection("p", sync=arango_common.sync_flag())
-        col.add_index({"type": "persistent", "fields": ["host", "ts"]})
+        with bench_common.index_timer(self):
+            col.add_index({"type": "persistent", "fields": ["host", "ts"]})
         buf = []
         for h, ts, uu, us, ui in pts:
             buf.append({"host": h, "ts": ts * 1000, "uu": uu, "us": us, "ui": ui})
@@ -1279,6 +1290,16 @@ def main():
     dt = time.perf_counter() - t0
     out["ingest_s"] = round(dt, 2)
     out["ingest_pts_per_s"] = round(len(pts) / dt, 1)
+    # THE SPLIT (FAIRNESS F14). `ingest_s` on THIS lane has always meant the
+    # whole of ingest(), index build included, and it is what the page prints
+    # as "ingest total s" -- so it keeps that meaning and the split is
+    # reported beside it. The load-only figure is `load_s` here and
+    # `ingest_s` on the document and dense lanes, which is an inconsistency
+    # in the field names and a deliberate one: renaming this lane's field
+    # would silently change what a published column means for every row
+    # already frozen under it.
+    out["load_s"], out["index_s"], out["index_before_load"] = \
+        bench_common.index_split(b, out["ingest_s"])
 
     # The engine's own catch-up, priced but not charged to the ingest rate.
     # An arm with no catch-up records 0.0 rather than nothing, so a row can

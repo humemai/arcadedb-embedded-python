@@ -298,37 +298,11 @@ def _prepare(li):
     return li
 
 
-# INDEX BUILD IS ITS OWN NUMBER (FAIRNESS F14, DECISIONS #112). The dense
-# vector table has separated `ingest s` from `index s` since it was written;
-# every other table folded the build into ingest, which hid both the cost of
-# an index and the fact that the arms do not pay it the same way. SurrealDB
-# must define its index BEFORE the load on the SDK's SurrealKV store, so its
-# index work is spread through ingest by construction and cannot be timed as
-# a step -- measured 2026-09-22, that is about 5.3 s of a 24.2 s ingest, sat
-# inside a number every other engine pays with no index work in it at all.
-#
-# Timed here rather than by restructuring each adapter's ingest: the lane
-# already measures the whole of build() as `build_s`, so timing the index DDL
-# gives the split arithmetically, and an adapter that builds no index reports
-# 0.0 rather than nothing. `index_before_load` says which arms cannot be
-# split, so the page can say so instead of printing a 0.0 that reads as free.
-@contextlib.contextmanager
-def index_timer(adapter):
-    _t = time.perf_counter()
-    try:
-        yield
-    finally:
-        # PARENTHESISED ON PURPOSE: `a or 0.0 + b` parses as `a or (0.0 + b)`,
-        # so an adapter that builds two indexes would have kept the first
-        # timing and discarded the second.
-        _prev = getattr(adapter, "index_s", 0.0) or 0.0
-        adapter.index_s = round(_prev + (time.perf_counter() - _t), 3)
-
-
-class IndexTimed:
-    """Mixed into every adapter on this lane; see index_timer above."""
-    index_s = 0.0
-    index_before_load = False
+# INDEX BUILD IS ITS OWN NUMBER (FAIRNESS F14, DECISIONS #112). The timer
+# lives in bench_common so this lane and the time-series lane cannot grow two
+# versions of it; see index_timer/index_split there for what it does and what
+# it deliberately does not do.
+index_timer = bench_common.index_timer
 
 
 class LineItems:
@@ -1434,9 +1408,8 @@ def main():
     # them. `index_before_load` marks the arm whose index cannot be timed as a
     # step because it exists before the first row lands, so the page can say
     # that instead of printing a near-zero that reads as free.
-    out["index_s"] = round(getattr(b, "index_s", 0.0) or 0.0, 2)
-    out["ingest_s"] = round(max(out["build_s"] - out["index_s"], 0.0), 2)
-    out["index_before_load"] = bool(getattr(b, "index_before_load", False))
+    out["ingest_s"], out["index_s"], out["index_before_load"] = \
+        bench_common.index_split(b, out["build_s"])
     # COUNTED, not asserted: the stream must have delivered every row the
     # file holds, or the row would publish a per-second figure over a partial
     # load under the tier's label (the l2 lane's shortfall rule).

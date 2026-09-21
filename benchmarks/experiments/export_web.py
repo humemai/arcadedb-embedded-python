@@ -1473,6 +1473,11 @@ OCT_TABLE_METRICS = {
         ("cold_first_query_ms", "cold first query ms"),
         ("ingest_pts_per_s", "ingest points/s"),
         ("ingest_s", "ingest total s"),
+        # The split beside the total, as on the document and dense tables.
+        # This lane's load-only field is `load_s` rather than `ingest_s`
+        # because `ingest_s` was published as the total first; see l4_tsbs.
+        ("load_s", "ingest s"),
+        ("index_s", "index s"),
         ("peak_anon_mib_sum", "peak memory GiB"),
         ("disk_data_mb", "disk GiB"),
     ],
