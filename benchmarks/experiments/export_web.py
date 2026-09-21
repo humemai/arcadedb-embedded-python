@@ -1426,6 +1426,16 @@ OCT_TABLE_METRICS = {
         ("recall_filtered", "filtered recall@10"),
         (_rate(("n_products", "n_edges"), "build_s"), "ingest+index vertices+edges/s"),
         ("build_s", "ingest+index total s"),
+        # AND NOW THE TWO HALVES (FAIRNESS F14). The combined name was always
+        # honest -- this lane builds the page's most expensive indexes, an
+        # LSM_VECTOR, an HNSW, a FAISS IVF, a MongoDB vector search index --
+        # but a combined number cannot say whether an engine is slow to load or
+        # slow to index, and on this lane that is most of the question. l3d and
+        # l3s keep theirs combined for the reason their own conditions give:
+        # Qdrant and Chroma build the index while ingesting, so the split is not
+        # defined there.
+        ("ingest_s", "ingest s"),
+        ("index_s", "index s"),
         ("peak_anon_mib_sum", "peak memory GiB"),
         (_disk_data, "disk GiB"),
     ],

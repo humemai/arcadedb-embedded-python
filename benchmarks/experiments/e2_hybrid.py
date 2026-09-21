@@ -216,7 +216,8 @@ class ArcadeE2:
         db.command("sql", "CREATE PROPERTY Product.pid INTEGER")
         db.command("sql", "CREATE PROPERTY Product.views INTEGER")
         db.command("sql", "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS")
-        db.command("sql", "CREATE INDEX ON Product (pid) UNIQUE")
+        with bench_common.index_timer(self):
+            db.command("sql", "CREATE INDEX ON Product (pid) UNIQUE")
         db.command("sql", "CREATE EDGE TYPE RELATED")
         with db.graph_batch(batch_size=BATCH, expected_edge_count=len(edges),
                             bidirectional=True, commit_every=BATCH) as b:
@@ -225,9 +226,10 @@ class ArcadeE2:
             rids = b.create_vertices("Product", rows)
             b.new_edges([rids[s] for s, _ in edges], "RELATED",
                         [rids[d] for _, d in edges])
-        db.command("sql", f'''CREATE INDEX ON Product (embedding) LSM_VECTOR
-                   METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
-                   "beamWidth": 100, "storeVectorsInGraph": false }}''')
+        with bench_common.index_timer(self):
+            db.command("sql", f'''CREATE INDEX ON Product (embedding) LSM_VECTOR
+                       METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
+                       "beamWidth": 100, "storeVectorsInGraph": false }}''')
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         """vector top-k -> 1-hop related of best hit -> bump views, one txn."""
@@ -368,9 +370,10 @@ class ArcadeE2Server(ArcadeE2):
                 self._script(buf); buf = []
         if buf:
             self._script(buf)
-        self._post("command", f'''CREATE INDEX ON Product (embedding) LSM_VECTOR
-                   METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
-                   "beamWidth": 100, "storeVectorsInGraph": false }}''', timeout=3600)
+        with bench_common.index_timer(self):
+            self._post("command", f'''CREATE INDEX ON Product (embedding) LSM_VECTOR
+                       METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
+                       "beamWidth": 100, "storeVectorsInGraph": false }}''', timeout=3600)
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         r = self.rq.post(f"{self.base}/begin/bench", timeout=60)
@@ -472,8 +475,9 @@ class SurrealE2:
         # A fresh cell gets a fresh server; a reused one (laptop smoke) must
         # not fail on "index already exists".
         q("REMOVE TABLE IF EXISTS related; REMOVE TABLE IF EXISTS product")
-        q(f"DEFINE INDEX pe ON product FIELDS embedding "
-          f"HNSW DIMENSION {DIM} DIST EUCLIDEAN")
+        with bench_common.index_timer(self):
+            q(f"DEFINE INDEX pe ON product FIELDS embedding "
+              f"HNSW DIMENSION {DIM} DIST EUCLIDEAN")
         for s in range(0, len(vecs), BATCH):
             # id is the RECORD-ID PART, not the full thing. Passing
             # f"product:{i}" here stores product:<product:i>, and every later
@@ -611,8 +615,10 @@ class ArangoE2:
         # PostgreSQL+AGE a primary key, Neo4j an index, MongoDB the vector
         # index's own filter path, SurrealDB its record id -- so an index is
         # the equivalent configuration and keeps one query text across arms.
-        prod.add_index({"type": "persistent", "fields": ["pid"], "name": "pid_idx"})
-        self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(prod, "embedding", DIM, len(vecs))
+        with bench_common.index_timer(self):
+            prod.add_index({"type": "persistent", "fields": ["pid"], "name": "pid_idx"})
+        with bench_common.index_timer(self):
+            self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(prod, "embedding", DIM, len(vecs))
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         aql = self.db.aql
@@ -720,11 +726,13 @@ class MongoE2:
                               for i in range(s, min(s + BATCH, len(vecs)))], ordered=False)
         for s in range(0, len(edges), BATCH):
             rel.insert_many([{"src": a, "dst": b} for a, b in edges[s:s + BATCH]], ordered=False)
-        rel.create_index("src")
+        with bench_common.index_timer(self):
+            rel.create_index("src")
         # `pid` as a filter field so the filtered search is a PRE-filter: the
         # candidate set goes into the index, not around it.
-        mongo_common.create_vector_index(prod, "embedding", DIM, 16, 100,
-                                         similarity="euclidean", filter_paths=("pid",))
+        with bench_common.index_timer(self):
+            mongo_common.create_vector_index(prod, "embedding", DIM, 16, 100,
+                                             similarity="euclidean", filter_paths=("pid",))
         mongo_common.wait_queryable(prod)
         self.prod, self.rel = prod, rel
         self.TXN_SCOPE = self._probe_txn_scope()
@@ -865,11 +873,13 @@ class PgAgeE2:
         with c.copy("COPY product (pid, views, embedding) FROM STDIN") as cp:
             for i in range(len(vecs)):
                 cp.write_row((i, 0, "[" + ",".join("%.9g" % x for x in vecs[i]) + "]"))
-        c.execute("CREATE INDEX ON product USING hnsw (embedding vector_l2_ops) WITH (m = 16, ef_construction = 100)")
+        with bench_common.index_timer(self):
+            c.execute("CREATE INDEX ON product USING hnsw (embedding vector_l2_ops) WITH (m = 16, ef_construction = 100)")
         c.execute("SELECT create_graph('e2graph')")
         c.execute("SELECT * FROM cypher('e2graph', $$ CREATE (:Product {pid: -1}) $$) AS (v agtype)")
         c.execute("SELECT * FROM cypher('e2graph', $$ MATCH (p:Product {pid: -1}) DELETE p $$) AS (v agtype)")
-        c.execute("""CREATE INDEX ON e2graph."Product" USING btree (ag_catalog.agtype_access_operator(properties, '"pid"'::agtype))""")
+        with bench_common.index_timer(self):
+            c.execute("""CREATE INDEX ON e2graph."Product" USING btree (ag_catalog.agtype_access_operator(properties, '"pid"'::agtype))""")
         for s in range(0, len(vecs), BATCH):
             c.execute("SELECT * FROM cypher('e2graph', $$ UNWIND $rows AS r CREATE (:Product {pid: r}) $$, %s) AS (v agtype)",
                       (json.dumps({"rows": list(range(s, min(s + BATCH, len(vecs))))}),))
@@ -1268,6 +1278,14 @@ def main():
     with _beat.phase("build", n=PRODUCTS, n_edges=len(edges)):
         b.build(vecs, edges)
     out["build_s"] = round(time.perf_counter() - t0, 2)
+    # THE SPLIT (FAIRNESS F14). This lane builds the page's most expensive
+    # indexes -- LSM_VECTOR, HNSW, FAISS IVF, a MongoDB vector search index --
+    # and every one of them was inside `ingest total s` with the load, so the
+    # column could not say whether an engine was slow to ingest or slow to
+    # index. Ten index steps are timed across the arms; an arm that builds
+    # none would report 0.0, and on this lane none does.
+    out["ingest_s"], out["index_s"], out["index_before_load"] = \
+        bench_common.index_split(b, out["build_s"])
     # AFTER THE BUILD, not before it. ArangoDB's waitForSync lives on the
     # collection, so the adapter can only read it back once build() has created
     # one; stamping before the build took the map's relaxed constant and a
