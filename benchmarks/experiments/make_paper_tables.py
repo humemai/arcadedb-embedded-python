@@ -115,6 +115,27 @@ PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
                 "e2": ["e2"],
                 "l4": ["ts100"],
                 "lifecycle": ["lc10k", "lc100k", "lc1m", "lc10m"]}
+# OCTOBER'S LARGE SIZES, WHICH #108 MAKES ROW GROUPS RATHER THAN REPLACEMENTS.
+# Dense and sparse always carried two (l3d small+deep10m, l3s three), so the
+# multi-size rendering has worked all along; these four lanes were simply
+# never added, because the list below them still implemented #103b's rule
+# that a raise REPLACES a tier when every engine has landed. #108 retired
+# that rule on 2026-09-19 and nothing here followed.
+#
+# The cost of the gap is measured, not hypothetical: on 2026-09-21 the
+# October campaign had 78 rows that reached no table, no figure and no gate
+# -- l4/ts1000 (56, already paid for by qOC), e2/e2_500k (21 and climbing
+# while qOD spends about 16 h on it), l2/sf1full -- with l1tpc/tpch10 due to
+# join them when qOE runs. That is the same silent discard the comment above
+# describes for LANES, happening to SIZES.
+#
+# SEPTEMBER MUST NOT GAIN THEM. Its store holds tpch10 and sf1full rows from
+# the qEA/qEB extension, measured at September's pin under #103b's rule that
+# they replace a tier only on a full switch that never happened. Adding them
+# unconditionally would change the live page without a decision, which is
+# exactly the trap F72 documented.
+OCTOBER_LARGE_SCALES = {"l1tpc": "tpch10", "l2": "sf1full",
+                        "e2": "e2_500k", "l4": "ts1000"}
 # THE SEPTEMBER EXTENSION'S RAISED SIZES (DECISIONS #103b) ARE NOT LISTED YET,
 # ON PURPOSE. A raised size REPLACES a tier: documents analytics moves to
 # tpch10, time series to ts1000, cross-model to e2_500k, graph analytics to
@@ -168,6 +189,12 @@ if INSTRUMENT and INSTRUMENT != "2026-10":
                      "freeze knows. Set it to 2026-10, or leave it unset for "
                      "September.")
 OCTOBER = INSTRUMENT == "2026-10"
+# Applied here and not at the literal above, because OCTOBER is not known
+# until the instrument is read. A skeleton keeps its own tiers either way.
+if OCTOBER and not SKELETON:
+    for _lane, _scale in OCTOBER_LARGE_SCALES.items():
+        if _scale not in PAPER_SCALES.get(_lane, []):
+            PAPER_SCALES.setdefault(_lane, []).append(_scale)
 # A SKELETON KEEPS ITS OWN NAMES (DECISIONS #86) whatever else is exported: it
 # is a laptop placeholder run, not a campaign, so it is tested first.
 FROZEN_NAME = ("runs_skeleton_laptop.csv" if SKELETON

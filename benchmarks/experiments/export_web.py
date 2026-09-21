@@ -1774,6 +1774,13 @@ LANES = {
     "l2": {
         "title": "Graph OLTP",
         "dataset": "LDBC-SNB Interactive (SF1, SF10)",
+        # THE PROJECTION TIERS, NAMED RATHER THAN INHERITED. October adds
+        # sf1full to PAPER_SCALES["l2"] for the ANALYTICS table, and this
+        # table draws from the same lane; without naming its tiers it would
+        # print the persons-and-KNOWS projection beside the full network,
+        # which is two corpora in one table and PAGE-SPEC rule 4's whole
+        # subject.
+        "only_scales": {"sf1"} if SKELETON else {"sf1", "sf10"},
         # Peak anon last, and present at all because the page had no memory
         # column anywhere while every lane has measured it since the #52 fix.
         # It is also the column that shows our largest loss on this lane:
@@ -1843,7 +1850,13 @@ LANES = {
         # from it is a declared outcome (#103g) rather than a block on every
         # other engine's rows. September's attempt did not switch, and those
         # nine sf1full rows publish in October at October's pin.
-        "only_scales": {"sf1"} if SKELETON else {"sf1", "sf10"},
+        # OCTOBER IS THE FULL NETWORK, one size (#108's table: "graph
+        # analytics -- full SF1 network -- SF10 full network is not
+        # feasible"). September keeps the two projection tiers it published,
+        # so the live page is untouched. This is the switch the comment above
+        # anticipated: the sf1full rows publish in October at October's pin.
+        "only_scales": ({"sf1"} if SKELETON
+                        else {"sf1full"} if _OCTOBER_ENV else {"sf1", "sf10"}),
         "only_workload": "olap",
         # p50, not the mean the page printed until 2026-09-10 (the lane's own
         # comment says p50 first, and it recorded one); p99 arrives with the
