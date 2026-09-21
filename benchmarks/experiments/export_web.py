@@ -5093,12 +5093,27 @@ def _zero_growth_notes(table_id):
         except Exception:  # noqa: BLE001 - a lane whose tier the map does not name
             continue
         mb, gib = f"{sb:.0f}", f"{sb / 1024:.2f}"
+        # THE CAUSE WAS TRACED ON ONE ENGINE AND WAS BEING TOLD ABOUT ALL OF
+        # THEM. The preallocated write-ahead log is SurrealDB 3.2.4's, verified
+        # 2026-09-15; the clause naming it was printed on every zero-growth
+        # server row, so FalkorDB's sentence read "its disk cell is 0.0 ...
+        # which for SurrealDB's server includes a preallocated write-ahead log
+        # of about 6 MB" -- another engine's explanation, wearing FalkorDB's
+        # own baseline figure. Incoherent to read and false as a claim.
+        #
+        # The zero itself is measured on every one of them and still needs
+        # saying, or the cell reads as "stores nothing". So the fact is
+        # printed for all and the cause only where it was established. An
+        # engine whose floor we have not traced gets a sentence that says what
+        # was measured and stops, which is the honest shape.
+        _why = (f", which for this engine is a preallocated write-ahead log of about "
+                f"{mb} MB that the whole corpus fits inside at this size"
+                if "SurrealDB" in str(label) else "")
         notes.append(_gen(
             f"{label} at {sl}: its disk cell is 0.0 because the server container did not "
-            f"grow over its empty footprint during the run, which for SurrealDB's server "
-            f"includes a preallocated write-ahead log of about {mb} MB that the whole corpus "
-            f"fits inside at this size; read the cell as a floor under {gib} GiB, not as a size.",
-            label, sl, "0.0", mb, gib))
+            f"grow over its empty footprint during the run{_why}; read the cell as a floor "
+            f"under {gib} GiB, not as a size.",
+            label, sl, "0.0", *( [mb, gib] if _why else [gib] )))
     return notes
 
 

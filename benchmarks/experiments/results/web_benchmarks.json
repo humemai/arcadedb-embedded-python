@@ -4812,8 +4812,8 @@
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "Each repetition runs every read against a fresh set of start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200); the p50 and p99 are over those.",
-        "FalkorDB at SF1 (10k people, 181k friendships): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 6 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.01 GiB, not as a size.",
-        "FalkorDB at SF10 (66k people, 1.9M friendships): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 6 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.01 GiB, not as a size.",
+        "FalkorDB at SF1 (10k people, 181k friendships): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run; read the cell as a floor under 0.01 GiB, not as a size.",
+        "FalkorDB at SF10 (66k people, 1.9M friendships): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run; read the cell as a floor under 0.01 GiB, not as a size.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ Arrow INSERT SELECT into the persons and knows tables under a property graph."
       ],
       "columns": [
@@ -13734,22 +13734,20 @@
         ]
       },
       {
-        "text": "FalkorDB at SF1 (10k people, 181k friendships): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 6 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.01 GiB, not as a size.",
+        "text": "FalkorDB at SF1 (10k people, 181k friendships): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run; read the cell as a floor under 0.01 GiB, not as a size.",
         "values": [
           "FalkorDB",
           "SF1 (10k people, 181k friendships)",
           "0.0",
-          "6",
           "0.01"
         ]
       },
       {
-        "text": "FalkorDB at SF10 (66k people, 1.9M friendships): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run, which for SurrealDB's server includes a preallocated write-ahead log of about 6 MB that the whole corpus fits inside at this size; read the cell as a floor under 0.01 GiB, not as a size.",
+        "text": "FalkorDB at SF10 (66k people, 1.9M friendships): its disk cell is 0.0 because the server container did not grow over its empty footprint during the run; read the cell as a floor under 0.01 GiB, not as a size.",
         "values": [
           "FalkorDB",
           "SF10 (66k people, 1.9M friendships)",
           "0.0",
-          "6",
           "0.01"
         ]
       },
