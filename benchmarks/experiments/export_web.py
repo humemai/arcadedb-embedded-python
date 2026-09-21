@@ -193,8 +193,17 @@ def _pinned_dir(name, expected=None):
     if not pin:
         raise SystemExit(f"BENCH_ENGINE_COMMIT is unset: {name} is pinned only")
     cand = HERE / "results" / f"{name}_{pin}"
+    # ABSENT IS NOT PARTIAL. A PARTIAL directory is what this refusal is for:
+    # an incomplete overlay standing in for a complete one is a wrong number,
+    # not a safety net. An ABSENT one is a lane that has not run at this pin,
+    # which for most of a campaign is the normal state -- sparse_mp comes from
+    # stage 8 of 10 and the dense overlays from stage 9, while October lands
+    # table by table from stage 1. Callers already expect this: the sparse
+    # multipass builder immediately below does `if not root.is_dir(): return
+    # None`, which the raise made unreachable, and the table is simply not
+    # drawn. Returning the path lets that guard do its job.
     if not cand.is_dir():
-        raise SystemExit(f"{cand.name} missing; no fallback, re-run the lane")
+        return cand
     if expected:
         missing = [f for f in expected if not (cand / f).is_file()]
         if missing:

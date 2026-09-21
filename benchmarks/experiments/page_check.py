@@ -585,6 +585,43 @@ RETIRED_TABLES = {
 }
 
 
+def _table_lanes():
+    """page table id -> (lane, workload), read from export_web by ast.
+
+    Not imported: export_web validates pinned artifacts at module scope and
+    would refuse here for reasons that have nothing to do with this gate.
+    """
+    if not hasattr(_table_lanes, "_v"):
+        import ast as _ast
+        src = (HERE / "export_web.py").read_text(encoding="utf-8")
+        out = {}
+        for node in _ast.parse(src).body:
+            if (isinstance(node, _ast.Assign)
+                    and getattr(node.targets[0], "id", "") == "_TABLE_LANE"):
+                out = _ast.literal_eval(node.value)
+        _table_lanes._v = out
+    return _table_lanes._v
+
+
+def _lanes_with_rows():
+    """Lanes that have at least one row in this campaign's frozen CSV.
+
+    The evidence for "this lane has run at this pin". Empty when the freeze
+    does not exist yet, which makes every lane read as not-yet-measured --
+    correct, because nothing has been frozen.
+    """
+    if not hasattr(_lanes_with_rows, "_v"):
+        import csv as _csv_local
+        frozen = HERE / "results" / _frozen_name()
+        lanes = set()
+        if frozen.exists():
+            for r in _csv_local.DictReader(frozen.open()):
+                if r.get("lane"):
+                    lanes.add(r["lane"])
+        _lanes_with_rows._v = lanes
+    return _lanes_with_rows._v
+
+
 def _check_no_arcadedb_row_lost(payload):
     """Every table that shows an ArcadeDB row on the LIVE page still shows one.
 
@@ -619,6 +656,23 @@ def _check_no_arcadedb_row_lost(payload):
         checked += 1
         t = fresh.get(tid)
         if t is None:
+            # LOST versus NOT YET MEASURED, and the ROWS decide which. This
+            # gate compares a fresh export against the LIVE page, and during a
+            # campaign that lands table by table (CAMPAIGN.md) the tables
+            # whose lanes are still queued are legitimately absent -- l3d is
+            # stage 9 of 10. Calling those "lost" would have failed every
+            # landing until the final stage, which is the opposite of what
+            # this rule protects. A table whose lane HAS rows at this pin and
+            # is still missing is the real thing it was written for (2026-09-07,
+            # the E2 table published with only comparators), and that still
+            # fails. No mode flag: at the switch every lane has rows, so the
+            # check tightens back to strict on its own.
+            lane = _table_lanes().get(tid, (None,))[0]
+            if lane and lane not in _lanes_with_rows():
+                print(f"  not yet measured: table {tid} is on the live page and "
+                      f"its lane {lane!r} has no rows at this pin; it lands "
+                      f"with its stage")
+                continue
             print(f"  LOST   table {tid}: on the live page, not in the export")
             bad += 1
         elif not any(_is_arc(e) for e in t.get("entries", [])):
