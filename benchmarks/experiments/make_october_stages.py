@@ -425,6 +425,21 @@ for _img in {images}; do
   docker image inspect "dbbench:$_img" >/dev/null 2>&1 || {{ say "$ID ABORT: dbbench:$_img missing after build"; exit 1; }}
 done
 say "$ID: images present: {images}"
+# AND THE ONES WE PULL RATHER THAN BUILD. Everything above checks images this
+# stage BUILDS; a digest-pinned comparator is fetched lazily by the first
+# `docker run` that names it, so a slow registry or a digest collected
+# upstream shows up as a failed cell deep into the stage instead of an abort
+# in its first minute. On 2026-09-22 five pinned images were absent from this
+# host -- elasticsearch, milvus at 3.7 GB, pgvector, postgres, qdrant -- with
+# three queued stages needing them and nothing checking. Pulled by digest, so
+# the pull IS the verification: a digest that no longer resolves cannot be
+# satisfied by a tag that moved.
+for _pin in {pulled}; do
+  [ -n "$_pin" ] || continue   # the empty element a lane with no pinned image renders
+  docker image inspect "$_pin" >/dev/null 2>&1 && continue
+  say "$ID: pulling $_pin"
+  docker pull -q "$_pin" >> "$S" 2>&1 || {{ say "$ID ABORT: cannot pull $_pin"; exit 1; }}
+done
 # IMAGES PRESENT IS NOT IMAGES CURRENT, and the difference cost two hours a
 # cell. dbbench:pg-age sat on PostgreSQL 17 for nine days after the pin moved
 # to 18 while this very check reported "present"; AGE 1.7.0 builds edges 65x
@@ -543,6 +558,35 @@ def _images_for(backends):
     return sorted(out)
 
 
+def _pulled_images_for(backends):
+    """The PINNED images these backends pull rather than build.
+
+    The stages verify every image they BUILD -- `build_images.sh`, then a
+    `docker image inspect` per dbbench target -- and nothing at all for the
+    ones they pull. A digest-pinned comparator is fetched lazily by the first
+    `docker run` that names it, so a registry that is slow or a digest that has
+    been collected upstream surfaces as a FAILED CELL partway into a stage
+    rather than an abort in its first minute.
+
+    That is not hypothetical for the stages queued on 2026-09-22: five pinned
+    images are absent from mini -- elasticsearch, milvus (3.7 GB), pgvector,
+    postgres, qdrant -- because the lanes that use them have not run since the
+    October re-pin. qOE, qOF and qOH need them. All five still resolve
+    upstream, so the queued stages will be fine; the point is that nothing
+    checked, and the run that finds out is the expensive one.
+
+    Pulled up front, by digest, so the failure is loud and early.
+    """
+    out = set()
+    for be in backends:
+        d = runner.BACKENDS.get(be, {})
+        for key in ("image", "server_image"):
+            img = d.get(key, "")
+            if img and not img.startswith("dbbench:") and "@sha256:" in img:
+                out.add(img)
+    return sorted(out)
+
+
 def emit(idx: int, spec) -> str:
     sid, title, lane, workloads, scales, guards, extra, stage_env = spec[:8]
     only = spec[8] if len(spec) > 8 else None
@@ -560,7 +604,15 @@ def emit(idx: int, spec) -> str:
                        caps=caps, scales=list(scales), scale_list=" ".join(scales), guards="\n".join(guards) + ("\n" if guards else ""),
                        stage_env=("export " + " ".join(stage_env) if stage_env else "# (this lane's in-script defaults are what the frozen rows ran)"),
                        backends=" ".join(backends),
-                       images=" ".join(_images_for(backends)))
+                       images=" ".join(_images_for(backends)),
+                       # ONE SHAPE FOR BOTH CASES. Rendering a comment as the
+                       # loop's word list -- `for _pin in # (none); do` -- is a
+                       # bash SYNTAX error, and it shipped two unrunnable stages
+                       # past queue_lint, which checks four known failure classes
+                       # and never asked whether the script parses. An empty
+                       # string is a valid word the loop body skips.
+                       pulled=(" ".join(f'"{i}"' for i in _pulled_images_for(backends))
+                               or '""'))
     for scale, cap in caps:
         senv = " ".join(SCALE_ENV.get((lane, scale), []))
         body += f'\nfor BE in $BACKENDS; do\n'

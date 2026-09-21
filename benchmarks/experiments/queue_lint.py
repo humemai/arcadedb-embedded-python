@@ -36,6 +36,7 @@ THE FOUR CLASSES, and why each is not obvious:
    result.
 """
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -191,6 +192,43 @@ def check_paths_and_python(name, body):
     return problems
 
 
+def check_parses(name, body):
+    """Class 5: does the script parse at all?
+
+    Added 2026-09-22 after this lint passed all seventeen stages while `bash
+    -n` refused two of them. A generator change rendered a comment as a for
+    loop's word list -- `for _pin in # (none); do` -- and the four classes
+    below all looked at WHAT the script says rather than whether bash can read
+    it. A stage that cannot parse dies on its first line, hours after the
+    previous one hands over, and the lint that was supposed to catch exactly
+    this said nothing.
+
+    `bash -n` reads and parses without executing a single command, so it is
+    safe to run on a queue script. It is the cheapest check here and the most
+    fundamental, which is why it now runs first.
+    """
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as fh:
+        fh.write(body)
+        path = fh.name
+    try:
+        r = subprocess.run(["bash", "-n", path],  # nosec B603 B607
+                           capture_output=True, text=True, timeout=30)
+    except Exception as exc:  # noqa: BLE001
+        return [(0, f"could not run `bash -n`: {exc.__class__.__name__}: {exc}")]
+    finally:
+        os.unlink(path)
+    if r.returncode == 0:
+        return []
+    msg = (r.stderr or "").strip().splitlines()
+    detail = msg[-1] if msg else f"bash -n exited {r.returncode}"
+    ln = 0
+    m = re.search(r"line (\d+):", " ".join(msg))
+    if m:
+        ln = int(m.group(1))
+    return [(ln, f"the script does not PARSE, so it dies on its first line: {detail}")]
+
+
 def check_cycles(scripts):
     """Wait edges from every form: standalone line, odd spacing, `for q in` loop."""
     edges = {}
@@ -258,7 +296,7 @@ def main():
         return 2
     bad = 0
     for name in sorted(scripts):
-        probs = check_paths_and_python(name, scripts[name])
+        probs = check_parses(name, scripts[name]) + check_paths_and_python(name, scripts[name])
         if probs:
             print(f"  {name}")
             for ln, msg in probs:
