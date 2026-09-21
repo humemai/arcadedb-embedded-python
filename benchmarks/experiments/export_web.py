@@ -1937,18 +1937,18 @@ SKELETON_TABLE_NOTE = (
 # What a laptop skeleton cannot draw, and why, published beside the banner so
 # the reader is not left wondering whether a table was dropped or forgotten.
 SKELETON_ABSENT = {
-    "l3smp": "the sparse second pass is a separate multipass driver on the "
-             "benchmark machine; the skeleton runs the lane once.",
+    "l3smp": "the second sparse pass is a separate run on the benchmark "
+             "machine; this placeholder measures each benchmark once.",
     "l3d warm columns": "the dense warm pass comes from the same multipass "
                         "driver; the skeleton's dense table is cold only.",
     "e4": "the client/server decomposition is its own overlay, measured on "
           "the benchmark machine.",
-    "pycost": "the Python-cost table is the binding suite's own frozen file, "
-              "not a lane the skeleton runs.",
+    "pycost": "the Python-cost table comes from the binding suite's own "
+              "measurements, which this placeholder run does not cover.",
     "the summary figure": "it is a ratio of every table against its best "
                           "comparator, and a ratio between two one-repetition "
                           "placeholder cells would look like a result while "
-                          "being noise; it is drawn from the campaign's rows.",
+                          "being noise; it is drawn from the real measurements.",
 }
 # NAMED BY WHAT THEY ARE, not by our invariant numbers: "FAIRNESS F1" means
 # nothing to a reader of the page, and the thing it labels -- cpuset pinning
@@ -1956,8 +1956,8 @@ SKELETON_ABSENT = {
 SKELETON_WAIVERS = [
     "CPU pinning: the skeleton runs on a shared cpuset, not a "
     "pinned one.",
-    "Memory envelope: the skeleton runs at the placeholder run's micro caps, not the "
-    "campaign's per-size envelope.",
+    "Memory envelope: this placeholder run uses the smallest memory caps, not "
+    "the per-size limits the real measurements use.",
 ]
 
 
@@ -6079,11 +6079,18 @@ def main() -> int:
         # The instrument the whole payload ran on; a table carries its own.
         "instrument": "2026-10" if _october else "2026-09",
         "conditions": _global_conditions(tables, _october),
+        # SAID THE WAY A READER READS IT. This sentence used our words for
+        # our own plumbing -- which "lanes" record a host, what "this file"
+        # can prove -- and the fact it carries is simpler than that: some
+        # rows name the machine and some name only the container they ran in,
+        # and we publish what the rows actually say rather than filling the
+        # gap in. Same rule as the hostnames: say the fact, not the filing.
         "provenance_note": (
-            "Host identity is recorded on the sparse and dense lanes only; the "
-            "remaining lanes record the container but not the machine. Every "
-            "lane ran on the same benchmark host, but this file reports only "
-            "what the frozen rows can prove."
+            "Some benchmarks record which machine they ran on and some record "
+            "only the container, so that column is filled in where it was "
+            "measured and left alone where it was not. Everything on this page "
+            "ran on the same machine; this note reports what each result can "
+            "actually show rather than what we know to be true of all of them."
         ),
         "hosts_recorded": hosts,
         "setup": {

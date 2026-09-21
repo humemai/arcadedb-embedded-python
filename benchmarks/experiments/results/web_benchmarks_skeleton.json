@@ -5,14 +5,14 @@
   "skeleton_banner": "These numbers were timed on a shared machine that was running other work at the same time: a browser, an editor, and whatever else happened to be open. Nothing here had the machine to itself, no cell was given cores of its own, and each one ran once instead of five times, on the smallest data set each benchmark has. A time on this page can therefore be out by a large factor in either direction, and two engines in the same table cannot be compared with each other, or with anything on the live page. They are here so the shape of the October page can be read and edited early: its tables, its columns, its conditions, and its prose. The machine the real numbers will be measured on has measured nothing yet.",
   "gates_waived": [
     "CPU pinning: the skeleton runs on a shared cpuset, not a pinned one.",
-    "Memory envelope: the skeleton runs at the placeholder run's micro caps, not the campaign's per-size envelope."
+    "Memory envelope: this placeholder run uses the smallest memory caps, not the per-size limits the real measurements use."
   ],
   "skeleton_absent_tables": {
-    "l3smp": "the sparse second pass is a separate multipass driver on the benchmark machine; the skeleton runs the lane once.",
+    "l3smp": "the second sparse pass is a separate run on the benchmark machine; this placeholder measures each benchmark once.",
     "l3d warm columns": "the dense warm pass comes from the same multipass driver; the skeleton's dense table is cold only.",
     "e4": "the client/server decomposition is its own overlay, measured on the benchmark machine.",
-    "pycost": "the Python-cost table is the binding suite's own frozen file, not a lane the skeleton runs.",
-    "the summary figure": "it is a ratio of every table against its best comparator, and a ratio between two one-repetition placeholder cells would look like a result while being noise; it is drawn from the campaign's rows."
+    "pycost": "the Python-cost table comes from the binding suite's own measurements, which this placeholder run does not cover.",
+    "the summary figure": "it is a ratio of every table against its best comparator, and a ratio between two one-repetition placeholder cells would look like a result while being noise; it is drawn from the real measurements."
   },
   "arcadedb_version": null,
   "comparator_versions": {
@@ -188,7 +188,7 @@
     "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
     "Comparators are pinned by sha256 image digest, not by a floating tag."
   ],
-  "provenance_note": "Host identity is recorded on the sparse and dense lanes only; the remaining lanes record the container but not the machine. Every lane ran on the same benchmark host, but this file reports only what the frozen rows can prove.",
+  "provenance_note": "Some benchmarks record which machine they ran on and some record only the container, so that column is filled in where it was measured and left alone where it was not. Everything on this page ran on the same machine; this note reports what each result can actually show rather than what we know to be true of all of them.",
   "hosts_recorded": [
     "container:05afec638dcd (host unknown)",
     "container:0753cd07d4e8 (host unknown)",
