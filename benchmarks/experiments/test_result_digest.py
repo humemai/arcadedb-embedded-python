@@ -272,6 +272,19 @@ def test_empty_and_scalar():
     eq("a bare scalar is a one-row answer", B.result_digest(7, columns=("n",))["n"], 1)
     eq("a scalar equals the same value in a tuple",
        d(7, columns=("n",)), d([(7,)], columns=("n",)))
+    # NaN IS NULL'S SPELLING FOR AN AGGREGATE OVER AN EMPTY SET (BUGS F87).
+    # Nine graph engines return NULL for the mean age of a person with no
+    # edges and SurrealDB's math::mean([]) returns NaN; canonicalising them
+    # apart made SurrealDB disagree with every other engine on hop1 at both
+    # sizes, which equivalence_check would have failed a landing on.
+    _nan = float("nan")
+    eq("NaN canonicalises to null",
+       d([(0, _nan)], columns=("n", "a")), d([(0, None)], columns=("n", "a")))
+    # Overflow is a different answer and stays one.
+    ne("inf is not null",
+       d([(0, float("inf"))], columns=("n", "a")), d([(0, None)], columns=("n", "a")))
+    ne("inf is not -inf",
+       d([(0, float("inf"))], columns=("n", "a")), d([(0, float("-inf"))], columns=("n", "a")))
 
 
 def main():
