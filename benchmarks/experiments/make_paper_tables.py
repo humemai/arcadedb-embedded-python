@@ -809,6 +809,17 @@ def _pinned_sparse_rows(arm="arcadedb_sparse_embedded"):
             continue
         out.setdefault(r["scale"], []).append(r)
     tiers = ("tiny", "small", "medium")
+    # ABSENT IS NOT PARTIAL -- the same distinction dense_mp_dir() needed.
+    # PARTIAL (some tiers at five reps, others short) is the all-or-nothing
+    # case this function exists for: a partial re-run must not supersede a
+    # complete set tier by tier. ABSENT (no row at any tier) is the sparse
+    # arm not having run at this pin yet, which is the normal state for most
+    # of a campaign -- l3s is stage 8 of 10, and October lands table by table
+    # from stage 1. Refusing both alike blocked every October landing until
+    # the sparse stage finished. Empty dict means absent; None still means
+    # partial or mixed, and still refuses.
+    if not out:
+        return {}
     if any(len(out.get(t, [])) < 5 for t in tiers):
         missing = [t for t in tiers if len(out.get(t, [])) < 5]
         sys.stderr.write(f"pinned sparse rows incomplete at {missing}\n")
@@ -827,7 +838,7 @@ def _sparse_2681_rows(arm="arcadedb_sparse_embedded"):
     pinned = _pinned_sparse_rows(arm)
     if pinned is None:
         raise SystemExit(f"pinned sparse rows for {arm} incomplete or mixed (see stderr); no fallback")
-    return pinned
+    return pinned   # {} when the arm has not run at this pin (absent, not partial)
 
 
 def _sparse_2681_rows_overlay(arm="arcadedb_sparse_embedded"):
@@ -907,7 +918,11 @@ def sparse_table(rows):
             # PAPER_CORPUS in load_canonical, which covers every tier and every
             # consumer instead of the one tier someone thought to hardcode.
             if be == "arcadedb_sparse_embedded":
-                g = arc[sc]
+                # .get, not [sc]: _sparse_2681_rows returns {} when the arm
+                # has not run at this pin, and the `if not g` branch four
+                # lines down already renders that as "--". Indexing raised
+                # KeyError instead and took the whole publish with it.
+                g = arc.get(sc) or []
             # The system name labels its block once; repeating it down three
             # rows is noise the eye has to subtract.
             head = NAMES[be] if j == 0 else ""
@@ -1106,15 +1121,36 @@ def _sig3(v):
 def dense_ts_table(rows):
     dense = _dense_multipass()
     if not dense:
-        raise SystemExit(
-            "REFUSING to write t5: no dense multipass artifacts under "
-            "results/dense_mp_2681/. The old runs.jsonl path emitted dev3-era "
-            "rows and would silently revert the paper's headline table.")
-    lines = [r"\begin{tabular}{lrrrrr}", r"\toprule",
-             r"\multicolumn{6}{l}{\textit{Dense ANN, DEEP-10M "
-             r"(10M$\times$96d), degree-matched; latencies in ms}} \\",
-             r"System & Build (s) & Cold p50 & Warm p50 & Cold p99 & Recall \\",
-             r"\midrule"]
+        # ABSENT IS NOT PARTIAL, the third place in this file that needed the
+        # distinction. The refusal below is about not reverting to an older
+        # path when the pinned artifacts are unusable; it is not about the
+        # dense arm simply not having run yet, which is the normal state for
+        # most of a campaign (l3d is stage 9 of 10). Skipping is LOUD on
+        # purpose -- a headline table that quietly stops being written is its
+        # own defect, so this says so on stdout every run until the arm lands.
+        if not os.path.isdir(dense_mp_dir()):
+            # t5 IS TWO BLOCKS, dense and time series, and only the dense half
+            # depends on the overlay. Returning here dropped the time-series
+            # block too, whose lane HAS run -- and claims_check then compared
+            # the f4 figure against a table cell that no longer existed and
+            # reported the figure as disagreeing with the tables. Drop the
+            # half that has no data, keep the half that does.
+            print("t5: the dense block is omitted, the dense arm has not run "
+                  f"at this pin ({os.path.basename(dense_mp_dir())} does not "
+                  "exist); the time-series block is written as usual")
+            dense = []
+        else:
+            raise SystemExit(
+                "REFUSING to write t5: no dense multipass artifacts under "
+                "results/dense_mp_2681/. The old runs.jsonl path emitted "
+                "dev3-era rows and would silently revert the paper's "
+                "headline table.")
+    lines = [r"\begin{tabular}{lrrrrr}", r"\toprule"]
+    if dense:
+        lines += [r"\multicolumn{6}{l}{\textit{Dense ANN, DEEP-10M "
+                  r"(10M$\times$96d), degree-matched; latencies in ms}} \\",
+                  r"System & Build (s) & Cold p50 & Warm p50 & Cold p99 & Recall \\",
+                  r"\midrule"]
     # WHICH COLUMNS SHOW THEIR RANGE. Every column now has one -- five builds
     # give five values for build, cold and recall, and twenty for warm. Showing
     # all five ranges is the most informative table and also the widest, and

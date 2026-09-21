@@ -100,6 +100,9 @@ TABLES = os.path.join(_PAPER_DIR, "tables")
 PAPER = os.path.join(_PAPER_DIR, "paper.tex")
 
 
+_MISSING_SAID = set()   # one line per absent table, not one per claim
+
+
 def cell(table, row_label, col):
     """Numeric value of one cell in a GENERATED table.
 
@@ -111,6 +114,18 @@ def cell(table, row_label, col):
     step. `col` is 0-based over the row's own cells, after the label.
     """
     path = os.path.join(TABLES, table)
+    # A TABLE THAT WAS NOT GENERATED CANNOT BE CHECKED, and that is a skip
+    # rather than a crash. October lands table by table from stage 1, so a
+    # table whose lane is still queued has no .tex file yet; a claim pinned to
+    # it is unverifiable now and gets verified the moment its stage lands.
+    # None is what this function already returns when a column is absent, so
+    # every caller handles it.
+    if not os.path.isfile(path):
+        if table not in _MISSING_SAID:
+            _MISSING_SAID.add(table)
+            print(f"claims_check: {table} not generated at this pin; claims "
+                  f"pinned to it are unchecked until its stage lands")
+        return None
     for line in open(path):
         line = line.strip()
         if not line.startswith(row_label):
@@ -134,6 +149,18 @@ def cell_text(table, row_label, col):
     """The printed number of one cell, as text, so a checker can read how many
     decimals the table prints and compare at that precision."""
     path = os.path.join(TABLES, table)
+    # A TABLE THAT WAS NOT GENERATED CANNOT BE CHECKED, and that is a skip
+    # rather than a crash. October lands table by table from stage 1, so a
+    # table whose lane is still queued has no .tex file yet; a claim pinned to
+    # it is unverifiable now and gets verified the moment its stage lands.
+    # None is what this function already returns when a column is absent, so
+    # every caller handles it.
+    if not os.path.isfile(path):
+        if table not in _MISSING_SAID:
+            _MISSING_SAID.add(table)
+            print(f"claims_check: {table} not generated at this pin; claims "
+                  f"pinned to it are unchecked until its stage lands")
+        return None
     for line in open(path):
         line = line.strip()
         if not line.startswith(row_label):

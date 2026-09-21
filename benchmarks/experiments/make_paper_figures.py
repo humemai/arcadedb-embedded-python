@@ -406,6 +406,15 @@ def _check_f4_comparators(entries):
     Vector rows only. Elsewhere there is no quality axis, so "best" is just
     fastest and needs no rule.
     """
+    # NOTHING TO CHECK WHEN THE DENSE ARM HAS NOT RUN. This function enforces
+    # the recall bar on the dense comparator f4 picks; with no dense rows at
+    # this pin there is no such row in `entries` to enforce it on. "Eligibility
+    # unknown" is the right refusal once a dense row is being DRAWN, and the
+    # wrong one for a campaign whose dense stage is still queued.
+    if not any(str(e.get("label", "")).startswith("Dense") for e in entries):
+        print("f4: dense rows not drawn at this pin; comparator eligibility "
+              "check has nothing to enforce")
+        return
     ours_recall = _dense_overlay_recall()
     if ours_recall is None:
         raise SystemExit("f4: no recall for our dense arm; eligibility unknown")
@@ -449,6 +458,16 @@ def _check_f4_protocol(entries):
     """
     got = {e["label"]: e for e in entries}
     if "Dense 10M p50" not in got:
+        # LOST versus NOT YET MEASURED. This refusal guards against the dense
+        # row silently disappearing from a figure that is supposed to carry
+        # it -- the check is blind without it, which is the point. But when
+        # the dense arm has not run at this pin there is no row to lose, and
+        # dense_row said so on stdout when it skipped. Ask the artifact, not
+        # the entry list: an absent overlay is the deliberate case.
+        if _dense_overlay_recall(scale="deep10m") is None:
+            print("f4: no dense row at this pin (the dense arm has not run); "
+                  "the protocol check has nothing to assert")
+            return
         raise SystemExit("f4 lost its dense entry; the protocol check is blind")
     e = got["Dense 10M p50"]
     for key, warm in (("cold", False), ("warm", True)):
@@ -829,6 +848,16 @@ def f4_one_vs_n(rows):
         a_c, a_rec = ours_cold
         elig = {b: v for b, v in comps.items() if v[0] is not None
                 and (a_rec is None or v[2] is None or v[2] >= a_rec - 1e-9)}
+        if a_c is None and not any(v[0] is not None for v in comps.values()):
+            # THE WHOLE ROW'S LANE HAS NOT RUN AT THIS PIN. Neither our arm
+            # nor any comparator left a value, which is not the failure the
+            # refusal below describes -- that one is "we measured, and no
+            # comparator qualifies", a real problem. October lands table by
+            # table from stage 1, so a figure row whose lane is still queued
+            # is the normal state for most of the campaign. Loud on purpose:
+            # a row that quietly stops being drawn is its own defect.
+            print(f"f4 {label}: SKIPPED, no rows at this pin for its lane yet")
+            return None
         if a_c is None or not elig:
             raise SystemExit(f"f4 {label}: no first-pass value or no eligible comparator ({comps})")
         best = (max if hb else min)(elig.items(), key=lambda kv: kv[1][0])
@@ -856,6 +885,13 @@ def f4_one_vs_n(rows):
     TSC = ("questdb", "duckdb", "sqlite")
 
     def dense_row(label, scale):
+        # The dense arm has not run at this pin: no overlay, no recall, so
+        # nothing to draw and nothing to pick a comparator against.
+        # _dense_best_comparator refuses without a recall, correctly, once a
+        # row is being drawn -- this returns before asking it.
+        if _dense_overlay_recall(scale=scale) is None:
+            print(f"f4 {label}: SKIPPED, the dense arm has not run at this pin")
+            return None
         ours_c = _dense_overlay_p50(warm=False, scale=scale)
         ours_w = _dense_overlay_p50(warm=True, scale=scale)
         b, s_c = _dense_best_comparator(False, scale)
@@ -964,6 +1000,8 @@ def f4_one_vs_n(rows):
             {"surrealdb_e2": (rate("e2", "e2", "hybrid", "surrealdb_e2", ("n_products", "n_edges")), None, None)},
             note="first pass only"),
     ]
+    # row() returns None for a row whose lane has not run at this pin.
+    entries = [e for e in entries if e is not None]
     # A row whose comparator's repeat pass is below the lane's resolution
     # (SQLite's newest reading until qDR lands) says so instead of dividing.
     for e in entries:
@@ -1019,7 +1057,18 @@ def f4_one_vs_n(rows):
                   fontsize=6.5)
     # Explicit margins: tight_layout did not reserve room for the row labels
     # beside two shared-y panels and the left column clipped (2026-09-11).
-    fig.subplots_adjust(left=0.20, right=0.985, top=0.95, bottom=0.13)
+    # THE BOTTOM MARGIN IS ABSOLUTE, NOT FRACTIONAL. The figure's height is
+    # 0.21*n + 0.9 inches, so a fixed FRACTION reserves less and less real
+    # space as rows drop out -- and rows do drop out, because October lands
+    # table by table and a lane still queued draws nothing. At the full row
+    # count 0.13 was about 0.72 in and fine; with a third of the rows it
+    # became 0.28 in and the two-line supxlabel printed straight through the
+    # x tick labels ("10-scale vs10best specialist log" in the extracted
+    # text), which the EXPECT_IN_PDF check caught as a missing label. Ask for
+    # the inches the label needs and convert once.
+    _bottom_in = 0.78
+    fig.subplots_adjust(left=0.20, right=0.985, top=0.95,
+                        bottom=min(0.35, _bottom_in / fig.get_figheight()))
     path = os.path.join(FIGS, "f4_one_vs_n.pdf")
     fig.savefig(path)
     plt.close(fig)
@@ -1052,6 +1101,16 @@ def f6_memory_ceiling(rows):
         if g:
             labels.append(label)
             vals.append(st.median(g))
+    # NO BARS, NO FIGURE. Every series here is l3d/deep10m, so before the
+    # dense stage runs there is nothing to draw -- and the annotation below
+    # sits at DATA coordinates (0.4, 17.5), which land outside the axes when
+    # the y-range collapses to an empty plot. The figure then saved without
+    # its label and the EXPECT_IN_PDF check reported it as truncated, which
+    # is true but says nothing about the figure's correctness.
+    if not vals:
+        print("f6 SKIPPED: no dense rows at deep10m for this pin; the figure "
+              "appears when the dense stage lands")
+        return
     fig, ax = plt.subplots(figsize=(3.45, 1.9))
     ax.bar(range(len(vals)), vals, width=0.6, color="C0", alpha=0.85)
     # A LEGEND, not an annotation. Every bar here exceeds the 3.84 GiB line,

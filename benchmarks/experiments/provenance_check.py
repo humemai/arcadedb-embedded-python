@@ -148,8 +148,14 @@ if SKELETON:
     FEEDS["T4"] = [os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")]
 else:
     FEEDS["T5"][0] = os.path.basename(_MPT.dense_mp_dir())
-    if _MPT._pinned_sparse_rows() is None:
+    _sparse = _MPT._pinned_sparse_rows()
+    if _sparse is None:
         raise SystemExit("pinned sparse rows incomplete; T4 has no fallback since 2026-09-08")
+    if not _sparse:
+        # Absent, not partial: the sparse arm has not run at this pin. T4 has
+        # no October feed yet and the table is simply not drawn; refusing here
+        # would block every landing until the sparse stage (8 of 10) finished.
+        FEEDS["T4"] = []
     FEEDS["T4"] = ["runs.jsonl"]
 
 # Top-level result FILES that feed published tables, as opposed to the overlay
