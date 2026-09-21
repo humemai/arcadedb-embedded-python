@@ -963,7 +963,7 @@ def mp_arms_present(small=False):
 
 
 def dense_mp_dir():
-    """results/dense_mp5_<pin>, complete, or refuse. PINNED ONLY since
+    """results/dense_mp5_<pin>: complete, or absent, or refuse. PINNED ONLY since
     2026-09-08: the fallback to dense_mp5_2681 was a way to publish an older
     engine's overlay quietly when the pinned one was incomplete (it did, on
     2026-09-06, until page_check caught the 8.87 vs 8.75 disagreement). One
@@ -972,6 +972,22 @@ def dense_mp_dir():
     if not pin:
         raise SystemExit("BENCH_ENGINE_COMMIT is unset: the dense overlay is pinned only")
     cand = os.path.join(RESULTS, f"dense_mp5_{pin}")
+    # ABSENT IS NOT PARTIAL, and conflating them blocked the campaign's own
+    # publish plan. A PARTIAL directory is the 2026-09-06 defect this function
+    # exists to stop: an incomplete overlay quietly superseding a complete one.
+    # An ABSENT directory is the dense arm not having run yet, which at a
+    # pin's first stages is the normal state -- l3d is stage 9 of 10, and
+    # October lands table by table from stage 1. Refusing both alike meant no
+    # October table could land until the LAST stage finished.
+    #
+    # This restores a behaviour the file already assumed: _arms_for_scale
+    # guards `if not os.path.isdir(cand): return base` on the value this
+    # returns, which the unconditional raise made unreachable for deep10m
+    # while leaving it live for the 1M size through dense_mp_small_dir(). The
+    # two resolvers now differ only in their arm list, which is the only
+    # thing they should ever have differed in.
+    if not os.path.isdir(cand):
+        return cand
     missing = [f"mp_{a}_b{b}.json" for a in MP_ARMS for b in range(1, MP_BUILDS + 1)
                if not os.path.isfile(os.path.join(cand, f"mp_{a}_b{b}.json"))]
     if missing:

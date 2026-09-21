@@ -133,6 +133,21 @@ STAGES = [
      ['docker image inspect dbbench:mongo-search >/dev/null 2>&1 && '
       '{ say "$ID: dbbench:mongo-search already present, will be rebuilt"; } || true'],
      {}, [], ["pg_age_e2", "mongodb_e2"]),
+    # THE STRICT HALF OF #90 FOR THE TWO STAGES THAT ALREADY RAN WITHOUT IT.
+    # qOA and qOD measured their timed writes at the relaxed class only,
+    # because no stage has ever passed --durability strict. Their relaxed rows
+    # are correct and stay; these add the missing second pass at the same pin
+    # and instrument, which is an extension of the campaign rather than a
+    # re-measure (#103a). Stages from qOE on carry both passes themselves.
+    #
+    # Reads are re-run as a side effect -- the class is a property of the
+    # CELL, not of an operation (F10b), so there is no way to ask for the
+    # writes alone. That is the cost #90 accepted when it chose a second cell
+    # over a second measurement inside one.
+    ("qOA3", "graph transactional, the strict durability pass (#90, F10b)", "l2",
+     ["oltp"], ["sf1", "sf10"], [], {}, [], None, "strict"),
+    ("qOD3", "cross-model, the strict durability pass (#90, F10b)", "e2",
+     ["hybrid", "atomicity"], ["e2", "e2_500k"], [], {}, [], None, "strict"),
     # BENCH_TPC_SF is NOT derived from --scale: `SF = os.environ.get("BENCH_TPC_SF", "1")`
     # is a module constant, so --scale tpch10 without it loads SF1 and records
     # it as tpch10. September's stages set it per scale; so does this one.
@@ -349,20 +364,39 @@ run_overlay() {{  # <label> <scale> <cap> <be> <wl> <driver> <outdir> <rf> <reps
     || say "$ID: $label OVERLAY failed (the table reads this, not the lane row)"
 }}
 
-run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-empty>
+run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-empty> [durability-flag]
   local label=$1 scale=$2 cap=$3 be=$4 wl=$5 envset=$6
+  # THE CLASS IS A CLI FLAG, NOT AN ENVIRONMENT VARIABLE. runner.py assigns
+  # os.environ["BENCH_DURABILITY"] from --durability, whose default is
+  # "relaxed", so exporting BENCH_DURABILITY=strict into the environment is
+  # overwritten before any lane reads it and the cell runs relaxed while
+  # claiming nothing. Unquoted on purpose: "--durability strict" must reach
+  # the runner as two words, which is what bash does here.
+  local dur=${{7:-}}
   env $envset python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \\
-    --workloads "$wl" --tier paper --workers 1 --timeout "$cap" \\
+    --workloads "$wl" --tier paper --workers 1 --timeout "$cap" $dur \\
     --only-reps 1 --reps "$REPS" --results-file "$RF" >> "$S" 2>&1
   if [ $? -ne 0 ]; then
     say "$ID: $label rep 1 failed, not repeating it"
     return 0
   fi
   [ "$REPS" -lt 2 ] || env $envset python3 runner.py --lanes {lane} --scale "$scale" \\
-    --backends "$be" --workloads "$wl" --tier paper --workers 1 --timeout "$cap" \\
+    --backends "$be" --workloads "$wl" --tier paper --workers 1 --timeout "$cap" $dur \\
     --only-reps "$(seq -s, 2 "$REPS")" --reps "$REPS" --results-file "$RF" >> "$S" 2>&1
 }}
 '''
+
+
+# THE TIMED WRITES RUN TWICE, ONCE AT EACH DURABILITY CLASS (DECISIONS #90,
+# FAIRNESS F10b). Every stage ran the relaxed pass only, so no row in any
+# campaign -- September's chain, October's, or the archive -- carries
+# `durability_class: strict`, the durability table publishes with every cell
+# empty, and fairness_check F10 fails for every timed write cell it sees. The
+# gate blocks a landing, so October could have finished and still been
+# unpublishable. Reads are untouched and bulk ingest stays at one setting
+# (#90a): only these four (lane, workload) pairs get the second pass.
+STRICT_WORKLOADS = {("l1tpc", "oltp"), ("l2", "oltp"),
+                    ("e2", "hybrid"), ("e2", "atomicity")}
 
 
 def _images_for(backends):
@@ -390,6 +424,10 @@ def _images_for(backends):
 def emit(idx: int, spec) -> str:
     sid, title, lane, workloads, scales, guards, extra, stage_env = spec[:8]
     only = spec[8] if len(spec) > 8 else None
+    # spec[9]: None runs both classes where F10b applies, "strict" runs only
+    # the strict pass (a repair for a stage that already ran relaxed-only),
+    # "relaxed" only the relaxed one.
+    dur_mode = spec[9] if len(spec) > 9 else None
     backends = list(only) if only else list(runner.LANES[lane][1])
     caps = [(s, runner.TIMEOUT_BY_SCALE[s]) for s in scales]
     wait = ("" if idx == 0 else
@@ -405,8 +443,12 @@ def emit(idx: int, spec) -> str:
         senv = " ".join(SCALE_ENV.get((lane, scale), []))
         body += f'\nfor BE in $BACKENDS; do\n'
         for wl in workloads:
-            body += (f'  run_cell "{lane}/{scale}/$BE/{wl}" {scale} {cap} '
-                     f'"$BE" {wl} "{senv}"\n')
+            if dur_mode != "strict":
+                body += (f'  run_cell "{lane}/{scale}/$BE/{wl}" {scale} {cap} '
+                         f'"$BE" {wl} "{senv}"\n')
+            if (lane, wl) in STRICT_WORKLOADS and dur_mode != "relaxed":
+                body += (f'  run_cell "{lane}/{scale}/$BE/{wl} strict" {scale} {cap} '
+                         f'"$BE" {wl} "{senv}" "--durability strict"\n')
             for be, envs in sorted(extra.items()):
                 for e in envs:
                     body += (f'  [ "$BE" = "{be}" ] && run_cell '
