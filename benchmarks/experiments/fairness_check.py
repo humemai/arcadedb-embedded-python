@@ -827,6 +827,24 @@ INDEX_DECISIONS = {
         "arangodb_tpc":         "NONE: the index costs it, 684 -> 881 ms (removed 2026-09-22)",
         "duckdb":               "NONE: no effect, 6.0 -> 6.2 ms; columnar with zone maps",
     },
+    # e2 WAS LEFT OUT OF THIS MAP AND SHOULD NOT HAVE BEEN. The scoping note
+    # above said an index decision can only go wrong where a query filters
+    # selectively, and then judged this lane as having no such filter. Its
+    # timed retrieval is `pid IN <the vector search's candidate ids>` over
+    # 50k or 500k products, which is exactly that shape -- and ArangoDB was
+    # scanning the whole collection for it, 22.52 ms against 3.21 ms indexed
+    # (BUGS F98). A scoping judgement is a claim like any other.
+    "e2": {
+        "arcadedb_e2":            "Product(pid) UNIQUE",
+        "arcadedb_e2_server":     "Product(pid) UNIQUE",
+        "pg_age_e2":              "product(pid) PRIMARY KEY",
+        "neo4j_e2":               "index on :Product(pid)",
+        "mongodb_e2":             "pid as the vector index's filter path",
+        "surrealdb_e2":           "record id carries pid",
+        "surrealdb_e2_server":    "record id carries pid",
+        "arangodb_e2":            "persistent(pid): 22.52 -> 3.21 ms, 7.0x (added 2026-09-22)",
+        "composed_qdrant_neo4j":  "Neo4j's index on :Product(pid); Qdrant keys by point id",
+    },
     "l4": {
         "arcadedb_ts_doc":            "(host, ts)",
         "arcadedb_ts_doc_server":     "(host, ts)",

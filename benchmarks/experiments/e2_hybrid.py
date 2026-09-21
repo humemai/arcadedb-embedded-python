@@ -598,6 +598,20 @@ class ArangoE2:
                               for i in range(s, min(s + BATCH, len(vecs)))])
         for s in range(0, len(edges), BATCH):
             rel.import_bulk([{"_from": f"product/{a}", "_to": f"product/{b}"} for a, b in edges[s:s + BATCH]])
+        # THE pid INDEX EVERY OTHER ARM ON THIS LANE HAS (BUGS F98). The timed
+        # retrieval is `FOR p IN product FILTER p.pid IN @ids`, and `pid` is a
+        # plain field here while `_key` carries the same value, so without an
+        # index that step was an EnumerateCollectionNode over every product:
+        # measured 2026-09-22 at 50k products, 22.52 ms scanning against
+        # 3.21 ms with this index, and e2_500k is ten times the corpus.
+        #
+        # An index rather than rewriting the query to DOCUMENT('product', k),
+        # which is marginally faster still at 2.74 ms: every other engine
+        # reaches this step through an index on pid -- ArcadeDB a UNIQUE index,
+        # PostgreSQL+AGE a primary key, Neo4j an index, MongoDB the vector
+        # index's own filter path, SurrealDB its record id -- so an index is
+        # the equivalent configuration and keeps one query text across arms.
+        prod.add_index({"type": "persistent", "fields": ["pid"], "name": "pid_idx"})
         self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(prod, "embedding", DIM, len(vecs))
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
