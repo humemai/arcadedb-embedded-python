@@ -133,7 +133,7 @@ JVM arguments use two flag types:
 
 - **`-D` flags**: System properties for ArcadeDB configuration
     - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: build-cache override (default automatic; leave unset)
-    - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: Mutations threshold before rebuilding JVector
+    - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: FLOOR for the rebuild threshold, which scales with the index (see the vector index guide); the effective value is `max(floor, min(graphSize x 0.2, 50000))` at the defaults
 
 **Automatically injected flags** (always set, override only if needed):
 

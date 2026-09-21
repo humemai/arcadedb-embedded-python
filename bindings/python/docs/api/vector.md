@@ -20,6 +20,62 @@ ArcadeDB's vector support enables:
 - Native NumPy integration (optional)
 - Configurable precision/performance trade-offs
 
+## What happens to a write after the index is built
+
+The index is a **hybrid**, and knowing which half answers your query explains
+most of its timing behaviour.
+
+A vector written *after* the graph has been built does **not** patch the graph.
+It is queued into an in-memory **delta buffer**, and the graph is left alone.
+The graph changes only when a rebuild runs, and a rebuild always re-indexes the
+whole graph from scratch — there is no incremental patch.
+
+**Your write is searchable immediately.** Every query scores the graph's results
+*and* scans the delta buffer exhaustively, merges the two, drops duplicates, and
+filters anything deleted. Because the buffer is scanned by brute force rather
+than traversed approximately, a vector sitting in it is found **exactly** — if
+anything more reliably than one already in the graph.
+
+What you pay for that is a linear per-query cost proportional to the buffer's
+size. On a 5,000-vector index at 16 dimensions, 900 buffered entries cost about
+5% on median query latency; the cost grows with both the number of buffered
+vectors and the dimensionality.
+
+### When the rebuild actually fires
+
+Not every `mutationsBeforeRebuild` writes. The effective threshold **scales with
+the index**:
+
+```
+threshold = max(mutationsBeforeRebuild,
+                min(graphSize * rebuildGraphRatio, maxPendingMutations))
+```
+
+At the defaults (`100`, `0.2`, `50_000`):
+
+| index size | rebuild after roughly |
+|---|---|
+| 1,000 vectors | 200 mutations |
+| 100,000 vectors | 20,000 mutations |
+| 1,000,000 vectors and above | 50,000 mutations (the ceiling binds) |
+
+A fixed threshold would make bulk loading quadratic — rebuilding a 200,000-node
+graph every 100 inserts — which is why it scales. The practical consequences:
+
+- **Raising `mutationsBeforeRebuild` alone changes nothing** on any index above
+  roughly 500 vectors, because it is only the floor. Use `rebuildGraphRatio` to
+  change how the threshold scales, and `maxPendingMutations` to move the ceiling.
+- **A lower ratio means fresher graph structure and more rebuild CPU**; a higher
+  one means a longer delta scan on every query. Neither affects correctness.
+- **`maxPendingMutations` caps the threshold, not the buffer.** Writes keep
+  appending between rebuilds, and rebuilds are asynchronous, so a sustained
+  ingest can outrun them and grow the buffer past that number.
+
+`get_stats()` reports `deltaVectorsCount` (how much is buffered now) and
+`graphRebuildCount` (how many rebuilds have run), which is the direct way to see
+which half of the index is answering your queries. `VectorIndex.build_graph_now()`
+drains the buffer on demand instead of waiting for the threshold.
+
 ## Module Functions
 
 Utility functions for converting between Python and Java vector representations:
