@@ -568,6 +568,23 @@ def main() -> int:
         print(f"  {spec[0]}.sh  lane={spec[2]:9} "
               f"backends={len(spec[8]) if len(spec) > 8 and spec[8] else len(runner.LANES[spec[2]][1]):2}"
               f"  scales={','.join(spec[4])}")
+
+    # REGENERATING IS EXACTLY WHEN THE DOCUMENTED CHAIN GOES STALE, so say so
+    # here rather than leaving it to be found later. CAMPAIGN.md and HANDOFF.md
+    # both carried `qOD -> qOD2 -> ... -> qOI` while this table said
+    # `qOD -> qOI -> qOD2`, which put the first landing's only blocker four
+    # stages later than it runs (BUGS F92). A warning and not an abort: the
+    # scripts are written and correct, it is the prose that owes an edit.
+    try:
+        import structure_check
+        drift = structure_check.check_stage_chain()
+    except Exception as exc:  # never let a doc check stop the generator
+        drift = [f"the chain check could not run: {exc.__class__.__name__}: {exc}"]
+    if drift:
+        print("\n  the documented chain no longer matches this table:")
+        for line in drift:
+            print(f"    {line}")
+        print("  update CAMPAIGN.md and HANDOFF.md before anyone plans from them")
     return 0
 
 
