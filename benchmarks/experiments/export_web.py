@@ -1171,15 +1171,24 @@ def _dense_overlay_entries(scale="deep10m"):
 # spec where the next lane to add memory would forget it.
 _UNIT_DIVISOR = {"peak_anon_mib_sum": 1024.0, "end_anon_mib_sum": 1024.0, "disk_data_mb": 1024.0,
                  "cpu_usec_sum": 1e6}
-DISK_NOTE = ("Disk is what the workload left on disk, in GiB: the engine's writable layer "
-             "plus its volumes after the cell, minus the same engine's empty footprint; for a "
-             "served row that is the server container alone, the client is only the driver. It is "
-             "read after the queries, so it includes anything querying wrote; a server "
-             "reading is taken once two samples agree within 1%, an embedded reading once on "
-             "the stopped container. A blank cell is a row measured before the disk "
-             "reading existed (2026-08-14). Neo4j's value includes the transaction-log "
-             "files it preallocates in 256 MiB steps, which is how Neo4j uses disk; "
-             "turning that off would have slowed its writes, so it stays on.")
+DISK_NOTE = ("Disk is what the workload left on disk, in GiB: the engine's writable "
+             "layer plus its volumes after the cell, minus the same engine's empty "
+             "footprint.")
+
+# HOW DISK IS READ, SAID ONCE FOR THE PAGE. It used to be said in full on
+# every table that prints the column -- eight of them, five clauses each,
+# verbatim -- which is the same repetition the censored notes had, one level
+# up. Peak memory was already a page-level sentence and disk was the outlier.
+# Each table keeps the one line above so it still reads standalone; the rest
+# lives beside the other conditions that hold everywhere.
+DISK_DETAIL = ("A disk reading is taken after the queries, so it includes anything "
+               "querying wrote; for a served row it is the server container alone, the "
+               "client being only the driver. A server reading is taken once two samples "
+               "agree within 1%, an embedded reading once on the stopped container. A "
+               "blank disk cell is a row measured before the disk reading existed "
+               "(2026-08-14). Neo4j's value includes the transaction-log files it "
+               "preallocates in 256 MiB steps, which is how Neo4j uses disk; turning "
+               "that off would have slowed its writes, so it stays on.")
 
 
 def _campaign_stat(backend, scale, field, lanes=("l3d", "l3s")):
@@ -2081,6 +2090,7 @@ GLOBAL_CONDITIONS = [
     "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
     "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
     "Comparators are pinned by sha256 image digest, not by a floating tag.",
+    DISK_DETAIL,
     "Durability is at each engine's default, and the defaults differ: ArcadeDB does "
     "not flush its write-ahead log at commit (txWalFlush=0), PostgreSQL and Neo4j "
     "fsync at every commit, and SQLite is the one comparator not at its default: it runs "
@@ -3589,12 +3599,13 @@ L3S_SECOND_PASS_100K = L3S_SECOND_PASS + " 100k has no second-pass run yet."
 
 OCT_DISK_NOTE = (
     "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its "
-    "volumes after the cell, minus the same engine's empty footprint; for a served row that "
-    "is the server container alone, the client is only the driver. It is read after the "
-    "queries, so it includes anything querying wrote; a server reading is taken once two "
-    "samples agree within 1%, an embedded reading once on the stopped container. Neo4j's "
-    "value includes the transaction-log files it preallocates in 256 MiB steps, which is how "
-    "Neo4j uses disk, so they stay in.")
+    "volumes after the cell, minus the same engine's empty footprint.")
+OCT_DISK_DETAIL = (
+    "A disk reading is taken after the queries, so it includes anything querying wrote; for "
+    "a served row it is the server container alone, the client being only the driver. A "
+    "server reading is taken once two samples agree within 1%, an embedded reading once on "
+    "the stopped container. Neo4j's value includes the transaction-log files it preallocates "
+    "in 256 MiB steps, which is how Neo4j uses disk, so they stay in.")
 
 # A pin is (regex with one capture, fn(P, rows) -> number) or the same with a
 # third element "const" when the number is a lane or runner constant, which the
@@ -3611,10 +3622,13 @@ OCT_PROSE = {
         "memory": ("Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it leaves out the file cache the kernel keeps on the engine's behalf. That is the right number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.", []),
         "defaults": ("Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.", []),
         "digest": ("Comparators are pinned by sha256 image digest, not by a floating tag.", []),
+        # THE PIN FOLLOWS THE CLAUSE IT PINS. The settle tolerance moved out of
+        # the per-table disk note with the sentence that states it.
+        "disk_detail": (OCT_DISK_DETAIL, [(r"agree within (\d+)%", lambda P, rows: _const("runner", "DISK_SETTLE_TOL") * 100, "const")]),
     },
     "*": {
         "skeleton": (SKELETON_TABLE_NOTE, []),
-        "disk": (OCT_DISK_NOTE, [(r"agree within (\d+)%", lambda P, rows: _const("runner", "DISK_SETTLE_TOL") * 100, "const")]),
+        "disk": (OCT_DISK_NOTE, []),
     },
     "l3s": {
         "recall": ("Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.", []),
@@ -4184,6 +4198,17 @@ _MARK_MEANINGS = {
 }
 
 
+_NUMBER_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven",
+                 "eight", "nine", "ten")
+
+
+def _count_word(n):
+    """Small counts in prose are words, which is what every other sentence on
+    this page does: "one", "two", "three" appear forty times between them and
+    a bare "3 query cells" reads as a field, not a sentence."""
+    return _NUMBER_WORDS[n] if 0 <= n <= 10 else f"{n:,}"
+
+
 def _mark_legend(marks):
     if not marks:
         return []
@@ -4195,16 +4220,18 @@ def _mark_legend(marks):
     caps = sorted((m for m in marks if m.startswith(">")),
                   key=lambda m: (m.endswith("m"), int(m[1:-1])))
     if caps:
-        parts.append(", ".join(f"`{c}`" for c in caps)
+        joined = (" and ".join(f"`{c}`" for c in caps) if len(caps) < 3
+                  else ", ".join(f"`{c}`" for c in caps[:-1]) + f" and `{caps[-1]}`")
+        parts.append(joined + (" mean" if len(caps) > 1 else " means")
                      + " the cell ran past its tier's cap and was not retried"
-                     + (" (each tier has its own cap, the same for every engine on it)"
+                     + ("; each tier has its own cap, the same for every engine on it"
                         if len(caps) > 1 else ""))
     for m in sorted(m for m in marks if not m.startswith(">")):
         if m not in _MARK_MEANINGS:
             raise SystemExit(f"export_web: no legend defined for the cell mark {m!r}; "
                              f"a mark the table cannot define must not reach a reader")
-        parts.append(f"`{m}` {_MARK_MEANINGS[m]}")
-    return [_gen("In the cells: " + "; ".join(parts) + ". A dash is an operation the "
+        parts.append(f"`{m}` means {_MARK_MEANINGS[m]}")
+    return [_gen("In the cells: " + ". ".join(parts) + ". A dash is an operation the "
                  "engine cannot express, never a slow one.", *sorted(marks))]
 
 
@@ -4441,7 +4468,7 @@ def _query_budget_notes(table_id):
 
     notes = []
     of = f" of {asked}" if asked else ""
-    lead = (f"{total} query cells on this table stopped at "
+    lead = (f"{_count_word(total).capitalize()} query cells on this table stopped at "
             + (f"the {one_budget:g} s budget every engine here is given"
                if one_budget else "their per-query budget, the same for every engine here")
             # "over THOSE <counted>" and not "over the <counted> it reached":
@@ -4450,7 +4477,7 @@ def _query_budget_notes(table_id):
             # pass"), and anything appended to it lands inside that clause.
             + f"; each one's p50 and p99 are over those {counted}, and every "
               f"other query in those cells keeps its numbers.")
-    notes.append(_gen(lead, str(total),
+    notes.append(_gen(lead, _count_word(total).capitalize(),
                       f"{one_budget:g} s budget" if one_budget else "per-query budget"))
 
     for (label, scale), cols in sorted(by_engine.items(), key=str):
