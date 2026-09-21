@@ -355,7 +355,21 @@ def main() -> int:
               f"{sorted(_have)}; a table the page names and the data lacks renders "
               f"as a heading with nothing under it", file=sys.stderr)
         return 1
-    print(f"  page asks for {len(set(_wanted))} table(s), payload carries {len(_have)}")
+    # AND THE OTHER DIRECTION, which is the one that bites at a landing. A
+    # table the payload carries and the prose never names is generated,
+    # gated, published and then not shown: the data is in the JSON and
+    # invisible on the page. The October preview names neither `e4` nor
+    # `pycost` today, so the first landing -- whose whole deliverable is e4 --
+    # would have published it into a page with no section to render it.
+    _unrendered = sorted(t for t in _have if t not in set(_wanted))
+    if _unrendered:
+        print(f"  REFUSING: the payload carries {_unrendered} and the page's prose "
+              f"names no section for it; the table would be published and never "
+              f"rendered. Add a benchmarkTable block for it, or stop building it.",
+              file=sys.stderr)
+        return 1
+    print(f"  page asks for {len(set(_wanted))} table(s), payload carries {len(_have)}, "
+          f"and the two agree")
 
     step(4, "Sync the page data")
     target = site / PAGE_DATA
