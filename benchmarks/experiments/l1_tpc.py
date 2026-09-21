@@ -489,7 +489,13 @@ class SQLiteTPC:
         self.cx.executemany("INSERT INTO part VALUES (?,?,100)",
                             list(part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)))
         self.cx.commit()
-        self.cx.execute("CREATE INDEX li_shipdate ON lineitem (l_shipdate)")
+        # NO li_shipdate INDEX HERE, and that is a measurement rather than an
+        # omission (BUGS F98). SQLite had one since the lane was written, and
+        # it costs it: 53.4 ms without against 63.3 ms with, at 500k rows on
+        # 2026-09-22. Its query planner takes the index for Q6's shipdate
+        # range and then pays a rowid lookup per candidate, which is dearer
+        # than the scan it replaces at 14% selectivity. The OLTP tables keep
+        # their PRIMARY KEYs, which is where SQLite's point lookups go.
         self.cx.commit()
 
     def olap(self, which):
@@ -846,6 +852,19 @@ class PostgresTPC:
         cur.execute("CREATE TABLE orders_new (okey BIGINT PRIMARY KEY, pkey BIGINT, qty INT, paid INT DEFAULT 0)")
         cur.execute("CREATE TABLE payments (okey BIGINT, pkey BIGINT, amount DOUBLE PRECISION)")
         cur.execute("CREATE TABLE crud (ckey BIGINT PRIMARY KEY, pkey BIGINT, qty INT, price DOUBLE PRECISION)")
+        # THE INDEX Q6 ACTUALLY USES, which this arm did not have (BUGS F98).
+        # Q6 is the only analytics query an index can help here: Q1 takes 98%
+        # of the rows and the other three are full aggregates, so a scan is
+        # the right plan for them. Q6's shipdate year is 14.3% of rows and
+        # 1.8% after the discount and quantity predicates, and PostgreSQL's
+        # planner turns that into a bitmap index scan. MEASURED at SF1 on 6.0M
+        # rows, 2026-09-22: 726 ms without the index, 290 ms with it, a 2.5x
+        # difference on a published cell -- against an ArcadeDB arm that has
+        # had the same index since the lane was written and gains 6.1x from
+        # it. ANALYZE after, so the planner costs it from real statistics
+        # rather than from the defaults a freshly loaded table carries.
+        cur.execute("CREATE INDEX li_shipdate ON lineitem (l_shipdate)")
+        cur.execute("ANALYZE lineitem")
         self.cx.commit()
 
     def olap(self, which):
