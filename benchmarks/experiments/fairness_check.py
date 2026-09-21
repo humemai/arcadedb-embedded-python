@@ -811,6 +811,28 @@ WRITE_CELLS = {("l1tpc", "oltp"), ("l2", "oltp"), ("e2", "hybrid")}
 # by degree or calibrated by effect. Adding a lane here without a selective
 # filter would collect declarations nobody can falsify.
 #
+# THE GRAPH LANE'S HALF OF THAT WAS CHECKED, NOT ASSUMED (2026-09-22), because
+# the e2 paragraph below is what a scoping judgement is worth unverified. Read
+# query by query: all five analytics queries are whole-graph aggregates with no
+# constant predicate (`top_degree` and `degree_dist` scan person, the two city
+# queries scan knows, and `same_city_edges`'s only WHERE compares an edge's two
+# endpoints to each other rather than to a value); LSQB's nine are pure
+# structural counts over labels with no property predicate at all; and `hop3f`'s
+# `age > 30` filters a vertex set the traversal has already reached, which no
+# index can narrow. So there is no selective filter on this lane to get wrong.
+#
+# The lane DOES build indexes, and they are matched by effect rather than by
+# rule -- which is why this note names them instead of stopping at "no
+# declaration needed". ArcadeDB, Neo4j, Memgraph and FalkorDB create a unique
+# vertex id index; SurrealDB addresses vertices by record id and LadybugDB by
+# its node key, both of which are primary and need no DDL; ArangoDB creates
+# `knows` and all nine LSQB edge collections with `edge=True`, which is what
+# earns it the automatic _from/_to edge index; DuckPGQ and MongoDB, having
+# neither adjacency nor an edge collection, index the edge endpoints
+# explicitly (k_src/k_dst, s/d). Checked BY EFFECT too: every engine's 1-hop
+# p50 is under 2 ms, none of them showing the scan signature that gave e2's
+# ArangoDB row away (22.52 ms against 3.21 ms indexed).
+#
 # A backend missing from its lane's map is a FAILURE, not a default. That is
 # the shape the capability table's legend uses: refuse the kind you cannot
 # define, rather than printing it and hoping.
