@@ -133,6 +133,29 @@ def main():
             have = sorted((RESULTS / d).glob(f"mp_{arm}_b*.json"))
             print(f"  {d}: {len(have)} files for {arm}")
 
+    # THE E4 TABLE IS A DIRECTORY OF ARTIFACTS, NOT ROWS IN THE JSONL, and
+    # nothing pulled it. `export_web` aborts outright when
+    # results/e4decomp_<pin>/ is not there, so a landing would have died at
+    # the export step with "e4decomp_417314c18 missing" -- after pulling,
+    # filtering and merging. September's directory is on this laptop because
+    # somebody scp'd it by hand once and it is untracked, which is exactly
+    # the kind of step that works until the person who knew about it is not
+    # the one doing the landing.
+    _e4 = RESULTS / f"e4decomp_{args.pin}"
+    _e4.mkdir(exist_ok=True)
+    sh(["scp", "-q", f"{HOST}:{REMOTE}/e4decomp_{args.pin}/decomp3m_*.json", str(_e4)],
+       check=False)
+    _reps = sorted(_e4.glob("decomp3m_*_rep*.json"))
+    if _reps:
+        print(f"  e4decomp_{args.pin}: {len(_reps)} rep file(s)")
+    else:
+        # An EMPTY directory is worse than no directory: export_web's check is
+        # `is_dir()`, so an empty one passes it and the failure moves
+        # somewhere less obvious. Leave the clear error in place.
+        _e4.rmdir()
+        print(f"  e4decomp_{args.pin}: none on {HOST} yet (the e4 lane has not run "
+              f"at this pin); the export will say so")
+
     step(2, "drop rows of the backends still running")
     excl = {b.strip() for b in args.exclude_backends.split(",") if b.strip()}
     rows = [json.loads(l) for l in pulled.read_text().splitlines() if l.strip()]
