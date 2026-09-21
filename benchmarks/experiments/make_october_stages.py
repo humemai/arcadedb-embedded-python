@@ -24,6 +24,7 @@ Usage:  python3 make_october_stages.py [--out DIR]   (default: ./october_stages)
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 
 import runner
@@ -406,8 +407,27 @@ run_cell() {{   # run_cell <label> <scale> <cap> <backend> <workload> <env-or-em
 # gate blocks a landing, so October could have finished and still been
 # unpublishable. Reads are untouched and bulk ingest stays at one setting
 # (#90a): only these four (lane, workload) pairs get the second pass.
-STRICT_WORKLOADS = {("l1tpc", "oltp"), ("l2", "oltp"),
-                    ("e2", "hybrid"), ("e2", "atomicity")}
+def _strict_workloads():
+    """The (lane, workload) pairs fairness_check enforces both classes on.
+
+    DERIVED, NOT TYPED -- which is the lesson of every other defect found the
+    same day. A typed copy here drifted on its first outing: it included
+    ("e2", "atomicity"), which is not a timed write at all (that cell counts
+    trials, crashes raised and torn reads), feeds no row of DURABILITY_WRITES,
+    and would have spent machine time producing rows nothing reads. Read by
+    ast rather than imported: fairness_check pulls in the whole table stack,
+    and this runs on the bench host where a stage must not.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    tree = ast.parse(open(os.path.join(here, "fairness_check.py")).read())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "WRITE_CELLS":
+            return {tuple(p) for p in ast.literal_eval(node.value)}
+    raise SystemExit("fairness_check.WRITE_CELLS not found: the stage generator "
+                     "cannot tell which cells need both durability classes")
+
+
+STRICT_WORKLOADS = _strict_workloads()
 
 
 def _images_for(backends):
