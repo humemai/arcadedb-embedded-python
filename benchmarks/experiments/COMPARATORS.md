@@ -69,7 +69,16 @@ differ).
 | LadybugDB | `ladybug==0.19.1` | `ladybug==0.20.4` | client package |
 | LanceDB | `lancedb==0.37.1` | `lancedb==0.39.0` | client package |
 
-**One of those moves is not a labelling change: AGE 1.8.0 builds edges about 65x faster than 1.7.0.** Measured on one host with one script, holding 500k vertices and a 5,000-edge batch fixed and changing only the image: 11.71 s on PG17 + AGE 1.7.0 against 0.18 s on PG18 + AGE 1.8.0. At `EDGES_PER = 3` the 500k-product cross-model corpus is 1.5M edges, so the same build is 58 minutes on the old pin and under a minute on the new one. October's pg_age build numbers will therefore be dramatically better than September's for a reason that is real and upstream, not an instrument change -- and a pg_age cell that ran the stale image was censored at the 2 h cap for exactly this reason (BUGS F90, F76). Vertex count and edge accumulation were both ruled out first; neither affects the batch.
+**One of those moves is not a labelling change: AGE 1.8.0 builds edges far faster than 1.7.0, and the gap widens with the graph.** Measured on one host with one script, holding a 5,000-edge batch fixed and varying only the vertex count and the image:
+
+| vertices | AGE 1.7.0 (PG17) | AGE 1.8.0 (PG18) | |
+|---|---|---|---|
+| 10,000 | 0.96 s | ~0.20 s | 4.8x |
+| 50,000 | 1.18 s | ~0.19 s | 6.2x |
+| 160,000 | 1.56 s | 0.18 s | 8.7x |
+| 500,000 | **11.14 s** | **0.18 s** | **62x** |
+
+1.8.0 is flat in the vertex count, which is what edge creation linear in edges should look like. 1.7.0 holds roughly steady to 160k and then jumps 7.2x in one step, which has the shape of a planner flip rather than a gradual cost -- so the ratio is not a constant and must not be quoted as one. At `EDGES_PER = 3` the 500k-product cross-model corpus is 1.5M edges, so the same build is 58 minutes on the old pin and under a minute on the new one. October's pg_age build numbers will therefore be dramatically better than September's for a reason that is real and upstream, not an instrument change -- and a pg_age cell that ran the stale image was censored at the 2 h cap for exactly this reason (BUGS F90, F76). Vertex count and edge accumulation were both ruled out first; neither affects the batch.
 | Qdrant client | `qdrant-client==1.19.0` | `1.19.1` | client package |
 | Elasticsearch client | `elasticsearch==9.5.0` | `9.5.1` | client package |
 | Neo4j driver (Neo4j AND Memgraph arms) | `neo4j==6.2.0` | `6.3.1` | client package |
