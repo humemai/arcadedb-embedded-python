@@ -2743,13 +2743,6 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                                              for _, s in samplers))
             row["end_anon_mib_sum"] = mib(sum((s.end_anon or 0) for _, s in samplers))
             row["cpu_usec_sum"] = sum((s.cpu.get("usage_usec") or 0) for _, s in samplers)
-            _therm1 = _thermal()
-            for _k, _v in _therm0.items():
-                row[f"{_k}_start"] = _v
-            for _k, _v in _therm1.items():
-                row[f"{_k}_end"] = _v
-            if "host_throttle_total_ms" in _therm0 and "host_throttle_total_ms" in _therm1:
-                row["host_throttled_ms"] = _therm1["host_throttle_total_ms"] - _therm0["host_throttle_total_ms"]
         elif samplers:
             row["peak_mib_sum"] = row.get("client_peak_mib")
             row["peak_anon_mib_sum"] = row.get("client_peak_anon_mib")
@@ -2760,6 +2753,27 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             row["io_read_mib_sum"] = mib(samplers[0][1].io.get("rbytes"))
             row["end_anon_mib_sum"] = row.get("client_end_anon_mib")
             row["cpu_usec_sum"] = row.get("client_cpu_usec")
+        # THE HOST THROTTLES FOR EVERY CELL, NOT ONLY TWO-CONTAINER ONES.
+        # This sat inside `if len(samplers) == 2`, a branch about summing a
+        # client's and a server's memory, which has nothing to do with the
+        # host's thermal state. `_therm0` is snapshotted for every cell at the
+        # top of run_cell, so an EMBEDDED cell took the reading and threw it
+        # away: every client_server row in the campaign carries
+        # host_throttled_ms and every embedded row carries none.
+        #
+        # That gap falls exactly along the axis this project publishes. The
+        # embedded-versus-served comparison is a headline of the page, and
+        # with throttling measured on one side of it only, there was no way to
+        # ask whether the comparison is thermally biased. Measured per cell
+        # because mini throttles (2026-09-14); measured for every cell now.
+        _therm1 = _thermal()
+        for _k, _v in _therm0.items():
+            row[f"{_k}_start"] = _v
+        for _k, _v in _therm1.items():
+            row[f"{_k}_end"] = _v
+        if "host_throttle_total_ms" in _therm0 and "host_throttle_total_ms" in _therm1:
+            row["host_throttled_ms"] = (_therm1["host_throttle_total_ms"]
+                                        - _therm0["host_throttle_total_ms"])
         if server_cid:
             docker_rm(server_cid)
     return row
