@@ -329,7 +329,37 @@ def _write_withheld_recall():
         fh.write("\n")
 
 
+def _assert_lanes_registered():
+    """Every lane the runner can run is registered here, or it says which.
+
+    THE PARAGRAPH ABOVE PAPER_SCALES HAS BEEN TRUE THREE TIMES. `lifecycle`
+    and `l4` were registered in runner.LANES, run to completion, stamped
+    correctly, and every row discarded here before a table, figure or gate saw
+    them -- 117 lifecycle rows worth about 18 h of bench time. `e4` made it
+    three on 2026-09-22, and its omission was hiding a second defect: with the
+    rows dropped upstream, F10 never saw that the lane records no durability
+    at all. A comment cannot stop this happening a fourth time; a check can.
+
+    Refusing here rather than warning, because the failure mode is silence:
+    an unregistered lane produces an empty freeze and a table built from
+    nothing, which is exactly what the first October landing did.
+    """
+    try:
+        import runner
+    except Exception:  # noqa: BLE001 - the freeze must still run without it
+        return
+    missing = sorted(set(runner.LANES) - set(PAPER_SCALES))
+    if missing:
+        raise SystemExit(
+            f"REFUSING to freeze: {missing} are lanes runner.LANES can run and "
+            f"PAPER_SCALES does not list, so every row they produce is discarded "
+            f"here before any table, figure or gate sees it. Registering a lane "
+            f"takes three steps and this is the first: PAPER_SCALES, then "
+            f"export_web.SCALE_LABELS, then fairness_check.LANE_SCRIPT.")
+
+
 def load_canonical(apply_corpus=True):
+    _assert_lanes_registered()
     del WITHHELD_RECALL[:]   # per call, or the sidecar counts every earlier call's rows again
     del UNSETTLED_DISK[:]
     del SEPT_UNSETTLED[:]
