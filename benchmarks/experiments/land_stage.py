@@ -76,6 +76,12 @@ PIN_DEFAULT = "8d6af9475"
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pin", default=os.environ.get("BENCH_ENGINE_COMMIT", PIN_DEFAULT))
+    ap.add_argument("--only-lanes", default="",
+                    help="comma list of lanes to land (e.g. l4,e4); rows of every other lane "
+                         "are left on the host for a later landing. A STAGED LANDING NEEDS "
+                         "THIS: the gates read the whole freeze and have no notion of which "
+                         "tables a landing publishes, so merging every lane's rows fails a "
+                         "landing on lanes it was not trying to publish. Empty lands everything.")
     ap.add_argument("--exclude-backends", default="",
                     help="comma list of backends still running on the host; their rows are dropped")
     ap.add_argument("--exclude-since", default="",
@@ -158,15 +164,23 @@ def main():
 
     step(2, "drop rows of the backends still running")
     excl = {b.strip() for b in args.exclude_backends.split(",") if b.strip()}
+    lanes = {l.strip() for l in args.only_lanes.split(",") if l.strip()}
     rows = [json.loads(l) for l in pulled.read_text().splitlines() if l.strip()]
-    keep, dropped = [], []
+    keep, dropped, other_lane = [], [], []
     for r in rows:
+        if lanes and str(r.get("lane") or "") not in lanes:
+            other_lane.append(r)
+            continue
         be = str(r.get("backend", ""))
         hit = any(be == x or be.startswith(x) for x in excl)
         if hit and (not args.exclude_since or str(r.get("ts_utc", "")) >= args.exclude_since):
             dropped.append(r)
         else:
             keep.append(r)
+    if lanes:
+        _held = sorted({str(r.get("lane")) for r in other_lane})
+        print(f"  landing lanes {sorted(lanes)}; {len(other_lane)} row(s) of {_held} "
+              f"stay on the host for a later landing")
     filtered = SCRATCH / "runs_page_filtered.jsonl"
     filtered.write_text("".join(json.dumps(r) + "\n" for r in keep))
     print(f"  {len(rows)} rows pulled, {len(dropped)} dropped ({sorted({r.get('backend') for r in dropped})})")
