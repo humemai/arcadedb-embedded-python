@@ -794,7 +794,17 @@ def _fmt_number(v, float_digits):
         return str(v)
     x = float(v)
     if x != x:
-        return "nan"
+        # NaN IS NULL'S SPELLING, NOT A DIFFERENT ANSWER. An aggregate over an
+        # empty set has no value: nine of eleven graph engines return NULL for
+        # the mean age of a person with no KNOWS edges, and SurrealDB's
+        # math::mean([]) returns NaN. Canonicalising them apart made SurrealDB
+        # disagree with every other engine on hop1 at BOTH sizes -- 9 against 2
+        # -- which equivalence_check would have failed the October landing on,
+        # for a difference that is not about the data. IEEE NaN is also not
+        # equal to itself, so keeping it as a value makes a digest unstable in
+        # principle as well as wrong in practice. Infinities stay distinct:
+        # those are overflow, which IS a different answer.
+        return NULL_TOKEN
     if x == float("inf"):
         return "inf"
     if x == float("-inf"):

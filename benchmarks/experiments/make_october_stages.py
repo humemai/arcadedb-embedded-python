@@ -160,6 +160,22 @@ STAGES = [
      ["oltp"], ["sf1", "sf10"], [], {}, [], None, "strict"),
     ("qOD3", "cross-model, the strict durability pass (#90, F10b)", "e2",
      ["hybrid", "atomicity"], ["e2", "e2_500k"], [], {}, [], None, "strict"),
+    # THE DIGEST WAS OURS, NOT SURREALDB'S. Nine of eleven graph engines
+    # returned NULL for the mean age of a person with no KNOWS edges;
+    # SurrealDB's math::mean([]) returns NaN, and bench_common canonicalised
+    # the two apart -- so SurrealDB "disagreed" with every other engine on
+    # hop1 at BOTH sizes and equivalence_check would have failed the October
+    # landing on a difference that is not about the data (BUGS F87). NaN is
+    # NULL's spelling for "an aggregate over an empty set", and the
+    # canonicaliser says so now.
+    #
+    # The fix only reaches rows measured AFTER it, and these two arms were
+    # measured before, so their stamped digests are still the divergent ones.
+    # Re-run at the relaxed class only: qOA3 already re-runs every engine on
+    # this lane at strict, and those rows will carry the corrected digest.
+    ("qOA4", "SurrealDB graph re-run for the corrected answer digest (F87)", "l2",
+     ["oltp"], ["sf1", "sf10"], [], {}, [],
+     ["surrealdb_graph", "surrealdb_graph_server"], "relaxed"),
     # BENCH_TPC_SF is NOT derived from --scale: `SF = os.environ.get("BENCH_TPC_SF", "1")`
     # is a module constant, so --scale tpch10 without it loads SF1 and records
     # it as tpch10. September's stages set it per scale; so does this one.
