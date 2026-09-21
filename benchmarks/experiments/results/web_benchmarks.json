@@ -2552,6 +2552,7 @@
         "SurrealDB (server) at 9.99M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent",
         "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
         "ArangoDB at 9.99M vectors is withheld: its search answered with a recall@10 of 0.0001 across 5 repetition(s), which is not a measurement of search but of a broken index, so its latency is not printed beside engines answering correctly. The cause is investigated on the bench host before anything is claimed about it (BUGS F55).",
+        "In the cells: `>4h`, `>8h` the cell ran past its tier's cap and was not retried (each tier has its own cap, the same for every engine on it); `lost` the connection dropped mid-query. A dash is an operation the engine cannot express, never a slow one.",
         "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
       ],
       "columns": [
@@ -3489,6 +3490,50 @@
               "min": 0.4993,
               "max": 0.4994,
               "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_dense",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "small",
+          "scale_label": "1M vectors",
+          "workload": "search",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "censored",
+          "metrics": {
+            "cold p50 ms": {
+              "text": ">4h"
+            },
+            "cold p99 ms": {
+              "text": ">4h"
+            },
+            "warm p50 ms": {
+              "text": ">4h"
+            },
+            "warm p99 ms": {
+              "text": ">4h"
+            },
+            "recall@10": {
+              "text": ">4h"
+            },
+            "ingest+index vectors/s": {
+              "text": ">4h"
+            },
+            "ingest+index total s": {
+              "text": ">4h"
+            },
+            "peak memory GiB": {
+              "text": ">4h"
+            },
+            "disk GiB": {
+              "text": ">4h"
             }
           }
         },
@@ -4621,6 +4666,94 @@
               "min": 3.8033,
               "max": 3.8033,
               "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_dense",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "deep10m",
+          "scale_label": "9.99M vectors",
+          "workload": "search",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "censored",
+          "metrics": {
+            "cold p50 ms": {
+              "text": ">8h"
+            },
+            "cold p99 ms": {
+              "text": ">8h"
+            },
+            "warm p50 ms": {
+              "text": ">8h"
+            },
+            "warm p99 ms": {
+              "text": ">8h"
+            },
+            "recall@10": {
+              "text": ">8h"
+            },
+            "ingest+index vectors/s": {
+              "text": ">8h"
+            },
+            "ingest+index total s": {
+              "text": ">8h"
+            },
+            "peak memory GiB": {
+              "text": ">8h"
+            },
+            "disk GiB": {
+              "text": ">8h"
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_dense_server",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "deep10m",
+          "scale_label": "9.99M vectors",
+          "workload": "search",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "failed",
+          "metrics": {
+            "cold p50 ms": {
+              "text": "lost"
+            },
+            "cold p99 ms": {
+              "text": "lost"
+            },
+            "warm p50 ms": {
+              "text": "lost"
+            },
+            "warm p99 ms": {
+              "text": "lost"
+            },
+            "recall@10": {
+              "text": "lost"
+            },
+            "ingest+index vectors/s": {
+              "text": "lost"
+            },
+            "ingest+index total s": {
+              "text": "lost"
+            },
+            "peak memory GiB": {
+              "text": "lost"
+            },
+            "disk GiB": {
+              "text": "lost"
             }
           }
         }
@@ -6497,6 +6630,7 @@
         "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.1 seconds here at SF10 (66k people, 1.9M friendships), once, before any query was timed.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at SF10 (66k people, 1.9M friendships): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "In the cells: `>2h` the cell ran past its tier's cap and was not retried. A dash is an operation the engine cannot express, never a slow one.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ Arrow INSERT SELECT into the persons and knows tables under a property graph."
       ],
       "columns": [
@@ -7752,6 +7886,83 @@
               "min": 0.6647,
               "max": 0.6648,
               "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "censored",
+          "metrics": {
+            "ingest vertices+edges/s": {
+              "text": ">2h"
+            },
+            "ingest total s": {
+              "text": ">2h"
+            },
+            "average friend age p50 ms": {
+              "text": ">2h"
+            },
+            "average friend age p99 ms": {
+              "text": ">2h"
+            },
+            "friends in same city p50 ms": {
+              "text": ">2h"
+            },
+            "friends in same city p99 ms": {
+              "text": ">2h"
+            },
+            "most friends p50 ms": {
+              "text": ">2h"
+            },
+            "most friends p99 ms": {
+              "text": ">2h"
+            },
+            "LSQB Q1 p50 ms": {
+              "text": ">2h"
+            },
+            "LSQB Q2 p50 ms": {
+              "text": ">2h"
+            },
+            "LSQB Q3 p50 ms": {
+              "text": ">2h"
+            },
+            "LSQB Q4 p50 ms": {
+              "text": ">2h"
+            },
+            "LSQB Q5 p50 ms": {
+              "text": ">2h"
+            },
+            "LSQB Q6 p50 ms": {
+              "text": ">2h"
+            },
+            "LSQB Q7 p50 ms": {
+              "text": ">2h"
+            },
+            "LSQB Q8 p50 ms": {
+              "text": ">2h"
+            },
+            "LSQB Q9 p50 ms": {
+              "text": ">2h"
+            },
+            "view build s": {
+              "text": ">2h"
+            },
+            "peak memory GiB": {
+              "text": ">2h"
+            },
+            "disk GiB": {
+              "text": ">2h"
             }
           }
         },
@@ -12860,7 +13071,8 @@
         "MongoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell reached the 32g memory envelope (peak 32,768 MiB) and was killed by the kernel, the same envelope every engine on this table had; it did not run out of time, and there is no row.",
-        "SurrealDB (server) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent"
+        "SurrealDB (server) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent",
+        "In the cells: `>2h` the cell ran past its tier's cap and was not retried; `OOM` killed at the cell's memory envelope rather than running out of time; `lost` the connection dropped mid-query. A dash is an operation the engine cannot express, never a slow one."
       ],
       "columns": [
         "Q1 p50 ms",
@@ -13320,6 +13532,151 @@
               "n": 10
             }
           }
+        },
+        {
+          "backend": "ArangoDB",
+          "backend_key": "arangodb_tpc",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch10",
+          "scale_label": "TPC-H SF10 (60.0M line items)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "censored",
+          "metrics": {
+            "Q1 p50 ms": {
+              "text": ">2h"
+            },
+            "Q1 p99 ms": {
+              "text": ">2h"
+            },
+            "Q6 p50 ms": {
+              "text": ">2h"
+            },
+            "Q6 p99 ms": {
+              "text": ">2h"
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "backend_key": "mongodb",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch10",
+          "scale_label": "TPC-H SF10 (60.0M line items)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "censored",
+          "metrics": {
+            "Q1 p50 ms": {
+              "text": ">2h"
+            },
+            "Q1 p99 ms": {
+              "text": ">2h"
+            },
+            "Q6 p50 ms": {
+              "text": ">2h"
+            },
+            "Q6 p99 ms": {
+              "text": ">2h"
+            }
+          }
+        },
+        {
+          "backend": "SQLite",
+          "backend_key": "sqlite",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch10",
+          "scale_label": "TPC-H SF10 (60.0M line items)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "censored",
+          "metrics": {
+            "Q1 p50 ms": {
+              "text": ">2h"
+            },
+            "Q1 p99 ms": {
+              "text": ">2h"
+            },
+            "Q6 p50 ms": {
+              "text": ">2h"
+            },
+            "Q6 p99 ms": {
+              "text": ">2h"
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_tpc",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch10",
+          "scale_label": "TPC-H SF10 (60.0M line items)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "envelope",
+          "metrics": {
+            "Q1 p50 ms": {
+              "text": "OOM"
+            },
+            "Q1 p99 ms": {
+              "text": "OOM"
+            },
+            "Q6 p50 ms": {
+              "text": "OOM"
+            },
+            "Q6 p99 ms": {
+              "text": "OOM"
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_tpc_server",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "tpch10",
+          "scale_label": "TPC-H SF10 (60.0M line items)",
+          "workload": "olap",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "failed",
+          "metrics": {
+            "Q1 p50 ms": {
+              "text": "lost"
+            },
+            "Q1 p99 ms": {
+              "text": "lost"
+            },
+            "Q6 p50 ms": {
+              "text": "lost"
+            },
+            "Q6 p99 ms": {
+              "text": "lost"
+            }
+          }
         }
       ],
       "withheld_scales": [],
@@ -13489,6 +13846,14 @@
         ]
       },
       {
+        "text": "In the cells: `>4h`, `>8h` the cell ran past its tier's cap and was not retried (each tier has its own cap, the same for every engine on it); `lost` the connection dropped mid-query. A dash is an operation the engine cannot express, never a slow one.",
+        "values": [
+          ">4h",
+          ">8h",
+          "lost"
+        ]
+      },
+      {
         "text": "Each repetition runs every read against a fresh set of start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200); the p50 and p99 are over those.",
         "values": [
           "SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200"
@@ -13533,6 +13898,12 @@
           "SurrealDB (embedded)",
           "SF10 (66k people, 1.9M friendships)",
           "2 hour"
+        ]
+      },
+      {
+        "text": "In the cells: `>2h` the cell ran past its tier's cap and was not retried. A dash is an operation the engine cannot express, never a slow one.",
+        "values": [
+          ">2h"
         ]
       },
       {
@@ -13595,6 +13966,14 @@
           "SurrealDB (server)",
           "TPC-H SF10 (60.0M line items)",
           "websockets.exceptions.ConnectionClosedError: no close frame received or sent"
+        ]
+      },
+      {
+        "text": "In the cells: `>2h` the cell ran past its tier's cap and was not retried; `OOM` killed at the cell's memory envelope rather than running out of time; `lost` the connection dropped mid-query. A dash is an operation the engine cannot express, never a slow one.",
+        "values": [
+          ">2h",
+          "OOM",
+          "lost"
         ]
       }
     ]

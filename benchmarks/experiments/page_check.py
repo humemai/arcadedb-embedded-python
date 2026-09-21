@@ -1211,9 +1211,16 @@ def _check_coverage(payload):
                 undeclared += len(engines)
                 continue
             for engine in engines:
+                # A CELL MARK IS NOT A MEASUREMENT (DECISIONS #111). A
+                # censored engine now keeps its row and prints `>2h`, `OOM`
+                # or `err` in the cells, so "the metric is not None" stopped
+                # meaning "the campaign measured this". A stat with no median
+                # is a statement about a RUN; the absence it declares is what
+                # accounts for it, exactly as before the row was printed.
                 got = [e for e in t.get("entries", [])
                        if str(e["backend"]) == engine
-                       and (e.get("metrics") or {}).get(op) is not None]
+                       and isinstance((e.get("metrics") or {}).get(op), dict)
+                       and (e["metrics"][op] or {}).get("median") is not None]
                 if got:
                     present += 1
                 elif engine in whole_row or (engine, op) in per_cell:

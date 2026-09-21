@@ -2910,7 +2910,11 @@ def multimodel_cell(table, engine):
     """(cell text, declared kinds) for one engine on one finished table, by
     the coverage gate's own reading of declared_absences: a whole-row absence
     or a per-cell one, either naming any arm of the engine."""
-    rows = [e for e in table.get("entries", []) if entry_engine(e) == engine]
+    # A MARKED ROW IS NOT A MEASURED ONE (DECISIONS #111). These rows exist
+    # so a censored engine stays in the comparison; reading one as "measured"
+    # here would claim a number the campaign never took.
+    rows = [e for e in table.get("entries", [])
+            if entry_engine(e) == engine and not e.get("outcome")]
     if rows:
         return MULTIMODEL_CELLS["measured"], []
     kinds = sorted({str(a.get("kind")) for a in table.get("declared_absences") or []
@@ -4064,6 +4068,105 @@ def _timeout_phase(hint):
     return None
 
 
+# DECISIONS #111: a censored engine keeps its row and prints its outcome in
+# the cell. The classification lives HERE, once, and both the note and the
+# mark read it -- writing the same three-way test twice is how a note and a
+# cell end up disagreeing about what happened to one run.
+def _outcome_kind(secs):
+    """(kind, mark) for a value out of _censored_cells()."""
+    if isinstance(secs, tuple) and secs and secs[0] == "envelope":
+        return "envelope", "OOM"
+    if isinstance(secs, int) or secs is None:
+        return "censored", _cap_label(secs)
+    text = str(secs).lower()
+    if "connection" in text or "closed" in text or "reset" in text:
+        return "failed", "lost"
+    return "failed", "err"
+
+
+def _cap_label(secs):
+    """`>2h` from 7200. The cap is a property of the TIER and identical for
+    every engine on it, which is what makes the bound comparable along a row;
+    it ranges from 15 minutes to 48 hours, so it is derived and never typed."""
+    if not secs:
+        return ">cap"
+    secs = int(secs)
+    if secs % 3600 == 0:
+        return f">{secs // 3600}h"
+    return f">{secs // 60}m"
+
+
+# The legend is BUILT FROM THE MARKS PRESENT and refuses one it cannot
+# define, which is the trap the capability table's legend fell into: a typed
+# tuple of three kinds, and a fourth printed into the cells with nothing
+# explaining it (BUGS F76's sibling).
+_MARK_MEANINGS = {
+    "OOM": "killed at the cell's memory envelope rather than running out of time",
+    "lost": "the connection dropped mid-query",
+    "err": "the cell failed inside its budget; the note says what it reported",
+}
+
+
+def _mark_legend(marks):
+    if not marks:
+        return []
+    parts = []
+    # THE CAP MARKS SHARE ONE ENTRY. A table carrying two sizes carries two
+    # caps, and listing `>4h` and `>8h` separately printed the same sentence
+    # twice; the marks differ because the TIERS do, which is the thing worth
+    # saying, and the cap is identical for every engine at a tier.
+    caps = sorted((m for m in marks if m.startswith(">")),
+                  key=lambda m: (m.endswith("m"), int(m[1:-1])))
+    if caps:
+        parts.append(", ".join(f"`{c}`" for c in caps)
+                     + " the cell ran past its tier's cap and was not retried"
+                     + (" (each tier has its own cap, the same for every engine on it)"
+                        if len(caps) > 1 else ""))
+    for m in sorted(m for m in marks if not m.startswith(">")):
+        if m not in _MARK_MEANINGS:
+            raise SystemExit(f"export_web: no legend defined for the cell mark {m!r}; "
+                             f"a mark the table cannot define must not reach a reader")
+        parts.append(f"`{m}` {_MARK_MEANINGS[m]}")
+    return [_gen("In the cells: " + "; ".join(parts) + ". A dash is an operation the "
+                 "engine cannot express, never a slow one.", *sorted(marks))]
+
+
+def _censored_entries(table):
+    """Rows for the engines whose cell did not finish (DECISIONS #111).
+
+    They carry `outcome` and text-only metrics, so everything that counts a
+    MEASUREMENT must skip them -- a mark is a statement about a run, not a
+    number. `page_check` skips a metric with no median for the same reason.
+    """
+    lane_wl = _TABLE_LANE.get(table.get("id"))
+    if not lane_wl:
+        return [], set()
+    lane, wl = lane_wl
+    scales = _table_scales(table.get("id"))
+    cols = list(table.get("columns") or [])
+    out, marks = [], set()
+    for (l, scale, backend, w), secs in sorted(_censored_cells().items(), key=str):
+        if l != lane or (wl and w != wl):
+            continue
+        if scales and str(scale) not in scales:
+            continue
+        kind, mark = _outcome_kind(secs)
+        marks.add(mark)
+        # THE SAME SHAPE AS A MEASURED ROW, so nothing that walks entries
+        # trips over a key that is not there; `outcome` is what tells the
+        # consumers that care this row is a statement and not a number.
+        out.append({"backend": display_name(backend), "backend_key": backend,
+                    "is_arcadedb": "arcadedb" in str(backend).lower(),
+                    "precision": None, "scale": scale,
+                    "scale_label": scale_label(lane, scale), "workload": w,
+                    "n_docs": None,
+                    "deployment": "server" if str(backend).endswith("_server") else "embedded",
+                    "image": None, "version_name": None, "host": None,
+                    "outcome": kind,
+                    "metrics": {c: {"text": mark} for c in cols}})
+    return out, marks
+
+
 def _censored_notes(table_id):
     lane_wl = _TABLE_LANE.get(table_id)
     if not lane_wl:
@@ -4083,7 +4186,8 @@ def _censored_notes(table_id):
         # cell that ran past the tier's cap; anything else is what the cell
         # reported when it failed inside its budget, and a lost connection
         # must not read as slowness.
-        if isinstance(secs, tuple) and secs and secs[0] == "envelope":
+        kind, _ = _outcome_kind(secs)
+        if kind == "envelope":
             _, _cap, _peak = secs
             _cap_txt = f"{_cap} memory envelope" if _cap else "cell's memory envelope"
             _peak_txt = f" (peak {_peak:,.0f} MiB)" if isinstance(_peak, (int, float)) else ""
@@ -4097,8 +4201,7 @@ def _censored_notes(table_id):
                        f"engine on this table had; it did not run out of time, and there is no row.",
                        display_name(backend), scale_label(lane, scale), _cap_txt,
                        _peak_txt.strip(" ()").replace("peak ", "") if _peak_txt else None)
-            kind = "envelope"
-        elif isinstance(secs, int) or secs is None:
+        elif kind == "censored":
             budget = f"{secs / 3600:g} hour" if secs else "its"
             _phase = _CENSORED_PHASE.get((lane, str(scale), backend, w))
             _in = f" It was still in {_phase} when the budget ran out." if _phase else ""
@@ -4106,13 +4209,11 @@ def _censored_notes(table_id):
                        f"its {budget} budget, the same budget every engine on this table had, on its first "
                        f"attempt and was not retried; there is no row.{_in}",
                        display_name(backend), scale_label(lane, scale), budget)
-            kind = "censored"
         else:
             why = _gen(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell failed "
                        f"inside its budget and was not retried, so there is no row. What it reported: "
                        f"{secs}",
                        display_name(backend), scale_label(lane, scale), str(secs))
-            kind = "failed"
         notes.append(why)
         _declare_absence(table_id, display_name(backend), None, kind, why)
     return notes
@@ -4590,7 +4691,12 @@ def _finish_table(table: dict) -> dict:
                            + _zero_growth_notes(table.get("id"))
                            + _unexpressible_notes(table.get("id"), table.get("entries", []))
                            + _withheld_recall_notes(table.get("id")))
-    entries = table["entries"]
+    # DECISIONS #111. Added AFTER every note and number is computed, so
+    # nothing that averages, ranks or counts a measurement can see them.
+    _marked, _marks = _censored_entries(table)
+    if _marked:
+        table["conditions"] = table["conditions"] + _mark_legend(_marks)
+    entries = table["entries"] + _marked
     seen = []
     for e in entries:
         if e.get("scale") not in seen:
@@ -4636,7 +4742,11 @@ def _finish_table(table: dict) -> dict:
     # And no column without a value in any row: a metric a lane records only
     # since a given date would otherwise print a column of dashes until the
     # re-run lands (the analytical p99s, 2026-09-10).
-    present = {m for e in table["entries"] for m, v in e.get("metrics", {}).items() if v is not None}
+    # A MARK IS NOT A VALUE. Without the outcome filter a column that only
+    # censored rows carry would print as a column of `>2h` and nothing else,
+    # which is a column the campaign never measured (DECISIONS #111).
+    present = {m for e in table["entries"] if not e.get("outcome")
+               for m, v in e.get("metrics", {}).items() if v is not None}
     table["columns"] = [c for c in cols if c in present]
     note = ((OCT_PROSE.get(table["id"]) or {}).get("ingest", (None,))[0] if october
             else INGEST_NOTES.get(table["id"]))
@@ -5394,7 +5504,8 @@ def main() -> int:
                   f"have comparator rows but no released ArcadeDB row, so the "
                   f"tier is not published (it would read as a missing result)")
     missing = [e["backend"] for t in tables for e in t["entries"]
-               if e["image"] is None and not e["backend"].endswith("_embedded")]
+               if e.get("image") is None and not e.get("outcome")
+               and not e["backend"].endswith("_embedded")]
     if missing:
         print(f"  NOTE: no pinned image for {sorted(set(missing))} "
               f"(embedded/in-process backends have none by design)")

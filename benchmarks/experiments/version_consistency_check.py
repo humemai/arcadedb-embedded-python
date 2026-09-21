@@ -124,15 +124,19 @@ def _versionless_measurements(node, table=None):
     `_rows` above can only reason about version strings that exist, so a row
     with no `version_name` at all was invisible to every check in this file --
     one level below the unreadable-string hole and with the same consequence.
-    A DECLARED OUTCOME is exempt and must be: a censored or failed cell
-    carries `kind`/`why` and no metrics, names no engine because it measured
-    nothing, and saying so is the point of it. A row with metrics is a
-    measurement, and a measurement that cannot say which engine produced it
-    is not publishable.
+    A DECLARED OUTCOME is exempt and must be: it names no engine because it
+    measured nothing, and saying so is the point of it. Until DECISIONS #111
+    that test could be "it carries no metrics", because a censored engine was
+    dropped from the table entirely. It now KEEPS ITS ROW and prints `>2h`,
+    `OOM` or `err` in the cells, so emptiness stopped being the signal and
+    `outcome` is: a marked cell is a statement about a run, not a number.
+
+    A row with real metrics is a measurement, and a measurement that cannot
+    say which engine produced it is not publishable.
     """
     if isinstance(node, dict):
         tid = node.get("id", table) if "entries" in node else table
-        if "backend" in node and node.get("metrics"):
+        if "backend" in node and node.get("metrics") and not node.get("outcome"):
             if not isinstance(node.get("version_name"), str) or not node["version_name"].strip():
                 yield tid, node.get("backend", "?")
         for value in node.values():
