@@ -606,7 +606,7 @@
   ],
   "setup": {
     "hosts": {
-      "mini": {
+      "benchmark machine": {
         "cpu": "Intel Core i9-12900HK, 14 cores (6 performance, 8 efficient), 20 threads, 24 MiB L3",
         "memory": "64 GiB",
         "storage": "Samsung 980 PRO 2 TB NVMe",
@@ -2552,7 +2552,7 @@
         "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
         "SurrealDB (embedded) at 9.99M vectors: the search cell exceeded its 8 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (server) at 9.99M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent",
-        "ArangoDB at 9.99M vectors is withheld: its search answered with a recall@10 of 0.0001 across 5 repetition(s), which is not a measurement of search but of a broken index, so its latency is not printed beside engines answering correctly. The cause is investigated on the bench host before anything is claimed about it.",
+        "ArangoDB at 9.99M vectors is withheld: its search answered with a recall@10 of 0.0001 across 5 repetition(s), which is not a measurement of search but of a broken index, so its latency is not printed beside engines answering correctly. The cause is investigated on the benchmark machine before anything is claimed about it.",
         "In the cells: `>4h` and `>8h` mean the cell ran past its tier's cap and was not retried; each tier has its own cap, the same for every engine on it. `lost` means the connection dropped mid-query. A dash is an operation the engine cannot express, never a slow one.",
         "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
       ],
@@ -2584,7 +2584,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1.35,
@@ -2654,7 +2654,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1.952,
@@ -2724,7 +2724,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 2.346,
@@ -2794,7 +2794,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 2.914,
@@ -2864,7 +2864,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "arangodb 3.12.11",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 5.891,
@@ -2934,7 +2934,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "chroma 1.5.9",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 0.639,
@@ -3004,7 +3004,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "duckdb vss 1.5.5",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1.778,
@@ -3074,7 +3074,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "lancedb 0.37.1",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1.482,
@@ -3144,7 +3144,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "milvus 2.6.13",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 0.995,
@@ -3214,7 +3214,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "neo4j 2026.07.1",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 11.754,
@@ -3284,7 +3284,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "pgvector 0.8.6",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1.818,
@@ -3366,7 +3366,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "qdrant 1.18.2",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1.082,
@@ -3436,7 +3436,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "sqlite-vec 0.1.9",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 126.426,
@@ -3550,7 +3550,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "surrealdb 3.2.4",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1503.138,
@@ -3620,7 +3620,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 2.858,
@@ -3690,7 +3690,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 8.745,
@@ -3760,7 +3760,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 3.972,
@@ -3830,7 +3830,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 8.694,
@@ -3900,7 +3900,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "chroma 1.5.9",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 0.7,
@@ -3970,7 +3970,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "duckdb vss 1.5.5",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 2.745,
@@ -4040,7 +4040,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "lancedb 0.37.1",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 442.853,
@@ -4110,7 +4110,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "milvus 2.6.13",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1.332,
@@ -4180,7 +4180,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "milvus 2.6.13",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1.387,
@@ -4250,7 +4250,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "neo4j 2026.07.1",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 85.025,
@@ -4320,7 +4320,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "pgvector 0.8.6",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 2.781,
@@ -4402,7 +4402,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "qdrant 1.18.2",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1.133,
@@ -4472,7 +4472,7 @@
           "deployment": "server",
           "image": null,
           "version_name": "qdrant 1.18.2",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 1.262,
@@ -4542,7 +4542,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "sqlite-vec 0.1.9",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 679.229,
@@ -4612,7 +4612,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "sqlite-vec 0.1.9",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "cold p50 ms": {
               "median": 928.273,
@@ -12336,7 +12336,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "time ms": {
               "median": 1.518,
@@ -12361,7 +12361,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "time ms": {
               "median": 1.581,
@@ -12386,7 +12386,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "time ms": {
               "median": 145.256,
@@ -12411,7 +12411,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "time ms": {
               "median": 254.649,
@@ -12436,7 +12436,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "time ms": {
               "median": 383.988,
@@ -12461,7 +12461,7 @@
           "deployment": "embedded",
           "image": null,
           "version_name": "arcadedb 26.9.1-dev \u00b7 8d6af9475",
-          "host": "mini",
+          "host": "benchmark machine",
           "metrics": {
             "time ms": {
               "median": 3856.661,
@@ -13711,7 +13711,7 @@
         ]
       },
       {
-        "text": "ArangoDB at 9.99M vectors is withheld: its search answered with a recall@10 of 0.0001 across 5 repetition(s), which is not a measurement of search but of a broken index, so its latency is not printed beside engines answering correctly. The cause is investigated on the bench host before anything is claimed about it.",
+        "text": "ArangoDB at 9.99M vectors is withheld: its search answered with a recall@10 of 0.0001 across 5 repetition(s), which is not a measurement of search but of a broken index, so its latency is not printed beside engines answering correctly. The cause is investigated on the benchmark machine before anything is claimed about it.",
         "values": [
           "ArangoDB",
           "9.99M vectors",

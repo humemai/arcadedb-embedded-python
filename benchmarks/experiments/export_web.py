@@ -1692,7 +1692,15 @@ def _strip_internal_refs(node):
         return _public_prose(node)
     # version strings ride the same walk: they are reader-facing too
     if isinstance(node, dict):
-        return {k: (v if k in _PROVENANCE_KEYS
+        # A HOST FIELD IS PROVENANCE AND STILL READER-FACING. `entries[].host`
+        # is rendered, and on the live page it rendered the literal "mini" on
+        # 35 rows. The value stays exact for a host we do not name -- l4's
+        # rows carry "container:<id> (host unknown)" and that is the honest
+        # answer -- but one of OUR machines becomes what it is to the reader.
+        # The frozen CSV keeps `bench_host` verbatim; this is the published
+        # copy, and the two are allowed to differ in how they say it.
+        return {k: (HOST_ROLE.get(v, v) if k in ("host", "bench_host") and isinstance(v, str)
+                    else v if k in _PROVENANCE_KEYS
                     else _one_spelling(v) if k == "version_name" and isinstance(v, str)
                     else _strip_internal_refs(v))
                 for k, v in node.items()}
@@ -1729,6 +1737,45 @@ def _refuse_internal_refs(payload):
         for path, m, ctx in bad[:12]:
             print(f"  {path}: {m!r} in {ctx!r}")
         raise SystemExit(f"{len(bad)} internal reference(s) would have been published")
+
+    # OUR MACHINES ARE INTERNAL VOICE TOO (user, 2026-09-22: "whether we use
+    # laptop or mini is internal voice. it shouldn't be in the page"). Same
+    # rule as the document citations above and found the same way -- by the
+    # user reading the page -- so it gets the same refusal rather than a
+    # sanitiser that might miss a phrasing. The live page said "mini" in
+    # `setup.hosts` and in a condition; the preview said "laptop" 185 times.
+    #
+    # `bench_host` on a ROW is provenance and stays exact, like the generator
+    # path: the rule is about prose the reader is asked to read, not about
+    # hiding where a number came from. Hence _PROVENANCE_KEYS is honoured by
+    # the same walk.
+    hosts = []
+
+    def walk_hosts(node, path=""):
+        if isinstance(node, str):
+            for m in re.findall(r"\b(?:laptop|mini|bench host|bench-host)\b", node, re.I):
+                hosts.append((path, m, node[:90]))
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                if k in _PROVENANCE_KEYS:
+                    continue
+                for m in re.findall(r"\b(?:laptop|mini)\b", str(k), re.I):
+                    hosts.append((path, f"key {k!r}", ""))
+                walk_hosts(v, f"{path}.{k}" if path else k)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk_hosts(v, f"{path}[{i}]")
+
+    walk_hosts(payload)
+    if hosts:
+        print("REFUSING to publish: a machine of ours is named in reader-facing text")
+        for path, m, ctx in hosts[:12]:
+            print(f"  {path}: {m!r}" + (f" in {ctx!r}" if ctx else ""))
+        raise SystemExit(
+            f"{len(hosts)} hostname(s) would have been published. A reader has no "
+            f"idea which machine is which and does not need one: say what the "
+            f"machine IS (the benchmark machine, a shared machine running other "
+            f"work), never what we call it.")
 
 
 def _declare_absence(table_id, backend, column, kind, why):
@@ -1865,7 +1912,7 @@ def _metrics_for(table_id, spec, src_lane=None):
 # were timed, so the numbers cannot be compared with each other or with the
 # live page.
 SKELETON_BANNER = (
-    "These numbers were timed on a laptop that was running other work at the "
+    "These numbers were timed on a shared machine that was running other work at the "
     "same time: a browser, an editor, and whatever else happened to be open. "
     "Nothing here had the machine to itself, no cell was given cores of its "
     "own, and each one ran once instead of five times, on the smallest data "
@@ -1877,12 +1924,12 @@ SKELETON_BANNER = (
     "machine the real numbers will be measured on has measured nothing yet.")
 SKELETON_TABLE_NOTE = (
     "Take every number in this table with a grain of salt. It was timed on a "
-    "laptop that was running other work at the same time, with no cores set "
+    "shared machine that was running other work at the same time, with no cores set "
     "aside for the benchmark and one run per cell, so these times can be out "
     "by a large factor and the engines here cannot be compared with each "
     "other, or with the same table on the live page. The columns, the "
     "conditions, and the sizes are October's; the values are filler until the "
-    "campaign measures them on the bench machine.")
+    "campaign measures them.")
 # The two invariants that describe the BENCH HOST rather than the comparison.
 # A laptop skeleton cannot satisfy either (no cpuset pinning, no per-scale
 # memory envelope), and every other gate must pass exactly as it will in
@@ -1891,11 +1938,11 @@ SKELETON_TABLE_NOTE = (
 # the reader is not left wondering whether a table was dropped or forgotten.
 SKELETON_ABSENT = {
     "l3smp": "the sparse second pass is a separate multipass driver on the "
-             "bench host; the skeleton runs the lane once.",
+             "benchmark machine; the skeleton runs the lane once.",
     "l3d warm columns": "the dense warm pass comes from the same multipass "
                         "driver; the skeleton's dense table is cold only.",
     "e4": "the client/server decomposition is its own overlay, measured on "
-          "the bench host.",
+          "the benchmark machine.",
     "pycost": "the Python-cost table is the binding suite's own frozen file, "
               "not a lane the skeleton runs.",
     "the summary figure": "it is a ratio of every table against its best "
@@ -1907,9 +1954,9 @@ SKELETON_ABSENT = {
 # nothing to a reader of the page, and the thing it labels -- cpuset pinning
 # -- means everything.
 SKELETON_WAIVERS = [
-    "CPU pinning: the skeleton runs on the laptop's shared cpuset, not a "
+    "CPU pinning: the skeleton runs on a shared cpuset, not a "
     "pinned one.",
-    "Memory envelope: the skeleton runs at the laptop's micro caps, not the "
+    "Memory envelope: the skeleton runs at the placeholder run's micro caps, not the "
     "campaign's per-size envelope.",
 ]
 
@@ -2235,7 +2282,7 @@ GLOBAL_CONDITIONS = [
 SKELETON_CONDITION_SWAPS = {
     "Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.":
         "Every engine ran in Docker under the same memory cap, one cell at a "
-        "time, on one laptop. The laptop was not doing only this: a browser, "
+        "time, on one shared machine. That machine was not doing only this: a browser, "
         "an editor, and the rest of a working machine kept running beside every "
         "cell, so no cell had cores of its own and the times below are not "
         "comparable between engines.",
@@ -2278,7 +2325,7 @@ def _thermal_note():
     med = ms[len(ms) // 2] / 1000.0
     worst = ms[-1] / 1000.0
     return _gen(
-        "The bench host is a mobile-class part in a small chassis and it "
+        "The benchmark machine is a mobile-class part in a small chassis and it "
         "throttles under sustained load. The power mode is left exactly as the "
         "machine ships -- governor `powersave`, turbo enabled -- because "
         "pinning the clock would lower every absolute number here, so a long "
@@ -3258,7 +3305,7 @@ def _multimodel_table(finished):
         # it answered was not the question the other engines answered.
         "withdrawn": "withdrawn, the query it answered was not the one the "
                      "other engines answered, so the row came down",
-        "unrun": "not run, the skeleton's laptop placeholder did not run this "
+        "unrun": "not run, the placeholder run did not cover this "
                  "workload for that engine",
     }
     # ITERATE THE KINDS THAT ARE PRESENT, not a list typed beside the legend.
@@ -3788,7 +3835,7 @@ OCT_PROSE = {
     "GLOBAL": {
         "docker": ("Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.", []),
         "docker_skeleton": ("Every engine ran in Docker under the same memory cap, one cell at a "
-                            "time, on one laptop. The laptop was not doing only this: a browser, "
+                            "time, on one shared machine. That machine was not doing only this: a browser, "
                             "an editor, and the rest of a working machine kept running beside every "
                             "cell, so no cell had cores of its own and the times below are not "
                             "comparable between engines.", []),
@@ -5163,7 +5210,7 @@ def _withheld_recall_notes(table_id):
             f"{label} at {size} is withheld: its search answered with a recall@10 of "
             f"{max(recs):.4f} across {len(recs)} repetition(s), which is not a measurement of "
             f"search but of a broken index, so its latency is not printed beside engines "
-            f"answering correctly. The cause is investigated on the bench host before anything "
+            f"answering correctly. The cause is investigated on the benchmark machine before anything "
             f"is claimed about it (BUGS F55).",
             label, size, f"{max(recs):.4f}", str(len(recs))))
     return notes
@@ -5216,7 +5263,7 @@ def _finish_table(table: dict) -> dict:
             if _norow:
                 _who = _join_and(_norow)
                 _why = _gen(f"{_who} {'has' if len(_norow) == 1 else 'have'} no row on this "
-                            f"table: the skeleton is a laptop placeholder and did not run this "
+                            f"table: the skeleton is a placeholder run and did not cover this "
                             f"workload for {'it' if len(_norow) == 1 else 'them'}. The campaign "
                             f"does.", _who)
                 table.setdefault("conditions", [])
@@ -5240,8 +5287,8 @@ def _finish_table(table: dict) -> dict:
             for _miss, _whos in sorted(_partial.items(), key=str):
                 _who = _join_and(_whos)
                 _why = _gen(f"{_who} {'prints' if len(_whos) == 1 else 'print'} no "
-                            f"{_join_and(list(_miss))} here: the skeleton is a laptop "
-                            f"placeholder and did not run that workload for "
+                            f"{_join_and(list(_miss))} here: the skeleton is a placeholder "
+                            f"run and did not cover that workload for "
                             f"{'this arm' if len(_whos) == 1 else 'those arms'}, though it ran "
                             f"the ingest the other columns come from. The campaign runs both.",
                             _who, _join_and(list(_miss)))
@@ -5335,6 +5382,14 @@ def _finish_table(table: dict) -> dict:
 # The host's hardware, typed once per host name and attached to the payload
 # for every host the rows name; a row from an unknown host stops the export
 # rather than publishing numbers with no machine behind them.
+# What each machine is TO A READER. The keys of HOST_HARDWARE are our own
+# hostnames and must stay that way -- rows carry `bench_host` and the lookup
+# is by that -- but nothing with a hostname in it reaches the page.
+HOST_ROLE = {
+    "mini": "benchmark machine",
+    "laptop": "development machine",
+}
+
 HOST_HARDWARE = {
     "mini": {
         "cpu": "Intel Core i9-12900HK, 14 cores (6 performance, 8 efficient), 20 threads, 24 MiB L3",
@@ -5374,7 +5429,13 @@ def _host_hardware(hosts, rows=()):
     missing = [h for h in named if h not in HOST_HARDWARE]
     if missing:
         raise SystemExit(f"rows name a host with no HOST_HARDWARE entry: {missing}")
-    return {h: HOST_HARDWARE[h] for h in named}
+    # KEYED BY ROLE, NOT BY OUR HOSTNAME. `setup.hosts` is published, so the
+    # key is reader-facing, and it read "mini" on the live page and "laptop"
+    # on the preview -- the names of two machines in this room, which tell a
+    # reader nothing and are the internal voice the page is not supposed to
+    # carry. The hardware underneath is exactly as specific as it was; only
+    # the label changes, from a name to what the machine IS to the reader.
+    return {HOST_ROLE.get(h, h): HOST_HARDWARE[h] for h in named}
 
 
 def _dense_columns(spec, src_lane):
