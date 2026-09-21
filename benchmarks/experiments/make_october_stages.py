@@ -114,6 +114,17 @@ STAGES = [
       ' v=dict(zip([k.value for k in d[0].value.keys],[ast.literal_eval(x) for x in d[0].value.values]));'
       ' sys.exit(0 if v.get(\'e2_500k\')==500000 else 1)"'
       ' || { say "$ID ABORT: e2_500k is not 500k products"; exit 1; }'], {}, []),
+    # E4 IS A PUBLISHED TABLE WITH NO PRODUCER IN THE CAMPAIGN. The live
+    # September page carries the deployment decomposition (embedded ->
+    # in-process HTTP -> docker HTTP, ArcadeDB against itself), and
+    # export_web REFUSES to build the page without `e4decomp_<pin>`. No
+    # October stage ran the lane, and no script in the archive ran it either
+    # -- September's artifact was produced by hand -- so the campaign as
+    # queued could not have produced a publishable page at all. One backend,
+    # one workload, at the cross-model scale, which is what the September
+    # artifact's own run_id records (e4_arcadedb_e4_decomp_e2_r1).
+    ("qOI", "deployment decomposition, the E4 table's producer", "e4",
+     ["decomp"], ["e2"], [], {}, [], None, None),
     # qOD ran two of its nine arms against images nobody was rebuilding, both
     # for the same reason: the stage built a typed list of three images, so an
     # image outside that list was whatever happened to be on the host.
@@ -149,17 +160,6 @@ STAGES = [
      ["oltp"], ["sf1", "sf10"], [], {}, [], None, "strict"),
     ("qOD3", "cross-model, the strict durability pass (#90, F10b)", "e2",
      ["hybrid", "atomicity"], ["e2", "e2_500k"], [], {}, [], None, "strict"),
-    # E4 IS A PUBLISHED TABLE WITH NO PRODUCER IN THE CAMPAIGN. The live
-    # September page carries the deployment decomposition (embedded ->
-    # in-process HTTP -> docker HTTP, ArcadeDB against itself), and
-    # export_web REFUSES to build the page without `e4decomp_<pin>`. No
-    # October stage ran the lane, and no script in the archive ran it either
-    # -- September's artifact was produced by hand -- so the campaign as
-    # queued could not have produced a publishable page at all. One backend,
-    # one workload, at the cross-model scale, which is what the September
-    # artifact's own run_id records (e4_arcadedb_e4_decomp_e2_r1).
-    ("qOI", "deployment decomposition, the E4 table's producer", "e4",
-     ["decomp"], ["e2"], [], {}, [], None, None),
     # BENCH_TPC_SF is NOT derived from --scale: `SF = os.environ.get("BENCH_TPC_SF", "1")`
     # is a module constant, so --scale tpch10 without it loads SF1 and records
     # it as tpch10. September's stages set it per scale; so does this one.
