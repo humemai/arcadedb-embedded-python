@@ -29,6 +29,7 @@ engine's own batch-insert path (LineItems below), so the tpch10 tier's 60M
 rows never sit in the client's memory whole; SF1 goes through the same path.
 """
 import argparse
+import contextlib
 import json
 import os
 import random
@@ -297,6 +298,39 @@ def _prepare(li):
     return li
 
 
+# INDEX BUILD IS ITS OWN NUMBER (FAIRNESS F14, DECISIONS #112). The dense
+# vector table has separated `ingest s` from `index s` since it was written;
+# every other table folded the build into ingest, which hid both the cost of
+# an index and the fact that the arms do not pay it the same way. SurrealDB
+# must define its index BEFORE the load on the SDK's SurrealKV store, so its
+# index work is spread through ingest by construction and cannot be timed as
+# a step -- measured 2026-09-22, that is about 5.3 s of a 24.2 s ingest, sat
+# inside a number every other engine pays with no index work in it at all.
+#
+# Timed here rather than by restructuring each adapter's ingest: the lane
+# already measures the whole of build() as `build_s`, so timing the index DDL
+# gives the split arithmetically, and an adapter that builds no index reports
+# 0.0 rather than nothing. `index_before_load` says which arms cannot be
+# split, so the page can say so instead of printing a 0.0 that reads as free.
+@contextlib.contextmanager
+def index_timer(adapter):
+    _t = time.perf_counter()
+    try:
+        yield
+    finally:
+        # PARENTHESISED ON PURPOSE: `a or 0.0 + b` parses as `a or (0.0 + b)`,
+        # so an adapter that builds two indexes would have kept the first
+        # timing and discarded the second.
+        _prev = getattr(adapter, "index_s", 0.0) or 0.0
+        adapter.index_s = round(_prev + (time.perf_counter() - _t), 3)
+
+
+class IndexTimed:
+    """Mixed into every adapter on this lane; see index_timer above."""
+    index_s = 0.0
+    index_before_load = False
+
+
 class LineItems:
     """The line-item table, streamed from the parquet in batches.
 
@@ -393,7 +427,8 @@ class DuckTPC:
         self.cx.register("p_src", part)
         self.cx.execute("CREATE TABLE part AS SELECT *, 100 AS stock FROM p_src")
         self.cx.execute("CREATE TABLE orders_new (okey BIGINT, pkey BIGINT, qty INT, paid INT DEFAULT 0)")
-        self.cx.execute("CREATE INDEX o_okey ON orders_new (okey)")
+        with index_timer(self):
+            self.cx.execute("CREATE INDEX o_okey ON orders_new (okey)")
         self.cx.execute("CREATE TABLE payments (okey BIGINT, pkey BIGINT, amount DOUBLE)")
         self.cx.execute("CREATE TABLE crud (ckey BIGINT PRIMARY KEY, pkey BIGINT, qty INT, price DOUBLE)")
         self.cx.execute("ALTER TABLE lineitem ALTER l_shipdate TYPE DATE")
@@ -608,13 +643,15 @@ class MongoTPC:
         pc.insert_many([{"p_partkey": int(k), "p_retailprice": float(v), "stock": 100}
                         for k, v in part[["p_partkey", "p_retailprice"]].itertuples(index=False, name=None)],
                        ordered=False)
-        pc.create_index("p_partkey", unique=True)
-        lc.create_index("l_shipdate")
-        oc.create_index("okey", unique=True)
+        with index_timer(self):
+            pc.create_index("p_partkey", unique=True)
+            lc.create_index("l_shipdate")
+            oc.create_index("okey", unique=True)
         # w=1, j=false on every timed write (#81); cached so the timed loop
         # does not build a collection handle per operation.
         self._crud = self.db.get_collection("crud", write_concern=self._wc)
-        self._crud.create_index("ckey", unique=True)
+        with index_timer(self):
+            self._crud.create_index("ckey", unique=True)
 
     _REV = {"$sum": {"$multiply": ["$l_extendedprice", {"$subtract": [1, "$l_discount"]}]}}
     TOP_PARTS = [{"$group": {"_id": "$l_partkey", "rev": _REV}},
@@ -715,7 +752,9 @@ class SurrealTPC:
         # DEFINE INDEX over the 6.0M loaded rows is one transaction record and
         # failed with "Record is too large to fit in a segment" on mini (qDO);
         # defined first, each 5,000-row batch maintains it in its own record.
-        self.db.query("DEFINE INDEX li_shipdate ON lineitem FIELDS l_shipdate")
+        self.index_before_load = True
+        with index_timer(self):
+            self.db.query("DEFINE INDEX li_shipdate ON lineitem FIELDS l_shipdate")
         buf = []
         for t in li.rows():
             buf.append(dict(zip(LI_COLS, t)))
@@ -863,8 +902,9 @@ class PostgresTPC:
         # had the same index since the lane was written and gains 6.1x from
         # it. ANALYZE after, so the planner costs it from real statistics
         # rather than from the defaults a freshly loaded table carries.
-        cur.execute("CREATE INDEX li_shipdate ON lineitem (l_shipdate)")
-        cur.execute("ANALYZE lineitem")
+        with index_timer(self):
+            cur.execute("CREATE INDEX li_shipdate ON lineitem (l_shipdate)")
+            cur.execute("ANALYZE lineitem")
         self.cx.commit()
 
     def olap(self, which):
@@ -1023,7 +1063,8 @@ class ArcadeTPC:
                  "p_retailprice": float(t.p_retailprice), "stock": 100}
                 for t in chunk.itertuples(index=False)], commit_every=BATCH)
         # aggregate columns indexed so Q1/Q6 filters avoid full scans
-        db.command("sql", "CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
+        with index_timer(self):
+            db.command("sql", "CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
 
     def olap(self, which):
         return self.db.query("sql", ARCADE_OLAP[which]).to_list()
@@ -1164,7 +1205,8 @@ class ArcadeServerTPC(ArcadeTPC):
                 buf = []
         if buf:
             self._cmd(";".join(buf), language="sqlscript")
-        self._cmd("CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
+        with index_timer(self):
+            self._cmd("CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
 
     def olap(self, which):
         return self._cmd(ARCADE_OLAP[which])
@@ -1384,6 +1426,17 @@ def main():
     with _beat.phase("build", n=len(li)):
         b.build(li, part)
     out["build_s"] = round(time.perf_counter() - t0, 2)
+    # THE SPLIT (FAIRNESS F14). build_s is the whole of build(); index_s is
+    # what the index DDL inside it cost, accumulated by index_timer; ingest is
+    # the remainder. An arm that builds no index reports 0.0, which is a
+    # statement rather than a gap -- F14 records WHY it builds none, and the
+    # two arms that build none here do so because the index measurably costs
+    # them. `index_before_load` marks the arm whose index cannot be timed as a
+    # step because it exists before the first row lands, so the page can say
+    # that instead of printing a near-zero that reads as free.
+    out["index_s"] = round(getattr(b, "index_s", 0.0) or 0.0, 2)
+    out["ingest_s"] = round(max(out["build_s"] - out["index_s"], 0.0), 2)
+    out["index_before_load"] = bool(getattr(b, "index_before_load", False))
     # COUNTED, not asserted: the stream must have delivered every row the
     # file holds, or the row would publish a per-second figure over a partial
     # load under the tier's label (the l2 lane's shortfall rule).

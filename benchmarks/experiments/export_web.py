@@ -1359,6 +1359,16 @@ OCT_TABLE_METRICS = {
         ("cold_first_query_ms", "cold first query ms"),
         (_rate(("n_lineitem", "n_part"), "build_s"), "ingest documents/s"),
         ("build_s", "ingest total s"),
+        # THE SPLIT, beside the total rather than replacing it (FAIRNESS F14).
+        # `ingest total s` keeps meaning what it has always meant, the whole of
+        # build(), so September's rows and October's say the same thing by that
+        # name. The two below say how that total divides, under the names the
+        # dense table has used since it was written. A row with no index_s --
+        # every September row, and any arm that builds no index -- does not fill
+        # them, and a column no row fills is dropped, so the split shows up
+        # exactly where it was measured.
+        ("ingest_s", "ingest s"),
+        ("index_s", "index s"),
         ("peak_anon_mib_sum", "peak memory GiB"),
         (_disk_data, "disk GiB"),
     ],
@@ -2077,6 +2087,16 @@ LANES = {
                     ("oltp_ops_per_s", "OLTP ops/s"),
                     (_rate(("n_lineitem", "n_part"), "build_s"), "ingest documents/s"),
                     ("build_s", "ingest total s"),
+                    # THE SPLIT, beside the total rather than replacing it (FAIRNESS F14).
+                    # `ingest total s` keeps meaning what it has always meant, the whole of
+                    # build(), so September's rows and October's say the same thing by that
+                    # name. The two below say how that total divides, under the names the
+                    # dense table has used since it was written. A row with no index_s --
+                    # every September row, and any arm that builds no index -- does not fill
+                    # them, and a column no row fills is dropped, so the split shows up
+                    # exactly where it was measured.
+                    ("ingest_s", "ingest s"),
+                    ("index_s", "index s"),
                     ("peak_anon_mib_sum", "peak memory GiB"),
                     (_disk_data, "disk GiB")],
         "conditions": [
