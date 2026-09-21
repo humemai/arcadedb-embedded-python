@@ -2548,9 +2548,9 @@
         "They do not run at 9.99M vectors, 1M vectors, where those four columns are blank because the pass was not asked for rather than because an engine failed it ().",
         "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. ArcadeDB's cold pass is up to 8.4x its warm one, because it pages its index off disk while the others are resident from build. Among the comparators the largest cold-to-warm change is a factor of 378 (SurrealDB (server, fp32) at 1M vectors); every other comparator is within 10% of itself.",
         "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
+        "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
         "SurrealDB (embedded) at 9.99M vectors: the search cell exceeded its 8 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (server) at 9.99M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent",
-        "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
         "ArangoDB at 9.99M vectors is withheld: its search answered with a recall@10 of 0.0001 across 5 repetition(s), which is not a measurement of search but of a broken index, so its latency is not printed beside engines answering correctly. The cause is investigated on the bench host before anything is claimed about it.",
         "In the cells: `>4h`, `>8h` the cell ran past its tier's cap and was not retried (each tier has its own cap, the same for every engine on it); `lost` the connection dropped mid-query. A dash is an operation the engine cannot express, never a slow one.",
         "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
@@ -4777,6 +4777,12 @@
           "backend": "SurrealDB (embedded)",
           "column": null,
           "kind": "censored",
+          "why": "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out."
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "column": null,
+          "kind": "censored",
           "why": "SurrealDB (embedded) at 9.99M vectors: the search cell exceeded its 8 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
         },
         {
@@ -4784,12 +4790,6 @@
           "column": null,
           "kind": "failed",
           "why": "SurrealDB (server) at 9.99M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent"
-        },
-        {
-          "backend": "SurrealDB (embedded)",
-          "column": null,
-          "kind": "censored",
-          "why": "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out."
         }
       ],
       "source_paths": [
@@ -13067,9 +13067,7 @@
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint; for a served row that is the server container alone, the client is only the driver. It is read after the queries, so it includes anything querying wrote; a server reading is taken once two samples agree within 1%, an embedded reading once on the stopped container. A blank cell is a row measured before the disk reading existed (2026-08-14). Neo4j's value includes the transaction-log files it preallocates in 256 MiB steps, which is how Neo4j uses disk; turning that off would have slowed its writes, so it stays on.",
         "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF1 (6.0M line items), of the 3.35 GiB shown, 3.344 GiB is our Python client and 0.008 GiB is the database.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
-        "ArangoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "MongoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "ArangoDB, MongoDB and SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell reached the 32g memory envelope (peak 32,768 MiB) and was killed by the kernel, the same envelope every engine on this table had; it did not run out of time, and there is no row.",
         "SurrealDB (server) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent"
       ],
@@ -13557,19 +13555,19 @@
           "backend": "ArangoDB",
           "column": null,
           "kind": "censored",
-          "why": "ArangoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
+          "why": "ArangoDB, MongoDB and SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
         },
         {
           "backend": "MongoDB",
           "column": null,
           "kind": "censored",
-          "why": "MongoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
+          "why": "ArangoDB, MongoDB and SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
         },
         {
           "backend": "SQLite",
           "column": null,
           "kind": "censored",
-          "why": "SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
+          "why": "ArangoDB, MongoDB and SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row."
         },
         {
           "backend": "SurrealDB (embedded)",
@@ -13667,6 +13665,14 @@
         ]
       },
       {
+        "text": "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
+        "values": [
+          "SurrealDB (embedded)",
+          "1M vectors",
+          "4 hour"
+        ]
+      },
+      {
         "text": "SurrealDB (embedded) at 9.99M vectors: the search cell exceeded its 8 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "values": [
           "SurrealDB (embedded)",
@@ -13680,14 +13686,6 @@
           "SurrealDB (server)",
           "9.99M vectors",
           "websockets.exceptions.ConnectionClosedError: no close frame received or sent"
-        ]
-      },
-      {
-        "text": "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
-        "values": [
-          "SurrealDB (embedded)",
-          "1M vectors",
-          "4 hour"
         ]
       },
       {
@@ -13782,25 +13780,9 @@
         ]
       },
       {
-        "text": "ArangoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
+        "text": "ArangoDB, MongoDB and SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "values": [
-          "ArangoDB",
-          "TPC-H SF10 (60.0M line items)",
-          "2 hour"
-        ]
-      },
-      {
-        "text": "MongoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "values": [
-          "MongoDB",
-          "TPC-H SF10 (60.0M line items)",
-          "2 hour"
-        ]
-      },
-      {
-        "text": "SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
-        "values": [
-          "SQLite",
+          "ArangoDB, MongoDB and SQLite",
           "TPC-H SF10 (60.0M line items)",
           "2 hour"
         ]

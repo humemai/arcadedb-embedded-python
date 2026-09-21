@@ -4262,6 +4262,7 @@ def _censored_notes(table_id):
         return []
     lane, wl = lane_wl
     notes = []
+    merged = {}
     scales = _table_scales(table_id)
     for (l, scale, backend, w), secs in sorted(_censored_cells().items(), key=str):
         if l != lane or (wl and w != wl):
@@ -4285,26 +4286,48 @@ def _censored_notes(table_id):
             # condition, and the peak comes off the row the same way the
             # envelope does -- passing one and not the other is how a real
             # number ends up looking typed.
-            why = _gen(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell reached "
-                       f"the {_cap_txt}{_peak_txt} and was killed by the kernel, the same envelope every "
-                       f"engine on this table had; it did not run out of time, and there is no row.",
-                       display_name(backend), scale_label(lane, scale), _cap_txt,
-                       _peak_txt.strip(" ()").replace("peak ", "") if _peak_txt else None)
+            tail = (f" at {scale_label(lane, scale)}: the {what} cell reached "
+                    f"the {_cap_txt}{_peak_txt} and was killed by the kernel, the same envelope every "
+                    f"engine on this table had; it did not run out of time, and there is no row.")
+            # EVERY DIGIT IN THE SENTENCE IS PINNED TO ITS SOURCE, including
+            # the peak. page_check refuses an unpinned number in a generated
+            # condition, and the peak comes off the row the same way the
+            # envelope does -- passing one and not the other is how a real
+            # number ends up looking typed.
+            pins = [scale_label(lane, scale), _cap_txt,
+                    _peak_txt.strip(" ()").replace("peak ", "") if _peak_txt else None]
         elif kind == "censored":
             budget = f"{secs / 3600:g} hour" if secs else "its"
             _phase = _CENSORED_PHASE.get((lane, str(scale), backend, w))
             _in = f" It was still in {_phase} when the budget ran out." if _phase else ""
-            why = _gen(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell exceeded "
-                       f"its {budget} budget, the same budget every engine on this table had, on its first "
-                       f"attempt and was not retried; there is no row.{_in}",
-                       display_name(backend), scale_label(lane, scale), budget)
+            tail = (f" at {scale_label(lane, scale)}: the {what} cell exceeded "
+                    f"its {budget} budget, the same budget every engine on this table had, on its first "
+                    f"attempt and was not retried; there is no row.{_in}")
+            pins = [scale_label(lane, scale), budget]
         else:
-            why = _gen(f"{display_name(backend)} at {scale_label(lane, scale)}: the {what} cell failed "
-                       f"inside its budget and was not retried, so there is no row. What it reported: "
-                       f"{secs}",
-                       display_name(backend), scale_label(lane, scale), str(secs))
+            tail = (f" at {scale_label(lane, scale)}: the {what} cell failed "
+                    f"inside its budget and was not retried, so there is no row. What it reported: "
+                    f"{secs}")
+            pins = [scale_label(lane, scale), str(secs)]
+        merged.setdefault((kind, tail, tuple(pins)), []).append(display_name(backend))
+
+    # ONE SENTENCE FOR THE ENGINES THAT HAVE THE SAME THING TO SAY. Three
+    # engines were censored at TPC-H SF10 and the page printed three sentences
+    # that differed in one word each, which is a loop's output and reads like
+    # one. Merged only where the wording is otherwise IDENTICAL, so an
+    # envelope failure keeps its own peak and a failed cell keeps its own
+    # reported line; those never collapse, and should not.
+    for (kind, tail, pins), engines in sorted(merged.items(), key=str):
+        if len(engines) == 1:
+            who = engines[0]
+        elif len(engines) == 2:
+            who = f"{engines[0]} and {engines[1]}"
+        else:
+            who = ", ".join(engines[:-1]) + f" and {engines[-1]}"
+        why = _gen(who + tail, who, *[p for p in pins if p is not None])
         notes.append(why)
-        _declare_absence(table_id, display_name(backend), None, kind, why)
+        for e in engines:
+            _declare_absence(table_id, e, None, kind, why)
     return notes
 
 
