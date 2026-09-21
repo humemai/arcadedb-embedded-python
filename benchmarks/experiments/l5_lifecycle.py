@@ -753,7 +753,7 @@ def main():
         bench_common.record_unexpressible(
             out, "lifecycle_read",
             "the vector situation's read goes through an approximate index; "
-            "it is checked by recall on the dense lane, not by an exact digest")
+            "it is checked by recall on the dense vector table, not by an exact digest")
     elif _LAST_READ["rows"] is not None:
         bench_common.record_result(out, "lifecycle_read", _LAST_READ["rows"])
         out["lifecycle_read_situation"] = _LAST_READ["situation"]

@@ -13066,7 +13066,7 @@
       "conditions": [
         "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
         "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
-        "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared.",
+        "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next the real run measures them with every engine's answer compared.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF1 (6.0M line items), of the 3.35 GiB shown, 3.344 GiB is our Python client and 0.008 GiB is the database.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
@@ -13559,13 +13559,13 @@
           "backend": "ArcadeDB (embedded)",
           "column": null,
           "kind": "withdrawn",
-          "why": "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared."
+          "why": "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next the real run measures them with every engine's answer compared."
         },
         {
           "backend": "ArcadeDB (server)",
           "column": null,
           "kind": "withdrawn",
-          "why": "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared."
+          "why": "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next the real run measures them with every engine's answer compared."
         },
         {
           "backend": "ArangoDB",
@@ -13651,7 +13651,7 @@
         ]
       },
       {
-        "text": "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared.",
+        "text": "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next the real run measures them with every engine's answer compared.",
         "values": [
           "0.05"
         ]

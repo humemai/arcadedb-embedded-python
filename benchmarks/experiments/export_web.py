@@ -1929,7 +1929,7 @@ SKELETON_TABLE_NOTE = (
     "by a large factor and the engines here cannot be compared with each "
     "other, or with the same table on the live page. The columns, the "
     "conditions, and the sizes are October's; the values are filler until the "
-    "campaign measures them.")
+    "the real run measures them.")
 # The two invariants that describe the BENCH HOST rather than the comparison.
 # A laptop skeleton cannot satisfy either (no cpuset pinning, no per-scale
 # memory envelope), and every other gate must pass exactly as it will in
@@ -4167,7 +4167,7 @@ def _reps_note(tables):
         return None
     if n == 1:
         return _gen("Each printed cell here is ONE run, not the median of five, and the min and "
-                    "max beside it are that same single sample. The campaign runs five and "
+                    "max beside it are that same single sample. The real run repeats each one five times and "
                     "prints the median; this page does not.")
     return _gen(f"Each printed cell is the median of {n} repetitions, with min and max carried "
                 f"alongside; nothing here is a single sample.", str(n))
@@ -5264,8 +5264,8 @@ def _finish_table(table: dict) -> dict:
                 _who = _join_and(_norow)
                 _why = _gen(f"{_who} {'has' if len(_norow) == 1 else 'have'} no row on this "
                             f"table: the skeleton is a placeholder run and did not cover this "
-                            f"workload for {'it' if len(_norow) == 1 else 'them'}. The campaign "
-                            f"does.", _who)
+                            f"workload for {'it' if len(_norow) == 1 else 'them'}. The real "
+                            f"run does.", _who)
                 table.setdefault("conditions", [])
                 if _why not in table["conditions"]:
                     table["conditions"].append(_why)
@@ -5290,7 +5290,7 @@ def _finish_table(table: dict) -> dict:
                             f"{_join_and(list(_miss))} here: the skeleton is a placeholder "
                             f"run and did not cover that workload for "
                             f"{'this arm' if len(_whos) == 1 else 'those arms'}, though it ran "
-                            f"the ingest the other columns come from. The campaign runs both.",
+                            f"the ingest the other columns come from. The real run measures both.",
                             _who, _join_and(list(_miss)))
                 table.setdefault("conditions", [])
                 if _why not in table["conditions"]:
@@ -5570,7 +5570,7 @@ def _restructure_tables(tables, rows):
                        "excluded the boundary discount because the engine reads `>= 0.05` against a "
                        "decimal literal as strictly greater. Both errors made its numbers faster than "
                        "the truth, so they are withdrawn rather than shown with a caveat, and the next "
-                       "campaign measures them with every engine's answer compared.", "0.05")
+                       "the real run measures them with every engine's answer compared.", "0.05")
         # THE SENTENCE IS NOT THE DECLARATION. A reader gets the prose above; the
         # coverage gate reads `declared_absences`, and under the 2026-10
         # instrument it fails a registered arm that has neither a row nor an

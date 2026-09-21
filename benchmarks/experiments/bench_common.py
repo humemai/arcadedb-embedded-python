@@ -1144,21 +1144,21 @@ def is_unexpressible(value):
 NA_COLD_WARM_TXN = ("no cold/warm split: each operation runs against an "
                     "already-built, already-warm database by construction "
                     "(DECISIONS #89)")
-NA_COLD_WARM_LIFECYCLE = ("no cold/warm split: this lane IS the cold "
-                          "measurement -- it times opening a database "
+NA_COLD_WARM_LIFECYCLE = ("no cold/warm split: this measurement IS the cold "
+                          "one -- it times opening a database "
                           "(DECISIONS #89)")
 NA_COLD_WARM_INGEST = ("no cold/warm split: the timed work is a single "
                        "ingest, which happens once (DECISIONS #89)")
 NA_INDEX_SPLIT_NONE = ("ingest and index are one timer: this engine indexes "
                        "while it ingests and has no boundary to split "
                        "(DECISIONS #66, #74 item 2)")
-NA_COLD_WARM_DENSE_LANE = ("no cold/warm split on this row: the lane warms on a "
+NA_COLD_WARM_DENSE_LANE = ("no cold/warm split on this row: this benchmark warms on a "
                            "held-out query slice before it times anything, so "
                            "every timed query here is warm. The dense table's "
                            "cold and warm columns come from the multipass "
                            "driver, whose pass 0 is the cold pass and whose "
                            "passes 1 to 5 are the warm ones (DECISIONS #89)")
-NA_COLD_WARM_SPARSE_LANE = ("no cold/warm split on this row: the lane warms "
+NA_COLD_WARM_SPARSE_LANE = ("no cold/warm split on this row: this benchmark warms "
                             "before it times, so every timed query here is "
                             "warm. The sparse table's cold and warm columns "
                             "come from the multipass driver (DECISIONS #89)")
