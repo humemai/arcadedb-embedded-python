@@ -217,6 +217,30 @@ STAGES = [
       'python3 -c "import graph_common as G, sys; sys.exit(0 if G.tier_excluded(\'sf1full\',\'lsqb_q6\') else 1)"'
       ' || { say "$ID ABORT: #109 exclusions are not in this tree"; exit 1; }'],
      {"arcadedb_graph_embedded": ["BENCH_GAV=0"], "arcadedb_graph_server": ["BENCH_GAV=0"]}, []),
+    # THE TIME-SERIES LANE, AGAIN, because its rows are stale (BUGS F98,
+    # FAIRNESS F14). qOC measured it with DuckDB holding no index while every
+    # other arm on the lane reached a host's points through one, so its two
+    # host-filtered queries read every row of every host: measured 7.06 ms
+    # against 6.20 ms for the last point at 500k rows over 100 hosts, and the
+    # gap grows with the corpus because the published tier is 25.9M rows over
+    # 1,000 hosts. The index landed 2026-09-22 and nothing else in the chain
+    # touches l4, so without this stage the page would publish DuckDB's
+    # unindexed numbers beside seven engines that had one.
+    #
+    # LAST rather than next, and that is the cost of doing it right: the
+    # chain is serial by F2, so a stage inserted beside a running one would
+    # break the invariant the whole campaign rests on. The e4 table can land
+    # before this finishes; the time-series table waits for it.
+    #
+    # It also picks up the ingest/index split, so this lane's rows will be
+    # the first to carry `index s` beside `ingest total s`.
+    ("qOJ", "time series again, with DuckDB indexed (qOC re-run, F98)", "l4",
+     ["ingest"], ["ts100", "ts1000"],
+     ['[ -f "$HOME/bench-data/tsbs/cpu_influx.lp" ] && [ -f "$HOME/bench-data/tsbs/cpu_influx_s1000.lp" ]'
+      ' || { say \'$ID ABORT: tsbs corpora missing\'; exit 1; }',
+      'grep -q "CREATE INDEX p_host_ts ON p (host, ts)" l4_tsbs.py'
+      ' || { say "$ID ABORT: the DuckDB index this re-run exists for is not in this tree"; exit 1; }'],
+     {}, ["BENCH_TS_SETTLE_S=90"]),
 ]
 
 HEAD = '''#!/bin/bash
