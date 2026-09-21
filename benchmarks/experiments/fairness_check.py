@@ -797,6 +797,79 @@ UNVERIFIED_ALLOWED = {"surrealdb_tpc_server", "surrealdb_graph_server",
 WRITE_CELLS = {("l1tpc", "oltp"), ("l2", "oltp"), ("e2", "hybrid")}
 
 
+# F14: EVERY ARM ON A SELECTIVE-FILTER LANE DECLARES ITS INDEX DECISION, and
+# the declaration names the measurement behind it (BUGS F98, DECISIONS #112).
+#
+# Only two lanes are listed, and the omission is the point rather than an
+# oversight. An index decision can go wrong where a query FILTERS selectively
+# and the engine has a choice: the document lane's Q6 (a shipdate year, 14.3%
+# of rows, 1.8% after three predicates) and the time-series lane's two
+# host-filtered queries. Everywhere else there is no choice to get wrong --
+# the graph lane's reads are point and hop lookups that every engine reaches
+# through its primary key, record id or document handle; its analytics
+# traverse the whole graph; the vector lanes are F7's subject and are matched
+# by degree or calibrated by effect. Adding a lane here without a selective
+# filter would collect declarations nobody can falsify.
+#
+# A backend missing from its lane's map is a FAILURE, not a default. That is
+# the shape the capability table's legend uses: refuse the kind you cannot
+# define, rather than printing it and hoping.
+INDEX_DECISIONS = {
+    "l1tpc": {
+        "arcadedb_embedded":    "l_shipdate: 870.7 -> 141.7 ms, 6.1x",
+        "arcadedb_server":      "l_shipdate: the embedded arm's measurement, same engine and schema",
+        "postgres":             "l_shipdate: 726 -> 290 ms, 2.5x (added 2026-09-22)",
+        "postgres_tuned":       "l_shipdate: inherits PostgresTPC",
+        "surrealdb_tpc":        "l_shipdate before the load: 4016 -> 1062 ms, 3.8x",
+        "surrealdb_tpc_server": "l_shipdate: inherits SurrealTPC",
+        "mongodb":              "l_shipdate: 280.3 -> 178.1 ms, 1.6x",
+        "sqlite":               "NONE: the index costs it, 53.4 -> 63.3 ms (removed 2026-09-22)",
+        "arangodb_tpc":         "NONE: the index costs it, 684 -> 881 ms",
+        "duckdb":               "NONE: no effect, 6.0 -> 6.2 ms; columnar with zone maps",
+    },
+    "l4": {
+        "arcadedb_ts_doc":            "(host, ts)",
+        "arcadedb_ts_doc_server":     "(host, ts)",
+        "arcadedb_ts_native":         "native TIMESERIES type, time-ordered by construction",
+        "arcadedb_ts_native_server":  "native TIMESERIES type, time-ordered by construction",
+        "sqlite":                     "(host, ts): 35.36 -> 0.01 ms last-point",
+        "duckdb":                     "(host, ts): 7.06 -> 6.20 ms last-point (added 2026-09-22)",
+        "timescaledb":                "(host, ts DESC)",
+        "surrealdb_ts":               "(host, ts) before the load",
+        "surrealdb_ts_server":        "(host, ts)",
+        "arangodb_ts":                "persistent (host, ts)",
+        "mongodb":                    "time-series collection, metaField=host timeField=ts",
+        "questdb":                    "UNMEASURED: the table is created by the line protocol, "
+                                      "so whether host carries an index is server-side",
+    },
+}
+
+
+def check_index_decisions():
+    """F14: no arm on a selective-filter lane goes undeclared."""
+    import runner
+    print("=== F14: every arm on a selective-filter lane declares its index decision ===")
+    bad = 0
+    for lane, decided in sorted(INDEX_DECISIONS.items()):
+        arms = list(runner.LANES.get(lane, (None, []))[1])
+        missing = [a for a in arms if a not in decided]
+        stale = [a for a in decided if a not in arms]
+        for a in missing:
+            print(f"  FAIL {lane}/{a}: no index decision declared. An index chosen by "
+                  f"reasoning was wrong for two of seven engines (BUGS F98); declare what "
+                  f"this arm builds and the measurement behind it.")
+            bad += 1
+        for a in stale:
+            print(f"  FAIL {lane}/{a}: declares an index decision and is not on the lane; "
+                  f"the map has outlived the arm")
+            bad += 1
+        if not missing and not stale:
+            unmeasured = [a for a, d in decided.items() if d.startswith("UNMEASURED")]
+            note = f", {len(unmeasured)} unmeasured ({', '.join(unmeasured)})" if unmeasured else ""
+            print(f"  ok   {lane}: {len(arms)} arm(s) declared{note}")
+    return bad
+
+
 def check_durability(rows):
     import bench_common
     print("=== F10: durability class and instrument per table ===")
@@ -924,6 +997,9 @@ def main():
     bad += check_degree(rows)
     bad += check_close_cost(rows)
     bad += check_durability(rows)
+    # F14 reads the LANE ROSTER rather than the rows: an arm that declared no
+    # index decision is a defect whether or not it happened to run this time.
+    bad += check_index_decisions()
     check_protocol_overlays()
     bad += report_producers(rows)
     print(f"\n{bad} fairness invariant failure(s)")

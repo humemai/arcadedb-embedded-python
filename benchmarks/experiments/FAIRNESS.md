@@ -263,6 +263,18 @@ time anything, and their cold and warm columns come from the multipass driver.
 
 **F13. Close cost is an invariant, not a column.** Close should be O(what was written), not O(what is stored), and on the order of 100 ms; the reasoning, the situations, and the numbers are PAGE-SPEC.md section 4 (DECISIONS #50). Checked by `fairness_check.check_close_cost`, which prints under this number. Renumbered from F11 here because F11 and F12 are the October instrument's two rules above; `fairness_check.check_close_cost` still prints its section header as F11, and that mismatch is recorded rather than silently renamed in a gate's output.
 
+**F14. Equivalent queries get equivalent index support, and the support is chosen by MEASUREMENT (DECISIONS #112, BUGS F98).** Every engine reaches a query through some access path, and which path it gets is a choice this harness makes on its behalf. Until 2026-09-22 that choice was made by reasoning about what ought to help, and it was wrong in both directions at once: the document lane gave ArcadeDB an `l_shipdate` index worth **6.1x** on Q6 and gave PostgreSQL, which gains **2.5x** from the same index, none; it gave SQLite one that costs it **20%**; and the time-series lane gave every engine a `(host, ts)` path except DuckDB, which wants one.
+
+The rule is NOT "every engine gets the same index". That is the obvious repair and it is wrong: the same Q6 index costs ArangoDB 29% and SQLite 20%, because at 14% selectivity an index lookup plus row fetches is dearer than the scan it replaces, and how dear depends on the engine. It is the rule F7 already uses for ArangoDB's IVF vector index, which has no degree to match: **matched by effect**. Each engine gets the configuration that is genuinely best for it, the decision is a measurement rather than an argument, the row records what was built, and the build time is published rather than folded into ingest so the cost of the choice is visible.
+
+Three things follow, and they are what make this checkable rather than a good intention:
+
+* **A new arm must declare its index decision.** `fairness_check` fails a lane backend that declares nothing, the way the capability table refuses a kind its legend cannot define. Silence is the state this invariant exists to remove.
+* **The decision names its evidence.** "No index" is a finding when it is measured (ArangoDB, DuckDB on the document lane) and a defect when it is an omission (PostgreSQL on the document lane, DuckDB on the time-series lane, both until 2026-09-22).
+* **Index build time is its own column** wherever the engine has a boundary to time. The dense vector table has always separated `ingest s` from `index s`; the rest folded index build into ingest, which hides both the cost and the asymmetry -- SurrealDB's document arm must build its index BEFORE the load, so about 5.3 s of index work sits inside an ingest number every other engine pays without any.
+
+The measurements behind this are in BUGS F98, per engine, with the row counts they were taken at. They are ratios within one engine and not a comparison between engines.
+
 ## Parallelism policy: maximise it, but never inside a published absolute
 
 The standing direction is to use the machine. But "run more at once" and "report this latency" are not compatible everywhere, so the rule has to say where the line falls.
