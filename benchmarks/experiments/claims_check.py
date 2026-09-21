@@ -101,6 +101,7 @@ PAPER = os.path.join(_PAPER_DIR, "paper.tex")
 
 
 _MISSING_SAID = set()   # one line per absent table, not one per claim
+_ABSENT_HIT = []        # set by cell() when a lookup missed an absent table
 
 
 def cell(table, row_label, col):
@@ -125,6 +126,7 @@ def cell(table, row_label, col):
             _MISSING_SAID.add(table)
             print(f"claims_check: {table} not generated at this pin; claims "
                   f"pinned to it are unchecked until its stage lands")
+        _ABSENT_HIT.append(table)
         return None
     for line in open(path):
         line = line.strip()
@@ -160,6 +162,7 @@ def cell_text(table, row_label, col):
             _MISSING_SAID.add(table)
             print(f"claims_check: {table} not generated at this pin; claims "
                   f"pinned to it are unchecked until its stage lands")
+        _ABSENT_HIT.append(table)
         return None
     for line in open(path):
         line = line.strip()
@@ -469,6 +472,14 @@ def _dense_rank(col, row="ArcadeDB (emb, fp32)"):
     # number: nothing looks different when it happens.
     missing = [s for s in DENSE_ROWS
                if cell("t5_dense_ts.tex", s, col) is None]
+    # ALL MISSING IS AN ABSENT BLOCK, SOME MISSING IS THE RENAME DEFECT. This
+    # refusal is about a denominator that quietly shrinks -- four rank claims
+    # once computed over eight engines while saying "of 9". That needs SOME of
+    # the rows to resolve. When NONE do, t5's dense block was not written at
+    # all because the dense arm has not run at this pin, and the claim is
+    # unchecked rather than wrong.
+    if missing and len(missing) == len(DENSE_ROWS):
+        return None
     if missing:
         raise SystemExit(
             f"dense_rank: {missing} not found in T5 column {col}.\n"
@@ -1778,7 +1789,9 @@ def main():
 
     bad = stale_figs
     checked = 0
+    unchecked = 0
     for cid, claimed, tol, fn, note in CLAIMS:
+        del _ABSENT_HIT[:]
         if args.lane and not cid.startswith(args.lane):
             continue
         checked += 1
@@ -1789,6 +1802,15 @@ def main():
             bad += 1
             continue
         if got is None:
+            if _ABSENT_HIT:
+                # Its source table is not generated at this pin, so there is
+                # nothing to disagree with yet. Counted and printed, never
+                # silent: an unchecked claim that nobody notices is how a
+                # wrong number reaches a page.
+                print(f"  UNCHECKED {cid:23s} claim={claimed}  ({note}) "
+                      f"-- {_ABSENT_HIT[0]} lands with its stage")
+                unchecked += 1
+                continue
             print(f"  NODATA {cid:26s} claim={claimed}  ({note})")
             bad += 1
             continue
@@ -1798,7 +1820,11 @@ def main():
         if not ok:
             bad += 1
 
-    print(f"\n{checked} claims checked, {bad} disagree")
+    # `checked` counts every claim the loop REACHED; an unchecked one was
+    # reached and not verified, so it must not be reported as checked.
+    print(f"\n{checked - unchecked} claims checked, {bad} disagree"
+          + (f", {unchecked} unchecked (their table lands with its stage)"
+             if unchecked else ""))
     return 1 if bad else 0
 
 

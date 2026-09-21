@@ -293,6 +293,15 @@ def _check_dense_10m(payload):
             print("  skeleton: no ten-million tier at micro scale, so the "
                   "cross-generator DEEP-10M comparison does not apply")
             return 0, 0
+        # WITHHELD AGAIN versus NOT YET MEASURED. "Withheld" is the real
+        # case: the lane ran and its ten-million tier did not reach the page.
+        # Before the dense stage runs -- it is 9 of 10, and October lands
+        # table by table -- there is no tier to withhold. The rows decide,
+        # the same way the lost-table check decides.
+        if "l3d" not in _lanes_with_rows():
+            print("  no deep10m rows yet: the dense lane has no rows at this "
+                  "pin, so the cross-generator comparison lands with its stage")
+            return 0, 0
         print("  no deep10m rows on the page; the tier is withheld again")
         return 0, 1
     checked = bad = 0
