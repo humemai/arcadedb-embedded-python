@@ -1542,6 +1542,80 @@ WITHHELD_CELLS = {}
 _DECLARED_ABSENCES = collections.defaultdict(list)
 
 
+# THE PAGE IS READ BY PEOPLE WHO HAVE NEVER SEEN THIS REPOSITORY. Our prose
+# cites its own paper trail -- "(DECISIONS #82b, #100)", "(BUGS F55)" -- and
+# those citations were going out on the page, where they name documents no
+# reader can open. Found 2026-09-21 by the user reading /next: forty-seven of
+# them on one table.
+#
+# Stripped at the single point the payload is written rather than at the forty
+# places the sentences are built, because those live in three modules and the
+# next one written would have leaked again. What the stripper cannot repair,
+# _refuse_internal_refs below refuses to publish: a silent sanitiser that
+# misses a form is worse than no sanitiser, since nothing would look wrong.
+_INTERNAL = r"DECISIONS?|BUGS?|FAIRNESS|PAGE-SPEC|PROTOCOL|CAMPAIGN|COMPARATORS|READING-RESULTS"
+# " (DECISIONS #82b, #100)." -> "." and " (BUGS F55)." -> "."
+_REF_PAREN = re.compile(r"\s*\((?:see\s+)?(?:%s)(?:\.md)?[^()]*\)" % _INTERNAL)
+# "..., DECISIONS #95b)" -> "...)"  (a parenthetical with real content too)
+_REF_TAIL = re.compile(r"[,;]\s*(?:%s)(?:\.md)?[^()]*(?=\))" % _INTERNAL)
+# a bare citation left in running text
+_REF_BARE = re.compile(r"\s*\b(?:%s)(?:\.md)?\s+#?[A-Z]?\d+[a-z]?\b" % _INTERNAL)
+
+
+def _public_prose(text):
+    """One reader-facing string with our internal citations taken out."""
+    out = _REF_PAREN.sub("", text)
+    out = _REF_TAIL.sub("", out)
+    out = _REF_BARE.sub("", out)
+    # the stripping can leave a double space or a space before punctuation
+    out = re.sub(r"\s{2,}", " ", out)
+    out = re.sub(r"\s+([.,;:)])", r"\1", out)
+    # A citation removed from the end of a clause leaves its comma behind.
+    out = re.sub(r"[,;]\s*$", "", out)
+    return out.strip()
+
+
+def _strip_internal_refs(node):
+    if isinstance(node, str):
+        return _public_prose(node)
+    if isinstance(node, dict):
+        return {k: (v if k in _PROVENANCE_KEYS else _strip_internal_refs(v))
+                for k, v in node.items()}
+    if isinstance(node, list):
+        return [_strip_internal_refs(v) for v in node]
+    return node
+
+
+# Fields that name an artifact ON PURPOSE and are provenance rather than
+# prose: the generator's own path, and the source files a table was built
+# from. A reader who wants them wants them exact.
+_PROVENANCE_KEYS = {"generator", "sources", "source", "artifact", "artifacts"}
+
+
+def _refuse_internal_refs(payload):
+    """Publish nothing that still cites a document the reader cannot open."""
+    bad = []
+
+    def walk(node, path=""):
+        if isinstance(node, str):
+            for m in re.findall(r"(?:%s)(?:\.md)?(?:\s+#?[A-Z]?\d+[a-z]?)?" % _INTERNAL, node):
+                bad.append((path, m, node[:90]))
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                if k not in _PROVENANCE_KEYS:
+                    walk(v, f"{path}.{k}" if path else k)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}[{i}]")
+
+    walk(payload)
+    if bad:
+        print("REFUSING to publish: internal references survive in reader-facing text")
+        for path, m, ctx in bad[:12]:
+            print(f"  {path}: {m!r} in {ctx!r}")
+        raise SystemExit(f"{len(bad)} internal reference(s) would have been published")
+
+
 def _declare_absence(table_id, backend, column, kind, why):
     rec = {"backend": backend, "column": column, "kind": kind, "why": why}
     if rec not in _DECLARED_ABSENCES[table_id]:
@@ -1714,11 +1788,14 @@ SKELETON_ABSENT = {
                           "placeholder cells would look like a result while "
                           "being noise; it is drawn from the campaign's rows.",
 }
+# NAMED BY WHAT THEY ARE, not by our invariant numbers: "FAIRNESS F1" means
+# nothing to a reader of the page, and the thing it labels -- cpuset pinning
+# -- means everything.
 SKELETON_WAIVERS = [
-    "FAIRNESS F1 (cpuset pinning): the skeleton runs on the laptop's shared "
-    "cpuset, not a pinned one.",
-    "FAIRNESS F3 (memory envelope): the skeleton runs at the laptop's micro "
-    "caps, not the campaign's per-size envelope.",
+    "CPU pinning: the skeleton runs on the laptop's shared cpuset, not a "
+    "pinned one.",
+    "Memory envelope: the skeleton runs at the laptop's micro caps, not the "
+    "campaign's per-size envelope.",
 ]
 
 
@@ -5505,6 +5582,10 @@ def main() -> int:
     # to its pins (September). Recorded after _finish_table, which is where
     # most generators run.
     payload["condition_provenance"] = {"generated": list(_GENERATED)}
+    # Last thing before the bytes: take our paper trail out of the prose, then
+    # refuse to write anything that still carries one.
+    payload = _strip_internal_refs(payload)
+    _refuse_internal_refs(payload)
     OUT.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n",
                    encoding="utf-8")
     n_entries = sum(len(t["entries"]) for t in tables)
