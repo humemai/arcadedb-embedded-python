@@ -321,6 +321,32 @@ for tier in {scales!r}:
     if tot >= cap:
         sys.exit(f"{{LANE}}/{{tier}}: budgets alone are {{pct:.0f}}% of the cap")
 PY
+
+# --- will the WHOLE CELL fit, first touches included? ----------------------
+# The budget check above bounds what ITERATIONS may cost. It cannot see the
+# FIRST TOUCH, which #82b makes always complete, and that is the gap that
+# actually bit: October's first analytics cell was censored at its 7,200 s
+# cap while its budgets summed to 3,480 s -- 48 percent -- because one
+# query (lsqb_q6) spent 1,384 s on its first touch alone (#109, BUGS F74).
+# cell_cost_check adds ingest + measured first touches + the budget ceiling
+# and compares the total against the cap.
+#
+# THREE OUTCOMES, AND ONLY ONE STOPS A STAGE. rc=1 is a scored projection
+# over the cap: a stage that would burn hours to publish censored cells.
+# rc=2 is the tool REFUSING to score because the rows do not cover this
+# tier query roster yet, which is the normal state for a tier nobody has
+# measured and must never block it -- that refusal exists because the tool
+# once scored 5 of 14 queries and reported ok.
+for _tier in {scale_list}; do
+  python3 cell_cost_check.py --lane {lane} --tier "$_tier" --rows "results/$RF" >> "$S" 2>&1
+  _cc=$?
+  if [ $_cc -eq 1 ]; then
+    say "$ID ABORT: projected cell cost exceeds the cap at $_tier (cell_cost_check)"
+    exit 1
+  elif [ $_cc -eq 2 ]; then
+    say "$ID: cell cost not scored at $_tier, no first-touch rows for this roster yet"
+  fi
+done
 {guards}
 # --- images and the pinned pair -------------------------------------------
 # THE WHEEL IS BAKED AT IMAGE BUILD TIME, so it has to be exported BEFORE
@@ -466,7 +492,7 @@ def emit(idx: int, spec) -> str:
             f'say "$ID: {STAGES[idx - 1][0]} finished, taking the machine"\n')
     body = HEAD.format(id=sid, n=idx + 1, total=len(STAGES), title=title, lane=lane,
                        nbe=len(backends), sha=SHA, wait=wait,
-                       caps=caps, scales=list(scales), guards="\n".join(guards) + ("\n" if guards else ""),
+                       caps=caps, scales=list(scales), scale_list=" ".join(scales), guards="\n".join(guards) + ("\n" if guards else ""),
                        stage_env=("export " + " ".join(stage_env) if stage_env else "# (this lane's in-script defaults are what the frozen rows ran)"),
                        backends=" ".join(backends),
                        images=" ".join(_images_for(backends)))
