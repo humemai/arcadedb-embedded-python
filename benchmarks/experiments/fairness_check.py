@@ -669,9 +669,33 @@ def check_close_cost(rows):
         if any_lifecycle:
             print("  Rows exist but none carry clean_close_ms; the lane wrote them "
                   "without the column this gate reads.")
-        else:
-            print("  Check PAPER_SCALES in make_paper_tables.py: a lane absent from "
-                  "it is deleted by load_canonical before any gate runs.")
+            return 1
+        # DELETED UPSTREAM versus NOT RUN YET, and only the first is a defect.
+        # The refusal above exists because PAPER_SCALES silently dropped every
+        # lifecycle row for weeks and this gate reported success on the
+        # emptiness that caused it. That catch has to survive. But a campaign
+        # that lands table by table reaches this gate before its lifecycle
+        # stage has run at all -- qOG is stage 8 of the October chain -- and
+        # failing then blocks a landing for work that is merely still queued.
+        #
+        # The distinguishing evidence is the MAP, not the rows: if `lifecycle`
+        # is absent from PAPER_SCALES its rows are being deleted, which is the
+        # original defect; if it is present and there are simply no rows, the
+        # lane has not run. Asked of make_paper_tables directly, so the two
+        # cannot drift apart.
+        try:
+            import make_paper_tables as _M
+            _mapped = "lifecycle" in getattr(_M, "PAPER_SCALES", {})
+        except Exception:
+            _mapped = False
+        if _mapped:
+            print("  `lifecycle` IS in PAPER_SCALES, so nothing is deleting its "
+                  "rows: the lane has not run at this pin yet. Reported, not "
+                  "failed -- this gate fails on rows that went missing, not on "
+                  "a stage still queued.")
+            return 0
+        print("  Check PAPER_SCALES in make_paper_tables.py: a lane absent from "
+              "it is deleted by load_canonical before any gate runs.")
         return 1
     print("\n== F11 session cost (open+close): O(written), not O(stored), under 100 ms ==")
     for (be, sit, scale), vals in sorted(_others.items(), key=str):
