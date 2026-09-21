@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import csv
 import collections
+import ast as _ast
 import json
 import os
 import re
@@ -4249,9 +4250,77 @@ def _mutation_note(rows):
                      + ", where those four columns are blank because the pass was "
                        "not asked for rather than because an engine failed it ("
                      + "; ".join(sorted(set(w for w in skipped.values() if w))) + ").")
+    # WHAT THE MUTATION COLUMNS ARE COMPARING, which is not one thing. Most
+    # dense engines patch their graph incrementally on insert; ArcadeDB's
+    # LSM_VECTOR buffers into a delta and rebuilds the WHOLE graph from
+    # scratch when a trigger fires -- the counter is incremented inside
+    # buildGraphFromScratchExclusively, read at the pin. So "insert into index
+    # ms/vector" can be a thousand nodes touched on one engine and a million
+    # on another, and a reader comparing 0.026 against 8.7 ms/vector without
+    # that is comparing two different amounts of work.
+    #
+    # Generated from the rows' own engine counters, never from a list here: an
+    # engine that rebuilds says so because ITS stats say so. Omitted entirely
+    # when no row carries the counter -- rows measured before
+    # engine_stats_after_mutate existed, or engines exposing no such metric --
+    # so silence means "not recorded", never "did not rebuild".
+    _rb = _mutation_rebuilds(rows)
+    if _rb:
+        parts.append(
+            "These engines do not all maintain an index the same way: "
+            + "; ".join("%s rebuilt its graph %d time%s" % (display_name(b), n, "" if n == 1 else "s")
+                        for b, n in _rb)
+            + ". A full rebuild touches every vector in the index while an "
+              "incremental insert touches only the new ones, so the per-vector "
+              "costs here price different amounts of work and are not a "
+              "straight speed comparison.")
     return _gen(" ".join(parts),
                 *[scale_label("l3d", s) for s in sorted(set(ran) | set(skipped))],
-                *sorted(set(ran.values()) | set(skipped.values())))
+                *sorted(set(ran.values()) | set(skipped.values())),
+                *[str(n) for _b, n in (_rb or ())])
+
+
+def _stats_int(row, field, key):
+    """One integer out of an engine_stats_* cell, whatever shape it arrives in."""
+    raw = row.get(field)
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, dict):
+        d = raw
+    else:
+        try:
+            d = _ast.literal_eval(str(raw))
+        except (ValueError, SyntaxError):
+            return None
+    if not isinstance(d, dict):
+        return None
+    try:
+        return int(d.get(key))
+    except (TypeError, ValueError):
+        return None
+
+
+def _mutation_rebuilds(rows):
+    """[(backend, rebuilds caused by the mutation phase)], from the rows.
+
+    The graph-rebuild counter AFTER the mutation phase minus the one after the
+    build, so it counts what the MUTATION caused and not the initial build.
+    Only engines reporting a positive count appear: zero is the ordinary case
+    (an incremental insert) and needs no sentence.
+    """
+    best = {}
+    for r in rows:
+        if r.get("lane") != "l3d":
+            continue
+        if str(r.get("mutate_ran", "")).lower() not in ("true", "1"):
+            continue
+        before = _stats_int(r, "engine_stats_after_build", "graphRebuildCount")
+        after = _stats_int(r, "engine_stats_after_mutate", "graphRebuildCount")
+        if before is None or after is None or after <= before:
+            continue
+        b = str(r.get("backend"))
+        best[b] = max(after - before, best.get(b, 0))
+    return sorted(best.items())
 
 
 _UNEXPRESSIBLE_CACHE = None
