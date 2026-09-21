@@ -857,8 +857,10 @@ INDEX_DECISIONS = {
         "surrealdb_ts_server":        "(host, ts)",
         "arangodb_ts":                "persistent (host, ts)",
         "mongodb":                    "time-series collection, metaField=host timeField=ts",
-        "questdb":                    "UNMEASURED: the table is created by the line protocol, "
-                                      "so whether host carries an index is server-side",
+        "questdb":                    "NONE: measured, 1.93 -> 1.75 ms last-point, inside the "
+                                      "spread of seven samples; host is unindexed by default and "
+                                      "the columnar layout answers it in 1.93 ms where SQLite "
+                                      "needed 35 ms unindexed",
     },
 }
 
