@@ -4144,11 +4144,23 @@ def _censored_entries(table):
     lane, wl = lane_wl
     scales = _table_scales(table.get("id"))
     cols = list(table.get("columns") or [])
+    # A MARK KEEPS A COMPARISON COMPLETE, SO IT NEEDS A COMPARISON TO JOIN.
+    # Found on the publish diff, 2026-09-21: docs_olap withholds its SF10 row
+    # group under #103b -- DuckDB and both PostgreSQL arms MEASURED there and
+    # are not printed -- so adding the five censored SF10 rows gave the page a
+    # size at which every engine failed, hiding that three had succeeded. That
+    # is the same distortion as a vanished row, pointing the other way. A
+    # scale the table prints no measured row at stays as it was: explained in
+    # the note, absent from the table.
+    measured_scales = {str(e.get("scale")) for e in table.get("entries") or []
+                       if not e.get("outcome")}
     out, marks = [], set()
     for (l, scale, backend, w), secs in sorted(_censored_cells().items(), key=str):
         if l != lane or (wl and w != wl):
             continue
         if scales and str(scale) not in scales:
+            continue
+        if str(scale) not in measured_scales:
             continue
         kind, mark = _outcome_kind(secs)
         marks.add(mark)

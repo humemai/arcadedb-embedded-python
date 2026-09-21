@@ -13071,8 +13071,7 @@
         "MongoDB at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SQLite at TPC-H SF10 (60.0M line items): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
         "SurrealDB (embedded) at TPC-H SF10 (60.0M line items): the analytics cell reached the 32g memory envelope (peak 32,768 MiB) and was killed by the kernel, the same envelope every engine on this table had; it did not run out of time, and there is no row.",
-        "SurrealDB (server) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent",
-        "In the cells: `>2h` the cell ran past its tier's cap and was not retried; `OOM` killed at the cell's memory envelope rather than running out of time; `lost` the connection dropped mid-query. A dash is an operation the engine cannot express, never a slow one."
+        "SurrealDB (server) at TPC-H SF10 (60.0M line items): the analytics cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent"
       ],
       "columns": [
         "Q1 p50 ms",
@@ -13532,151 +13531,6 @@
               "n": 10
             }
           }
-        },
-        {
-          "backend": "ArangoDB",
-          "backend_key": "arangodb_tpc",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "tpch10",
-          "scale_label": "TPC-H SF10 (60.0M line items)",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "outcome": "censored",
-          "metrics": {
-            "Q1 p50 ms": {
-              "text": ">2h"
-            },
-            "Q1 p99 ms": {
-              "text": ">2h"
-            },
-            "Q6 p50 ms": {
-              "text": ">2h"
-            },
-            "Q6 p99 ms": {
-              "text": ">2h"
-            }
-          }
-        },
-        {
-          "backend": "MongoDB",
-          "backend_key": "mongodb",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "tpch10",
-          "scale_label": "TPC-H SF10 (60.0M line items)",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "outcome": "censored",
-          "metrics": {
-            "Q1 p50 ms": {
-              "text": ">2h"
-            },
-            "Q1 p99 ms": {
-              "text": ">2h"
-            },
-            "Q6 p50 ms": {
-              "text": ">2h"
-            },
-            "Q6 p99 ms": {
-              "text": ">2h"
-            }
-          }
-        },
-        {
-          "backend": "SQLite",
-          "backend_key": "sqlite",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "tpch10",
-          "scale_label": "TPC-H SF10 (60.0M line items)",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "outcome": "censored",
-          "metrics": {
-            "Q1 p50 ms": {
-              "text": ">2h"
-            },
-            "Q1 p99 ms": {
-              "text": ">2h"
-            },
-            "Q6 p50 ms": {
-              "text": ">2h"
-            },
-            "Q6 p99 ms": {
-              "text": ">2h"
-            }
-          }
-        },
-        {
-          "backend": "SurrealDB (embedded)",
-          "backend_key": "surrealdb_tpc",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "tpch10",
-          "scale_label": "TPC-H SF10 (60.0M line items)",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "embedded",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "outcome": "envelope",
-          "metrics": {
-            "Q1 p50 ms": {
-              "text": "OOM"
-            },
-            "Q1 p99 ms": {
-              "text": "OOM"
-            },
-            "Q6 p50 ms": {
-              "text": "OOM"
-            },
-            "Q6 p99 ms": {
-              "text": "OOM"
-            }
-          }
-        },
-        {
-          "backend": "SurrealDB (server)",
-          "backend_key": "surrealdb_tpc_server",
-          "is_arcadedb": false,
-          "precision": null,
-          "scale": "tpch10",
-          "scale_label": "TPC-H SF10 (60.0M line items)",
-          "workload": "olap",
-          "n_docs": null,
-          "deployment": "server",
-          "image": null,
-          "version_name": null,
-          "host": null,
-          "outcome": "failed",
-          "metrics": {
-            "Q1 p50 ms": {
-              "text": "lost"
-            },
-            "Q1 p99 ms": {
-              "text": "lost"
-            },
-            "Q6 p50 ms": {
-              "text": "lost"
-            },
-            "Q6 p99 ms": {
-              "text": "lost"
-            }
-          }
         }
       ],
       "withheld_scales": [],
@@ -13966,14 +13820,6 @@
           "SurrealDB (server)",
           "TPC-H SF10 (60.0M line items)",
           "websockets.exceptions.ConnectionClosedError: no close frame received or sent"
-        ]
-      },
-      {
-        "text": "In the cells: `>2h` the cell ran past its tier's cap and was not retried; `OOM` killed at the cell's memory envelope rather than running out of time; `lost` the connection dropped mid-query. A dash is an operation the engine cannot express, never a slow one.",
-        "values": [
-          ">2h",
-          "OOM",
-          "lost"
         ]
       }
     ]
