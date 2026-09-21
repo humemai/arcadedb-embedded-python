@@ -785,6 +785,10 @@ SCALE_LABELS = {
     ("l3d", "deep10m"): "9.99M vectors",
     # LDBC publishes its tiers as scale factors, so SF1/SF10 are the corpus's
     # own vocabulary rather than ours; the person count says how big that is.
+    # The e4 lane decomposes ONE corpus across three deployments; its row
+    # labels are the six result sizes, so the scale names the corpus the
+    # projection runs over, which is the cross-model lane's 50k products.
+    ("e4", "e2"): "50k products",
     ("l2", "sf1"): "SF1 (11k people)",
     ("l2", "sf10"): "SF10 (73k people)",
     # THE SEPTEMBER EXTENSION'S RAISED SIZES (DECISIONS #103b). Each is a

@@ -1032,6 +1032,7 @@ LANE_SCRIPT = {
     "l3d": {"l3d_dense.py"},
     "l4": {"l4_tsbs.py"},
     "e2": {"e2_hybrid.py"},
+    "e4": {"e4_decomp.py"},
     "lifecycle": {"l5_lifecycle.py"},
     "e4_decomp": {"deployment_decomp_probe.py"},
 }

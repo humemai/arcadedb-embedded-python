@@ -92,6 +92,15 @@ def main():
     # expects; the full artifact stays in the file.
     from importlib.metadata import version as _v
     payload["engine_version"] = _v("arcadedb-embedded")
+    # THE DURABILITY THE ARM RAN AT, read out of the engine rather than
+    # asserted (#81, #90). Every 2026-10 row must record it -- F10 fails a row
+    # that does not -- and this lane recorded nothing, which nobody noticed
+    # while the lane was unregistered: its five rows were discarded upstream
+    # of every gate, so the gate that would have caught this never saw them.
+    # The lane runs one engine at its default class; the readback says which.
+    import bench_common
+    payload["durability"] = bench_common.arcade_durability_readback()
+    payload["durability_class"] = bench_common.DURABILITY_CLASS
     for n, d in payload.get("results", {}).get("embedded", {}).items():
         payload[f"embedded_{n}_p50_ms"] = d.get("p50_ms")
     json.dump(payload, open(args.out, "w"))

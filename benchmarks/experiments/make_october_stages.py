@@ -241,6 +241,21 @@ STAGES = [
       'grep -q "CREATE INDEX p_host_ts ON p (host, ts)" l4_tsbs.py'
       ' || { say "$ID ABORT: the DuckDB index this re-run exists for is not in this tree"; exit 1; }'],
      {}, ["BENCH_TS_SETTLE_S=90"]),
+    # THE E4 LANE AGAIN, because its rows record no durability and F10 fails
+    # any 2026-10 row that does not. Nobody noticed while the lane was
+    # unregistered: PAPER_SCALES dropped all five rows upstream of every gate,
+    # so the gate that would have caught it never saw them. Registering the
+    # lane (2026-09-22) surfaced it on the first landing that carried e4.
+    #
+    # Three minutes of machine time: qOI ran 17:12:20 to 17:15:02 for one
+    # engine, one workload, five reps. Cheaper than arguing about whether a
+    # deployment decomposition needs a durability stamp -- it runs an engine,
+    # the engine has a setting, and every other lane records it.
+    ("qOK", "deployment decomposition again, with the durability stamp (qOI re-run)",
+     "e4", ["decomp"], ["e2"],
+     ['grep -q "durability_readback" e4_decomp.py'
+      ' || { say "$ID ABORT: the durability stamp this re-run exists for is not in this tree"; exit 1; }'],
+     {}, []),
 ]
 
 HEAD = '''#!/bin/bash

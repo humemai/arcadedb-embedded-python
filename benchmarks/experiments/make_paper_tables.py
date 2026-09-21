@@ -110,7 +110,14 @@ MAX_REP = 5
 # Adding a lane here is therefore step 1 of 3. Step 2 is export_web.SCALE_LABELS,
 # which SystemExits on a missing tier by design. Step 3 is fairness_check
 # .LANE_SCRIPT, so F6b can tell a lane script from a bespoke driver.
-PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"],
+# e4 REGISTERED 2026-09-22, the third lane to be caught by the paragraph
+# above. qOI ran it to completion at the October pin, the rows were
+# stamped correctly, and all five were discarded here: the E4 TABLE is
+# built from the artifacts in results/e4decomp_<pin>/, so nothing
+# downstream complained, and the first landing that carried only this
+# lane froze zero rows and failed. The table still reads the artifacts;
+# registering the lane is what lets a GATE see the rows.
+PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"], "e4": ["e2"],
                 "l3s": ["tiny", "small", "medium"], "l3d": ["small", "deep10m"],
                 "e2": ["e2"],
                 "l4": ["ts100"],
