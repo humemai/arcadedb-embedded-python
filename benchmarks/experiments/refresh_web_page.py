@@ -91,8 +91,15 @@ PREVIEW_INVENTORY = HERE / "results" / "generated" / "preview-tables.md"
 # rows say. None of them asks whether the two engines answered the same
 # question, which is the check that decides whether a fast number is also a
 # right one, so it is the first gate a publish has to pass.
+# SIX GATES. version_pin_check is the newest (2026-09-21) and is the only one
+# that reads no rows: the other five ask whether the MEASUREMENTS are sound,
+# and this one asks whether the four files a human edits can still disagree
+# about which artifact was measured. 86 pins across runner.py, build_images.sh
+# and the two Dockerfiles, with COMPARATORS.md stating them for a reader, and
+# nothing compared them until dbbench:pg-age spent a campaign on PostgreSQL
+# 17.11 under an instrument declaring 18.6 (BUGS F76).
 GATES = ["equivalence_check", "provenance_check", "fairness_check", "page_check",
-         "version_consistency_check"]
+         "version_consistency_check", "version_pin_check"]
 
 # THE SKELETON GUARDS (DECISIONS #86). A skeleton publish fills the preview
 # route with placeholder cells from a one-repetition laptop run so the October

@@ -153,7 +153,7 @@ The invariant it enforces: **every page table and figure is generated from froze
 listed in the page manifest, pinned by a gate, and carries a source link to a tracked
 artifact.**
 
-Five gates run, and they answer different questions. `equivalence_check` is the newest of them: it arrived with the 2026-10 instrument, which is also the instrument whose lanes stamp the answer digests it compares. **The rows behind the CURRENT page carry no digest field**, so the gate has nothing to compare there and the answers behind the published cells were never compared across engines. That is worth knowing when you read one of today's latencies: with no answer check behind a number, a fast number and a wrong answer look alike. It is the 2026-10 rows that this gate holds to each other.
+Six gates run, and they answer different questions. Five read the rows; `version_pin_check` reads none, asking instead whether the files that state a version pin still agree with each other. `equivalence_check` is the newest of them: it arrived with the 2026-10 instrument, which is also the instrument whose lanes stamp the answer digests it compares. **The rows behind the CURRENT page carry no digest field**, so the gate has nothing to compare there and the answers behind the published cells were never compared across engines. That is worth knowing when you read one of today's latencies: with no answer check behind a number, a fast number and a wrong answer look alike. It is the 2026-10 rows that this gate holds to each other.
 
 | Gate | Asks |
 |---|---|
