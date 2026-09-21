@@ -2994,9 +2994,26 @@ def _durability_table(all_rows):
             # that was traced to a sync at every commit, or one whose behaviour
             # at commit could not be established at all. Both print once; only
             # the first can be called a commit that waits.
+            # NOT rs[0]. The note class decides which sentence explains this
+            # engine's single number, and reading it off whichever row happens
+            # to sit first in the file is reading one row and calling it the
+            # set. DuckPGQ has 17 rows: 15 carry "fsync at commit, not
+            # configurable" and 2 early ones carry no durability string at
+            # all. The unstamped one sorted first, `durability_class(None)`
+            # answered neither "strict" nor "unverified", and DuckPGQ printed
+            # a number in the waiting column that NO condition on the table
+            # accounted for -- the one engine of six in that column with
+            # nothing saying why it is there.
+            #
+            # Decided by what the stamped rows say, with the unstamped ones
+            # ignored rather than allowed to win by position. They are stale,
+            # the stamp reached the adapter afterwards, and a row that says
+            # nothing should not outvote fifteen that agree.
+            _stamped = [r for r in rs if str(r.get("durability") or "").strip()]
+            _classes = collections.Counter(
+                bench_common.durability_class(r.get("durability")) for r in _stamped)
             entry["_durability_note_class"] = (
-                bench_common.durability_class(rs[0].get("durability"))
-                if no_setting else None)
+                _classes.most_common(1)[0][0] if (no_setting and _classes) else None)
             if no_setting:
                 got = _agg(rs, field)
                 if got is not None:
@@ -3025,6 +3042,28 @@ def _durability_table(all_rows):
 
     def _verb(names):
         return "have" if len(names) > 1 else "has"
+    # EVERY SINGLE NUMBER IS ACCOUNTED FOR, or the table does not publish.
+    # A cell in the waiting column with nothing in the other one is the table
+    # saying "this engine had no choice", and a reader can only take that on
+    # trust if a condition names the engine and says how we know. DuckPGQ
+    # printed exactly that cell, unexplained, because the note class was read
+    # off whichever row sorted first. Refusing here is the capability table's
+    # rule -- refuse the kind you cannot define rather than printing it and
+    # hoping -- applied to the one other table that prints a lone number.
+    _explained = set(_no_knob) | set(_unverified)
+    _lone = sorted({e["backend"] for e in entries
+                    if e["metrics"].get("waits for the disk ms")
+                    and not e["metrics"].get("no wait ms")}
+                   - _explained)
+    if _lone:
+        raise SystemExit(
+            f"REFUSING to publish the durability table: {_lone} print a number in "
+            f"the waiting column and nothing in the other one, and no condition "
+            f"names them. That cell claims the engine offers no choice; unexplained "
+            f"it is indistinguishable from a setting that failed to take. Stamp the "
+            f"engine's `durability` on its rows, or add the sentence that says how "
+            f"its behaviour at commit was established.")
+
     return {
         "id": "durability",
         "title": "What waiting for the disk costs",
