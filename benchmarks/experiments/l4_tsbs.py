@@ -578,6 +578,23 @@ class DuckTS:
                           "ui": [p[4] for p in pts]})
             self.cx.register("src", t)
             self.cx.execute("INSERT INTO p SELECT * FROM src")
+        # THE INDEX THIS ARM DID NOT HAVE (BUGS F98). Every other engine on
+        # this lane reaches a host's points through one: an explicit (host,
+        # ts) index on SQLite, TimescaleDB, SurrealDB, ArangoDB and both
+        # ArcadeDB document arms, a native TIMESERIES type on ArcadeDB's
+        # native arm, a time-series collection keyed on metaField=host for
+        # MongoDB. DuckDB had none, and both of this lane's host-filtered
+        # queries want one: `WHERE host = X ORDER BY ts DESC LIMIT 1` and the
+        # windowed aggregate are point lookups into one host's rows, which is
+        # the shape DuckDB's ART index documents itself for, not the scan-wide
+        # analytics where an index earns nothing.
+        #
+        # MEASURED 2026-09-22 at 500k rows over 100 hosts: last-point 7.06 ms
+        # without against 6.20 ms with, windowed 8.41 ms against 6.57 ms. The
+        # margin grows with the corpus, because without an index the last
+        # point of one host is found by reading every row of every host, and
+        # the published tier is 25.9M rows over 1,000 hosts.
+        self.cx.execute("CREATE INDEX p_host_ts ON p (host, ts)")
 
     def q_last(self):
         return self.cx.execute(
