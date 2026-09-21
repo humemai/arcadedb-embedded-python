@@ -1569,10 +1569,24 @@ _REF_PAREN = re.compile(r"\s*\((?:see\s+)?(?:%s)(?:\.md)?[^()]*\)" % _INTERNAL)
 _REF_TAIL = re.compile(r"[,;]\s*(?:%s)(?:\.md)?[^()]*(?=\))" % _INTERNAL)
 # a bare citation left in running text
 _REF_BARE = re.compile(r"\s*\b(?:%s)(?:\.md)?\s+#?[A-Z]?\d+[a-z]?\b" % _INTERNAL)
+# cheap "is there anything here at all" test, so untouched prose stays byte
+# for byte what its author wrote
+_REF_SCAN = re.compile(r"\b(?:%s)\b" % _INTERNAL)
 
 
 def _public_prose(text):
-    """One reader-facing string with our internal citations taken out."""
+    """One reader-facing string with our internal citations taken out.
+
+    A STRING WITH NOTHING TO STRIP IS RETURNED UNTOUCHED. The tidy-up below
+    collapses runs of whitespace and pulls punctuation back, which is right
+    for a sentence a citation was just cut out of and wrong for every other
+    sentence on the page: page_check holds each October sentence against
+    OCT_PROSE by exact text, and rewriting one space made two registered
+    sentences unrecognisable to the gate that registers them. Cleaning what
+    was not dirty is how a sanitiser becomes a source of drift.
+    """
+    if not _REF_SCAN.search(text):
+        return text
     out = _REF_PAREN.sub("", text)
     out = _REF_TAIL.sub("", out)
     out = _REF_BARE.sub("", out)
@@ -1584,11 +1598,27 @@ def _public_prose(text):
     return out.strip()
 
 
+# ONE ENGINE, ONE SPELLING OF ITS VERSION. FalkorDB reports "v4.20.6" on the
+# graph lanes and "4.20.6" on the durability lane; SurrealDB's server does the
+# same with v3.2.4. Same build, two strings, and a reader comparing two tables
+# cannot see they agree -- which is exactly what version_consistency_check
+# refuses. The leading v is the engine's own habit and carries nothing, so it
+# comes off here, once, rather than in each adapter that reports a version.
+_V_PREFIX = re.compile(r"\bv(?=[0-9]+(?:\.[0-9]+)+)")
+
+
+def _one_spelling(text):
+    return _V_PREFIX.sub("", text)
+
+
 def _strip_internal_refs(node):
     if isinstance(node, str):
         return _public_prose(node)
+    # version strings ride the same walk: they are reader-facing too
     if isinstance(node, dict):
-        return {k: (v if k in _PROVENANCE_KEYS else _strip_internal_refs(v))
+        return {k: (v if k in _PROVENANCE_KEYS
+                    else _one_spelling(v) if k == "version_name" and isinstance(v, str)
+                    else _strip_internal_refs(v))
                 for k, v in node.items()}
     if isinstance(node, list):
         return [_strip_internal_refs(v) for v in node]
@@ -1867,7 +1897,13 @@ LANES = {
         # print the persons-and-KNOWS projection beside the full network,
         # which is two corpora in one table and PAGE-SPEC rule 4's whole
         # subject.
-        "only_scales": {"sf1"} if SKELETON else {"sf1", "sf10"},
+        # THE SKELETON'S OLTP CORPUS IS micro, NOT sf1. This branch carried
+        # l2olap's value, and the two lanes ran different corpora on the
+        # laptop: 22 OLTP rows at micro, and the OLAP slice at sf1. Filtering
+        # the transactional table to sf1 left it with no rows at all, so the
+        # whole table vanished from the preview -- a silent loss, because a
+        # table with no entries is simply not emitted.
+        "only_scales": {"micro"} if SKELETON else {"sf1", "sf10"},
         # Peak anon last, and present at all because the page had no memory
         # column anywhere while every lane has measured it since the #52 fix.
         # It is also the column that shows our largest loss on this lane:
@@ -2974,7 +3010,12 @@ MULTIMODEL_ENGINES = ("ArcadeDB", "ArangoDB", "MongoDB", "SurrealDB")
 MULTIMODEL_CELLS = {"measured": "measured", "declared": "declared", "none": "no arm"}
 MULTIMODEL_KINDS = {"censored": "censored", "withheld": "withheld",
                     "unexpressible": "cannot express", "envelope": "out of memory",
-                    "failed": "failed"}
+                    "failed": "failed",
+                    # "withdrawn" is not "withheld": a withheld cell is one
+                    # number pulled from a row that stands, a withdrawn one is
+                    # the whole row taken down because the query it answered
+                    # was not the question the comparators answered.
+                    "withdrawn": "withdrawn"}
 
 
 def engine_family(backend, is_arcadedb=False):
@@ -3087,6 +3128,13 @@ def _multimodel_table(finished):
         "envelope": "out of memory, the cell reached the memory envelope every engine "
                     "on that table had and was killed by the kernel",
         "failed": "failed, the cell reported an error inside its budget",
+        # NOT THE SAME AS withheld. Withheld is one number pulled from a row
+        # that stands; withdrawn is the whole row taken down because the query
+        # it answered was not the question the other engines answered.
+        "withdrawn": "withdrawn, the query it answered was not the one the "
+                     "other engines answered, so the row came down",
+        "unrun": "not run, the skeleton's laptop placeholder did not run this "
+                 "workload for that engine",
     }
     # ITERATE THE KINDS THAT ARE PRESENT, not a list typed beside the legend.
     # The tuple this replaces named three, so "failed" -- a kind
@@ -4020,6 +4068,14 @@ def _oct_conditions(table):
     return head, tail
 
 
+# The runner's own roster of which backends a lane runs, so "registered for
+# this lane" means here what it means to the gate that checks it.
+try:
+    import runner as _runner_mod
+    LANES_RUNNER = {k: tuple(v[1]) for k, v in _runner_mod.LANES.items()}
+except Exception:  # noqa: BLE001 - the page must still build without it
+    LANES_RUNNER = {}
+
 _TABLE_LANE = {
     "docs_oltp": ("l1tpc", "oltp"), "docs_olap": ("l1tpc", "olap"),
     "l2": ("l2", "oltp"), "l2olap": ("l2", "olap"),
@@ -4063,55 +4119,65 @@ def _censored_cells():
     # runs.jsonl a laptop timeout left the engine off the table with no note at
     # all, which is exactly the gap-versus-censored confusion this function
     # exists to remove.
-    path = HERE / "results" / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
-    if path.exists():
-        with open(path) as fh:
-            for line in fh:
-                if not line.strip():
-                    continue
-                r = json.loads(line)
-                if str(r.get("ts_utc", "")) < "2026-09-01":
-                    continue
-                key = (r.get("lane"), str(r.get("scale")), r.get("backend"), r.get("workload"))
-                err = str(r.get("error") or "")
-                if not err:
-                    clean.add(key)
-                elif err.startswith("timeout_after_"):
-                    try:
-                        timeouts[key] = int(err.split("_")[-1].rstrip("s"))
-                    except ValueError:
-                        timeouts[key] = None
-                    # WHICH PHASE THE CAP INTERRUPTED, kept beside the seconds
-                    # rather than folded into them, because the branch below
-                    # tells a censored cell from a failed one by the TYPE of
-                    # this value and changing that would silently reclassify
-                    # every timeout as an error string.
-                    _ph = _timeout_phase(r.get("timeout_phase_hint"))
-                    if _ph:
-                        _CENSORED_PHASE[key] = _ph
-                elif r.get("oom_killed"):
-                    # AN ENVELOPE FAILURE IS NOT A TIMEOUT (DECISIONS #103g).
-                    # The cell was killed by the kernel at the memory cap; it
-                    # did not run out of TIME, and "failed inside its budget"
-                    # -- what the branch below would have said -- is false
-                    # about it. `oom_killed` has been on 943 rows since the
-                    # runner started setting it and nothing read it, so the
-                    # classification fell through to parsing the error text,
-                    # which for two of the three real cases is a phase marker
-                    # or a log tail that tells a reader nothing.
-                    _cap = str(r.get("mem_cap") or (f"{r.get('server_mem_cap_g')}g"
-                                                    if r.get("server_mem_cap_g") else "") or "")
-                    _peak = (r.get("peak_mib_sum") or r.get("client_peak_mib")
-                             or r.get("server_peak_mib"))
-                    timeouts[key] = ("envelope", _cap, _peak)
-                else:
-                    # A CELL THAT FAILED FOR ANOTHER REASON IS STILL A CENSORED
-                    # OBSERVATION. 2026-09-14: the served SurrealDB cells at
-                    # 9.99M built their index and then lost the connection
-                    # mid-query, twice; a timeout-only rule left the page with
-                    # no row and no note, which reads as a cell nobody ran.
-                    # The reason is carried as a string so the note can say it.
-                    timeouts[key] = err.strip().splitlines()[-1][:90] or "an error"
+    # THE CENSORED CELLS COME FROM THE ROWS THIS PUBLISH IS BUILT FROM. The
+    # comment above says a skeleton reads its own results file, and nothing
+    # made that true: BENCH_RUNS_JSONL defaults to runs.jsonl, no skeleton
+    # jsonl exists, and so a laptop placeholder page picked up the BENCH
+    # HOST's censored cells -- including one at a corpus size the skeleton has
+    # no label for, which is how this surfaced (the export died rather than
+    # published, which is the good failure). A skeleton refuses bench-host
+    # ROWS by design; it must refuse their outcomes for the same reason.
+    if _SKELETON_ENV:
+        rows = list(csv.DictReader(FROZEN.open())) if FROZEN.exists() else []
+    else:
+        path = HERE / "results" / os.environ.get("BENCH_RUNS_JSONL", "runs.jsonl")
+        rows = []
+        if path.exists():
+            with open(path) as fh:
+                rows = [json.loads(l) for l in fh if l.strip()]
+    for r in rows:
+        if str(r.get("ts_utc", "")) < "2026-09-01":
+            continue
+        key = (r.get("lane"), str(r.get("scale")), r.get("backend"), r.get("workload"))
+        err = str(r.get("error") or "")
+        if not err:
+            clean.add(key)
+        elif err.startswith("timeout_after_"):
+            try:
+                timeouts[key] = int(err.split("_")[-1].rstrip("s"))
+            except ValueError:
+                timeouts[key] = None
+            # WHICH PHASE THE CAP INTERRUPTED, kept beside the seconds
+            # rather than folded into them, because the branch below
+            # tells a censored cell from a failed one by the TYPE of
+            # this value and changing that would silently reclassify
+            # every timeout as an error string.
+            _ph = _timeout_phase(r.get("timeout_phase_hint"))
+            if _ph:
+                _CENSORED_PHASE[key] = _ph
+        elif r.get("oom_killed"):
+            # AN ENVELOPE FAILURE IS NOT A TIMEOUT (DECISIONS #103g).
+            # The cell was killed by the kernel at the memory cap; it
+            # did not run out of TIME, and "failed inside its budget"
+            # -- what the branch below would have said -- is false
+            # about it. `oom_killed` has been on 943 rows since the
+            # runner started setting it and nothing read it, so the
+            # classification fell through to parsing the error text,
+            # which for two of the three real cases is a phase marker
+            # or a log tail that tells a reader nothing.
+            _cap = str(r.get("mem_cap") or (f"{r.get('server_mem_cap_g')}g"
+                                            if r.get("server_mem_cap_g") else "") or "")
+            _peak = (r.get("peak_mib_sum") or r.get("client_peak_mib")
+                     or r.get("server_peak_mib"))
+            timeouts[key] = ("envelope", _cap, _peak)
+        else:
+            # A CELL THAT FAILED FOR ANOTHER REASON IS STILL A CENSORED
+            # OBSERVATION. 2026-09-14: the served SurrealDB cells at
+            # 9.99M built their index and then lost the connection
+            # mid-query, twice; a timeout-only rule left the page with
+            # no row and no note, which reads as a cell nobody ran.
+            # The reason is carried as a string so the note can say it.
+            timeouts[key] = err.strip().splitlines()[-1][:90] or "an error"
     _CENSORED_CACHE = {k: v for k, v in timeouts.items() if k not in clean}
     return _CENSORED_CACHE
 
@@ -4207,6 +4273,14 @@ def _count_word(n):
     this page does: "one", "two", "three" appear forty times between them and
     a bare "3 query cells" reads as a field, not a sentence."""
     return _NUMBER_WORDS[n] if 0 <= n <= 10 else f"{n:,}"
+
+
+def _join_and(items):
+    """"a", "a and b", "a, b and c" -- the page writes lists as sentences."""
+    items = list(items)
+    if len(items) < 3:
+        return " and ".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
 
 
 def _mark_legend(marks):
@@ -4865,6 +4939,64 @@ def _finish_table(table: dict) -> dict:
                            + _zero_growth_notes(table.get("id"))
                            + _unexpressible_notes(table.get("id"), table.get("entries", []))
                            + _withheld_recall_notes(table.get("id")))
+    # AN ARM THE SKELETON NEVER RAN IS NOT A GAP IN THE CAMPAIGN. The laptop
+    # placeholder runs one small corpus per lane and does not always run every
+    # workload of it: `surrealdb_tpc` has OLTP rows and no analytics row,
+    # while its served twin has both. The coverage gate is right to refuse an
+    # engine that is registered for a lane, prints nothing, and says nothing
+    # -- that is how a silently dropped arm looks. So the skeleton says it,
+    # derived from the rows rather than typed into a list that would go stale
+    # the first time the placeholder run changed shape. Campaign payloads are
+    # untouched: there an unrun arm IS a finding, and must stay one.
+    if SKELETON:
+        _lane_wl = _TABLE_LANE.get(table.get("id"))
+        if _lane_wl:
+            _lane, _wl = _lane_wl
+            _have = {str(e.get("backend_key") or "") for e in table.get("entries") or []}
+            # MERGED, for the reason every other note on this page is merged:
+            # these differ only in a name, and thirteen of them under one
+            # table is a loop's output. One sentence, every engine named.
+            _norow = [display_name(_be) for _be in (LANES_RUNNER.get(_lane) or ())
+                      if _be not in _have]
+            if _norow:
+                _who = _join_and(_norow)
+                _why = _gen(f"{_who} {'has' if len(_norow) == 1 else 'have'} no row on this "
+                            f"table: the skeleton is a laptop placeholder and did not run this "
+                            f"workload for {'it' if len(_norow) == 1 else 'them'}. The campaign "
+                            f"does.", _who)
+                table.setdefault("conditions", [])
+                if _why not in table["conditions"]:
+                    table["conditions"].append(_why)
+                for _n in _norow:
+                    _declare_absence(table.get("id"), _n, None, "unrun", _why)
+            # AND THE PARTIAL ROWS, which are the harder half. `surrealdb_tpc`
+            # HAS a row here: its OLTP run supplies ingest, disk and memory,
+            # so the arm looks present while every analytics cell is empty.
+            # A whole-row declaration does not cover it and a reader cannot
+            # tell those blanks from a slow engine. One sentence per engine,
+            # and a declaration per column, which is what the gate reads.
+            _partial = {}
+            for _e in table.get("entries") or []:
+                _miss = tuple(c for c in (table.get("columns") or [])
+                              if (_e.get("metrics") or {}).get(c) is None)
+                if not _miss or _e.get("outcome"):
+                    continue
+                _partial.setdefault(_miss, []).append(str(_e.get("backend")))
+            for _miss, _whos in sorted(_partial.items(), key=str):
+                _who = _join_and(_whos)
+                _why = _gen(f"{_who} {'prints' if len(_whos) == 1 else 'print'} no "
+                            f"{_join_and(list(_miss))} here: the skeleton is a laptop "
+                            f"placeholder and did not run that workload for "
+                            f"{'this arm' if len(_whos) == 1 else 'those arms'}, though it ran "
+                            f"the ingest the other columns come from. The campaign runs both.",
+                            _who, _join_and(list(_miss)))
+                table.setdefault("conditions", [])
+                if _why not in table["conditions"]:
+                    table["conditions"].append(_why)
+                for _n in _whos:
+                    for _c in _miss:
+                        _declare_absence(table.get("id"), _n, _c, "unrun", _why)
+
     # DECISIONS #111. Added AFTER every note and number is computed, so
     # nothing that averages, ranks or counts a measurement can see them.
     _marked, _marks = _censored_entries(table)
@@ -5108,18 +5240,33 @@ def _restructure_tables(tables, rows):
         # `BETWEEN` is correct). Both errors make ArcadeDB's numbers faster than
         # the truth, so the cells come down rather than stand with a caveat, and
         # October re-measures them with the answers checked.
+        _withdrawn = [e for e in src["entries"]
+                      if str(e.get("backend", "")).lower().startswith("arcadedb")]
         _olap_entries = [clone(e, OLAP_KEEP) for e in src["entries"]
                          if not str(e.get("backend", "")).lower().startswith("arcadedb")]
+        # GENERATED, NOT TYPED. Under the October instrument every sentence
+        # must be one or the other, and this one was a bare string: September
+        # never checked, so the withdrawal that has been on the page since
+        # 2026-09-14 failed the first October-instrument payload to be gated.
+        _withdrawal = _gen("ArcadeDB has no row on this table. Answer checking built for the next campaign "
+                       "found that the two queries it ran here were not the questions the comparators "
+                       "answered: one of the five aggregates was missing from our Q1 text, and its Q6 "
+                       "excluded the boundary discount because the engine reads `>= 0.05` against a "
+                       "decimal literal as strictly greater. Both errors made its numbers faster than "
+                       "the truth, so they are withdrawn rather than shown with a caveat, and the next "
+                       "campaign measures them with every engine's answer compared.", "0.05")
+        # THE SENTENCE IS NOT THE DECLARATION. A reader gets the prose above; the
+        # coverage gate reads `declared_absences`, and under the 2026-10
+        # instrument it fails a registered arm that has neither a row nor an
+        # entry there. September never hit it because that check is skipped on
+        # the older instrument, so the withdrawal has been prose-only since
+        # 2026-09-14 and the first October-instrument payload to be gated --
+        # the skeleton -- failed on both ArcadeDB arms.
+        for _e in _withdrawn:
+            _declare_absence("docs_olap", str(_e.get("backend")), None, "withdrawn", _withdrawal)
         tables.append({"id": "docs_olap", "title": "Document OLAP",
                        "dataset": "TPC-H Q1 and Q6 at SF1",
-                       "conditions": list(src["conditions"]) + [
-                           "ArcadeDB has no row on this table. Answer checking built for the next campaign "
-                           "found that the two queries it ran here were not the questions the comparators "
-                           "answered: one of the five aggregates was missing from our Q1 text, and its Q6 "
-                           "excluded the boundary discount because the engine reads `>= 0.05` against a "
-                           "decimal literal as strictly greater. Both errors made its numbers faster than "
-                           "the truth, so they are withdrawn rather than shown with a caveat, and the next "
-                           "campaign measures them with every engine's answer compared."],
+                       "conditions": list(src["conditions"]) + [_withdrawal],
                        "columns": (OCT_OLAP_COLS if _oct else
                                    ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"]),
                        "entries": _olap_entries, **base})
@@ -5330,7 +5477,18 @@ def main() -> int:
                     # A served comparator whose image has no entry in the pin
                     # table's names (Milvus) still stamps its server version
                     # on the row; the page showed Milvus unversioned for it.
-                    else ((names.get(image) or rs[0].get("engine_version"))
+                    #
+                    # A COMPOSED ARM HAS MORE THAN ONE IMAGE AND ONLY ONE FITS
+                    # HERE. `server_image` for Qdrant + Neo4j is the NEO4J
+                    # digest, so the pin table named neo4j and the Qdrant half
+                    # vanished: the cross-model tables published the composed
+                    # stack as "neo4j 2026.08.1", on the two tables whose whole
+                    # subject is that it takes two systems. The row's own
+                    # string names every member, so it wins wherever it names
+                    # more than one.
+                    else (rs[0].get("engine_version")
+                          if len(_composed_members(rs[0].get("engine_version"))) > 1
+                          else (names.get(image) or rs[0].get("engine_version"))
                           if (image and not _stale_pin and not str(image).startswith("dbbench"))
                           else rs[0].get("engine_version")),
                     image, commit=rs[0].get("engine_commit")),

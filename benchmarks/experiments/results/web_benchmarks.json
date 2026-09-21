@@ -1078,7 +1078,7 @@
           "n_docs": "100000",
           "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": "milvus v2.6.13",
+          "version_name": "milvus 2.6.13",
           "host": "container:4a760a37d3a7 (host unknown)",
           "metrics": {
             "recall@10": {
@@ -1686,7 +1686,7 @@
           "n_docs": "1000000",
           "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": "milvus v2.6.13",
+          "version_name": "milvus 2.6.13",
           "host": "container:2596e52f1a5d (host unknown)",
           "metrics": {
             "recall@10": {
@@ -2294,7 +2294,7 @@
           "n_docs": "8841823",
           "deployment": "server",
           "image": "milvusdb/milvus@sha256:0ea40276f8111f0183e72c8ee3144f3b9aafcd30571bd947de1ed0d22ee9dd56",
-          "version_name": "milvus v2.6.13",
+          "version_name": "milvus 2.6.13",
           "host": "container:24718e20df8d (host unknown)",
           "metrics": {
             "recall@10": {
@@ -2554,7 +2554,7 @@
         "SurrealDB (server) at 9.99M vectors: the search cell failed inside its budget and was not retried, so there is no row. What it reported: websockets.exceptions.ConnectionClosedError: no close frame received or sent",
         "ArangoDB at 9.99M vectors is withheld: its search answered with a recall@10 of 0.0001 across 5 repetition(s), which is not a measurement of search but of a broken index, so its latency is not printed beside engines answering correctly. The cause is investigated on the bench host before anything is claimed about it.",
         "In the cells: `>4h` and `>8h` mean the cell ran past its tier's cap and was not retried; each tier has its own cap, the same for every engine on it. `lost` means the connection dropped mid-query. A dash is an operation the engine cannot express, never a slow one.",
-        "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
+        "Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany."
       ],
       "columns": [
         "cold p50 ms",
@@ -3143,7 +3143,7 @@
           "n_docs": "1,000,000",
           "deployment": "server",
           "image": null,
-          "version_name": "milvus v2.6.13",
+          "version_name": "milvus 2.6.13",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -4109,7 +4109,7 @@
           "n_docs": "9,990,000",
           "deployment": "server",
           "image": null,
-          "version_name": "milvus v2.6.13",
+          "version_name": "milvus 2.6.13",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -4179,7 +4179,7 @@
           "n_docs": "9,990,000",
           "deployment": "server",
           "image": null,
-          "version_name": "milvus v2.6.13",
+          "version_name": "milvus 2.6.13",
           "host": "mini",
           "metrics": {
             "cold p50 ms": {
@@ -5196,7 +5196,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",
-          "version_name": "falkordb v4.20.6",
+          "version_name": "falkordb 4.20.6",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -5636,7 +5636,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
-          "version_name": "surrealdb v3.2.4",
+          "version_name": "surrealdb 3.2.4",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -6076,7 +6076,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",
-          "version_name": "falkordb v4.20.6",
+          "version_name": "falkordb 4.20.6",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -6516,7 +6516,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
-          "version_name": "surrealdb v3.2.4",
+          "version_name": "surrealdb 3.2.4",
           "host": null,
           "metrics": {
             "point p50 ms": {
@@ -7281,7 +7281,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
-          "version_name": "surrealdb v3.2.4",
+          "version_name": "surrealdb 3.2.4",
           "host": null,
           "metrics": {
             "ingest vertices+edges/s": {
@@ -7978,7 +7978,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
-          "version_name": "surrealdb v3.2.4",
+          "version_name": "surrealdb 3.2.4",
           "host": null,
           "metrics": {
             "ingest vertices+edges/s": {
@@ -8296,7 +8296,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
-          "version_name": "surrealdb v3.2.4",
+          "version_name": "surrealdb 3.2.4",
           "host": null,
           "metrics": {
             "trials": {
@@ -8339,7 +8339,7 @@
         "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
-        "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
+        "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
       ],
       "columns": [
         "p50 ms",
@@ -8727,7 +8727,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
-          "version_name": "surrealdb v3.2.4",
+          "version_name": "surrealdb 3.2.4",
           "host": null,
           "metrics": {
             "p50 ms": {
@@ -12987,7 +12987,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
-          "version_name": "surrealdb v3.2.4",
+          "version_name": "surrealdb 3.2.4",
           "host": null,
           "metrics": {
             "new-order p50 ms": {
@@ -13478,7 +13478,7 @@
           "n_docs": null,
           "deployment": "server",
           "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
-          "version_name": "surrealdb v3.2.4",
+          "version_name": "surrealdb 3.2.4",
           "host": null,
           "metrics": {
             "Q1 p50 ms": {
@@ -13552,6 +13552,18 @@
         "disk GiB": "down"
       },
       "declared_absences": [
+        {
+          "backend": "ArcadeDB (embedded)",
+          "column": null,
+          "kind": "withdrawn",
+          "why": "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared."
+        },
+        {
+          "backend": "ArcadeDB (server)",
+          "column": null,
+          "kind": "withdrawn",
+          "why": "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared."
+        },
         {
           "backend": "ArangoDB",
           "column": null,
@@ -13633,6 +13645,12 @@
         "text": "The path you choose inside Python matters far more than the language boundary does. Asking for record objects is 15.1x slower than asking for columns over the same query, so the practical advice is to use the columnar or batched call for anything large.",
         "values": [
           "15.1"
+        ]
+      },
+      {
+        "text": "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next campaign measures them with every engine's answer compared.",
+        "values": [
+          "0.05"
         ]
       },
       {

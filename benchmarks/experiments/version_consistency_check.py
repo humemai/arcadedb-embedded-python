@@ -105,10 +105,22 @@ SPELLINGS = {
 _OURS = re.compile(r"^2[0-9]\.[0-9]{1,2}\.[0-9]+$")
 
 
+# THE CAPABILITY TABLE CARRIES NO MEASUREMENT, so its version field is not a
+# version: it is a SUMMARY of the versions the other tables carry, joined with
+# " / " when an engine legitimately wears more than one (SurrealDB embedded is
+# core 2.3.10 and its server is 3.2.4, two engines by DECISIONS #95). Read as a
+# row's own version it becomes a third spelling that no engine ever reported,
+# and the checks below then fail an engine for a string this file's own
+# generator invented.
+_SUMMARY_TABLES = {"multimodel"}
+
+
 def _rows(node, table=None):
     """Yield (table_id, backend, version_name) for every row in a payload."""
     if isinstance(node, dict):
         tid = node.get("id", table) if "entries" in node else table
+        if tid in _SUMMARY_TABLES:
+            return
         if isinstance(node.get("version_name"), str):
             yield tid, node.get("backend", "?"), node["version_name"]
         for value in node.values():
@@ -206,6 +218,18 @@ def check(path: str) -> list[str]:
     for table, backend, version in _rows(payload):
         spellings[backend].add(version.strip())
     for backend, values in sorted(spellings.items()):
+        # AN OPTIONAL COMPONENT IS NOT A SECOND ENGINE. MongoDB's document
+        # arms run mongod alone and its vector arms run mongod beside mongot,
+        # so the rows honestly read "mongodb 8.2.12" and "mongodb 8.2.12 +
+        # MongoDb Search Community Version 1.70.4". That is one engine at one
+        # version with a component disclosed where it actually runs, and
+        # naming it on the tables that do not run it would be the lie. What
+        # this check exists to catch is two DIFFERENT builds of one engine
+        # compared against each other, so it compares the part before the
+        # first "+" and lets the tail differ.
+        bases = {v.split("+")[0].strip() for v in values}
+        if len(bases) == 1 and len(values) > 1:
+            continue
         norm = {re.sub(r"\bv(?=[0-9])", "", v) for v in values}
         if len(values) > 1 and len(norm) == 1:
             failures.append(
