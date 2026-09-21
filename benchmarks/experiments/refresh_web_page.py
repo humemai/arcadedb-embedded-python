@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import json
 import re
 import shutil
 import subprocess
@@ -334,6 +335,27 @@ def main() -> int:
             print(proc.stderr, file=sys.stderr)
             print("\nrefusing to publish: a gate failed", file=sys.stderr)
             return 1
+
+    # EVERY TABLE THE PAGE ASKS FOR MUST EXIST IN THE PAYLOAD (BUGS F95). The
+    # prose file names its tables by `tableId`, and the renderer shows nothing
+    # at all for one the payload does not carry -- no error, no gap, just a
+    # heading with nothing under it. On 2026-09-22 `l2` was filtered to a tier
+    # holding none of its rows and the whole table stopped being emitted;
+    # twelve became eleven in silence, and PAGE-SPEC's inventory agreed,
+    # because that inventory is written FROM the payload and so cannot
+    # disagree with it. The page's own prose can.
+    _payload = json.loads(exported.read_text(encoding="utf-8"))
+    _have = {t.get("id") for t in _payload.get("tables") or []}
+    _absent = set((_payload.get("skeleton_absent_tables") or {}).keys())
+    _wanted = re.findall(r'tableId:\s*"([A-Za-z0-9_]+)"',
+                         (site / PAGE_SOURCE).read_text(encoding="utf-8"))
+    _missing = [t for t in dict.fromkeys(_wanted) if t not in _have and t not in _absent]
+    if _missing:
+        print(f"  REFUSING: the page asks for {_missing} and the payload carries "
+              f"{sorted(_have)}; a table the page names and the data lacks renders "
+              f"as a heading with nothing under it", file=sys.stderr)
+        return 1
+    print(f"  page asks for {len(set(_wanted))} table(s), payload carries {len(_have)}")
 
     step(4, "Sync the page data")
     target = site / PAGE_DATA
