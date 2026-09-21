@@ -4414,6 +4414,73 @@ def _censored_entries(table):
     return out, marks
 
 
+def _split_note(table):
+    """The two phases are INSIDE the total, and do not always fill it.
+
+    The ingest/index split (FAIRNESS F14) prints `ingest s` and `index s`
+    beside the total, and the obvious sentence to write over that -- "the
+    total is the two added together" -- is false. It was drafted here twice
+    and caught twice by checking it against the payload, which is the only
+    reason it is not on the page.
+
+    The first draft claimed the sum. The second blamed the difference on
+    aggregation, reasoning that three independent medians need not add. Both
+    were wrong in the same way: the difference is there ROW BY ROW. Each
+    adapter starts its ingest timer after whatever setup it does inside
+    `build()` -- ArcadeDB after `CREATE PROPERTY`, Milvus after the collection
+    and connection -- so the two timers are named phases within the total, not
+    a partition of it. Measured on the dense table: MongoDB and Neo4j lose
+    nothing, ArcadeDB 11 to 19 per cent, Milvus 33 to 39.
+
+    So the sentence says what the columns are and states the residue's actual
+    range, computed from the entries in front of the reader rather than
+    typed, because the range is a property of which engines the table shows.
+
+    Emitted only where both parts are printed AND at least one arm fills them:
+    the column list alone was not enough of a test, and firing on it put this
+    sentence over two tables whose entries carry neither part.
+    """
+    cols = set(table.get("columns") or [])
+    if not {"ingest s", "index s"} <= cols:
+        return []
+    total = ("ingest total s" if "ingest total s" in cols
+             else "ingest+index total s" if "ingest+index total s" in cols else None)
+    if not total:
+        return []
+
+    def _m(entry, key):
+        v = (entry.get("metrics") or {}).get(key)
+        return v.get("median") if isinstance(v, dict) else v
+
+    shares = []
+    for e in table.get("entries", []):
+        tot, ing, idx = _m(e, total), _m(e, "ingest s"), _m(e, "index s")
+        if not tot or ing is None:
+            continue
+        shares.append(max(0.0, (tot - (ing + (idx or 0.0))) / tot))
+    if not shares:
+        return []
+    hi = round(max(shares) * 100)
+    lo = round(min(shares) * 100)
+    if hi < 1:
+        rest = ("On this table the two account for the whole of it on every "
+                "engine shown.")
+    else:
+        rest = (f"How much is left over depends on the engine: nothing on some "
+                f"of the ones here, up to about {hi} per cent on others."
+                if lo < 1 else
+                f"How much is left over depends on the engine, between about "
+                f"{lo} and {hi} per cent on the ones here.")
+    return [_gen(
+        f"`{total}` is the whole of building this corpus. `ingest s` and "
+        f"`index s` are the two phases timed inside it -- writing the data, "
+        f"then building whatever index the engine was given -- and they are "
+        f"not a division of it: each engine's ingest clock starts after the "
+        f"setup it does first, creating a schema or a collection, which "
+        f"neither phase counts. {rest} Read the two as what each phase cost, "
+        f"and the total as what the whole of it cost.", total, str(hi))]
+
+
 def _index_note(table_id):
     """Which engines build an index for this table's queries, and which do not.
 
@@ -5053,6 +5120,7 @@ def _finish_table(table: dict) -> dict:
     table["conditions"] = (base
                            + _counts_note(table.get("id"), table.get("entries", []))
                            + _index_note(table.get("id"))
+                           + _split_note(table)
                            + _censored_notes(table.get("id"))
                            + _query_budget_notes(table.get("id"))
                            + _zero_growth_notes(table.get("id"))
