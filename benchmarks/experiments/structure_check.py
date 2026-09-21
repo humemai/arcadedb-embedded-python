@@ -35,6 +35,7 @@ Usage:  python structure_check.py        # exit 1 on any drift
 """
 import os
 import re
+from pathlib import Path
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -108,7 +109,65 @@ def check_stage_chain():
     return bad
 
 
-CHECKS = (("gates", check_gates), ("stage chain", check_stage_chain))
+def check_citations():
+    """Every DECISIONS #N and BUGS F-number cited here exists over there.
+
+    The code and the docs cite the record constantly -- "(DECISIONS #90)",
+    "BUGS F98" -- and a citation to something that was never written is worse
+    than none: it reads as though a decision was taken and recorded when it
+    was not. Found by writing FAIRNESS F14 against "#112" and then noticing,
+    four references later, that #112 did not exist.
+
+    The record lives in a SEPARATE repository (.notes, deliberately without a
+    remote), so this skips rather than fails when it is not checked out: a
+    developer with only the public tree cannot be asked to verify a file they
+    do not have.
+    """
+    notes = Path(HERE).parent.parent / ".notes" / "bench"
+    if not notes.is_dir():
+        print("  citations    skipped (.notes not checked out)")
+        return []
+    known = {}
+    for name, pat in (("DECISIONS", r"^\| (#\d+[a-z]?) \|"), ("BUGS", r"^\| (F\d+[a-z]?) \|")):
+        f = notes / f"{name}.md"
+        known[name] = set(re.findall(pat, f.read_text(encoding="utf-8"), re.M)) if f.exists() else set()
+    if not known["DECISIONS"] or not known["BUGS"]:
+        print("  citations    skipped (the record's index tables did not parse)")
+        return []
+    cited_d, cited_b = set(), set()
+    for f in sorted(Path(HERE).glob("*.py")) + sorted(Path(HERE).glob("*.md")):
+        if f.name == "structure_check.py":
+            continue                      # this file names the example that motivated it
+        text = f.read_text(encoding="utf-8", errors="ignore")
+        cited_d |= {f"#{n}" for n in re.findall(r"DECISIONS?[^\n]{0,12}?#(\d+[a-z]?)", text)}
+        cited_b |= {f"F{n}" for n in re.findall(r"BUGS?[^\n]{0,12}?F(\d+[a-z]?)", text)}
+    # A LETTERED ID IS A SUB-REFERENCE, NOT A MISSING ENTRY. F63's entry
+    # describes four defects and labels them a. to d., so `BUGS F63c` points
+    # at something a reader can find even though the index table lists only
+    # F63. Resolve a lettered id against its base number; an id whose BASE is
+    # absent is still a finding, which is how F73 was caught -- cited by
+    # CAMPAIGN.md, fixed by a stage, and never written.
+    def _resolves(cid, have):
+        return cid in have or (cid[-1].isalpha() and cid[:-1] in have)
+
+    bad = []
+    for label, cited, have in (("DECISIONS", cited_d, known["DECISIONS"]),
+                               ("BUGS", cited_b, known["BUGS"])):
+        missing = sorted((c for c in cited if not _resolves(c, have)),
+                         key=lambda x: (len(x), x))
+        if missing:
+            bad.append(f"cites {label} {missing} and {label}.md has no such entry; a citation "
+                       f"to something never written reads as a decision that was taken")
+    if not bad:
+        # main() prints the ok/DRIFTED line for every check; this adds the
+        # counts under it rather than printing a second verdict.
+        print(f"               {len(cited_d)} decision(s) and {len(cited_b)} bug(s) cited, "
+              f"all present")
+    return bad
+
+
+CHECKS = (("gates", check_gates), ("stage chain", check_stage_chain),
+          ("citations", check_citations))
 
 
 def main() -> int:
