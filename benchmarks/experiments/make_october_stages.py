@@ -386,6 +386,16 @@ for _img in {images}; do
   docker image inspect "dbbench:$_img" >/dev/null 2>&1 || {{ say "$ID ABORT: dbbench:$_img missing after build"; exit 1; }}
 done
 say "$ID: images present: {images}"
+# IMAGES PRESENT IS NOT IMAGES CURRENT, and the difference cost two hours a
+# cell. dbbench:pg-age sat on PostgreSQL 17 for nine days after the pin moved
+# to 18 while this very check reported "present"; AGE 1.7.0 builds edges 65x
+# slower than 1.8.0, so the cross-model cell at e2_500k burned the whole cap
+# and read as an engine limit (BUGS F90, F76). The ArcadeDB arm has been
+# verified by content since August -- the pair check below reads the jar's own
+# build number -- and this gives every comparator the same treatment, by
+# reading each image's versions back out of the image before any cell runs.
+python3 version_pin_check.py --runtime >> "$S" 2>&1 || {{ say "$ID ABORT: an image does not carry the version it is pinned to"; exit 1; }}
+say "$ID: images carry their pins"
 # VERIFY THE ARM, NOT THE FILE: read the version out of the built image.
 # The pair check below is the REPO copy, not ~/verify_pair_c25.sh: that
 # one is a stale copy from 2026-08-30 and would miss its own fourth

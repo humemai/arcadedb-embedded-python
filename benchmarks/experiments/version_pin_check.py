@@ -15,19 +15,30 @@ What this refuses:
   a digest stated in COMPARATORS.md that no code uses
   a package pinned in build_images.sh at a version COMPARATORS.md contradicts
 
-It does NOT check the running artifact -- that is what the stage's image
-verification and the row's `engine_version` do. This checks that the four
-files a human edits cannot disagree with each other, which is the half that
-was unguarded.
+The default mode checks that the four files a human edits cannot disagree
+with each other. That is half the problem, and it was NOT the half that cost
+machine time: the files agreed perfectly while mini's `dbbench:pg-age` sat
+three PostgreSQL majors behind them, because nothing compared a pin to the
+artifact that pin was supposed to have produced.
+
+`--runtime` closes that. It runs each `dbbench:*` image that exists locally
+and reads the versions back out of it, so a stale image is caught BEFORE the
+cells rather than by an `engine_version` field days later. The stages' own
+check was existence-only -- "images present: client mongo-search pg-age" is
+true of an image built in September for an October pin. AGE 1.7.0 builds
+edges 65x slower than 1.8.0, so that gap was worth two hours a cell (F90),
+and a check that can only run after the run is an autopsy, not a guard.
 
 COMPARATORS.md truncates digests for readability (8 or 12 hex), so the
 comparison is by prefix, and a prefix that matches more than one full digest
 is itself reported: an ambiguous pin documents nothing.
 
-Usage:  python version_pin_check.py        # exit 1 on any disagreement
+Usage:  python version_pin_check.py            # files agree with each other
+        python version_pin_check.py --runtime  # ... and the images agree too
 """
 import os
 import re
+import subprocess  # nosec B404
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -62,6 +73,133 @@ def _read(name):
 
 def _digests(text):
     return {m.group(1) for m in _DIGEST.finditer(text)}
+
+
+_PKGS_BLOCK = re.compile(r"declare -A PKGS=\((.*?)^\)", re.S | re.M)
+_PKGS_ENTRY = re.compile(r'^\s*\[([a-z0-9-]+)\]="([^"]*)"', re.M)
+_PG_MAJOR = re.compile(r"postgresql-(\d+)-age")
+
+
+def _pkg_targets(build_images_text):
+    """{image target: {distribution: pinned version}} from build_images.sh.
+
+    Only `name==version` entries resolve. `[arcadedb]="$ARCADE_PKGS"` is a
+    shell variable and several packages are deliberately unpinned, so the
+    caller is told how many entries could not be resolved rather than being
+    left to read an empty dict as a pass.
+    """
+    block = _PKGS_BLOCK.search(build_images_text)
+    if not block:
+        return {}, ["build_images.sh has no `declare -A PKGS=(` block to read"]
+    out, unresolved = {}, []
+    for m in _PKGS_ENTRY.finditer(block.group(1)):
+        target, spec = m.group(1), m.group(2)
+        pins = {p.group(1).lower(): p.group(2) for p in _PKG.finditer(spec)}
+        out[target] = pins
+        if not pins:
+            unresolved.append(f"PKGS[{target}] pins no explicit version "
+                              f"({spec.strip() or 'empty'}); nothing to check at runtime")
+    return out, unresolved
+
+
+def _docker(args, timeout=120):
+    try:
+        r = subprocess.run(["docker"] + args, capture_output=True,  # nosec B603 B607
+                           text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, str(exc)
+    if r.returncode != 0:
+        return None, (r.stderr or r.stdout).strip().splitlines()[-1:] or ["failed"]
+    return r.stdout, None
+
+
+def _local_images():
+    out, err = _docker(["images", "--format", "{{.Repository}}:{{.Tag}}"])
+    if out is None:
+        return None
+    return {ln.split(":", 1)[1] for ln in out.splitlines() if ln.startswith("dbbench:")}
+
+
+def _installed(target, dists):
+    """Ask the image itself what it has. Returns {dist: version-or-ABSENT}."""
+    probe = ("import importlib.metadata as m\n"
+             "for p in %r:\n"
+             "    try: print(p, m.version(p))\n"
+             "    except Exception: print(p, 'ABSENT')\n" % (sorted(dists),))
+    out, err = _docker(["run", "--rm", "--entrypoint", "python3",
+                        f"dbbench:{target}", "-c", probe])
+    if out is None:
+        return None, err
+    got = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            got[parts[0].lower()] = parts[1]
+    return got, None
+
+
+def check_runtime(code):
+    """Every local dbbench:* image carries the versions its pins name."""
+    bad, notes = [], []
+    targets, unresolved = _pkg_targets(code.get("build_images.sh", ""))
+    notes.extend(unresolved)
+
+    present = _local_images()
+    if present is None:
+        print("  docker is not available here; runtime check skipped entirely")
+        return ["--runtime asked for, and no image could be read; that is not a pass"]
+
+    checked = 0
+    for target in sorted(targets):
+        pins = targets[target]
+        if target not in present:
+            # A MISSING IMAGE IS NOT A PASS. qOD ran two arms whose images
+            # nobody built, and the cells recorded `server_not_ready`, which
+            # reads like a slow engine rather than an absent one (F76).
+            notes.append(f"dbbench:{target} is not built on this host; "
+                         f"a stage naming it would run against nothing")
+            continue
+        if not pins:
+            continue
+        got, err = _installed(target, pins)
+        if got is None:
+            bad.append(f"dbbench:{target} could not be read ({err}); an image that "
+                       f"cannot state its versions cannot be trusted to have them")
+            continue
+        for dist, want in sorted(pins.items()):
+            have = got.get(dist, "ABSENT")
+            checked += 1
+            if have != want:
+                bad.append(f"dbbench:{target} carries {dist} {have}, pinned at {want} "
+                           f"in build_images.sh -- the image predates the pin")
+
+    # dbbench:pg-age's pin is a Dockerfile apt package, not a PKGS line, and it
+    # is the one that actually went stale, so it gets its own probe.
+    dockerfile = code.get("Dockerfile.pgage", "")
+    want_major = _PG_MAJOR.search(dockerfile)
+    if want_major and "pg-age" in present:
+        out, err = _docker(["run", "--rm", "--entrypoint", "sh", "dbbench:pg-age",
+                            "-c", "postgres --version; dpkg-query -W -f='${Package}\n' "
+                                  "'postgresql-*-age' 2>/dev/null"])
+        if out is None:
+            bad.append(f"dbbench:pg-age could not be read ({err})")
+        else:
+            checked += 1
+            got_major = re.search(r"PostgreSQL\)?\s+(\d+)", out)
+            if not got_major:
+                bad.append(f"dbbench:pg-age did not report a PostgreSQL version: {out!r}")
+            elif got_major.group(1) != want_major.group(1):
+                bad.append(f"dbbench:pg-age runs PostgreSQL {got_major.group(1)}, "
+                           f"Dockerfile.pgage pins {want_major.group(1)} -- this is the "
+                           f"shape of F90, where AGE 1.7.0 built edges 65x slower than "
+                           f"1.8.0 and censored a two-hour cell")
+    elif want_major:
+        notes.append("dbbench:pg-age is not built on this host")
+
+    print(f"{checked} runtime version(s) read out of the images themselves")
+    for line in notes:
+        print(f"  NOTE     {line}")
+    return bad
 
 
 def main() -> int:
@@ -108,8 +246,16 @@ def main() -> int:
 
     print(f"{len(code_full)} image digest(s) in code, {len(doc_digests)} stated in "
           f"{DOC}, {sum(len(v) for v in doc_pkgs.values())} package pin(s) stated")
+    if "--runtime" in sys.argv:
+        bad.extend(check_runtime(code))
+
+    # EVERY FINDING GETS PRINTED. The first version of the runtime half
+    # appended to `bad` after this loop, so its findings were counted in the
+    # total and never shown: "3 pin disagreement(s)" over one visible line.
+    # A gate that reports a number an operator cannot act on is half a gate.
     for line in bad:
         print(f"  DISAGREE {line}")
+
     print(f"\n{len(bad)} pin disagreement(s)")
     return 1 if bad else 0
 
