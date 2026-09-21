@@ -887,7 +887,80 @@ INDEX_DECISIONS = {
 }
 
 
-def check_index_decisions():
+def _check_index_rows(rows):
+    """F14b: the DECLARATION is a claim; `index_s` on the row is the evidence.
+
+    check_index_decisions below asks whether every arm is declared. It never
+    reads a row, so a map saying "PostgreSQL builds l_shipdate, 2.5x" passes
+    green whether or not the index was built -- and a row measured without one
+    is a perfectly valid row, so nothing else notices either. That is the same
+    shape as every defect this file keeps recording: a setting written is not a
+    setting in force.
+
+    WHY THIS IS NEEDED NOW. Every stage's preflight checks the tree generically
+    (the pull, budget_lookup, equivalence_check, budgets.py); only qOJ checks
+    that the specific fix it exists to measure is present, because that guard
+    was written by hand when the stage was generated. qOD3 and qOE carry the
+    2026-09-22 index fixes -- PostgreSQL's l_shipdate, ArangoDB's persistent
+    pid, the two removals -- and verify none of them. A waiting queue script
+    cannot be edited (bash reads it by byte offset), so the check goes where
+    the pull already reaches: here, against the rows the stage produces.
+
+    ONLY THE UNAMBIGUOUS HALF IS ASSERTED, and the rest is counted rather than
+    guessed. A declaration reading `NONE:` means no index is built, and one
+    citing a measured with/without ratio (`870.7 -> 141.7 ms`) means one is.
+    The others -- "record id carries pid", "native TIMESERIES type",
+    "inherits PostgresTPC" -- describe an index that exists with no build step
+    to time, and pattern-matching that prose into an expectation is how a check
+    starts producing fluent false findings. They are reported as unchecked so
+    the coverage is visible, which is the rule absent-is-not-partial asks for.
+    """
+    checked = unchecked = 0
+    bad = 0
+    no_split = collections.Counter()
+    for lane, decided in sorted(INDEX_DECISIONS.items()):
+        for arm, decl in sorted(decided.items()):
+            builds = None
+            if decl.startswith("NONE"):
+                builds = False
+            elif "->" in decl:
+                builds = True
+            if builds is None:
+                unchecked += 1
+                continue
+            got = [r for r in rows
+                   if r.get("lane") == lane and str(r.get("backend")) == arm
+                   and r.get("index_s") is not None]
+            if not got:
+                # Not a failure: every row frozen before the ingest/index split
+                # landed carries no index_s at all, and a lane that has not
+                # re-run since simply has nothing to check yet.
+                no_split[lane] += 1
+                continue
+            checked += 1
+            built = [float(r["index_s"]) for r in got]
+            any_built = any(v > 0 for v in built)
+            if builds and not any_built:
+                print(f"  FAIL {lane}/{arm}: declares an index with a measured ratio "
+                      f"({decl}) and every one of its {len(got)} row(s) records "
+                      f"index_s=0. The declaration is a claim; the row is the evidence, "
+                      f"and they disagree.")
+                bad += 1
+            elif not builds and any_built:
+                print(f"  FAIL {lane}/{arm}: declares NONE ({decl}) and records "
+                      f"index_s={max(built)}. An index that was removed for costing "
+                      f"this engine has come back.")
+                bad += 1
+    if no_split:
+        _w = ", ".join(f"{k} ({v})" for k, v in sorted(no_split.items()))
+        print(f"  note: {sum(no_split.values())} arm(s) have no index_s on any row yet, "
+              f"so nothing to check against: {_w}. The split lands with the re-runs.")
+    print(f"  ok   {checked} arm(s) checked against their rows, {unchecked} not asserted "
+          f"(an index with no build step to time)")
+    return bad
+
+
+def check_index_decisions(rows=None):
     """F14: no arm on a selective-filter lane goes undeclared."""
     import runner
     print("=== F14: every arm on a selective-filter lane declares its index decision ===")
@@ -909,6 +982,8 @@ def check_index_decisions():
             unmeasured = [a for a, d in decided.items() if d.startswith("UNMEASURED")]
             note = f", {len(unmeasured)} unmeasured ({', '.join(unmeasured)})" if unmeasured else ""
             print(f"  ok   {lane}: {len(arms)} arm(s) declared{note}")
+    if rows is not None:
+        bad += _check_index_rows(rows)
     return bad
 
 
@@ -1041,7 +1116,10 @@ def main():
     bad += check_durability(rows)
     # F14 reads the LANE ROSTER rather than the rows: an arm that declared no
     # index decision is a defect whether or not it happened to run this time.
-    bad += check_index_decisions()
+    # The rows go in as well, for the second half (F14b): a declaration is a
+    # claim and `index_s` is the evidence, and only the rows can say whether
+    # the index the map promises was actually built.
+    bad += check_index_decisions(rows)
     check_protocol_overlays()
     bad += report_producers(rows)
     print(f"\n{bad} fairness invariant failure(s)")
