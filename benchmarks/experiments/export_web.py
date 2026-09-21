@@ -4386,6 +4386,67 @@ def _censored_entries(table):
     return out, marks
 
 
+def _index_note(table_id):
+    """Which engines build an index for this table's queries, and which do not.
+
+    PROTOCOL section 7 requires anything that differs between engines to be
+    disclosed, and after FAIRNESS F14 the index configuration differs on
+    purpose: it is matched by EFFECT, so the engines that gain from an index
+    have one and the engines it costs do not. A reader comparing two cells
+    cannot see that from the numbers, so the table says it.
+
+    READ FROM fairness_check.INDEX_DECISIONS, which is where the gate reads
+    it, so the page and the gate cannot come to disagree about what was
+    built -- the failure this repository keeps finding in a list written
+    twice.
+    """
+    lane_wl = _TABLE_LANE.get(table_id)
+    if not lane_wl:
+        return []
+    # ONLY THE WORKLOAD THE DECISION WAS MEASURED ON. The document lane's
+    # index question is Q6's, which lives on the analytics table and not on
+    # the transactional one; the cross-model lane's is the hybrid
+    # retrieval's, not the atomicity trial's. Attaching the note to a table
+    # whose queries were never the subject would be a claim about a
+    # measurement that was not taken.
+    _MEASURED_ON = {"l1tpc": "olap", "e2": "hybrid", "l4": None}
+    lane, workload = lane_wl
+    if lane not in _MEASURED_ON or _MEASURED_ON[lane] != workload:
+        return []
+    try:
+        import fairness_check
+        decided = fairness_check.INDEX_DECISIONS.get(lane)
+    except Exception:  # noqa: BLE001 - the page must still build without it
+        return []
+    if not decided:
+        return []
+    have = sorted({display_name(be) for be, d in decided.items()
+                   if not d.startswith("NONE")})
+    none = sorted({display_name(be) for be, d in decided.items()
+                   if d.startswith("NONE")})
+    if not have and not none:
+        return []
+    parts = []
+    if have:
+        parts.append(f"{_join_and(have)} build{'' if len(have) > 1 else 's'} one")
+    if none:
+        parts.append(f"{_join_and(none)} build{'' if len(none) > 1 else 's'} none, because "
+                     f"measuring it showed the index "
+                     f"{'costs them' if len(none) > 1 else 'costs it'} or changes nothing")
+    # WHAT IS TRUE OF ALL OF THEM, and no more. Ten of these arms were timed
+    # with the index and without it; the rest reach the query through a
+    # primary key or a record id, which is the same access path by another
+    # name and was never a choice to measure. Saying "each engine was
+    # measured both ways" would be a claim about work that was not done.
+    return [_gen(
+        "Indexes on this table are matched by effect rather than by rule: " +
+        "; ".join(parts) + ". Where building one was a choice, the engine was timed with it "
+        "and without it and the faster configuration kept; where an engine reaches these "
+        "queries through its own primary key or record id, that is its equivalent. The time "
+        "an index took to build is the index column.",
+        *(have + none))]
+
+
 def _censored_notes(table_id):
     lane_wl = _TABLE_LANE.get(table_id)
     if not lane_wl:
@@ -4963,6 +5024,7 @@ def _finish_table(table: dict) -> dict:
                 base.append(note)
     table["conditions"] = (base
                            + _counts_note(table.get("id"), table.get("entries", []))
+                           + _index_note(table.get("id"))
                            + _censored_notes(table.get("id"))
                            + _query_budget_notes(table.get("id"))
                            + _zero_growth_notes(table.get("id"))
