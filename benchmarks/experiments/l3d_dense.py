@@ -2047,6 +2047,20 @@ def main():
         _v = getattr(b, _k, None)
         if _v is not None:
             out[_k] = _v
+    # AND THE RESIDUE, so the three fields PARTITION the total instead of being
+    # two named intervals inside it (BUGS F101). A reader who adds `ingest s`
+    # and `index s` and does not get `ingest+index total s` is entitled to ask
+    # where the rest went, and the answer differs per adapter: the schema DDL
+    # before the load and the settle after the index sit inside `build_s` and
+    # outside both timers. Measured at the October pin it is 0.00 s for MongoDB
+    # and Neo4j, 0.48-0.75 s for ArcadeDB's four arms, and 1.63-1.83 s for
+    # Milvus -- a third of that arm's total, which is not a rounding gap.
+    #
+    # Derived, not timed: no clock moves and no published number changes. It is
+    # arithmetic over three numbers the row already carries, which is why it
+    # can land mid-campaign at all.
+    if out.get("ingest_s") is not None and out.get("index_s") is not None:
+        out["setup_s"] = round(build - out["ingest_s"] - out["index_s"], 2)
     # Ingest only, so the relaxed class only (DECISIONS #90); the class is on
     # the row regardless.
     bench_common.stamp_durability(out, getattr(b, "durability", None)
