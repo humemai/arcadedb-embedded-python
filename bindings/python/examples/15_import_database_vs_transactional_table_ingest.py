@@ -663,7 +663,20 @@ def run_import_documents_load(
                             staging_dir / f"{table_name}_chunk_{chunk_index:05d}.csv"
                         )
                         chunk_index += 1
-                        chunk_handle = chunk_path.open("w", encoding="utf-8")
+                        # newline="" so the terminators are written EXACTLY as
+                        # they were read. The source above is opened with
+                        # newline="" too, so each line still carries its own
+                        # ending; writing it back in text mode translates the
+                        # "\n" a second time, which on Windows turns "\r\n"
+                        # into "\r\r\n". The stray "\r" lands inside the last
+                        # field, so the header's final column reads "name\r",
+                        # the importer stops recognising the header, and counts
+                        # it as data -- one extra row per chunk. CI runs two
+                        # tables, so the parity check failed with exactly two
+                        # (expected 4,000, got 4,002), on Windows only.
+                        chunk_handle = chunk_path.open(
+                            "w", encoding="utf-8", newline=""
+                        )
                         chunk_handle.write(header)
 
                     def import_chunk(table_name: str = table_name) -> None:
