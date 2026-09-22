@@ -1,0 +1,2806 @@
+{
+  "source": "benchmarks/experiments/results/runs_paper_oct.csv",
+  "generator": "benchmarks/experiments/export_web.py",
+  "skeleton": false,
+  "skeleton_banner": null,
+  "gates_waived": [],
+  "skeleton_absent_tables": {},
+  "arcadedb_version": null,
+  "comparator_versions": {
+    "arangodb_e2": [
+      "arangodb:3.12.11"
+    ],
+    "composed_qdrant_neo4j": [
+      "qdrant-local:1.19.1+neo4j:2026.08.1"
+    ],
+    "mongodb_e2": [
+      "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4 at localhost:27028"
+    ],
+    "neo4j_e2": [
+      "neo4j:2026.08.1"
+    ],
+    "pg_age_e2": [
+      "PostgreSQL 18.6 + pgvector:0.8.6 + age:1.8.0"
+    ],
+    "surrealdb_e2": [
+      "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
+    ],
+    "surrealdb_e2_server": [
+      "surrealdb-server:3.2.4+20260803.93ab219"
+    ]
+  },
+  "comparator_version_split": [],
+  "arcadedb_engines": [
+    "arcadedb 26.10.1-dev \u00b7 417314c18"
+  ],
+  "arcadedb_commits": [
+    "417314c18"
+  ],
+  "instrument": "2026-10",
+  "conditions": [
+    "Every engine runs in Docker under an identical cpuset and memory cap, one job at a time, on the same host.",
+    "Peak memory is the largest amount an engine held in its own address space, added over every container a run used, and it leaves out the file cache the kernel keeps on the engine's behalf. That is the right number for engines that manage their own memory, and an undercount for engines that lean on the kernel instead, so compare it down one engine's rows rather than across engines that work differently.",
+    "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
+    "Defaults first. Where a default would make the comparison meaningless, it is equalized and the override is disclosed rather than hidden.",
+    "Comparators are pinned by sha256 image digest, not by a floating tag."
+  ],
+  "provenance_note": "Some benchmarks record which machine they ran on and some record only the container, so that column is filled in where it was measured and left alone where it was not. Everything on this page ran on the same machine; this note reports what each result can actually show rather than what we know to be true of all of them.",
+  "hosts_recorded": [],
+  "setup": {
+    "hosts": {
+      "benchmark machine": {
+        "cpu": "Intel Core i9-12900HK, 14 cores (6 performance, 8 efficient), 20 threads, 24 MiB L3",
+        "memory": "64 GiB",
+        "storage": "Samsung 980 PRO 2 TB NVMe",
+        "os": "Ubuntu 26.04 LTS, Linux 7.0, Docker 29"
+      }
+    },
+    "cpuset": "0-11",
+    "memory_cap_by_size": {
+      "micro": "8g",
+      "tiny": "8g",
+      "small": "16g",
+      "medium": "32g",
+      "large": "48g",
+      "lc10k": "8g",
+      "lc100k": "8g",
+      "lc1m": "24g",
+      "lc10m": "28g",
+      "ts100": "16g",
+      "sf1": "8g",
+      "sf10": "24g",
+      "deep10m": "36g",
+      "e2": "12g",
+      "tpch1": "16g",
+      "tpch10": "32g",
+      "sf1full": "32g",
+      "ts1000": "32g",
+      "e2_500k": "32g"
+    },
+    "jvm_heap_by_size": {
+      "micro": "4g",
+      "tiny": "4g",
+      "small": "8g",
+      "medium": "16g",
+      "large": "24g",
+      "lc10k": "4g",
+      "lc100k": "4g",
+      "lc1m": "16g",
+      "lc10m": "24g",
+      "ts100": "8g",
+      "sf1": "4g",
+      "sf10": "12g",
+      "deep10m": "24g",
+      "e2": "6g",
+      "tpch1": "8g",
+      "tpch10": "16g",
+      "sf1full": "16g",
+      "ts1000": "16g",
+      "e2_500k": "16g"
+    }
+  },
+  "tables": [
+    {
+      "id": "e2atom",
+      "title": "Cross-model transaction: what survives a crash",
+      "dataset": "The same vector-graph-document operation, killed mid-way, then inspected",
+      "conditions": [
+        "A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these.",
+        "SurrealDB (embedded) at 500k products: the atomicity cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
+        "In the cells: `>2h` means the cell ran past its tier's cap and was not retried. A dash is an operation the engine cannot express, never a slow one."
+      ],
+      "columns": [
+        "trials",
+        "torn results"
+      ],
+      "withheld_scales": [],
+      "withheld_reason": null,
+      "entries": [
+        {
+          "backend": "ArcadeDB (one transaction)",
+          "backend_key": "arcadedb_e2",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server, one transaction)",
+          "backend_key": "arcadedb_e2_server",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedb-c25:417314c18",
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "backend_key": "arangodb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "backend_key": "mongodb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:mongo-search",
+          "version_name": "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Neo4j (vector index)",
+          "backend_key": "neo4j_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",
+          "version_name": "neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "PostgreSQL + pgvector + AGE",
+          "backend_key": "pg_age_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:pg-age",
+          "version_name": "PostgreSQL 18.6 + pgvector 0.8.6 + age 1.8.0",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Qdrant + Neo4j (no shared transaction)",
+          "backend_key": "composed_qdrant_neo4j",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",
+          "version_name": "qdrant 1.19.1 + neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_e2_server",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (one transaction)",
+          "backend_key": "arcadedb_e2",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server, one transaction)",
+          "backend_key": "arcadedb_e2_server",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedb-c25:417314c18",
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "backend_key": "arangodb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "backend_key": "mongodb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:mongo-search",
+          "version_name": "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Neo4j (vector index)",
+          "backend_key": "neo4j_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",
+          "version_name": "neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "PostgreSQL + pgvector + AGE",
+          "backend_key": "pg_age_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:pg-age",
+          "version_name": "PostgreSQL 18.6 + pgvector 0.8.6 + age 1.8.0",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Qdrant + Neo4j (no shared transaction)",
+          "backend_key": "composed_qdrant_neo4j",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",
+          "version_name": "qdrant 1.19.1 + neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "censored",
+          "metrics": {
+            "trials": {
+              "text": ">2h"
+            },
+            "torn results": {
+              "text": ">2h"
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_e2_server",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "atomicity",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "trials": {
+              "median": 40.0,
+              "min": 40.0,
+              "max": 40.0,
+              "n": 5
+            },
+            "torn results": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        }
+      ],
+      "instrument": "2026-10",
+      "directions": {
+        "torn results": "down"
+      },
+      "declared_absences": [
+        {
+          "backend": "SurrealDB (embedded)",
+          "column": null,
+          "kind": "censored",
+          "why": "SurrealDB (embedded) at 500k products: the atomicity cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out."
+        }
+      ],
+      "source_paths": [
+        "benchmarks/experiments/results/runs_paper_oct.csv"
+      ],
+      "source_urls": [
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper_oct.csv"
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper_oct.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper_oct.csv"
+    },
+    {
+      "id": "e2",
+      "title": "Cross-model transaction",
+      "dataset": "Vector hit to graph traversal to document update, in one transaction",
+      "conditions": [
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
+        "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
+        "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
+        "Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:), so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
+        "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
+        "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
+        "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) build one. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
+        "SurrealDB (embedded) at 500k products: the transaction cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
+        "In the cells: `>2h` means the cell ran past its tier's cap and was not retried. A dash is an operation the engine cannot express, never a slow one.",
+        "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; Neo4j and the composed stack load the graph with UNWIND over bolt, and the composed stack upserts its vectors into Qdrant; PostgreSQL + pgvector + AGE loads the products with COPY under a pgvector HNSW index and creates the graph with UNWIND inside Cypher; ArangoDB import_bulk; MongoDB insert_many."
+      ],
+      "columns": [
+        "transaction p50 ms",
+        "transaction p99 ms",
+        "retrieval p50 ms",
+        "graph-filtered search p50 ms",
+        "retrieval recall@10",
+        "filtered recall@10",
+        "ingest+index vertices+edges/s",
+        "ingest+index total s",
+        "peak memory GiB",
+        "disk GiB"
+      ],
+      "withheld_scales": [],
+      "withheld_reason": null,
+      "entries": [
+        {
+          "backend": "ArcadeDB (one transaction)",
+          "backend_key": "arcadedb_e2",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 1.707,
+              "min": 1.623,
+              "max": 1.793,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 3.189,
+              "min": 2.396,
+              "max": 37.041,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 2.619,
+              "min": 2.211,
+              "max": 2.71,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 6.814,
+              "min": 6.418,
+              "max": 7.411,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.772,
+              "min": 0.769,
+              "max": 0.7865,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 0.069,
+              "min": 0.0675,
+              "max": 0.0695,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 21052.4211,
+              "min": 19120.2677,
+              "max": 21459.0129,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 9.5,
+              "min": 9.32,
+              "max": 10.46,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 2.4107,
+              "min": 1.8878,
+              "max": 3.1651,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0384,
+              "min": 0.0384,
+              "max": 0.0384,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server, one transaction)",
+          "backend_key": "arcadedb_e2_server",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedb-c25:417314c18",
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 7.52,
+              "min": 7.313,
+              "max": 7.779,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 9.868,
+              "min": 9.37,
+              "max": 11.206,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 5.294,
+              "min": 4.952,
+              "max": 5.55,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 9.745,
+              "min": 9.33,
+              "max": 10.136,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.787,
+              "min": 0.78,
+              "max": 0.792,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 0.069,
+              "min": 0.069,
+              "max": 0.0695,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 14673.3676,
+              "min": 14513.643,
+              "max": 15048.7585,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 13.63,
+              "min": 13.29,
+              "max": 13.78,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 4.0886,
+              "min": 4.079,
+              "max": 4.097,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0976,
+              "min": 0.0407,
+              "max": 0.1008,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "backend_key": "arangodb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 5.041,
+              "min": 4.687,
+              "max": 5.178,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 6.464,
+              "min": 5.603,
+              "max": 6.52,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 12.79,
+              "min": 12.532,
+              "max": 13.322,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 14.982,
+              "min": 14.754,
+              "max": 15.189,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.7335,
+              "min": 0.7335,
+              "max": 0.7335,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 44247.3451,
+              "min": 42016.3866,
+              "max": 44542.9844,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 4.52,
+              "min": 4.49,
+              "max": 4.76,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.6032,
+              "min": 0.5448,
+              "max": 0.6194,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1402,
+              "min": 0.1402,
+              "max": 0.1403,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "backend_key": "mongodb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:mongo-search",
+          "version_name": "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 5.684,
+              "min": 5.566,
+              "max": 5.861,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 9.074,
+              "min": 7.655,
+              "max": 9.379,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 7.621,
+              "min": 7.462,
+              "max": 7.866,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 6.696,
+              "min": 5.999,
+              "max": 6.799,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.8405,
+              "min": 0.837,
+              "max": 0.847,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 6992.9371,
+              "min": 6983.1704,
+              "max": 7007.6384,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 28.6,
+              "min": 28.54,
+              "max": 28.64,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.1771,
+              "min": 1.0849,
+              "max": 1.2104,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0702,
+              "min": 0.0385,
+              "max": 0.0739,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Neo4j (vector index)",
+          "backend_key": "neo4j_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",
+          "version_name": "neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 17.54,
+              "min": 14.528,
+              "max": 18.987,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 24.519,
+              "min": 23.5,
+              "max": 33.398,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 8.759,
+              "min": 8.533,
+              "max": 9.108,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 4.58,
+              "min": 4.015,
+              "max": 4.829,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.777,
+              "min": 0.777,
+              "max": 0.777,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 15337.2699,
+              "min": 15337.2699,
+              "max": 15372.6364,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 13.04,
+              "min": 13.01,
+              "max": 13.04,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 6.8305,
+              "min": 6.8144,
+              "max": 6.8422,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0161,
+              "min": 0.0161,
+              "max": 0.0161,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "PostgreSQL + pgvector + AGE",
+          "backend_key": "pg_age_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:pg-age",
+          "version_name": "PostgreSQL 18.6 + pgvector 0.8.6 + age 1.8.0",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 4.928,
+              "min": 4.548,
+              "max": 5.171,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 7.321,
+              "min": 7.226,
+              "max": 7.609,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 2.409,
+              "min": 2.387,
+              "max": 2.944,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 1.247,
+              "min": 1.234,
+              "max": 1.542,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.7815,
+              "min": 0.7765,
+              "max": 0.7855,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 24301.0936,
+              "min": 24009.3637,
+              "max": 24509.5588,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 8.23,
+              "min": 8.16,
+              "max": 8.33,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.1236,
+              "min": 0.1223,
+              "max": 0.1251,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1595,
+              "min": 0.1595,
+              "max": 0.1596,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Qdrant + Neo4j (no shared transaction)",
+          "backend_key": "composed_qdrant_neo4j",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",
+          "version_name": "qdrant 1.19.1 + neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 18.823,
+              "min": 18.02,
+              "max": 19.685,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 30.904,
+              "min": 24.632,
+              "max": 35.002,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 14.739,
+              "min": 14.296,
+              "max": 15.558,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 543.007,
+              "min": 540.909,
+              "max": 545.715,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 31999.68,
+              "min": 31495.748,
+              "max": 32414.5867,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 6.25,
+              "min": 6.17,
+              "max": 6.35,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 6.8425,
+              "min": 6.8279,
+              "max": 6.8733,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0097,
+              "min": 0.0097,
+              "max": 0.0097,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 7.876,
+              "min": 7.48,
+              "max": 7.896,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 8.873,
+              "min": 8.597,
+              "max": 8.991,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 9.296,
+              "min": 9.042,
+              "max": 9.338,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 441.997,
+              "min": 439.424,
+              "max": 445.915,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.697,
+              "min": 0.6915,
+              "max": 0.704,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 619.8221,
+              "min": 613.472,
+              "max": 620.9768,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 322.67,
+              "min": 322.07,
+              "max": 326.01,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.8401,
+              "min": 0.8336,
+              "max": 0.8471,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.2435,
+              "min": 0.2435,
+              "max": 0.2436,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_e2_server",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2",
+          "scale_label": "50k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 15.121,
+              "min": 14.063,
+              "max": 16.467,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 19.956,
+              "min": 17.844,
+              "max": 23.375,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 5.165,
+              "min": 4.969,
+              "max": 5.203,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 9.934,
+              "min": 9.444,
+              "max": 10.138,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.726,
+              "min": 0.7195,
+              "max": 0.731,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 16447.2039,
+              "min": 16233.6039,
+              "max": 16542.4318,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 12.16,
+              "min": 12.09,
+              "max": 12.32,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.8973,
+              "min": 0.8591,
+              "max": 0.9587,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.4739,
+              "min": 0.4737,
+              "max": 0.5238,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (one transaction)",
+          "backend_key": "arcadedb_e2",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 2.149,
+              "min": 2.107,
+              "max": 2.181,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 4.405,
+              "min": 3.432,
+              "max": 138.791,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 6.461,
+              "min": 6.358,
+              "max": 6.51,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 9.327,
+              "min": 9.086,
+              "max": 10.758,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.42,
+              "min": 0.3955,
+              "max": 0.436,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 0.0125,
+              "min": 0.0095,
+              "max": 0.014,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 17035.7411,
+              "min": 16528.8926,
+              "max": 17728.8893,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 117.4,
+              "min": 112.81,
+              "max": 121.0,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 14.0793,
+              "min": 13.9676,
+              "max": 14.6116,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.3947,
+              "min": 0.3947,
+              "max": 0.3947,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server, one transaction)",
+          "backend_key": "arcadedb_e2_server",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedb-c25:417314c18",
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 7.918,
+              "min": 7.551,
+              "max": 8.539,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 10.306,
+              "min": 9.752,
+              "max": 11.123,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 8.467,
+              "min": 8.204,
+              "max": 9.002,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 11.947,
+              "min": 11.652,
+              "max": 12.155,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.4155,
+              "min": 0.4075,
+              "max": 0.4285,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 0.012,
+              "min": 0.01,
+              "max": 0.0135,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 10514.1205,
+              "min": 10448.2081,
+              "max": 10816.0511,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 190.22,
+              "min": 184.91,
+              "max": 191.42,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 11.5977,
+              "min": 11.5928,
+              "max": 11.6113,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.4242,
+              "min": 0.4175,
+              "max": 0.4265,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "backend_key": "arangodb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 17.852,
+              "min": 15.821,
+              "max": 18.403,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 19.542,
+              "min": 17.061,
+              "max": 21.865,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 105.781,
+              "min": 102.335,
+              "max": 106.233,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 122.159,
+              "min": 120.551,
+              "max": 122.959,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.7995,
+              "min": 0.788,
+              "max": 0.8065,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 43629.9302,
+              "min": 43112.6536,
+              "max": 43782.7496,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 45.84,
+              "min": 45.68,
+              "max": 46.39,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.9178,
+              "min": 1.9027,
+              "max": 2.0605,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.7501,
+              "min": 0.7471,
+              "max": 0.7501,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "backend_key": "mongodb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:mongo-search",
+          "version_name": "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 6.136,
+              "min": 6.01,
+              "max": 6.197,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 7.746,
+              "min": 7.517,
+              "max": 9.251,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 8.701,
+              "min": 8.546,
+              "max": 8.728,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 7.089,
+              "min": 6.768,
+              "max": 7.343,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.6945,
+              "min": 0.688,
+              "max": 0.7115,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 34722.1528,
+              "min": 34542.2453,
+              "max": 34849.2072,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 57.6,
+              "min": 57.39,
+              "max": 57.9,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 3.9153,
+              "min": 3.8267,
+              "max": 4.0161,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.8521,
+              "min": 0.851,
+              "max": 0.8707,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Neo4j (vector index)",
+          "backend_key": "neo4j_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",
+          "version_name": "neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 14.201,
+              "min": 13.902,
+              "max": 15.402,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 20.996,
+              "min": 17.938,
+              "max": 22.796,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 9.303,
+              "min": 9.219,
+              "max": 9.357,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 4.136,
+              "min": 3.888,
+              "max": 4.348,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.416,
+              "min": 0.4115,
+              "max": 0.443,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 12656.6004,
+              "min": 12424.6506,
+              "max": 12991.2049,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 158.02,
+              "min": 153.95,
+              "max": 160.97,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 18.0192,
+              "min": 17.9766,
+              "max": 18.0515,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.2969,
+              "min": 1.2968,
+              "max": 1.2969,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "PostgreSQL + pgvector + AGE",
+          "backend_key": "pg_age_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "dbbench:pg-age",
+          "version_name": "PostgreSQL 18.6 + pgvector 0.8.6 + age 1.8.0",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 13.082,
+              "min": 12.73,
+              "max": 13.181,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 15.162,
+              "min": 14.892,
+              "max": 15.293,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 6.114,
+              "min": 5.933,
+              "max": 6.215,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 1.366,
+              "min": 1.34,
+              "max": 1.67,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.4105,
+              "min": 0.4025,
+              "max": 0.416,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 17599.4016,
+              "min": 17268.1402,
+              "max": 17769.8445,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 113.64,
+              "min": 112.55,
+              "max": 115.82,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.6749,
+              "min": 0.6746,
+              "max": 0.7146,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.5092,
+              "min": 1.5091,
+              "max": 1.5093,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Qdrant + Neo4j (no shared transaction)",
+          "backend_key": "composed_qdrant_neo4j",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",
+          "version_name": "qdrant 1.19.1 + neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 143.398,
+              "min": 138.031,
+              "max": 143.964,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 154.626,
+              "min": 154.295,
+              "max": 158.794,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 117.402,
+              "min": 116.202,
+              "max": 117.631,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 5342.037,
+              "min": 5302.747,
+              "max": 5387.792,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 17543.8246,
+              "min": 17190.9575,
+              "max": 17719.4649,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 114.0,
+              "min": 112.87,
+              "max": 116.34,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 18.266,
+              "min": 18.2611,
+              "max": 18.2939,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.361,
+              "min": 0.3609,
+              "max": 0.361,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_e2",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": null,
+          "host": null,
+          "outcome": "censored",
+          "metrics": {
+            "transaction p50 ms": {
+              "text": ">2h"
+            },
+            "transaction p99 ms": {
+              "text": ">2h"
+            },
+            "retrieval p50 ms": {
+              "text": ">2h"
+            },
+            "graph-filtered search p50 ms": {
+              "text": ">2h"
+            },
+            "retrieval recall@10": {
+              "text": ">2h"
+            },
+            "filtered recall@10": {
+              "text": ">2h"
+            },
+            "ingest+index vertices+edges/s": {
+              "text": ">2h"
+            },
+            "ingest+index total s": {
+              "text": ">2h"
+            },
+            "ingest s": {
+              "text": ">2h"
+            },
+            "index s": {
+              "text": ">2h"
+            },
+            "peak memory GiB": {
+              "text": ">2h"
+            },
+            "disk GiB": {
+              "text": ">2h"
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_e2_server",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "e2_500k",
+          "scale_label": "500k products",
+          "workload": "hybrid",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "transaction p50 ms": {
+              "median": 15.536,
+              "min": 14.65,
+              "max": 15.769,
+              "n": 5
+            },
+            "transaction p99 ms": {
+              "median": 26.006,
+              "min": 20.838,
+              "max": 30.213,
+              "n": 5
+            },
+            "retrieval p50 ms": {
+              "median": 6709.453,
+              "min": 6671.889,
+              "max": 6746.445,
+              "n": 5
+            },
+            "graph-filtered search p50 ms": {
+              "median": 87.448,
+              "min": 83.419,
+              "max": 92.153,
+              "n": 5
+            },
+            "retrieval recall@10": {
+              "median": 0.674,
+              "min": 0.6685,
+              "max": 0.681,
+              "n": 5
+            },
+            "filtered recall@10": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "n": 5
+            },
+            "ingest+index vertices+edges/s": {
+              "median": 14559.1905,
+              "min": 14227.7584,
+              "max": 14617.7167,
+              "n": 5
+            },
+            "ingest+index total s": {
+              "median": 137.37,
+              "min": 136.82,
+              "max": 140.57,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 6.4894,
+              "min": 5.9662,
+              "max": 6.71,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.6876,
+              "min": 0.6854,
+              "max": 0.6904,
+              "n": 5
+            }
+          }
+        }
+      ],
+      "instrument": "2026-10",
+      "directions": {
+        "transaction p50 ms": "down",
+        "transaction p99 ms": "down",
+        "retrieval p50 ms": "down",
+        "graph-filtered search p50 ms": "down",
+        "ingest+index vertices+edges/s": "up",
+        "ingest+index total s": "down",
+        "peak memory GiB": "down",
+        "disk GiB": "down"
+      },
+      "declared_absences": [
+        {
+          "backend": "SurrealDB (embedded)",
+          "column": null,
+          "kind": "censored",
+          "why": "SurrealDB (embedded) at 500k products: the transaction cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out."
+        }
+      ],
+      "source_paths": [
+        "benchmarks/experiments/results/runs_paper_oct.csv"
+      ],
+      "source_urls": [
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper_oct.csv"
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper_oct.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper_oct.csv"
+    },
+    {
+      "id": "durability",
+      "title": "What waiting for the disk costs",
+      "dataset": "Every timed write, run twice, once at each durability setting",
+      "conditions": [
+        "Each row is one engine running ONE operation twice: once where a commit returns without waiting for the disk, which is the setting every other table on this page reports, and once where the commit waits for the log to be flushed and synced. Nothing else about the cell changes.",
+        "Every timed write on the page is here: the six document operations, the three graph writes, and the cross-model transaction. Read down the operations for one engine rather than across the engines for one operation, because what the setting costs is a property of the engine's commit and the rest of the page already compares the engines.",
+        "The read is the control, and it is the row that makes the rest readable: it runs in both cells like everything else and commits nothing, so it is what the writes are moving against.",
+        "The Size column names the operation rather than a corpus size: the three lanes that time a write do not write the same thing, so each engine is compared only against the engines running its own operation.",
+        "The setting is a property of the cell, not a second measurement inside one: it lives on the database or on the server for most of these engines, so each pair of numbers is two runs.",
+        "Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
+        "SurrealDB (server) has no durability setting to read and what it does at commit could not be established from the engine, so the one number printed is in neither class. It is placed in the waiting column because that is the safer reading of an unknown, and this line is why it is there.",
+        "The ratio is what the strict setting costs on that engine, at this corpus size and this operation count. It is not a claim about any other write. A large ratio is not a slow engine: it is an engine whose relaxed path was fast, measured against a flush that costs what a flush costs."
+      ],
+      "columns": [
+        "no wait ms",
+        "waits for the disk ms",
+        "cost of waiting"
+      ],
+      "withheld_scales": [],
+      "withheld_reason": null,
+      "entries": [
+        {
+          "backend": "ArcadeDB (one transaction)",
+          "is_arcadedb": true,
+          "scale": "crossmodel_txn",
+          "scale_label": "one transaction across three models (cross-model)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 1.95,
+              "min": 1.623,
+              "max": 2.181,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 1.9635,
+              "min": 1.652,
+              "max": 2.276,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 1.01,
+              "min": 1.01,
+              "max": 1.01,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server, one transaction)",
+          "is_arcadedb": true,
+          "scale": "crossmodel_txn",
+          "scale_label": "one transaction across three models (cross-model)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 7.6625,
+              "min": 7.313,
+              "max": 8.539,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 18.0535,
+              "min": 15.174,
+              "max": 27.481,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 2.36,
+              "min": 2.36,
+              "max": 2.36,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "scale": "crossmodel_txn",
+          "scale_label": "one transaction across three models (cross-model)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 10.4995,
+              "min": 4.687,
+              "max": 18.403,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 20.31,
+              "min": 14.321,
+              "max": 22.039,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 1.93,
+              "min": 1.93,
+              "max": 1.93,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "scale": "crossmodel_txn",
+          "scale_label": "one transaction across three models (cross-model)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 5.9355,
+              "min": 5.566,
+              "max": 6.197,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 9.886,
+              "min": 9.085,
+              "max": 10.819,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 1.67,
+              "min": 1.67,
+              "max": 1.67,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "Neo4j (vector index)",
+          "is_arcadedb": false,
+          "scale": "crossmodel_txn",
+          "scale_label": "one transaction across three models (cross-model)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 15.602,
+              "min": 13.902,
+              "max": 18.987,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "PostgreSQL + pgvector + AGE",
+          "is_arcadedb": false,
+          "scale": "crossmodel_txn",
+          "scale_label": "one transaction across three models (cross-model)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "PostgreSQL 18.6 + pgvector 0.8.6 + age 1.8.0",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 8.9505,
+              "min": 4.548,
+              "max": 13.181,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 13.517,
+              "min": 7.752,
+              "max": 18.576,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 1.51,
+              "min": 1.51,
+              "max": 1.51,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "Qdrant + Neo4j (no shared transaction)",
+          "is_arcadedb": false,
+          "scale": "crossmodel_txn",
+          "scale_label": "one transaction across three models (cross-model)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "qdrant 1.19.1 + neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 79.4345,
+              "min": 17.598,
+              "max": 144.297,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "is_arcadedb": false,
+          "scale": "crossmodel_txn",
+          "scale_label": "one transaction across three models (cross-model)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 7.876,
+              "min": 7.48,
+              "max": 7.896,
+              "n": 5
+            },
+            "waits for the disk ms": {
+              "median": 16.1,
+              "min": 15.832,
+              "max": 16.803,
+              "n": 5
+            },
+            "cost of waiting": {
+              "median": 2.04,
+              "min": 2.04,
+              "max": 2.04,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "scale": "crossmodel_txn",
+          "scale_label": "one transaction across three models (cross-model)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 15.584,
+              "min": 14.063,
+              "max": 18.476,
+              "n": 20
+            }
+          }
+        }
+      ],
+      "source_paths": [],
+      "source_path": null,
+      "instrument": "2026-10",
+      "directions": {
+        "no wait ms": "down",
+        "waits for the disk ms": "down"
+      },
+      "declared_absences": [],
+      "source_urls": [],
+      "source_url": null
+    },
+    {
+      "id": "e4",
+      "title": "What the client/server split costs",
+      "dataset": "200,000-document projection, one engine, three deployments",
+      "conditions": [
+        "Measured at ArcadeDB 26.10.1.dev0 on 2026-09-21. This table has not yet been re-run at the engine commit the rest of the page reports; the re-run is queued and this line goes away with it.",
+        "Every number is milliseconds. One engine build (arcadedb 26.10.1-dev \u00b7 417314c18) in all three deployments, 15 repetitions after 3 warmup, identical cpuset 0-11, memory cap 8g and heap 6g.",
+        "All three deployments turn the answer into Python objects the same way, so the difference is how the database was deployed and not how we read the result.",
+        "The separate container runs on the same machine, talking over the local network interface. It says what running the database beside your program costs, and says nothing about a database on another machine across a real network.",
+        "The separate-process column goes slightly negative at the smaller result sizes. That is not a container being faster than an in-process server; it is the boundary term sitting below what this design can resolve, so run-to-run noise swamps it and the sign flips. Reported rather than clamped to zero, because the negative values are the evidence for the claim: at these sizes co-locating costs nothing measurable. The packing cost, in the column beside it, stays firmly positive at every size."
+      ],
+      "columns": [
+        "in-process ms",
+        "in-process server, HTTP ms",
+        "separate container, HTTP ms"
+      ],
+      "withheld_scales": [],
+      "withheld_reason": null,
+      "entries": [
+        {
+          "backend": "1 documents",
+          "is_arcadedb": true,
+          "scale": "1",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": "container:2ee4a423bd19 (host unknown)",
+          "metrics": {
+            "in-process ms": {
+              "median": 1.2031,
+              "min": 1.2031,
+              "max": 1.2031,
+              "n": 5
+            },
+            "in-process server, HTTP ms": {
+              "median": 2.5355,
+              "min": 2.5355,
+              "max": 2.5355,
+              "n": 5
+            },
+            "separate container, HTTP ms": {
+              "median": 2.7308,
+              "min": 2.7308,
+              "max": 2.7308,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "10 documents",
+          "is_arcadedb": true,
+          "scale": "10",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": "container:2ee4a423bd19 (host unknown)",
+          "metrics": {
+            "in-process ms": {
+              "median": 0.9383,
+              "min": 0.9383,
+              "max": 0.9383,
+              "n": 5
+            },
+            "in-process server, HTTP ms": {
+              "median": 1.8107,
+              "min": 1.8107,
+              "max": 1.8107,
+              "n": 5
+            },
+            "separate container, HTTP ms": {
+              "median": 2.0162,
+              "min": 2.0162,
+              "max": 2.0162,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "100 documents",
+          "is_arcadedb": true,
+          "scale": "100",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": "container:2ee4a423bd19 (host unknown)",
+          "metrics": {
+            "in-process ms": {
+              "median": 1.8289,
+              "min": 1.8289,
+              "max": 1.8289,
+              "n": 5
+            },
+            "in-process server, HTTP ms": {
+              "median": 2.9245,
+              "min": 2.9245,
+              "max": 2.9245,
+              "n": 5
+            },
+            "separate container, HTTP ms": {
+              "median": 3.6891,
+              "min": 3.6891,
+              "max": 3.6891,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "1,000 documents",
+          "is_arcadedb": true,
+          "scale": "1,000",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": "container:2ee4a423bd19 (host unknown)",
+          "metrics": {
+            "in-process ms": {
+              "median": 3.1008,
+              "min": 3.1008,
+              "max": 3.1008,
+              "n": 5
+            },
+            "in-process server, HTTP ms": {
+              "median": 4.6992,
+              "min": 4.6992,
+              "max": 4.6992,
+              "n": 5
+            },
+            "separate container, HTTP ms": {
+              "median": 4.3647,
+              "min": 4.3647,
+              "max": 4.3647,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "10,000 documents",
+          "is_arcadedb": true,
+          "scale": "10,000",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": "container:2ee4a423bd19 (host unknown)",
+          "metrics": {
+            "in-process ms": {
+              "median": 19.3623,
+              "min": 19.3623,
+              "max": 19.3623,
+              "n": 5
+            },
+            "in-process server, HTTP ms": {
+              "median": 22.905,
+              "min": 22.905,
+              "max": 22.905,
+              "n": 5
+            },
+            "separate container, HTTP ms": {
+              "median": 22.5689,
+              "min": 22.5689,
+              "max": 22.5689,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "100,000 documents",
+          "is_arcadedb": true,
+          "scale": "100,000",
+          "workload": "projection",
+          "n_docs": "200000",
+          "deployment": "all three",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": "container:2ee4a423bd19 (host unknown)",
+          "metrics": {
+            "in-process ms": {
+              "median": 198.9412,
+              "min": 198.9412,
+              "max": 198.9412,
+              "n": 5
+            },
+            "in-process server, HTTP ms": {
+              "median": 207.8561,
+              "min": 207.8561,
+              "max": 207.8561,
+              "n": 5
+            },
+            "separate container, HTTP ms": {
+              "median": 258.1424,
+              "min": 258.1424,
+              "max": 258.1424,
+              "n": 5
+            }
+          }
+        }
+      ],
+      "instrument": "2026-10",
+      "directions": {
+        "in-process ms": "down",
+        "in-process server, HTTP ms": "down",
+        "separate container, HTTP ms": "down"
+      },
+      "declared_absences": [],
+      "source_paths": [
+        "benchmarks/experiments/results/e4decomp_417314c18"
+      ],
+      "source_urls": [
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/e4decomp_417314c18"
+      ],
+      "source_path": "benchmarks/experiments/results/e4decomp_417314c18",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/e4decomp_417314c18"
+    },
+    {
+      "id": "multimodel",
+      "title": "What the four multi-model engines cover",
+      "dataset": "Every October table on this page, read for which engine has a row",
+      "instrument": "2026-10",
+      "conditions": [
+        "This table is derived from the four tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there; no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page."
+      ],
+      "columns": [
+        "Cross-model transaction",
+        "Cross-model transaction: what survives a crash",
+        "What waiting for the disk costs",
+        "What the client/server split costs"
+      ],
+      "directions": {},
+      "withheld_scales": [],
+      "withheld_reason": null,
+      "declared_absences": [],
+      "entries": [
+        {
+          "backend": "ArcadeDB",
+          "is_arcadedb": true,
+          "scale": "all",
+          "scale_label": "every size above",
+          "workload": "coverage",
+          "n_docs": null,
+          "deployment": "all three, embedded, server",
+          "precision": null,
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "Cross-model transaction": {
+              "text": "measured"
+            },
+            "Cross-model transaction: what survives a crash": {
+              "text": "measured"
+            },
+            "What waiting for the disk costs": {
+              "text": "measured"
+            },
+            "What the client/server split costs": {
+              "text": "measured"
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "scale": "all",
+          "scale_label": "every size above",
+          "workload": "coverage",
+          "n_docs": null,
+          "deployment": "server",
+          "precision": null,
+          "image": null,
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "Cross-model transaction": {
+              "text": "measured"
+            },
+            "Cross-model transaction: what survives a crash": {
+              "text": "measured"
+            },
+            "What waiting for the disk costs": {
+              "text": "measured"
+            },
+            "What the client/server split costs": {
+              "text": "no arm"
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "scale": "all",
+          "scale_label": "every size above",
+          "workload": "coverage",
+          "n_docs": null,
+          "deployment": "server",
+          "precision": null,
+          "image": null,
+          "version_name": "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4",
+          "host": null,
+          "metrics": {
+            "Cross-model transaction": {
+              "text": "measured"
+            },
+            "Cross-model transaction: what survives a crash": {
+              "text": "measured"
+            },
+            "What waiting for the disk costs": {
+              "text": "measured"
+            },
+            "What the client/server split costs": {
+              "text": "no arm"
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB",
+          "is_arcadedb": false,
+          "scale": "all",
+          "scale_label": "every size above",
+          "workload": "coverage",
+          "n_docs": null,
+          "deployment": "embedded, server",
+          "precision": null,
+          "image": null,
+          "version_name": "surrealdb 2.3.10 / surrealdb 3.2.4 / surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "Cross-model transaction": {
+              "text": "measured"
+            },
+            "Cross-model transaction: what survives a crash": {
+              "text": "measured"
+            },
+            "What waiting for the disk costs": {
+              "text": "measured"
+            },
+            "What the client/server split costs": {
+              "text": "no arm"
+            }
+          }
+        }
+      ],
+      "source_paths": [
+        "benchmarks/experiments/results/runs_paper_oct.csv"
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper_oct.csv",
+      "source_urls": [
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper_oct.csv"
+      ],
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper_oct.csv"
+    }
+  ],
+  "condition_provenance": {
+    "generated": [
+      {
+        "text": "Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
+        "values": [
+          "Neo4j (vector index)",
+          "Qdrant + Neo4j (no shared transaction)"
+        ]
+      },
+      {
+        "text": "SurrealDB (server) has no durability setting to read and what it does at commit could not be established from the engine, so the one number printed is in neither class. It is placed in the waiting column because that is the safer reading of an unknown, and this line is why it is there.",
+        "values": [
+          "SurrealDB (server)"
+        ]
+      },
+      {
+        "text": "Measured at ArcadeDB 26.10.1.dev0 on 2026-09-21. This table has not yet been re-run at the engine commit the rest of the page reports; the re-run is queued and this line goes away with it.",
+        "values": [
+          "26.10.1.dev0",
+          "2026-09-21"
+        ]
+      },
+      {
+        "text": "Every number is milliseconds. One engine build (arcadedb 26.10.1-dev \u00b7 417314c18) in all three deployments, 15 repetitions after 3 warmup, identical cpuset 0-11, memory cap 8g and heap 6g.",
+        "values": [
+          "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "15",
+          "3",
+          "0-11",
+          "8g",
+          "6g"
+        ]
+      },
+      {
+        "text": "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction",
+        "values": [
+          "no cold/warm split: each operation runs against an already-built, already-warm database by construction"
+        ]
+      },
+      {
+        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "values": [
+          "Neo4j (vector index)",
+          "Qdrant + Neo4j (no shared transaction)",
+          "SurrealDB (server)"
+        ]
+      },
+      {
+        "text": "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
+        "values": [
+          "5"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 500k products: the atomicity cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
+        "values": [
+          "SurrealDB (embedded)",
+          "500k products",
+          "2 hour"
+        ]
+      },
+      {
+        "text": "In the cells: `>2h` means the cell ran past its tier's cap and was not retried. A dash is an operation the engine cannot express, never a slow one.",
+        "values": [
+          ">2h"
+        ]
+      },
+      {
+        "text": "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
+        "values": [
+          "300"
+        ]
+      },
+      {
+        "text": "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) build one. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
+        "values": [
+          "ArangoDB",
+          "ArcadeDB (one transaction)",
+          "ArcadeDB (server, one transaction)",
+          "MongoDB",
+          "Neo4j (vector index)",
+          "PostgreSQL + pgvector + AGE",
+          "Qdrant + Neo4j (no shared transaction)",
+          "SurrealDB (embedded)",
+          "SurrealDB (server)"
+        ]
+      },
+      {
+        "text": "SurrealDB (embedded) at 500k products: the transaction cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
+        "values": [
+          "SurrealDB (embedded)",
+          "500k products",
+          "2 hour"
+        ]
+      },
+      {
+        "text": "This table is derived from the four tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there; no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page.",
+        "values": [
+          "four"
+        ]
+      }
+    ]
+  },
+  "pending_tables": {
+    "docs_oltp": "Still being measured at this version. This table appears here when its run finishes.",
+    "docs_olap": "Still being measured at this version. This table appears here when its run finishes.",
+    "l2": "Still being measured at this version. This table appears here when its run finishes.",
+    "l2olap": "Still being measured at this version. This table appears here when its run finishes.",
+    "l3s": "Still being measured at this version. This table appears here when its run finishes.",
+    "l3d": "Still being measured at this version. This table appears here when its run finishes.",
+    "l4": "Still being measured at this version. This table appears here when its run finishes.",
+    "lifecycle": "Still being measured at this version. This table appears here when its run finishes."
+  }
+}
