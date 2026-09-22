@@ -72,6 +72,33 @@ def sh(cmd, cwd=None, check=True, capture=False, env=None, quiet=False):
                           capture_output=capture or quiet, env=env)
 
 
+def _dirty_results():
+    """Tracked, modified paths under the results tree, as a set.
+
+    Used to tell what a rehearsal wrote from what was already in flight, so
+    the restore can be exact. Tracked only: the raw row files are deliberately
+    untracked (a `git checkout` over them once reverted runs.jsonl mid-campaign
+    and lost rows), and nothing here may touch them.
+    """
+    out = sh(["git", "status", "--porcelain", "--", "benchmarks/experiments/results"],
+             cwd=REPO, check=False, capture=True, quiet=True)
+    got = set()
+    for line in (out.stdout or "").splitlines():
+        # Porcelain v1 is exactly two status characters, a space, then the
+        # path. Splitting on the FIRST space instead keeps the "M " on the
+        # front of every path for a " M file" line, and git then refuses the
+        # whole checkout with "did not match any file(s)".
+        if len(line) < 4 or line.startswith("??"):
+            continue
+        path = line[3:].strip()
+        # A rename prints "old -> new"; the new name is the one on disk.
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path:
+            got.add(path.strip('"'))
+    return got
+
+
 def step(n, title):
     print(f"\n[{n}] {title}", flush=True)
 
@@ -221,6 +248,16 @@ def main():
 
     step(3, "merge into results/runs.jsonl")
     before = SITE_PAYLOAD.read_text() if SITE_PAYLOAD.exists() else "{}"
+    # WHAT WAS ALREADY DIRTY IN THE RESULTS TREE, so a rehearsal can put back
+    # what IT wrote without touching what someone else was mid-way through.
+    # Same rule as the site restore below and the same reason: this run
+    # regenerates the payload, the October freeze and the .tex tables, and on
+    # a dry run or a failed gate it leaves them behind. On 2026-09-22 an l2
+    # rehearsal that FAILED its gates left `web_benchmarks_next.json` holding
+    # the l2 payload while the published page carried the e2 one, so the file
+    # a reader opens to ask "what is on the page?" answered with a payload
+    # that was refused.
+    _dirty_before = _dirty_results()
     sh([PY, str(HERE / "merge_campaign.py"), "--from-file", str(filtered), "--apply"], cwd=HERE)
 
     step(4, "publish through the gates (page-only, no site build)")
@@ -234,6 +271,17 @@ def main():
             print("  " + line.strip()[:160])
     if rc != 0 or "_check  FAIL" in text.replace("   ", " ") or " FAIL " in text:
         print(f"\nREFUSED: refresh rc={rc}; read {log}. The merge stands; nothing was pushed.")
+        # A REFUSED RUN MUST NOT LEAVE ITS PAYLOAD IN THE TREE. This is the
+        # path a rehearsal actually takes -- it fails at a gate, which returns
+        # here and not through the dry-run block below -- and step 1 has
+        # already regenerated the payload, the freeze and the .tex tables from
+        # the scoped rows. Leaving them means the file a reader opens to ask
+        # what is published answers with a payload the gates just refused.
+        _refused = sorted(_dirty_results() - _dirty_before)
+        if _refused:
+            sh(["git", "checkout", "--"] + _refused, cwd=REPO)
+            print(f"  restored {len(_refused)} regenerated artifact(s); the refused "
+                  f"payload is not left in the tree")
         return 1
 
     step(5, "what changed on the page")
@@ -283,6 +331,13 @@ def main():
         # ways: it may not keep what it wrote, and it may not drop what it did
         # not write. The prose file is never written here, so it is never
         # restored here.
+        # The bindings tree first: same rule, other repo.
+        _now = _dirty_results()
+        _ours = sorted(_now - _dirty_before)
+        if _ours:
+            sh(["git", "checkout", "--"] + _ours, cwd=REPO)
+            print(f"  restored {len(_ours)} regenerated artifact(s) this run rewrote")
+
         _written = [f for f in site_files if "/items/" not in f]
         _tracked = [f for f in _written
                     if sh(["git", "ls-files", "--error-unmatch", f], cwd=SITE,
