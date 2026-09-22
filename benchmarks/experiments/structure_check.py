@@ -199,25 +199,33 @@ def check_ingest_sentences():
 
     bad = []
     for tid in sorted(set(E.INGEST_NOTES) | set(E.OCT_PROSE)):
-        sep = E.INGEST_NOTES.get(tid)
         oct_ = (E.OCT_PROSE.get(tid) or {}).get("ingest")
         oct_ = oct_[0] if isinstance(oct_, tuple) else oct_
-        if not (sep and oct_):
-            continue
         lane = (E._TABLE_LANE.get(tid) or (None,))[0]
         spec = R.LANES.get(lane) if lane else None
-        if not spec:
+        if not (oct_ and spec):
             continue
-        # the display names of the arms this lane actually runs
+        # THE LANE'S ROSTER, NOT THE OTHER SENTENCE. Comparing the two copies
+        # only finds an arm that one of them happens to name; the roster finds
+        # an arm nobody wrote down, and finds it on lanes that have not run
+        # yet, which is where it is still cheap to fix. runner.LANES is what
+        # the runner actually executes, so it cannot disagree with what ran.
         arms = set()
         for be in spec[1]:
             arms |= named(E.display_name(be) if be in E.DISPLAY_NAMES else be)
-        lost = sorted((named(sep) - named(oct_)) & arms)
-        if lost:
-            bad.append(f"{tid}: {lost} named in the September ingest sentence and "
-                       f"still on the October table, but missing from the October "
-                       f"sentence -- one copy of the fact was updated and the other "
-                       f"was not")
+        missing = sorted(arms - named(oct_))
+        if missing:
+            bad.append(f"{tid}: the October ingest sentence does not name {missing}, "
+                       f"which lane {lane} runs -- a reader is told how every other "
+                       f"arm on that table was loaded and not that one")
+        # And the older copy must not be the only one that knows an arm: that
+        # is the DuckPGQ case, one copy updated and the other not.
+        sep = E.INGEST_NOTES.get(tid)
+        if sep:
+            lost = sorted((named(sep) - named(oct_)) & arms)
+            if lost and lost != missing:
+                bad.append(f"{tid}: {lost} named in the September ingest sentence "
+                           f"and missing from the October one")
     return bad
 
 
