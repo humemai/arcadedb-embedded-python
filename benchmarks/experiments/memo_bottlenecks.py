@@ -474,17 +474,31 @@ def triage():
                 continue
             (bo, ob), (bc, cb) = (min(ov), min(cv)) if low else (max(ov), max(cv))
             gap = (bo / bc) if low else (bc / bo)
+            # RANK BY THE MEDIAN COMPARATOR, NOT THE BEST ONE. Gap-to-best puts
+            # category differences on top -- SQLite's in-process B-tree seek at
+            # 2 us, an in-process C library's memory against a JVM's -- and
+            # buries a cell where we are genuinely behind the field. On
+            # 2026-09-22 the gap-to-best list ranked the time-series last-point
+            # query first, where we are mid-pack with MongoDB and QuestDB, and
+            # put the point lookup where we are 6th of 8 further down. Two dead
+            # ends were investigated in that order before the ranking was fixed.
+            vals = sorted(v for v, _ in cv)
+            med = vals[len(vals) // 2]
+            vs_med = (bo / med) if low else (med / bo)
+            rank = sum(1 for v in vals if (v < bo if low else v > bo)) + 1
             if gap > 1.0:
-                out.append((gap, tid, col, ob, bo, cb, bc))
+                out.append((vs_med, gap, tid, col, ob, bo, cb, bc, rank, len(vals) + 1))
     out.sort(reverse=True)
     print("Cells where ArcadeDB trails the BEST comparator, worst first.")
     print("A gap is a place to look, not a finding: audit the harness before the engine,")
     print("and see CAMPAIGN.md 'Filing an engine weakness upstream' before writing anything.\n")
-    print("%6s  %-10s %-32s %-26s %10s %10s" % ("gap", "table", "column", "best comparator", "ours", "theirs"))
-    for gap, tid, col, ob, bo, cb, bc in out[:25]:
-        print("%5.1fx  %-10s %-32s %-26s %10.4g %10.4g" % (gap, tid, col[:32], cb[:26], bo, bc))
-    print(f"\n{len(out)} cell(s) where ArcadeDB trails; "
-          f"{sum(1 for x in out if x[0] >= 2)} by 2x or more.")
+    print("%8s %7s  %-9s %-30s %-7s %9s" % ("vs med", "vs best", "table", "column", "rank", "ours"))
+    for vs_med, gap, tid, col, ob, bo, cb, bc, rank, n in out[:25]:
+        print("%7.1fx %6.1fx  %-9s %-30s %2d/%-4d %9.4g" % (vs_med, gap, tid, col[:30], rank, n, bo))
+    print(f"\n{len(out)} cell(s) where ArcadeDB trails the best comparator; "
+          f"{sum(1 for x in out if x[0] >= 2)} are also 2x or more behind the MEDIAN one.")
+    print("Read the 'vs med' column first: behind the field is a weakness, behind one")
+    print("outlier is usually a category difference (an in-process B-tree, a C library's memory).")
     return 0
 
 
