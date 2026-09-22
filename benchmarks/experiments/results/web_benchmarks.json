@@ -4811,6 +4811,7 @@
       "conditions": [
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
+        "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop.",
         "Each repetition runs every read against a fresh set of start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200); the p50 and p99 are over those.",
         "FalkorDB at SF1 (10k people, 181k friendships) and SF10 (66k people, 1.9M friendships): its disk cells are 0.0 because the server container did not grow over its empty footprint during the run; read them as a floor under 0.01 GiB, not as a size.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ Arrow INSERT SELECT into the persons and knows tables under a property graph."
@@ -6627,6 +6628,7 @@
         "The two rows labelled ArcadeDB (embedded) are the same engine on the same data, differing only in whether that view is built. Both return identical answers.",
         "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
+        "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop.",
         "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.1 seconds here at SF10 (66k people, 1.9M friendships), once, before any query was timed.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at SF10 (66k people, 1.9M friendships): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
@@ -8079,7 +8081,8 @@
       "title": "Cross-model transaction: what survives a crash",
       "dataset": "The same vector-graph-document operation, killed mid-way, then inspected",
       "conditions": [
-        "A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these."
+        "A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these.",
+        "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop."
       ],
       "columns": [
         "trials",
@@ -8337,6 +8340,7 @@
         "Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:), so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
         "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
+        "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop.",
         "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
         "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) build one. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
         "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
@@ -12500,6 +12504,7 @@
         "Q1 and Q6 are TPC-H's own query numbers. Q1 groups and aggregates the whole line-item table, so it measures a full scan; Q6 sums one column under a narrow filter, so it measures how well an engine skips what it does not need.",
         "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
+        "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop.",
         "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF1 (6.0M line items), of the 3.35 GiB shown, 3.344 GiB is our Python client and 0.008 GiB is the database.",
         "Each repetition runs 1,000 new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate."
       ],
@@ -13067,6 +13072,7 @@
         "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
         "ArcadeDB has no row on this table. Answer checking built for the next campaign found that the two queries it ran here were not the questions the comparators answered: one of the five aggregates was missing from our Q1 text, and its Q6 excluded the boundary discount because the engine reads `>= 0.05` against a decimal literal as strictly greater. Both errors made its numbers faster than the truth, so they are withdrawn rather than shown with a caveat, and the next the real run measures them with every engine's answer compared.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
+        "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop.",
         "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF1 (6.0M line items), of the 3.35 GiB shown, 3.344 GiB is our Python client and 0.008 GiB is the database.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "Indexes on this table are matched by effect rather than by rule: ArcadeDB (embedded), ArcadeDB (server), MongoDB, PostgreSQL, PostgreSQL (tuned), SurrealDB (embedded) and SurrealDB (server) build one; ArangoDB, DuckDB and SQLite build none, because measuring it showed the index costs them or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
@@ -13724,6 +13730,13 @@
           ">4h",
           ">8h",
           "lost"
+        ]
+      },
+      {
+        "text": "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop.",
+        "values": [
+          "surrealdb 2.3.10",
+          "surrealdb 3.2.4"
         ]
       },
       {

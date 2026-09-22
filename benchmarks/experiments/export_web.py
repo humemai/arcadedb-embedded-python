@@ -4047,6 +4047,51 @@ def _query_words_note(table):
     return _gen(f"{_WORDS.get(len(labels), str(len(labels)))} {kind}. {body} {tail}")
 
 
+def _surreal_pair_note(table):
+    """The two SurrealDB rows are two engines, and the page has to say so.
+
+    Embedded vs served is the axis this page invites a reader to read, and for
+    every other engine the pair is one build behind two transports. SurrealDB's
+    is not: the embedded arm runs the core the Python SDK carries and the
+    served arm runs the container we pin, and on 2026-09-22 those are 2.3.10
+    and 3.2.4 -- two major versions, a different store (SurrealKV against
+    RocksDB), and a different threading profile. COMPARATORS.md has said this
+    since DECISIONS #95 and BUGS F39; the PAGE said nothing, so the whole gap
+    between those two rows read as a deployment result.
+
+    Not a defect in the arms and not fixable by re-running: the embedded path
+    goes through the SDK, so its core is whatever the SDK ships. The honest
+    move is to disclose it where the comparison is made.
+
+    Both version strings are READ FROM THE ENTRIES rather than typed, so the
+    sentence cannot drift from the rows the way a typed pin would, and it says
+    nothing at all on a table that shows only one of the two arms.
+    """
+    ent = {str(e.get("backend")): e for e in table.get("entries") or []}
+    emb = ent.get("SurrealDB (embedded)")
+    srv = ent.get("SurrealDB (server)")
+    if not emb or not srv:
+        return None
+    # ONE SPELLING, here too. `version_name` is normalised on its way into the
+    # payload, but a version quoted inside a SENTENCE misses that walk: this
+    # note first published "surrealdb 2.3.10 and surrealdb v3.2.4", the exact
+    # two-spellings-of-one-identifier defect _one_spelling exists to stop, one
+    # layer further out.
+    ev = _one_spelling(str(emb.get("version_name") or ""))
+    sv = _one_spelling(str(srv.get("version_name") or ""))
+    if not ev or not sv or ev == sv:
+        return None
+    return _gen(
+        f"The two SurrealDB rows are not one engine in two deployments. The "
+        f"embedded arm runs the core its Python driver carries and the served "
+        f"arm runs the released server, and here those are {ev} and {sv} -- "
+        f"different versions on different storage engines, released about a "
+        f"year apart. Read each row against the other engines on the table "
+        f"rather than against each other: the distance between these two is "
+        f"not the cost of a network hop.",
+        ev, sv)
+
+
 def _pg_memory_note(table):
     """PostgreSQL's memory cell, split into client and server from the row's
     own fields (client_peak_anon_mib, server_peak_anon_mib). The split was
@@ -5262,7 +5307,8 @@ def _finish_table(table: dict) -> dict:
     else:
         # September's generated replacements for two typed numbers: the
         # PostgreSQL client/server split and the view build time.
-        for note in (_pg_memory_note(table) if table.get("id") in ("docs_oltp", "docs_olap") else None,
+        for note in (_surreal_pair_note(table),
+                     _pg_memory_note(table) if table.get("id") in ("docs_oltp", "docs_olap") else None,
                      _gav_build_note(table) if table.get("id") == "l2olap" else None,
                      _dense_cold_warm_note(table) if table.get("id") == "l3d" else None):
             if note:
