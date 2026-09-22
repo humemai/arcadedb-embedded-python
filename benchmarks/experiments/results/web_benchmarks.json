@@ -669,6 +669,7 @@
         "ArcadeDB's server takes longer to build than its embedded deployment, and that gap is loading the data, not building the index. Both run the same index code. The embedded one is handed the numbers directly, because the database is running inside the same program. The server has to be sent them, and the only way in is a written-out INSERT statement: every non-zero weight of every document arrives as an index and a value spelled out as text, which the server then has to read back into numbers.",
         "Cold p50 and p99 are the first timed pass after the build, median of five builds. Warm and gain come from a separate run of the same arms: one build per engine, then five more passes over a different half of the query set, so a warm number cannot be explained by the engine having already answered that exact query; gain is that run's cold over its warm.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
+        "ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8) and Elasticsearch run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Elasticsearch's 17.38 GiB here is about 109 per cent of its 16g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
         "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load)."
       ],
@@ -2547,6 +2548,7 @@
         "ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "They do not run at 9.99M vectors, 1M vectors, where those four columns are blank because the pass was not asked for rather than because an engine failed it ().",
+        "ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8) and Neo4j (fp32) run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Neo4j (fp32)'s 37.70 GiB here is about 157 per cent of its 24g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
         "Cold is the first timed pass after the index is built; warm is a repeat of the same query set. ArcadeDB's cold pass is up to 8.4x its warm one, because it pages its index off disk while the others are resident from build. Among the comparators the largest cold-to-warm change is a factor of 378 (SurrealDB (server, fp32) at 1M vectors); every other comparator is within 10% of itself.",
         "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
         "SurrealDB (embedded) at 1M vectors: the search cell exceeded its 4 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row. It was still in the index build when the budget ran out.",
@@ -4812,6 +4814,7 @@
         "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop.",
+        "ArcadeDB (embedded), ArcadeDB (server) and Neo4j run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Neo4j's 4.69 GiB here is about 117 per cent of its 4g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
         "Each repetition runs every read against a fresh set of start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200); the p50 and p99 are over those.",
         "FalkorDB at SF1 (10k people, 181k friendships) and SF10 (66k people, 1.9M friendships): its disk cells are 0.0 because the server container did not grow over its empty footprint during the run; read them as a floor under 0.01 GiB, not as a size.",
         "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ Arrow INSERT SELECT into the persons and knows tables under a property graph."
@@ -6629,6 +6632,7 @@
         "The benefit is uneven, and the three queries show why. Top degree gains most because it only walks adjacency. The other two read a property from the far end of every edge traversed, and that lookup costs the same either way, so it comes to dominate once the traversal itself is cheap.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop.",
+        "ArcadeDB (embedded), ArcadeDB (embedded, GAV), ArcadeDB (server), ArcadeDB (server, GAV) and Neo4j run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Neo4j's 4.61 GiB here is about 115 per cent of its 4g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
         "The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Building it took 2.1 seconds here at SF10 (66k people, 1.9M friendships), once, before any query was timed.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "SurrealDB (embedded) at SF10 (66k people, 1.9M friendships): the analytics cell exceeded its 2 hour budget, the same budget every engine on this table had, on its first attempt and was not retried; there is no row.",
@@ -8341,6 +8345,7 @@
         "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop.",
+        "ArcadeDB (one transaction), ArcadeDB (server, one transaction), Neo4j (vector index) and Qdrant + Neo4j (no shared transaction) run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Neo4j (vector index)'s 6.82 GiB here is about 114 per cent of its 6g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
         "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
         "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB (one transaction), ArcadeDB (server, one transaction), MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) build one. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
         "ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; the composed stack upserts vectors into Qdrant and loads the graph into Neo4j with UNWIND."
@@ -8801,6 +8806,7 @@
         "One tag and three fields, not the ten and ten the TSBS cpu schema defines. The reduction is applied identically to every engine, so the comparison is internally fair, but it is not the full benchmark.",
         "Newest reading means the most recent value each sensor has reported, which is what a monitoring dashboard asks for when it shows the current state of a fleet. TSBS calls this query last-point. It is run without a time bound; the same query bounded to the past hour is measured beside it and stays on the row (ArcadeDB embedded, native time series: 0.333 ms bounded against 0.426 unbounded).",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
+        "ArcadeDB (embedded, document path), ArcadeDB (embedded, native time series), ArcadeDB (server, document path), ArcadeDB (server, native time series) and QuestDB run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: ArcadeDB (server, document path)'s 6.48 GiB here is about 81 per cent of its 8g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
         "Each repetition runs every query 100 times; the p50 and p99 are over those runs.",
         "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB, DuckDB, MongoDB, SQLite, SurrealDB (embedded), SurrealDB (server) and TimescaleDB build one; QuestDB builds none, because measuring it showed the index costs it or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
         "Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP."
@@ -12505,6 +12511,7 @@
         "New-order is TPC-C's checkout transaction: it reads a customer and a warehouse, inserts an order with its line items, and updates stock, all in one transaction.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "The two SurrealDB rows are not one engine in two deployments. The embedded arm runs the core its Python driver carries and the served arm runs the released server, and here those are surrealdb 2.3.10 and surrealdb 3.2.4 -- different versions on different storage engines, released about a year apart. Read each row against the other engines on the table rather than against each other: the distance between these two is not the cost of a network hop.",
+        "ArcadeDB (embedded) and ArcadeDB (server) run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: ArcadeDB (server)'s 9.22 GiB here is about 115 per cent of its 8g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
         "PostgreSQL's memory cell is not comparable to the others: this column counts memory an engine holds in its own address space, and PostgreSQL holds its data in shared memory and the kernel's file cache instead. At TPC-H SF1 (6.0M line items), of the 3.35 GiB shown, 3.344 GiB is our Python client and 0.008 GiB is the database.",
         "Each repetition runs 1,000 new-order transactions; the p50 and p99 are over those, and OLTP ops/s is their rate."
       ],
@@ -13675,11 +13682,29 @@
         ]
       },
       {
+        "text": "ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8) and Elasticsearch run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Elasticsearch's 17.38 GiB here is about 109 per cent of its 16g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
+        "values": [
+          "ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8) and Elasticsearch",
+          "17.38",
+          "109",
+          "16g"
+        ]
+      },
+      {
         "text": "Each pass answers 1,000 queries; cold is the first pass after the build and warm pools the four passes after it, over five builds.",
         "values": [
           "1,000",
           "4",
           "5"
+        ]
+      },
+      {
+        "text": "ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8) and Neo4j (fp32) run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Neo4j (fp32)'s 37.70 GiB here is about 157 per cent of its 24g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
+        "values": [
+          "ArcadeDB (embedded, fp32), ArcadeDB (embedded, int8), ArcadeDB (server, fp32), ArcadeDB (server, int8) and Neo4j (fp32)",
+          "37.70",
+          "157",
+          "24g"
         ]
       },
       {
@@ -13740,6 +13765,15 @@
         ]
       },
       {
+        "text": "ArcadeDB (embedded), ArcadeDB (server) and Neo4j run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Neo4j's 4.69 GiB here is about 117 per cent of its 4g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
+        "values": [
+          "ArcadeDB (embedded), ArcadeDB (server) and Neo4j",
+          "4.69",
+          "117",
+          "4g"
+        ]
+      },
+      {
         "text": "Each repetition runs every read against a fresh set of start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200); the p50 and p99 are over those.",
         "values": [
           "SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200"
@@ -13752,6 +13786,15 @@
           "SF1 (10k people, 181k friendships) and SF10 (66k people, 1.9M friendships)",
           "0.0",
           "0.01"
+        ]
+      },
+      {
+        "text": "ArcadeDB (embedded), ArcadeDB (embedded, GAV), ArcadeDB (server), ArcadeDB (server, GAV) and Neo4j run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Neo4j's 4.61 GiB here is about 115 per cent of its 4g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
+        "values": [
+          "ArcadeDB (embedded), ArcadeDB (embedded, GAV), ArcadeDB (server), ArcadeDB (server, GAV) and Neo4j",
+          "4.61",
+          "115",
+          "4g"
         ]
       },
       {
@@ -13782,6 +13825,15 @@
         ]
       },
       {
+        "text": "ArcadeDB (one transaction), ArcadeDB (server, one transaction), Neo4j (vector index) and Qdrant + Neo4j (no shared transaction) run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: Neo4j (vector index)'s 6.82 GiB here is about 114 per cent of its 6g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
+        "values": [
+          "ArcadeDB (one transaction), ArcadeDB (server, one transaction), Neo4j (vector index) and Qdrant + Neo4j (no shared transaction)",
+          "6.82",
+          "114",
+          "6g"
+        ]
+      },
+      {
         "text": "Each repetition runs the transaction 300 times; the p50 and p99 are over those.",
         "values": [
           "300"
@@ -13802,6 +13854,15 @@
         ]
       },
       {
+        "text": "ArcadeDB (embedded, document path), ArcadeDB (embedded, native time series), ArcadeDB (server, document path), ArcadeDB (server, native time series) and QuestDB run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: ArcadeDB (server, document path)'s 6.48 GiB here is about 81 per cent of its 8g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
+        "values": [
+          "ArcadeDB (embedded, document path), ArcadeDB (embedded, native time series), ArcadeDB (server, document path), ArcadeDB (server, native time series) and QuestDB",
+          "6.48",
+          "81",
+          "8g"
+        ]
+      },
+      {
         "text": "Indexes on this table are matched by effect rather than by rule: ArangoDB, ArcadeDB, DuckDB, MongoDB, SQLite, SurrealDB (embedded), SurrealDB (server) and TimescaleDB build one; QuestDB builds none, because measuring it showed the index costs it or changes nothing. Where building one was a choice, the engine was timed with it and without it and the faster configuration kept; where an engine reaches these queries through its own primary key or record id, that is its equivalent. The time an index took to build is the index column.",
         "values": [
           "ArangoDB",
@@ -13813,6 +13874,15 @@
           "SurrealDB (server)",
           "TimescaleDB",
           "QuestDB"
+        ]
+      },
+      {
+        "text": "ArcadeDB (embedded) and ArcadeDB (server) run on a JVM, and for them this column is close to the heap they were given rather than the memory the work needed: ArcadeDB (server)'s 9.22 GiB here is about 115 per cent of its 8g heap, and across every heap this page has run the peak lands between about two thirds of the heap and a fifth above it. Every engine on a table gets the same memory envelope; how much of it a JVM takes is a property of the runtime, so read these cells against each other rather than against an engine that manages its own memory.",
+        "values": [
+          "ArcadeDB (embedded) and ArcadeDB (server)",
+          "9.22",
+          "115",
+          "8g"
         ]
       },
       {

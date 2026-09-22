@@ -4092,6 +4092,116 @@ def _surreal_pair_note(table):
         ev, sv)
 
 
+def _jvm_memory_note(table):
+    """What the memory column measures for an engine running on a JVM.
+
+    THE COLUMN IS NOT ONE MEASUREMENT, and it is the column ArcadeDB looks
+    worst in, which is exactly why it gets said. An in-process C library's
+    cell is what it needed; a JVM engine's cell is close to the heap it was
+    given. Measured across September's rows at a FIXED memory cap of 8g, the
+    peak moved with the heap and not with the work: 4g heap -> 2,781 MiB,
+    8g -> 6,604, 16g -> 17,312, 24g -> 29,103, a ratio of 0.68 to 1.19, and
+    every other cap/heap pair on the page sits in the same band.
+
+    The page already makes this disclosure in the other direction for
+    PostgreSQL, whose cell reads artificially LOW because its data lives in
+    shared memory and the kernel's file cache. Saying it for the JVM arms and
+    not for PostgreSQL, or the reverse, is the asymmetry; saying both is the
+    page being even-handed about an accounting artifact whoever it favours.
+
+    DERIVED, and every JVM arm on the table is named rather than ArcadeDB
+    alone -- Neo4j records a heap too, and the composed stack's Neo4j half is
+    in the same position. An arm whose rows record no heap says nothing here.
+    """
+    lane_wl = _TABLE_LANE.get(table.get("id"))
+    # ASK THE ENTRIES, NOT table["columns"]. The column list is not populated
+    # yet for a table that is reshaped here -- the document lane becomes two
+    # page tables in this function -- so a guard reading it skipped docs_oltp,
+    # docs_olap and lifecycle silently while working on the five tables whose
+    # columns were already set. A metric that an entry carries is the thing
+    # this note is about anyway.
+    if not lane_wl or not any("peak memory GiB" in (e.get("metrics") or {})
+                              for e in table.get("entries") or []):
+        return None
+    lane, wl = lane_wl
+    if lane == "l1tpc":
+        wl = "oltp"
+    found = {}
+    for e in table.get("entries", []):
+        cell = (e.get("metrics") or {}).get("peak memory GiB")
+        if not cell:
+            continue
+        # SCALE-EXACT FIRST, THEN THE LANE. The cell's own scale is the right
+        # match and is what most tables need, but some take their memory figure
+        # from an overlay rather than from the lane's rows (the dense table's
+        # warm pass is a separate driver), and there the exact match finds
+        # nothing. Dropping the scale for everyone was worse -- an arm that ran
+        # two heaps across scales then reads as ambiguous and says nothing, which
+        # took the note from four tables to two. So: try the cell's scale, fall
+        # back to the whole lane, and if THAT is ambiguous say nothing rather
+        # than pick a heap.
+        # THE DENSE TABLE APPENDS A QUANTIZATION to the arm's name, so its
+        # entries read "ArcadeDB (embedded, fp32)" where display_name() gives
+        # "ArcadeDB (embedded)". An equality match found nothing there and the
+        # note went missing from the one vector table that has it.
+        def _same_arm(r, _eb=e.get("backend")):
+            dn = display_name(str(r.get("backend")))
+            if _eb == dn:
+                return True
+            # "ArcadeDB (embedded)" -> "ArcadeDB (embedded, fp32)"
+            if dn.endswith(")") and str(_eb).startswith(dn[:-1] + ","):
+                return True
+            # "Neo4j" -> "Neo4j (fp32)": an arm with no deployment in its name
+            # still gets the quantization appended on the vector tables, and
+            # missing it left Neo4j's 37.7 GiB cell unexplained beside four
+            # ArcadeDB ones that were.
+            return "(" not in dn and str(_eb).startswith(dn + " (")
+
+        _match = lambda r: (r.get("lane") == lane and (not wl or r.get("workload") == wl)
+                            and _same_arm(r))
+        rs = [r for r in _FROZEN_ROWS if _match(r) and str(r.get("scale")) == str(e.get("scale"))]
+        if not rs:
+            rs = [r for r in _FROZEN_ROWS if _match(r)]
+        heaps = {str(r.get("heap") or r.get("server_heap") or "").strip() for r in rs}
+        heaps = {h for h in heaps if h and h[-1].lower() == "g" and h[:-1].replace(".", "").isdigit()}
+        if not heaps:
+            continue
+        # A JVM ARM WITH AN AMBIGUOUS HEAP STILL GETS THE EXPLANATION, just not
+        # the example. The dense and lifecycle tables run an arm at two heaps
+        # across their scales, so no single number can be quoted for it -- but
+        # "this column is close to the heap, not to the work" is true of that
+        # arm either way, and dropping the sentence there left the artifact
+        # explained on six tables and unexplained on three.
+        found.setdefault(e.get("backend"),
+                         (heaps.pop() if len(heaps) == 1 else None, float(cell["median"])))
+    if not found:
+        return None
+    names = _join_and(sorted(found))
+    _one = len(found) == 1
+    # The biggest cell among them carries the example, so the sentence names a
+    # number the reader can find in the column rather than an average of them.
+    quotable = {k: v for k, v in found.items() if v[0]}
+    head = (f"{names} {'runs' if _one else 'run'} on a JVM, and for {'it' if _one else 'them'} "
+            f"this column is close to the heap {'it was' if _one else 'they were'} given rather "
+            f"than the memory the work needed")
+    tail = ("Every engine on a table gets the same memory envelope; how much of it a JVM "
+            "takes is a property of the runtime, so read these cells against each other "
+            "rather than against an engine that manages its own memory.")
+    if not quotable:
+        # Every JVM arm here ran more than one heap across this table's sizes,
+        # so there is no single figure to quote and the sentence says the thing
+        # that is true without one.
+        return _gen(f"{head}: across every heap this page has run, the peak lands between "
+                    f"about two thirds of the heap and a fifth above it. {tail}", names)
+    who, (heap, gib) = max(quotable.items(), key=lambda kv: kv[1][1])
+    pct = f"{gib / float(heap[:-1]) * 100:.0f}"
+    return _gen(
+        f"{head}: {who}'s {gib:.2f} GiB here is about {pct} per cent of its {heap} heap, and "
+        f"across every heap this page has run the peak lands between about two thirds of the "
+        f"heap and a fifth above it. {tail}",
+        names, f"{gib:.2f}", pct, heap)
+
+
 def _pg_memory_note(table):
     """PostgreSQL's memory cell, split into client and server from the row's
     own fields (client_peak_anon_mib, server_peak_anon_mib). The split was
@@ -5308,6 +5418,7 @@ def _finish_table(table: dict) -> dict:
         # September's generated replacements for two typed numbers: the
         # PostgreSQL client/server split and the view build time.
         for note in (_surreal_pair_note(table),
+                     _jvm_memory_note(table),
                      _pg_memory_note(table) if table.get("id") in ("docs_oltp", "docs_olap") else None,
                      _gav_build_note(table) if table.get("id") == "l2olap" else None,
                      _dense_cold_warm_note(table) if table.get("id") == "l3d" else None):
