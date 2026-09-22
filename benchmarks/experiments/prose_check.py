@@ -172,12 +172,64 @@ def backed_by(value, claims, unit=""):
     return None
 
 
+def near_duplicate_conditions(payload_path, ratio=0.80):
+    """Report condition sentences within a table that read almost the same.
+
+    REPORTS, does not gate, and the reason is the point: a high ratio is not
+    by itself a defect. The analytics tables carry one budget sentence per
+    engine, each with its own iteration counts -- "LSQB Q1 (20 of 100)" beside
+    "LSQB Q1 (22 of 100)" -- and those differ in substance, not just in a
+    name. Merging them would destroy information. So this prints the pairs and
+    a person reads them.
+
+    It earns its place twice over. The user objected on 2026-09-21 to
+    loop-shaped prose, forty-seven sentences under one table differing in two
+    tokens each, which is exactly what a similarity pass finds. And run once
+    by hand on 2026-09-22 it surfaced something worse than duplication: the
+    FalkorDB and SurrealDB zero-disk sentences came back at 0.96, and reading
+    the pair side by side showed FalkorDB's explained its own disk cell with
+    SURREALDB's write-ahead log -- a false claim that had been live for a day
+    (BUGS F102). The duplication was the symptom; the pair being readable
+    together is what exposed it.
+    """
+    import difflib
+    import json as _json
+    data = _json.loads(pathlib.Path(payload_path).read_text())
+    pairs = []
+    for table in data.get("tables", []):
+        texts = [c if isinstance(c, str) else str(c.get("text", ""))
+                 for c in table.get("conditions", [])]
+        for i in range(len(texts)):
+            for j in range(i + 1, len(texts)):
+                r = difflib.SequenceMatcher(None, texts[i], texts[j]).ratio()
+                if r >= ratio:
+                    pairs.append((r, table.get("id"), texts[i], texts[j]))
+    pairs.sort(reverse=True, key=lambda x: x[0])
+    if not pairs:
+        print(f"no condition pairs above {ratio:.2f} in {pathlib.Path(payload_path).name}")
+        return 0
+    print(f"{len(pairs)} near-identical condition pair(s) in "
+          f"{pathlib.Path(payload_path).name}, most similar first.")
+    print("Read each: sentences differing only in a NAME should be merged; "
+          "sentences differing in their own NUMBERS should not.\n")
+    for r, tid, a, b in pairs:
+        print(f"  [{tid}] ratio {r:.2f}")
+        print(f"    A: {a[:150]}")
+        print(f"    B: {b[:150]}\n")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true",
                     help="print every number found and its status")
     ap.add_argument("--target", help="check only this target by name")
+    ap.add_argument("--near-duplicates", metavar="PAYLOAD",
+                    help="report condition sentences in one payload that read "
+                         "almost the same (reports, never gates)")
     args = ap.parse_args()
+    if args.near_duplicates:
+        return near_duplicate_conditions(args.near_duplicates)
 
     claims = load_claim_values()
     failed = skipped = 0

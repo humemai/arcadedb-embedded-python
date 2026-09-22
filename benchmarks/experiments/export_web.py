@@ -5086,12 +5086,25 @@ def _zero_growth_notes(table_id):
         key = (label, str(r.get("scale")), r.get("lane"), sb)
         if key not in hits:
             hits.append(key)
-    notes = []
-    for label, scale, lane, sb in sorted(hits, key=str):
+    # ONE SENTENCE PER ENGINE, NOT PER CELL. Two sizes of the same engine with
+    # the same baseline produced two sentences identical apart from the size
+    # name -- FalkorDB at SF1 and at SF10, both ending "a floor under 0.01
+    # GiB" -- which is the loop-shaped prose the page is not supposed to carry
+    # (the user, on forty-seven such sentences: "human won't duplicate things
+    # like this that are very similar"). Grouped by what the sentence actually
+    # says, so two sizes that agree share a line and two that differ keep
+    # their own.
+    _by_engine = {}
+    for label, scale, lane, sb in hits:
         try:
             sl = scale_label(lane, scale)
         except Exception:  # noqa: BLE001 - a lane whose tier the map does not name
             continue
+        _by_engine.setdefault((label, sb), []).append(sl)
+
+    notes = []
+    for (label, sb), sls in sorted(_by_engine.items(), key=str):
+        sl = _join_and(sorted(set(sls), key=str))
         mb, gib = f"{sb:.0f}", f"{sb / 1024:.2f}"
         # THE CAUSE WAS TRACED ON ONE ENGINE AND WAS BEING TOLD ABOUT ALL OF
         # THEM. The preallocated write-ahead log is SurrealDB 3.2.4's, verified
@@ -5109,9 +5122,16 @@ def _zero_growth_notes(table_id):
         _why = (f", which for this engine is a preallocated write-ahead log of about "
                 f"{mb} MB that the whole corpus fits inside at this size"
                 if "SurrealDB" in str(label) else "")
+        # AGREEMENT FOLLOWS THE GROUPING. Merging two sizes into one sentence
+        # left it reading "FalkorDB at SF1 and SF10: its disk cell is 0.0",
+        # singular over two cells. Generated prose has to survive its own
+        # grouping or the merge just trades duplication for a grammar slip.
+        _n = len(set(sls))
+        _cell = "its disk cell is" if _n == 1 else "its disk cells are"
+        _read = "read the cell" if _n == 1 else "read them"
         notes.append(_gen(
-            f"{label} at {sl}: its disk cell is 0.0 because the server container did not "
-            f"grow over its empty footprint during the run{_why}; read the cell as a floor "
+            f"{label} at {sl}: {_cell} 0.0 because the server container did not "
+            f"grow over its empty footprint during the run{_why}; {_read} as a floor "
             f"under {gib} GiB, not as a size.",
             label, sl, "0.0", *( [mb, gib] if _why else [gib] )))
     return notes
