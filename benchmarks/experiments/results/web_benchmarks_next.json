@@ -642,6 +642,7 @@
       "title": "Cross-model transaction",
       "dataset": "Vector hit to graph traversal to document update, in one transaction",
       "conditions": [
+        "The engines do not all run the same SHAPE of filtered search. ArangoDB, MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) restrict the candidate set first and rank what is left by distance. ArcadeDB (one transaction) and ArcadeDB (server, one transaction) fetch an over-large global top-k and drop what falls outside it afterwards, which is more work for the same answer. Read that column as what each engine's own idiom costs, not as one query timed on nine engines.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction",
         "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
@@ -2761,6 +2762,20 @@
         "text": "In the cells: `>2h` means the cell ran past its tier's cap and was not retried. A dash is an operation the engine cannot express, never a slow one.",
         "values": [
           ">2h"
+        ]
+      },
+      {
+        "text": "The engines do not all run the same SHAPE of filtered search. ArangoDB, MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) restrict the candidate set first and rank what is left by distance. ArcadeDB (one transaction) and ArcadeDB (server, one transaction) fetch an over-large global top-k and drop what falls outside it afterwards, which is more work for the same answer. Read that column as what each engine's own idiom costs, not as one query timed on nine engines.",
+        "values": [
+          "ArangoDB",
+          "MongoDB",
+          "Neo4j (vector index)",
+          "PostgreSQL + pgvector + AGE",
+          "Qdrant + Neo4j (no shared transaction)",
+          "SurrealDB (embedded)",
+          "SurrealDB (server)",
+          "ArcadeDB (one transaction)",
+          "ArcadeDB (server, one transaction)"
         ]
       },
       {
