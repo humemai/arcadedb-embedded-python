@@ -4650,13 +4650,25 @@ def _filter_strategy_note(table):
                   or m.startswith("cross-system")})
     if not post or not pre:
         return None
+    # "FOR THE SAME ANSWER" WAS WRONG, AND THE TABLE SAID SO. The first
+    # version of this sentence ended "which is more work for the same answer".
+    # It is not the same answer: a global top-k usually does not contain k of
+    # the candidates, so the post-filtering arm returns an incomplete list of
+    # near-arbitrary candidates, which is exactly what the filtered recall
+    # column on this table shows. A disclosure sentence that understates the
+    # thing it discloses is worse than none, because it tells the reader the
+    # difference has been accounted for.
     return _gen(
-        f"The engines do not all run the same SHAPE of filtered search. "
+        f"The engines do not all run the same SHAPE of filtered search, and it "
+        f"shows in the recall column as much as the time one. "
         f"{_join_and(pre)} restrict the candidate set first and rank what is "
-        f"left by distance. {_join_and(post)} fetch an over-large global "
-        f"top-k and drop what falls outside it afterwards, which is more work "
-        f"for the same answer. Read that column as what each engine's own "
-        f"idiom costs, not as one query timed on nine engines.",
+        f"left by distance, so they return that set's true nearest matches. "
+        f"{_join_and(post)} instead take an over-large global top-k and keep "
+        f"whichever candidates happen to fall inside it: more work, and a "
+        f"partial answer, because a global list of that size usually does not "
+        f"contain enough of the candidates. Read both columns for those arms "
+        f"as what this query shape costs rather than as what the engine can "
+        f"do.",
         *pre, *post)
 
 
