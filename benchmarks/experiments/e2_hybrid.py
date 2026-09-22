@@ -90,6 +90,13 @@ HTTP_LIMIT = -1
 READ_OPS = int(os.environ.get("E2_READ_OPS", "200"))
 FILTER_HOPS = 3
 # How wide a post-filtering engine searches before dropping non-neighbours.
+#
+# NO ARM USES THIS SINCE 2026-09-22. Both ArcadeDB arms pre-filter now, and
+# every other arm on the table always did, so nothing reads it -- it is kept
+# and still recorded on the row because the rows measured BEFORE that change
+# were shaped by it, and a reader comparing a 26.8.1-era row against a current
+# one needs to see which regime produced it. `filtered_mode` on the same row
+# says which. If a post-filtering arm is ever added, this is the knob again.
 # Recorded on the row: it is the only knob in this measurement and it decides
 # what a post-filter arm's recall can possibly be.
 FILTER_OVERFETCH = int(os.environ.get("E2_FILTER_OVERFETCH", "1000"))
@@ -255,16 +262,36 @@ class ArcadeE2:
 
     # THE TWO READ PATHS (DECISIONS #82c).
     #
-    # POST-FILTER, AND IT IS NOT A CHOICE. ArcadeDB 26.8.1 exposes no scalar
-    # vector-distance function in SQL -- vectorDistance, similarity,
-    # cosineSimilarity, euclideanDistance and vector_distance are all "Unknown
-    # function name" (laptop probe, 2026-09-14) -- so a candidate set cannot be
-    # ranked by distance and the graph filter cannot be pushed into the index.
-    # The arm over-fetches a global search and drops the non-neighbours, and
-    # its recall says what that costs. Every other engine on this table ranks
-    # the candidate set directly.
-    FILTER_MODE = ("post-filter: no scalar vector-distance function in SQL at 26.8.1, "
-                   "so an over-fetched global search is filtered afterwards")
+    # PRE-FILTER, like every other engine on this table: restrict the candidate
+    # set, then rank those by distance. `vector.l2Distance` is exact over the
+    # candidates, which is what pgvector's `<->` and MongoDB's `exact:true` do
+    # here, and it matches the LSM_VECTOR index's own EUCLIDEAN metric.
+    #
+    # THIS ARM POST-FILTERED UNTIL 2026-09-22, and the reason it gave had
+    # stopped being true. It read "no scalar vector-distance function in SQL at
+    # 26.8.1 -- vectorDistance, similarity, cosineSimilarity, euclideanDistance
+    # and vector_distance are all Unknown function name (laptop probe,
+    # 2026-09-14)". All five of those guesses are bare names and the functions
+    # are NAMESPACED: `vector.l2Distance`, `vector.cosineSimilarity`,
+    # `vector.dotProduct` and about forty more are registered in
+    # DefaultSQLFunctionFactory, and have been since the 2026-02-15 function
+    # refactor. Five wrong guesses are not evidence that a capability is
+    # absent, and that inference cost the arm both of the numbers below.
+    #
+    # What it cost, measured on 50,000 products at the pinned wheel with the
+    # lane's own DDL, 300 candidates, top-10, 25 queries:
+    #
+    #   post-filter (over-fetch 1000, then drop)   29.3 ms p50, 6 of 10 rows
+    #   pre-filter  (vector.l2Distance)             6.4 ms p50, 10 of 10 rows
+    #
+    # 4.6x on latency, and the recall difference is the serious half: a global
+    # top-1000 usually does not contain ten of the 300 candidates, so the arm
+    # returned an incomplete answer made of near-arbitrary members of the
+    # candidate set. That is what published `filtered recall@10` = 0.013
+    # against every other engine's 1.000 actually measured -- our query shape,
+    # not the engine (BUGS F112).
+    FILTER_MODE = ("pre-filter: the candidate set is restricted first and ranked by "
+                   "vector.l2Distance, exact over the candidates")
 
     def _vec_topk(self, qvec, k, ef=100):
         rows = self.db.query(
@@ -291,10 +318,9 @@ class ArcadeE2:
             return []
         lst = ",".join(str(int(p)) for p in cands)
         rows = self.db.query(
-            "sql", f"SELECT pid FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?))) "
-                   f"WHERE pid IN [{lst}] LIMIT {k}",
-            "Product[embedding]", self._a.to_java_float_array(qvec),
-            FILTER_OVERFETCH, max(100, FILTER_OVERFETCH)).to_list()
+            "sql", f"SELECT pid, vector.l2Distance(embedding, :q) AS d FROM Product "
+                   f"WHERE pid IN [{lst}] ORDER BY d ASC LIMIT {k}",
+            {"q": [float(x) for x in qvec]}).to_list()
         return [int(r["pid"]) for r in rows]
 
     def total_views(self):
@@ -398,8 +424,11 @@ class ArcadeE2Server(ArcadeE2):
             raise
         return len(touched)
 
-    # The same two read paths over HTTP; the same post-filter, for the same
-    # reason (the SQL is the server's, and the function is missing there too).
+    # The same two read paths over HTTP, and the same PRE-filter: the server
+    # parses the same SQL and registers the same functions, so the reason the
+    # embedded arm stopped post-filtering applies here unchanged. FILTER_MODE
+    # is inherited, so these two must agree -- an arm that claims a pre-filter
+    # and runs a post-filter would be worse than either.
     def _vec_topk(self, qvec, k, ef=100):
         rows = self._post("query", "SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef)))",
                           {"idx": "Product[embedding]", "q": [float(x) for x in qvec],
@@ -425,10 +454,9 @@ class ArcadeE2Server(ArcadeE2):
             return []
         lst = ",".join(str(int(p)) for p in cands)
         rows = self._post("query",
-                          f"SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef))) "
-                          f"WHERE pid IN [{lst}] LIMIT {k}",
-                          {"idx": "Product[embedding]", "q": [float(x) for x in qvec],
-                           "k": FILTER_OVERFETCH, "ef": max(100, FILTER_OVERFETCH)})
+                          f"SELECT pid, vector.l2Distance(embedding, :q) AS d FROM Product "
+                          f"WHERE pid IN [{lst}] ORDER BY d ASC LIMIT {k}",
+                          {"q": [float(x) for x in qvec]})
         return [int(r["pid"]) for r in rows]
 
     def total_views(self):
