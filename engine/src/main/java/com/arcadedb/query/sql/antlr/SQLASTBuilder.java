@@ -19,6 +19,7 @@
 package com.arcadedb.query.sql.antlr;
 
 import com.arcadedb.database.Identifiable;
+import com.arcadedb.engine.timeseries.ColumnDefinition;
 import com.arcadedb.engine.timeseries.DownsamplingTier;
 import com.arcadedb.exception.CommandSQLParsingException;
 import com.arcadedb.index.lsm.LSMTreeIndexAbstract;
@@ -1293,7 +1294,7 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
 
     final Object valueObj = visit(ctx.expression());
 
-    final String keyName = key.getStringValue().toLowerCase();
+    final String keyName = key.getStringValue().toLowerCase(Locale.ROOT);
 
     // Map the key to the appropriate field
     switch (keyName) {
@@ -2928,6 +2929,10 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
    */
   @Override
   public BaseExpression visitMapLit(final SQLParser.MapLitContext ctx) {
+    // The BaseExpression WRAP around it is load-bearing beyond this method: it is how
+    // BaseExpression#carriesItsOwnModifierTail() recognises this atom as one the grammar gives a modifier* tail,
+    // and so how a redundant pair of written parentheses around it is kept out of an unaliased projection's name
+    // (issue #7896). Attaching the node raw would slip past that and rename the column.
     final Json json = (Json) visit(ctx.mapLiteral());
 
     // Wrap in Expression
@@ -3359,6 +3364,9 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
   public BaseExpression visitNullBaseExpr(final SQLParser.NullBaseExprContext ctx) {
     final BaseExpression baseExpr = new BaseExpression();
     baseExpr.isNull = true;
+    // The grammar accepts `NULL modifier*` (`null.ifNull('default')`, `null.asString()`) and this visitor used to
+    // drop the modifiers on the floor, so the whole method/selector chain was silently discarded (issue #7774).
+    baseExpr.modifier = buildModifierChain(ctx.modifier());
     return baseExpr;
   }
 
@@ -3515,6 +3523,10 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
    */
   @Override
   public BaseExpression visitArrayLit(final SQLParser.ArrayLitContext ctx) {
+    // The BaseExpression WRAP around it is load-bearing beyond this method: it is how
+    // BaseExpression#carriesItsOwnModifierTail() recognises this atom as one the grammar gives a modifier* tail,
+    // and so how a redundant pair of written parentheses around it is kept out of an unaliased projection's name
+    // (issue #7896). Attaching the node raw would slip past that and rename the column.
     final ArrayLiteralExpression arrayLiteral = new ArrayLiteralExpression();
 
     // Visit each expression in the array literal
@@ -3613,7 +3625,7 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
           && firstIdCtx.RID_ATTR() == null && firstIdCtx.TYPE_ATTR() == null
           && firstIdCtx.IN_ATTR() == null && firstIdCtx.OUT_ATTR() == null && firstIdCtx.THIS() == null) {
         final String baseIdText = firstIdCtx.getText();
-        if (FUNCTION_NAMESPACES.contains(baseIdText.toLowerCase())) {
+        if (FUNCTION_NAMESPACES.contains(baseIdText.toLowerCase(Locale.ROOT))) {
           return buildNamespaceQualifiedFunctionCall(baseIdText, ctx.methodCall(0), ctx);
         }
       }
@@ -4039,6 +4051,10 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
    * Grammar: caseAlternative : WHEN whereClause THEN expression
    */
   public BaseExpression visitCaseExpr(final SQLParser.CaseExprContext ctx) {
+    // The BaseExpression WRAP around it is load-bearing beyond this method: it is how
+    // BaseExpression#carriesItsOwnModifierTail() recognises this atom as one the grammar gives a modifier* tail,
+    // and so how a redundant pair of written parentheses around it is kept out of an unaliased projection's name
+    // (issue #7896). Attaching the node raw would slip past that and rename the column.
     final SQLParser.CaseExpressionContext caseCtx = ctx.caseExpression();
 
     // Build list of alternatives
@@ -4078,6 +4094,10 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
    * Grammar: extendedCaseAlternative : WHEN expression THEN expression
    */
   public BaseExpression visitExtendedCaseExpr(final SQLParser.ExtendedCaseExprContext ctx) {
+    // The BaseExpression WRAP around it is load-bearing beyond this method: it is how
+    // BaseExpression#carriesItsOwnModifierTail() recognises this atom as one the grammar gives a modifier* tail,
+    // and so how a redundant pair of written parentheses around it is kept out of an unaliased projection's name
+    // (issue #7896). Attaching the node raw would slip past that and rename the column.
     final SQLParser.ExtendedCaseExpressionContext caseCtx = ctx.extendedCaseExpression();
 
     // Get the case expression (the value being tested) - first expression in the list
@@ -4279,7 +4299,7 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
         final Identifier id = (Identifier) visit(ctx.identifier());
         paramName = id.getValue();
       } else {
-        paramName = ctx.FROM().getText().toLowerCase();
+        paramName = ctx.FROM().getText().toLowerCase(Locale.ROOT);
       }
       final NamedParameter param = new NamedParameter();
       param.paramName = paramName;
@@ -6004,7 +6024,7 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
 
       if (!bodyCtx.NULL_STRATEGY().isEmpty() && bodyCtx.identifier().size() > legacyIdIdx) {
         final Identifier nsId = (Identifier) visit(bodyCtx.identifier(legacyIdIdx));
-        stmt.nullStrategy = LSMTreeIndexAbstract.NULL_STRATEGY.valueOf(nsId.getValue().toUpperCase());
+        stmt.nullStrategy = LSMTreeIndexAbstract.NULL_STRATEGY.valueOf(nsId.getValue().toUpperCase(Locale.ROOT));
       }
 
       return stmt;
@@ -6093,7 +6113,7 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     // NULL_STRATEGY (comes first in grammar and toString)
     if (!bodyCtx.NULL_STRATEGY().isEmpty() && bodyCtx.identifier().size() > extraIdIndex) {
       final Identifier nsId = (Identifier) visit(bodyCtx.identifier(extraIdIndex));
-      stmt.nullStrategy = LSMTreeIndexAbstract.NULL_STRATEGY.valueOf(nsId.getValue().toUpperCase());
+      stmt.nullStrategy = LSMTreeIndexAbstract.NULL_STRATEGY.valueOf(nsId.getValue().toUpperCase(Locale.ROOT));
       extraIdIndex++;
     }
 
@@ -6310,13 +6330,19 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     // Type name
     stmt.name = (Identifier) visit(bodyCtx.identifier());
 
-    // Process all alter type items
+    // Process all alter type items. One AlterTypeStatement.Item per grammar item, which is what the grammar's
+    // `alterTypeItem (COMMA alterTypeItem)*` promises: these fields used to live on the statement itself and be
+    // overwritten per item, so a multi-item ALTER kept only the last one and answered OK, and because the
+    // identifier list was shared, `ALIASES x, y, SUPERTYPE +A` ended up as three super types (issue #7920).
     for (final SQLParser.AlterTypeItemContext itemCtx : bodyCtx.alterTypeItem()) {
+      final AlterTypeStatement.Item item = new AlterTypeStatement.Item();
+      stmt.items.add(item);
+
       if (itemCtx.NAME() != null) {
-        stmt.property = "name";
-        stmt.identifierValue = (Identifier) visit(itemCtx.identifier(0));
+        item.property = "name";
+        item.identifierValue = (Identifier) visit(itemCtx.identifier(0));
       } else if (itemCtx.SUPERTYPE() != null) {
-        stmt.property = "supertype";
+        item.property = "supertype";
         // Process SUPERTYPE with optional +/- prefixes for each identifier
         // Grammar: SUPERTYPE ((PLUS | MINUS)? identifier (COMMA (PLUS | MINUS)? identifier)*)
         boolean nextIsAdd = true; // Default is add if no +/- specified
@@ -6330,16 +6356,16 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
               nextIsAdd = false;
             }
           } else if (child instanceof SQLParser.IdentifierContext) {
-            stmt.identifierListValue.add((Identifier) visit(itemCtx.identifier(identifierIndex++)));
-            stmt.identifierListAddRemove.add(nextIsAdd);
+            item.identifierListValue.add((Identifier) visit(itemCtx.identifier(identifierIndex++)));
+            item.identifierListAddRemove.add(nextIsAdd);
             nextIsAdd = true; // Reset to default for next identifier
           }
         }
       } else if (itemCtx.BUCKETSELECTIONSTRATEGY() != null) {
-        stmt.property = "bucketselectionstrategy";
-        stmt.identifierValue = (Identifier) visit(itemCtx.identifier(0));
+        item.property = "bucketselectionstrategy";
+        item.identifierValue = (Identifier) visit(itemCtx.identifier(0));
       } else if (itemCtx.BUCKET() != null) {
-        stmt.property = "bucket";
+        item.property = "bucket";
         // Process BUCKET with +/- identifiers
         // Grammar: BUCKET ((PLUS | MINUS) identifier)+
         int identifierIndex = 0;
@@ -6347,27 +6373,28 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
           final var child = itemCtx.getChild(i);
           if (child instanceof final TerminalNode terminal) {
             if (terminal.getSymbol().getType() == SQLParser.PLUS) {
-              stmt.identifierListAddRemove.add(true);
+              item.identifierListAddRemove.add(true);
             } else if (terminal.getSymbol().getType() == SQLParser.MINUS) {
-              stmt.identifierListAddRemove.add(false);
+              item.identifierListAddRemove.add(false);
             }
           } else if (child instanceof SQLParser.IdentifierContext) {
-            stmt.identifierListValue.add((Identifier) visit(itemCtx.identifier(identifierIndex++)));
+            item.identifierListValue.add((Identifier) visit(itemCtx.identifier(identifierIndex++)));
           }
         }
       } else if (itemCtx.CUSTOM() != null) {
-        stmt.customKey = (Identifier) visit(itemCtx.identifier(0));
-        stmt.customValue = (Expression) visit(itemCtx.expression());
+        // The one arm with no named property: it carries a key/value pair instead.
+        item.customKey = (Identifier) visit(itemCtx.identifier(0));
+        item.customValue = (Expression) visit(itemCtx.expression());
       } else if (itemCtx.ALIASES() != null) {
-        stmt.property = "aliases";
+        item.property = "aliases";
         // Check if NULL (to clear aliases) or identifiers (to set aliases)
         if (itemCtx.NULL() != null) {
           // NULL means clear all aliases - leave identifierListValue empty
         } else {
           // Add all alias identifiers
           for (final SQLParser.IdentifierContext aliasCtx : itemCtx.identifier()) {
-            stmt.identifierListValue.add((Identifier) visit(aliasCtx));
-            stmt.identifierListAddRemove.add(true); // Always add for ALIASES
+            item.identifierListValue.add((Identifier) visit(aliasCtx));
+            item.identifierListAddRemove.add(true); // Always add for ALIASES
           }
         }
       }
@@ -6629,6 +6656,8 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     // Extract string literal and remove quotes
     final String rawText = actionCtx.STRING_LITERAL().getText();
     stmt.actionCode = rawText.substring(1, rawText.length() - 1);
+    // KEPT WITH ITS QUOTES SO toString() CAN RE-RENDER THE EXACT ORIGINAL LITERAL (ISSUE #7794)
+    stmt.actionCodeQuoted = rawText;
 
     return stmt;
   }
@@ -6697,38 +6726,52 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     final CreateTimeSeriesTypeStatement stmt = new CreateTimeSeriesTypeStatement();
     final SQLParser.CreateTimeSeriesTypeBodyContext bodyCtx = ctx.createTimeSeriesTypeBody();
 
-    stmt.name = (Identifier) visit(bodyCtx.identifier(0));
+    stmt.name = (Identifier) visit(bodyCtx.identifier());
     stmt.ifNotExists = bodyCtx.IF() != null && bodyCtx.NOT() != null && bodyCtx.EXISTS() != null;
 
-    // TIMESTAMP column and optional PRECISION / CODEC
-    if (bodyCtx.TIMESTAMP() != null && bodyCtx.identifier().size() > 1) {
-      stmt.timestampColumn = (Identifier) visit(bodyCtx.identifier(1));
-      if (bodyCtx.PRECISION() != null && bodyCtx.tsPrecision() != null)
-        // Locale.ENGLISH, not the default locale: the four precision names all contain an 'i', and under a Turkish
-        // default locale the no-arg toUpperCase maps it to a dotted capital that matches none of them (claude
-        // review on PR #7721).
-        stmt.precision = bodyCtx.tsPrecision().getText().toUpperCase(Locale.ENGLISH);
-      // The body-level tsCodecClause is the TIMESTAMP column's: the tag and field ones are nested inside
-      // tsTagColumnDef/tsFieldColumnDef and so are not children of this context.
-      stmt.timestampCodec = codecOf(bodyCtx.tsCodecClause());
-    }
-
-    // TAGS (name type [CODEC name], ...)
-    if (bodyCtx.TAGS() != null) {
-      for (final SQLParser.TsTagColumnDefContext colCtx : bodyCtx.tsTagColumnDef()) {
-        final Identifier colName = (Identifier) visit(colCtx.identifier(0));
-        final Identifier colType = (Identifier) visit(colCtx.identifier(1));
-        stmt.tags.add(new CreateTimeSeriesTypeStatement.ColumnDef(colName, colType, codecOf(colCtx.tsCodecClause())));
+    // The column members - the TIMESTAMP clause and the TAGS/FIELDS groups - in the order they were WRITTEN
+    // (issue #7702). Walked as one list rather than read off bodyCtx.TIMESTAMP()/tsTagColumnDef()/
+    // tsFieldColumnDef(): those accessors answer every timestamp, every tag and every field, each in its own
+    // order, which is precisely the information loss that made a declaration whose roles interleave - or whose
+    // timestamp is not its first column - unspellable. The type stores what it is given, so a statement that
+    // could not say the order created a different type from the builder body that rendered it.
+    stmt.timestampPosition = 0;
+    boolean timestampSeen = false;
+    for (final SQLParser.TsTypeMemberContext memberCtx : bodyCtx.tsTypeMember()) {
+      if (memberCtx.TIMESTAMP() != null) {
+        // Through visit(), not getText(): the raw token text of a back-quoted name carries its quotes and its
+        // escapes, so the message would name a column the user did not write (code review on PR #7757).
+        final Identifier timestamp = (Identifier) visit(memberCtx.identifier());
+        if (timestampSeen)
+          // The single-TIMESTAMP rule is the TYPE's, and the builder enforces it for every path; saying so here
+          // as well turns a second clause into a parse-time error naming the column, rather than a create that
+          // fails later with the type half-described.
+          throw new CommandSQLParsingException(
+              "A TIMESERIES type has exactly one TIMESTAMP column, and this statement declares a second one: '"
+                  + timestamp.getStringValue() + "'");
+        timestampSeen = true;
+        stmt.timestampPosition = stmt.columns.size();
+        stmt.timestampColumn = timestamp;
+        if (memberCtx.tsPrecision() != null)
+          // Locale.ENGLISH, not the default locale: the four precision names all contain an 'i', and under a
+          // Turkish default locale the no-arg toUpperCase maps it to a dotted capital that matches none of them
+          // (code review on PR #7721).
+          stmt.precision = memberCtx.tsPrecision().getText().toUpperCase(Locale.ENGLISH);
+        // The member-level tsCodecClause is the TIMESTAMP column's: the tag and field ones are nested inside
+        // tsTagColumnDef/tsFieldColumnDef and so are not children of this context.
+        stmt.timestampCodec = codecOf(memberCtx.tsCodecClause());
+        continue;
       }
-    }
 
-    // FIELDS (name type [CODEC name], ...)
-    if (bodyCtx.FIELDS() != null) {
-      for (final SQLParser.TsFieldColumnDefContext colCtx : bodyCtx.tsFieldColumnDef()) {
-        final Identifier colName = (Identifier) visit(colCtx.identifier(0));
-        final Identifier colType = (Identifier) visit(colCtx.identifier(1));
-        stmt.fields.add(new CreateTimeSeriesTypeStatement.ColumnDef(colName, colType, codecOf(colCtx.tsCodecClause())));
-      }
+      final SQLParser.TsColumnGroupContext groupCtx = memberCtx.tsColumnGroup();
+      if (groupCtx.TAGS() != null)
+        for (final SQLParser.TsTagColumnDefContext colCtx : groupCtx.tsTagColumnDef())
+          stmt.columns.add(columnDef(colCtx.identifier(0), colCtx.identifier(1), ColumnDefinition.ColumnRole.TAG,
+              colCtx.tsCodecClause()));
+      else
+        for (final SQLParser.TsFieldColumnDefContext colCtx : groupCtx.tsFieldColumnDef())
+          stmt.columns.add(columnDef(colCtx.identifier(0), colCtx.identifier(1), ColumnDefinition.ColumnRole.FIELD,
+              colCtx.tsCodecClause()));
     }
 
     // SHARDS count
@@ -6803,6 +6846,17 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
       stmt.tiers = parseDownsamplingTiers(bodyCtx.downsamplingTierClause());
 
     return stmt;
+  }
+
+  /**
+   * One {@code name TYPE [CODEC name]} column of a {@code tsColumnGroup}, tagged with the role its group gave it
+   * (issue #7702). The two group branches are identical apart from that role, so they share this.
+   */
+  private CreateTimeSeriesTypeStatement.ColumnDef columnDef(final SQLParser.IdentifierContext nameCtx,
+      final SQLParser.IdentifierContext typeCtx, final ColumnDefinition.ColumnRole role,
+      final SQLParser.TsCodecClauseContext codecCtx) {
+    return new CreateTimeSeriesTypeStatement.ColumnDef((Identifier) visit(nameCtx), (Identifier) visit(typeCtx), role,
+        codecOf(codecCtx));
   }
 
   /**
@@ -7526,7 +7580,8 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
   /**
    * Visit CHECK DATABASE statement.
    * Grammar: CHECK DATABASE (TYPE ident (COMMA ident)*)? (BUCKET (ident|int) (COMMA (ident|int))*)?
-   * (RECORD rid (COMMA rid)*)? (FIX)? (DELETE ORPHANS)? (RECLAIM UNREFERENCED FILES)? (DEEP)? (COMPRESS)?
+   * (RECORD rid (COMMA rid)*)? (FIX)? (DELETE ORPHANS)? (DELETE INVALID RECORDS)? (RECLAIM UNREFERENCED FILES)?
+   * (DEEP)? (COMPRESS)?
    */
   @Override
   public CheckDatabaseStatement visitCheckDatabaseStmt(final SQLParser.CheckDatabaseStmtContext ctx) {
@@ -7585,6 +7640,12 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     // ORPHANS alone identifies the clause - it is the only place the token appears in this statement.
     if (checkCtx.ORPHANS() != null) {
       stmt.deleteOrphans = true;
+    }
+
+    // Parse DELETE INVALID RECORDS flag (#7952): opt-in removal of records that do not satisfy their own type's
+    // existence constraints. INVALID alone identifies the clause - it is the only place the token appears here.
+    if (checkCtx.INVALID() != null) {
+      stmt.deleteInvalidRecords = true;
     }
 
     // Parse RECLAIM UNREFERENCED FILES flag (#6189): opt-in reclaim of files no schema component was ever built
@@ -7774,10 +7835,21 @@ public class SQLASTBuilder extends SQLParserBaseVisitor<Object> {
     } else if (ctx.CLASSPATH_URL() != null) {
       urlString = ctx.CLASSPATH_URL().getText();
     } else if (ctx.STRING_LITERAL() != null) {
+      // NOT decoded, ONLY unquoted: urlString is handed straight to BackupDatabaseStatement/ExportDatabaseStatement/
+      // ImportDatabaseStatement as a filesystem path. Decoding here (issue #7894) ran BaseExpression.decode(), which
+      // resolves the lexer's escape sequences and drops the backslash before any other character, over a Windows
+      // path, so 'C:temp new.zip' (backslash-t, backslash-n) targeted a filename containing a TAB and a LINE FEED
+      // instead. quotedLiteral (below) already carries the verbatim literal for toString(), which is what issue
+      // #7800 needed decoding for; the execution-side value must stay exactly what removeQuotes produces.
       urlString = removeQuotes(ctx.STRING_LITERAL().getText());
     }
 
-    return new Url(urlString);
+    final Url url = new Url(urlString);
+    if (ctx.STRING_LITERAL() != null)
+      // KEPT WITH ITS ORIGINAL QUOTES SO toString() CAN RE-RENDER THE EXACT LITERAL WITHOUT RE-ESCAPING
+      // ALREADY-ESCAPED TEXT (ISSUE #7800 REVIEW)
+      url.quotedLiteral = ctx.STRING_LITERAL().getText();
+    return url;
   }
 
   /**

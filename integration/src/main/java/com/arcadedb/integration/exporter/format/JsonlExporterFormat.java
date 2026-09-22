@@ -23,8 +23,10 @@ import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.Document;
 import com.arcadedb.database.Record;
+import com.arcadedb.engine.timeseries.AggregationMetrics;
 import com.arcadedb.engine.timeseries.ColumnDefinition;
 import com.arcadedb.engine.timeseries.TimeSeriesEngine;
+import com.arcadedb.engine.timeseries.TimeSeriesWalkCoarsenedException;
 import com.arcadedb.graph.Edge;
 import com.arcadedb.graph.LightEdge;
 import com.arcadedb.graph.Vertex;
@@ -48,6 +50,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
+import java.io.UncheckedIOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -284,7 +287,27 @@ public class JsonlExporterFormat extends AbstractExporterFormat {
    * The schema line already carries the type's definition; without this the definition came back on import with no
    * data behind it, which is not a round trip. The samples do not go through {@link JsonGraphSerializer}: a
    * TimeSeries row is a fixed column tuple with no RID and no type of its own, so it is written as the raw value
-   * array the engine reads and writes, in schema-column order, timestamp first.
+   * array the engine reads and writes.
+   * <p>
+   * <b>That array is an ENGINE ROW</b>: position 0 is the timestamp and positions 1..n are the NON-TIMESTAMP
+   * columns in schema order. This paragraph used to call it "schema-column order, timestamp first", two
+   * descriptions of the same array only while the TIMESTAMP column is declared FIRST - and
+   * {@code JsonlImporterFormat} read it the second way, so a type declaring the timestamp anywhere else, which
+   * issue #7702 made spellable, did not survive the round trip (issue #7899). The engine layout is what is
+   * emitted, here and before the correction, so nothing about the FILE changes and no format-version bump is
+   * involved; what changed is that the reader and this sentence now agree with it.
+   * <p>
+   * Walked through {@link TimeSeriesEngine#forEachRow} rather than {@code iterateQuery} (issue #7697):
+   * {@code iterateQuery}'s own javadoc says the sealed layer materialises every matching row before it returns an
+   * iterator over them, so an export - which asks for {@code Long.MIN_VALUE} to {@code Long.MAX_VALUE}, the widest
+   * range there is - held the whole series in heap before the chunk size ever bounded anything. {@code forEachRow}
+   * folds each row into the chunk as it is produced, bounded by one block, so residency is independent of how many
+   * samples the type holds. The chunk flush is unchanged; it just runs from inside the visitor now. The one thing
+   * this trades away is the global timestamp order {@code iterateQuery}'s shard merge gave: {@code forEachRow}
+   * visits shard by shard, so samples across shards are no longer interleaved by timestamp in the export. Nothing
+   * downstream needs that order - {@code JsonlImporterFormat} hands each chunk straight to
+   * {@code TimeSeriesEngine#appendBatch}, which carries its own per-row timestamps and does not require them
+   * sorted - so the round trip is unaffected.
    *
    * @param timeSeriesTypes names of the TIMESERIES types selected for export
    */
@@ -309,28 +332,96 @@ public class JsonlExporterFormat extends AbstractExporterFormat {
       if (ownTransaction)
         database.begin();
       try {
-        JSONArray chunk = new JSONArray();
-        for (final Iterator<Object[]> rows = engine.iterateQuery(Long.MIN_VALUE, Long.MAX_VALUE, null, null);
-            rows.hasNext(); ) {
-          final Object[] row = rows.next();
-          final JSONArray sample = new JSONArray();
-          for (int i = 0; i < columns.size() && i < row.length; i++)
+        // A single-element holder, not a local variable reassigned in the loop: the visitor lambda can only close
+        // over an effectively-final reference, and the chunk itself is replaced (not mutated) on every flush.
+        final JSONArray[] chunkHolder = { new JSONArray() };
+        // An AggregationMetrics, where this used to pass null (issue #8166). The engine counts a sealed block a
+        // retention truncate removed from under the walk, and until now the only reader of that count anywhere
+        // was the PromQL/HTTP metrics surface - so an export that lost blocks mid-walk wrote a SHORT file with no
+        // exception, no log line and no count, which issue #8043 called the worst available outcome. A block a
+        // DOWNSAMPLE replaced does not reach here at all any more: the engine raises for it, because its rows
+        // were coarsened rather than removed and no mixed-resolution answer is a consistent one.
+        final AggregationMetrics metrics = new AggregationMetrics();
+        // Set by the coarsening arm below rather than jumping out of the loop, so the flush and the report that
+        // follow the scan run for a refused walk exactly as they do for a whole one.
+        boolean coarsened = false;
+        try {
+          engine.forEachRow(Long.MIN_VALUE, Long.MAX_VALUE, null, null, metrics, row -> {
+            final JSONArray sample = new JSONArray();
+            // Copied position for position: the row IS the wire order (see the engine-row note above), so there
+            // is nothing to permute here - the bound is the row's own length, guarded by the column count
+            // because an unprojected row carries exactly one value per column.
+            for (int i = 0; i < columns.size() && i < row.length; i++)
               // Only the non-finite doubles need work, and they need it badly: JSONArray.put(Number) rewrites NaN
-            // and +/-Infinity to 0, so writing them straight would turn "no measurement" into a measurement of
-            // zero. NonFiniteNumbers is the same encoding record properties already travel by, and
-            // JsonlImporterFormat decodes them back against the column's declared type.
-            sample.put(NonFiniteNumbers.encode(row[i]));
-          chunk.put(sample);
-          context.timeSeriesSamples.incrementAndGet();
+              // and +/-Infinity to 0, so writing them straight would turn "no measurement" into a measurement of
+              // zero. NonFiniteNumbers is the same encoding record properties already travel by, and
+              // JsonlImporterFormat decodes them back against the column's declared type.
+              sample.put(NonFiniteNumbers.encode(row[i]));
+            chunkHolder[0].put(sample);
+            context.timeSeriesSamples.incrementAndGet();
 
-          if (chunk.length() >= TIMESERIES_CHUNK_SIZE) {
-            writeJsonLine("ts", new JSONObject().put("t", typeName).put("s", chunk));
-            chunk = new JSONArray();
-          }
+            if (chunkHolder[0].length() >= TIMESERIES_CHUNK_SIZE) {
+              try {
+                writeJsonLine("ts", new JSONObject().put("t", typeName).put("s", chunkHolder[0]));
+              } catch (final IOException e) {
+                // TimeSeriesRowVisitor#visit declares no checked exception; unwrapped just below the scan.
+                throw new UncheckedIOException(e);
+              }
+              chunkHolder[0] = new JSONArray();
+            }
+            return true;
+          });
+        } catch (final UncheckedIOException e) {
+          throw e.getCause();
+        } catch (final TimeSeriesWalkCoarsenedException e) {
+          // Fails THIS type, not the whole export (issue #8166, review of PR #8197). A downsample is a scheduled
+          // maintenance event and an export of a large database is long, so the two overlap; aborting everything
+          // would throw away the vertices, edges, documents and other TIMESERIES types already written and make
+          // the operator re-run the lot to learn about one series. Counted as a skipped record, which is the
+          // mechanism issue #6471 established for a part of the export that could not be written: every other
+          // type is still exported, and Exporter turns a non-zero count into a failed outcome at the end, so the
+          // run is loudly incomplete rather than silently short - which is the whole point.
+          //
+          // And counted a SECOND time, under its own name. The rows already written for this type stay in the
+          // archive - they are real, just fewer than the type holds - which is not the shape a skipped record
+          // has, since that one produced no output at all. A consumer reading skippedRecords as "nothing was
+          // written for this" would be wrong here, so partialTimeSeriesTypes says which types those are.
+          //
+          // It does NOT skip the flush and the report below, and that is the whole point of setting a flag here
+          // instead of the `continue` this used to be (review of PR #8197). Both of those exist to say what
+          // happened to the rows this walk DID read, and stepping over them threw that away twice: the rows
+          // buffered since the last chunk boundary - up to TIMESERIES_CHUNK_SIZE - 1 of them, already counted in
+          // context.timeSeriesSamples inside the visitor - never reached the file, so the count and the archive
+          // disagreed; and a vanished-block tally this same walk had already accumulated, which the store-side
+          // fix makes possible in one walk, went unreported. Silently short numbers, in the middle of the change
+          // that exists to abolish them.
+          coarsened = true;
+          context.skippedRecords.incrementAndGet();
+          context.partialTimeSeriesTypes.incrementAndGet();
+          LogManager.instance().log(this, Level.SEVERE,
+              "TIMESERIES type '%s' was downsampled while this export was reading it, so the samples written for "
+                  + "it are PARTIAL and at a finer resolution than the store now holds; re-run the export for a "
+                  + "whole answer. %s", null, typeName, e.getMessage());
         }
 
-        if (chunk.length() > 0)
-          writeJsonLine("ts", new JSONObject().put("t", typeName).put("s", chunk));
+        // Always, for a whole walk and a refused one alike: every row the visitor counted is a row in the file.
+        if (chunkHolder[0].length() > 0)
+          writeJsonLine("ts", new JSONObject().put("t", typeName).put("s", chunkHolder[0]));
+
+        // WARNING rather than a failure: retention dropping old blocks while a long export runs is legitimate and
+        // expected, and the rows are genuinely gone rather than somewhere else, so the export is not wrong - it is
+        // merely not the snapshot the operator may think it is. What it must not be is SILENT.
+        // Reported even when the walk was refused above: a walk can step over blocks retention removed and only
+        // later meet one a downsample replaced, which is precisely the "both maintenance passes in one walk" case
+        // the store-side discrimination was built for. The two counts answer different questions and an operator
+        // reading the summary needs both.
+        if (metrics.getVanishedBlocks() > 0) {
+          context.vanishedTimeSeriesBlocks.addAndGet(metrics.getVanishedBlocks());
+          LogManager.instance().log(this, Level.WARNING,
+              "%d sealed block(s) of TIMESERIES type '%s' were removed by retention while this export was reading "
+                  + "them%s", null, metrics.getVanishedBlocks(), typeName,
+              coarsened ? ", before the downsample that cut the read short" : "; their samples are NOT part of this export");
+        }
       } finally {
         // Rolled back, never committed, on the success path too: the scan above only reads, so there is nothing
         // to publish, and a rollback releases the read view without asking the page manager to flush anything.

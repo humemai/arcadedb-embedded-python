@@ -21,6 +21,9 @@ package com.arcadedb.query.sql.executor;
 import com.arcadedb.exception.TimeoutException;
 import com.arcadedb.query.sql.parser.Limit;
 
+import java.util.NoSuchElementException;
+import java.util.Optional;
+
 /**
  * Created by luigidellaquila on 08/07/16.
  */
@@ -45,9 +48,44 @@ public class LimitExecutionStep extends AbstractExecutionStep {
     checkForPrevious();
 
     final int nextBlockSize = Math.min(nRecords, limitVal - loaded);
-    final ResultSet result = prev.syncPull(context, nextBlockSize);
-    loaded += nextBlockSize;
-    return result;
+    final ResultSet upstream = prev.syncPull(context, nextBlockSize);
+    // COUNT WHAT IS ACTUALLY DELIVERED, NOT WHAT WAS ASKED FOR: a batch shorter than nextBlockSize is allowed
+    // upstream (LocalResultSet simply pulls again), and counting the request instead of the delivery makes loaded
+    // run ahead of the rows a caller ever sees, so the LIMIT stops early (issue #7799)
+    return new ResultSet() {
+      @Override
+      public boolean hasNext() {
+        // APPLY the limit, do not merely count towards it: a source step is free to hand back more rows than the
+        // nextBlockSize it was asked for, and the whole FetchFromSchema* family used to hand back its entire
+        // listing in one batch, so `LIMIT 2` over six types answered six rows (issue #7898). #7799 fixed what this
+        // step COUNTS; this is the cut-off it was still inheriting from whatever upstream chose to send.
+        return loaded < limitVal && upstream.hasNext();
+      }
+
+      @Override
+      public Result next() {
+        if (loaded >= limitVal)
+          throw new NoSuchElementException();
+        final Result result = upstream.next();
+        loaded++;
+        return result;
+      }
+
+      @Override
+      public void close() {
+        upstream.close();
+      }
+
+      @Override
+      public Optional<ExecutionPlan> getExecutionPlan() {
+        return upstream.getExecutionPlan();
+      }
+
+      @Override
+      public Optional<QueryStatistics> getStatistics() {
+        return upstream.getStatistics();
+      }
+    };
   }
 
   @Override

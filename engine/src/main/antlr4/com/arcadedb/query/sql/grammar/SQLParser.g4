@@ -487,9 +487,7 @@ customMetadataItem
 createTimeSeriesTypeBody
     : identifier
       (IF NOT EXISTS)?
-      (TIMESTAMP identifier (PRECISION tsPrecision)? tsCodecClause?)?
-      (TAGS LPAREN tsTagColumnDef (COMMA tsTagColumnDef)* RPAREN)?
-      (FIELDS LPAREN tsFieldColumnDef (COMMA tsFieldColumnDef)* RPAREN)?
+      tsTypeMember*
       (SHARDS INTEGER_LITERAL)?
       (RETENTION INTEGER_LITERAL tsRetentionUnit?)?
       ((COMPACTION_INTERVAL | COMPACTION INTERVAL) INTEGER_LITERAL tsRetentionUnit?)?
@@ -508,6 +506,33 @@ tsRetentionUnit
     | HOURS
     | MINUTES
     | SECONDS
+    ;
+
+/**
+ * One column declaration of a TIMESERIES type - the TIMESTAMP clause, or a parenthesised run of TAG or FIELD
+ * columns - in the position it was written (issue #7702). The type stores its columns in declaration order and that
+ * order is its identity, a column index being a position in it and a sample a positional array, so the members are
+ * one repeatable list rather than three fixed slots. The TIMESTAMP clause appearing here rather than ahead of them
+ * is what lets a declaration whose timestamp is not the first column be spelled at all; the type still has exactly
+ * one, which `CreateTimeSeriesTypeStatement` enforces where the rest of the single-timestamp rule lives.
+ */
+tsTypeMember
+    : TIMESTAMP identifier (PRECISION tsPrecision)? tsCodecClause?
+    | tsColumnGroup
+    ;
+
+/**
+ * One parenthesised run of columns sharing a role. REPEATABLE, and in any order (issue #7702): a TIMESERIES type
+ * stores its columns in the order they were declared, and that order is the type's identity - a column index is a
+ * position in it and a sample is a positional array - so a grammar with exactly one TAGS slot and one FIELDS slot
+ * could not spell a type whose roles interleave. `TimeSeriesTypeBuilder.toSQL()` had to regroup such a declaration,
+ * which made the same builder body create columns in one order embedded and another remotely, and made a logical
+ * restore of an interleaved type through the DDL path refuse rather than round-trip. A run of consecutive columns
+ * sharing a role still renders as one group, so every statement written against the old grammar is unchanged.
+ */
+tsColumnGroup
+    : TAGS LPAREN tsTagColumnDef (COMMA tsTagColumnDef)* RPAREN
+    | FIELDS LPAREN tsFieldColumnDef (COMMA tsFieldColumnDef)* RPAREN
     ;
 
 tsTagColumnDef
@@ -1128,6 +1153,10 @@ checkDatabaseStatement
       // Issue #6090: opt-in reclaim of ORPHAN EDGE RECORDS (edge records no vertex's edge list references).
       // Deliberately its own clause rather than part of FIX - see DatabaseChecker.setDeleteOrphanEdgeRecords.
       (DELETE ORPHANS)?
+      // Issue #7952: opt-in removal of records that do not satisfy their own type's existence constraints.
+      // Deliberately its own clause too, and for a sharper reason than the other two - ALTER PROPERTY ... MANDATORY
+      // TRUE on a populated type makes every record it holds a finding. See DatabaseChecker.setDeleteInvalidRecords.
+      (DELETE INVALID RECORDS)?
       // Issue #6189: opt-in reclaim of files this node holds that no schema component was ever built for.
       // Deliberately its own clause too - see DatabaseChecker.setReclaimUnreferencedFiles.
       (RECLAIM UNREFERENCED FILES)?
@@ -1736,6 +1765,8 @@ identifier
     | RECLAIM
     | UNREFERENCED
     | FILES
+    | INVALID
+    | RECORDS
     | DEEP
     | FORCE
     | OPTIMIZE

@@ -19,6 +19,7 @@
 package com.arcadedb.server.http.handler;
 
 import com.arcadedb.exception.CommandExecutionException;
+import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
@@ -31,7 +32,6 @@ import io.micrometer.core.instrument.Metrics;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.HttpString;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -124,7 +124,7 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
     else if (command_lc.startsWith(DROP_USER))
       dropUser(extractTarget(command, DROP_USER));
     else if (command_lc.startsWith(CONNECT_CLUSTER))
-      connectCluster(extractTarget(command, CONNECT_CLUSTER));
+      return connectCluster(extractTarget(command, CONNECT_CLUSTER));
     else if (DISCONNECT_CLUSTER.equals(command_lc))
       disconnectCluster();
     else if (command_lc.startsWith(SET_DATABASE_SETTING))
@@ -203,9 +203,31 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
     Metrics.counter("http.drop-user").increment();
   }
 
-  private void connectCluster(final String serverAddress) {
-    controlPlane.connectCluster(serverAddress);
+  /**
+   * {@code connect cluster} answers 503 when the join succeeded but a security document could not be seeded to
+   * the new peer, which is the status {@code POST /api/v1/cluster/peer} already gives the identical condition
+   * (issue #7532, absorbing #7550). Before this the two verbs disagreed: that route answered 503 and named the
+   * documents, while this one answered 200 and left the failure in a SEVERE log line, so an operator driving
+   * the join through {@code POST /api/v1/server} had nothing their automation could branch on.
+   * <p>
+   * {@code result} is still present and still says the server joined, for the same reason the add-peer route
+   * keeps it: that half did happen, and a caller that treated the whole call as a no-op would be wrong about
+   * the cluster's membership. The counter is incremented either way - the command ran.
+   */
+  private ExecutionResponse connectCluster(final String serverAddress) {
+    final ServerControlPlane.ConnectClusterResult result = controlPlane.connectCluster(serverAddress);
     Metrics.counter("http.connect-cluster").increment();
+
+    final JSONObject response = new JSONObject().put("result", "ok");
+    if (!result.hasFailedSeeds())
+      return new ExecutionResponse(200, response.toString());
+
+    // error/detail, not one long error: AbstractServerHttpHandler.error2json uses that split everywhere, and
+    // Studio's globalNotifyError renders 'error' as the notification TITLE and 'detail' as its body.
+    response.put("error", result.errorMessage());
+    response.put("detail", result.detailMessage());
+    response.put("failedSeeds", new JSONArray(result.failedSeeds()));
+    return new ExecutionResponse(503, response.toString());
   }
 
   private void disconnectCluster() {
@@ -237,7 +259,7 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
   }
 
   private String extractTarget(String command, String keyword) {
-    final int pos = command.toLowerCase().indexOf(keyword);
+    final int pos = command.toLowerCase(Locale.ROOT).indexOf(keyword);
     if (pos == -1)
       return "";
 
@@ -532,7 +554,7 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
       // Nothing has been written yet, so the request can still be answered with a status code.
       if (!sink.started())
         throw e;
-      sink.send(new JSONObject().put("status", "error").put("message", failureMessage(e)));
+      sink.send(errorEvent(e));
     } finally {
       sink.close();
     }
@@ -540,8 +562,42 @@ public class PostServerCommandHandler extends AbstractServerHttpHandler {
   }
 
   /**
-   * The message an SSE {@code error} frame carries. The control plane wraps a failure raised inside
-   * the restore or import machinery in a {@link CommandExecutionException}, so the cause is the one
+   * The SSE {@code error} frame for a failure that happened after the stream had already begun, which is the only
+   * point at which the response can no longer be a status code.
+   * <p>
+   * It carries what the JSON error body carries, and CONCEALS what the JSON error body conceals. The frame used to
+   * report {@link #failureMessage} - the raw internal message - whatever {@code arcadedb.server.mode} said, so this
+   * surface silently opted out of the production concealment the rest of the server applies. It is root-gated, so
+   * the exposure is to an already-privileged caller; but the concealment is either a policy or it is not, and a
+   * surface that opts out makes it unreliable as one (issue #7472).
+   * <p>
+   * The bounded {@code exception} class name is emitted in EVERY mode, exactly as
+   * {@code AbstractServerHttpHandler.buildErrorBody} emits it: it is what tells a client WHICH failure this was,
+   * and it carries no free-form text.
+   */
+  private JSONObject errorEvent(final RuntimeException e) {
+    final JSONObject event = new JSONObject().put("status", "error");
+    final Throwable reported = e.getCause() != null ? e.getCause() : e;
+    event.put("exception", reported.getClass().getName());
+    final boolean conceal = isProductionMode();
+    if (conceal)
+      // THE CONCEALED TEXT PROMISES A LOG ENTRY, AND THIS BRANCH IS THE ONE PLACE THAT CAN WRITE IT: streamOrRun
+      // HAS ALREADY SENT THE RESPONSE, SO THE FAILURE NEVER REACHES AbstractServerHttpHandler'S MAPPING, WHICH IS
+      // WHERE EVERY OTHER CONCEALED HTTP FAILURE IS LOGGED (PR #7755 REVIEW).
+      // AT THIS CLASS'S OWN INTERNAL-ERROR LEVEL RATHER THAN A FLAT SEVERE, SO THE LEVEL FOLLOWS THE SAME RULE THE
+      // REST OF THE HTTP SURFACE USES AND A PRODUCTION SERVER UNDER FLOOD PROTECTION IS NOT DROWNED BY IT. THE
+      // gRPC SIDE SPLITS ON ErrorCategory INSTEAD BECAUSE ITS PATH CARRIES ROUTINE CALLER-CAUSED FAILURES - A
+      // DUPLICATED KEY ON EVERY UPSERT RETRY - WHICH A RESTORE OR IMPORT REACHING HERE NEVER IS
+      LogManager.instance().log(this, getInternalErrorLogLevel(),
+          "Error on a control-plane operation, concealed from the client in production mode", e);
+
+    event.put("message", conceal ? ArcadeDBServer.CONCEALED_ERROR_MESSAGE : failureMessage(e));
+    return event;
+  }
+
+  /**
+   * The message an SSE {@code error} frame carries outside production mode. The control plane wraps a failure
+   * raised inside the restore or import machinery in a {@link CommandExecutionException}, so the cause is the one
    * that names what actually went wrong - the same message the pre-#7308 handler read straight off
    * the {@code InvocationTargetException}.
    */

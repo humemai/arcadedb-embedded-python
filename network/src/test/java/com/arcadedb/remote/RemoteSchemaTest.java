@@ -51,6 +51,11 @@ class RemoteSchemaTest {
   void setUp() {
     mockDatabase = mock(RemoteDatabase.class);
     schema = new RemoteSchema(mockDatabase);
+    // reload() also reads schema:buckets directly, alongside schema:types, so a standalone bucket is visible
+    // even when no type uses it (issue #7797 follow-up). Tests below only care about type-attached buckets, so
+    // this default keeps them unchanged; a test asserting on a standalone bucket overrides it explicitly.
+    final ResultSet emptyBuckets = buildSchemaResultSet();
+    when(mockDatabase.command("sql", "select from schema:buckets")).thenReturn(emptyBuckets);
   }
 
   @Test
@@ -146,11 +151,17 @@ class RemoteSchemaTest {
         .isInstanceOf(UnsupportedOperationException.class);
   }
 
+  /**
+   * Issue #7659: this used to call {@code buildVertexType()}, which throws on the FIRST call in the chain, so every
+   * builder call after it was dead code and the 3-argument {@code getOrCreateVertexType} this test is named for was
+   * never reached at all - it had no coverage anywhere. Pointed at the method it names, mirroring the
+   * document-type counterpart above.
+   */
   @Test
   void getOrCreateVertexTypeWithPageSizeThrowsUnsupported() {
-    assertThatThrownBy(() ->
-        schema.buildVertexType().withName("Type").withTotalBuckets(1).withIgnoreIfExists(true).withPageSize(100).create())
-        .isInstanceOf(UnsupportedOperationException.class);
+    assertThatThrownBy(() -> schema.getOrCreateVertexType("Type", 1, 100))
+        .isInstanceOf(UnsupportedOperationException.class)
+        .hasMessageContaining("getOrCreateVertexType()");
   }
 
   @Test

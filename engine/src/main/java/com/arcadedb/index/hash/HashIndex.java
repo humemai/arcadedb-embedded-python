@@ -56,6 +56,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -79,6 +80,10 @@ public class HashIndex implements IndexInternal {
   private boolean                              valid  = true;
   private IndexMetadata                        metadata;
   protected HashIndexBucket                    bucket;
+  // CI collation flags per key component, mirrored from `metadata` - see #7766. `LSMTreeIndexAbstract` keeps the
+  // same kind of array for the same reason: HashIndexBucket has no collation concept of its own, so folding must
+  // happen here, in convertKeys(), on both the write and the lookup side.
+  private boolean[]                            caseInsensitiveKeys;
 
   // ─── FACTORY HANDLERS ────────────────────────────────────
 
@@ -456,6 +461,7 @@ public class HashIndex implements IndexInternal {
   public void setMetadata(final IndexMetadata metadata) {
     checkIsValid();
     this.metadata = metadata;
+    updateCaseInsensitiveKeys();
   }
 
   @Override
@@ -473,6 +479,24 @@ public class HashIndex implements IndexInternal {
       this.metadata.propertyNames = new ArrayList<>();
       for (int i = 0; i < jsonArray.length(); i++)
         metadata.propertyNames.add(jsonArray.getString(i));
+    }
+    final var collationsJSON = indexJSON.getJSONArray("collations", null);
+    if (collationsJSON != null)
+      metadata.collations = collationsJSON.toListOfStrings();
+
+    updateCaseInsensitiveKeys();
+  }
+
+  /**
+   * Propagates CI collation flags from {@link #metadata} to {@link #caseInsensitiveKeys}, mirroring
+   * {@code LSMTreeIndex.updateCaseInsensitiveKeys()} - see #7766.
+   */
+  private void updateCaseInsensitiveKeys() {
+    if (metadata != null && metadata.hasAnyCaseInsensitive()) {
+      final boolean[] flags = new boolean[metadata.propertyNames.size()];
+      for (int i = 0; i < flags.length; i++)
+        flags[i] = metadata.isCaseInsensitive(i);
+      caseInsensitiveKeys = flags;
     }
   }
 
@@ -613,6 +637,8 @@ public class HashIndex implements IndexInternal {
     json.put("properties", getPropertyNames());
     json.put("nullStrategy", getNullStrategy());
     json.put("unique", isUnique());
+    if (metadata.hasAnyCaseInsensitive())
+      json.put("collations", metadata.collations);
     return json;
   }
 
@@ -678,6 +704,22 @@ public class HashIndex implements IndexInternal {
 
   // ─── INTERNAL HELPERS ────────────────────────────────────
 
+  /**
+   * The single funnel every put/get/remove passes its key through, and therefore the one place where a key can be
+   * made to mean the same thing on the write side and on the lookup side.
+   * <p>
+   * The hash index settles key identity on BYTES - {@code HashIndexBucket} serializes the key, hashes those bytes to
+   * route it, and compares them raw to decide whether an entry matches - so every value type whose serialized form
+   * draws a distinction {@link BinaryComparator} does not has to be canonicalized here, or the two spellings of one
+   * key land in different slots: a lookup for one cannot find the other, and a UNIQUE index does not see the
+   * collision. That is the whole of {@link BinaryComparator#canonicalizeForByteEquality}, shared with the LSM index,
+   * which needs the same rule for its bloom filter (issue #7767; DECIMAL is the type it exists for, since
+   * {@link Type#convert} coerces the CLASS but preserves the SCALE).
+   * <p>
+   * Applied to the STORED key and not only to the hash, unlike the LSM index: here the bytes on the page ARE the
+   * equality test. An index created before this was applied therefore has to be rebuilt to answer for both
+   * spellings - and the rebuild surfaces whatever duplicates the constraint had been letting through.
+   */
   private Object[] convertKeys(final Object[] keys) {
     if (keys != null) {
       final byte[] keyTypes = bucket.declaredKeyTypes;
@@ -685,7 +727,20 @@ public class HashIndex implements IndexInternal {
       for (int i = 0; i < keys.length; ++i) {
         if (keys[i] == null)
           continue;
-        convertedKeys[i] = Type.convert(getDatabase(), keys[i], BinaryTypes.getClassFromType(keyTypes[i]));
+        // convertIndexKeyOrNull(), not convert(): the twin of LSMTreeIndexAbstract#convertKeysToDeclaredTypes and
+        // for the same reason. The keys reaching here are whatever the records hold, and on a schemaless property
+        // that can include a date the type this index settled on cannot read. Such a row indexes under a null key
+        // and the build carries on; refusing it would make one heterogeneous record fail CREATE INDEX outright -
+        // and, since build() rethrows, would also fail an ordinary INSERT that used to index a null key and
+        // continue (issue #8090, which made convert() itself strict). Every other mismatch still fails the build.
+        convertedKeys[i] = BinaryComparator.canonicalizeForByteEquality(
+            Type.convertIndexKeyOrNull(getDatabase(), keys[i], BinaryTypes.getClassFromType(keyTypes[i])));
+
+        // Fold CI-collated String components the same way LSMTreeIndexAbstract#convertKeysToDeclaredTypes does, so
+        // writes and lookups agree on the same key: HashIndexBucket has no collation concept of its own (#7766).
+        if (convertedKeys[i] instanceof String string && caseInsensitiveKeys != null && i < caseInsensitiveKeys.length
+            && caseInsensitiveKeys[i])
+          convertedKeys[i] = string.toLowerCase(Locale.ROOT);
       }
       return convertedKeys;
     }

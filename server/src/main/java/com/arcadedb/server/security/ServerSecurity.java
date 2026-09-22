@@ -149,6 +149,13 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
    * The handler's other caller is shutdown: once {@code stopService()} has run, a refresh submitted by a late
    * apply is dropped as well, which is what stopping means.
    */
+  /**
+   * What this node has done with the replicated group changes it received (issue #7529). Declared ahead of
+   * {@link #permissionsRefreshExecutor} on purpose: that field's initializer builds the rejection handler that
+   * records into this one, and a field initializer sees only the fields declared above it.
+   */
+  private final        PermissionRefreshMetrics           permissionRefreshMetrics   = new PermissionRefreshMetrics();
+
   private final        ThreadPoolExecutor                 permissionsRefreshExecutor = createPermissionsRefreshExecutor();
 
   /**
@@ -197,9 +204,21 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
   public void configure(final ArcadeDBServer arcadeDBServer, final ContextConfiguration configuration) {
   }
 
+  /**
+   * Issue #7545: schedules the {@code server-groups.json} reload watcher, once, for the lifetime of this
+   * service - the mirror of the {@code groupRepository.stop()} that {@link #stopService()} has always done.
+   * <p>
+   * It used to be scheduled only as a side effect of {@link SecurityGroupFileRepository#load()}, i.e. only on a
+   * node that reached {@link SecurityGroupFileRepository#getGroups()} while the in-memory document was still
+   * absent. A node seeded by a replicated {@code SECURITY_GROUPS_ENTRY} before it opened any database gets its
+   * document published straight into memory by {@link #applyReplicatedGroups}, so that branch never ran and the
+   * file was never watched - an operator's hand edit on that node stayed invisible until restart. The
+   * repository keeps its own guard on every publisher; this call additionally makes the watcher independent of
+   * any document ever arriving.
+   */
   @Override
   public void startService() {
-    // NO ACTION
+    groupRepository.startWatching();
   }
 
   public void loadUsers() {
@@ -763,13 +782,32 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     }
   }
 
-  private static ThreadPoolExecutor createPermissionsRefreshExecutor() {
+  /**
+   * Instance method, not static: the rejection handler counts into {@link #permissionRefreshMetrics}, and a
+   * coalesced hand-off is the one event in this path that used to leave no trace at all above FINE (issue #7529).
+   */
+  private ThreadPoolExecutor createPermissionsRefreshExecutor() {
     return new ThreadPoolExecutor(0, 1, 30L, TimeUnit.SECONDS, new ArrayBlockingQueue<>(1), r -> {
       final Thread thread = new Thread(r, "arcadedb-security-permissions-refresh");
       thread.setDaemon(true);
       return thread;
-    }, (rejected, executor) -> LogManager.instance().log(ServerSecurity.class, Level.FINE,
-        "A cached-permission refresh is already queued or the server is stopping; this one is coalesced into it"));
+    }, (rejected, executor) -> {
+      permissionRefreshMetrics.refreshCoalesced();
+      LogManager.instance().log(ServerSecurity.class, Level.FINE,
+          "A cached-permission refresh is already queued or the server is stopping; this one is coalesced into it");
+    });
+  }
+
+  /**
+   * A reading of the replicated-permission refresh counters (issue #7529).
+   * <p>
+   * The surfaces are {@code GET /api/v1/server?mode=cluster} under {@code ha.securityRefresh} and the
+   * {@code arcadedb.ha.security.*} Micrometer meters {@code HAReplicationMetrics} binds, so an operator who has
+   * narrowed a permission can check that every peer enforced it instead of having to trust that no WARNING was
+   * logged anywhere.
+   */
+  public PermissionRefreshMetrics.Snapshot getPermissionRefreshStats() {
+    return permissionRefreshMetrics.snapshot();
   }
 
   /**
@@ -784,6 +822,10 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     if (server == null)
       return;
 
+    // Every hand-off is counted, taken or not: execute() runs the rejection handler on THIS thread and returns
+    // normally, so the submit cannot tell them apart. The handler counts the refusals separately, and the
+    // accepted ones are the difference (issue #7529).
+    permissionRefreshMetrics.refreshRequested();
     permissionsRefreshExecutor.execute(this::runDatabasePermissionsRefresh);
   }
 
@@ -799,6 +841,7 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
       // Exception and deliberately not Throwable: an Error is not a refresh that failed, it is a JVM that is no
       // longer able to run one, and logging it here as though the node had merely lost its fast path would be a
       // lie about the state of the process. Let it kill the worker and reach the default handler.
+      permissionRefreshMetrics.sweepFailed();
       LogManager.instance().log(this, Level.SEVERE,
           "Error while refreshing the cached database permissions after a replicated group change; this node now "
               + "converges only on the '%s' reload tick", e, SecurityGroupFileRepository.FILE_NAME);
@@ -825,10 +868,15 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     if (server == null)
       return;
 
+    long refreshed = 0;
+    long failures = 0;
+
     for (final String databaseName : server.getDatabaseNames())
       try {
         updateSchema(server.getDatabase(databaseName));
+        ++refreshed;
       } catch (final Exception e) {
+        ++failures;
         // Guarded PER DATABASE, not once around the loop. server.getDatabase() can refuse a name this iteration
         // has already seen - it is dropped meanwhile, or its directory still carries the interrupted-snapshot
         // marker ArcadeDBServer.getDatabase() throws DatabaseNotAvailableException for - and a peer mid-snapshot
@@ -839,6 +887,11 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
             "Could not refresh the cached permissions of database '%s'; it converges on the '%s' reload tick, or "
                 + "when it is next opened", e, databaseName, SecurityGroupFileRepository.FILE_NAME);
       }
+
+    // Counted HERE rather than in the worker, so the number covers every source of a sweep - the replicated
+    // apply, the server-groups.json watcher and an inline refresh - and an operator comparing it against
+    // entriesApplied is comparing two numbers that mean the same thing on every node (issue #7529).
+    permissionRefreshMetrics.sweepCompleted(refreshed, failures);
   }
 
   public String getEncodedHash(final String password, final String salt, final int iterations) {
@@ -1207,7 +1260,7 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
    * they all hold the same value - and it survives a restart, because it is on disk.</li>
    * </ul>
    * Neither is the document currently in force, and that is the point. Comparing against the LIVE document was the
-   * defect #7693 reports and, in its second form, what claude-review and CodeRabbit both caught on PR #7748:
+   * defect #7693 reports and, in its second form, what the code review and CodeRabbit both caught on PR #7748:
    * <ul>
    * <li>before the first replicated entry the live documents differ by construction - each node bootstraps its own
    * {@code root} with an independently salted password hash, so three nodes of a statically configured cluster (one
@@ -1532,6 +1585,10 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
     // document in memory first, so this node authorizes against it from now on whether or not the write
     // succeeded. Scheduling after the throw below would leave the case that needs the refresh most - a narrowed
     // permission on a node whose configuration volume is full or read-only - waiting for the reload tick.
+    // Recorded next to the scheduling and for the same reason: from applyReplicated() onwards this node
+    // authorizes against the new document, so that is the moment 'this peer has the change' became true - whether
+    // or not the write below succeeded, and whether or not the refresh worker took the hand-off (issue #7529).
+    permissionRefreshMetrics.entryApplied();
     scheduleDatabasePermissionsRefresh();
 
     if (persistFailure != null) {
@@ -1586,6 +1643,21 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
    * change is not blocked for three consecutive Raft round trips. Each is best-effort and independent: the
    * failures are collected and returned rather than thrown, so one failing seed does not skip the other two.
    * <p>
+   * <b>A seed is submitted UNCONDITIONALLY, and that is not an oversight</b> (issue #7834). The obvious
+   * hardening - give the seed the compare-and-set precondition of issue #7509, so a change committed on another
+   * node between this read and the apply cannot be undone by the whole document a seed carries - does not work,
+   * and fails in the one case a seed exists for. {@link #isSuperseded} compares the precondition against the
+   * fingerprint of the last replicated document THE APPLYING NODE installed, which is the only value that is
+   * the same everywhere (issue #7693). On a peer whose baseline has drifted - which is precisely a peer that
+   * missed entries, joined late, or caught up by a snapshot install - that value does NOT match, so the peer
+   * would refuse the very seed sent to repair it. Weakening the comparison so the stale peer accepts while a
+   * caught-up peer refuses would not fix that either: it manufactures a divergence, with the revoked credential
+   * living on exactly the node that was already behind.
+   * <p>
+   * What closes the window instead is having a single seeder: one node, one monitor, one read-and-submit
+   * sequence per admission (issue #7834). The residual window - a security change committed on ANOTHER node
+   * between this read and this entry's apply - is pre-existing and is not made worse by any of that.
+   * <p>
    * This form makes one attempt per document. An admission path wants
    * {@link #seedSecurityStateClusterWide(long)} instead, which retries the ones that failed (issue #7521).
    *
@@ -1593,6 +1665,44 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
    */
   public List<String> seedSecurityStateClusterWide() {
     return seedSecurityStateClusterWide(0L);
+  }
+
+  /**
+   * The cluster-replicated security documents this node has never installed a replicated copy of, in the order
+   * {@link #seedSecurityStateClusterWide} reports its failures (issue #7532).
+   * <p>
+   * <b>What it answers.</b> Not "is this node's document stale" - nothing local can answer that - but the one
+   * question that is locally decidable and is the one the readiness gate needs: <b>is what this node enforces
+   * something the cluster installed, or is it this node's own config directory?</b> The distinction is the same
+   * one {@link ReplicatedSecurityFingerprintRepository} was built for, read here for a second purpose: a recorded
+   * fingerprint exists if and only if an {@code applyReplicated*} has installed that document from the replicated
+   * log, so its absence means every credential, group and API token this node enforces for that document came off
+   * its own disk.
+   * <p>
+   * That is exactly the state a freshly admitted peer is in between the commit of its membership change and the
+   * landing of the admission seed - the window issue #7521's bounded retry shortens but, because the seed is
+   * submitted only after {@code addPeer} returns, cannot close - and the state it stays in when the seed never
+   * lands at all, which is the residual failure both admission verbs now report.
+   * <p>
+   * <b>It also reports a cluster that has simply never replicated a security document</b>, because such a cluster
+   * has no node with a recorded fingerprint and there is no local way to tell the two apart. That is why the
+   * readiness gate consuming this is bounded by a window that is zero by default: see
+   * {@code arcadedb.ha.securityConvergenceReadinessTimeout}.
+   * <p>
+   * Free of this object's monitor and of any filesystem access - the repository answers from the map it read at
+   * construction - so a readiness probe may call it on any thread as often as it likes.
+   *
+   * @return the document names, empty when all three have been installed from the replicated log
+   */
+  public List<String> unconvergedClusterSecurityDocuments() {
+    final List<String> unconverged = new ArrayList<>(3);
+    if (replicatedFingerprints.get(ReplicatedSecurityFingerprintRepository.USERS) == null)
+      unconverged.add("users");
+    if (replicatedFingerprints.get(ReplicatedSecurityFingerprintRepository.GROUPS) == null)
+      unconverged.add("groups");
+    if (replicatedFingerprints.get(ReplicatedSecurityFingerprintRepository.API_TOKENS) == null)
+      unconverged.add("API tokens");
+    return unconverged;
   }
 
   /**

@@ -142,7 +142,7 @@ public class DatabaseAsyncCommand implements DatabaseAsyncTask {
             LogManager.instance().log(this, Level.WARNING, "Error on rolling back active transaction", re);
           }
         }
-        // #7615 (claude-review): unconditional on isTransactionActive(), matching
+        // #7615 (code review): unconditional on isTransactionActive(), matching
         // commitBatch()/closeTransactionBoundaryIfDurabilityPolicyChanged() - guarded only by !idempotent
         // (an idempotent query's own failure is unrelated to the shared batch, nothing to abandon), not
         // nested in the rollback branch above, so a hypothetical failure that already left the transaction
@@ -159,6 +159,20 @@ public class DatabaseAsyncCommand implements DatabaseAsyncTask {
       if (dbContext != null)
         dbContext.setCurrentUser(previousUser);
     }
+  }
+
+  /**
+   * Routed to this command's own {@code onError}, so a command that ended up in the executor's
+   * {@code pendingUnreplayableTasks} list - which happens when a statement committed the shared batch mid-execution
+   * and this command therefore straddles that commit (issue #7667) - still reports when the batch it left its
+   * remaining writes in is abandoned. Without the override this would be the interface's no-op default, and the
+   * submitter would be left holding only the {@code onComplete} it already received.
+   *
+   * @param cause the failure that closed the batch
+   */
+  @Override
+  public void notifyBatchAbandoned(final Throwable cause) {
+    notifyError(cause);
   }
 
   /**

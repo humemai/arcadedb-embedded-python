@@ -22,6 +22,8 @@ import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.http.HttpSession;
+import com.arcadedb.server.http.HttpSessionManager;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.undertow.websockets.core.WebSocketChannel;
 
@@ -50,7 +52,20 @@ import java.util.logging.Level;
  * @author Arcade Data Ltd
  */
 public class WebSocketInsertSessionManager {
+  /**
+   * Channel attribute set by {@link #closeChannelSessions}, so a {@code start} frame drained after the connection
+   * closed is refused instead of opening a session nothing will ever deregister (issue #7471).
+   */
+  private static final String CHANNEL_CLOSED_ATTRIBUTE = "arcadedb.ws.insert.channelClosed";
+
   private final ArcadeDBServer                          server;
+  /**
+   * Where a {@code start} frame's {@code transactionId} is resolved (issue #7403). The same registry
+   * {@code POST /api/v1/begin} mints into and {@code DatabaseAbstractHandler} resolves against, reached through
+   * {@link HttpSessionManager#getSessionById} rather than around it so a {@code /ws} client can only adopt a
+   * transaction its own principal opened.
+   */
+  private final HttpSessionManager                      httpSessionManager;
   private final Map<String, WebSocketInsertSession>     sessions = new ConcurrentHashMap<>();
   /** One session per channel, so a channel that opens a second one is refused rather than tracked. */
   private final Map<UUID, String>                       byChannel = new ConcurrentHashMap<>();
@@ -71,8 +86,10 @@ public class WebSocketInsertSessionManager {
     void onSessionCancelled(WebSocketInsertSession session, String reason);
   }
 
-  public WebSocketInsertSessionManager(final ArcadeDBServer server, final long idleTimeoutMs) {
+  public WebSocketInsertSessionManager(final ArcadeDBServer server, final HttpSessionManager httpSessionManager,
+      final long idleTimeoutMs) {
     this.server = server;
+    this.httpSessionManager = httpSessionManager;
     this.idleTimeoutMs = idleTimeoutMs;
 
     this.timer = new Timer("arcadedb-ws-insert-session-sweep", true);
@@ -97,14 +114,22 @@ public class WebSocketInsertSessionManager {
    *
    * @param channel     the connection the session belongs to, attached before the session is registered so the
    *                    idle sweep always has a worker to dispatch an expiry to
-   * @param requestedId the id the client asked for, or {@code null}/blank to have the server generate one
+   * @param requestedId           the id the client asked for, or {@code null}/blank to have the server generate one
+   * @param externalTransactionId the {@code arcadedb-session-id} of a transaction already begun over HTTP that
+   *                              this session is to write into instead of opening one of its own (issue #7403),
+   *                              or {@code null}/blank for a server-managed session
    *
-   * @throws IllegalStateException    when the channel already has a session, or the requested id is taken
+   * @throws IllegalStateException    when the channel already has a session, the channel has closed (or is
+   *                                  closing) underneath a frame that was still queued, the requested id is taken,
+   *                                  or the named external transaction is unknown or expired - which is the
+   *                                  {@code FAILED_PRECONDITION} the gRPC path answers, never a silent
+   *                                  fall-through to a server-managed transaction
    * @throws SecurityException        when the principal cannot access the database
    * @throws IllegalArgumentException when the options are not ones this server implements
    */
   public WebSocketInsertSession start(final ServerSecurityUser user, final WebSocketChannel channel,
-      final UUID channelId, final String databaseName, final String requestedId, final JSONObject rawOptions) {
+      final UUID channelId, final String databaseName, final String requestedId, final JSONObject rawOptions,
+      final String externalTransactionId) {
     if (closed)
       throw new IllegalStateException("The server is shutting down and is not opening new insert sessions");
 
@@ -114,22 +139,46 @@ public class WebSocketInsertSessionManager {
     if (user == null || !user.canAccessToDatabase(databaseName))
       throw new SecurityException("User does not have access to database '" + databaseName + "'.");
 
-    final InsertSessionOptions options = InsertSessionOptions.parse(rawOptions);
+    final String externalId =
+        externalTransactionId == null || externalTransactionId.isBlank() ? null : externalTransactionId;
+
+    final InsertSessionOptions options = InsertSessionOptions.parse(rawOptions, externalId != null);
+
+    // Resolved BEFORE the channel is claimed, so a start refused over its transaction leaves nothing registered.
+    // getSessionById() is the ownership gate: it answers null for a session owned by another principal exactly as
+    // it does for one that never existed, which is why an unknown id and someone else's id are refused alike.
+    final HttpSession externalSession = externalId == null ? null : resolveExternalTransaction(user, externalId, databaseName);
 
     final String id = requestedId == null || requestedId.isBlank() ? UUID.randomUUID().toString() : requestedId;
 
     // Claim the channel BEFORE the id: a client that pipelines two starts must be refused on the second one
     // whichever id it chose, and claiming the id first would leave it registered to a session that is refused.
-    final String alreadyOnChannel = byChannel.putIfAbsent(channelId, id);
-    if (alreadyOnChannel != null)
-      throw new IllegalStateException(
-          "This connection already has insert session '" + alreadyOnChannel + "' open. Commit or roll it back first");
+    //
+    // Through compute() rather than putIfAbsent() because this claim has a SECOND invariant to keep, and the two
+    // have to be decided together (issue #7471): the channel must still be one this connection can have a session
+    // on. A 'start' frame still queued when the connection dies is drained by the frame queue's worker task, while
+    // closeChannelSessions() runs on a worker task of its own, and nothing orders the two - so the start could open
+    // a session on a dead channel AFTER the sweep that would have cleaned it up had already been and gone, leaving
+    // an open transaction held until the idle sweep reclaimed it, once per abrupt disconnect. compute() and the
+    // compute() in closeChannelSessions() are mutually exclusive on this key, which decides the race either way
+    // round: a start that wins registers a session the close then rolls back, and a start that loses finds the
+    // marker the close left on the channel and is refused.
+    byChannel.compute(channelId, (key, alreadyOnChannel) -> {
+      if (alreadyOnChannel != null)
+        throw new IllegalStateException(
+            "This connection already has insert session '" + alreadyOnChannel + "' open. Commit or roll it back first");
+
+      if (channelIsGone(channel))
+        throw new IllegalStateException("This connection is closing and is not opening new insert sessions");
+
+      return id;
+    });
 
     final DatabaseInternal database;
     final WebSocketInsertSession session;
     try {
       database = server.getDatabase(databaseName, false, false);
-      session = new WebSocketInsertSession(id, database, user, channelId, options);
+      session = new WebSocketInsertSession(id, database, user, channelId, options, externalId, externalSession);
       // Before it is registered, not after: a session the sweep can see must already know where to send its
       // expiry, or the sweep would have nothing to dispatch to and would roll it back on its own thread.
       session.setChannel(channel);
@@ -149,7 +198,48 @@ public class WebSocketInsertSessionManager {
       throw e;
     }
 
+    // The claim above and the registration below it are two steps, and closeChannelSessions() can run BETWEEN them:
+    // it would find the claim in byChannel, clear it, and find nothing in `sessions` to roll back, because the
+    // session was not registered yet. The close fires once per connection, so the session it missed would then be
+    // orphaned until the idle sweep - the very symptom this guard exists to prevent, on a window of microseconds
+    // rather than of an arbitrarily delayed frame (code review on PR #7855).
+    //
+    // Re-reading the claim under the same per-key critical section is what closes it. The session is in `sessions`
+    // and has begun by now, so the two orderings are genuinely exhaustive: a close AFTER this point finds the
+    // session and rolls it back, and a close BEFORE it took the claim away, which is what this reads.
+    if (!claimIsStillOurs(channelId, id)) {
+      sessions.remove(id, session);
+      session.cancel();
+      throw new IllegalStateException("This connection closed while the insert session was being opened");
+    }
+
     return session;
+  }
+
+  /**
+   * Resolves the HTTP transaction a {@code start} frame named, refusing every way it can fail to be one this
+   * client may write into (issue #7403).
+   * <p>
+   * The database check is not redundant with the access check above it: a principal with access to two databases
+   * could otherwise open a transaction on one with {@code /begin} and have the session write into the other,
+   * since the frame names the database and the session id independently.
+   */
+  private HttpSession resolveExternalTransaction(final ServerSecurityUser user, final String transactionId,
+      final String databaseName) {
+    final HttpSession externalSession = httpSessionManager.getSessionById(user, transactionId);
+    if (externalSession == null)
+      throw new IllegalStateException("Transaction '" + transactionId
+          + "' not found or expired. Begin one with 'POST /api/v1/begin' and name the id it returns");
+
+    if (externalSession.transaction == null || !externalSession.transaction.isActive())
+      throw new IllegalStateException("Transaction '" + transactionId + "' is no longer active");
+
+    final String transactionDatabase = externalSession.transaction.getDatabase().getName();
+    if (!transactionDatabase.equals(databaseName))
+      throw new IllegalArgumentException("Transaction '" + transactionId + "' belongs to database '"
+          + transactionDatabase + "', not to '" + databaseName + "'");
+
+    return externalSession;
   }
 
   /**
@@ -185,18 +275,68 @@ public class WebSocketInsertSessionManager {
   }
 
   /**
-   * Rolls back and forgets every session opened on a channel. Called when the connection closes, whether the
-   * client said goodbye or the socket simply went away.
+   * Rolls back and forgets every session opened on a channel, and marks the channel so no LATER {@code start} can
+   * open one on it. Called when the connection closes, whether the client said goodbye or the socket simply went
+   * away. Idempotent: both close paths may call it.
+   * <p>
+   * The marker is what makes this safe against a {@code start} frame that is still queued when the connection dies
+   * (issue #7471). It is set BEFORE the registry is cleared, and read inside {@link #start}'s claim of the same
+   * key, so the two orderings are the only two possible: this call sees a session and rolls it back, or the start
+   * sees the marker and is refused. It lives on the CHANNEL rather than in a set here, so it is reclaimed with the
+   * connection instead of accumulating one entry per connection the server has ever served.
+   *
+   * @param channel   the connection that closed, or {@code null} when it is not reachable - in which case the
+   *                  marker cannot be set and only the sessions already registered are rolled back
+   * @param channelId the id the sessions of that connection are registered under
    */
-  public void closeChannelSessions(final UUID channelId) {
-    final String sessionId = byChannel.remove(channelId);
-    if (sessionId == null)
+  public void closeChannelSessions(final WebSocketChannel channel, final UUID channelId) {
+    if (channel != null)
+      channel.setAttribute(CHANNEL_CLOSED_ATTRIBUTE, Boolean.TRUE);
+
+    // compute(), not remove(), to be explicit that this is the same per-key critical section start() claims under.
+    final String[] removed = new String[1];
+    byChannel.compute(channelId, (key, sessionId) -> {
+      removed[0] = sessionId;
+      return null;
+    });
+
+    if (removed[0] == null)
       return;
 
-    final WebSocketInsertSession session = sessions.remove(sessionId);
+    final WebSocketInsertSession session = sessions.remove(removed[0]);
     if (session != null && session.cancel())
       LogManager.instance().log(this, Level.FINE,
-          "Rolled back /ws insert session %s: its connection closed before it was committed", sessionId);
+          "Rolled back /ws insert session %s: its connection closed before it was committed", removed[0]);
+  }
+
+  /**
+   * Whether {@code channel} can no longer carry a session: either it is already closed, or
+   * {@link #closeChannelSessions} has marked it as closing.
+   * <p>
+   * Both tests are needed. {@code isOpen()} alone misses the courteous-close path, where the receive listener's
+   * {@code onClose} reaches {@link #closeChannelSessions} while Undertow is still completing the closing handshake
+   * and the channel therefore still reports itself open. The marker alone would miss a channel that died before
+   * any close handler had run.
+   */
+  private static boolean channelIsGone(final WebSocketChannel channel) {
+    return channel != null && (!channel.isOpen() || channel.getAttribute(CHANNEL_CLOSED_ATTRIBUTE) != null);
+  }
+
+  /**
+   * Whether the channel claim {@link #start} took is still registered to {@code id}, read under the same per-key
+   * critical section {@link #closeChannelSessions} clears it in - so the answer cannot go stale between the read
+   * and the caller acting on it.
+   * <p>
+   * {@code compute} rather than {@code get} for exactly that reason: {@code get} is lock-free and could observe the
+   * claim an instant before the close removes it.
+   */
+  private boolean claimIsStillOurs(final UUID channelId, final String id) {
+    final boolean[] ours = new boolean[1];
+    byChannel.compute(channelId, (key, claimed) -> {
+      ours[0] = id.equals(claimed);
+      return claimed;
+    });
+    return ours[0];
   }
 
   /**
@@ -279,6 +419,20 @@ public class WebSocketInsertSessionManager {
 
   public int getOpenSessionCount() {
     return sessions.size();
+  }
+
+  /**
+   * Whether {@code channelId} currently holds an insert session (issue #7909).
+   * <p>
+   * The authority behind the larger {@code /ws} text-frame budget. Read rather than tracked, so the budget cannot
+   * drift from the truth: a session that ends any way at all - a {@code commit} or {@code rollback} frame, the
+   * idle sweep, the connection closing, server shutdown, a {@code start} that never produced one - is gone from
+   * {@link #byChannel} by the time it has ended, and every one of those paths clears the claim. The alternative,
+   * a flag raised and lowered by hand, is what granted a 256x heap budget for the life of a connection whose
+   * {@code start} frame the server had REFUSED.
+   */
+  public boolean hasSessionOnChannel(final UUID channelId) {
+    return channelId != null && byChannel.containsKey(channelId);
   }
 
   private void unregister(final WebSocketInsertSession session) {

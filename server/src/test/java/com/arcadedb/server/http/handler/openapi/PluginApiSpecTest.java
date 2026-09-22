@@ -28,6 +28,7 @@ import io.swagger.v3.oas.models.parameters.Parameter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -44,7 +45,7 @@ class PluginApiSpecTest {
   }
 
   @Test
-  void allThirteenPluginOperationsAreDeclared() {
+  void allFourteenPluginOperationsAreDeclared() {
     assertThat(openAPI.getPaths().keySet()).containsExactlyInAnyOrder(
         "/prometheus",
         "/api/v1/cluster",
@@ -57,12 +58,13 @@ class PluginApiSpecTest {
         "/api/v1/cluster/resync/{database}",
         "/api/v1/cluster/bootstrap-state",
         "/api/v1/cluster/capabilities",
+        "/api/v1/cluster/security-seed",
         "/api/v1/ha/snapshot/{database}",
         "/api/v1/ha/snapshot/{database}/checksums");
 
     final long operations = openAPI.getPaths().values().stream()
         .mapToLong(item -> item.readOperations().size()).sum();
-    assertThat(operations).isEqualTo(13);
+    assertThat(operations).isEqualTo(14);
   }
 
   @Test
@@ -118,11 +120,16 @@ class PluginApiSpecTest {
     final Schema<?> schema = openAPI.getComponents().getSchemas().get("ClusterStatus");
     // 'localAppliedIndex', 'localCommitIndex', 'localReplicationLag' and 'localResync' are written by
     // GetClusterHandler on every answer and were declared nowhere until issue #7578's sweep read the handler.
+    // 'criticalHalt', 'raftLogFailure' and 'crashLoopEscalated' joined them with issue #7872: they are the
+    // readiness - and, for the last one, liveness - inputs the #7136 invariant promised were visible in this
+    // document and were not, so a node with a dead state machine read green here while '/api/v1/ready' was
+    // pinned at 503.
     assertThat(schema.getProperties().keySet()).containsExactlyInAnyOrder(
         "implementation", "clusterName", "localPeerId", "capabilities", "raftState", "isLeader", "leaderReady",
         "leaderId", "leaderHttpAddress", "electionCount", "lastElectionTime", "uptime",
         "localAppliedIndex", "localCommitIndex", "localReplicationLag",
-        "peers", "databases", "databasePresence", "alerts", "localResync");
+        "peers", "databases", "databasePresence", "alerts", "localResync",
+        "criticalHalt", "raftLogFailure", "crashLoopEscalated");
 
     // Pinned to the exact set (not .contains(...)): GetClusterHandler writes exactly these fields per peer, no
     // more, no fewer. 'capabilitiesUnknownReason' joined them with issue #7578's sweep - the leader writes it
@@ -204,7 +211,20 @@ class PluginApiSpecTest {
     final Schema<?> schema = openAPI.getComponents().getSchemas().get("AddPeerRequest");
     assertThat(schema.getRequired()).containsExactlyInAnyOrder("peerId", "address");
     assertThat(schema.getProperties().keySet())
-        .containsExactlyInAnyOrder("peerId", "address", "name");
+        .containsExactlyInAnyOrder("peerId", "address", "name", "priority");
+    // Issue #7523: the field is optional and its default has to be stated, because 0 is not "unset" - it is the
+    // value that makes a peer a witness as soon as any other peer carries a positive one.
+    final Schema<?> priority = schema.getProperties().get("priority");
+    assertThat(priority.getDescription())
+        .containsIgnoringCase("non-negative")
+        .containsIgnoringCase("defaults to 0");
+
+    // The facets have to say what PostAddPeerHandler.readPriority does, or a generated client rejects the
+    // explicit null that handler accepts and sends the negative value it refuses.
+    assertThat(priority.getType()).isEqualTo("integer");
+    assertThat(priority.getNullable()).as("an explicit null means 'not stated'").isTrue();
+    assertThat(priority.getDefault()).isEqualTo(0);
+    assertThat(priority.getMinimum()).isEqualByComparingTo(BigDecimal.ZERO);
   }
 
   @Test
@@ -355,6 +375,36 @@ class PluginApiSpecTest {
         .get("/api/v1/ha/snapshot/{database}/checksums").getGet();
     assertThat(checksums.getResponses().keySet())
         .containsExactlyInAnyOrder("200", "400", "401", "403", "404", "500", "503");
+  }
+
+  /**
+   * #7956 added the one key of a {@code /checksums} answer that is not a file name, and it has to be DECLARED
+   * rather than merely returned. The body stays a flat map - {@code additionalProperties} is still the CRC integer -
+   * so a generated client models {@code /unreadableFiles} as the string array it is only if the property is spelled
+   * out beside it. This module has been bitten by exactly that before: #7577 was an un-named object schema on this
+   * very route that produced an empty client model, which is why the assertion is on the generated schema and not
+   * on the builder call.
+   */
+  @Test
+  void theChecksumsSchemaDeclaresTheReservedUnreadableFilesKey() {
+    final Schema<?> body = openAPI.getPaths().get("/api/v1/ha/snapshot/{database}/checksums").getGet()
+        .getResponses().get("200").getContent().get(SpecBuilders.JSON).getSchema();
+
+    assertThat(((Schema<?>) body.getAdditionalProperties()).getType())
+        .as("every other key is still a file name mapped to its CRC")
+        .isEqualTo("integer");
+
+    // Asserted on the map before it is indexed: an undeclared property leaves getProperties() NULL, and an NPE
+    // deep in the test says far less about what broke than "the reserved key must be declared" does.
+    assertThat(body.getProperties())
+        .as("the reserved key must be declared, or a generated client cannot see it")
+        .isNotNull()
+        .containsKey("/unreadableFiles");
+
+    final Schema<?> unreadable = (Schema<?>) body.getProperties().get("/unreadableFiles");
+    assertThat(unreadable.getType()).isEqualTo("array");
+    assertThat(unreadable.getItems().getType())
+        .as("it carries the NAMES of the files this answer does not cover").isEqualTo("string");
   }
 
   @Test

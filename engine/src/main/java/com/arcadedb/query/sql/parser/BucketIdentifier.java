@@ -81,14 +81,35 @@ public class BucketIdentifier extends SimpleNode {
     return copy;
   }
 
+  /**
+   * Renders the SQL spelling of this bucket reference, which has to REPARSE: the name goes through
+   * {@link Identifier#toString(Map, StringBuilder)} so a back-tick quoted one keeps its back-ticks, rather than
+   * through {@link #getValue()}, which hands back the bare name and rendered {@code `my bucket`} as
+   * {@code my bucket} (#7913). {@code getValue()} stays what the EXECUTORS ask - they want the bare name to look
+   * the bucket up with - and this stays what the renderers ask.
+   */
   @Override
   public void toString(final Map<String, Object> params, final StringBuilder builder) {
     if (inputParam != null) {
       builder.append("bucket:");
       inputParam.toString(params, builder);
+    } else if (bucketId != null) {
+      bucketId.toString(params, builder);
     } else {
-      builder.append(getValue());
+      bucketName.toString(params, builder);
     }
+  }
+
+  /**
+   * Without this, equals()/hashCode() fall back to identity (the {@link SimpleNode} default when
+   * {@code getIdentityElements()} is empty), so two instances naming the SAME bucket - notably an original and its
+   * {@code copy()} - never compare equal and a {@code Set<BucketIdentifier>} can neither dedupe them nor survive a
+   * copy with its iteration order intact (found alongside issue #7793, in {@code CheckDatabaseStatement}, the only
+   * caller that puts these in a {@code Set}).
+   */
+  @Override
+  protected Object[] getIdentityElements() {
+    return new Object[] { bucketId, bucketName, inputParam };
   }
 
   @Override

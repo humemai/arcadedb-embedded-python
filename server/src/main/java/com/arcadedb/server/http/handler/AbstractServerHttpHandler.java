@@ -23,7 +23,9 @@ import com.arcadedb.database.DatabaseContext;
 import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.ProtocolContext;
+import com.arcadedb.engine.timeseries.TimeSeriesWalkCoarsenedException;
 import com.arcadedb.exception.*;
+import com.arcadedb.index.fulltext.FullTextQueryParseException;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.serializer.json.JSONArray;
@@ -40,6 +42,7 @@ import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.http.HttpSessionException;
 import com.arcadedb.server.http.HttpSessionManager;
 import com.arcadedb.server.http.IdempotencyCache;
+import com.arcadedb.server.http.RequestBodyTooLargeException;
 import com.arcadedb.server.http.ResultSetTooLargeException;
 import com.arcadedb.server.security.ApiTokenConfiguration;
 import com.arcadedb.server.ServerControlPlane;
@@ -51,6 +54,7 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.transport.RequestReplyReceiverContext;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
+import io.undertow.server.RequestTooBigException;
 import io.undertow.util.AttachmentKey;
 import io.undertow.util.HeaderValues;
 import io.undertow.util.Headers;
@@ -58,6 +62,10 @@ import io.undertow.util.HttpString;
 import io.undertow.util.PathTemplateMatch;
 import io.undertow.util.StatusCodes;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.security.MessageDigest;
@@ -67,17 +75,29 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.IdentityHashMap;
-import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 import java.util.logging.Level;
 
 public abstract class AbstractServerHttpHandler implements HttpHandler {
+  /** Shared answer of {@link #readRequestBody} for a request that carries no body at all. */
+  private static final byte[] EMPTY_REQUEST_BODY = new byte[0];
+  /**
+   * Read granularity of {@link #readRequestBody}. Also the most the cap can be overshot in heap before the
+   * refusal fires, since the check runs once per read rather than once per byte.
+   */
+  private static final int    REQUEST_BODY_READ_BUFFER_SIZE = 8192;
+  /**
+   * The most {@link #readRequestBody} pre-allocates for a body on the strength of its {@code Content-Length}
+   * header alone. A larger body still arrives intact - the buffer grows - it is only the head start that stops
+   * here.
+   */
+  private static final int    MAX_PRESIZED_REQUEST_BODY     = 1024 * 1024;
+
   // Raw request body, kept on the exchange for the handlers that need the text rather than the JSONObject
   // parsed from it: the request body is consumed once and cannot be read again from the exchange.
   public static final AttachmentKey<String> RAW_PAYLOAD = AttachmentKey.create(String.class);
@@ -244,6 +264,13 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
         "Field '" + field + "' must be an integer between " + Integer.MIN_VALUE + " and " + Integer.MAX_VALUE, cause);
   }
 
+  /**
+   * Reads the request body as text. An override that returns {@code null} because the route streams its body
+   * instead of buffering it must also override {@link #bodyReachesIdempotencyKey()} to say so: the body is a
+   * field of the idempotency key, and a key built without it cannot tell two payloads of the same route apart
+   * (issue #7381). An override that returns the body as BYTES says so through {@link #idempotencyBodyBytes}
+   * instead (issue #7704).
+   */
   protected String parseRequestPayload(final HttpServerExchange e) {
     if (!e.isInIoThread() && !e.isBlocking())
       e.startBlocking();
@@ -252,17 +279,83 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       LogManager.instance()
               .log(this, Level.SEVERE, "Error: handler must return true at mustExecuteOnWorkerThread() to read payload from request");
 
-    final AtomicReference<String> result = new AtomicReference<>();
-    e.getRequestReceiver().receiveFullBytes(
-            // OK
-            (exchange, data) -> result.set(new String(data, DatabaseFactory.getDefaultCharset())),
-            // ERROR
-            (exchange, err) -> {
-              LogManager.instance().log(this, Level.SEVERE, "receiveFullBytes completed with an error: %s", err, err.getMessage());
-              exchange.setStatusCode(StatusCodes.INTERNAL_SERVER_ERROR);
-              exchange.getResponseSender().send("Invalid Request");
-            });
-    return result.get();
+    final byte[] body = readRequestBody(e);
+    return body == null ? null : new String(body, DatabaseFactory.getDefaultCharset());
+  }
+
+  /**
+   * Reads the whole request body into memory, refusing one that exceeds
+   * {@code arcadedb.server.httpBodyContentMaxSize}. The single buffered reader of the HTTP server: every handler
+   * that needs the body as text or as bytes goes through it, so the cap means the same thing on all of them.
+   * <p>
+   * It replaced {@code Receiver.receiveFullBytes}, which cannot enforce that cap. Undertow's receiver compares
+   * its {@code maxBufferSize} against the DECLARED {@code Content-Length} only
+   * ({@code BlockingReceiverImpl.receiveFullBytes}), so a body sent with {@code Transfer-Encoding: chunked} - or
+   * an HTTP/2 POST with no {@code content-length} - was accumulated into a {@code ByteArrayOutputStream} with no
+   * limit at all, and the declared-length check in {@code HttpServer.createBodySizeLimitHandler} could not see it
+   * either, because {@code getRequestContentLength()} answers {@code -1} for it (issue #7772).
+   * <p>
+   * The cap is checked BEFORE the chunk that crosses it is buffered, so the heap this method can be made to hold
+   * is the cap plus one read buffer, whatever the client sends. Refusing here rather than letting Undertow's
+   * {@code MAX_ENTITY_SIZE} do it is what makes the refusal answerable: that ceiling is enforced inside the
+   * request conduit, which terminates the exchange and closes the connection at the instant it is crossed, so a
+   * handler reached afterwards has nothing left to write a response on. It is also frozen at the value read when
+   * the server was built, while this one is re-read per request - so it is left off entirely and this is the
+   * enforcement, not a second line behind one. See the note in {@code HttpServer.buildUndertowServer}.
+   *
+   * @return the body, or {@code null} when it could not be read and a 500 has already been sent
+   *
+   * @throws UncheckedIOException wrapping a {@link RequestTooBigException} when the body exceeds the cap;
+   *                              {@link #sendMappedErrorResponse} answers it with the documented JSON 413
+   */
+  protected byte[] readRequestBody(final HttpServerExchange e) {
+    if (e.isRequestComplete())
+      return EMPTY_REQUEST_BODY;
+
+    // Re-read per request, so a change through SET SERVER SETTING takes effect on the next request rather than
+    // at the next restart - the behaviour the declared-length check has always had.
+    final long maxBodySize = httpServer.getServer().getConfiguration()
+        .getValueAsLong(GlobalConfiguration.SERVER_HTTP_BODY_CONTENT_MAX_SIZE);
+
+    // Sized from the declared length where there is one, so the common case does not pay for a chain of
+    // doublings and array copies on a hot path - what Receiver.receiveFullBytes did. Bounded by
+    // MAX_PRESIZED_REQUEST_BODY rather than trusting the header outright: Content-Length is a claim, and
+    // allocating whatever a client asserts is a way to be made to reserve the whole cap per request by a caller
+    // that then sends one byte.
+    final long declaredLength = e.getRequestContentLength();
+    // Clamped by the cap as well as by MAX_PRESIZED_REQUEST_BODY: a deployment whose cap is under 1 MB would
+    // otherwise reserve up to 1 MB for a declared length it is about to refuse anyway (PR #8092 review). Never
+    // below one read buffer, so a very small cap does not turn the first write into a grow-and-copy.
+    final long presizeCeiling = maxBodySize > 0
+        ? Math.max(Math.min(maxBodySize, MAX_PRESIZED_REQUEST_BODY), REQUEST_BODY_READ_BUFFER_SIZE)
+        : MAX_PRESIZED_REQUEST_BODY;
+    final ByteArrayOutputStream buffered = new ByteArrayOutputStream(declaredLength > 0
+        ? (int) Math.min(declaredLength, presizeCeiling)
+        : REQUEST_BODY_READ_BUFFER_SIZE);
+    final byte[] chunk = new byte[REQUEST_BODY_READ_BUFFER_SIZE];
+    long total = 0;
+    try {
+      final InputStream in = e.getInputStream();
+      int read;
+      // != -1, not > 0: only -1 means end of body. A zero-length read would otherwise be taken for the end and
+      // a partial body handed back as though it were whole - on a request the cap is supposed to decide about.
+      // InputStream.read(byte[]) cannot return 0 for a non-empty buffer, so this costs nothing and removes the
+      // silent-truncation hazard for any stream implementation that ever sits here (PR #8092 review).
+      while ((read = in.read(chunk)) != -1) {
+        total += read;
+        if (maxBodySize > 0 && total > maxBodySize)
+          throw new UncheckedIOException(new RequestTooBigException(
+              "Request body size exceeds the maximum allowed size of " + maxBodySize + " bytes. Configure '"
+                  + GlobalConfiguration.SERVER_HTTP_BODY_CONTENT_MAX_SIZE.getKey() + "' to increase the limit"));
+        buffered.write(chunk, 0, read);
+      }
+    } catch (final IOException err) {
+      LogManager.instance().log(this, Level.SEVERE, "Error on reading the request body: %s", err, err.getMessage());
+      e.setStatusCode(StatusCodes.INTERNAL_SERVER_ERROR);
+      e.getResponseSender().send("Invalid Request");
+      return null;
+    }
+    return buffered.toByteArray();
   }
 
   @Override
@@ -281,6 +374,17 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
         && "POST".equalsIgnoreCase(exchange.getRequestMethod().toString())
         && dispatchRequestId != null && !dispatchRequestId.isBlank()
         && exchange.getRequestHeaders().getFirst(SESSION_ID_HEADER) == null) {
+      exchange.dispatch(this);
+      return;
+    }
+
+    // Basic authentication runs PBKDF2 at 'arcadedb.server.saltIterations' (65536 by default) - tens of
+    // milliseconds of deliberately expensive, CPU-bound work - and would otherwise run right here, on the Undertow
+    // IO thread, for every route that does not dispatch of its own accord. An IO thread is a shared selector, so
+    // while it is inside the KDF it serves no other connection multiplexed onto it: health probes, WebSocket
+    // change-event frames and established clients all wait behind one password check (issue #7785). Dispatched
+    // BEFORE authenticating, in the same shape as the X-Request-Id dispatch above.
+    if (exchange.isInIoThread() && authenticationNeedsWorkerThread(exchange)) {
       exchange.dispatch(this);
       return;
     }
@@ -553,7 +657,10 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
           // Gated on the handler, not on the header alone: a route that cannot stream answers the same body
           // whatever Accept says, so dropping ITS replay protection because a client sent a header it ignores
           // would take away a guarantee and give nothing back.
-          && !(supportsNdJsonEncoding() && isNdJsonRequested(exchange));
+          && !(supportsNdJsonEncoding() && isNdJsonRequested(exchange))
+          // ...and a route whose body never reaches the key is out of the cache in EVERY encoding, because for
+          // it the key no longer identifies the request (issue #7381).
+          && bodyReachesIdempotencyKey();
 
       if (idempotentPost) {
         // Bind the key to method/path/database/body so a reused correlation id cannot replay a different
@@ -716,6 +823,29 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       return;
     }
 
+    // 413 Content Too Large: the REQUEST body exceeded arcadedb.server.httpBodyContentMaxSize, so this server
+    // stopped reading it - in readRequestBody above, or in PostBatchHandler's CountingInputStream for the route
+    // that streams instead of buffering. Reached only by a body that declared no length; a declared one is
+    // refused earlier and more cheaply by HttpServer.createBodySizeLimitHandler, which never runs the handler at
+    // all. This arm is what makes the cap mean the same thing for a chunked or HTTP/2 body as for a
+    // Content-Length one (issue #7772). A 4xx and not a 5xx: the server is working exactly as configured, and
+    // repeating the request unchanged can only be refused again.
+    // Named for the bytes ON THE WIRE, to keep it apart from the decoded-size arm below: the two caps are
+    // different settings refusing at different points, and both are reachable on the same request.
+    final RequestTooBigException wireBodyTooLarge = firstOf(e, cause, RequestTooBigException.class);
+    if (wireBodyTooLarge != null) {
+      logUserError(wireBodyTooLarge);
+      // The setting name goes in the label, not only in 'detail': detail is concealed in production mode, and a
+      // caller that cannot see WHICH knob refused it has been told nothing it can act on. Same treatment as the
+      // ResultSetTooLargeException arm below, for the same reason.
+      final long maxBodySize = httpServer.getServer().getConfiguration()
+          .getValueAsLong(GlobalConfiguration.SERVER_HTTP_BODY_CONTENT_MAX_SIZE);
+      sendErrorResponse(exchange, 413,
+          "Request body too large (" + GlobalConfiguration.SERVER_HTTP_BODY_CONTENT_MAX_SIZE.getKey() + ")",
+          wireBodyTooLarge, String.valueOf(maxBodySize));
+      return;
+    }
+
     // 413 Content Too Large: the response the caller asked for exceeds the hard row ceiling
     // (arcadedb.server.httpQueryMaxResultRows). Independent of every other arm - nothing extends it and it
     // extends nothing but ServerException - so its position here is only for readability. A 4xx and not a 5xx:
@@ -730,6 +860,19 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       sendErrorResponse(exchange, 413,
           "Result set too large for a single response (" + GlobalConfiguration.SERVER_HTTP_QUERY_MAX_RESULT_ROWS.getKey()
               + ")", tooLarge, String.valueOf(tooLarge.getMaxResultRows()));
+      return;
+    }
+
+    // 413 Content Too Large, the REQUEST side of the pair above: a body that declared a Content-Encoding decoded
+    // past arcadedb.server.httpBodyContentDecompressedMaxSize (issue #8084). Independent of every other arm for
+    // the reason the response-side one is, and 4xx for the same reason: the request is answerable, just not as
+    // written, and the caller fixes it by sending less or by compressing less.
+    final RequestBodyTooLargeException bodyTooLarge = firstOf(e, cause, RequestBodyTooLargeException.class);
+    if (bodyTooLarge != null) {
+      logUserError(bodyTooLarge);
+      sendErrorResponse(exchange, 413,
+          "Request body too large once decoded (" + GlobalConfiguration.SERVER_HTTP_BODY_CONTENT_DECOMPRESSED_MAX_SIZE.getKey()
+              + ")", bodyTooLarge, String.valueOf(bodyTooLarge.getMaxSize()));
       return;
     }
 
@@ -835,6 +978,19 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
       return;
     }
 
+    // 503: a TimeSeries read was overtaken by a DOWNSAMPLE, which replaced the rows it had not reached yet with
+    // coarser ones (issue #8166). Transient by construction in the same sense the two arms around it are:
+    // downsampling a series is a maintenance event, not a per-request one, so the identical request re-issued
+    // returns a whole answer at one resolution. It has to be mapped HERE rather than left to the generic 500,
+    // because that 500 is precisely the outcome the refusal exists to replace - a client whose retry policy keys
+    // on the status code cannot tell it apart from a real server fault, and the whole point of raising instead of
+    // answering short was that the caller be able to act on it.
+    final TimeSeriesWalkCoarsenedException coarsened = firstOf(e, cause, TimeSeriesWalkCoarsenedException.class);
+    if (coarsened != null) {
+      sendRetryableResponse(exchange, coarsened);
+      return;
+    }
+
     // 503: an HA snapshot-reinstall resync (issue #5977 pattern) closed and reinstalled the database out from
     // under a handle a request had already resolved (or resolved while one was in flight). The condition is
     // transient by construction - a handle resolved a moment later sees the reinstalled database - so it must be
@@ -912,6 +1068,20 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
     // Gremlin syntax such as Groovy closures, ...) is a client error - the query text is invalid, not an
     // internal server fault. Surfaced with the real validation message so API consumers can fix the query,
     // instead of a misleading 500. See issues #5191 and #5201.
+    // The Lucene parser refusing the search expression the caller supplied. Its own arm rather than a wrap at
+    // every call site, because the call sites keep arriving: issue #7393 re-typed the two the report came in
+    // through and #7862 found four more - SEARCH_INDEX(), SEARCH_FIELDS() and the two db.index.fulltext.query
+    // procedures - still answering 500 with a stack trace for a client's typo. FullTextQueryParseException
+    // extends IndexException, which has NO arm here and must not get one: a tokenizer, an analyzer or an index
+    // read failing IS a server fault. Only the parser's own exception is a client error, so only it is named.
+    // Placed above the parsing arm because the two say the same thing and this one says which parser.
+    final FullTextQueryParseException fullTextParsing = firstOf(e, cause, FullTextQueryParseException.class);
+    if (fullTextParsing != null) {
+      logUserError(fullTextParsing);
+      sendErrorResponse(exchange, 400, "Cannot execute command", fullTextParsing, null);
+      return;
+    }
+
     final CommandParsingException parsing = firstOf(e, cause, CommandParsingException.class);
     if (parsing != null) {
       logUserError(parsing);
@@ -1007,7 +1177,21 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
    */
   private static boolean isGenericWrapper(final Throwable e) {
     return e instanceof TransactionException || e instanceof CommandExecutionException
-            || e instanceof CommandParsingException;
+            || e instanceof CommandParsingException
+            // UncheckedIOException is the definition above applied literally: it says "an IO failure happened"
+            // and carries no classification of its own, so the failure that matters is always its cause. The
+            // server's own reason for listing it is readRequestBody, which uses it to carry the body-too-large
+            // refusal out of a call that cannot declare a checked exception (issue #7772).
+            //
+            // It is not the only producer that can reach this boundary - the two others in the tree are
+            // LocalDatabase and JsonlExporterFormat:
+            //   $ grep -rn --include='*.java' 'throw new UncheckedIOException' . | grep '/src/main/'
+            //   integration/.../exporter/format/JsonlExporterFormat.java:345
+            //   server/.../http/handler/AbstractServerHttpHandler.java:321
+            //   engine/.../database/LocalDatabase.java:592
+            // Both of those wrap a plain IOException, which no arm below classifies either, so unwrapping leaves
+            // them on the same generic 500 they reached before.
+            || e instanceof UncheckedIOException;
   }
 
   /**
@@ -1024,8 +1208,9 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   }
 
   /**
-   * Sends a 503 for a failure the caller can retry as-is - a Raft conflict or a resync race, both transient by
-   * construction. Shared by the {@link NeedRetryException} and {@link DatabaseIsClosedException} arms of
+   * Sends a 503 for a failure the caller can retry as-is - a Raft conflict, a resync race, or a TimeSeries read
+   * a downsample overtook, all transient by construction. Shared by the {@link NeedRetryException},
+   * {@link DatabaseIsClosedException} and {@link TimeSeriesWalkCoarsenedException} arms of
    * {@link #sendMappedErrorResponse}.
    */
   private void sendRetryableResponse(final HttpServerExchange exchange, final Throwable retryable) {
@@ -1141,6 +1326,33 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
    */
   protected byte[] idempotencyBodyBytes(final HttpServerExchange exchange) {
     return null;
+  }
+
+  /**
+   * Whether this route's request body reaches {@link #buildIdempotencyKey}, as text through
+   * {@link #parseRequestPayload} or as bytes through {@link #idempotencyBodyBytes}. A route that answers
+   * {@code false} is never reserved in, and never replayed from, the idempotency cache.
+   * <p>
+   * The key exists to bind a cached response to the request that produced it, and the body is the field that
+   * does the binding: without it the key degenerates to {@code (X-Request-Id, method, path, database)}, which
+   * two different payloads of the same bulk load share. Reusing one correlation id across two loads - common
+   * proxy and tracing practice, and exactly the collision the body was put in the key to prevent - then
+   * replayed the FIRST load's response to the second and never executed it: the records were silently missing
+   * and the client was told they had been created. That is the mirror image of the defect the cache exists to
+   * fix, running a write zero times instead of twice, and it is worse because it reports success (issue #7381).
+   * <p>
+   * Answering {@code false} is the only honest option for a route that streams its body: the reservation is
+   * taken before {@code execute} runs, and a body that is never buffered cannot be digested before then. Such a
+   * route is simply not idempotent over HTTP, and says so here rather than pretending with a key that cannot
+   * tell two requests apart.
+   * <p>
+   * Overridden by {@link PostBatchHandler} and by it alone, verified with
+   * {@code grep -rn 'bodyReachesIdempotencyKey' server/src/main}: it is the only handler that overrides
+   * {@link #parseRequestPayload} to return {@code null} without overriding {@link #idempotencyBodyBytes}
+   * ({@code AbstractBinaryHttpHandler} does both, {@code PostTimeSeriesWriteHandler} returns the text).
+   */
+  protected boolean bodyReachesIdempotencyKey() {
+    return true;
   }
 
   /**
@@ -1567,6 +1779,31 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
   }
 
   /**
+   * Whether authenticating THIS request is expensive enough that it must not happen on an Undertow IO thread
+   * (issue #7785).
+   * <p>
+   * Only Basic credentials are. They reach {@code ServerSecurity.passwordMatch} -> {@code encodePassword}, which on
+   * a salt-cache miss runs {@code PBKDF2WithHmacSHA256} at {@code arcadedb.server.saltIterations} (65536 by
+   * default): a KDF whose whole purpose is to be slow, measured in tens of milliseconds per call. The cache does
+   * not make a miss rare - it holds {@code arcadedb.server.securitySaltCacheSize} (64) credentials server-wide, and
+   * {@code POST /api/v1/login} exists precisely to turn a password nobody has presented yet into a token, so it
+   * misses by definition.
+   * <p>
+   * Everything else stays on the IO thread, where it belongs: Bearer authentication (API token or session token) is
+   * a hash-map lookup plus one SHA-256, and a request with no {@code Authorization} header at all - the readiness
+   * and liveness probes among them - does no authentication work whatsoever. Dispatching those too would trade a
+   * cheap inline check for a thread hand-off on the server's most frequent requests.
+   *
+   * @return {@code true} when the request carries a Basic {@code Authorization} header
+   */
+  static boolean authenticationNeedsWorkerThread(final HttpServerExchange exchange) {
+    final String authorization = exchange.getRequestHeaders().getFirst(Headers.AUTHORIZATION);
+    // Matched the same way the authentication below does - startsWith, not equalsIgnoreCase on a split scheme - so
+    // the dispatch decision and the branch it is taken for cannot drift apart.
+    return authorization != null && authorization.startsWith(AUTHORIZATION_BASIC);
+  }
+
+  /**
    * Whether this handler can answer in the {@code application/x-ndjson} streaming encoding when the caller
    * negotiates it. False for every route that always writes the same buffered body.
    * <p>
@@ -1644,13 +1881,13 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
    * these must stay visible with default logging in production - demoting them to FINE is how a
    * BufferUnderflowException on a read-only command went undiagnosable (issue #5374).
    */
-  private Level getInternalErrorLogLevel() {
+  protected Level getInternalErrorLogLevel() {
     return "development".equals(httpServer.getServer().getConfiguration().getValueAsString(GlobalConfiguration.SERVER_MODE)) ?
             Level.SEVERE :
             Level.WARNING;
   }
 
-  private Level getUserSevereErrorLogLevel() {
+  protected Level getUserSevereErrorLogLevel() {
     return "development".equals(httpServer.getServer().getConfiguration().getValueAsString(GlobalConfiguration.SERVER_MODE)) ?
             Level.INFO :
             Level.FINE;
@@ -1661,9 +1898,13 @@ public abstract class AbstractServerHttpHandler implements HttpHandler {
    * free-form cause chain ({@code detail}), which can leak file paths and engine internals; the bounded
    * {@code exception} class name and structured {@code exceptionArgs} are still emitted because the remote driver
    * and HA rely on them. {@code development} and {@code test} keep the full verbose body to aid debugging.
+   * <p>
+   * The decision itself lives on {@link com.arcadedb.server.ArcadeDBServer#isProductionMode()} so every surface
+   * that conceals reads ONE answer - this used to be the only place that asked, and the surfaces added since
+   * (the control plane's SSE progress stream, the gRPC error paths) silently opted out (issue #7472).
    */
-  private boolean isProductionMode() {
-    return "production".equals(httpServer.getServer().getConfiguration().getValueAsString(GlobalConfiguration.SERVER_MODE));
+  protected boolean isProductionMode() {
+    return ArcadeDBServer.isProductionMode(httpServer.getServer().getConfiguration());
   }
 
   /**

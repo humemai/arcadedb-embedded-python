@@ -34,6 +34,8 @@ import com.arcadedb.server.HAServerPlugin;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.monitor.DefaultServerMetrics;
 import com.arcadedb.server.monitor.ServerMetrics;
+import com.arcadedb.server.security.PermissionRefreshMetrics;
+import com.arcadedb.server.security.ServerSecurity;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
@@ -123,10 +125,45 @@ public class GetServerHandler extends AbstractServerHttpHandler {
 
       haJSON.put("leaderAddress", leaderServer);
       haJSON.put("replicaAddresses", replicaServers);
+      haJSON.put("securityRefresh", buildSecurityRefreshJSON());
 
       LogManager.instance()
           .log(this, Level.FINE, "Returning configuration leaderServer=%s replicaServers=[%s]", leaderServer, replicaServers);
     }
+  }
+
+  /**
+   * Whether the replicated group changes this node received have been ENFORCED here, not merely received
+   * (issue #7529).
+   * <p>
+   * On the {@code ha} section because that is the section an operator already polls per node when checking a
+   * cluster-wide change, and because the gap it reports - {@code entriesApplied} ahead of {@code sweepsCompleted}
+   * - only exists on a node that receives replicated entries. It is the same reading the
+   * {@code arcadedb.ha.security.*} Micrometer gauges expose, for operators who poll this route rather than scrape
+   * Prometheus.
+   * <p>
+   * Readable by every authenticated user, like the topology fields beside it: these are counters and epoch
+   * timestamps, naming no user, no group, no database and no permission.
+   * <p>
+   * Falls back to {@link PermissionRefreshMetrics.Snapshot#ZERO} when there is no security service to ask, the
+   * same answer the gauges give, so that a request served while one is being installed or torn down reports the
+   * section as zeros rather than failing the whole {@code mode=cluster} response over one of its members.
+   */
+  private JSONObject buildSecurityRefreshJSON() {
+    final ServerSecurity security = httpServer.getServer().getSecurity();
+    final PermissionRefreshMetrics.Snapshot stats = security != null
+        ? security.getPermissionRefreshStats()
+        : PermissionRefreshMetrics.Snapshot.ZERO;
+    return new JSONObject()
+        .put("entriesApplied", stats.entriesApplied())
+        .put("refreshesRequested", stats.refreshesRequested())
+        .put("refreshesCoalesced", stats.refreshesCoalesced())
+        .put("sweepsCompleted", stats.sweepsCompleted())
+        .put("sweepsFailed", stats.sweepsFailed())
+        .put("databasesRefreshed", stats.databasesRefreshed())
+        .put("databaseRefreshFailures", stats.databaseRefreshFailures())
+        .put("lastEntryAppliedAt", stats.lastEntryAppliedAt())
+        .put("lastSweepAt", stats.lastSweepAt());
   }
 
   private void exportMetrics(final JSONObject response, final ServerSecurityUser user) {
@@ -229,70 +266,26 @@ public class GetServerHandler extends AbstractServerHttpHandler {
     final List<Map<String, Object>> settings = new ArrayList<>();
     for (GlobalConfiguration cfg : GlobalConfiguration.values()) {
       if (cfg.getScope() != GlobalConfiguration.SCOPE.DATABASE) {
-        // Redact every secret setting using the single source of truth (GlobalConfiguration.isHidden(),
-        // which already flags clusterToken/*password*), instead of the previous ad-hoc "contains password"
-        // check that leaked arcadedb.ha.clusterToken in clear and enabled cluster-forwarded-auth root
-        // impersonation (GHSA-46hj-24h4-j8gf).
-        final boolean hidden = cfg.isHidden();
+        // Redaction is GlobalConfiguration.publishableValue's, the single source of truth for it: isHidden()
+        // masks a secret setting whole (which is what closed GHSA-46hj-24h4-j8gf for arcadedb.ha.clusterToken),
+        // and arcadedb.server.defaultDatabases, whose value EMBEDS credentials without being one, keeps its
+        // database and user names while its passwords are replaced.
         final Map<String, Object> map = new LinkedHashMap<>();
         map.put("key", cfg.getKey());
-        map.put("value", hidden ? "*****" : convertValue(cfg.getKey(), cfg.getValue()));
+        // The EFFECTIVE value, resolved through this server's overlay, not the process-wide enum (issue #7784).
+        // ContextConfiguration.setValue writes the overlay and never touches the enum, so a setting overridden by
+        // the server configuration file, by the embedding application or live by SET SERVER SETTING was rendered
+        // at the enum's value - next to "overridden": true, and equal to "default", a response contradicting
+        // itself on its own terms while every handler ran on the other number. Same resolution the DATABASE-scope
+        // sibling in FetchFromSchemaDatabaseStep already uses; "default" stays on the enum's declared default.
+        map.put("value", cfg.publishableValue(srvCfg.getValue(cfg)));
         map.put("description", cfg.getDescription());
         map.put("overridden", contextKeys.contains(cfg.getKey()));
-        map.put("default", hidden ? "*****" : convertValue(cfg.getKey(), cfg.getDefValue()));
+        map.put("default", cfg.publishableValue(cfg.getDefValue()));
         settings.add(map);
       }
     }
     response.put("settings", settings);
-  }
-
-  private Object convertValue(final String key, Object value) {
-    if (key.toLowerCase(Locale.ENGLISH).contains("password"))
-      // MASK SENSITIVE DATA
-      value = "*****";
-
-    if ("arcadedb.server.defaultDatabases".equals(key)) {
-      final String defaultDatabases = (String) value;
-      if (value != null && !defaultDatabases.isEmpty()) {
-        // CREATE DEFAULT DATABASES
-        String modified = "";
-
-        final String[] dbs = defaultDatabases.split(";");
-        for (final String db : dbs) {
-          final int credentialBegin = db.indexOf('[');
-          if (credentialBegin < 0) {
-            modified += db;
-            continue;
-          }
-
-          final String dbName = db.substring(0, credentialBegin);
-          final int credentialEnd = db.indexOf(']', credentialBegin);
-          final String credentials = db.substring(credentialBegin + 1, credentialEnd);
-
-          final String[] credentialPairs = credentials.split(",");
-          for (final String credential : credentialPairs) {
-            final String[] credentialParts = credential.split(":");
-            if (credentialParts.length >= 2) {
-              final String userName = credentialParts[0];
-              modified += dbName + "[" + userName + ":*****]";
-            } else
-              modified += dbName + "[" + credentialParts + "]";
-          }
-
-          modified += ";";
-        }
-
-        if (modified.endsWith(";"))
-          modified = modified.substring(0, modified.length() - 1);
-
-        value = modified;
-      }
-    }
-
-    if (value instanceof Class<?> class1)
-      value = class1.getName();
-
-    return value;
   }
 
   /**

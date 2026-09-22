@@ -25,6 +25,7 @@ import com.arcadedb.exception.CommandExecutionException;
 import com.arcadedb.exception.TimeoutException;
 
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
@@ -163,6 +164,17 @@ public class ExpandStep extends AbstractExecutionStep {
           nextSubsequence = iterator;
         } else if (projValue instanceof Iterable iterable) {
           nextSubsequence = iterable.iterator();
+        } else if (MultiValue.isSequenceArray(projValue)) {
+          // A native array (ARRAY_OF_SHORTS/INTEGERS/LONGS/FLOATS/DOUBLES, or any Object[]) is a sequence just like
+          // a LIST holding the same values, so it yields one row per element and not one row holding the whole
+          // array. A byte[] is excluded: it is a BINARY blob, not a sequence. MultiValue.getMultiValueIterator()
+          // boxes the elements of a primitive array through reflection.
+          nextSubsequence = MultiValue.getMultiValueIterator(projValue);
+        } else {
+          // A single non-collection value (scalar, Map, ...) is one element, not zero: treat it as a
+          // one-element sequence and let the per-element handling above wrap a Map as a row and anything
+          // else as {alias|value: x}, exactly as it does for the same value reached through a collection.
+          nextSubsequence = List.of(projValue).iterator();
         }
       } finally {
         if (context.isProfiling())

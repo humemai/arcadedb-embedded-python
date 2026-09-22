@@ -18,6 +18,7 @@
  */
 package com.arcadedb.integration.importer;
 
+import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.integration.importer.format.CSVImporterFormat;
 import com.arcadedb.integration.importer.format.FormatImporter;
@@ -31,6 +32,7 @@ import com.arcadedb.integration.importer.format.Word2VecImporterFormat;
 import com.arcadedb.integration.importer.format.XMLImporterFormat;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.utility.FileUtils;
+import com.arcadedb.utility.SafeHttpFetcher;
 
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -54,10 +56,18 @@ import java.util.zip.ZipInputStream;
 
 public class SourceDiscovery {
   private static final String RESOURCE_SEPARATOR = ":::";
+  /** The label {@code ImportSecurityValidator} opens every remote connection with, so a read timeout says the same. */
+  private static final String IMPORT_CONTEXT      = "IMPORT DATABASE";
   private static final String FILE_PREFIX        = "file://";
   private static final String CLASSPATH_PREFIX   = "classpath://";
   private              String  url;
   private final        Boolean allowLocalUrls;
+  /**
+   * The importing database's settings overlay, or null for a CLI caller. Only the fetch TIMEOUTS are read from it,
+   * and only because they are {@code SCOPE.SERVER} settings a {@code ContextConfiguration} never writes through to
+   * the enum for (PR #7755 review).
+   */
+  private              ContextConfiguration configuration;
   private              long    limitBytes         = 10000000;
   private              long    limitEntries       = 0;
 
@@ -124,6 +134,15 @@ public class SourceDiscovery {
     return source;
   }
 
+  /**
+   * Hands this discovery the importing database's configuration, so a remote fetch is bounded by the timeout the
+   * OPERATOR configured rather than by the enum default. Null-tolerant: a CLI import has no overlay.
+   */
+  public SourceDiscovery setConfiguration(final ContextConfiguration configuration) {
+    this.configuration = configuration;
+    return this;
+  }
+
   private Source getSourceFromURL(final String url) throws IOException {
     final int sep = url.lastIndexOf(RESOURCE_SEPARATOR);
     final String urlPath = sep > -1 ? url.substring(0, sep) : url;
@@ -140,24 +159,33 @@ public class SourceDiscovery {
     final boolean blockLocalNetworks = allowLocalUrls != null ?
         !allowLocalUrls : GlobalConfiguration.SERVER_SECURITY_IMPORT_BLOCK_LOCAL_NETWORKS.getValueAsBoolean();
 
-    final HttpURLConnection connection = ImportSecurityValidator.openRemoteConnection(urlPath, blockLocalNetworks);
+    final HttpURLConnection connection = ImportSecurityValidator.openRemoteConnection(urlPath, blockLocalNetworks,
+        configuration);
 
-    return getSourceFromContent(new BufferedInputStream(connection.getInputStream()), connection.getContentLengthLong(), resource,
+    // EVERY READ OF A REMOTE SOURCE IS BOUNDED BY NETWORK_REMOTE_FETCH_READ_TIMEOUT, WHICH openRemoteConnection
+    // APPLIES. SafeHttpFetcher.body() IS WHAT MAKES THAT BOUND LEGIBLE WHEN IT FIRES: SINCE #7494 THE SNIFFER BLOCKS
+    // IN reader.read() RATHER THAN GUESSING THAT A QUIET SOCKET MEANS END-OF-INPUT, SO A SOURCE THAT STOPS SENDING
+    // AND NEVER CLOSES IS EXACTLY THE CASE THAT REACHES A CLIENT - AND IT USED TO REACH IT AS "Error on parsing
+    // source ...", NAMING NEITHER THE TIMEOUT NOR THE SETTING (ISSUE #7500)
+    return getSourceFromContent(new BufferedInputStream(SafeHttpFetcher.body(connection, IMPORT_CONTEXT)),
+        connection.getContentLengthLong(), resource,
         source -> {
           try {
             source.inputStream.close();
             connection.disconnect();
 
-            final HttpURLConnection connection1 = ImportSecurityValidator.openRemoteConnection(urlPath, blockLocalNetworks);
+            final HttpURLConnection connection1 = ImportSecurityValidator.openRemoteConnection(urlPath,
+                blockLocalNetworks, configuration);
+            final InputStream body1 = SafeHttpFetcher.body(connection1, IMPORT_CONTEXT);
 
             if (source.inputStream instanceof GZIPInputStream)
-              source.inputStream = new GZIPInputStream(connection1.getInputStream(), 2048);
+              source.inputStream = new GZIPInputStream(body1, 2048);
             else if (source.inputStream instanceof ZipInputStream) {
-              final ZipInputStream zip = new ZipInputStream(connection1.getInputStream());
+              final ZipInputStream zip = new ZipInputStream(body1);
               positionZipStream(zip, resource);
               source.inputStream = zip;
             } else
-              source.inputStream = new BufferedInputStream(connection1.getInputStream());
+              source.inputStream = new BufferedInputStream(body1);
           } catch (final Exception e) {
             throw new ImportException("Error on reset remote resource", e);
           }
@@ -238,6 +266,26 @@ public class SourceDiscovery {
     return userDelimiter;
   }
 
+  /**
+   * The vertex property an RDF source keys its subject and object IRIs by: the user's own
+   * {@code -typeIdProperty} / {@code WITH typeIdProperty = ...} when there is one, {@code "id"} otherwise.
+   * <p>
+   * The sibling of {@link #resolveDelimiter} one line up, and it used to be the unguarded half of the pair: the
+   * detection arm assigned {@code settings.typeIdProperty = "id"} unconditionally, so recognising N-Triples silently
+   * discarded an explicit choice that names a real schema artefact - the property, its index and the
+   * {@code newEdgeByKeys} lookup all follow it - and did so without the INFO line the discarded delimiter gets
+   * (issue #7891).
+   */
+  static String resolveTypeIdProperty(final String userTypeIdProperty) {
+    if (userTypeIdProperty == null)
+      return RDFImporterFormat.DEFAULT_TYPE_ID_PROPERTY;
+    if (!RDFImporterFormat.DEFAULT_TYPE_ID_PROPERTY.equals(userTypeIdProperty))
+      LogManager.instance().log(SourceDiscovery.class, Level.INFO,
+          "RDF default key property '%s' discarded: using the typeIdProperty '%s' explicitly set by the user",
+          RDFImporterFormat.DEFAULT_TYPE_ID_PROPERTY, userTypeIdProperty);
+    return userTypeIdProperty;
+  }
+
   private FormatImporter analyzeSourceContent(final Parser parser, final AnalyzedEntity.EntityType entityType,
       final ImporterSettings settings,
       final ConsoleLogger logger) throws IOException {
@@ -295,27 +343,9 @@ public class SourceDiscovery {
       } else if ("xml".equalsIgnoreCase(knownFileType)) {
         return new XMLImporterFormat();
       } else if ("graphml".equalsIgnoreCase(knownFileType)) {
-
-        try {
-          final Class<FormatImporter> clazz = (Class<FormatImporter>) Class.forName(
-              "com.arcadedb.gremlin.integration.importer.format.GraphMLImporterFormat");
-          return clazz.getConstructor().newInstance();
-        } catch (final ClassNotFoundException | InvocationTargetException | InstantiationException | IllegalAccessException |
-                       NoSuchMethodException e) {
-          LogManager.instance().log(this, Level.SEVERE, "Impossible to find importer for 'graphml' ", e);
-        }
-
+        return gremlinFormatImporter(knownFileType, "com.arcadedb.gremlin.integration.importer.format.GraphMLImporterFormat");
       } else if ("graphson".equalsIgnoreCase(knownFileType)) {
-
-        try {
-          final Class<FormatImporter> clazz = (Class<FormatImporter>) Class.forName(
-              "com.arcadedb.gremlin.integration.importer.format.GraphSONImporterFormat");
-          return clazz.getConstructor().newInstance();
-        } catch (final ClassNotFoundException | InvocationTargetException | InstantiationException | IllegalAccessException |
-                       NoSuchMethodException e) {
-          LogManager.instance().log(this, Level.SEVERE, "Impossible to find importer for 'graphson' ", e);
-        }
-
+        return gremlinFormatImporter(knownFileType, "com.arcadedb.gremlin.integration.importer.format.GraphSONImporterFormat");
       } else {
         LogManager.instance()
             .log(this, Level.WARNING, "File type '%s' is not supported. Trying to understand file type...", knownFileType);
@@ -332,6 +362,35 @@ public class SourceDiscovery {
       return format;
 
     return analyzeText(parser, settings, logger, userDelimiter);
+  }
+
+  /**
+   * The importer for a file type the optional {@code arcadedb-gremlin} module supplies, resolved by name because
+   * {@code arcadedb-integration} deliberately does not depend on it.
+   * <p>
+   * A failed lookup THROWS. It used to log {@code SEVERE} and fall out of the known-file-type chain into the generic
+   * content sniffer below, which is written for an UNKNOWN type - its own message says so - and for a {@code .graphml}
+   * source answered "XML". {@code XMLImporterFormat} then imported the GraphML container as ONE ordinary record and
+   * {@code Importer.load()} RETURNED NORMALLY with {@code createdVertices=1}: the CLI exited 0 and
+   * {@code IMPORT DATABASE} answered 200 while the two nodes and the edge the file described were gone, the only
+   * trace being a log line nobody reads after a command that just said it worked (issue #7781). A known file type
+   * whose handler is absent is not a candidate for sniffing - it is a refusal, and one that has to name the module
+   * that supplies the handler, because "Error on parsing source" sent the operator to look at their file.
+   */
+  @SuppressWarnings("unchecked")
+  private static FormatImporter gremlinFormatImporter(final String fileType, final String className) {
+    try {
+      final Class<FormatImporter> clazz = (Class<FormatImporter>) Class.forName(className);
+      return clazz.getConstructor().newInstance();
+    } catch (final ClassNotFoundException | InvocationTargetException | InstantiationException | IllegalAccessException |
+                   NoSuchMethodException | ClassCastException e) {
+      // ClassCastException too: the cast above is unchecked, so a class that RESOLVES but is not a FormatImporter -
+      // a gremlin module whose version does not match this one - would otherwise escape as a raw cast failure naming
+      // neither the format nor the module, which is the exact shape of failure this method exists to replace.
+      throw new ImportException(
+          "Cannot import a '" + fileType + "' source: its importer is provided by the optional arcadedb-gremlin module, "
+              + "which is not available on this classpath", e);
+    }
   }
 
   /**
@@ -658,12 +717,18 @@ public class SourceDiscovery {
    * and only when it can matter, so a data line that merely begins with a single {@code /} keeps its first
    * character and is sniffed whole (issue #7347).
    */
-  private boolean isCommentLineStart(final Parser parser) throws IOException {
+  private static boolean isCommentLineStart(final Parser parser) throws IOException {
+    if (parser.isBeforeFirstChar())
+      // NOTHING HAS BEEN READ, SO THERE IS NO CURRENT CHARACTER TO JUDGE. THE PLACEHOLDER getCurrentChar() ANSWERS
+      // IS 0, WHICH OPENS NEITHER COMMENT FORM, SO THIS IS THE SAME ANSWER SPELLED HONESTLY RATHER THAN A CHANGE -
+      // AND IT KEEPS THE "0 MEANS NOTHING YET" READING OUT OF A SECOND PLACE (ISSUE #7501)
+      return false;
+
     final char first = parser.getCurrentChar();
     return isCommentLineStart(first, first == '/' ? parser.peekChar() : 0);
   }
 
-  private void skipLine(final Parser parser) throws IOException {
+  private static void skipLine(final Parser parser) throws IOException {
     readLine(parser);
   }
 
@@ -676,10 +741,15 @@ public class SourceDiscovery {
    * {@link #analyzeText} and the {@link #analyzeChar} dispatch they call - was looking at a newline rather than at
    * the first character of the line they had just uncovered.
    * <p>
-   * A parser that has read nothing yet ({@link Parser#getCurrentChar()} is {@code 0}, which is the state
-   * {@link Parser#reset()} leaves) starts from the first character of the source.
+   * A parser that has read nothing yet ({@link Parser#isBeforeFirstChar()}) starts from the first character of the
+   * source. That question is asked of the PARSER and not of {@code getCurrentChar()}, which answers {@code 0} both
+   * for "nothing read yet" and for a NUL the source really carries: testing the character value dropped a genuine
+   * leading NUL and worked on a line one character shorter than the source (issue #7501).
+   * <p>
+   * Package-private and static for direct unit testing: this is where the sentinel collision lived, and the line it
+   * returns reaches the separator scan and {@link #analyzeChar} rather than any caller outside this class.
    */
-  private String readLine(final Parser parser) throws IOException {
+  static String readLine(final Parser parser) throws IOException {
     final char first = parser.getCurrentChar();
     if (first == '\n') {
       // AN EMPTY LINE: THE PARSER IS ALREADY ON ITS TERMINATOR
@@ -690,9 +760,10 @@ public class SourceDiscovery {
 
     final StringBuilder line = new StringBuilder(128);
     // THE isEndOfStream() HALF IS DEFENCE, NOT A LIVE CASE: EVERY nextChar() IN THIS CLASS IS GUARDED BY AN
-    // isAvailable(), SO first IS A REAL CHARACTER WHENEVER IT IS NOT 0. IT IS KEPT BECAUSE THE COST OF A FUTURE
-    // CALLER LOSING THAT GUARD IS Parser.END_OF_STREAM SILENTLY BECOMING THE FIRST CHARACTER OF A SNIFFED LINE
-    if (first != 0 && !parser.isEndOfStream())
+    // isAvailable(), SO first IS A REAL CHARACTER WHENEVER THE PARSER HAS READ ANYTHING. IT IS KEPT BECAUSE THE
+    // COST OF A FUTURE CALLER LOSING THAT GUARD IS Parser.END_OF_STREAM SILENTLY BECOMING THE FIRST CHARACTER OF A
+    // SNIFFED LINE
+    if (!parser.isBeforeFirstChar() && !parser.isEndOfStream())
       line.append(first);
 
     boolean terminated = false;
@@ -756,12 +827,15 @@ public class SourceDiscovery {
       // THE SEPARATOR IS TAKEN FROM BETWEEN THE SUBJECT AND THE PREDICATE AND HANDED TO THE FORMAT, WHICH INHERITS
       // CSVImporterFormat'S PARSER CONSTRUCTION AND WOULD OTHERWISE FALL BACK TO A COMMA (ISSUE #7315). PER-FORMAT
       // AND NOT THROUGH settings.options, WHICH ONE IMPORT SHARES ACROSS ITS DOCUMENTS, VERTICES AND EDGES FILES -
-      // WRITING IT THERE IS WHAT LEAKED IT INTO THE NEXT CSV ENTITY (ISSUE #6946)
+      // WRITING IT THERE IS WHAT LEAKED IT INTO THE NEXT CSV ENTITY (ISSUE #6946).
+      // THE KEY PROPERTY TRAVELS THE SAME WAY AND FOR BOTH OF THE SAME REASONS: settings.typeIdProperty = "id" USED
+      // TO BE ASSIGNED HERE UNCONDITIONALLY, WHICH DISCARDED AN EXPLICIT -typeIdProperty AND THEN OUTLIVED THE RDF
+      // SOURCE IT HAD BEEN DECIDED FOR, DRIVING THE PROPERTY AND UNIQUE-INDEX AUTO-CREATION OF THE NEXT ENTITY
+      // (ISSUE #7891)
       final char separator = nTriplesSeparator(line);
-      if (separator != 0) {
-        settings.typeIdProperty = "id";
-        return new RDFImporterFormat(resolveDelimiter(userDelimiter, separator));
-      }
+      if (separator != 0)
+        return new RDFImporterFormat(resolveDelimiter(userDelimiter, separator),
+            resolveTypeIdProperty(settings.typeIdProperty));
 
       // A LINE THAT OPENS WITH TWO IRI TERMS AND IS STILL NOT A TRIPLE IS AN RDF FILE THIS METHOD CANNOT PLACE.
       // SAYING SO HERE IS THE ONLY PLACE IT CAN BE SAID: THE CSV FALLBACK BELOW REPORTS A NumberFormatException
@@ -878,8 +952,9 @@ public class SourceDiscovery {
   }
 
   private String getFormatFromExtension(String fileName) {
-    if (fileName.lastIndexOf(File.separator) > -1)
-      fileName = fileName.substring(fileName.lastIndexOf(File.separator) + 1);
+    // EITHER SEPARATOR CONVENTION: THE NAME COMES FROM A CALLER-SUPPLIED -url / -documents / -vertices / -edges
+    // VALUE, WHICH ON WINDOWS IS AS LIKELY TO USE '/' AS '\' (ISSUE #7588)
+    fileName = FileUtils.getFileNameFromPath(fileName);
 
     if (fileName.endsWith(".tgz"))
       fileName = fileName.substring(0, fileName.length() - ".tgz".length());

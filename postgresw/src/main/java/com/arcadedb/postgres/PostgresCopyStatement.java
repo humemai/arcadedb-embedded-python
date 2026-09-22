@@ -19,6 +19,7 @@
 package com.arcadedb.postgres;
 
 import com.arcadedb.exception.CommandParsingException;
+import com.arcadedb.query.sql.parser.Identifier;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -209,13 +210,19 @@ public final class PostgresCopyStatement {
       }
     }
 
+    // Identifier.quote() is the escaping, not a copy of it (issue #7858): the grammar's
+    // QUOTED_IDENTIFIER : BACKTICK ( ~[`\\] | '\\' . )+ BACKTICK gives a backslash its escaping meaning, so the
+    // back-quote AND the backslash both have to be escaped here. Splicing them raw and refusing only the
+    // back-quote - which is what this used to do - is the defect #7740 fixed in TimeSeriesTypeBuilder.quote():
+    // a type named `a\b` was read as `ab`, and one ending in a backslash swallowed the closing quote and ran
+    // into whatever parseTail() appended after it.
     final StringBuilder select = new StringBuilder("SELECT ");
     for (int c = 0; c < columns.size(); c++) {
       if (c > 0)
         select.append(", ");
-      select.append('`').append(columns.get(c)).append('`');
+      select.append(Identifier.quote(columns.get(c)));
     }
-    select.append(columns.isEmpty() ? "FROM `" : " FROM `").append(table).append('`');
+    select.append(columns.isEmpty() ? "FROM " : " FROM ").append(Identifier.quote(table));
     return parseTail(select.toString(), tokens, i, false);
   }
 
@@ -376,11 +383,6 @@ public final class PostgresCopyStatement {
     final PostgresCatalogToken token = tokens.get(i);
     if (token.type != PostgresCatalogToken.Type.IDENTIFIER && token.type != PostgresCatalogToken.Type.QUOTED_IDENTIFIER)
       throw new CopyException("syntax error in COPY at '" + token.text + "': expected a name", SQLSTATE_SYNTAX_ERROR);
-    // The table form splices its names into a SELECT between back-ticks, which ArcadeDB's SQL cannot escape inside
-    // an identifier: a name holding one would end the identifier early and read the rest as SQL. No type or
-    // property can be named that way, so there is nothing to lose by refusing it.
-    if (token.text.indexOf('`') >= 0)
-      throw new CopyException("syntax error in COPY: the name \"" + token.text + "\" cannot contain a back-tick", SQLSTATE_SYNTAX_ERROR);
     return token.text;
   }
 
@@ -393,8 +395,9 @@ public final class PostgresCopyStatement {
 
   /**
    * The index of the {@code )} closing the {@code (} at {@code open}, read past nested parentheses, string
-   * literals (with {@code ''} and, in {@code E'...'}, backslash escapes), quoted identifiers of either kind and
-   * comments - anything the query inside may legitimately hold a stray parenthesis in.
+   * literals (with {@code ''} and, in {@code E'...'}, backslash escapes), quoted identifiers of either kind -
+   * each with its OWN escaping, the back-tick's backslash and the double quote's doubled quote - and comments:
+   * anything the query inside may legitimately hold a stray parenthesis in.
    */
   static int matchingParenthesis(final String text, final int open) {
     int depth = 0;
@@ -423,8 +426,16 @@ public final class PostgresCopyStatement {
           }
           i++;
         }
-      } else if (c == '"' || c == '`') {
-        final int end = text.indexOf(c, i + 1);
+      } else if (c == '`') {
+        // A back-tick identifier escapes with a backslash, which indexOf() cannot see: `a\`b)` used to end at the
+        // ESCAPED back-tick, leaving the ')' inside the identifier to close the query (found in review). One scan,
+        // shared with the tokenizer, and the same rule Identifier.quote() writes them with.
+        final int end = Identifier.endOfQuoted(text, i);
+        i = end < 0 ? length : end;
+      } else if (c == '"') {
+        // A double-quoted identifier escapes by DOUBLING the quote, so stopping at the first one is right: the
+        // next character is then the second quote of the pair, which re-enters this branch and scans on.
+        final int end = text.indexOf('"', i + 1);
         i = end < 0 ? length : end;
       } else if (c == '-' && i + 1 < length && text.charAt(i + 1) == '-') {
         final int end = text.indexOf('\n', i);
@@ -552,13 +563,27 @@ public final class PostgresCopyStatement {
       final String nul = nullString != null ? nullString : fmt == Format.CSV ? "" : "\\N";
       if (nul.indexOf('\r') >= 0 || nul.indexOf('\n') >= 0)
         throw new CopyException("COPY null representation cannot use newline or carriage return", SQLSTATE_SYNTAX_ERROR);
-      if (fmt == Format.TEXT && nul.indexOf(delim) >= 0)
-        throw new CopyException("COPY delimiter cannot appear in the NULL specification", SQLSTATE_SYNTAX_ERROR);
 
       final char q = quote != null ? quote : '"';
       final char e = escape != null ? escape : q;
       if (fmt == Format.CSV && delim == q)
         throw new CopyException("COPY delimiter and quote must be different", SQLSTATE_SYNTAX_ERROR);
+
+      // THE NULL SPECIFICATION IS WRITTEN RAW AND UNQUOTED FOR EVERY NULL VALUE (SEE appendRow), SO A CHARACTER
+      // INSIDE IT THAT THE FORMAT GIVES A MEANING TO DOES NOT ESCAPE - IT TAKES EFFECT. A DELIMITER SPLITS THE
+      // RECORD INTO ONE FIELD TOO MANY AND A CSV QUOTE OPENS A FIELD THE READER NEVER SEES CLOSED, SO THE OUTPUT
+      // STOPS BEING PARSEABLE AS THE FORMAT IT CLAIMS TO BE AND THE CONSUMER GETS A SHIFTED OR TRUNCATED ROW
+      // RATHER THAN AN ERROR. POSTGRESQL REFUSES BOTH COMBINATIONS UP FRONT (ProcessCopyOptions IN copy.c) AND
+      // THE DELIMITER ONE IN BOTH FORMATS, NOT ONLY IN TEXT, WHICH IS WHERE THIS STOPPED (ISSUE #7472).
+      // BOTH MESSAGES NAME THE CHARACTER, SO THE OPERATOR DOES NOT HAVE TO GUESS WHICH OPTION TO CHANGE
+      if (nul.indexOf(delim) >= 0)
+        throw new CopyException(
+            "COPY delimiter character must not appear in the NULL specification: delimiter is '" + delim
+                + "' and the NULL specification is \"" + nul + "\"", SQLSTATE_SYNTAX_ERROR);
+      if (fmt == Format.CSV && nul.indexOf(q) >= 0)
+        throw new CopyException(
+            "CSV quote character must not appear in the NULL specification: quote is '" + q
+                + "' and the NULL specification is \"" + nul + "\"", SQLSTATE_SYNTAX_ERROR);
 
       final Set<String> forced;
       if (forceQuoteColumns != null) {

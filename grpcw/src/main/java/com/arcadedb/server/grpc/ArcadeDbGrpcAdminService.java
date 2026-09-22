@@ -22,6 +22,7 @@ import com.arcadedb.Constants;
 import com.arcadedb.database.Database;
 import com.arcadedb.engine.OperationProgress;
 import com.arcadedb.exception.DatabaseOperationInProgressException;
+import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.index.Index;
 import com.arcadedb.schema.DocumentType;
 import com.arcadedb.schema.Schema;
@@ -932,7 +933,18 @@ public class ArcadeDbGrpcAdminService extends ArcadeDbAdminServiceGrpc.ArcadeDbA
     respond(resp, "connectCluster", () -> {
       requireServerAdmin(authenticate(req.getCredentials()));
 
-      controlPlane.connectCluster(req.getServerAddress());
+      final ServerControlPlane.ConnectClusterResult result = controlPlane.connectCluster(req.getServerAddress());
+      // The join succeeded and part of the follow-up did not: UNAVAILABLE, which is this transport's 503 and
+      // the status the HTTP add-peer route has answered the identical condition since issue #7521 (issue
+      // #7532, absorbing #7550). Before this the RPC answered OK and the failure existed only as a SEVERE log
+      // line, so an operator joining a peer over gRPC had nothing to branch on while one joining it over
+      // POST /api/v1/cluster/peer got a hard failure. Re-issuing the RPC is idempotent on the membership
+      // change and reissues the seed, which is what makes UNAVAILABLE the honest status rather than a
+      // decorative one. Raised as a StatusException here rather than out of the control plane, which must keep
+      // returning normally so the join stands: respond() catches it and toStatus() passes a StatusException
+      // through unchanged, so this is the transport choosing the status for a result it was handed.
+      if (result.hasFailedSeeds())
+        throw Status.UNAVAILABLE.withDescription(result.errorMessage() + " " + result.detailMessage()).asException();
       return ConnectClusterResponse.newBuilder().build();
     });
   }
@@ -1078,7 +1090,7 @@ public class ArcadeDbGrpcAdminService extends ArcadeDbAdminServiceGrpc.ArcadeDbA
     // gRPC has no equivalent of the HTTP handler's forwardToLeaderIfReplica, which proxies the request body to
     // the leader, so naming the leader is how this transport reproduces that gate.
     if (e instanceof ServerIsNotTheLeaderException) {
-      final StatusRuntimeException mapped = GrpcErrorMapper.toStatusRuntimeException(e, operation, ha());
+      final StatusRuntimeException mapped = GrpcErrorMapper.toStatusRuntimeException(e, operation, ha(), concealErrors());
       return new StatusException(mapped.getStatus(), mapped.getTrailers());
     }
     if (e instanceof AdminAuthorizationException)
@@ -1127,7 +1139,45 @@ public class ArcadeDbGrpcAdminService extends ArcadeDbAdminServiceGrpc.ArcadeDbA
     // could not be deleted), which is INTERNAL, not a precondition the caller can satisfy.
     if (e instanceof ServerControlPlane.OperationNotAvailableException)
       return Status.FAILED_PRECONDITION.withDescription(e.getMessage()).asException();
-    return Status.INTERNAL.withDescription(operation + ": " + e.getMessage()).asException();
+    // A transient failure the caller fixes by sending the same request again - most concretely
+    // QuorumNotReachedException out of any admin operation that has to commit a Raft entry. The HTTP control
+    // plane answers every NeedRetryException 503 (AbstractServerHttpHandler), and UNAVAILABLE is the status
+    // that says the same thing here; without this arm it reached the catch-all below and came out INTERNAL,
+    // which tells a client the server broke rather than to retry (issue #7532, absorbing #7550). LAST of the
+    // named arms because it is a supertype: ServerIsNotTheLeaderException extends it and is answered further
+    // up with the redirect trailers it needs.
+    if (e instanceof NeedRetryException)
+      return Status.UNAVAILABLE.withDescription(e.getMessage()).asException();
+    // THE CATCH-ALL: AN UNEXPECTED FAULT, WHOSE MESSAGE IS FREE-FORM ENGINE TEXT AND CAN CARRY FILE PATHS, SCHEMA
+    // NAMES AND INTERNALS. THAT IS PRECISELY WHAT PRODUCTION MODE CONCEALS IN THE HTTP BODY'S 'detail' FIELD, AND
+    // THIS SURFACE USED TO EMIT IT WHATEVER THE MODE SAID (ISSUE #7472). THE ARMS ABOVE ARE NOT CONCEALED: EACH IS
+    // AN ARCADEDB-AUTHORED, BOUNDED SENTENCE FOR ONE CLASSIFIED OUTCOME - THE GRPC ANALOGUE OF THE HTTP BODY'S
+    // 'error' FIELD, WHICH PRODUCTION MODE KEEPS BECAUSE IT IS WHAT MAKES THE REFUSAL ACTIONABLE.
+    // DatabaseOperationInProgressException IS NAMED ON BOTH SIDES AND IS NOT A CONTRADICTION: HERE THE CALLER GAVE
+    // THE DATABASE NAME IT IS BEING TOLD ABOUT, SO THE MESSAGE RETURNS ITS OWN INPUT; REACHING GrpcErrorMapper IT
+    // ARRIVES FROM AN ARBITRARY DEPTH - A SQL 'BACKUP DATABASE' INSIDE ExecuteCommand - WHERE IT DOES NOT.
+    // GrpcErrorMapper CONCEALS ITS CLASSIFIED BRANCHES TOO, AND THAT DIFFERENCE IS DELIBERATE: THE EXCEPTIONS IT
+    // MAPS CARRY ENGINE TEXT (A DuplicatedKeyException EMBEDS THE OFFENDING KEY VALUE), WHILE THESE ARMS CARRY
+    // SENTENCES THIS SERVER WROTE ABOUT THE REQUEST. SEE ITS JAVADOC BEFORE MAKING THE TWO MATCH
+    // THROUGH THE SHARED HELPER, WHICH LOGS WHAT IT CONCEALS. BUILDING THE DESCRIPTION HERE MEANT THIS ARM - THE
+    // TERMINAL PATH FOR EVERY ADMIN RPC - CONCEALED THE FAILURE FROM THE CLIENT AND WROTE NOTHING ANYWHERE, WHICH
+    // IS WORSE THAN NOT CONCEALING: NOBODY HAD THE DETAIL AT ALL. NOTHING ELSE ON THIS PATH LOGS IT EITHER -
+    // GrpcUnaryCall.respond ONLY LOGS THE CLIENT-CANCEL RACE, AND THE LOGGING INTERCEPTOR SEES THE MAPPED STATUS
+    // RATHER THAN THE CAUSE (PR #7755 REVIEW)
+    return Status.INTERNAL
+        .withDescription(GrpcErrorMapper.concealableDescription(this, operation, e, concealErrors()))
+        .asException();
+  }
+
+  /**
+   * Whether this server conceals the free-form part of an error from the client - see
+   * {@code ArcadeDBServer.isProductionMode()}, the ONE place the decision is made so the setting means the same
+   * thing on every surface (issue #7472).
+   */
+  private boolean concealErrors() {
+    // NO NULL CHECK: THE CONSTRUCTOR REQUIRES A SERVER. ArcadeDbGrpcService's OWN concealErrors() DOES CHECK,
+    // BECAUSE THAT CLASS DELIBERATELY TOLERATES A NULL SERVER FOR EMBEDDED AND TEST CONSTRUCTION
+    return server.isProductionMode();
   }
 
   // Defense-in-depth: GrpcAuthInterceptor already authenticates these body credentials centrally

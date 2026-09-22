@@ -25,7 +25,7 @@ import com.arcadedb.database.ProtocolContext;
 import com.arcadedb.database.RID;
 import com.arcadedb.database.TransactionContext;
 import com.arcadedb.exception.DuplicatedKeyException;
-import com.arcadedb.graph.MutableEdge;
+import com.arcadedb.exception.LockTimeoutException;
 import com.arcadedb.graph.MutableVertex;
 import com.arcadedb.graph.Vertex;
 import com.arcadedb.log.LogManager;
@@ -37,6 +37,7 @@ import com.arcadedb.schema.EdgeType;
 import com.arcadedb.schema.VertexType;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
+import com.arcadedb.server.http.HttpSession;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.undertow.websockets.core.WebSocketChannel;
 
@@ -64,6 +65,13 @@ import java.util.logging.Level;
  * checked against durable state when the transaction commits, so a session that wants a conflict reported on
  * the row that caused it names its {@code keyColumns}.
  * <p>
+ * <b>External transactions.</b> Under {@link InsertSessionOptions.TransactionMode#NONE} the session writes into
+ * a transaction begun with {@code POST /api/v1/begin} and named by the {@code start} frame's
+ * {@code transactionId} (issue #7403). It never begins, commits or rolls that transaction back: the HTTP
+ * {@code /commit} or {@code /rollback} on the same id owns its lifecycle, exactly as {@code InsertContext}'s
+ * external-transaction path does on the gRPC side. Each chunk runs inside {@code HttpSession.execute}, so it
+ * takes the same lock an HTTP command on that transaction takes and refreshes the same idle clock.
+ * <p>
  * <b>Threading.</b> The session's {@link TransactionContext} is bound to whichever thread is currently running one
  * of its frames and detached again when that frame finishes - the same borrow-per-request lifecycle
  * {@code DatabaseAbstractHandler} gives an {@code arcadedb-session-id} transaction, and the reason no thread has to
@@ -88,6 +96,16 @@ public class WebSocketInsertSession {
   public final  UUID                          channelId;
   public final  InsertSessionOptions          options;
   private final DatabaseInternal              database;
+  /**
+   * The HTTP session whose transaction this session writes into, or {@code null} for a server-managed one
+   * (issue #7403). Non-null exactly when {@link InsertSessionOptions.TransactionMode#NONE} is in force, and the
+   * reason {@link #transaction} stays null in that mode: every path that ends a session - the {@code commit}
+   * frame, the connection-close hook, the idle sweep, server shutdown - acts on {@link #transaction}, so a
+   * transaction this session does not own is unreachable from all of them by construction rather than by four
+   * separate guards.
+   */
+  private final HttpSession                   externalSession;
+  private final String                        externalTransactionId;
   private final ReentrantLock                 lock       = new ReentrantLock();
   private final long                          startedAt  = System.currentTimeMillis();
   /** Null in every mode but {@code PER_STREAM}, where it is the transaction the client's frames decide. */
@@ -99,6 +117,21 @@ public class WebSocketInsertSession {
   private       long                          failed;
   /** Highest chunk sequence already applied. A chunk at or below it is acknowledged without being applied again. */
   private       long                          watermark;
+  /**
+   * The rows of the one chunk that failed as a whole and has not been replayed yet, held OUT of the totals above
+   * (issue #7471).
+   * <p>
+   * A whole-chunk failure leaves the watermark where it is and the protocol tells the client to resend that
+   * sequence, so folding its rows into the session totals counted them twice: once as {@code failed} here and once
+   * again as written when the replay landed. A client reconciling "rows sent" against "rows written" off the final
+   * summary got a mismatch on exactly the path it had been instructed to take.
+   * <p>
+   * Held aside instead, and added back only when the summary is built, which keeps BOTH readings honest: a chunk
+   * the client never replayed still shows up as failed, and one it did replay is superseded rather than added to.
+   * At most one chunk can ever be in this state - a failure does not advance the watermark, so the next chunk the
+   * session will accept is the failed one, and nothing beyond it can be applied until it is.
+   */
+  private       long                          failedChunkRows;
   private volatile boolean                    closed;
   /** Set once the "out/in in updateColumnsOnConflict are ignored" warning has been logged for this session. */
   private          boolean                    warnedEdgeEndpointUpdateColumns;
@@ -107,33 +140,60 @@ public class WebSocketInsertSession {
   private volatile WebSocketChannel            channel;
 
   WebSocketInsertSession(final String id, final DatabaseInternal database, final ServerSecurityUser user,
-      final UUID channelId, final InsertSessionOptions options) {
+      final UUID channelId, final InsertSessionOptions options, final String externalTransactionId,
+      final HttpSession externalSession) {
     this.id = id;
     this.database = database;
     this.databaseName = database.getName();
     this.user = user;
     this.channelId = channelId;
     this.options = options;
+    this.externalTransactionId = externalTransactionId;
+    this.externalSession = externalSession;
+  }
+
+  /** The {@code arcadedb-session-id} this session writes into, or {@code null} when it manages its own. */
+  public String getExternalTransactionId() {
+    return externalTransactionId;
   }
 
   /**
    * Begins the session's own transaction. Only {@code PER_STREAM} has one: the other modes open and commit a
    * transaction inside {@link #applyChunk}, which is what makes their acknowledged chunks durable before the
    * client has said anything.
+   * <p>
+   * Under {@link #lock} and behind {@link #requireOpen()} like every other mutating entry point, because this one
+   * races the connection-close hook as well (CodeRabbit on PR #7855). {@link WebSocketInsertSessionManager#start}
+   * registers the session BEFORE beginning it - it has to, or the close hook and the idle sweep could not see it -
+   * so a close landing in that gap runs {@link #cancel()} on a session whose transaction does not exist yet. That
+   * sets {@code closed} and rolls back nothing, and {@code begin()} would then open a transaction anyway; every
+   * later {@code cancel()} returns immediately on the {@code closed} flag, so nothing would ever roll it back, and
+   * the session is no longer registered for the sweep to find. Taking the lock and re-checking {@code closed}
+   * makes the two orderings exhaustive: close first and this THROWS - {@code start} unregisters and reports it -
+   * or begin first and the close that follows finds the transaction and rolls it back.
+   *
+   * @throws IllegalStateException when the session was closed underneath the caller
    */
   void begin() {
-    if (options.transactionMode != InsertSessionOptions.TransactionMode.PER_STREAM)
-      return;
-
-    DatabaseContext.INSTANCE.init(database);
+    lock.lock();
     try {
-      database.begin();
-      transaction = database.getTransaction();
-      // The requester is what lets a lock taken on this thread be released from another one, which is exactly
-      // what a session whose frames land on different worker threads needs. Same reason PostBeginHandler sets it.
-      transaction.setRequester(id);
+      requireOpen();
+
+      if (options.transactionMode != InsertSessionOptions.TransactionMode.PER_STREAM)
+        return;
+
+      DatabaseContext.INSTANCE.init(database);
+      try {
+        database.begin();
+        transaction = database.getTransaction();
+        // The requester is what lets a lock taken on this thread be released from another one, which is exactly
+        // what a session whose frames land on different worker threads needs. Same reason PostBeginHandler sets it.
+        transaction.setRequester(id);
+      } finally {
+        DatabaseContext.INSTANCE.removeContext(database.getDatabasePath());
+      }
     } finally {
-      DatabaseContext.INSTANCE.removeContext(database.getDatabasePath());
+      lock.unlock();
     }
   }
 
@@ -213,61 +273,36 @@ public class WebSocketInsertSession {
       final ChunkCounts counts = new ChunkCounts();
       final int rows = records == null ? 0 : records.length();
 
-      DatabaseContext.INSTANCE.init(database, transaction);
-      // The key lookups below are real SQL: tagged with the transport they serve so they are metered as such,
-      // which is the misattribution issue #7407 found on the gRPC streaming inserts.
-      ProtocolContext.set("ws");
-      try {
-        DatabaseContext.INSTANCE.getContext(database.getDatabasePath()).setCurrentUser(user.getDatabaseUser(database));
+      if (externalSession != null)
+        // Under the caller's own session lock, which is what an HTTP request on that transaction takes too: the
+        // /ws frames of this session and the /commit that ends it arrive on different threads and would
+        // otherwise mutate the same TransactionContext concurrently. It also re-validates that the session is
+        // still registered and refreshes its idle clock, so a loader pausing between chunks does not have the
+        // transaction swept out from under it. rollbackOnFailure is false: a frame this session refuses - a
+        // skipped sequence, a malformed record - is not a reason to destroy a transaction the client still owns.
+        runInExternalSession(() -> applyUnderTransaction(records, rows, counts));
+      else
+        applyUnderTransaction(records, rows, counts);
 
-        switch (options.transactionMode) {
-        case PER_STREAM -> applyRows(records, rows, counts);
-        case PER_BATCH -> {
-          try {
-            counts.absorb(inOwnTransaction(attempt -> applyRows(records, rows, attempt)));
-          } catch (final Exception e) {
-            // The chunk's own transaction failed to commit, so nothing in it is durable. Report the whole chunk
-            // as failed - the per-row tallies the attempts produced describe transactions that no longer exist.
-            counts.resetToWholeChunkFailure(rows, e);
-          }
-        }
-        case PER_ROW -> {
-          for (int i = 0; i < rows; i++) {
-            final int row = i;
-            try {
-              counts.absorb(inOwnTransaction(attempt -> applyRowCounting(records, row, attempt)));
-            } catch (final DuplicatedKeyException e) {
-              // The row's own commit hit a unique index the session named no key columns for. The row IS the
-              // transaction here, so the mode can still answer per row: dropped under ignore, a CONFLICT
-              // otherwise.
-              if (options.conflictMode == InsertSessionOptions.ConflictMode.IGNORE)
-                counts.ignored++;
-              else
-                counts.conflict(row, e);
-            } catch (final Exception e) {
-              // Anything else that stops the row's commit is reported on the row, since the row is the transaction.
-              counts.fail(row, e);
-            }
-          }
-        }
-        default -> throw new IllegalStateException("Unsupported transaction mode " + options.transactionMode);
-        }
-      } finally {
-        ProtocolContext.clear();
-        DatabaseContext.INSTANCE.removeContext(database.getDatabasePath());
-      }
-
-      received += rows;
-      inserted += counts.inserted;
-      updated += counts.updated;
-      ignored += counts.ignored;
-      failed += counts.failed;
-      // The watermark advances only on a chunk that was applied without a whole-chunk failure, so a client that
-      // replays a chunk whose transaction never committed gets it applied rather than acknowledged as a duplicate.
-      // Only PER_STREAM and PER_BATCH can report a whole-chunk failure: PER_ROW commits row by row, so it advances
-      // even when every row failed, and the client resends those rows under a new sequence. See the javadoc.
-      if (!counts.wholeChunkFailed)
+      // Either way round, this attempt SUPERSEDES any earlier attempt at the same sequence: a whole-chunk failure
+      // does not advance the watermark, so the chunk being applied here is the one that failed (issue #7471).
+      if (counts.wholeChunkFailed)
+        // Deliberately NOT folded into the totals: the client is being told to replay this chunk, and the replay
+        // would count its rows a second time. Held aside so the summary can still report it if no replay comes.
+        failedChunkRows = rows;
+      else {
+        failedChunkRows = 0;
+        received += rows;
+        inserted += counts.inserted;
+        updated += counts.updated;
+        ignored += counts.ignored;
+        failed += counts.failed;
+        // The watermark advances only on a chunk that was applied without a whole-chunk failure, so a client that
+        // replays a chunk whose transaction never committed gets it applied rather than acknowledged as a duplicate.
+        // Only PER_STREAM and PER_BATCH can report a whole-chunk failure: PER_ROW commits row by row, so it advances
+        // even when every row failed, and the client resends those rows under a new sequence. See the javadoc.
         watermark = chunkSeq;
+      }
 
       ack.put("received", (long) rows);
       ack.put("inserted", counts.inserted);
@@ -281,6 +316,92 @@ public class WebSocketInsertSession {
       return ack;
     } finally {
       lock.unlock();
+    }
+  }
+
+  /**
+   * Applies the rows of a chunk with the session's transaction bound to this thread. Split out of
+   * {@link #applyChunk} so an externally-managed transaction (issue #7403) can wrap exactly this - and only
+   * this - in the owning {@link HttpSession}'s lock, without the replay and watermark bookkeeping around it
+   * taking a lock the client's HTTP requests contend on.
+   */
+  private void applyUnderTransaction(final JSONArray records, final int rows, final ChunkCounts counts) {
+    DatabaseContext.INSTANCE.init(database, externalSession != null ? externalSession.transaction : transaction);
+    // The key lookups below are real SQL: tagged with the transport they serve so they are metered as such,
+    // which is the misattribution issue #7407 found on the gRPC streaming inserts.
+    ProtocolContext.set("ws");
+    try {
+      DatabaseContext.INSTANCE.getContext(database.getDatabasePath()).setCurrentUser(user.getDatabaseUser(database));
+
+      switch (options.transactionMode) {
+      // NONE writes into the caller's transaction exactly as PER_STREAM writes into its own: rows are applied
+      // and nothing is committed. The difference is only in who commits, which is decided in finish().
+      case PER_STREAM, NONE -> applyRows(records, rows, counts);
+      case PER_BATCH -> {
+        try {
+          counts.absorb(inOwnTransaction(attempt -> applyRows(records, rows, attempt)));
+        } catch (final Exception e) {
+          // The chunk's own transaction failed to commit, so nothing in it is durable. Report the whole chunk
+          // as failed - the per-row tallies the attempts produced describe transactions that no longer exist.
+          counts.resetToWholeChunkFailure(rows, e);
+        }
+      }
+      case PER_ROW -> {
+        for (int i = 0; i < rows; i++) {
+          final int row = i;
+          try {
+            // applyRow, not applyRowCounting: a row that fails must take its own transaction down with it rather
+            // than be tallied inside it and committed anyway (issue #7467). The row IS the transaction here, so
+            // letting the exception out is the whole retraction, whatever the failure was and whether or not the
+            // engine could undo it on its own. The tallies are identical either way - the two arms below record
+            // the same CONFLICT or DB_ERROR the swallowed catch did.
+            counts.absorb(inOwnTransaction(attempt -> applyRow(records.getJSONObject(row), row, attempt)));
+          } catch (final DuplicatedKeyException e) {
+            // The row's own commit hit a unique index the session named no key columns for. The row IS the
+            // transaction here, so the mode can still answer per row: dropped under ignore, a CONFLICT
+            // otherwise.
+            if (options.conflictMode == InsertSessionOptions.ConflictMode.IGNORE)
+              counts.ignored++;
+            else
+              counts.conflict(row, e);
+          } catch (final Exception e) {
+            // Anything else that stops the row's commit is reported on the row, since the row is the transaction.
+            counts.fail(row, e);
+          }
+        }
+      }
+      default -> throw new IllegalStateException("Unsupported transaction mode " + options.transactionMode);
+      }
+    } finally {
+      ProtocolContext.clear();
+      DatabaseContext.INSTANCE.removeContext(database.getDatabasePath());
+    }
+  }
+
+  /**
+   * Runs {@code work} inside the caller's HTTP session, translating what that can refuse into the exceptions
+   * {@link WebSocketInsertProtocol} already answers with an {@code error} frame.
+   */
+  private void runInExternalSession(final Runnable work) {
+    try {
+      externalSession.execute(user, () -> {
+        work.run();
+        return null;
+      }, false);
+    } catch (final LockTimeoutException e) {
+      // An HTTP command is running on the caller's own transaction right now. Translated rather than allowed to
+      // propagate: LockTimeoutException is a NeedRetryException, which WebSocketInsertProtocol does not name, so
+      // it would have been answered "Internal error" - telling a client the server had broken when the truth is
+      // that its own two clients contended and this chunk can simply be sent again (code review on PR #7811).
+      throw new IllegalStateException("Transaction '" + externalTransactionId
+          + "' is busy with another command on it. Send this chunk again once that command has finished", e);
+    } catch (final RuntimeException e) {
+      throw e;
+    } catch (final Exception e) {
+      // HttpSessionException - the transaction ended between this session's start and now - is checked here only
+      // because HttpSession.execute declares Exception. It is not an internal error either.
+      throw new IllegalStateException(
+          "Transaction '" + externalTransactionId + "' could not be used: " + e.getMessage(), e);
     }
   }
 
@@ -313,22 +434,37 @@ public class WebSocketInsertSession {
         }
       }
 
+      // The totals count every chunk EXACTLY ONCE, and count each one as its LATEST attempt left it: a chunk that
+      // failed as a whole is not in them, because the protocol tells the client to replay it and the replay would
+      // count the same rows again (issue #7471). A chunk still outstanding when the session ends - failed, never
+      // replayed - is added back here, so 'received' remains "rows this session was given" and 'failed' remains
+      // "rows it did not write", rather than either quietly losing them.
       final JSONObject summary = new JSONObject();
-      summary.put("received", received);
+      summary.put("received", received + failedChunkRows);
       summary.put("inserted", inserted);
       summary.put("updated", updated);
       summary.put("ignored", ignored);
-      summary.put("failed", failed);
+      summary.put("failed", failed + failedChunkRows);
       summary.put("executionTimeMs", System.currentTimeMillis() - startedAt);
       // PER_BATCH and PER_ROW commit as they go, so a rollback frame cannot take back a chunk the client has
       // already been acknowledged for. Say so in the answer rather than letting the outcome imply otherwise.
-      summary.put("partialCommit", options.transactionMode != InsertSessionOptions.TransactionMode.PER_STREAM);
+      // An externally-managed session has committed nothing either way, so it is never a partial commit: what
+      // its rows are worth is decided by the HTTP /commit or /rollback the client still has to send.
+      summary.put("partialCommit",
+          externalSession == null && options.transactionMode != InsertSessionOptions.TransactionMode.PER_STREAM);
+      if (externalSession != null) {
+        summary.put("externalTransaction", true);
+        summary.put("transactionId", externalTransactionId);
+      }
 
       final JSONObject response = new JSONObject();
       response.put("result", "ok");
       response.put("action", "committed");
       response.put("sessionId", id);
-      response.put("outcome", commit ? "commit" : "rollback");
+      // 'detached', not 'commit'/'rollback': neither frame decided anything about a transaction this session
+      // does not own, and answering 'commit' would tell a client its rows were durable when nothing had been
+      // committed. See WebSocketInsertProtocol's frame documentation.
+      response.put("outcome", externalSession != null ? "detached" : (commit ? "commit" : "rollback"));
       response.put("summary", summary);
       return response;
     } finally {
@@ -382,7 +518,14 @@ public class WebSocketInsertSession {
     }
   }
 
-  /** Must be called holding {@link #lock}. */
+  /**
+   * Must be called holding {@link #lock}.
+   * <p>
+   * Only ever rolls back {@link #transaction}, which is null for an externally-managed session (issue #7403), so
+   * a connection that drops, an idle sweep that gives up and a server that stops all leave the caller's
+   * transaction exactly where the caller left it: still open, still theirs to commit or roll back over HTTP,
+   * still on the HTTP session's own idle budget.
+   */
   private boolean rollbackAndClose() {
     if (closed)
       return false;
@@ -434,7 +577,22 @@ public class WebSocketInsertSession {
       applyRowCounting(records, i, counts);
   }
 
-  /** {@link #applyRow} with its outcome tallied: a row that cannot be applied is counted, never thrown. */
+  /**
+   * {@link #applyRow} with its outcome tallied: a row that cannot be applied is counted, never thrown, so the
+   * rest of the chunk still goes in.
+   * <p>
+   * <b>The invariant this rests on</b> (issue #7467): a row reported here as not written must not be in the
+   * transaction the chunk goes on to commit. That is not the caller's to arrange - the row's work is already in
+   * the shared transaction by the time the exception reaches this frame - it is the engine's, and
+   * {@code LocalDatabase.createRecordNoLock} keeps it: a create whose indexing refuses the record takes the
+   * record body, the bucket delta, the cache entry and the index entries added before the refusal back out
+   * before the exception leaves. Until it did, a duplicate key was tallied CONFLICT here and committed anyway,
+   * leaving a record that exists in the bucket, is absent from the unique index that was supposed to forbid it,
+   * and was acknowledged to the client as not written.
+   * <p>
+   * Only the modes that share ONE transaction across rows rely on that. {@code PER_ROW} calls {@link #applyRow}
+   * directly, so a failing row rolls its own transaction back and needs no engine guarantee at all.
+   */
   private void applyRowCounting(final JSONArray records, final int rowIndex, final ChunkCounts counts) {
     try {
       applyRow(records.getJSONObject(rowIndex), rowIndex, counts);
@@ -531,9 +689,12 @@ public class WebSocketInsertSession {
       final String from, final String to) {
     if (type instanceof EdgeType) {
       final Vertex fromVertex = database.lookupByRID(database.newRID(from), false).asVertex(false);
-      final MutableEdge edge = fromVertex.newEdge(typeName, database.newRID(to));
-      edge.set(properties);
-      edge.save();
+      // The properties go INTO the creation rather than into a save() after it (issue #7467). newEdge() sets
+      // them on the edge before its save() and links the two vertices' edge lists after, so a unique index that
+      // refuses one of them refuses the CREATE - which LocalDatabase now undoes whole. Created and then updated,
+      // the refusal arrived at the update, leaving a property-less edge already wired into both vertices and
+      // acknowledged to the client as not written.
+      fromVertex.newEdge(typeName, database.newRID(to), properties);
     } else if (type instanceof VertexType) {
       final MutableVertex vertex = database.newVertex(typeName);
       vertex.set(properties);

@@ -39,13 +39,20 @@ import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.net.URLEncoder;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -60,7 +67,21 @@ public class FileUtils {
   public static final String UTF8_BOM = "\uFEFF";
 
   /** One warning per JVM when the file store cannot replace files atomically (see {@link #publishAtomically}). */
-  private static final AtomicBoolean NON_ATOMIC_MOVE_REPORTED = new AtomicBoolean();
+  private static final AtomicBoolean NON_ATOMIC_MOVE_REPORTED   = new AtomicBoolean();
+  /** One warning per JVM when the platform cannot fsync a directory (see {@link #forceDirectory}). */
+  private static final AtomicBoolean NO_DIRECTORY_SYNC_REPORTED = new AtomicBoolean();
+  /**
+   * Whether this platform has no way to fsync a directory at all, which is Windows: a directory is not a file
+   * there, so opening one as a channel throws and no equivalent call exists.
+   * <p>
+   * Decided ONCE, from the platform itself, rather than latched the first time an open happens to fail. Inferring
+   * it from a failure would let ONE uncooperative directory - a network mount, a directory with unusual
+   * permissions - turn off the fsync for every other database in the JVM, silently dropping the machine-crash
+   * guarantee everywhere on the evidence of a single call (code review on PR #7855). A non-Windows file store
+   * that still refuses simply pays one exception per publish and is logged; that cost is local to it.
+   */
+  private static final boolean       NO_DIRECTORY_SYNC_ON_THIS_PLATFORM =
+      System.getProperty("os.name", "").toLowerCase(Locale.ENGLISH).contains("win");
 
   public static String getStringContent(final Object iValue) {
     if (iValue == null)
@@ -188,6 +209,96 @@ public class FileUtils {
   public static String getFileNameFromPath(final String path) {
     final int pos = lastIndexOfSeparator(path);
     return pos > -1 ? path.substring(pos + 1) : path;
+  }
+
+  // A PATH THAT IS ITSELF A ROOT - "/" OR "C:/" - HAS NO LAST SEGMENT, SO THIS ANSWERS "". THAT IS THE HONEST
+  // ANSWER AND IT IS WHAT LocalDatabase THEN USES AS THE DATABASE NAME, WHICH IS WHY A ROOT IS NOT A USABLE
+  // DATABASE PATH ON EITHER PLATFORM. PRE-EXISTING FOR "/" AND UNCHANGED BY #7588: stripTrailingSeparator KEEPS A
+  // ROOT'S SEPARATOR PRECISELY SO THE PATH STILL NAMES THE ROOT, RATHER THAN SILENTLY NAMING SOMETHING ELSE
+
+  /**
+   * Whether {@code path} ends with a path separator in EITHER convention, not only this JVM's own
+   * {@link File#separator}. Same reason as {@link #lastIndexOfSeparator(String)}: a path an embedder, a
+   * configuration file or an environment variable supplies is routinely written with {@code '/'} even on Windows,
+   * and a check that only knows {@code '\'} answers "no separator" for one (issue #7588).
+   */
+  public static boolean endsWithSeparator(final String path) {
+    return !path.isEmpty() && isSeparator(path.charAt(path.length() - 1));
+  }
+
+  /**
+   * Whether {@code path} starts with a path separator in either convention - an absolute, root-relative path. Used
+   * by the guards that refuse one, which must not be escapable by writing the path the other way round.
+   */
+  public static boolean startsWithSeparator(final String path) {
+    return !path.isEmpty() && isSeparator(path.charAt(0));
+  }
+
+  /** Whether {@code c} is a path separator in either convention. */
+  public static boolean isSeparator(final char c) {
+    return c == '/' || c == '\\';
+  }
+
+  /**
+   * {@code path} guaranteed to end with a separator, appending this JVM's {@link File#separator} only when it does
+   * not already end with one of EITHER convention - so {@code "C:/data/"} on Windows stays as it is rather than
+   * becoming {@code "C:/data/\"}.
+   * <p>
+   * Carries the same trade-off {@link #isSeparator(char)} does, in the other direction: a POSIX directory whose
+   * name genuinely ENDS in a backslash is read as already separated and gets nothing appended, so a later
+   * {@code directory + name} glues the two into one path segment instead of nesting them. Accepted for the same
+   * reason - a backslash in a POSIX directory name is pathological, a '/'-written Windows path is everyday - and
+   * noted here because the trade-off is not confined to the name-parsing side of it (PR #7755 review).
+   */
+  public static String appendSeparatorIfMissing(final String path) {
+    return endsWithSeparator(path) ? path : path + File.separator;
+  }
+
+  /**
+   * {@code path} without its trailing separator, in either convention, or unchanged when it has none.
+   * <p>
+   * A path that IS a root keeps its separator, because stripping it changes which directory the path names rather
+   * than just tidying it. Two forms of root:
+   * <ul>
+   *   <li>the POSIX root {@code "/"} (and {@code "\\"}), which would otherwise become the empty string;</li>
+   *   <li>a Windows DRIVE root, {@code "C:/"} or {@code "C:\\"}, which would otherwise become {@code "C:"} - and
+   *   {@code "C:"} is drive-RELATIVE on Windows: it names the current directory on drive C:, not the volume root.
+   *   {@code DatabaseFactory} keeps this value and {@code LocalDatabase} hands it to {@code new File(...)} and
+   *   {@code Path.of(...)}, so the difference is which directory the database is opened in (PR #7755 review).</li>
+   * </ul>
+   */
+  public static String stripTrailingSeparator(final String path) {
+    if (!endsWithSeparator(path) || isRoot(path))
+      return path;
+    return path.substring(0, path.length() - 1);
+  }
+
+  /**
+   * Whether {@code path} is ABSOLUTE in either platform's terms, regardless of which platform this JVM runs on:
+   * it starts with a separator, or it is Windows drive-qualified ({@code "C:\\backup.zip"}, {@code "C:/backup.zip"}).
+   * <p>
+   * For the guards that refuse an absolute caller-supplied path. {@link #startsWithSeparator(String)} alone is not
+   * that question on Windows: a drive-qualified path starts with a LETTER and is absolute all the same, so a guard
+   * asking only about the leading separator lets it through (PR #7755 review).
+   */
+  public static boolean isAbsolutePath(final String path) {
+    if (startsWithSeparator(path))
+      return true;
+    // DRIVE-QUALIFIED: A LETTER, A COLON, AND A SEPARATOR OR NOTHING. "C:backup.zip" IS DRIVE-RELATIVE RATHER THAN
+    // ABSOLUTE, BUT IT IS STILL A PATH ON ANOTHER DRIVE, SO IT IS REFUSED TOO
+    return path.length() >= 2 && path.charAt(1) == ':' && Character.isLetter(path.charAt(0));
+  }
+
+  /**
+   * Whether {@code path} names a file-system root that its trailing separator is PART OF rather than trailing
+   * punctuation on: {@code "/"}, {@code "\\"}, or a Windows drive root such as {@code "C:/"}.
+   */
+  private static boolean isRoot(final String path) {
+    if (path.length() == 1)
+      return true;
+    // A DRIVE ROOT IS EXACTLY THREE CHARACTERS: A LETTER, A COLON AND THE SEPARATOR. "C:/data/" IS NOT ONE, AND ITS
+    // TRAILING SEPARATOR IS THE ORDINARY KIND
+    return path.length() == 3 && path.charAt(1) == ':' && Character.isLetter(path.charAt(0));
   }
 
   public static void deleteRecursively(final File rootFile) {
@@ -380,6 +491,10 @@ public class FileUtils {
    * partial/spliced one. If a crash happens mid-write, the previous valid file is left untouched.
    * When the underlying filesystem cannot perform an atomic move, it falls back to a
    * {@code REPLACE_EXISTING} move (still a single rename, just without the cross-crash guarantee).
+   * <p>
+   * The parent directory is fsync'd after the rename, so the guarantee holds across a MACHINE crash and not only a
+   * process one - the rename is directory metadata, and forcing the file does not make it durable (issue #7465). On
+   * a platform that will not fsync a directory (Windows) the attempt is skipped; see {@link #forceDirectory}.
    */
   public static void atomicWriteFile(final File file, final String content) throws IOException {
     atomicWriteFile(file, content.getBytes(StandardCharsets.UTF_8));
@@ -396,7 +511,7 @@ public class FileUtils {
     // required for the ATOMIC_MOVE below to actually be atomic instead of falling back to a copy.
     final Path target = file.toPath().toAbsolutePath();
     final Path dir = target.getParent();
-    Files.createDirectories(dir);
+    createDirectoriesDurably(dir);
 
     final Path tmp = Files.createTempFile(dir, file.getName() + ".", ".tmp");
     try {
@@ -414,7 +529,8 @@ public class FileUtils {
   /**
    * Publishes a byte-identical copy of {@code source} at {@code target} atomically, so a reader of
    * {@code target} sees either its previous complete content or the full copy, never a partial one, and
-   * {@code source} is never unlinked in the process.
+   * {@code source} is never unlinked in the process. As in {@link #atomicWriteFile(File, byte[])}, the parent
+   * directory is fsync'd after the rename so the published name survives a power failure (issue #7465).
    * <p>
    * A hard link is attempted first: it makes {@code target} a second name for the bytes already on disk,
    * which costs one inode operation instead of a full read + write + fsync of the source, and is
@@ -430,7 +546,7 @@ public class FileUtils {
     final Path from = source.toPath().toAbsolutePath();
     final Path to = target.toPath().toAbsolutePath();
     final Path dir = to.getParent();
-    Files.createDirectories(dir);
+    createDirectoriesDurably(dir);
 
     // Unique by construction, so the link below never races another writer for the name.
     final Path tmp = dir.resolve(target.getName() + "." + UUID.randomUUID() + ".tmp");
@@ -470,6 +586,124 @@ public class FileUtils {
             "File store hosting '%s' cannot replace files atomically: a crash during a replacement can leave the file "
                 + "missing or partial. Consider hosting the database on a file store that supports atomic renames.", null, target);
       Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+    }
+
+    // The rename is a DIRECTORY-metadata update, and the fsync the caller already did on the temporary file does not
+    // make it durable: after a machine crash the new content can be on disk while the directory still names the old
+    // file, or nothing at all (issue #7465). Forcing the parent directory is what turns "the previous complete file
+    // or the new complete file" from a statement about a process crash into one about a power failure, which is what
+    // both helpers' javadocs claim.
+    forceDirectory(target.getParent());
+  }
+
+  /**
+   * Creates {@code dir} and any missing ancestor, making each new directory's ENTRY durable as it goes.
+   * <p>
+   * {@link Files#createDirectories} is not enough on its own for the guarantee {@link #atomicWriteFile} states. A
+   * directory's name lives in its PARENT, so a power failure right after a publish into a freshly created nested
+   * path can lose the new directory - and with it the file that was just fsync'd and atomically renamed inside it,
+   * however carefully (CodeRabbit on PR #7855). Creating one level at a time and forcing the parent after each
+   * level is what makes the whole path durable rather than only its last component.
+   * <p>
+   * Costs one {@code isDirectory} stat when the directory already exists, which is every publish after the first.
+   */
+  private static void createDirectoriesDurably(final Path dir) throws IOException {
+    if (Files.isDirectory(dir))
+      return;
+
+    // Deepest missing ancestor LAST out of the deque, so every level is created into a parent that exists by then.
+    final Deque<Path> missing = new ArrayDeque<>();
+    for (Path path = dir; path != null && !Files.isDirectory(path); path = path.getParent())
+      missing.push(path);
+
+    for (final Path path : missing) {
+      try {
+        Files.createDirectory(path);
+      } catch (final FileAlreadyExistsException e) {
+        // Another thread or process created it between the check and the call: a race this loop is allowed to
+        // lose, since the directory it wanted now exists. Anything ELSE under that name - a regular file - is a
+        // genuine error, and is reported exactly as createDirectories() would have reported it.
+        if (!Files.isDirectory(path))
+          throw e;
+        continue;
+      }
+      forceDirectory(path.getParent());
+    }
+  }
+
+  /**
+   * fsyncs a DIRECTORY, so a rename published into it survives a power failure rather than only a process crash.
+   * <p>
+   * There is no portable API for this. Opening a directory as a read-only {@link FileChannel} and forcing it is the
+   * POSIX idiom and works on Linux and macOS; on Windows the open itself throws, since a directory is not a file
+   * there, and the platform has no equivalent call - which {@link #NO_DIRECTORY_SYNC_ON_THIS_PLATFORM} answers once,
+   * from the platform, so Windows does not build and discard an exception per publish.
+   * <p>
+   * Everywhere else the attempt is made and its failure TOLERATED, per call: a durability improvement that cannot be
+   * had on one file store must neither fail the write nor be inferred into a verdict about the others. The first
+   * refusal of the JVM is logged at FINE.
+   * <p>
+   * An I/O error from {@code force} itself is treated the same way. The bytes and the rename are already on the file
+   * store at this point; failing the caller here would turn a weaker durability guarantee into a failed schema save,
+   * which is the worse of the two outcomes.
+   *
+   * @param dir the directory to force; ignored when {@code null}
+   *
+   * @return {@code true} when the directory was fsync'd, {@code false} when it could not be. Returned for the test
+   * that asserts the fsync actually happens on the platforms that support it - no caller acts on it
+   */
+  public static boolean forceDirectory(final Path dir) {
+    if (dir == null || NO_DIRECTORY_SYNC_ON_THIS_PLATFORM)
+      return false;
+
+    // metaData=true: the point of the call is precisely the directory's METADATA, its name entries.
+    try (final FileChannel channel = FileChannel.open(dir, StandardOpenOption.READ)) {
+      channel.force(true);
+      return true;
+    } catch (final IOException | UnsupportedOperationException e) {
+      // IOException covers both the open ("access is denied" on a file store that will not present a directory as a
+      // channel) and the force itself; UnsupportedOperationException is a provider refusing the open outright.
+      // Narrow on purpose: an unexpected RuntimeException from a custom FileSystemProvider is a fault worth
+      // surfacing, not something to absorb into a FINE log (code review on PR #7855).
+      reportNoDirectorySync(dir);
+      return false;
+    }
+  }
+
+  private static void reportNoDirectorySync(final Path dir) {
+    if (NO_DIRECTORY_SYNC_REPORTED.compareAndSet(false, true))
+      LogManager.instance().log(FileUtils.class, Level.FINE,
+          "Cannot fsync directory '%s': an atomically published file is durable against a process crash but, after a "
+              + "power failure, the rename that published it may be lost.", null, dir);
+  }
+
+  /**
+   * Writes every remaining byte of {@code buffer} to {@code channel}, looped rather than trusted to a single call.
+   * {@link WritableByteChannel#write(ByteBuffer)} is only obliged to consume SOME of what remains; a caller that
+   * takes one call's return value on faith can fsync and publish a short write as a complete one - the file looks
+   * published, but its content is truncated, and nothing about the call failing says so (issue #7825).
+   * <p>
+   * A caller writing through a plain {@link java.io.FileOutputStream} or {@link OutputStreamWriter} instead does
+   * not need this: {@code OutputStream.write(byte[])} is specified to loop internally. It is {@link FileChannel}
+   * specifically - used for its {@code force(true)} fsync - whose {@code write} contract allows the short return.
+   * <p>
+   * Requires {@code channel} to make progress on every call that does not throw (true of every blocking channel,
+   * {@link FileChannel} among them, which is what every caller today passes). A channel that legitimately returns
+   * zero - a non-blocking one with no room to write into right now - is not a channel this method supports: retrying
+   * such a zero into an unbounded busy-loop would trade a short write for CPU spent spinning, so it fails fast with
+   * an {@link IOException} instead (CodeRabbit review).
+   *
+   * @param channel the channel to write to
+   * @param buffer  the bytes to write; consumed as a side effect, empty on return
+   */
+  public static void writeFully(final WritableByteChannel channel, final ByteBuffer buffer) throws IOException {
+    while (buffer.hasRemaining()) {
+      final int written = channel.write(buffer);
+      if (written == 0)
+        throw new IOException(
+            "WritableByteChannel.write() returned 0 with bytes still remaining: the channel made no progress, which "
+                + "writeFully() requires to avoid retrying forever (a non-blocking channel with no room to write "
+                + "into right now is not supported here)");
     }
   }
 

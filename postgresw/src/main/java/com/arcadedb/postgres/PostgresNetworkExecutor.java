@@ -124,6 +124,12 @@ public class PostgresNetworkExecutor extends Thread {
   /** Bind-message parameter length denoting a NULL value (wire value -1, read unsigned). */
   private static final long                                           NULL_PARAM_LENGTH = 0xFFFFFFFFL;
   private static final Object[]                                       NO_PARAMETERS     = new Object[0];
+  /** Shared between the simple and extended query protocol's identical ROLLBACK TO refusal (issue #7846). */
+  private static final String                                         ROLLBACK_TO_NOT_SUPPORTED_MESSAGE =
+      "ROLLBACK TO SAVEPOINT is not supported by this server: it cannot discard the writes made since the savepoint";
+  /** Shared between every path that refuses a statement inside an aborted transaction block (SQLSTATE 25P02). */
+  private static final String                                         ABORTED_TRANSACTION_MESSAGE       =
+      "current transaction is aborted, commands ignored until end of transaction block";
   /** Case-insensitive {@code TO} separator for the {@code SET <param> TO <value>} syntax. */
   private static final Pattern                                        SET_TO_SEPARATOR  = Pattern.compile("(?i)\\s+TO\\s+");
   /** Case-insensitive {@code SESSION}/{@code LOCAL} scope modifier leading a {@code SET} command (issue #6701). */
@@ -168,6 +174,19 @@ public class PostgresNetworkExecutor extends Thread {
   private long     processIdSequence          = 0;
   private boolean  explicitTransactionStarted = false;
   private boolean  errorInTransaction         = false;
+  /**
+   * The extended query protocol's "discard every message until Sync" state (issue #7775). PostgreSQL enters it on
+   * EVERY ErrorResponse raised by a Parse/Bind/Describe/Execute/Close, whether or not a transaction block is open,
+   * and leaves it only at the next Sync; the run of messages a Sync terminates is an implicit transaction block,
+   * so that Sync discards the block instead of committing it.
+   * <p>
+   * It is deliberately NOT the same flag as {@link #errorInTransaction}, which is the aborted-block state an
+   * explicit BEGIN puts the session in (SQLSTATE 25P02, ReadyForQuery 'E') and which only the client's own
+   * COMMIT/ROLLBACK/END can clear (issue #7851). The two coincide inside an explicit transaction and come apart
+   * in autocommit - where only this one is set - and after a Sync inside an aborted block - where only
+   * {@code errorInTransaction} survives.
+   */
+  private boolean  skipUntilSync              = false;
 
   private interface ReadMessageCallback {
     void read(char type, long length) throws IOException;
@@ -312,7 +331,12 @@ public class PostgresNetworkExecutor extends Thread {
               return;
 
           } catch (final Exception e) {
-            setErrorInTx();
+            // An exception escaping a handler outright, rather than through its own catch. The message type is no
+            // longer in scope here, so this is the conservative answer for both protocols: raising skipUntilSync
+            // means the Sync that ends an extended-protocol pipeline discards it instead of committing a block one
+            // of whose messages blew up unanswered. The simple query protocol catches everything inside
+            // queryCommand(), so what reaches here from it is a dead socket, where the flag is never read again.
+            setExtendedProtocolError();
 
             if (e instanceof PostgresProtocolException) {
               LogManager.instance().log(this, Level.SEVERE, e.getMessage(), e);
@@ -329,6 +353,7 @@ public class PostgresNetworkExecutor extends Thread {
         }
       } finally {
         ACTIVE_SESSIONS.remove(pid);
+        rollbackPendingTransaction();
       }
 
     } finally {
@@ -341,14 +366,27 @@ public class PostgresNetworkExecutor extends Thread {
     if (DEBUG)
       LogManager.instance().log(this, Level.INFO, "PSQL: sync (thread=%s)", Thread.currentThread().threadId());
 
-    if (errorInTransaction) {
-      // DISCARDED PREVIOUS MESSAGES TILL THIS POINT
-      database.rollback();
-      errorInTransaction = false;
+    if (skipUntilSync || errorInTransaction) {
+      // DISCARDED PREVIOUS MESSAGES TILL THIS POINT. The block the discarded messages belonged to goes with
+      // them: PostgreSQL rolls back the WHOLE run of extended-protocol messages this Sync terminates when any
+      // one of them failed, whether that run was an explicit BEGIN block or the implicit one a pipeline in
+      // autocommit forms (issue #7775) - which is what a JDBC executeBatch() or a psycopg3 pipeline sends.
+      // Committing it persisted the statements that ran before the failure.
+      skipUntilSync = false;
+      if (database.isTransactionActive())
+        database.rollback();
+      // errorInTransaction is deliberately NOT cleared here (issue #7851): Sync does not end a transaction
+      // block, so an explicit BEGIN whose statement failed stays aborted - status 'E', every further statement
+      // refused with 25P02 - until the client sends COMMIT/ROLLBACK/END, exactly as real PostgreSQL requires and
+      // exactly as queryCommand()'s own aborted branch already behaves on the simple query protocol.
     } else if (!explicitTransactionStarted) {
       if (database.isTransactionActive())
         database.commit();
     }
+    if (!explicitTransactionStarted)
+      // The implicit block this Sync terminates is over, committed or discarded, and its portals end with it
+      // (issue #8212). Inside an explicit block they live on until COMMIT/ROLLBACK/END: see endTransactionBlockState().
+      dropPortals();
     writeReadyForQueryMessage();
   }
 
@@ -365,8 +403,11 @@ public class PostgresNetworkExecutor extends Thread {
     final byte closeType = channel.readByte();
     final String prepStatementOrPortal = readString();
 
-    if (errorInTransaction)
+    if (skipUntilSync)
       return;
+    // No errorInTransaction check: PostgreSQL runs Close inside an aborted transaction block like any other -
+    // it ends no transaction command and touches no data - and a client cleaning up its portals while it
+    // recovers is owed the CloseComplete it is waiting for.
 
     if (closeType == 'P')
       getPortal(prepStatementOrPortal, true);
@@ -386,11 +427,20 @@ public class PostgresNetworkExecutor extends Thread {
 
     if (DEBUG)
       LogManager.instance()
-          .log(this, Level.INFO, "PSQL: describe '%s' type=%s (errorInTransaction=%s thread=%s)", portalName, (char) type,
-              errorInTransaction, Thread.currentThread().threadId());
+          .log(this, Level.INFO, "PSQL: describe '%s' type=%s (skipUntilSync=%s errorInTransaction=%s thread=%s)",
+              portalName, (char) type, skipUntilSync, errorInTransaction, Thread.currentThread().threadId());
 
-    if (errorInTransaction)
+    if (skipUntilSync)
       return;
+
+    if (errorInTransaction) {
+      // The block is aborted and only the client's COMMIT/ROLLBACK/END ends it, so this Describe never runs -
+      // but it is owed a reply, and PostgreSQL's own exec_describe_*_message answers 25P02 rather than nothing.
+      // Returning silently here left a client that had recovered past a Sync waiting for a RowDescription that
+      // was never coming (issue #7851 review).
+      refuseInAbortedTransaction();
+      return;
+    }
 
     // Describe('S') names a PREPARED STATEMENT (registered by PARSE); Describe('P') names a bound PORTAL
     // (registered by BIND) - two different registries since #6660 / CodeRabbit split them apart so portals
@@ -400,7 +450,11 @@ public class PostgresNetworkExecutor extends Thread {
     // same way queryTargetType/aliasToSourceProperty are already memoized per statement.
     final PostgresPortal portal = type == 'S' ? preparedStatements.get(portalName) : getPortal(portalName, false);
     if (portal == null) {
-      writeNoData();
+      // NoData would tell the client the statement/portal exists and returns no rows (issue #8211)
+      if (type == 'S')
+        refuseMissingPreparedStatement(portalName);
+      else
+        refuseMissingPortal(portalName);
       return;
     }
 
@@ -429,6 +483,7 @@ public class PostgresNetworkExecutor extends Thread {
         // already ran it) reuses the materialized result instead of running it again: issue #6458's follow-up
         // Execute(s) depend on this same fullResultSet being run exactly once.
         try {
+          beginImplicitTransactionBlock(portal);
           final ResultSet resultSet = runPortalQuery(portal);
           // Materializes the whole result now (issue #6458): Describe needs every row's columns, not just the
           // first, to catch a property that only shows up on a later row (documents can be sparse) - and the
@@ -445,12 +500,12 @@ public class PostgresNetworkExecutor extends Thread {
           // The one reply Describe is owed is an ErrorResponse here; the client discards everything up to its
           // Sync, exactly as after a failed Execute. Without it the refusal (or any other failure of the query)
           // reached the server log only and the client waited for a RowDescription that never came.
-          setErrorInTx();
+          setExtendedProtocolError();
           writeError(ERROR_SEVERITY.ERROR, "Syntax error on executing query: " + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()), sqlStateFor(e));
         } catch (final PostgresProtocolException e) {
           throw e;
         } catch (final Exception e) {
-          setErrorInTx();
+          setExtendedProtocolError();
           writeError(ERROR_SEVERITY.ERROR, "Error on executing query: " + e.getMessage(), sqlStateFor(e));
         }
       } else if (portal.isExpectingResult && portal.columns != null) {
@@ -464,10 +519,11 @@ public class PostgresNetworkExecutor extends Thread {
         // underneath (issue #6725).
         answerWithColumns(portal);
       } else
-        // In practice, SAVEPOINT/RELEASE/ROLLBACK TO/SET and nothing else (issue #6930): they are the only
-        // portals that carry no statement, never produce a result, and never get columns. An INSERT/UPDATE/
-        // DELETE does NOT land here - it is run by the first arm and announced under whatever columns its
-        // rows carried, empty ones included, exactly like the {cypher} write with no RETURN. The arm is kept
+        // In practice SAVEPOINT/RELEASE/SET and BEGIN/COMMIT/ROLLBACK (issues #6930, #7905): they are the
+        // portals that carry no statement, never produce a result, and never get columns - ROLLBACK TO used to
+        // be one of them too, but fails at Parse instead since issue #7846, so it never reaches here. An
+        // INSERT/UPDATE/DELETE does NOT land here - it is run by the first arm and announced under whatever
+        // columns its rows carried, empty ones included, exactly like the {cypher} write with no RETURN. The arm is kept
         // general rather than written as `ignoreExecution` because it is also the backstop that keeps the
         // reply count right: whatever state a portal reaches Describe in, it leaves with exactly one answer.
         writeNoData();
@@ -580,16 +636,24 @@ public class PostgresNetworkExecutor extends Thread {
       final int limit = (int) channel.readUnsignedInt();
       profile.addDeserializationNanos(System.nanoTime() - deserStart);
 
-      if (errorInTransaction)
+      if (skipUntilSync)
         return;
+
+      if (errorInTransaction) {
+        // Same as describeCommand above: refused, not swallowed. The portal may well still be registered from
+        // before the failure, and running it would execute a statement the client was told the block refuses.
+        refuseInAbortedTransaction();
+        return;
+      }
 
       // Do NOT remove the portal here (issue #6458): a limit-hit Execute suspends rather than finishes, and
       // the follow-up Execute the client sends to continue fetching looks this same portal name up again.
-      // The portal is only ever discarded by an explicit Close ('C') message or by a later Bind reusing the
-      // name (closeCommand()/bindCommand()).
+      // The portal is discarded by an explicit Close ('C') message, by a later Bind reusing the name
+      // (closeCommand()/bindCommand()), or with the transaction block it was bound in (issue #8212).
       portal = getPortal(portalName, false);
       if (portal == null) {
-        writeNoData();
+        // Not NoData: that is a Describe-only reply, never a legal answer to Execute (issue #8211)
+        refuseMissingPortal(portalName);
         return;
       }
 
@@ -598,9 +662,17 @@ public class PostgresNetworkExecutor extends Thread {
             .log(this, Level.INFO, "PSQL: execute (portal=%s) (limit=%d)-> %s (thread=%s)", portalName, limit, portal,
                 Thread.currentThread().threadId());
 
+      // Not "apply, then decide": applyTransactionControl() clears the marker it acted on, so a guard inside
+      // beginImplicitTransactionBlock() reading portal.transactionControl afterwards would never see one.
+      if (!applyTransactionControl(portal))
+        beginImplicitTransactionBlock(portal);
+
       if (portal.ignoreExecution)
-        // SAVEPOINT/RELEASE/ROLLBACK TO/SET never produce rows: Execute must answer CommandComplete, not
-        // NoData - NoData ('n') is a Describe-only reply and is never a legal answer to Execute (issue #6930).
+        // SAVEPOINT/RELEASE/SET and BEGIN/COMMIT/ROLLBACK never produce rows: Execute must answer
+        // CommandComplete, not NoData - NoData ('n') is a Describe-only reply and is never a legal answer to
+        // Execute (issue #6930). The tag comes from portal.query, so getTag() spells it BEGIN/COMMIT/ROLLBACK
+        // exactly as it did when these three carried an empty result set instead (issue #7905). ROLLBACK TO
+        // used to be one of these too, but fails at Parse instead since issue #7846, so it never reaches here.
         writeCommandComplete(portal.query, 0);
       else if (portal.copyStatement != null) {
         // COPY ... TO STDOUT (issue #7188): the rows go out as CopyData, and there is nothing to slice by the
@@ -726,17 +798,17 @@ public class PostgresNetworkExecutor extends Thread {
         }
       }
     } catch (final PostgresCopyStatement.CopyException e) {
-      setErrorInTx();
+      setExtendedProtocolError();
       writeError(ERROR_SEVERITY.ERROR, e.getMessage(), e.sqlState);
     } catch (final CommandParsingException e) {
       // The "Syntax error" wording assumes only genuine parse failures reach this arm, which holds because this
       // path runs an already-parsed statement and execution failures are CommandExecutionException. If a
       // CommandParsingException ever wraps a non-parse cause here, sqlStateFor reports that cause - correctly, and
       // clients branch on the SQLSTATE - while this text would still read "Syntax error".
-      setErrorInTx();
+      setExtendedProtocolError();
       writeError(ERROR_SEVERITY.ERROR, "Syntax error on executing query: " + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()), sqlStateFor(e));
     } catch (final Exception e) {
-      setErrorInTx();
+      setExtendedProtocolError();
       writeError(ERROR_SEVERITY.ERROR, "Error on executing query: " + e.getMessage(), sqlStateFor(e));
     } finally {
       if (portal != null)
@@ -771,8 +843,7 @@ public class PostgresNetworkExecutor extends Thread {
           // warning): there is nothing left to commit, so both end keywords just discard the transaction.
           if (database.isTransactionActive())
             database.rollback();
-          explicitTransactionStarted = false;
-          errorInTransaction = false;
+          endTransactionBlockState();
           // The tag is always "ROLLBACK" here, even if the client sent COMMIT/END: see the comment above.
           writeCommandComplete("ROLLBACK", 0);
         } else if (queryText.isEmpty()) {
@@ -781,8 +852,7 @@ public class PostgresNetworkExecutor extends Thread {
           // Every other statement is refused, not silently swallowed (issue #6457): the client needs an
           // ErrorResponse to know its statement never ran, and errorInTransaction must stay set so the
           // session remains aborted until COMMIT/ROLLBACK/END ends the block.
-          writeError(ERROR_SEVERITY.ERROR,
-              "current transaction is aborted, commands ignored until end of transaction block", "25P02");
+          writeError(ERROR_SEVERITY.ERROR, ABORTED_TRANSACTION_MESSAGE, "25P02");
         }
         return;
       }
@@ -809,23 +879,39 @@ public class PostgresNetworkExecutor extends Thread {
         return;
       }
 
+      // ROLLBACK TO <savepoint> promises to discard every write made since that savepoint, but this server has
+      // no savepoint checkpoint to roll back to (issue #7846): SAVEPOINT and RELEASE below are harmless no-ops
+      // (nothing is lost by accepting or discarding a marker nothing else reads), but a CommandComplete here
+      // would tell the client its rollback succeeded while every write since the savepoint is still pending and
+      // will be persisted by the next COMMIT. Refusing it - and aborting the transaction the same way any other
+      // statement is refused once the session is aborted - is the only reply that cannot silently lose data.
+      if (query.query.toUpperCase(Locale.ENGLISH).startsWith("ROLLBACK TO ")) {
+        setErrorInTx();
+        writeError(ERROR_SEVERITY.ERROR, ROLLBACK_TO_NOT_SUPPORTED_MESSAGE, PostgresCopyStatement.SQLSTATE_FEATURE_NOT_SUPPORTED);
+        return;
+      }
+
       // Reused below for both the schema-fallback and the target-type resolution, but only set in the one
-      // branch that reaches database.command(...) below: none of SET/SAVEPOINT/RELEASE/ROLLBACK TO/SHOW/a
-      // system query/BEGIN are valid SQL productions (no bare "SET"/"SHOW" statement exists in SQLParser.g4),
-      // so parsing any of them here would be a guaranteed parse-and-fail on every one of those statements -
-      // exactly the ones connection setup (JDBC drivers, psql, poolers) sends most.
+      // branch that reaches database.command(...) below: none of SET/SAVEPOINT/RELEASE/SHOW/a system query/
+      // BEGIN are valid SQL productions (no bare "SET"/"SHOW" statement exists in SQLParser.g4), so parsing
+      // any of them here would be a guaranteed parse-and-fail on every one of those statements - exactly the
+      // ones connection setup (JDBC drivers, psql, poolers) sends most.
       Statement parsedStatement = null;
 
       final long engineStart = System.nanoTime();
       final ResultSet resultSet;
+      // Transaction control returns no rows: PostgreSQL answers it with the bare CommandComplete tag. A RowDescription
+      // in front of the tag, even with zero fields, makes libpq report PGRES_TUPLES_OK instead of PGRES_COMMAND_OK,
+      // and a client that checks the status when it opens a transaction gives up ("Failed to begin transaction").
+      boolean transactionControl = false;
       final String upperCaseText = query.query.toUpperCase(Locale.ENGLISH);
       final PostgresSystemQuery systemQuery = PostgresSystemQuery.parse(query.query);
       if (upperCaseText.startsWith("SET ")) {
         setConfiguration(query.query);
         resultSet = new IteratorResultSet(createResultSet("STATUS", "Setting ignored").iterator());
       } else if (upperCaseText.startsWith("SAVEPOINT ") ||
-          upperCaseText.startsWith("RELEASE ") ||
-          upperCaseText.startsWith("ROLLBACK TO ")) {
+          upperCaseText.startsWith("RELEASE ")) {
+        transactionControl = true;
         resultSet = new IteratorResultSet(Collections.emptyIterator());
       } else if (systemQuery != null)
         resultSet = new IteratorResultSet(
@@ -839,17 +925,32 @@ public class PostgresNetworkExecutor extends Thread {
         resultSet = new IteratorResultSet(createResultSet(varName, getShowConfigValue(varName)).iterator());
       } else if (isBeginStatement(upperCaseText)) {
         explicitTransactionStarted = true;
-        database.begin();
+        // Guarded, exactly like applyTransactionControl()'s BEGIN on the extended protocol: a BEGIN that finds a
+        // transaction already open - a second BEGIN, or an implicit block an earlier extended-protocol statement
+        // left running - joins it instead of stacking a nested one under it. PostgreSQL answers such a BEGIN with
+        // a warning and keeps the block it already has.
+        if (!database.isTransactionActive())
+          database.begin();
+        transactionControl = true;
         resultSet = new IteratorResultSet(Collections.emptyIterator());
       } else if (isCommitStatement(upperCaseText)) {
-        if (explicitTransactionStarted && database.isTransactionActive())
+        // Whatever transaction the connection holds, not only one an explicit BEGIN opened (issue #8028): a
+        // 'Q' message can arrive while the implicit block of an extended-protocol pipeline is still open - the
+        // block is opened at Execute and only ended by a Sync - and asking explicitTransactionStarted left that
+        // block for the Sync to decide while the client had already been told COMMIT. Same rule as
+        // applyTransactionControl()'s arms on the extended protocol.
+        if (database.isTransactionActive())
           database.commit();
-        explicitTransactionStarted = false;
+        endTransactionBlockState();
+        transactionControl = true;
         resultSet = new IteratorResultSet(Collections.emptyIterator());
       } else if (isRollbackStatement(upperCaseText)) {
-        if (explicitTransactionStarted && database.isTransactionActive())
+        // See the COMMIT arm above (issue #8028): an implicit block is a transaction the client can end too,
+        // and leaving it open made Sync COMMIT the writes the client had just been told were rolled back.
+        if (database.isTransactionActive())
           database.rollback();
-        explicitTransactionStarted = false;
+        endTransactionBlockState();
+        transactionControl = true;
         resultSet = new IteratorResultSet(Collections.emptyIterator());
       } else {
         // A query about the emulated system catalog, which every client sends and which ArcadeDB's own SQL
@@ -866,17 +967,22 @@ public class PostgresNetworkExecutor extends Thread {
       profile.addEngineNanos(System.nanoTime() - engineStart);
 
       final long serStart = System.nanoTime();
-      Map<String, PostgresType> columns = catalogAnswer != null ? catalogAnswer.columns()
-          : getColumns(cachedResultSet, resolveQueryTargetType(parsedStatement), resolveAliasToSourceProperty(parsedStatement));
-      if (columns.isEmpty() && cachedResultSet.isEmpty()) {
-        final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(query.query, query.language, NO_PARAMETERS,
-            parsedStatement);
-        if (schemaColumns != null)
-          columns = schemaColumns;
+      if (!transactionControl) {
+        Map<String, PostgresType> columns = catalogAnswer != null ? catalogAnswer.columns()
+            : getColumns(cachedResultSet, resolveQueryTargetType(parsedStatement), resolveAliasToSourceProperty(parsedStatement));
+        if (columns.isEmpty() && cachedResultSet.isEmpty()) {
+          final Map<String, PostgresType> schemaColumns = resolveEmptyResultSchemaColumns(query.query, query.language, NO_PARAMETERS,
+              parsedStatement);
+          if (schemaColumns != null)
+            columns = schemaColumns;
+        }
+        writeRowDescription(columns);
+        writeDataRows(cachedResultSet, columns);
       }
-      writeRowDescription(columns);
-      writeDataRows(cachedResultSet, columns);
-      writeCommandComplete(queryText, cachedResultSet.size());
+      // query.query is the language-prefix-stripped text (getTag matches bare "BEGIN"/"COMMIT"/... against it); the raw
+      // queryText still carries a "{sql}" prefix when the client sends one, which getTag doesn't recognise and answers
+      // with an empty command tag instead of e.g. "BEGIN".
+      writeCommandComplete(query.query, cachedResultSet.size());
       profile.addSerializationNanos(System.nanoTime() - serStart);
 
     } catch (final PostgresCopyStatement.CopyException e) {
@@ -891,6 +997,10 @@ public class PostgresNetworkExecutor extends Thread {
       setErrorInTx();
       writeError(ERROR_SEVERITY.ERROR, "Error on executing query: " + e.getMessage(), sqlStateFor(e));
     } finally {
+      if (!explicitTransactionStarted)
+        // A simple Query outside an explicit block is a transaction of its own, and the portals bound before it
+        // end with it exactly as they do at a Sync (issue #8212)
+        dropPortals();
       writeReadyForQueryMessage();
       if (query != null)
         recordPostgresProfile(profile, query.language, query.query);
@@ -1319,7 +1429,7 @@ public class PostgresNetworkExecutor extends Thread {
 
     // Not parsable as an ArcadeDB SELECT: fall back to the textual FROM-target extraction
     // Patterns: "SELECT FROM TypeName", "SELECT * FROM TypeName", "SELECT ... FROM TypeName"
-    final String upperQuery = query.toUpperCase();
+    final String upperQuery = query.toUpperCase(Locale.ROOT);
     final int fromIndex = upperQuery.indexOf(" FROM ");
     if (fromIndex < 0) {
       return null;
@@ -1330,7 +1440,7 @@ public class PostgresNetworkExecutor extends Thread {
     // Extract type name (ends at WHERE, LIMIT, ORDER, or end of string)
     String typeName = afterFrom;
     for (String terminator : new String[]{" WHERE ", " LIMIT ", " ORDER ", " GROUP ", ";"}) {
-      final int idx = typeName.toUpperCase().indexOf(terminator);
+      final int idx = typeName.toUpperCase(Locale.ROOT).indexOf(terminator);
       if (idx > 0) {
         typeName = typeName.substring(0, idx);
       }
@@ -1338,7 +1448,7 @@ public class PostgresNetworkExecutor extends Thread {
     typeName = typeName.trim();
 
     // Skip schema: prefix if present
-    if (typeName.toLowerCase().startsWith("schema:")) {
+    if (typeName.toLowerCase(Locale.ROOT).startsWith("schema:")) {
       return null; // Schema queries have different structure
     }
 
@@ -1471,6 +1581,14 @@ public class PostgresNetworkExecutor extends Thread {
       if (!sampleRows.isEmpty()) {
         // Use the sample row to discover columns
         final Map<String, PostgresType> cols = getColumns(sampleRows, docType, Map.of());
+        // A property the type DECLARES but the one sampled row happens not to carry is part of the type's shape
+        // all the same, so the sample is WIDENED with the schema rather than trusted on its own (issue #7470):
+        // sampling alone dropped such a column from every row of the answer - silently, and for COPY ... TO STDOUT
+        // that means an export that looks complete and is not. The sampled types stay authoritative where the two
+        // overlap: a schemaless property has no declaration to read, and a declared one can hold a narrower
+        // runtime type that the row is the only witness of (issue #6447).
+        collectDeclaredColumns(docType, cols);
+        moveSystemColumnsLast(cols);
         if (DEBUG)
           LogManager.instance().log(this, Level.INFO,
               "PSQL: getColumnsFromType('%s') -> sampleQuery='%s', found %d rows, columns=%s (thread=%s)",
@@ -1478,23 +1596,16 @@ public class PostgresNetworkExecutor extends Thread {
         return cols;
       }
 
-      // If no rows exist, fall back to schema-defined properties
+      // If no rows exist, fall back to schema-defined properties, in the same order the sampled branch above
+      // announces them: the declared columns first, then the system ones. The two branches describe the same type
+      // and a client must not see the column order change with whether the type happens to hold a row.
       final Map<String, PostgresType> columns = new LinkedHashMap<>();
+      collectDeclaredColumns(docType, columns);
 
-      // Add system properties first (these are returned for document/vertex types)
+      // These are returned for document/vertex types
       columns.put(RID_PROPERTY, PostgresType.VARCHAR);
       columns.put(TYPE_PROPERTY, PostgresType.VARCHAR);
       columns.put(CAT_PROPERTY, PostgresType.CHAR);
-
-      // Add all defined properties from the type
-      for (final String propName : docType.getPropertyNames()) {
-        final Property prop = docType.getProperty(propName);
-        if (prop != null && prop.getType() != null) {
-          columns.put(propName, PostgresType.getTypeFromArcade(prop.getType(), prop.getOfType()));
-        } else {
-          columns.put(propName, PostgresType.VARCHAR);
-        }
-      }
 
       return columns;
 
@@ -1504,6 +1615,37 @@ public class PostgresNetworkExecutor extends Thread {
             typeName, e.getMessage());
       return null;
     }
+  }
+
+  private static final String[] SYSTEM_COLUMNS = { RID_PROPERTY, TYPE_PROPERTY, CAT_PROPERTY };
+
+  /**
+   * Re-appends the {@code @rid}/{@code @type}/{@code @cat} columns at the end of the map, where
+   * {@link #getColumns(List, DocumentType, Map)} puts them, after another source has added columns behind them.
+   */
+  private static void moveSystemColumnsLast(final Map<String, PostgresType> columns) {
+    for (final String systemColumn : SYSTEM_COLUMNS) {
+      final PostgresType type = columns.remove(systemColumn);
+      if (type != null)
+        columns.put(systemColumn, type);
+    }
+  }
+
+  /**
+   * Adds every property {@code docType} declares - its supertypes' included - that {@code columns} does not
+   * already name, typed from the schema. The order is stable: the type's own properties in declaration order,
+   * then each supertype's, depth first. {@code getPolymorphicPropertyNames()} answers the same set through a
+   * {@code HashSet}, whose iteration order would make an exported column order vary from run to run.
+   */
+  private static void collectDeclaredColumns(final DocumentType docType, final Map<String, PostgresType> columns) {
+    for (final String propName : docType.getPropertyNames()) {
+      final Property prop = docType.getProperty(propName);
+      columns.putIfAbsent(propName, prop != null && prop.getType() != null
+          ? PostgresType.getTypeFromArcade(prop.getType(), prop.getOfType())
+          : PostgresType.VARCHAR);
+    }
+    for (final DocumentType superType : docType.getSuperTypes())
+      collectDeclaredColumns(superType, columns);
   }
 
   /**
@@ -2057,6 +2199,8 @@ public class PostgresNetworkExecutor extends Thread {
       if (row == null)
         continue;
 
+      checkRowFitsAnnouncedColumns(row, columns);
+
       if (binary) {
         payload.putShort((short) names.length);
         for (int i = 0; i < names.length; i++)
@@ -2086,6 +2230,44 @@ public class PostgresNetworkExecutor extends Thread {
     if (DEBUG)
       LogManager.instance().log(this, Level.INFO, "PSQL:-> %d row(s) copied out (thread=%s)", count, Thread.currentThread().threadId());
     return count;
+  }
+
+  /**
+   * Refuses a row carrying a property the {@code CopyOutResponse} did not announce, instead of streaming the row
+   * without it (issue #7470).
+   * <p>
+   * A COPY stream fixes its column set before the first row, the way {@code RowDescription} fixes it for a query,
+   * and a type in this schemaless engine can hold rows of different shapes - so a column set resolved from the
+   * declared schema and a sampled row is a good answer, not a provably complete one. Dropping what it did not
+   * predict is the one outcome an export must not have: the file looks complete and the loss surfaces downstream.
+   * The message names the column and the way to get it: list the columns in the COPY itself, which fixes them by
+   * construction and is then exact.
+   * <p>
+   * A query whose projection already names its columns cannot trip this - its rows carry exactly those - so the
+   * check costs a map lookup per property on the paths where it can never fire. Both the element's properties and
+   * the result's own are walked, deliberately: that is exactly what {@link #columnNamesOf(Result)} feeds the map
+   * this checks against, so the two can never disagree about what a row carries. They are walked rather than
+   * unioned through that method because this runs per row on the bulk path and the union allocates a set.
+   */
+  private static void checkRowFitsAnnouncedColumns(final Result row, final Map<String, PostgresType> columns) {
+    if (row.isElement())
+      for (final String name : row.getElement().get().getPropertyNames())
+        if (!columns.containsKey(name))
+          throw unannouncedCopyColumn(name, columns);
+    for (final String name : row.getPropertyNames())
+      if (!columns.containsKey(name))
+        throw unannouncedCopyColumn(name, columns);
+  }
+
+  private static PostgresCopyStatement.CopyException unannouncedCopyColumn(final String name,
+      final Map<String, PostgresType> columns) {
+    return new PostgresCopyStatement.CopyException(
+        "a row of this COPY carries column \"" + name + "\", which is not among the columns the stream announced ("
+            + String.join(", ", columns.keySet())
+            + "): this type stores rows of different shapes, and a COPY cannot add a column once its stream has "
+            + "started. List the columns to export in the COPY itself - COPY <table> (" + name
+            + ", ...) TO STDOUT, or COPY (SELECT " + name + ", ... FROM <table>) TO STDOUT - so its column set is "
+            + "exact", PostgresCopyStatement.SQLSTATE_FEATURE_NOT_SUPPORTED);
   }
 
   /**
@@ -2208,7 +2390,7 @@ public class PostgresNetworkExecutor extends Thread {
             // either reintroduce an unbounded read or block the connection thread indefinitely if the
             // declared bytes never arrive. Tell the client why, then close the connection outright
             // rather than gamble on realigning the stream.
-            setErrorInTx();
+            setExtendedProtocolError();
             writeError(ERROR_SEVERITY.FATAL, "Postgres bind parameter too large: " + paramSize + " bytes (max "
                 + server.getConfiguration().getValueAsInteger(GlobalConfiguration.POSTGRES_MAX_PARAM_SIZE) + ")", "08P01");
             shutdown = true;
@@ -2266,13 +2448,23 @@ public class PostgresNetworkExecutor extends Thread {
       }
       resultFormatSectionRead = true;
 
+      // The Bind message is already fully consumed off the wire at this point (parameter values and
+      // result-format codes), so neither exit below needs a drain.
+      if (skipUntilSync)
+        // Discarded until the next Sync, with no reply: the ErrorResponse that opened this state is the only
+        // answer the client is owed for everything up to its Sync. Checked BEFORE the aborted-block refusal
+        // below, the way describeCommand() and executeCommand() check it, so a Bind the client had already
+        // pipelined behind the failing message gets no second ErrorResponse of its own.
+        return;
+
       if (errorInTransaction) {
-        // The Bind message is already fully consumed off the wire at this point (parameter values and
-        // result-format codes), so no drain is needed. Mirror the simple-query fix from #6542/#6457: refuse
-        // with an ErrorResponse instead of silently returning, so the client knows this Bind never ran
-        // (issue #6545). errorInTransaction stays set until COMMIT/ROLLBACK/END ends the block.
-        writeError(ERROR_SEVERITY.ERROR,
-            "current transaction is aborted, commands ignored until end of transaction block", "25P02");
+        // Reached when the block is aborted but the discard state is not set: the failure came from the simple
+        // query protocol, or a Sync has since been processed. Mirror the simple-query fix from #6542/#6457 and
+        // refuse with an ErrorResponse instead of silently returning, so the client knows this Bind never ran
+        // (issue #6545). errorInTransaction stays set until COMMIT/ROLLBACK/END ends the block, and this refusal
+        // is an ErrorResponse like any other, so it re-enters skip-until-Sync - the Execute the client already
+        // pipelined behind this Bind must not run against whatever portal is still registered under that name.
+        refuseInAbortedTransaction();
         return;
       }
 
@@ -2281,16 +2473,19 @@ public class PostgresNetworkExecutor extends Thread {
       // statement's own template object (issue #6660 / CodeRabbit review on #6658).
       // This is necessary because EXECUTE looks up portals by portal name, not prepared statement name.
       // PostgreSQL protocol: PARSE creates "prepared statement", BIND creates "portal" from it.
-      // If the source prepared statement was closed or non-existent, invalidate/remove any previously bound
-      // portal under this name so Execute returns NoData.
-      if (preparedStatement != null) {
-        portals.put(portalName, portal);
-        if (DEBUG)
-          LogManager.instance().log(this, Level.INFO, "PSQL: bind stored portal under name '%s' (thread=%s)",
-              portalName, Thread.currentThread().threadId());
-      } else {
+      // If the source prepared statement was closed or non-existent, the Bind is refused (issue #8211) rather than
+      // answered BindComplete for a portal it never registered, and any portal previously bound under this name
+      // goes with it, as PostgreSQL's aborted transaction takes it.
+      if (preparedStatement == null) {
         portals.remove(portalName);
+        refuseMissingPreparedStatement(sourcePreparedStatement);
+        return;
       }
+
+      portals.put(portalName, portal);
+      if (DEBUG)
+        LogManager.instance().log(this, Level.INFO, "PSQL: bind stored portal under name '%s' (thread=%s)",
+            portalName, Thread.currentThread().threadId());
 
       writeMessage("bind complete", null, '2', 4);
 
@@ -2322,7 +2517,7 @@ public class PostgresNetworkExecutor extends Thread {
         // still goes out and the client will see the failure.
         drainedCleanly = false;
       }
-      setErrorInTx();
+      setExtendedProtocolError();
       writeError(ERROR_SEVERITY.ERROR, "Error on parsing bind message: " + e.getMessage(), sqlStateFor(e));
       if (!drainedCleanly)
         shutdown = true;
@@ -2392,18 +2587,68 @@ public class PostgresNetworkExecutor extends Thread {
         if (isTransactionEndStatement(abortedUpperCaseText)) {
           if (database.isTransactionActive())
             database.rollback();
-          explicitTransactionStarted = false;
-          errorInTransaction = false;
+          // Clears skipUntilSync as well, so the Bind/Execute the client pipelines behind this Parse (that is
+          // how it sends the recovering statement, and there is no Sync in between - see the #6548 tests) are
+          // not discarded by the state the failure left behind. Accepting the recovery here rather than only
+          // after a Sync is a deliberate leniency of this server over real PostgreSQL, and clearing all three
+          // flags is what makes it complete: half-clearing it answered the Parse and then swallowed its Bind.
+          endTransactionBlockState();
           // Real Postgres treats a COMMIT/END of an aborted transaction the same as ROLLBACK - there is
           // nothing left to commit - so the command tag executeCommand() later writes must read ROLLBACK
           // regardless of which of the three keywords the client actually sent (see queryCommand()).
           portal.query = "ROLLBACK";
-          setEmptyResultSet(portal);
+          // Same reasoning as the BEGIN/COMMIT/ROLLBACK branches below (issue #7905): this portal is a
+          // transaction-control statement too, so its Describe('P') owes NoData rather than a zero-field
+          // RowDescription. The rollback itself already happened, just above.
+          portal.ignoreExecution = true;
+          // MARKED ROLLBACK for the same reason the healthy branch below marks its three, and this is what the
+          // recovery branch used to leave out (issue #8030). What is registered here is a PREPARED STATEMENT,
+          // and it outlives the round trip that recovered the block: PostgresPortal.bindFrom() copies it for
+          // every later Bind, which is what a pgjdbc/psycopg3 statement cache sends once the statement is
+          // promoted - Bind+Execute of the same name, with no Parse in between. Without the marker every one of
+          // those Binds produced a portal applyTransactionControl() had nothing to act on, while the
+          // ignoreExecution arm of executeCommand() answered "CommandComplete ROLLBACK" regardless: the client
+          // was told its rollback succeeded, the open transaction stayed open with explicitTransactionStarted
+          // still set (ReadyForQuery kept reporting 'T'), and the writes it had discarded were persisted by
+          // whatever COMMIT came next. ROLLBACK and not COMMIT even when the client sent COMMIT/END, for the
+          // same reason portal.query is rewritten just above: that is the tag this statement answers with from
+          // now on, and a reuse that committed instead would contradict it.
+          // The immediate database.rollback() above stays - it is what makes the Parse itself recover the block -
+          // and neither it nor issue #7851's "applies only once" boundary is disturbed by the marker; see
+          // applyTransactionControl(), whose guard and whose clearing of the marker are what make both hold.
+          portal.transactionControl = PostgresPortal.TransactionControl.ROLLBACK;
           preparedStatements.put(portalName, portal);
           writeMessage("parse complete", null, '1', 4);
         }
         return;
       }
+
+      if (skipUntilSync)
+        // Autocommit, and an earlier message in this same pipeline already errored: PostgreSQL discards every
+        // message up to the client's Sync (issue #7775), so this statement must not be parsed, registered or
+        // answered. The aborted-block branch above runs first on purpose - a transaction-end statement is the
+        // one thing that is still accepted, per the note there.
+        return;
+
+      // THE DESTINATION NAME IS INVALIDATED BEFORE ANYTHING THAT CAN FAIL, which is PostgreSQL's own rule for
+      // the unnamed statement (`drop_unnamed_stmt()` runs at the top of `exec_parse_message`) and the only safe
+      // reading of a named one: a Parse that is refused must not leave the name usable. The registration at the
+      // end of this method used to be the only writer, so every failure path - the three catch arms and the
+      // ROLLBACK TO refusal below - left whatever had been parsed under this name BEFORE still registered, and a
+      // Bind that followed resurrected it: the client received, for the statement this server had just refused,
+      // a complete successful answer built from a DIFFERENT statement - BindComplete, RowDescription, the old
+      // statement's rows and a success tag (issue #7906). Two round trips apart, so skip-until-Sync (#7775) does
+      // not reach it. Only the prepared statement is dropped, not the portals already bound from it: PostgreSQL
+      // keeps those alive too, each holding the plan it was bound with.
+      //
+      // "ANYTHING THAT CAN FAIL" MEANS ANYTHING THAT CAN FAIL AND LEAVE THE CONNECTION USABLE, which is where
+      // this sits rather than immediately after readString() reads the name. The reads above it - the query
+      // text, the parameter count, the parameter type OIDs - are wire-level: a failure in one of them has left
+      // the channel misaligned, so no later message can be framed and what is registered under a statement name
+      // cannot matter to anybody. The two early returns above it are the deliberate half of the boundary: an
+      // aborted block and a skip-until-Sync discard are PostgreSQL DISCARDING this message, not refusing it, and
+      // a discarded Parse must leave the name exactly as it found it.
+      preparedStatements.remove(portalName);
 
       if (portal.query.isEmpty()) {
         emptyQueryResponse();
@@ -2414,9 +2659,17 @@ public class PostgresNetworkExecutor extends Thread {
       final PostgresSystemQuery systemQuery = PostgresSystemQuery.parse(portal.query);
 
       if (upperCaseText.startsWith("SAVEPOINT ") ||
-          upperCaseText.startsWith("RELEASE ") ||
-          upperCaseText.startsWith("ROLLBACK TO ")) {
+          upperCaseText.startsWith("RELEASE ")) {
         portal.ignoreExecution = true;
+      } else if (upperCaseText.startsWith("ROLLBACK TO ")) {
+        // Mirror queryCommand()'s ROLLBACK TO refusal (issue #7846): failed here, at Parse, the same way a
+        // statement this server can't parse is - no portal is registered and no ParseComplete is sent, only
+        // the ErrorResponse. bindCommand() already drains a Bind that names a missing prepared statement
+        // without resurrecting it (issue #6660), so the rest of this pipelined request is handled the same
+        // way it is for any other rejected Parse.
+        setExtendedProtocolError();
+        writeError(ERROR_SEVERITY.ERROR, ROLLBACK_TO_NOT_SUPPORTED_MESSAGE, PostgresCopyStatement.SQLSTATE_FEATURE_NOT_SUPPORTED);
+        return;
       } else if (upperCaseText.startsWith("SET ")) {
         // Strip a trailing ';' before dispatch, mirroring what queryCommand() already does for its own
         // queryText on the simple-query protocol - a Parse message keeps the terminator glued onto the
@@ -2476,23 +2729,31 @@ public class PostgresNetworkExecutor extends Thread {
             // clause) - "BEGIN TRANSACTION"/"COMMIT WORK"/"ROLLBACK TRANSACTION"/etc. all fail to parse as SQL.
             // Checking first, the same way queryCommand's simple-query dispatch already does, keeps this
             // branch from ever calling parse() on text the grammar was never going to accept (issue #6543).
+            // Recognized here, but APPLIED at Execute (see applyTransactionControl): Parse prepares a statement,
+            // it does not run one, and a client is free to Parse a statement and Sync without ever binding it -
+            // pgjdbc and psycopg3 both prepare ahead of use. Moving the state at Parse meant a Parse("COMMIT")
+            // alone made the next Sync commit the open transaction, and a Parse("ROLLBACK") discarded it on the
+            // spot, in both cases without the client having executed anything.
+            // MARKED ignoreExecution, where these three used to be given an EMPTY materialized result set
+            // instead, and that difference is the whole of issue #7905. An empty result set leaves a non-null
+            // (but empty) column map behind, which describeCommand()'s second arm matches, and
+            // writeRowDescription() returns early only on a NULL map - so a zero-field RowDescription went out
+            // in front of the tag, which is the exact byte the simple-query fix removed: libpq reports
+            // PGRES_TUPLES_OK instead of PGRES_COMMAND_OK for it, and a client that checks the status when it
+            // opens a transaction gives up. PQexecParams/PQexecPrepared - psycopg3, asyncpg and the Arrow ADBC
+            // driver with them - always Describe('P') before Execute, so the extended protocol is where those
+            // clients actually send BEGIN. SAVEPOINT/RELEASE/SET were already on the right side of this line;
+            // these three now join them, and Execute answers them identically either way (the ignoreExecution
+            // arm writes the same CommandComplete an empty cachedResultSet produced).
             if (isBeginStatement(upperCaseText)) {
-              explicitTransactionStarted = true;
-              setEmptyResultSet(portal);
+              portal.transactionControl = PostgresPortal.TransactionControl.BEGIN;
+              portal.ignoreExecution = true;
             } else if (isCommitStatement(upperCaseText)) {
-              // No explicit database.commit() here: clearing the flag makes the Sync that follows this
-              // Execute take its implicit-commit branch (see syncCommand()), which is what actually
-              // persists the transaction.
-              explicitTransactionStarted = false;
-              setEmptyResultSet(portal);
+              portal.transactionControl = PostgresPortal.TransactionControl.COMMIT;
+              portal.ignoreExecution = true;
             } else if (isRollbackStatement(upperCaseText)) {
-              // Unlike COMMIT, ROLLBACK cannot lean on Sync's implicit-commit branch - clearing the flag
-              // without rolling back here would make the next Sync COMMIT the transaction instead (issue
-              // #6543), the opposite of what the client asked for.
-              if (explicitTransactionStarted && database.isTransactionActive())
-                database.rollback();
-              explicitTransactionStarted = false;
-              setEmptyResultSet(portal);
+              portal.transactionControl = PostgresPortal.TransactionControl.ROLLBACK;
+              portal.ignoreExecution = true;
             } else {
               final SQLQueryEngine sqlEngine = (SQLQueryEngine) database.getQueryEngine("sql");
               portal.sqlStatement = sqlEngine.parse(query.query, (DatabaseInternal) database);
@@ -2511,13 +2772,13 @@ public class PostgresNetworkExecutor extends Thread {
       writeMessage("parse complete", null, '1', 4);
 
     } catch (final PostgresCopyStatement.CopyException e) {
-      setErrorInTx();
+      setExtendedProtocolError();
       writeError(ERROR_SEVERITY.ERROR, e.getMessage(), e.sqlState);
     } catch (final CommandParsingException e) {
-      setErrorInTx();
+      setExtendedProtocolError();
       writeError(ERROR_SEVERITY.ERROR, "Syntax error on parsing query: " + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()), sqlStateFor(e));
     } catch (final Exception e) {
-      setErrorInTx();
+      setExtendedProtocolError();
       writeError(ERROR_SEVERITY.ERROR, "Error on parsing query: " + e.getMessage(), sqlStateFor(e));
     }
   }
@@ -2630,13 +2891,6 @@ public class PostgresNetworkExecutor extends Thread {
       case "timezone" -> "UTC";
       default -> "";
     };
-  }
-
-  private void setEmptyResultSet(final PostgresPortal portal) {
-    portal.executed = true;
-    portal.isExpectingResult = true;
-    portal.cachedResultSet = Collections.emptyList();
-    portal.columns = getColumns(portal.cachedResultSet);
   }
 
   private void sendServerParameter(final String name, final String value) {
@@ -3002,8 +3256,6 @@ public class PostgresNetworkExecutor extends Thread {
       return "COMMIT";
     } else if (isRollbackStatement(upperCaseText)) {
       return "ROLLBACK";
-    } else if (upperCaseText.startsWith("ROLLBACK TO ")) {
-      return "ROLLBACK";
     } else if (upperCaseText.startsWith("SAVEPOINT ")) {
       return "SAVEPOINT";
     } else if (upperCaseText.startsWith("RELEASE ")) {
@@ -3165,6 +3417,196 @@ public class PostgresNetworkExecutor extends Thread {
   private void setErrorInTx() {
     if (explicitTransactionStarted)
       errorInTransaction = true;
+  }
+
+  /**
+   * Records an ErrorResponse raised while handling an extended-protocol message: the session enters
+   * {@link #skipUntilSync} whatever the transaction state is, and additionally aborts the transaction block when
+   * one is open. Every Parse/Bind/Describe/Execute/Close failure goes through here rather than through
+   * {@link #setErrorInTx()} alone; the simple query protocol ('Q') keeps the latter, since it ends each statement
+   * with its own ReadyForQuery and never forms a multi-statement block for a Sync to discard.
+   */
+  private void setExtendedProtocolError() {
+    skipUntilSync = true;
+    setErrorInTx();
+  }
+
+  /**
+   * Opens the implicit transaction block a run of extended-protocol messages terminated by one Sync forms, when the
+   * client has not opened an explicit one. PostgreSQL rolls that whole block back when any statement in it fails, so
+   * the block has to be a real transaction: without it every write statement opened and committed its own
+   * statement-level implicit transaction ({@code Statement.beginImplicitTransaction}, issue #7096), which made a
+   * failed pipeline - a JDBC {@code executeBatch()}, a psycopg3 pipeline - leave the statements that ran before the
+   * failure behind (issue #7775). An already-active transaction is joined rather than nested, which is what makes the
+   * statement-level one stand down; {@link #syncCommand()} then commits or discards the block as a whole.
+   * <p>
+   * Only a portal that can WRITE opens one. A read has nothing to roll back, and the extended protocol is where the
+   * overwhelming majority of SELECT traffic arrives: opening a transaction around each one would charge every JDBC
+   * read the allocation of a transaction's page maps and the database read lock for no gain. A read that follows a
+   * write in the same pipeline still sees it - the block is already open by then, and this joins it rather than
+   * deciding again. The proof that a portal cannot write comes from the parsed statement ({@code isIdempotent()},
+   * which is how the engine itself classifies a statement) or from the portal being one of the kinds that execute
+   * nothing at all; anything unproven - another language, a statement this server did not parse - opens one.
+   * <p>
+   * An EXPLICIT block opened over this protocol needs the same treatment, which is why the guard asks the database
+   * and not {@code explicitTransactionStarted}: {@code parseCommand()}'s BEGIN branch only raises that flag - unlike
+   * {@code queryCommand()}'s, which calls {@code database.begin()} beside it - so a client that sends BEGIN through
+   * Parse/Bind/Execute (pgx in extended mode, any pipelining client) had no engine transaction at all. Every write
+   * in the "block" committed itself statement by statement and the client's ROLLBACK then found nothing to roll back
+   * and silently kept them, while ReadyForQuery reported 'T' throughout. Executing the BEGIN portal opens the
+   * transaction here instead, which is the moment PostgreSQL starts the block on too - at Execute, not at Parse.
+   * A transaction-control portal never reaches this method at all: {@link #applyTransactionControl(PostgresPortal)}
+   * has already done whatever it needs, BEGIN's own {@code database.begin()} included, and says so by returning true.
+   * Left to this method, COMMIT and ROLLBACK would open an empty transaction of their own - nothing is active by the
+   * time they run - and hand it to Sync to commit, the very cost the isIdempotent() gate above removes from reads.
+   * <p>
+   * {@code executed} is the same exemption reached from the other side: several Parse branches compute the whole
+   * answer there and mark the portal done - a catalog query whose filters are not bound parameters, SHOW and the
+   * system queries through {@code createResultSet}, the aborted-block recovery portal - and none of them sets any of
+   * the flags above or leaves a {@code sqlStatement} for the idempotency check to read. Their Execute runs nothing,
+   * so a transaction opened for them would only be an empty one for Sync to commit, and connection setup issues
+   * several of them per connection. It is also what makes a second Execute of an already-materialized portal (a
+   * Describe that ran the query, a resumed cursor) not open a second transaction.
+   */
+  private void beginImplicitTransactionBlock(final PostgresPortal portal) {
+    if (portal.ignoreExecution || portal.catalogQuery || portal.executed)
+      return;
+    if (portal.sqlStatement != null && portal.sqlStatement.isIdempotent())
+      return;
+    if (!database.isTransactionActive())
+      database.begin();
+  }
+
+  /**
+   * Discards whatever transaction this connection still holds when its loop ends: a client that disconnects between
+   * an Execute and its Sync - or inside an explicit BEGIN it never ends - would otherwise leave the transaction's
+   * buffered pages and locks behind on a thread that is about to die. Runs on the executor's own thread, where the
+   * transaction lives; {@link #close()} cannot do it, since the cancel-request path calls that from another
+   * connection's thread.
+   */
+  private void rollbackPendingTransaction() {
+    try {
+      if (database != null && database.isTransactionActive())
+        database.rollback();
+    } catch (final Exception e) {
+      LogManager.instance().log(this, Level.WARNING, "PSQL: error on discarding the transaction of a closing connection", e);
+    }
+  }
+
+  /**
+   * Applies the transaction-control statement a portal carries, at Execute, which is where PostgreSQL applies one -
+   * {@code parseCommand()} only recognizes the keyword and records it, so that a statement merely prepared and never
+   * run cannot move the session's transaction state. A no-op for every other portal.
+   * <p>
+   * COMMIT commits here rather than leaving the transaction for the next Sync to persist: the CommandComplete this
+   * Execute is about to write tells the client the commit succeeded, and until the data is actually committed that
+   * acknowledgement can still be taken back - by {@link #rollbackPendingTransaction()} if the client disconnects
+   * before its Sync, or by {@link #syncCommand()} if a later message in the same pipeline fails, which is a plain
+   * loss of acknowledged data. It is the same two lines queryCommand() runs for a COMMIT on the simple query
+   * protocol, so both protocols now persist an explicit block at exactly the same point.
+   * <p>
+   * COMMIT and ROLLBACK act on whatever transaction the connection holds, asking the database rather than
+   * {@code explicitTransactionStarted} (issue #8028). That flag is raised only by a BEGIN, and since issue
+   * #7775 a pipeline sent without one runs inside the implicit block {@link #beginImplicitTransactionBlock}
+   * opens, where it is false: guarding on it made both arms answer the client and do nothing, so a ROLLBACK
+   * left the block for the next Sync to COMMIT - the writes the client was told were discarded were kept -
+   * and a COMMIT left it for the same Sync to discard if anything later in the pipeline failed, which is the
+   * loss of acknowledged data described above. PostgreSQL ends an implicit block on either keyword
+   * ({@code EndTransactionBlock}/{@code UserAbortTransactionBlock} on {@code TBLOCK_IMPLICIT_INPROGRESS}); a
+   * write that follows in the same pipeline opens a fresh block at its own Execute.
+   * <p>
+   * {@link #endTransactionBlockState()} rather than clearing {@code explicitTransactionStarted} alone, so
+   * there is one rule for ending a block on both protocols. The other two flags it clears are already false
+   * here: {@code executeCommand()} is the only caller and returns on {@code skipUntilSync} before reaching
+   * this method, and answers {@code errorInTransaction} with {@link #refuseInAbortedTransaction()} - an
+   * aborted block's own COMMIT/ROLLBACK is dispatched by {@code parseCommand()} instead, which ends the block
+   * there and marks the portal {@code ignoreExecution}.
+   * <p>
+   * The marker is cleared once applied. Portals outlive their Execute on purpose (a limit-hit Execute suspends and
+   * the client fetches the rest through the same portal, issue #6458), so without this a second Execute of a
+   * retained ROLLBACK portal would roll back whatever transaction had been opened since.
+   *
+   * @return true when the portal carried a transaction-control statement, so the caller knows not to open an
+   * implicit block for it - the marker is gone by then and cannot be asked again.
+   */
+  private boolean applyTransactionControl(final PostgresPortal portal) {
+    if (portal.transactionControl == null)
+      return false;
+
+    switch (portal.transactionControl) {
+    case BEGIN -> {
+      explicitTransactionStarted = true;
+      if (!database.isTransactionActive())
+        database.begin();
+    }
+    case COMMIT -> {
+      if (database.isTransactionActive())
+        database.commit();
+      endTransactionBlockState();
+    }
+    case ROLLBACK -> {
+      if (database.isTransactionActive())
+        database.rollback();
+      endTransactionBlockState();
+    }
+    }
+    portal.transactionControl = null;
+    return true;
+  }
+
+  /**
+   * Refuses an extended-protocol message that arrived while the transaction block is aborted, the way PostgreSQL
+   * refuses every command in that state: SQLSTATE {@code 25P02}, and the session enters skip-until-Sync so the rest
+   * of the pipeline behind this message is discarded rather than refused one ErrorResponse at a time.
+   */
+  private void refuseInAbortedTransaction() {
+    setExtendedProtocolError();
+    writeError(ERROR_SEVERITY.ERROR, ABORTED_TRANSACTION_MESSAGE, "25P02");
+  }
+
+  /**
+   * Clears every trace of a failure, called on the one event that ends a transaction block: the client's own
+   * COMMIT/ROLLBACK/END. {@link #skipUntilSync} goes with the rest - the block those discarded messages belonged
+   * to is over, so the statements the client sends next belong to a new one.
+   */
+  private void endTransactionBlockState() {
+    explicitTransactionStarted = false;
+    errorInTransaction = false;
+    skipUntilSync = false;
+    dropPortals();
+  }
+
+  /**
+   * Drops every bound portal, called when the transaction block they were bound in ends (issue #8212). PostgreSQL
+   * portals are transaction-scoped: a non-holdable portal is dropped at the end of its transaction - at Sync for the
+   * implicit block of an autocommit pipeline, at COMMIT/ROLLBACK/END for an explicit block, which is also the only
+   * way out of an aborted one. Keeping them any longer let an Execute in a later round trip run a portal PostgreSQL
+   * would have answered with {@code 34000}, and kept the materialized result of a suspended portal the client
+   * abandoned in memory until the connection closed. Prepared statements are session-scoped and are not touched.
+   */
+  private void dropPortals() {
+    if (!portals.isEmpty())
+      portals.clear();
+  }
+
+  /**
+   * Refuses a Bind or Describe('S') naming a prepared statement that does not exist, with PostgreSQL's own
+   * message and SQLSTATE {@code 26000} (issue #8211).
+   */
+  private void refuseMissingPreparedStatement(final String name) {
+    setExtendedProtocolError();
+    writeError(ERROR_SEVERITY.ERROR,
+        name.isEmpty() ? "unnamed prepared statement does not exist" : "prepared statement \"" + name + "\" does not exist",
+        "26000");
+  }
+
+  /**
+   * Refuses an Execute or Describe('P') naming a portal that does not exist, with PostgreSQL's own message and
+   * SQLSTATE {@code 34000} (issue #8211).
+   */
+  private void refuseMissingPortal(final String name) {
+    setExtendedProtocolError();
+    writeError(ERROR_SEVERITY.ERROR, "portal \"" + name + "\" does not exist", "34000");
   }
 
   private record Query(String language, String query) {

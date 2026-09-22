@@ -22,12 +22,17 @@ import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
+import com.arcadedb.server.HAServerPlugin;
 import com.arcadedb.server.http.HttpServer;
 import com.arcadedb.server.http.handler.AbstractServerHttpHandler;
 import com.arcadedb.server.http.handler.ExecutionResponse;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.undertow.server.HttpServerExchange;
+import org.apache.ratis.protocol.RaftPeer;
+import org.apache.ratis.protocol.RaftPeerId;
 
+import java.io.IOException;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.logging.Level;
 
@@ -50,6 +55,13 @@ public class PostAddPeerHandler extends AbstractServerHttpHandler {
       final JSONObject payload) {
     checkRootUser(user);
 
+    // A null payload is what AbstractServerHttpHandler hands over for an absent or blank body, and every read
+    // below would NPE on it - answering 500 for a request that is merely missing its fields, when the 400 two
+    // lines down says exactly what is wrong (code review on PR #7854).
+    if (payload == null)
+      return new ExecutionResponse(400,
+          new JSONObject().put("error", "Missing required fields: peerId, address").toString());
+
     final RaftHAServer raftHAServer = plugin.getRaftHAServer();
     if (raftHAServer == null)
       return new ExecutionResponse(400, new JSONObject().put("error", "Raft HA is not enabled").toString());
@@ -61,7 +73,14 @@ public class PostAddPeerHandler extends AbstractServerHttpHandler {
       return new ExecutionResponse(400,
           new JSONObject().put("error", "Missing required fields: peerId, address").toString());
 
-    raftHAServer.addPeer(peerId, address, name.isEmpty() ? null : name);
+    final RaftPeer peer;
+    try {
+      peer = peerFromPayload(peerId, address, payload);
+    } catch (final IllegalArgumentException e) {
+      return new ExecutionResponse(400, new JSONObject().put("error", e.getMessage()).toString());
+    }
+
+    raftHAServer.addPeer(peer, name.isEmpty() ? null : name);
 
     // Seed the newly-joined peer with the current security documents. Snapshot install covers none of them
     // (they live under <server-root>/config/, outside the database directory), so without this explicit
@@ -69,18 +88,45 @@ public class PostAddPeerHandler extends AbstractServerHttpHandler {
     // document, a stale token store - until the next mutation of that kind happens cluster-wide. The
     // groups and tokens half is issue #7373; the users half predates it.
     //
-    // Delegated to ServerSecurity so each document is READ and SUBMITTED under the security monitor. Reading
-    // here and submitting afterwards would leave a window in which a revocation commits in between, and the
-    // seed - which carries a whole document - would then put the revoked token, or the deleted group, back on
-    // every node. addPeer is exactly when an operator is also likely to be rotating credentials.
+    // ASKED FOR rather than run here (issue #7834). This node is not required to be the leader - the check
+    // above is checkRootUser and nothing else, and RaftHAServer.addPeer routes only the membership change to
+    // the leader - while the leader seeds every membership change of its own accord since issue #7531. Running
+    // a second seed here made an admission put up to six entries in the Raft log from two different JVMs, each
+    // holding only its own ServerSecurity monitor; that monitor is what keeps a revocation committing mid-seed
+    // from being undone by the whole document a seed carries (issue #7373), so a revocation landing between the
+    // two could be resurrected by whichever submit was second. One seeder, on the leader, is the fix.
     //
-    // Retried within a bounded budget rather than attempted once (issue #7521): the submit waits for a Raft
-    // commit, so its usual failure is an absent quorum at this instant - transient, and the same condition
-    // that makes an addPeer interesting in the first place.
-    final long retryBudgetMs = httpServer.getServer().getConfiguration()
-        .getValueAsLong(GlobalConfiguration.HA_SECURITY_SEED_RETRY_TIMEOUT);
-    final List<String> failedSeeds = httpServer.getServer().getSecurity()
-        .seedSecurityStateClusterWide(retryBudgetMs);
+    // The report is unchanged and is the reason this is not simply deleted: issue #7521 made a residual seed
+    // failure operator-facing, and addPeerResponse answers 503 with a failedSeeds array. It now describes the
+    // leader's seed rather than this node's.
+    //
+    // The seed is still retried within a bounded budget (issue #7521): the submit waits for a Raft commit, so
+    // its usual failure is an absent quorum at this instant - transient, and the same condition that makes an
+    // addPeer interesting in the first place.
+    final List<String> failedSeeds;
+    try {
+      // Through the plugin rather than through ServerSecurity: the seed runs on the leader. The orElseGet is
+      // the interface's contract for an HA implementation with no leader-side seeder and is unreachable here -
+      // this handler IS the Raft plugin's - but stating it keeps the two admission call sites identical.
+      failedSeeds = plugin.seedSecurityStateForAdmission(peerId)
+          .orElseGet(() -> httpServer.getServer().getSecurity().seedSecurityStateClusterWide(
+              httpServer.getServer().getConfiguration()
+                  .getValueAsLong(GlobalConfiguration.HA_SECURITY_SEED_RETRY_TIMEOUT)));
+    } catch (final IOException | IllegalStateException e) {
+      // The peer IS a committed member by now, so this must not be answered as a failed add. What is unknown is
+      // the seed, and "unknown" is reported as a failure of all three rather than as none: a 503 naming them
+      // tells the operator to reissue, which is the action that repairs it either way.
+      //
+      // IllegalStateException as well as IOException (CodeRabbit on PR #7854): the first is what
+      // seedSecurityNowAndReport raises when the seed could not be run or its outcome could not be read, and on
+      // the leader that call is reached directly rather than over HTTP - so it is the LOCAL path's version of
+      // exactly the same "the membership change stands, the seed is unknown" case.
+      LogManager.instance().log(this, Level.SEVERE,
+          "Peer '%s' was added but the leader could not be asked to seed the security documents: %s. It is a "
+              + "cluster member serving requests against its own copy of them; re-POST the peer to retry the seed",
+          e, peerId, e.getMessage());
+      return addPeerResponse(peerId, HAServerPlugin.ALL_SEEDED_SECURITY_DOCUMENTS);
+    }
 
     if (!failedSeeds.isEmpty())
       LogManager.instance().log(this, Level.SEVERE,
@@ -88,6 +134,85 @@ public class PostAddPeerHandler extends AbstractServerHttpHandler {
               + "serving requests against its own copy of them", peerId, String.join(", ", failedSeeds));
 
     return addPeerResponse(peerId, failedSeeds);
+  }
+
+  /**
+   * The peer this payload names, carrying every field it declares (issue #7523).
+   * <p>
+   * Handed on as a whole {@link RaftPeer} rather than as {@code (id, address, priority)}, because that is the
+   * shape {@code RaftClusterManager.addPeer(RaftPeer, String)} was given for exactly this reason (issue #7401):
+   * a field a peer carries is then impossible to drop on the way down, instead of merely tested for. That is
+   * also why this is not the fourth argument of a four-argument overload - the next field would need a fifth.
+   * <p>
+   * Package-private and static so a test can drive the construction the handler actually performs. Asserting on
+   * {@link #readPriority} alone would leave the one step that matters - the priority reaching the peer object -
+   * untested, which is the shape of the bug this fixes.
+   *
+   * @throws IllegalArgumentException from {@link #readPriority}, answered 400 by the caller
+   */
+  static RaftPeer peerFromPayload(final String peerId, final String address, final JSONObject payload) {
+    return RaftPeer.newBuilder()
+        .setId(RaftPeerId.valueOf(peerId))
+        .setAddress(address)
+        .setPriority(readPriority(payload))
+        .build();
+  }
+
+  /**
+   * The leader-election priority the payload asks for, {@code 0} when it names none (issue #7523).
+   * <p>
+   * Before this, a peer admitted through this route always got Ratis's default priority, while the same peer
+   * declared in {@code arcadedb.ha.serverList} - or joined with {@code connect cluster}, which parses one such
+   * entry - could name any. That is not a cosmetic difference: {@link RaftHAServer#selectStepDownTargets} and
+   * Ratis's own election both read the live {@code RaftPeer.getPriority()}, and once ANY peer carries a positive
+   * priority the priority-0 ones stop being electable. A witness added at runtime could therefore be elected
+   * leader, which is the one thing declaring it a witness was meant to prevent.
+   * <p>
+   * {@code 0} is the default because it is Ratis's, so an omitted field keeps the behaviour every existing caller
+   * already gets. On a cluster where nobody names a priority that leaves every peer equally electable - the
+   * witness semantics appear only once some peer is given a positive one, which is the same rule
+   * {@code selectStepDownTargets} applies.
+   *
+   * <b>Read through {@link BigDecimal#intValueExact()}, not {@code JSONObject.getInt}.</b> That method is
+   * {@code Number.intValue()} underneath, which SILENTLY narrows: {@code {"priority":0.5}} would arrive as
+   * {@code 0} and {@code {"priority":4294967296}} as {@code 0} again - and {@code 0} is not a harmless default
+   * here, it is the value that declares a witness as soon as any other peer carries a positive one. An operator
+   * who mistypes a priority would have been told the peer was added at the priority they asked for, and got the
+   * one value with the opposite meaning. {@code intValueExact} refuses a fractional part and an out-of-range
+   * magnitude in the same call, so both become a 400 naming the field.
+   *
+   * @throws IllegalArgumentException when the field is present but is not a number, is not a whole number, does
+   *                                  not fit in an {@code int}, or is negative - Ratis rejects a negative
+   *                                  priority, and answering 400 here names the field instead of surfacing it as
+   *                                  a failed membership change
+   */
+  static int readPriority(final JSONObject payload) {
+    if (!payload.has("priority") || payload.isNull("priority"))
+      return 0;
+
+    if (!(payload.get("priority") instanceof Number number))
+      // Naming the value, like the three refusals below: an operator reading a log line needs to see what was
+      // sent, not only which field was wrong.
+      throw new IllegalArgumentException("Field 'priority' must be a non-negative integer, the peer's Raft "
+          + "leader-election priority, but was " + payload.get("priority"));
+
+    final int priority;
+    try {
+      // toString() rather than a doubleValue(): it is the one conversion that is lossless for every Number the
+      // JSON parser produces - Integer, Long, Double and BigDecimal alike - so nothing is rounded on the way
+      // into the check that exists to catch rounding.
+      priority = new BigDecimal(number.toString()).intValueExact();
+    } catch (final ArithmeticException | NumberFormatException e) {
+      throw new IllegalArgumentException("Field 'priority' must be a whole number that fits in a 32-bit integer, "
+          + "but was " + number + ". It is the peer's Raft leader-election priority, so a value rounded to fit "
+          + "would silently change which nodes can take leadership");
+    }
+
+    if (priority < 0)
+      throw new IllegalArgumentException("Field 'priority' must be a non-negative integer, but was " + priority
+          + ". Use 0 for a witness that must never become leader, and a higher value for a preferred one");
+
+    return priority;
   }
 
   /**

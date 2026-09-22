@@ -209,9 +209,8 @@ public final class LeaderCommandForwarder {
       // 26.10.1 server: '?x=a{b}' is answered 400 by the parser, and URI.create rejects the same string).
       // What is guarded is the gap between those two allowances drifting apart - an Undertow upgrade, that
       // option being turned on, or an HTTP/2 ':path' that does not travel through the same parser.
-      // LeaderProxy guards the identical call the same way, which is why this is not left to chance - though
-      // that class is never constructed, so it is a precedent for the shape of the guard and not evidence
-      // anything has exercised it (issue #7551).
+      // Nothing has exercised this arm: it guards the gap between two allowances drifting apart, not a reachable
+      // input (issue #7528).
       return new ExecutionResponse(400, new JSONObject()
           .put("error", "The request target cannot be forwarded to the cluster leader: " + e.getMessage())
           .toString());
@@ -422,11 +421,16 @@ public final class LeaderCommandForwarder {
     /**
      * Releases the client's selector thread and executor. One client per {@link HttpServer}, so without this an
      * in-process cluster - or a test suite that starts and stops servers - would accumulate them.
+     * <p>
      * {@code shutdownNow} rather than {@code close}: the latter waits for in-flight exchanges, and the whole
-     * point of the deadlines above is that this node stops waiting on the leader.
+     * point of the deadlines above is that this node stops waiting on the leader. But {@code shutdownNow} only
+     * <em>requests</em> the shutdown - the selector thread unwinds after it returns - so on its own it leaves the
+     * caller no way to say the client is released, which is what {@code Issue7507ForwarderClientLifecycleTest}
+     * asserts and why that test was intermittently red (issue #7677). {@link LeaderDial#releaseBounded} is both
+     * halves: cancel now, then wait a few seconds for the termination that follows.
      */
     void close() {
-      client.shutdownNow();
+      LeaderDial.releaseBounded(client);
     }
 
     private static GlobalConfiguration deadlineSetting(final boolean longRunningCommand) {

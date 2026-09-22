@@ -98,6 +98,7 @@ import org.jspecify.annotations.NonNull;
 
 import com.arcadedb.utility.DateUtils;
 
+import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -116,6 +117,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -197,6 +199,14 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     final String          owner;
     final long            createdAtMs;
     volatile long         lastAccessMs;
+    // The ENGINE's transaction object behind this gRPC transaction, captured once on the dedicated thread right
+    // after database.begin() (issue #8134). Its commit counter is the only witness that a statement with a
+    // BATCH boundary published part of the caller's block: LocalDatabase.begin() reuses the same context object
+    // for the next transaction and the counter is never reset, which is exactly what the HTTP handler relies on
+    // when it holds the session's TransactionContext across a request.
+    // Fully qualified because this class is itself called TransactionContext - as is the protobuf message the
+    // requests carry - so all three names meet in this file and only one of them can be the short one.
+    volatile com.arcadedb.database.TransactionContext engineTransaction;
 
     TransactionContext(Database db, String txId, String owner) {
       this.db = db;
@@ -548,10 +558,33 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
    * executor-internals exception up through the RPC's catch block (issue #6709 cycle-2 review).
    */
   <T> Future<T> submitToActiveTransaction(final TransactionContext txCtx, final Callable<T> task) {
+    // #8134: read HERE, on the thread the RPC was dispatched on, because that is where the gRPC Context is
+    // attached - the transaction's dedicated executor thread has none. Every RPC that runs work inside a
+    // CLIENT-MANAGED transaction comes through this method, which is why the sampling lives here rather than
+    // in each of the dozen RPCs: commitTransaction and rollbackTransaction submit to the executor directly and
+    // are therefore exempt, exactly as /commit is exempt from the HTTP header
+    // (DatabaseAbstractHandler.reportsSessionPartialCommit()) - a transaction that committed in full has
+    // nothing left to replay and must not be described as half-published.
+    final GrpcSessionPartialCommitInterceptor.Verdict partialCommit =
+        GrpcSessionPartialCommitInterceptor.currentVerdict();
     try {
       return txCtx.executor.submit(() -> {
         requireTransactionStillActive(txCtx);
-        return task.call();
+        final com.arcadedb.database.TransactionContext engineTx = txCtx.engineTransaction;
+        final long commitCountAtStart = engineTx != null ? engineTx.getCommitCount() : 0;
+        try {
+          return task.call();
+        } finally {
+          // In a finally, because the statement that publishes half the block is often the same one that then
+          // fails: a verdict only reported on the success path would miss the case the guard exists for.
+          //
+          // Raised on the executor thread and read on the gRPC thread when the call closes. Every one of this
+          // method's callers joins the Future it returns before that close - the unary RPCs on the response
+          // they send, streamQuery and the chunked inserts on each unit of work - so the verdict is always
+          // established before it is read, whatever kind of RPC asked for it.
+          if (com.arcadedb.database.TransactionContext.isPartiallyCommitted(engineTx, commitCountAtStart))
+            GrpcSessionPartialCommitInterceptor.raise(partialCommit);
+        }
       });
     } catch (final RejectedExecutionException ree) {
       throw unknownTransactionStatus(txCtx.txId).asRuntimeException();
@@ -741,7 +774,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // everything else erased the exception type on the wire; the client's handleGrpcException/
       // GrpcClientErrorMapper already rebuilds the exact type from the status + trailers (issue #6192).
       if (!responded)
-        resp.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "ExecuteCommand", ha()));
+        resp.onError(mapError(cause, "ExecuteCommand"));
     }
   }
 
@@ -1039,7 +1072,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // Preserve the engine exception type (e.g. DuplicatedKeyException -> ALREADY_EXISTS with index/keys)
         // so the client can reconstruct it instead of receiving an opaque INTERNAL.
         if (!responded)
-          resp.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "CreateRecord", ha()));
+          resp.onError(mapError(cause, "CreateRecord"));
       }
       return;
     }
@@ -1053,7 +1086,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     } catch (Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "ERROR in createRecord", e);
       if (!responded)
-        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "CreateRecord", ha()));
+        resp.onError(mapError(e, "CreateRecord"));
     }
   }
 
@@ -1177,7 +1210,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // #7123) and passes an already-mapped StatusRuntimeException through unchanged (e.g.
         // FAILED_PRECONDITION from requireTransactionStillActive) instead of masking it as INTERNAL.
         if (!responded)
-          resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "LookupByRid"));
+          resp.onError(mapError(e, "LookupByRid"));
       }
       return;
     }
@@ -1189,7 +1222,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       resp.onCompleted();
     } catch (Exception e) {
       if (!responded)
-        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "LookupByRid"));
+        resp.onError(mapError(e, "LookupByRid"));
     }
   }
 
@@ -1240,7 +1273,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // #7123) and passes an already-mapped StatusRuntimeException through unchanged (e.g.
         // FAILED_PRECONDITION from requireTransactionStillActive) instead of masking it as INTERNAL.
         if (!responded)
-          resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "UpdateRecord"));
+          resp.onError(mapError(e, "UpdateRecord"));
       }
       return;
     }
@@ -1254,7 +1287,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     } catch (Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "ERROR in updateRecord", e);
       if (!responded)
-        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "UpdateRecord"));
+        resp.onError(mapError(e, "UpdateRecord"));
     }
   }
 
@@ -1313,7 +1346,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // Exclude ArcadeDB system fields during update
 
         props.forEach((k, v) -> {
-          String key = k.trim().toLowerCase();
+          String key = k.trim().toLowerCase(Locale.ROOT);
           if ("@rid".equals(key) || "@type".equals(key) || "@cat".equals(key)) {
             // Skip internal fields to prevent accidental overwrites
             LogManager.instance().log(this, Level.FINE, "Skipping internal field during update: %s", k);
@@ -1349,7 +1382,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // Exclude ArcadeDB system fields during update
 
         props.forEach((k, v) -> {
-          String key = k.trim().toLowerCase();
+          String key = k.trim().toLowerCase(Locale.ROOT);
           if ("@rid".equals(key) || "@type".equals(key) || "@cat".equals(key)) {
             // Skip internal fields to prevent accidental overwrites
             LogManager.instance().log(this, Level.FINE, "Skipping internal field during update: %s", k);
@@ -1422,7 +1455,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // #7123) and passes an already-mapped StatusRuntimeException through unchanged (e.g.
         // FAILED_PRECONDITION from requireTransactionStillActive) instead of masking it as INTERNAL.
         if (!responded)
-          resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "DeleteRecord"));
+          resp.onError(mapError(e, "DeleteRecord"));
       }
       return;
     }
@@ -1436,7 +1469,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     } catch (Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "ERROR in deleteRecord", e);
       if (!responded)
-        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "DeleteRecord"));
+        resp.onError(mapError(e, "DeleteRecord"));
     }
   }
 
@@ -1530,7 +1563,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         } else {
           LogManager.instance().log(this, Level.SEVERE, "Error executing query: %s", cause, cause.getMessage());
           if (!txResponded)
-            responseObserver.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "Query execution failed"));
+            responseObserver.onError(mapError(cause, "Query execution failed"));
         }
       }
       return;
@@ -1557,7 +1590,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     } catch (Exception e) {
       LogManager.instance().log(this, Level.SEVERE, "Error executing query: %s", e, e.getMessage());
       if (!responded)
-        responseObserver.onError(GrpcErrorMapper.toStatusRuntimeException(e, "Query execution failed"));
+        responseObserver.onError(mapError(e, "Query execution failed"));
     }
   }
 
@@ -1775,6 +1808,8 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // Begin transaction ON THE DEDICATED THREAD - this is critical because ArcadeDB
       // transactions are thread-local
       final String txOwner = owner;
+      // txCtx is cleared to null once the transaction is registered, so the task below cannot close over it.
+      final TransactionContext startedTxCtx = txCtx;
       Future<?> beginFuture = txCtx.executor.submit(() -> {
         // Initialize the DatabaseContext on this dedicated thread before any DB operation
         DatabaseContext.INSTANCE.init((DatabaseInternal) database);
@@ -1791,6 +1826,12 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         bindPrincipalToCurrentThread(database, txOwner);
 
         database.begin(isolationLevel);
+
+        // #8134: the engine's transaction object, taken on the thread whose DatabaseContext owns it and
+        // therefore the only thread that can see it. Held for the transaction's whole life so that every RPC
+        // dispatched onto this thread can sample the same counter, the way the HTTP handler samples the
+        // counter of the session's TransactionContext.
+        startedTxCtx.engineTransaction = ((DatabaseInternal) database).getTransactionIfExists();
       });
       beginFuture.get(); // Wait for begin to complete
 
@@ -1844,7 +1885,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // Pass through an already-mapped status (e.g. UNAUTHENTICATED/PERMISSION_DENIED from getDatabase)
       // instead of masking it as INTERNAL, and preserve the exception type for everything else.
       if (!responded)
-        responseObserver.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "Failed to begin transaction", ha()));
+        responseObserver.onError(mapError(cause, "Failed to begin transaction"));
     }
   }
 
@@ -1925,7 +1966,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       // this catch calling onError on an already-closed call - see the identical guard on executeCommand
       // (#6192) / createRecord.
       if (!responded)
-        rsp.onError(GrpcErrorMapper.toStatusRuntimeException(cause, "Commit failed", ha()));
+        rsp.onError(mapError(cause, "Commit failed"));
     } finally {
       // The transaction was claimed above (removed from activeTransactions), so release its concurrency slot and
       // shut the executor down exactly once here.
@@ -2002,7 +2043,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       LogManager.instance().log(this, Level.FINE, "rollbackTransaction(): rollback FAILED txId=%s err=%s", txId,
           cause.toString(), cause);
       if (!responded)
-        rsp.onError(Status.ABORTED.withDescription("Rollback failed: " + cause.getMessage()).asException());
+        rsp.onError(Status.ABORTED.withDescription(concealable("Rollback failed", cause)).asException());
     } finally {
       // The transaction was claimed above (removed from activeTransactions), so release its concurrency slot and
       // shut the executor down exactly once here.
@@ -2179,7 +2220,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         // GrpcErrorMapper both classifies the failure (a SQL syntax error, a missing type, etc. - issue
         // #7123) and passes an already-mapped StatusRuntimeException through unchanged (e.g.
         // RESOURCE_EXHAUSTED from the MATERIALIZE_ALL cap) instead of masking it as INTERNAL.
-        responseObserver.onError(GrpcErrorMapper.toStatusRuntimeException(e, "Stream query failed"));
+        responseObserver.onError(mapError(e, "Stream query failed"));
     } finally {
       // Stream endpoints mix engine iteration and row serialization throughout; expose the
       // total cost as engineNanos so the Server Profiler still captures query-level metrics.
@@ -2642,7 +2683,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // StatusRuntimeException submitToActiveTransaction throws synchronously when the executor was
           // already shut down - RejectedExecutionException case, issue #6709) instead of masking it as INTERNAL.
           if (!responded)
-            resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "bulkInsert"));
+            resp.onError(mapError(e, "bulkInsert"));
         }
       } else {
         try (InsertContext ctx = new InsertContext(opts)) {
@@ -2655,7 +2696,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       }
     } catch (Exception e) {
       if (!responded)
-        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "bulkInsert"));
+        resp.onError(mapError(e, "bulkInsert"));
     } finally {
       ProtocolContext.clear();
     }
@@ -2847,7 +2888,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // were in the discarded Counts, so the summary under-reports inserted for this chunk. The
           // tests use single-row chunks; a precise per-chunk reconciliation is a separate follow-up.
           totals.received += c.getRowsCount();
-          totals.err(-1, commitErrorCode(e), exceptionMessage(e), "");
+          totals.err(-1, commitErrorCode(e), insertErrorMessage(e), "");
           // A structural failure (e.g. "options changed mid-stream") leaves the transaction still
           // active and bound to this pooled gRPC thread. Roll it back here (on the failing thread,
           // where it is bound) so its locks are released immediately and it is not leaked into a later
@@ -2935,7 +2976,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             out.onCompleted();
           }
         } catch (Exception e) {
-          out.onError(GrpcErrorMapper.toStatusRuntimeException(e, "insertStream"));
+          out.onError(mapError(e, "insertStream"));
         } finally {
           InsertContext ctx = ctxRef.get();
           if (ctx != null)
@@ -2951,7 +2992,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
    * stream-level {@code Status.INTERNAL}. The engine auto-rolls back on commit failure, so any rows
    * that were optimistically counted as inserted/updated did not persist - reclassify them as failed.
    */
-  private static void recordCommitException(final Counts totals, final Exception e) {
+  private void recordCommitException(final Counts totals, final Exception e) {
     final long rolledBack = totals.inserted + totals.updated;
     totals.inserted = 0;
     totals.updated = 0;
@@ -2962,7 +3003,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     totals.errors.add(InsertError.newBuilder()
         .setRowIndex(-1)
         .setCode(commitErrorCode(e))
-        .setMessage(exceptionMessage(e))
+        .setMessage(insertErrorMessage(e))
         .setField("")
         .build());
   }
@@ -2987,8 +3028,25 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
    * Returns a non-null human-readable message for an exception, falling back to the simple class name
    * when {@link Exception#getMessage()} is null.
    */
-  private static String exceptionMessage(final Exception e) {
-    return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+  /**
+   * The free-form text of an {@code InsertError} - the per-row and per-chunk failure channel that
+   * {@code insertStream} and {@code insertBidirectional} report through - concealed and logged in production mode.
+   * <p>
+   * This channel is a protobuf MESSAGE FIELD rather than a gRPC {@code Status}, so none of the concealment applied
+   * to the status paths reached it: a {@link DuplicatedKeyException} here still carried the index name and the
+   * offending key VALUE, and a {@code DB_ERROR} wrapping an {@code IOException} still carried a file path, on the
+   * two RPCs that use it (PR #7755 review). It is the same defect class #7472 is about, on the one channel the
+   * audit did not cover.
+   * <p>
+   * The {@code code} beside it - {@code CONFLICT}, {@code DB_ERROR} - is NOT concealed, and that is the same split
+   * as everywhere else: a bounded, structured value a client branches on survives, the free text does not.
+   */
+  private String insertErrorMessage(final Throwable e) {
+    if (!concealErrors())
+      return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+
+    GrpcErrorMapper.logConcealed(this, "insert", e);
+    return GrpcErrorMapper.CONCEALED_DESCRIPTION;
   }
 
   // --- 3) Client-streaming graph batch load ---
@@ -3023,6 +3081,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     final SynchronizedStreamObserver<GraphBatchResult> out = new SynchronizedStreamObserver<>(resp);
 
     final long startedAt = System.currentTimeMillis();
+    // Resolved once, up front: the error paths below run on the stream's own threads and must answer the same way
+    // for every chunk of one load (issue #7472).
+    final boolean conceal = concealErrors();
     final AtomicBoolean cancelled = new AtomicBoolean(false);
     // errorSent gates the onCompleted flush and the call.request(1) flow-control pull; the
     // SynchronizedStreamObserver above independently guarantees terminal-call safety.
@@ -3076,7 +3137,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             final HAServerPlugin ha = ha();
             if (ha != null && !ha.isLeader()) {
               errorSent[0] = true;
-              out.onError(notTheLeader(ha, "graphBatchLoad", "a graph batch load must run on the leader"));
+              out.onError(notTheLeader("graphBatchLoad", "a graph batch load must run on the leader"));
               return;
             }
 
@@ -3107,7 +3168,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               // internal fault. Scoped to build() so genuine engine failures keep reporting as INTERNAL.
               errorSent[0] = true;
               out.onError(Status.FAILED_PRECONDITION.withDescription(
-                  "graphBatchLoad: " + e.getMessage()).asException());
+                  concealable("graphBatchLoad", e)).asException());
               return;
             }
             batchRef.set(batch);
@@ -3155,7 +3216,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // abandoned batch is still the one holding the flushed-edge count, and abandon() drops what was
           // buffered without touching what it had already committed.
           final Metadata trailers = partialCommitTrailer(abandoned, counts, tempIdMap, startedAt);
-          out.onError(graphBatchLoadError(e, trailers, ha()));
+          out.onError(graphBatchLoadError(e, trailers, ha(), conceal));
           return;
         } finally {
           if (!cancelled.get() && !errorSent[0])
@@ -3213,7 +3274,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // close() is where the deferred incoming edges are connected, so a failure here can leave edges
           // buffered that the counters must not claim: the batch is asked what it actually flushed.
           final Metadata trailers = partialCommitTrailer(batchRef.get(), counts, tempIdMap, startedAt);
-          out.onError(graphBatchLoadError(e, trailers, ha()));
+          out.onError(graphBatchLoadError(e, trailers, ha(), conceal));
           closeQuietly(batchRef.get());
         }
       }
@@ -3233,11 +3294,12 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
    * to the same follower to be refused again (issue #7624). An already-mapped status - a {@code getDatabase()}
    * auth refusal, say - is still passed through with its own description and trailers.
    *
-   * @param ha this server's HA plugin, or null outside a cluster
+   * @param ha      this server's HA plugin, or null outside a cluster
+   * @param conceal true when the server runs in production mode, so the description carries no engine text
    */
   private static StatusException graphBatchLoadError(final Throwable e, final Metadata trailers,
-      final HAServerPlugin ha) {
-    return GrpcErrorMapper.toStatusException(e, "graphBatchLoad", ha, trailers);
+      final HAServerPlugin ha, final boolean conceal) {
+    return GrpcErrorMapper.toStatusException(e, "graphBatchLoad", ha, trailers, conceal);
   }
 
   // ---------------------------------------------------------------------------------------------------------
@@ -3308,7 +3370,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       resp.onCompleted();
     } catch (final Exception e) {
       if (!responded)
-        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "TimeSeriesWrite", ha()));
+        resp.onError(mapError(e, "TimeSeriesWrite"));
     } finally {
       ProtocolContext.clear();
     }
@@ -3384,7 +3446,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
           // drain for: every chunk before this one is already durable, so the client's useful next step is the
           // error, and the counts it can read from a subsequent query.
           failed.set(true);
-          out.onError(GrpcErrorMapper.toStatusRuntimeException(e, "TimeSeriesWriteStream", ha()));
+          out.onError(mapError(e, "TimeSeriesWriteStream"));
         } finally {
           ProtocolContext.clear();
         }
@@ -3484,7 +3546,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
         resp.onCompleted();
     } catch (final Exception e) {
       if (!cancelled.get())
-        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "TimeSeriesQuery", ha()));
+        resp.onError(mapError(e, "TimeSeriesQuery"));
     } finally {
       ProtocolContext.clear();
     }
@@ -3693,9 +3755,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
 
       // Same default alias as the HTTP endpoint, so the two protocols name the same computed column alike.
       final String alias = request.getAlias().isEmpty()
-          ? request.getField() + "_" + type.name().toLowerCase()
+          ? request.getField() + "_" + type.name().toLowerCase(Locale.ROOT)
           : request.getAlias();
-      requests.add(new MultiColumnAggregationRequest(columnIndex, type, alias));
+      // As on the two HTTP endpoints: the factory owns both rules a producer has to get right (issue #8140).
+      requests.add(MultiColumnAggregationRequest.of(columns, columnIndex, type, alias));
       aliases.add(alias);
     }
 
@@ -3805,7 +3868,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       resp.onCompleted();
     } catch (final Exception e) {
       if (!responded)
-        resp.onError(GrpcErrorMapper.toStatusRuntimeException(e, "TimeSeriesLatest", ha()));
+        resp.onError(mapError(e, "TimeSeriesLatest"));
     } finally {
       ProtocolContext.clear();
     }
@@ -3900,14 +3963,51 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
    * replicated database rejects on a follower - indistinguishable to a caller (issue #6183): same status, same
    * trailers, same typed exception rebuilt on the client. All that is left to choose here is the wording.
    */
-  private static StatusRuntimeException notTheLeader(final HAServerPlugin ha, final String rpc, final String why) {
-    return GrpcErrorMapper.toStatusRuntimeException(
-        new ServerIsNotTheLeaderException("this server is not the cluster leader and " + why, null), rpc, ha);
+  private StatusRuntimeException notTheLeader(final String rpc, final String why) {
+    return mapError(new ServerIsNotTheLeaderException("this server is not the cluster leader and " + why, null), rpc);
   }
 
   /** This server's HA plugin, or null when HA is inactive: the source of the leader address on a refusal. */
   private HAServerPlugin ha() {
     return arcadeServer != null ? arcadeServer.getHA() : null;
+  }
+
+  /**
+   * Every failure this service answers with, mapped in ONE place.
+   * <p>
+   * It was 20-odd direct {@code GrpcErrorMapper.toStatusRuntimeException(...)} calls, half of which passed
+   * {@link #ha()} and half of which did not - so a leader refusal was actionable or not depending on which RPC
+   * raised it - and none of which applied the server's production-mode concealment. Routing them through a single
+   * method is what makes both of those one decision rather than twenty (issue #7472).
+   */
+  private StatusRuntimeException mapError(final Throwable t, final String contextPrefix) {
+    return GrpcErrorMapper.toStatusRuntimeException(t, contextPrefix, ha(), concealErrors());
+  }
+
+  /**
+   * Whether this server conceals the free-form part of an error from the client. Null-tolerant for the embedded and
+   * test constructions that pass no server: no server means no configured mode, and the verbose answer is what the
+   * pre-#7472 behaviour was.
+   */
+  private boolean concealErrors() {
+    return arcadeServer != null && arcadeServer.isProductionMode();
+  }
+
+  /**
+   * A description for a failure this service maps DIRECTLY - keeping a status code it chose deliberately rather
+   * than one {@link GrpcErrorMapper} would classify - with the exception's own text concealed in production.
+   * <p>
+   * {@link #mapError} covers everything that goes through the mapper. These do not, because the status is the
+   * point: a rollback failure is {@code ABORTED} whatever the cause was, and a batch already owning the database
+   * is {@code FAILED_PRECONDITION}. Concealment still applies, because the leaking part is the MESSAGE and it is
+   * engine text either way (PR #7755 review).
+   * <p>
+   * Logs the throwable before returning, so the "check the server log" the concealed text promises is true. That
+   * promise is the whole reason concealment is acceptable: with it the operator still has the detail, without it
+   * the failure is simply gone.
+   */
+  private String concealable(final String prefix, final Throwable e) {
+    return GrpcErrorMapper.concealableDescription(this, prefix, e, concealErrors());
   }
 
   private Object[] toPropertyArray(final Map<String, GrpcValue> properties) {
@@ -4209,7 +4309,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
                   // insertStream path. Per-row failures are already reported chunk-relative inside insertRows.
                   perChunk.errors.add(InsertError.newBuilder().setRowIndex(-1).setCode(
                           "DB_ERROR")
-                      .setMessage(String.valueOf(e.getMessage())).build());
+                      .setMessage(insertErrorMessage(e)).build());
                   ctx.totals.add(perChunk);
                   // intentionally do not advance watermark on failure; client may replay safely
 
@@ -4231,7 +4331,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
                   out.onNext(InsertResponse.newBuilder().setCommitted(Committed.newBuilder().setSummary(sum).build()).build());
                   out.onCompleted();
                 } catch (Exception e) {
-                  out.onError(GrpcErrorMapper.toStatusRuntimeException(e, "commit"));
+                  out.onError(mapError(e, "commit"));
                 } finally {
                   sessionWatermark.remove(ctx.sessionId);
                   ctx.closeQuietly();
@@ -4249,7 +4349,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
             }
           } catch (Exception unexpected) {
             // defensive: fail fast on unexpected exceptions
-            out.onError(GrpcErrorMapper.toStatusRuntimeException(unexpected, "insertBidirectional"));
+            out.onError(mapError(unexpected, "insertBidirectional"));
             final InsertContext ctx = ref.getAndSet(null);
             if (ctx != null) {
               sessionWatermark.remove(ctx.sessionId);
@@ -4415,6 +4515,16 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     }
   }
 
+  /**
+   * Inserts the rows of one chunk. Deliberately contains no {@code commit()} and no {@code begin()}: inside a
+   * client-managed transaction the client owns the lifecycle, and outside one the caller wraps.
+   * <p>
+   * Issue #8134 depends on that. This runs under {@link #submitToActiveTransaction}, which reports to the
+   * caller "your transaction published a commit under this call" by comparing the transaction's commit counter
+   * across the task. Adding a commit here would start setting that signal on every streamed chunk, telling a
+   * client's retry loop not to replay blocks that are perfectly replayable. If a commit ever does belong here,
+   * read {@link GrpcSessionPartialCommitInterceptor} first and give the change a test of its own.
+   */
   private Counts insertRowsTagged(InsertContext ctx, Iterator<GrpcRecord> it) {
 
     Counts c = new Counts();
@@ -4510,7 +4620,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       } catch (DuplicatedKeyException dup) {
         switch (ctx.opts.getConflictMode()) {
           case CONFLICT_IGNORE -> c.ignored++;
-          case CONFLICT_ABORT, UNRECOGNIZED -> c.err(c.received - 1, "CONFLICT", dup.getMessage(), "");
+          case CONFLICT_ABORT, UNRECOGNIZED -> c.err(c.received - 1, "CONFLICT", insertErrorMessage(dup), "");
           // A concurrent stream inserted this key after our check; the unique index proves it exists
           // now, so retry as an update instead of losing the row. Not exercised by
           // Issue4656InsertStreamConflictUpdateIT: the race needs two concurrent streams hitting the
@@ -4522,19 +4632,19 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
               else
                 // The match vanished between the conflict and the retry (transient MVCC window): report
                 // it as a retriable CONFLICT rather than guessing.
-                c.err(c.received - 1, "CONFLICT", dup.getMessage(), "");
+                c.err(c.received - 1, "CONFLICT", insertErrorMessage(dup), "");
             } catch (DuplicatedKeyException retryDup) {
               // A third writer can race the retry too: still a retriable conflict.
-              c.err(c.received - 1, "CONFLICT", retryDup.getMessage(), "");
+              c.err(c.received - 1, "CONFLICT", insertErrorMessage(retryDup), "");
             } catch (Exception retryEx) {
               // Anything else (IO error, etc.) is a real failure - do not mask it as a CONFLICT.
-              c.err(c.received - 1, "DB_ERROR", retryEx.getMessage(), "");
+              c.err(c.received - 1, "DB_ERROR", insertErrorMessage(retryEx), "");
             }
           }
-          case CONFLICT_ERROR -> c.err(c.received - 1, "CONFLICT", dup.getMessage(), "");
+          case CONFLICT_ERROR -> c.err(c.received - 1, "CONFLICT", insertErrorMessage(dup), "");
         }
       } catch (Exception e) {
-        c.err(c.received - 1, "DB_ERROR", e.getMessage(), "");
+        c.err(c.received - 1, "DB_ERROR", insertErrorMessage(e), "");
       }
 
       inBatch++;
@@ -5418,7 +5528,7 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
    * INVALID_ARGUMENT with that message intact - a caller that crossed a documented limit has to be able to tell
    * that from a server fault, exactly as the HTTP surface distinguishes 400 from 500.
    */
-  private static StatusException toSearchStatus(final String operation, final Exception e) {
+  private StatusException toSearchStatus(final String operation, final Exception e) {
     if (e instanceof final StatusException se)
       return se;
     if (e instanceof final StatusRuntimeException sre)
@@ -5429,7 +5539,10 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
     // every other wire protocol uses (issue #7123) instead of collapsing to INTERNAL.
     if (e instanceof ServerSecurityException)
       return Status.PERMISSION_DENIED.withDescription(operation + ": " + e.getMessage()).asException();
-    return GrpcErrorMapper.statusCodeFor(e).toStatus().withDescription(operation + ": " + e.getMessage()).asException();
+    // THE CATCH-ALL CARRIES ENGINE TEXT - A SCHEMA NAME, A FILE PATH, AN INDEX - AND IS CONCEALED IN PRODUCTION
+    // LIKE EVERY OTHER FREE-FORM DESCRIPTION. THE ARM ABOVE IS NOT: A SECURITY REFUSAL IS A SENTENCE THIS SERVER
+    // WROTE ABOUT THE REQUEST, WHICH IS WHAT MAKES IT ACTIONABLE (PR #7755 REVIEW)
+    return GrpcErrorMapper.statusCodeFor(e).toStatus().withDescription(concealable(operation, e)).asException();
   }
 
   // Helper methods
@@ -5489,7 +5602,9 @@ public class ArcadeDbGrpcService extends ArcadeDbServiceGrpc.ArcadeDbServiceImpl
       }
 
       // Create database factory for the specific database
-      DatabaseFactory dbFactory = new DatabaseFactory(databasePath + "/" + databaseName);
+      // File.separator AND NOT A LITERAL '/': THIS LOCATES A WHOLE DATABASE DIRECTORY, AND EVERY OTHER PATH THE
+      // ENGINE BUILDS FOR ONE USES THE PLATFORM SEPARATOR (ISSUE #7588)
+      DatabaseFactory dbFactory = new DatabaseFactory(databasePath + File.separator + databaseName);
 
       try {
         // Open database - ArcadeDB requires MODE parameter

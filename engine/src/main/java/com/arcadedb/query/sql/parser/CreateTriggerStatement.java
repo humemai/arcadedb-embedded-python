@@ -29,6 +29,9 @@ import com.arcadedb.query.sql.executor.ResultSet;
 import com.arcadedb.schema.Trigger;
 import com.arcadedb.schema.TriggerImpl;
 
+import java.util.Locale;
+import java.util.Map;
+
 /**
  * SQL Statement for CREATE TRIGGER command.
  * Syntax: CREATE TRIGGER [IF NOT EXISTS] name (BEFORE|AFTER) (CREATE|READ|UPDATE|DELETE)
@@ -44,6 +47,12 @@ public class CreateTriggerStatement extends DDLStatement {
   public Identifier typeName;
   public Identifier actionType;  // SQL, JAVASCRIPT, or JAVA
   public String actionCode;
+  /**
+   * The action code's STRING_LITERAL exactly as it appeared in the source, quotes included. Rendering this instead
+   * of re-quoting {@link #actionCode} guarantees an exact round-trip no matter what the body contains (same
+   * approach as {@code DefineFunctionStatement.codeQuoted}).
+   */
+  public String actionCodeQuoted;
   public boolean ifNotExists = false;
 
   public CreateTriggerStatement() {
@@ -59,7 +68,7 @@ public class CreateTriggerStatement extends DDLStatement {
       throw new CommandSQLParsingException("Trigger timing (BEFORE/AFTER) is required");
     }
 
-    final String timingStr = timing.getStringValue().toUpperCase();
+    final String timingStr = timing.getStringValue().toUpperCase(Locale.ROOT);
     if (!"BEFORE".equals(timingStr) && !"AFTER".equals(timingStr)) {
       throw new CommandSQLParsingException("Trigger timing must be BEFORE or AFTER");
     }
@@ -68,7 +77,7 @@ public class CreateTriggerStatement extends DDLStatement {
       throw new CommandSQLParsingException("Trigger event (CREATE/READ/UPDATE/DELETE) is required");
     }
 
-    final String eventStr = event.getStringValue().toUpperCase();
+    final String eventStr = event.getStringValue().toUpperCase(Locale.ROOT);
     if (!"CREATE".equals(eventStr) && !"READ".equals(eventStr) &&
         !"UPDATE".equals(eventStr) && !"DELETE".equals(eventStr)) {
       throw new CommandSQLParsingException("Trigger event must be CREATE, READ, UPDATE, or DELETE");
@@ -82,7 +91,7 @@ public class CreateTriggerStatement extends DDLStatement {
       throw new CommandSQLParsingException("Trigger action type (SQL/JAVASCRIPT/JAVA) is required");
     }
 
-    final String actionTypeStr = actionType.getStringValue().toUpperCase();
+    final String actionTypeStr = actionType.getStringValue().toUpperCase(Locale.ROOT);
     if (!"SQL".equals(actionTypeStr) && !"JAVASCRIPT".equals(actionTypeStr) && !"JAVA".equals(actionTypeStr)) {
       throw new CommandSQLParsingException("Trigger action type must be SQL, JAVASCRIPT, or JAVA");
     }
@@ -128,9 +137,9 @@ public class CreateTriggerStatement extends DDLStatement {
     }
 
     // Parse enums
-    final Trigger.TriggerTiming triggerTiming = Trigger.TriggerTiming.valueOf(timing.getStringValue().toUpperCase());
-    final Trigger.TriggerEvent triggerEvent = Trigger.TriggerEvent.valueOf(event.getStringValue().toUpperCase());
-    final Trigger.ActionType triggerActionType = Trigger.ActionType.valueOf(actionType.getStringValue().toUpperCase());
+    final Trigger.TriggerTiming triggerTiming = Trigger.TriggerTiming.valueOf(timing.getStringValue().toUpperCase(Locale.ROOT));
+    final Trigger.TriggerEvent triggerEvent = Trigger.TriggerEvent.valueOf(event.getStringValue().toUpperCase(Locale.ROOT));
+    final Trigger.ActionType triggerActionType = Trigger.ActionType.valueOf(actionType.getStringValue().toUpperCase(Locale.ROOT));
 
     // Create trigger
     final Trigger trigger = new TriggerImpl(
@@ -160,14 +169,44 @@ public class CreateTriggerStatement extends DDLStatement {
   }
 
   @Override
-  public String toString() {
-    return "CreateTriggerStatement{" +
-        "name=" + name +
-        ", timing=" + timing +
-        ", event=" + event +
-        ", typeName=" + typeName +
-        ", actionType=" + actionType +
-        ", ifNotExists=" + ifNotExists +
-        '}';
+  public void toString(final Map<String, Object> params, final StringBuilder builder) {
+    builder.append("CREATE TRIGGER ");
+    if (ifNotExists)
+      builder.append("IF NOT EXISTS ");
+    name.toString(params, builder);
+    builder.append(' ');
+    timing.toString(params, builder);
+    builder.append(' ');
+    event.toString(params, builder);
+    builder.append(" ON TYPE ");
+    typeName.toString(params, builder);
+    builder.append(" EXECUTE ");
+    actionType.toString(params, builder);
+    builder.append(' ');
+    if (actionCodeQuoted != null)
+      builder.append(actionCodeQuoted);
+    else
+      // actionCodeQuoted IS ONLY SET BY THE PARSER. A STATEMENT BUILT ANY OTHER WAY (SETTING actionCode DIRECTLY)
+      // WOULD OTHERWISE RENDER THE BARE WORD "null" HERE INSTEAD OF A QUOTED LITERAL (CODE REVIEW, ISSUE #7800)
+      appendQuotedStringLiteral(builder, actionCode);
+  }
+
+  @Override
+  public CreateTriggerStatement copy() {
+    final CreateTriggerStatement result = new CreateTriggerStatement();
+    result.name = name == null ? null : name.copy();
+    result.timing = timing == null ? null : timing.copy();
+    result.event = event == null ? null : event.copy();
+    result.typeName = typeName == null ? null : typeName.copy();
+    result.actionType = actionType == null ? null : actionType.copy();
+    result.actionCode = actionCode;
+    result.actionCodeQuoted = actionCodeQuoted;
+    result.ifNotExists = ifNotExists;
+    return result;
+  }
+
+  @Override
+  protected Object[] getIdentityElements() {
+    return new Object[] { name, timing, event, typeName, actionType, actionCode, ifNotExists };
   }
 }
