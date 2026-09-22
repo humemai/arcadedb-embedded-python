@@ -158,8 +158,19 @@ def _refuse_skeleton_payload_on_live(exported):
 
 
 def run(cmd, **kw):
+    """Run a step, and let a step that refuses do its own explaining.
+
+    `check=True` turns a child's clean, deliberate `SystemExit("REFUSING: ...")`
+    into a CalledProcessError traceback here, so the last thing printed is this
+    file's call stack rather than the reason the child gave -- which it already
+    printed, several lines up, where nobody looks after a traceback. Exit with
+    the child's own code instead and say nothing more.
+    """
     print(f"  $ {' '.join(str(c) for c in cmd)}")
-    return subprocess.run(cmd, check=True, **kw)
+    proc = subprocess.run(cmd, **kw)
+    if proc.returncode != 0:
+        raise SystemExit(proc.returncode)
+    return proc
 
 
 def step(n, title):

@@ -258,7 +258,26 @@ def main():
     # a reader opens to ask "what is on the page?" answered with a payload
     # that was refused.
     _dirty_before = _dirty_results()
-    sh([PY, str(HERE / "merge_campaign.py"), "--from-file", str(filtered), "--apply"], cwd=HERE)
+    # AN EMPTY FILTERED FILE IS NOT A BROKEN PULL WHEN WE DID THE EMPTYING.
+    #
+    # merge_campaign refuses an empty incoming file, and it is right to: an
+    # empty pull usually means the copy failed, and merging nothing silently
+    # would hide that. But under --only-lanes it is THIS script that emptied
+    # the file, by keeping only the rows of a lane the bench host has not
+    # measured yet -- and that is the normal state when rehearsing a landing
+    # BEFORE its data arrives, which is the whole point of rehearsing.
+    #
+    # Rehearsing l3s and l3d on 2026-09-22 died here with a traceback out of
+    # subprocess, which reads like a broken tool rather than "that lane has no
+    # rows yet". Since "every incoming row was already present" is not an
+    # error one line down, "there were no incoming rows for this lane" should
+    # not be either. The pull itself is still checked, above.
+    _n_in = sum(1 for _ in open(filtered)) if filtered.exists() else 0
+    if _n_in == 0 and lanes:
+        print(f"  no incoming rows for {','.join(sorted(lanes))} at this pin; "
+              f"the store is unchanged and the gates run over what it holds")
+    else:
+        sh([PY, str(HERE / "merge_campaign.py"), "--from-file", str(filtered), "--apply"], cwd=HERE)
 
     step(4, "publish through the gates (page-only, no site build)")
     log = SCRATCH / "refresh.log"
@@ -267,7 +286,14 @@ def main():
                             cwd=REPO, env=env, stdout=fh, stderr=subprocess.STDOUT).returncode
     text = log.read_text()
     for line in text.splitlines():
-        if "_check " in line or "STALE" in line or "LOST" in line or "UNFLAGGED" in line or "Traceback" in line:
+        # REFUSING/REFUSED too: a step that declines with a reason is the most
+        # useful line in the log, and it was the one line not surfaced here.
+        # It mattered once tracebacks stopped being printed -- before that the
+        # traceback was the only signal, and it named the file rather than the
+        # cause.
+        if ("_check " in line or "STALE" in line or "LOST" in line
+                or "UNFLAGGED" in line or "Traceback" in line
+                or line.lstrip().startswith(("REFUSING", "REFUSED"))):
             print("  " + line.strip()[:160])
     if rc != 0 or "_check  FAIL" in text.replace("   ", " ") or " FAIL " in text:
         print(f"\nREFUSED: refresh rc={rc}; read {log}. The merge stands; nothing was pushed.")

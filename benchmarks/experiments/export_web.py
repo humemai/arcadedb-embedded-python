@@ -49,10 +49,28 @@ from runner import BACKENDS, MEM_BY_SCALE, HEAP_BY_SCALE  # noqa: E402  (path se
 # cross-model one as "50k products" beside E2's default; a raised tier
 # (DECISIONS #103b) would have needed a second typed number each. Formatted
 # from the constant the lane reads, so the label cannot drift from the rows.
+def _l4_scale_points(scale: str) -> int:
+    """The point count the LANE defines for a tier, as an int."""
+    from l4_tsbs import SCALE_POINTS  # noqa: E402
+    return int(SCALE_POINTS[scale])
+
+
+def _l4_tiers(scales):
+    """The tiers present, smallest corpus first, skipping any the lane does
+    not define (a row from a retired tier must not name a size we cannot
+    source)."""
+    out = []
+    for t in scales:
+        try:
+            out.append((_l4_scale_points(t), t))
+        except KeyError:
+            continue
+    return [t for _, t in sorted(out)]
+
+
 def _l4_points(scale: str) -> str:
     """The time-series corpus size as the lane defines it, formatted for a label."""
-    from l4_tsbs import SCALE_POINTS  # noqa: E402
-    n = SCALE_POINTS[scale]
+    n = _l4_scale_points(scale)
     return f"{n / 1e6:.2f}M" if n >= 1_000_000 else f"{n // 1000}k"
 
 
@@ -228,6 +246,32 @@ def _comparator_versions(rows):
 def _engine_is_identifiable(raw) -> bool:
     """False when engine_version names no build that could ever be resolved."""
     return not _UNUSABLE_VERSION.match(str(raw or ""))
+
+
+def _dominant_cpuset(rows):
+    """The cpuset the rows actually recorded, or a refusal naming why not.
+
+    `Counter(...).most_common(1)[0][0]` raises IndexError on an empty counter,
+    which is what a payload with no rows produces -- and "IndexError: list
+    index out of range" from inside a dict literal says nothing about the
+    cause. Rehearsing the l3s landing before that lane has any October rows
+    hit exactly this.
+
+    A payload with no rows is not publishable anyway: page_check requires the
+    page's hardware paragraph to name this cpuset, so an empty one would take
+    a wrong or missing value all the way to the gate that exists to catch it.
+    Refuse here, where the reason is known.
+    """
+    seen = collections.Counter(str(r.get("cpuset")) for r in rows if r.get("cpuset"))
+    if not seen:
+        _only = os.environ.get("BENCH_ONLY_LANES", "").strip()
+        raise SystemExit(
+            "REFUSING: no row at this pin records a cpuset, so the page cannot "
+            "state the machine its numbers were measured on"
+            + (f" -- this landing covers only [{_only}], and that lane has no "
+               f"rows at this pin yet" if _only else "")
+            + ". Nothing to publish.")
+    return seen.most_common(1)[0][0]
 
 
 def _arcadedb_identity(rows) -> str | None:
@@ -2512,7 +2556,10 @@ L4_FILE = HERE / "results" / "l4_tsbs.jsonl"
 L4_NATIVE = HERE / "results" / "ts_2681"
 
 # One configuration, so these are constants of the experiment.
-L4_SHAPE = {"scale": "2.59M points", "workload": "TSBS cpu-only"}
+# The workload name only. "scale" lived here too and was a typed "2.59M
+# points" that outlived the one-tier assumption it was written under; the size
+# now comes from each row group's own tier through _l4_points.
+L4_SHAPE = {"workload": "TSBS cpu-only"}
 
 # Field names differ from the other lanes and one of them is a trap.
 # `q_global_ms` is the 12-hour aggregation (it returns 12 rows, one per hour).
@@ -2584,7 +2631,19 @@ def _l4_canonical(all_rows):
             continue
         label = L4_CANON_LABELS.get(r.get("backend"))
         if label:
-            grouped[label].append(r)
+            # KEYED ON THE TIER TOO. This grouped by display label alone,
+            # which was right while the lane had one tier and silently wrong
+            # the moment October added `ts1000`: every published cell became a
+            # median across BOTH corpora -- 2,592,000 points and 25,920,000
+            # together -- under a table labelled "2.59M points". ArcadeDB's
+            # newest-reading p50 published as 2.3889 ms with n=10, where the
+            # ts100-only median is 2.1124 and the ts1000-only one is 3.1835:
+            # a number belonging to neither corpus, with its min taken from
+            # one tier and its max from the other.
+            #
+            # All six gates passed on it. None of them compares a cell's row
+            # count against the tiers its table claims to print.
+            grouped[(label, str(r.get("scale")))].append(r)
     return grouped or None
 
 
@@ -3378,23 +3437,33 @@ def _l4_table(all_rows):
     _l4_cols = (OCT_TABLE_METRICS["l4"] if _instrument_of("l4") == "2026-10"
                 else list(L4_METRICS))
     entries = []
-    for label in sorted(grouped, key=lambda k: (order.index(k) if k in order else 99, k)):
-        rs = grouped[label]
+    # Tier first, then the engine order the section reads, so the table shows
+    # each corpus as its own row group the way every other multi-tier lane
+    # does rather than interleaving two corpora under one heading.
+    _tier_rank = {"ts100": 0, "ts1000": 1}
+    for key in sorted(grouped, key=lambda k: (_tier_rank.get(k[1], 99),
+                                              order.index(k[0]) if k[0] in order else 99,
+                                              k[0])):
+        label, _scale = key
+        rs = grouped[key]
         entry = {
             "backend": display_name(label) if label in DISPLAY_NAMES else label,
             "backend_key": str(rs[0].get("backend")),
             # case-insensitive: the labels read "ArcadeDB (...)" since
             # 2026-09-11 and the lowercase test unshaded all four rows for a day
             "is_arcadedb": "arcadedb" in label.lower(),
-            "scale": L4_SHAPE["scale"],
+            "scale": f"{_l4_points(_scale)} points",
             # THE SIZE COLUMN NAMES THE CORPUS THAT RAN. This lane has one
             # tier, so its size was a typed constant, and under a skeleton the
             # table then printed the campaign's corpus over a laptop slice of
             # it -- the one thing SKELETON_SCALE_LABELS exists to stop. The
             # scale key stays as it is because page_check and the figures
             # address cells by it.
-            "scale_label": (scale_label("l4", "ts100") if SKELETON
-                            else L4_SHAPE["scale"]),
+            # FROM THE ROW'S OWN TIER, via the lane's constant. Typed as one
+            # string while the lane had one tier; with two, a typed label puts
+            # the smaller corpus's name on the larger corpus's numbers.
+            "scale_label": (scale_label("l4", _scale) if SKELETON
+                            else f"{_l4_points(_scale)} points"),
             "workload": L4_SHAPE["workload"],
             "n_docs": str(rs[0].get("n_points")),
             "deployment": L4_DEPLOYMENT[label],
@@ -3418,13 +3487,18 @@ def _l4_table(all_rows):
         if entry["metrics"]:
             entries.append(entry)
 
+    _tiers = _l4_tiers({k[1] for k in grouped})
     settles = {r.get("settle_s") for rs in grouped.values() for r in rs}
     symmetric = settles <= {0, 0.0}
 
     return {
         "id": "l4",
         "title": "Time series",
-        "dataset": "TSBS cpu-only, 2,592,000 points",
+        # EVERY CORPUS THE TABLE PRINTS. Typed as one size while the lane had
+        # one tier; with ts1000 alongside ts100 it named the smaller over both.
+        "dataset": _gen("TSBS cpu-only, "
+                        + _join_and([f"{_l4_scale_points(t):,} points" for t in _tiers]),
+                        *[f"{_l4_scale_points(t):,}" for t in _tiers]),
         "conditions": ([_R("l4", "settle" if symmetric else "settle_rows"), _R("l4", "schema"), _R("l4", "newest")]
                        if _instrument_of("l4") == "2026-10" else [
             # The two-arm explanation moved into the page caption, where a
@@ -6390,7 +6464,7 @@ def main() -> int:
             # "container:<id> (host unknown)"; the named hosts are the ones
             # that must have hardware on record.
             "hosts": _host_hardware(hosts, rows),
-            "cpuset": collections.Counter(str(r.get("cpuset")) for r in rows if r.get("cpuset")).most_common(1)[0][0],
+            "cpuset": _dominant_cpuset(rows),
             "memory_cap_by_size": MEM_BY_SCALE,
             "jvm_heap_by_size": HEAP_BY_SCALE,
         },
