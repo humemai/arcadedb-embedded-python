@@ -166,7 +166,63 @@ def check_citations():
     return bad
 
 
+def check_ingest_sentences():
+    """A fact written twice must not lose an engine on one of the copies.
+
+    The ingest path of each arm is stated in TWO places: `INGEST_NOTES` for
+    the September page and `OCT_PROSE[...]["ingest"]` for the October one.
+    Two copies of one fact drift, and on 2026-09-22 they had: DuckPGQ joined
+    the graph lane in September's extension, September's sentence was updated
+    and October's was not, so the October graph table named ten of its eleven
+    arms -- and October's is the one that page renders.
+
+    The rule is not "the two must match". October legitimately names engines
+    September never had, because October's tables have more arms. What must
+    not happen is an engine that is ON the October table, named in the
+    September sentence, and missing from the October one: that is a copy which
+    was updated once and not twice.
+
+    Checked against `runner.LANES` rather than against the other sentence, so
+    an engine genuinely dropped in October does not read as drift.
+    """
+    import export_web as E
+    import runner as R
+    import re
+
+    ENGINES = ("ArcadeDB", "Neo4j", "Memgraph", "FalkorDB", "LadybugDB", "DuckPGQ",
+               "DuckDB", "ArangoDB", "MongoDB", "SurrealDB", "QuestDB", "SQLite",
+               "TimescaleDB", "Qdrant", "Milvus", "Elasticsearch", "PostgreSQL",
+               "Chroma", "LanceDB")
+
+    def named(text):
+        return {e for e in ENGINES if re.search(rf"\b{e}\b", text)}
+
+    bad = []
+    for tid in sorted(set(E.INGEST_NOTES) | set(E.OCT_PROSE)):
+        sep = E.INGEST_NOTES.get(tid)
+        oct_ = (E.OCT_PROSE.get(tid) or {}).get("ingest")
+        oct_ = oct_[0] if isinstance(oct_, tuple) else oct_
+        if not (sep and oct_):
+            continue
+        lane = (E._TABLE_LANE.get(tid) or (None,))[0]
+        spec = R.LANES.get(lane) if lane else None
+        if not spec:
+            continue
+        # the display names of the arms this lane actually runs
+        arms = set()
+        for be in spec[1]:
+            arms |= named(E.display_name(be) if be in E.DISPLAY_NAMES else be)
+        lost = sorted((named(sep) - named(oct_)) & arms)
+        if lost:
+            bad.append(f"{tid}: {lost} named in the September ingest sentence and "
+                       f"still on the October table, but missing from the October "
+                       f"sentence -- one copy of the fact was updated and the other "
+                       f"was not")
+    return bad
+
+
 CHECKS = (("gates", check_gates), ("stage chain", check_stage_chain),
+          ("ingest prose", check_ingest_sentences),
           ("citations", check_citations))
 
 
