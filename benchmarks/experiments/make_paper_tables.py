@@ -1297,10 +1297,26 @@ def dense_ts_table(rows):
     # versions. The l4 lane now carries all ArcadeDB arms at the pin
     # (arcadedb_ts_doc, arcadedb_ts_native, and their served twins) beside the
     # comparators, so the block reads the same rows the page does.
-    ts = [r for r in load_canonical() if r.get("lane") == "l4"]
+    # ONE TIER, AND THE CAPTION SAYS WHICH. October runs l4 at ts100 and
+    # ts1000, and this block filtered on backend alone, so every figure in it
+    # was a median across both corpora under a caption naming only the
+    # smaller: ArcadeDB's last point printed 2.39 [2.1--4.1], where the ts100
+    # median is 2.11 and the ts1000 median is 3.18, with the bracket's low end
+    # from one corpus and its high end from the other. Same defect as the
+    # page's (BUGS F110), one file over.
+    #
+    # Pinned to ts100, which is the tier this block has always described, with
+    # the caption generated from the lane's own constant so the two cannot
+    # drift apart again. The larger corpus is on the page, as its own row
+    # group.
+    _T5_TIER = "ts100"
+    ts = [r for r in load_canonical()
+          if r.get("lane") == "l4" and str(r.get("scale")) == _T5_TIER]
+    from l4_tsbs import SCALE_POINTS as _L4_POINTS
+    _pts = _L4_POINTS[_T5_TIER]
     lines += [r"\midrule",
               r"\multicolumn{6}{l}{\textit{Time series, TSBS cpu-only "
-              r"(2.59M points)}} \\",
+              + f"({_pts / 1e6:.2f}M points)}}}} \\\\",
               r"System & Ingest (pts/s) & Last point (ms) & 1h bucket (ms) & "
               r"12h global (ms) & \\", r"\midrule"]
     import glob
