@@ -4623,6 +4623,57 @@ def _l4_lastpoint_note(rows):
                 ws, us_)
 
 
+def _filter_strategy_note(table):
+    """Which arms pre-filter and which post-filter, from `filtered_mode`.
+
+    The cross-model table's filtered search is a top-k restricted to a
+    neighbourhood, and the arms do not all run the same SHAPE of query. Nine
+    of them pre-filter -- restrict the candidates, then rank those by distance
+    -- and ArcadeDB's two post-filter: fetch an over-large global top-k and
+    drop what falls outside. Those are different algorithms with different
+    costs, and the page printed the two side by side with nothing saying so:
+    9.33 ms against PostgreSQL's 1.37 ms at 500k, read as one query.
+
+    The rows have carried `filtered_mode` all along; nothing published it.
+
+    Named per arm rather than in general, because which arms sit on which side
+    is the fact a reader needs, and it is read from the rows so it cannot
+    drift from what ran.
+    """
+    if table.get("id") != "e2":
+        return None
+    modes = _filtered_modes()
+    if not modes:
+        return None
+    post = sorted({disp for disp, m in modes.items() if m.startswith("post-filter")})
+    pre = sorted({disp for disp, m in modes.items() if m.startswith("pre-filter")
+                  or m.startswith("cross-system")})
+    if not post or not pre:
+        return None
+    return _gen(
+        f"The engines do not all run the same SHAPE of filtered search. "
+        f"{_join_and(pre)} restrict the candidate set first and rank what is "
+        f"left by distance. {_join_and(post)} fetch an over-large global "
+        f"top-k and drop what falls outside it afterwards, which is more work "
+        f"for the same answer. Read that column as what each engine's own "
+        f"idiom costs, not as one query timed on nine engines.",
+        *pre, *post)
+
+
+def _filtered_modes():
+    """backend display name -> the `filtered_mode` its rows recorded."""
+    out = {}
+    for r in _FROZEN_ROWS:
+        if r.get("lane") != "e2" or r.get("workload") != "hybrid":
+            continue
+        m = str(r.get("filtered_mode") or "").strip()
+        if not m or m == "None":
+            continue
+        be = str(r.get("backend"))
+        out.setdefault(display_name(be) if be in DISPLAY_NAMES else be, m)
+    return out
+
+
 def _oct_conditions(table):
     """The registered and generated sentences an October table carries beyond
     what its builder and main() already put there: (head, tail). The head
@@ -4633,6 +4684,9 @@ def _oct_conditions(table):
     q = _query_words_note(table)
     if q:
         head.append(q)
+    f = _filter_strategy_note(table)
+    if f:
+        head.append(f)
     if tid == "l3d":
         split = _ingest_split_note(table)
         if split:
