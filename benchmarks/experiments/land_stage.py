@@ -72,6 +72,45 @@ def sh(cmd, cwd=None, check=True, capture=False, env=None, quiet=False):
                           capture_output=capture or quiet, env=env)
 
 
+def _published_lanes(payload_path, pin=None):
+    """The lanes whose tables are already on the page being republished.
+
+    Derived from the payload's own table ids through export_web's table->lane
+    map, so it cannot drift from what the exporter builds. Tables with no lane
+    in that map are derived or artifact-backed -- `durability` and
+    `multimodel` are summaries over the others, `e4` and `pycost` read pinned
+    artifacts -- and contribute no lane, which is right: they are rebuilt from
+    whatever lanes are in scope rather than pinning a lane themselves.
+    """
+    try:
+        payload = json.loads(Path(payload_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    # export_web REFUSES TO IMPORT without a pin -- it resolves the dense
+    # overlay's artifact path at module scope -- and this process does not set
+    # one, because the pin travels to the gates in the subprocess `env` dict.
+    # Lend it the landing's own pin for the duration of the import, and put
+    # the environment back: a helper must not leave a variable behind that
+    # something later reads as configuration.
+    sys.path.insert(0, str(HERE))
+    _had = os.environ.get("BENCH_ENGINE_COMMIT")
+    if pin and not _had:
+        os.environ["BENCH_ENGINE_COMMIT"] = pin
+    try:
+        from export_web import _TABLE_LANE
+    except Exception:  # noqa: BLE001  (a landing must not die on this helper)
+        return set()
+    finally:
+        if pin and not _had:
+            os.environ.pop("BENCH_ENGINE_COMMIT", None)
+    out = set()
+    for t in payload.get("tables") or []:
+        got = _TABLE_LANE.get(t.get("id"))
+        if got:
+            out.add(got[0])
+    return out
+
+
 def _dirty_results():
     """Tracked, modified paths under the results tree, as a set.
 
@@ -162,7 +201,31 @@ def main():
     # environment never reaches the gates, which is how the first attempt at
     # this fix passed every local test and still failed the real landing.
     _lanes = {l.strip() for l in args.only_lanes.split(",") if l.strip()}
+    # A LANDING IS CUMULATIVE. The page is built fresh from the scoped freeze
+    # every time, so a scope of exactly one lane does not ADD that lane to the
+    # page -- it rebuilds the page as if no other lane existed. Landing `l2`
+    # over this morning's `e2` publish would have dropped `e2` and `e2atom`
+    # from the payload entirely, and the pending-table mechanism would then
+    # have labelled them "Still being measured at this version": a false
+    # statement about two tables measured, gated and published hours earlier.
+    #
+    # It also emptied the cross-lane tables. The durability table is one row
+    # per timed write across every lane; scoped to l2 it holds the three graph
+    # writes alone, while its own condition sentence says it holds "the six
+    # document operations, the three graph writes, and the cross-model
+    # transaction".
+    #
+    # So the scope is the lane being landed PLUS every lane already on the
+    # page, read from the published payload rather than remembered. Every
+    # published row therefore passes every gate on every landing, which is the
+    # property that makes republishing safe at all.
     if _lanes:
+        _already = _published_lanes(PREVIEW_PAYLOAD if args.preview else SITE_PAYLOAD,
+                                    pin=args.pin)
+        if _already - _lanes:
+            print(f"  cumulative: landing {','.join(sorted(_lanes))} and keeping "
+                  f"{','.join(sorted(_already - _lanes))} already on the page")
+        _lanes |= _already
         env["BENCH_ONLY_LANES"] = ",".join(sorted(_lanes))
     if args.preview:
         # THE SWITCH TRAVELS WITH THE PUBLISH (DECISIONS #84). `env` is what
@@ -326,6 +389,19 @@ def main():
         if n_new != n_old or added or json.dumps(t, sort_keys=True) != json.dumps(old.get(tid), sort_keys=True):
             changed += 1
             print(f"  {tid}: {n_old} -> {n_new} rows" + (f", new: {added[:6]}" if added else ", cells changed"))
+    # A TABLE THAT VANISHES IS THE CHANGE MOST WORTH PRINTING, and this loop
+    # walked the NEW payload only, so it could not see one. A scoped landing
+    # used to rebuild the page as if no other lane existed; that is fixed
+    # above, and this is the net under it, because "the page lost a table" is
+    # the one diff nobody would accept by accident.
+    gone = sorted(set(old) - set(new))
+    if gone:
+        for tid in gone:
+            print(f"  {tid}: {len(old[tid].get('entries', []))} -> GONE")
+        print(f"\n  REFUSING: {len(gone)} table(s) on the page would disappear: "
+              f"{gone}. A landing adds to the page; it does not replace it.",
+              file=sys.stderr)
+        return 1
     if not changed:
         print("  no table changed; the stage was not page material or its rows were excluded")
 

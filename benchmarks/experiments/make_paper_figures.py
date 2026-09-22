@@ -844,7 +844,16 @@ def f4_one_vs_n(rows):
     def recall(lane, scale, wl, be):
         return med(lane, scale, wl, be, "recall_at_10")
 
-    ts = [r for r in canonical() if r.get("lane") == "l4"]
+    # ONE TIER, THE ONE THE TABLE THIS FIGURE SUMMARISES PRINTS. October runs
+    # l4 at ts100 and ts1000; unfiltered, every ratio here was a median across
+    # both corpora, and the figure's own cross-check against t5 caught it --
+    # "TS 12h agg p50: figure=6.214 table=3.4" -- once the table was fixed to
+    # read one tier (BUGS F110). A summary figure must be built from the same
+    # population as the table it claims to summarise, or the check that
+    # compares them is comparing two different questions.
+    _T5_TIER = "ts100"
+    ts = [r for r in canonical()
+          if r.get("lane") == "l4" and str(r.get("scale")) == _T5_TIER]
     if not any(r.get("backend") == "arcadedb_ts_native" for r in ts):
         # A LANE SCOPED OUT IS NOT A MISSING ARTIFACT (the same distinction
         # make_paper_tables draws). The refusal is right when l4 belongs in
