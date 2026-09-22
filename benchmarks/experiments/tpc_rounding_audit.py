@@ -186,11 +186,54 @@ def main():
         print(f"no ans_*.json under {d}")
         return 2
     print(f"engines: {len(docs)} -- {', '.join(sorted(docs))}")
+
     for be in sorted(docs):
         doc = docs[be]
         print(f"  {be:26} {str(doc.get('engine_version'))[:38]:38} "
               f"sf={doc.get('tpch_sf')} n_lineitem={doc.get('n_lineitem')} "
               f"build_s={doc.get('build_s')}")
+
+    # REFUSE TO AUDIT A PRE-DECLARATION ARTIFACT QUIETLY.
+    #
+    # On 2026-09-14 the pricing summary split seven engines to one because
+    # ArangoDB types a SUM over integer-stored columns as an int while every
+    # SQL engine types it as a double, and an int prints exactly where a
+    # double prints to six significant digits. The fix was a per-column
+    # declaration in l1_tpc.OLAP_DIGEST -- a measure is `num` and compared as
+    # a number whatever the driver returned -- not a looser hash.
+    #
+    # Answers STORED BEFORE that fix carry no `coerce_applied`, so re-digesting
+    # them here reproduces the original split faithfully and reports it as a
+    # live finding. On 2026-09-22 that cost an hour: the split was rediscovered
+    # from these very files, diagnosed correctly, and a "fix" was written
+    # against a gate that had been correct for eight days.
+    #
+    # An artifact that predates the declaration cannot answer the question this
+    # tool asks, so it says so first rather than printing a table that reads
+    # like news.
+    # PER QUERY, against the lane's CURRENT declarations. An `any()` over one
+    # engine's whole answer set hides this: by_month has always carried a
+    # coercion for its month key, so every engine looked declared while q1 --
+    # the query that actually splits -- carried none.
+    import l1_tpc
+    _stale = []
+    for q, spec in sorted(l1_tpc.OLAP_DIGEST.items()):
+        want = spec.get("coerce")
+        if not want:
+            continue
+        missing = sorted(be for be, doc in docs.items()
+                         if ((doc.get("answers") or {}).get(q) or {}).get("coerce_applied") is None)
+        if missing:
+            _stale.append((q, want, missing))
+    for q, want, missing in _stale:
+        print(f"\n  !! {q}: {len(missing)} of {len(docs)} engines' stored answers carry NO "
+              f"coerce_applied, but the lane declares {sorted(want)}")
+        print(f"     ({', '.join(missing)})")
+        print("     These were stored before that declaration landed "
+              "(l1_tpc.OLAP_DIGEST, 2026-09-14, the int-vs-double SUM spelling).")
+        print(f"     Any {q} split reported below is that ALREADY-FIXED defect "
+              "being replayed, not a live finding.")
+        print("     Re-run tpc_answer_probe.py to audit the current instrument.")
 
     print("\n=== SELF-TEST: the stored answers re-digested at 6 digits must equal "
           "the lane's own digest ===")
