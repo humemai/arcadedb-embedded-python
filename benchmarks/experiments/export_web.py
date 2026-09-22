@@ -2610,6 +2610,36 @@ L4_CANON_LABELS = {
 }
 
 
+def _l4_settle_note(settles):
+    """How long every engine waited before a query was timed, from the rows.
+
+    The registered sentence beside this one says sealing "makes the
+    aggregation faster and the last-point query slower" and does not say by
+    how long anyone waited. That magnitude is the whole difference between
+    this page's newest-reading column and September's: September ran at the
+    lane's default settle of 0 and read 0.42 ms, October waits and reads
+    2.11 ms on the same corpus, same iteration count, same engine family.
+    A reader moving between the two pages sees 5x and is handed the direction
+    without the cause.
+
+    Generated from `settle_s` rather than typed, so it cannot outlive the
+    value it describes -- which is exactly how the corpus label two functions
+    up came to name one tier while the table printed two.
+    """
+    vals = sorted({float(x) for x in settles
+                   if x not in (None, "") and str(x) != "None" and float(x) > 0})
+    if not vals:
+        return []
+    shown = _join_and([f"{v:g} seconds" for v in vals])
+    return [_gen(
+        f"Every engine was left to settle for {shown} after its ingest returned "
+        f"and before any query was timed, outside the ingest timer. The wait is "
+        f"the same for every engine, so the comparison below is unaffected by it; "
+        f"a table measured without that wait reads a partly sealed store, where "
+        f"the newest reading is cheaper to find.",
+        *[f"{v:g}" for v in vals])]
+
+
 def _l4_canonical(all_rows):
     """Frozen l4 rows, grouped by display label, or None when the lane is absent.
 
@@ -3499,7 +3529,9 @@ def _l4_table(all_rows):
         "dataset": _gen("TSBS cpu-only, "
                         + _join_and([f"{_l4_scale_points(t):,} points" for t in _tiers]),
                         *[f"{_l4_scale_points(t):,}" for t in _tiers]),
-        "conditions": ([_R("l4", "settle" if symmetric else "settle_rows"), _R("l4", "schema"), _R("l4", "newest")]
+        "conditions": ([_R("l4", "settle" if symmetric else "settle_rows")]
+                       + _l4_settle_note(settles)
+                       + [_R("l4", "schema"), _R("l4", "newest")]
                        if _instrument_of("l4") == "2026-10" else [
             # The two-arm explanation moved into the page caption, where a
             # reader meets the rows; saying it in both places said it twice.
