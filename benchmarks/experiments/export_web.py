@@ -1357,8 +1357,35 @@ def _rate(count_fields, seconds_field):
     return fn
 
 
-def _agg(rows, field):
-    """Median across repetitions, with the spread, matching the paper."""
+def _agg(rows, field, across_scales=False):
+    """Median across repetitions, with the spread, matching the paper.
+
+    ONE CELL IS ONE POPULATION. Every caller here aggregates the repetitions of
+    a single cell, so the rows it is handed must agree on the corpus they ran
+    against. When they do not, the median describes no measurement anyone made:
+    the time-series table published ArcadeDB's newest-reading p50 as 2.3889 ms
+    over n=10 rows spanning 2,592,000 AND 25,920,000 points, where the two
+    corpora alone give 2.1124 and 3.1835 -- and the printed min came from one
+    while the max came from the other (BUGS F110).
+
+    All six publish gates passed that, because none of them compares a cell's
+    rows against the corpus its table claims. The check belongs here, at the
+    one place every table's numbers are actually computed, rather than in a
+    gate reading the payload afterwards and trying to reconstruct which rows
+    went in.
+
+    `across_scales=True` is for the caller that genuinely spans corpora and
+    says so. Nothing sets it today; it exists so that a future caller has to
+    write the word rather than discover the behaviour.
+    """
+    if not across_scales and rows:
+        _scales = {str(r.get("scale")) for r in rows if r.get("scale") is not None}
+        if len(_scales) > 1:
+            raise SystemExit(
+                f"REFUSING: a cell would be aggregated across {sorted(_scales)}. "
+                f"One cell is one corpus; a median over two is a number that "
+                f"describes neither (BUGS F110). Group the rows by scale, or "
+                f"pass across_scales=True if the span is deliberate.")
     if callable(field):
         vals = [v for v in (field(r) for r in rows) if v is not None]
         if not vals:
@@ -3217,12 +3244,30 @@ def _durability_table(all_rows):
                 bench_common.durability_class(r.get("durability")) for r in _stamped)
             entry["_durability_note_class"] = (
                 _classes.most_common(1)[0][0] if (no_setting and _classes) else None)
+            # ACROSS CORPORA ON PURPOSE, AND MEASURED BEFORE SAYING SO. Each
+            # row here is one engine running ONE operation, and the graph
+            # lane times its writes at both sf1 and sf10, so these rows span
+            # two corpora. That is why the table's Size column names the
+            # operation rather than a size.
+            #
+            # It is only defensible because the operation is a SINGLE record
+            # and does not depend on how much is already there. Checked at the
+            # October pin before passing the flag: ArcadeDB's delete is 0.494
+            # ms at sf1 against 0.464 at sf10, its strict update 8.435 against
+            # 8.591, Neo4j's delete 6.062 against 6.452 -- within 6% on every
+            # pair. Compare the time-series lane, where the same span put
+            # 2.1124 and 3.1835 into one number (BUGS F110): there the corpus
+            # decides the answer, here it does not.
+            #
+            # If a write is ever added whose cost grows with the corpus, this
+            # flag is the line that has to be revisited.
             if no_setting:
-                got = _agg(rs, field)
+                got = _agg(rs, field, across_scales=True)
                 if got is not None:
                     entry["metrics"]["waits for the disk ms"] = got
             else:
-                rel, strc = _agg(relaxed, field), _agg(strict, field)
+                rel = _agg(relaxed, field, across_scales=True)
+                strc = _agg(strict, field, across_scales=True)
                 if rel is not None:
                     entry["metrics"]["no wait ms"] = rel
                 if strc is not None:
