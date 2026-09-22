@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import csv
 import os
@@ -77,7 +78,7 @@ def _frozen_name():
 _LANE_ROWS_CACHE = None
 
 
-def _lane_has_rows(lane):
+def _lane_has_rows(lane, workload=None):
     """Does the frozen set this publish is built from hold ANY row for a lane?
 
     A landing's scope is cumulative -- the lane being landed plus every lane
@@ -93,16 +94,34 @@ def _lane_has_rows(lane):
     """
     global _LANE_ROWS_CACHE
     if _LANE_ROWS_CACHE is None:
-        _LANE_ROWS_CACHE = set()
+        # (lane, workload, backend) -> row count, so "has rows" can mean what
+        # the caller needs it to mean.
+        _LANE_ROWS_CACHE = collections.Counter()
         path = os.path.join(HERE, "results", _frozen_name())
         try:
             with open(path, newline="", encoding="utf-8") as fh:
                 for r in csv.DictReader(fh):
                     if r.get("lane"):
-                        _LANE_ROWS_CACHE.add(r["lane"])
+                        _LANE_ROWS_CACHE[(r["lane"], str(r.get("workload")),
+                                          str(r.get("backend")))] += 1
         except OSError:
             pass
-    return lane in _LANE_ROWS_CACHE
+    # A COMPLETE CELL, NOT A ROW. The graph lane has thousands of `oltp` rows
+    # and exactly ONE `olap` row -- the single cell qOB produced before it was
+    # stopped (#109) -- and the analytics table cannot be built from it, so the
+    # payload has no such table and the roster read that as a defect. A lane
+    # having rows says nothing about whether a particular TABLE's workload was
+    # measured; the table needs at least one backend with a full set of
+    # repetitions behind it.
+    want = 2   # two repetitions is already more than a stopped stage leaves
+    for (ln, wl, _be), n in _LANE_ROWS_CACHE.items():
+        if ln != lane:
+            continue
+        if workload is not None and wl != str(workload):
+            continue
+        if n >= want:
+            return True
+    return False
 
 
 def _generated_dir():
@@ -1265,8 +1284,9 @@ def _check_coverage(payload):
         if not t:
             import export_web as _EW
             _lane = _EW._TABLE_LANE.get(tid, (None,))[0]
+            _wl = _EW._TABLE_LANE.get(tid, (None, None))[1]
             if _ONLY_LANES and _lane and (_lane not in _ONLY_LANES
-                                          or not _lane_has_rows(_lane)):
+                                          or not _lane_has_rows(_lane, _wl)):
                 # Same distinction the roster check draws one function down: a
                 # table absent because its lane is outside this landing, or
                 # because that lane has no rows at this pin yet, is the
@@ -1389,7 +1409,7 @@ def _check_lane_roster(payload):
         t = tables.get(tid)
         if t is None:
             if _ONLY_LANES and (lane not in _ONLY_LANES
-                                or not _lane_has_rows(lane)):
+                                or not _lane_has_rows(lane, _wl)):
                 # A LANDING SCOPED TO ONE LANE CARRIES ONE LANE'S TABLES. This
                 # roster check exists so a registered arm cannot vanish from a
                 # table silently, and it reads the RUNNER's lanes rather than
