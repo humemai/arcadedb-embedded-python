@@ -145,6 +145,7 @@ class Base:
 
 # --------------------------------------------------------------- ArcadeDB
 class ArcadeGraphEmbedded(Base):
+    QUERY_LANGUAGE = "openCypher (the engine also has its own SQL; DECISIONS #113)"
     name = "arcadedb_graph_embedded"
 
     def connect(self):
@@ -336,6 +337,7 @@ class ArcadeGraphEmbedded(Base):
 
 
 class ArcadeGraphServer(ArcadeGraphEmbedded):
+    QUERY_LANGUAGE = "openCypher over HTTP (the engine also has its own SQL; DECISIONS #113)"
     name = "arcadedb_graph_server"
     # The served twin's txWalFlush is a JAVA_OPTS entry runner.py sets for the
     # strict class; no HTTP read-back exists and the string says so. Built in
@@ -479,6 +481,7 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
 
 # ----------------------------------------------------------------- Neo4j
 class Neo4jGraph(Base):
+    QUERY_LANGUAGE = "Cypher over Bolt"
     name = "neo4j_graph"
 
     def connect(self):
@@ -634,6 +637,7 @@ class MemgraphGraph(Neo4jGraph):
     1 fsync at the default and 3,012 with --storage-wal-file-flush-every-n-tx=1,
     which is what the strict class sets (DECISIONS #90).
     """
+    QUERY_LANGUAGE = "Cypher over Bolt"
     name = "memgraph_graph"
 
     def connect(self):
@@ -753,6 +757,7 @@ class FalkorGraph(Base):
     default and 3,011 fdatasync with --appendonly yes --appendfsync always,
     which is what the strict class sets through REDIS_ARGS (DECISIONS #90).
     """
+    QUERY_LANGUAGE = "Cypher over the Redis protocol"
     name = "falkordb_graph"
 
     def connect(self):
@@ -902,6 +907,7 @@ class FalkorGraph(Base):
 
 # --------------------------------------------------------------- LadybugDB
 class LadybugGraph(Base):
+    QUERY_LANGUAGE = "Cypher, embedded"
     name = "ladybug_graph"
 
     def connect(self):
@@ -1228,6 +1234,7 @@ class DuckpgqGraph(Base):
     `sched_getaffinity`, the fix every other DuckDB arm carries, recorded as
     `duckpgq_threads`.
     """
+    QUERY_LANGUAGE = "SQL/PGQ (GRAPH_TABLE ... MATCH)"
     name = "duckpgq_graph"
     durability = bench_common.DURABILITY_DUCKDB
     DBPATH = "/tmp/l2_duckpgq.db"
@@ -1521,6 +1528,7 @@ class SurrealGraph(Base):
     (SDK 2.0.0, which carries core 2.3.10), the same LDBC questions in SurrealQL: person records with
     record ids, KNOWS as a RELATE edge table (2026-09-11). The served twin
     below runs the 3.2.4 server on RocksDB."""
+    QUERY_LANGUAGE = "SurrealQL, embedded"
     name = "surrealdb_graph"
     URL = "surrealkv:///tmp/l2_surrealkv"
 
@@ -1900,6 +1908,7 @@ class SurrealGraph(Base):
 
 
 class SurrealGraphServer(SurrealGraph):
+    QUERY_LANGUAGE = "SurrealQL over WebSocket"
     name = "surrealdb_graph_server"
 
     # THE SAME QUESTION, THE SPELLING THIS ENGINE'S PLANNER PREFERS. Every
@@ -1971,6 +1980,7 @@ class ArangoGraph(Base):
     the bulk import API; the same LDBC questions in AQL traversals through
     the name-based hooks. The write is one AQL query (two INSERTs), which
     ArangoDB runs as one transaction."""
+    QUERY_LANGUAGE = "AQL"
     name = "arangodb_graph"
 
     def connect(self):
@@ -2307,6 +2317,7 @@ class MongoGraph(Base):
     out rather than left to luck: the day it matters, it would be a silent
     over-count against every engine that enforces the rule.
     """
+    QUERY_LANGUAGE = "the aggregation pipeline ($graphLookup)"
     name = "mongodb_graph"
 
     def connect(self):
@@ -2863,6 +2874,24 @@ def main():
     # (Memgraph, FalkorDB, DuckPGQ). Read from the server, not restated from
     # the flags the runner sent. Not printed by the page; kept on the row.
     out.update(getattr(ad, "row_extra", None) or {})
+    # WHICH LANGUAGE THIS ARM WAS ASKED IN, declared by the adapter.
+    #
+    # The page has a hand-typed sentence naming which engine answers in what,
+    # and on 2026-09-22 it still listed the five arms this table had when it
+    # was written while the table had eleven -- Memgraph, FalkorDB, DuckPGQ
+    # and MongoDB simply missing from a sentence whose only job is that list.
+    # It matters more here than on most tables: ArcadeDB has its own SQL and
+    # is asked in Cypher by choice (DECISIONS #113), so a reader comparing its
+    # point lookup against Memgraph's cannot otherwise tell that our engine is
+    # answering in a non-native dialect.
+    #
+    # Recorded, not yet published. The sentence stays typed until every arm on
+    # the lane has carried this field through a campaign, because a generated
+    # sentence built from a half-populated field would name a SUBSET of the
+    # engines and read as though the rest answer in nothing. That is the same
+    # trap `filtered_mode` avoided by being recorded long before it was
+    # published.
+    out["query_language"] = getattr(ad, "QUERY_LANGUAGE", "not declared")
     out["instrument"] = bench_common.INSTRUMENT
 
     # THE MESSAGE HALF, inside the build timer, because at the full-network
