@@ -171,6 +171,37 @@ EXPECT_IN_PDF = {
 }
 
 
+def _scoped_out(*lanes):
+    """True when a per-lane landing does not include the lane(s) a figure needs.
+
+    Every figure here reads one lane's rows and computes a statistic over them
+    -- a median, a ratio against the best comparator, a per-query panel. Under
+    `land_stage --only-lanes X` the freeze holds X and nothing else, so a
+    figure for any other lane runs over an EMPTY list and dies inside
+    statistics.median rather than saying which lane it wanted.
+
+    That is not hypothetical: rehearsing the l2 landing on 2026-09-22 killed
+    the whole refresh at `f7_e2` with "no median for empty data", which would
+    have blocked the landing at the moment the data arrived. `f4_one_vs_n`
+    already carried this guard written out by hand; the other four did not,
+    and a guard that has to be remembered per figure is one that will be
+    missed again the next time a figure is added.
+
+    A figure is drawn only when EVERY lane it reads is in scope: a summary
+    over a subset of its inputs is not the figure, it is a different and
+    unlabelled one.
+    """
+    only = {x.strip() for x in os.environ.get("BENCH_ONLY_LANES", "").split(",") if x.strip()}
+    if not only:
+        return False
+    missing = [l for l in lanes if l not in only]
+    if missing:
+        print(f"figure omitted: needs {','.join(missing)}, and this landing "
+              f"covers {','.join(sorted(only))}")
+        return True
+    return False
+
+
 def f3_sparse_perquery():
     """Per-query latency vs summed posting length (bigann 1M, 1000 dev
     queries): the evidence that pruning is not cutting head terms.
@@ -247,6 +278,8 @@ def fit_ylim_to_annotations(fig, ax, anns, pad=1.03, iters=8):
 
 
 def f7_e2(rows):
+    if _scoped_out("e2"):
+        return
     e2 = [r for r in rows if r["lane"] == "e2"]
     order = [("arcadedb_e2", "ArcadeDB\n(one txn)"),
              ("surrealdb_e2", "SurrealDB\n(one txn)"),
@@ -600,6 +633,8 @@ def _sparse_overlay_pass(tier, arm, warm):
 
 def f8_deployment(rows):
     """Server/embedded ratio per metric: the transport fee, same engine."""
+    if _scoped_out("l1", "l1tpc", "l2", "l3s"):
+        return
     def _sel(lane, scale, wl, be):
         return [r for r in rows if r["lane"] == lane and r["scale"] == scale
                 and r.get("workload") == wl and r["backend"] == be]
@@ -815,11 +850,10 @@ def f4_one_vs_n(rows):
         # make_paper_tables draws). The refusal is right when l4 belongs in
         # the freeze and its rows are absent; it is wrong when a per-lane
         # landing deliberately left l4 out, where dying here would block a
-        # landing of a different lane entirely.
-        _only = {x.strip() for x in os.environ.get("BENCH_ONLY_LANES", "").split(",") if x.strip()}
-        if _only and "l4" not in _only:
-            print(f"time-series figure omitted: l4 is not in this landing's "
-                  f"lanes ({','.join(sorted(_only))})")
+        # landing of a different lane entirely. Written out by hand here
+        # first; `_scoped_out` is that check made shared, after the same
+        # omission in f7 killed an l2 rehearsal.
+        if _scoped_out("l4"):
             return
         raise SystemExit("no arcadedb_ts_native rows at the pin (ts_2681 fallback retired 2026-09-08)")
 
@@ -1087,6 +1121,8 @@ def f4_one_vs_n(rows):
 
 def f6_memory_ceiling(rows):
     """Peak anon working set at DEEP-10M: memory is the scale ceiling."""
+    if _scoped_out("l3d"):
+        return
     order = [("arcadedb_dense_embedded", "ArcadeDB (emb)"),
              ("arcadedb_dense_server", "ArcadeDB (srv)"),
              ("duckdb_vss_dense", "DuckDB-VSS"),
