@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import csv
 import os
 import re
 import sys
@@ -71,6 +72,37 @@ def _frozen_name():
     if SKELETON:
         return "runs_skeleton_laptop.csv"
     return "runs_paper_oct.csv" if OCTOBER else "runs_paper.csv"
+
+
+_LANE_ROWS_CACHE = None
+
+
+def _lane_has_rows(lane):
+    """Does the frozen set this publish is built from hold ANY row for a lane?
+
+    A landing's scope is cumulative -- the lane being landed plus every lane
+    already on the page -- so "in scope" stopped meaning "has rows". A lane
+    that is in scope because a LATER landing will add it, and has not been
+    measured yet, has no table, and the two guards below read that absence as
+    a coverage gap rather than as work not yet done.
+
+    The distinction they actually need is this one: a table is missing either
+    because its lane was excluded (the instruction), because its lane has no
+    rows at this pin (not measured yet, and the payload declares it pending),
+    or because something dropped it (a finding). Only the third is a finding.
+    """
+    global _LANE_ROWS_CACHE
+    if _LANE_ROWS_CACHE is None:
+        _LANE_ROWS_CACHE = set()
+        path = os.path.join(HERE, "results", _frozen_name())
+        try:
+            with open(path, newline="", encoding="utf-8") as fh:
+                for r in csv.DictReader(fh):
+                    if r.get("lane"):
+                        _LANE_ROWS_CACHE.add(r["lane"])
+        except OSError:
+            pass
+    return lane in _LANE_ROWS_CACHE
 
 
 def _generated_dir():
@@ -1233,10 +1265,12 @@ def _check_coverage(payload):
         if not t:
             import export_web as _EW
             _lane = _EW._TABLE_LANE.get(tid, (None,))[0]
-            if _ONLY_LANES and _lane and _lane not in _ONLY_LANES:
+            if _ONLY_LANES and _lane and (_lane not in _ONLY_LANES
+                                          or not _lane_has_rows(_lane)):
                 # Same distinction the roster check draws one function down: a
-                # table absent because its lane is outside this landing is the
-                # instruction, not a gap in coverage.
+                # table absent because its lane is outside this landing, or
+                # because that lane has no rows at this pin yet, is the
+                # instruction rather than a gap in coverage.
                 continue
             print(f"  MISS   {tid}: the payload has no such table")
             bad += 1
@@ -1354,7 +1388,8 @@ def _check_lane_roster(payload):
     for tid, (lane, _wl) in sorted(EW._TABLE_LANE.items()):
         t = tables.get(tid)
         if t is None:
-            if _ONLY_LANES and lane not in _ONLY_LANES:
+            if _ONLY_LANES and (lane not in _ONLY_LANES
+                                or not _lane_has_rows(lane)):
                 # A LANDING SCOPED TO ONE LANE CARRIES ONE LANE'S TABLES. This
                 # roster check exists so a registered arm cannot vanish from a
                 # table silently, and it reads the RUNNER's lanes rather than
@@ -1362,6 +1397,12 @@ def _check_lane_roster(payload):
                 # BENCH_ONLY_LANES the absence is the instruction, not the
                 # defect: eight tables on an e2-only landing, every one of them
                 # a lane nobody was publishing.
+                #
+                # The scope became CUMULATIVE on 2026-09-22 (F111), so "in
+                # scope" no longer implies "has rows": a lane can be in scope
+                # because a later landing will add it. A lane with no rows at
+                # this pin has not been measured yet, the payload declares it
+                # pending, and that is not a roster finding either.
                 continue
             print(f"  MISS    {tid}: the payload has no such table")
             bad += 1
