@@ -5298,7 +5298,15 @@ def _row_label_for(table_id, r):
     """The label this table gives the row's engine, for a sentence about it."""
     backend = str(r.get("backend") or "")
     if table_id == "l4":
-        return L4_CANON_LABELS.get(backend, display_name(backend))
+        # THROUGH display_name, LIKE THE TABLE DOES. L4_CANON_LABELS carries
+        # the raw key for five comparators (duckdb, mongodb, questdb, sqlite,
+        # timescaledb) and the table maps those through DISPLAY_NAMES when it
+        # builds its rows, so the cells read "SQLite". This path did not, so
+        # the budget sentences under the same table said "sqlite at 25.92M
+        # points" -- a backend key in page prose, beside "ArangoDB" and
+        # "SurrealDB (server)" in the sentences either side of it.
+        canon = L4_CANON_LABELS.get(backend, backend)
+        return display_name(canon) if canon in DISPLAY_NAMES else canon
     label = display_name(backend)
     if table_id == "l2olap" and str(r.get("gav")) != "False" and "arcade" in backend:
         label = f"{label[:-1]}, GAV)" if label.endswith(")") else f"{label} (GAV)"
