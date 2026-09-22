@@ -3086,6 +3086,56 @@ DURABILITY_WRITES = [
 ]
 
 
+def _durability_scope_note(entries):
+    """What this table actually holds, counted from its own rows.
+
+    The registered sentence said "Every timed write on the page is here: the
+    six document operations, the three graph writes, and the cross-model
+    transaction" -- a description of the table's DESIGN, printed whatever the
+    table contained. The October campaign lands one lane at a time, so on the
+    first landing the table held the cross-model transaction alone and said it
+    held ten writes; on a graph-only landing it would have held three and said
+    the same.
+
+    The design sentence is still the right thing to say once every lane has
+    landed, and it is what this returns then. Until then it names what is
+    here and what is still to come, from the operations present rather than
+    from a list typed beside them.
+    """
+    kinds = {"doc": 0, "graph": 0, "crossmodel": 0}
+    for e in entries:
+        op = str(e.get("scale") or "")
+        if op.startswith("doc"):
+            kinds["doc"] += 1
+        elif op.startswith("graph"):
+            kinds["graph"] += 1
+        elif "crossmodel" in op:
+            kinds["crossmodel"] += 1
+    # One entry per engine per operation, so the operation count is what the
+    # reader needs, not the row count.
+    ops = {k: len({str(e.get("scale")) for e in entries
+                   if str(e.get("scale") or "").startswith(k)
+                   or (k == "crossmodel" and "crossmodel" in str(e.get("scale") or ""))})
+           for k in kinds}
+    tail = ("Read down the operations for one engine rather than across the "
+            "engines for one operation, because what the setting costs is a "
+            "property of the engine's commit and the rest of the page already "
+            "compares the engines.")
+    if ops["doc"] >= 6 and ops["graph"] >= 3 and ops["crossmodel"] >= 1:
+        return _R("durability", "every_write")
+    have = _join_and([f"{n} {name}" for n, name in
+                      ((ops["doc"], "document operation" + ("s" if ops["doc"] != 1 else "")),
+                       (ops["graph"], "graph write" + ("s" if ops["graph"] != 1 else "")),
+                       (ops["crossmodel"], "cross-model transaction"))
+                      if n])
+    return _gen(
+        f"This table holds {have}. The campaign measures ten timed writes in "
+        f"all -- six document operations, three graph writes and the "
+        f"cross-model transaction -- and the rest appear here as the runs "
+        f"that produce them finish. {tail}",
+        *[str(ops[k]) for k in ("doc", "graph", "crossmodel") if ops[k]])
+
+
 def _durability_table(all_rows):
     """The same write per engine at both durability settings, with the ratio.
 
@@ -3223,7 +3273,7 @@ def _durability_table(all_rows):
         "dataset": "Every timed write, run twice, once at each durability setting",
         "conditions": [
             _R("durability", "pairs"),
-            _R("durability", "every_write"),
+            _durability_scope_note(entries),
             _R("durability", "read_control"),
             _R("durability", "size_column"),
             _R("durability", "cell_property"),
