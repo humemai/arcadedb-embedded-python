@@ -165,6 +165,12 @@ def main():
     step(2, "drop rows of the backends still running")
     excl = {b.strip() for b in args.exclude_backends.split(",") if b.strip()}
     lanes = {l.strip() for l in args.only_lanes.split(",") if l.strip()}
+    # AND THE FREEZE HEARS ABOUT IT TOO. Until 2026-09-22 this filtered the
+    # PULL alone, so a landing scoped to two lanes still froze and gated the
+    # whole store -- five undurable e4 rows from a failed landing blocked a
+    # landing of l2 and e2 that had nothing to do with them.
+    if lanes:
+        os.environ["BENCH_ONLY_LANES"] = ",".join(sorted(lanes))
     rows = [json.loads(l) for l in pulled.read_text().splitlines() if l.strip()]
     keep, dropped, other_lane = [], [], []
     for r in rows:

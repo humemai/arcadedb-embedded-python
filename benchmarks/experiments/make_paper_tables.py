@@ -170,6 +170,8 @@ SKELETON_SCALES = {"l1tpc": ["micro"], "l2": ["micro", "sf1"], "l3s": ["micro"],
                    "l3d": ["micro"], "e2": ["e2"], "l4": ["ts100"],
                    "lifecycle": ["lc10k"]}
 SKELETON = os.environ.get("BENCH_SKELETON") == "1"
+# Set by land_stage --only-lanes; empty means every lane this freeze knows.
+_ONLY_LANES = {l.strip() for l in os.environ.get("BENCH_ONLY_LANES", "").split(",") if l.strip()}
 if SKELETON:
     PAPER_SCALES = dict(SKELETON_SCALES)
 
@@ -397,6 +399,20 @@ def load_canonical(apply_corpus=True):
         if r.get("rc") != 0:
             continue
         if r["scale"] not in PAPER_SCALES.get(r["lane"], []):
+            continue
+        # A PARTIAL LANDING FREEZES ONLY ITS OWN LANES. `land_stage --only-lanes`
+        # filtered what was PULLED and nothing downstream, so the freeze still
+        # swept the whole canonical store -- and a landing of l2 and e2 was
+        # gated on e4's rows, which sit in the store from an earlier landing
+        # that failed, carry no durability stamp, and cannot publish until qOK
+        # re-runs them at the end of the chain. Five rows of a lane nobody was
+        # landing blocked every October publish for a week.
+        #
+        # Scoping the freeze instead of deleting those rows: they are a record
+        # of what ran, qOK will supersede them on ts_utc, and the rule this file
+        # already follows for out-of-range reps is KEEP and EXCLUDE rather than
+        # remove. Unset means every lane, so a full landing is unchanged.
+        if _ONLY_LANES and r["lane"] not in _ONLY_LANES:
             continue
         # A published cell must come from the SERIAL tier. The sweep tier runs
         # N workers on disjoint cpuset shards, which shows up here as a
