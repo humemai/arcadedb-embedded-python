@@ -987,6 +987,65 @@ def check_index_decisions(rows=None):
     return bad
 
 
+def check_phase_split(rows):
+    """F14c: if one arm on a lane splits ingest from index, every arm must.
+
+    The split is what turns "this engine took 40 s to build the corpus" into
+    "it spent 12 s writing and 28 s indexing", and it is the finer measurement
+    the whole instrument is for. It is also exactly the kind of thing that
+    arrives per adapter and then stops arriving: whoever adds the next engine
+    to a lane writes a `build()` and has no reason to know that its neighbours
+    time two phases inside theirs.
+
+    What that costs is not a missing number, it is an unfair TABLE. The column
+    exists because other arms fill it, so the new arm prints a blank where
+    everyone else prints a figure, and a blank in a benchmark reads as a
+    result -- the same confusion between "not measured" and "nothing there"
+    that the censored-cell notes exist to prevent one column over.
+
+    THREE STATES, AND ONLY ONE IS A FINDING. An arm may record the split; or
+    declare `index_before_load`, which is the honest answer where the index is
+    defined before the first row lands and its work is spread through the load
+    (SurrealDB on the cross-model lane); or belong to a lane where no arm
+    splits at all, because every engine there builds its index as it ingests
+    (the sparse lane) or creates it in the schema before loading (the graph
+    lane). The finding is the fourth case: a lane where some arms split and
+    one does not, and does not say why.
+    """
+    print("\n=== F14c: on a lane that splits ingest from index, every arm does ===")
+    lanes = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0, 0]))
+    for r in rows:
+        lane = r.get("lane")
+        if not lane or str(r.get("instrument") or "") != "2026-10":
+            continue
+        st = lanes[lane][r.get("backend")]
+        st[0] += 1
+        if r.get("index_s") not in (None, "", "None"):
+            st[1] += 1
+        if r.get("index_before_load"):
+            st[2] += 1
+    bad = 0
+    for lane in sorted(lanes, key=str):
+        arms = lanes[lane]
+        split = [b for b, st in arms.items() if st[1]]
+        if not split:
+            print(f"  n/a    {lane}: no arm splits, so there is nothing to be "
+                  f"inconsistent about ({len(arms)} arm(s))")
+            continue
+        missing = sorted(b for b, st in arms.items() if not st[1] and not st[2])
+        if missing:
+            print(f"  FAIL   {lane}: {len(split)} of {len(arms)} arms split ingest "
+                  f"from index; these do not, and declare no reason: "
+                  f"{', '.join(missing)}")
+            bad += len(missing)
+        else:
+            declared = [b for b, st in arms.items() if not st[1] and st[2]]
+            extra = f", {len(declared)} declared index-before-load" if declared else ""
+            print(f"  ok     {lane}: all {len(arms)} arm(s) accounted for "
+                  f"({len(split)} split{extra})")
+    return bad
+
+
 def check_durability(rows):
     import bench_common
     print("=== F10: durability class and instrument per table ===")
@@ -1120,6 +1179,10 @@ def main():
     # claim and `index_s` is the evidence, and only the rows can say whether
     # the index the map promises was actually built.
     bad += check_index_decisions(rows)
+    # F14c is the other direction: F14/F14b ask whether the index DECISION is
+    # declared and real, this asks whether the two PHASES are timed on every
+    # arm of a lane where any arm times them.
+    bad += check_phase_split(rows)
     check_protocol_overlays()
     bad += report_producers(rows)
     print(f"\n{bad} fairness invariant failure(s)")
