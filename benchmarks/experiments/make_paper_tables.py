@@ -1340,6 +1340,20 @@ def dense_ts_table(rows):
     # gone: the release artifacts or nothing.
     native = [r for r in ts if r.get("backend") == "arcadedb_ts_native"]
     if not native:
+        # A LANE SCOPED OUT IS NOT A MISSING ARTIFACT. The refusal below is
+        # right when the time-series lane was supposed to be in the freeze and
+        # its rows are absent -- that is the "release artifacts or nothing"
+        # rule. It is wrong when BENCH_ONLY_LANES deliberately excluded the
+        # lane: a landing scoped to one lane then dies generating a paper
+        # table for a different one, which is how the first e2-only landing
+        # failed after the gates had already passed.
+        #
+        # The dense block two paragraphs up already draws this distinction and
+        # omits itself with a printed reason; this does the same.
+        if _ONLY_LANES and "l4" not in _ONLY_LANES:
+            print("t5: the time-series block is omitted, l4 is not in this "
+                  f"landing's lanes ({','.join(sorted(_ONLY_LANES))})")
+            return
         raise SystemExit("no arcadedb_ts_native rows at the pin; no fallback (ts_2681 retired 2026-09-08)")
     # The lane's native arm records the unbounded last-point under q_last_ms
     # (its q_last() is the unbounded form since 2026-08-27); the 26.8.1 probe

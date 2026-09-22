@@ -2497,21 +2497,9 @@ def _e4_table():
                  str(_engine_identity(meta.get('engine_version'), meta.get('engine_commit'))),
                  str(meta.get('reps')), str(meta.get('warmup')), str(meta.get('cpuset')),
                  str(meta.get('mem_cap')), str(meta.get('heap'))),
-            "All three deployments turn the answer into Python objects the same "
-            "way, so the difference is how the database was deployed and not "
-            "how we read the result.",
-            "The separate container runs on the same machine, talking over the "
-            "local network interface. It says what running the database beside "
-            "your program costs, and says nothing about a database on another "
-            "machine across a real network.",
-            "The separate-process column goes slightly negative at the smaller "
-            "result sizes. That is not a container being faster than an "
-            "in-process server; it is the boundary term sitting below what this "
-            "design can resolve, so run-to-run noise swamps it and the sign "
-            "flips. Reported rather than clamped to zero, because the negative "
-            "values are the evidence for the claim: at these sizes co-locating "
-            "costs nothing measurable. The packing cost, in the column beside "
-            "it, stays firmly positive at every size.",
+            _R("e4", "same_materialisation"),
+            _R("e4", "same_machine"),
+            _R("e4", "negative"),
         ],
         "columns": [label for _, label in E4_ARMS],
         "withheld_scales": [],
@@ -3354,6 +3342,19 @@ def _l4_table(all_rows):
     # Canonical first; the 2026-08 files are the fallback, not the source.
     grouped = _l4_canonical(all_rows)
     if not grouped:
+        # A LANE SCOPED OUT IS NOT A MISSING ARTIFACT, the third place today
+        # that needed this told apart (make_paper_tables and
+        # make_paper_figures are the others). The refusal is right when l4
+        # belongs in the freeze and its rows are absent -- the legacy readers
+        # were retired on purpose and a silent fallback is what that retirement
+        # prevents. It is wrong when a per-lane landing deliberately left l4
+        # out: the table simply does not appear, the way a table with no rows
+        # never appears.
+        _only = {x.strip() for x in os.environ.get("BENCH_ONLY_LANES", "").split(",") if x.strip()}
+        if _only and "l4" not in _only:
+            print(f"  l4 table omitted: not in this landing's lanes "
+                  f"({','.join(sorted(_only))})")
+            return None
         raise SystemExit("no canonical l4 rows at the pin; the legacy l4_tsbs.jsonl/ts_2681 readers were retired 2026-09-08")
     if not grouped:
         return None
@@ -3529,6 +3530,19 @@ def _python_cost_table():
         return None
     _prov = _overhead_provenance()
     _ident = _engine_identity(_prov.get("engine_version"), _prov.get("engine_commit")) if _prov else None
+    if not _ident:
+        # ABSENT BEATS UNVERSIONED. This table is fed by the binding suite's own
+        # frozen file, not by a lane, and PAGE-SPEC says it returns "when its
+        # artifact is re-measured at the October pin". Until then the artifact
+        # carries no provenance line this payload can read, and building the
+        # table anyway publishes measurements that name no engine -- which
+        # version_consistency_check refuses by name, correctly, and which is
+        # exactly the defect that check exists for. The skeleton already lists
+        # pycost among its declared absences; a real October payload should
+        # reach the same answer rather than a worse one.
+        print("  pycost table omitted: its artifact carries no engine identity "
+              "at this pin (PAGE-SPEC: it returns when re-measured)")
+        return None
 
     def us(w, a):
         return m.get((w, a))
@@ -3790,8 +3804,56 @@ def _table_instrument(table_id):
         return "2026-10"
     lane_wl = _TABLE_LANE.get(table_id)
     if not lane_wl:
-        return "2026-09"
+        # ARTIFACT-BACKED, AND THE ARTIFACT PATH IS PIN-SCOPED. The flat
+        # "September's" above was true while the only artifacts on disk were
+        # September's; it stopped being true the moment e4 was re-measured,
+        # and it failed in the direction that matters. `_october` at the
+        # bottom of this file is an ALL() over the tables, so one table
+        # wrongly marked September made the whole payload September --
+        # stamping `instrument: 2026-09` on a page of October rows and
+        # handing `_global_conditions` the September condition set.
+        #
+        # The evidence is the path: these tables read
+        # `results/<name>_<BENCH_ENGINE_COMMIT>/`, so an artifact that
+        # resolves at all was produced at the pin being published. It cannot
+        # be a leftover from the other campaign, because the other campaign's
+        # artifacts sit in a differently named directory. A meta stamp is
+        # better still and newer artifacts carry one, so prefer it and fall
+        # back to the campaign this publish is for.
+        return _artifact_instrument(table_id)
     return _instrument_of(lane_wl[0])
+
+
+def _artifact_instrument(table_id):
+    """The instrument behind a table fed by a pin-scoped artifact directory."""
+    stamped = set()
+    src = SOURCES.get(table_id)
+    # SOURCES holds repo-relative paths for the published link; resolve
+    # against the repo root rather than the caller's cwd, which is the bench
+    # repo for a landing and the experiments directory for a hand run.
+    dirs = [HERE.parents[1] / str(src)] if isinstance(src, str) else []
+    for path in sorted(p for d in dirs if d.is_dir() for p in d.glob("*.json")):
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8")).get("meta") or {}
+        except (ValueError, OSError):
+            continue
+        if meta.get("instrument"):
+            stamped.add(str(meta["instrument"]))
+    if len(stamped) > 1:
+        raise SystemExit(f"REFUSING: the {table_id} artifacts carry two instruments "
+                         f"{sorted(stamped)}; a table cannot mix them (DECISIONS #84)")
+    if stamped:
+        return next(iter(stamped))
+    # THE INFERENCE IS ONLY SOUND FOR A PIN-SCOPED PATH. e4 reads
+    # `e4decomp_<pin>/`, so its presence dates it; pycost reads a single CSV
+    # whose name never changes, and that file is as old as whenever it was
+    # last written. Answering "October" for it would be the original bug
+    # inverted -- an artifact measured under the old instrument labelled with
+    # the new one, which is the direction that puts a wrong provenance under
+    # real numbers rather than merely withholding a table.
+    _pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+    _scoped = bool(_pin) and isinstance(src, str) and _pin in src
+    return "2026-10" if (_OCTOBER_ENV and _scoped) else "2026-09"
 
 
 def _const(module, name):
@@ -3849,6 +3911,18 @@ OCT_PROSE = {
     "*": {
         "skeleton": (SKELETON_TABLE_NOTE, []),
         "disk": (OCT_DISK_NOTE, []),
+    },
+    # e4's three explanatory sentences. They were unregistered until the table
+    # was correctly dated October (it is artifact-backed, and the instrument
+    # was inferred from a lane map it is not in), at which point the October
+    # rule applies: a sentence that is not generated is registered here, by
+    # the table that prints it. None of the three states a measured quantity
+    # -- "slightly negative" is about a sign the cells themselves show -- so
+    # none carries a pin.
+    "e4": {
+        "same_materialisation": ('All three deployments turn the answer into Python objects the same way, so the difference is how the database was deployed and not how we read the result.', []),
+        "same_machine": ('The separate container runs on the same machine, talking over the local network interface. It says what running the database beside your program costs, and says nothing about a database on another machine across a real network.', []),
+        "negative": ('The separate-process column goes slightly negative at the smaller result sizes. That is not a container being faster than an in-process server; it is the boundary term sitting below what this design can resolve, so run-to-run noise swamps it and the sign flips. Reported rather than clamped to zero, because the negative values are the evidence for the claim: at these sizes co-locating costs nothing measurable. The packing cost, in the column beside it, stays firmly positive at every size.', []),
     },
     "l3s": {
         "recall": ("Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.", []),
@@ -4462,8 +4536,34 @@ def _censored_cells():
         if path.exists():
             with open(path) as fh:
                 rows = [json.loads(l) for l in fh if l.strip()]
+    # SCOPE TO THE PIN THIS PUBLISH IS FOR. `pin` was read at the top of this
+    # function and never used, so the only scoping was a date, and BOTH
+    # campaigns are after it. A cell censored in September therefore carried
+    # its note, and its September budget, onto an October page.
+    #
+    # The reverse -- an October timeout hidden by a September success -- was
+    # never possible, because the cancel below drops any key with a clean row
+    # at any pin. So the defect ran one way: a claim about the engine we no
+    # longer publish, printed beside numbers from the one we do. Six cells in
+    # l2, l3d and l1tpc are censored at September's pin alone today, and all
+    # three of those lanes are still to land.
+    #
+    # Comparator rows carry the campaign's pin too (the launcher stamps every
+    # row, not just ArcadeDB's), so scoping does not silently drop the
+    # comparator timeouts -- which are most of them, and whose notes are the
+    # ones keeping a censored cell distinguishable from an unmeasured one.
+    # Prefixes, because a row may hold the full 40 characters and the pin is
+    # published truncated.
+    def _same_pin(r):
+        if not pin:
+            return True
+        got = str(r.get("engine_commit") or "")
+        return bool(got) and (got.startswith(pin) or pin.startswith(got))
+
     for r in rows:
         if str(r.get("ts_utc", "")) < "2026-09-01":
+            continue
+        if not _same_pin(r):
             continue
         key = (r.get("lane"), str(r.get("scale")), r.get("backend"), r.get("workload"))
         err = str(r.get("error") or "")

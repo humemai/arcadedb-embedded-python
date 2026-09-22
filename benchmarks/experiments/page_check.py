@@ -385,6 +385,19 @@ def _check_prose(page_ts):
             # placeholder and is not compared. See SKELETON above.
             print(f"  placeholder {pid:24s} page={hits[0]} (skeleton: not compared)")
             continue
+        if _ONLY_LANES and not _pin_in_scope(pid):
+            # A PIN WHOSE TABLE IS NOT IN THIS LANDING IS NOT STALE. Under
+            # BENCH_ONLY_LANES the freeze holds one lane, so every pin over
+            # another lane's table reads as "no cell" -- twelve of them on an
+            # e2-only landing, about the dense, graph-analytics and sparse
+            # tables, none of which was being published. Stale means the page
+            # says a number the data no longer supports; absent means the data
+            # was not in this landing's scope. The sentence and its number are
+            # still on the page and are still checked by the landing that
+            # carries their lane.
+            print(f"  out of scope {pid:24s} (lane not in "
+                  f"{','.join(sorted(_ONLY_LANES))})")
+            continue
         if callable(ref):
             try:
                 table_val = ref(_PAGE)
@@ -594,6 +607,27 @@ RETIRED_TABLES = {
 }
 
 
+_ONLY_LANES = {x.strip() for x in os.environ.get("BENCH_ONLY_LANES", "").split(",") if x.strip()}
+
+
+def _pin_in_scope(pid):
+    """Is this pin's subject a table this landing carries?
+
+    Pin ids are dotted and start with the table or lane they describe
+    ("dense.arcadedb.cold", "l2olap.view.top_degree", "l3smp.max_gain.small"),
+    so the first segment is the subject. Mapped through the same table->lane
+    table the LOST check uses, with a couple of prefixes that name a lane
+    directly. Anything that does not resolve stays IN scope, so an unknown pin
+    is still checked rather than silently waved through.
+    """
+    head = str(pid).split(".", 1)[0]
+    lane = _table_lanes().get(head, (None,))[0]
+    if lane is None:
+        lane = {"dense": "l3d", "sparse": "l3s", "l3smp": "l3s",
+                "graph": "l2", "docs": "l1tpc", "ts": "l4"}.get(head)
+    return lane is None or lane in _ONLY_LANES
+
+
 def _table_lanes():
     """page table id -> (lane, workload), read from export_web by ast.
 
@@ -681,6 +715,18 @@ def _check_no_arcadedb_row_lost(payload):
                 print(f"  not yet measured: table {tid} is on the live page and "
                       f"its lane {lane!r} has no rows at this pin; it lands "
                       f"with its stage")
+                continue
+            # A DERIVED TABLE FOLLOWS THE TABLES IT DERIVES FROM. `multimodel`
+            # has no lane of its own -- it is built from the other tables --
+            # so the lane test above cannot speak for it, and under a landing
+            # scoped to one lane it cannot be built at all. That is the same
+            # "not yet measured" case one step removed, and calling it LOST
+            # failed the first e2-only landing after five other gates had
+            # already passed.
+            _only = {x.strip() for x in os.environ.get("BENCH_ONLY_LANES", "").split(",") if x.strip()}
+            if not lane and _only:
+                print(f"  not yet measured: table {tid} is derived from tables this "
+                      f"landing does not carry (scoped to {','.join(sorted(_only))})")
                 continue
             print(f"  LOST   table {tid}: on the live page, not in the export")
             bad += 1
@@ -1185,6 +1231,13 @@ def _check_coverage(payload):
     for tid, operations in sorted(OPERATION_MANIFEST.items()):
         t = tables.get(tid)
         if not t:
+            import export_web as _EW
+            _lane = _EW._TABLE_LANE.get(tid, (None,))[0]
+            if _ONLY_LANES and _lane and _lane not in _ONLY_LANES:
+                # Same distinction the roster check draws one function down: a
+                # table absent because its lane is outside this landing is the
+                # instruction, not a gap in coverage.
+                continue
             print(f"  MISS   {tid}: the payload has no such table")
             bad += 1
             continue
@@ -1301,6 +1354,15 @@ def _check_lane_roster(payload):
     for tid, (lane, _wl) in sorted(EW._TABLE_LANE.items()):
         t = tables.get(tid)
         if t is None:
+            if _ONLY_LANES and lane not in _ONLY_LANES:
+                # A LANDING SCOPED TO ONE LANE CARRIES ONE LANE'S TABLES. This
+                # roster check exists so a registered arm cannot vanish from a
+                # table silently, and it reads the RUNNER's lanes rather than
+                # the payload's rows precisely so an absent table is loud. Under
+                # BENCH_ONLY_LANES the absence is the instruction, not the
+                # defect: eight tables on an e2-only landing, every one of them
+                # a lane nobody was publishing.
+                continue
             print(f"  MISS    {tid}: the payload has no such table")
             bad += 1
             continue
@@ -1659,8 +1721,17 @@ def _check_setup_prose(payload):
     token) and the cpuset the rows ran on; a re-pin on another machine then
     fails here until the prose is rewritten (2026-09-11)."""
     setup = payload.get("setup") or {}
+    # CHECK THE PAGE BEING PUBLISHED, not always the live one. Pinned to
+    # PAGE_TS, this verified the September page's hardware paragraph while the
+    # October preview was the file actually being written, so the preview's
+    # setup paragraph was unchecked for as long as it existed -- and it spent
+    # that time describing a machine the numbers under it were not measured
+    # on. The whole point of the check is that a re-pin onto another machine
+    # fails until the prose is rewritten; pointed at the wrong file it cannot
+    # notice the rewrite it exists to force.
+    page = PREVIEW_TS if "--preview" in sys.argv else PAGE_TS
     try:
-        prose = PAGE_TS.read_text(encoding="utf-8")
+        prose = page.read_text(encoding="utf-8")
     except Exception:
         print("  (no page prose file; setup check skipped)")
         return 0

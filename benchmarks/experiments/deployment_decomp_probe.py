@@ -249,6 +249,13 @@ def main() -> int:
         "heap": args.heap,
         "embedded_materialisation": "to_json_list",
         "note": "embedded arm uses to_json_list so all three arms return list-of-dicts",
+        # STAMP WHAT THIS RAN UNDER, so the page does not have to infer it.
+        # The exporter dated this artifact by its directory name, which works
+        # only because the directory carries the pin; a table fed by a file
+        # with a fixed name had no way to say which instrument produced it,
+        # and defaulted to the older one. An artifact that names its own
+        # instrument cannot be misdated by a reader written later.
+        "instrument": os.environ.get("BENCH_INSTRUMENT", "2026-09"),
     }
     print(f"engine {arcadedb.__version__}  corpus {ROWS:,} rows  "
           f"reps {REPS} (+{WARMUP} warmup)  heap {args.heap}", flush=True)

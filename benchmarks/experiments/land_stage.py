@@ -59,10 +59,17 @@ TRAILER = ("\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n"
            "Claude-Session: https://claude.ai/code/session_01JB6Hg77dQVqABoTJmiUnV2")
 
 
-def sh(cmd, cwd=None, check=True, capture=False, env=None):
-    print("  $ " + " ".join(str(c) for c in cmd), flush=True)
+def sh(cmd, cwd=None, check=True, capture=False, env=None, quiet=False):
+    """Run a command, echoing it so the transcript shows what was done.
+
+    `quiet` suppresses the echo for probes whose answer is the point and whose
+    command is noise -- asking git whether each of three paths is tracked is
+    three lines that say nothing a reader of the log wants.
+    """
+    if not quiet:
+        print("  $ " + " ".join(str(c) for c in cmd), flush=True)
     return subprocess.run(cmd, cwd=cwd, check=check, text=True,
-                          capture_output=capture, env=env)
+                          capture_output=capture or quiet, env=env)
 
 
 def step(n, title):
@@ -120,6 +127,16 @@ def main():
     SCRATCH.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, BENCH_ENGINE_COMMIT=args.pin)
     env.pop("BENCH_PAPER_DIR", None)
+    # AND THE FREEZE HEARS ABOUT --only-lanes TOO. It filtered the PULL alone
+    # until 2026-09-22, so a landing scoped to one lane still froze and gated
+    # the whole store: five undurable e4 rows blocked an e2 landing that had
+    # nothing to do with them. It must go in THIS dict, not os.environ -- step
+    # 4 hands the subprocess `env=env` explicitly, so a variable set on our own
+    # environment never reaches the gates, which is how the first attempt at
+    # this fix passed every local test and still failed the real landing.
+    _lanes = {l.strip() for l in args.only_lanes.split(",") if l.strip()}
+    if _lanes:
+        env["BENCH_ONLY_LANES"] = ",".join(sorted(_lanes))
     if args.preview:
         # THE SWITCH TRAVELS WITH THE PUBLISH (DECISIONS #84). `env` is what
         # step 4 hands refresh_web_page.py, and that script sets the same
@@ -165,12 +182,6 @@ def main():
     step(2, "drop rows of the backends still running")
     excl = {b.strip() for b in args.exclude_backends.split(",") if b.strip()}
     lanes = {l.strip() for l in args.only_lanes.split(",") if l.strip()}
-    # AND THE FREEZE HEARS ABOUT IT TOO. Until 2026-09-22 this filtered the
-    # PULL alone, so a landing scoped to two lanes still froze and gated the
-    # whole store -- five undurable e4 rows from a failed landing blocked a
-    # landing of l2 and e2 that had nothing to do with them.
-    if lanes:
-        os.environ["BENCH_ONLY_LANES"] = ",".join(sorted(lanes))
     rows = [json.loads(l) for l in pulled.read_text().splitlines() if l.strip()]
     keep, dropped, other_lane = [], [], []
     for r in rows:
@@ -247,8 +258,37 @@ def main():
     if not args.apply:
         # Put the site's payload back so the working tree is what the last
         # publish left; the merge into runs.jsonl stands (it is idempotent).
-        SITE_PAYLOAD.write_text(before)
-        sh(["git", "checkout", "--"] + site_files[:2], cwd=SITE, check=False)
+        #
+        # RESTORE WHAT THIS RUN TOUCHED, not a fixed slice. Two bugs lived in
+        # the old two lines. `before` is read from SITE_PAYLOAD, which is the
+        # LIVE payload, so a --preview dry run wrote the live file and left the
+        # preview one to a positional `site_files[:2]` that happened to include
+        # it. And that slice named `public/images/projects/arcadedb-next`,
+        # a directory holding no tracked files, so git answered "pathspec did
+        # not match" and returned non-zero for the whole command -- a restore
+        # that announces "site payload restored" while reporting an error is
+        # the shape where one day it restores nothing and still says that.
+        #
+        # git checkout only restores TRACKED paths, so ask git which of them
+        # are tracked and pass exactly those. An untracked or empty directory
+        # is then not an error, because nothing in it could have been changed.
+        # RESTORE ONLY WHAT THIS RUN WROTE. `site_files` is the COMMIT list --
+        # payload, images, and the hand-written prose -- and a dry run writes
+        # only the first two. Reverting the third threw away uncommitted prose
+        # edits twice in one session, silently, while printing "site payload
+        # restored"; the second time it discarded the rewrite that stopped the
+        # page claiming its numbers came from a development laptop.
+        #
+        # A dry run must leave the tree as it found it, and that cuts both
+        # ways: it may not keep what it wrote, and it may not drop what it did
+        # not write. The prose file is never written here, so it is never
+        # restored here.
+        _written = [f for f in site_files if "/items/" not in f]
+        _tracked = [f for f in _written
+                    if sh(["git", "ls-files", "--error-unmatch", f], cwd=SITE,
+                          check=False, quiet=True).returncode == 0]
+        if _tracked:
+            sh(["git", "checkout", "--"] + _tracked, cwd=SITE)
         print("\nDRY RUN: stopping before build and commit; site payload restored. Re-run with --apply to publish.")
         return 0
 

@@ -358,12 +358,48 @@ def main() -> int:
     # twelve became eleven in silence, and PAGE-SPEC's inventory agreed,
     # because that inventory is written FROM the payload and so cannot
     # disagree with it. The page's own prose can.
+    only_lanes = {x.strip() for x in
+                  os.environ.get("BENCH_ONLY_LANES", "").split(",") if x.strip()}
     _payload = json.loads(exported.read_text(encoding="utf-8"))
     _have = {t.get("id") for t in _payload.get("tables") or []}
     _absent = set((_payload.get("skeleton_absent_tables") or {}).keys())
     _wanted = re.findall(r'tableId:\s*"([A-Za-z0-9_]+)"',
                          (site / PAGE_SOURCE).read_text(encoding="utf-8"))
     _missing = [t for t in dict.fromkeys(_wanted) if t not in _have and t not in _absent]
+    # A STAGED LANDING IS THE ONE LEGITIMATE WAY TO BE MISSING TABLES, and it
+    # must SAY SO on the page rather than be waved through. The October
+    # campaign publishes one lane at a time, so a payload landed between
+    # stages genuinely lacks most of the page's tables -- but the reader still
+    # meets every section heading and every paragraph of prose about numbers
+    # that are not there.
+    #
+    # Three options and only one is honest. Refusing blocks every staged
+    # landing, which is the whole publication plan. Exempting the missing
+    # tables renders nine bare headings, which is the defect this guard was
+    # written for. So the payload DECLARES what is pending and why, the page
+    # renders that in the table's place, and the guard is satisfied by the
+    # declaration rather than by the exemption.
+    #
+    # Computed here rather than in the exporter because both lists are in
+    # hand here: `_wanted` is parsed from the page's own prose and `_have`
+    # from the payload. The exporter would have to carry a second copy of the
+    # page's table list, and a typed list beside the thing it describes is
+    # what structure_check.py exists to catch.
+    if _missing and only_lanes:
+        _pending = {}
+        for t in _missing:
+            if t == "multimodel":
+                _pending[t] = ("The capability summary is built from the tables "
+                               "above it, so it appears once enough of them have "
+                               "been measured at this version.")
+            else:
+                _pending[t] = ("Still being measured at this version. This table "
+                               "appears here when its run finishes.")
+        _payload["pending_tables"] = _pending
+        exported.write_text(json.dumps(_payload, indent=2) + "\n", encoding="utf-8")
+        print(f"  {len(_pending)} table(s) not yet measured at this pin are declared "
+              f"pending, and the page renders that in their place: {_missing}")
+        _missing = []
     if _missing:
         print(f"  REFUSING: the page asks for {_missing} and the payload carries "
               f"{sorted(_have)}; a table the page names and the data lacks renders "

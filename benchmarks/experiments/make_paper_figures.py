@@ -811,6 +811,16 @@ def f4_one_vs_n(rows):
 
     ts = [r for r in canonical() if r.get("lane") == "l4"]
     if not any(r.get("backend") == "arcadedb_ts_native" for r in ts):
+        # A LANE SCOPED OUT IS NOT A MISSING ARTIFACT (the same distinction
+        # make_paper_tables draws). The refusal is right when l4 belongs in
+        # the freeze and its rows are absent; it is wrong when a per-lane
+        # landing deliberately left l4 out, where dying here would block a
+        # landing of a different lane entirely.
+        _only = {x.strip() for x in os.environ.get("BENCH_ONLY_LANES", "").split(",") if x.strip()}
+        if _only and "l4" not in _only:
+            print(f"time-series figure omitted: l4 is not in this landing's "
+                  f"lanes ({','.join(sorted(_only))})")
+            return
         raise SystemExit("no arcadedb_ts_native rows at the pin (ts_2681 fallback retired 2026-09-08)")
 
     def tsmed(be, f):

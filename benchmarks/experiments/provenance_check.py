@@ -515,6 +515,20 @@ def caption_n():
         # limitation we fixed is its own defect.
     }
     print("=== repetitions behind each published cell ===")
+    # THE PAPER'S TABLES ARE NOT PART OF A PER-LANE LANDING. This audit reads
+    # the t2-t5 .tex files, which cover every lane; under BENCH_ONLY_LANES the
+    # freeze holds one lane, so the OTHER tables are left unregenerated and
+    # this reports N=0 behind cells their stale text still claims -- four BAD
+    # findings about the document table during an e2-only landing, none of
+    # them about anything being published. The paper was dropped on 2026-09-11
+    # (DECISIONS #72) and these files are not on the page; a landing scoped to
+    # a lane regenerates the PAGE, and auditing the paper against a freeze
+    # that was never meant to fill it is a false finding.
+    _only = {x.strip() for x in os.environ.get("BENCH_ONLY_LANES", "").split(",") if x.strip()}
+    if _only:
+        print(f"  SKIPPED: this landing is scoped to {','.join(sorted(_only))}, so the "
+              f"paper's tables cover lanes the freeze does not hold\n")
+        return 0
     try:
         sys.path.insert(0, HERE)
         import make_paper_tables as M
