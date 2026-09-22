@@ -10,13 +10,34 @@
     "arangodb_e2": [
       "arangodb:3.12.11"
     ],
+    "arangodb_graph": [
+      "arangodb:3.12.11"
+    ],
     "composed_qdrant_neo4j": [
       "qdrant-local:1.19.1+neo4j:2026.08.1"
+    ],
+    "duckpgq_graph": [
+      "duckdb:1.5.4 + duckpgq:f386a6c"
+    ],
+    "falkordb_graph": [
+      "falkordb:4.20.6 (redis 8.6.3)"
+    ],
+    "ladybug_graph": [
+      "ladybug:0.20.4"
+    ],
+    "memgraph_graph": [
+      "memgraph:3.13.1"
     ],
     "mongodb_e2": [
       "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4 at localhost:27028"
     ],
+    "mongodb_graph": [
+      "mongodb 8.2.12"
+    ],
     "neo4j_e2": [
+      "neo4j:2026.08.1"
+    ],
+    "neo4j_graph": [
       "neo4j:2026.08.1"
     ],
     "pg_age_e2": [
@@ -26,6 +47,12 @@
       "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
     ],
     "surrealdb_e2_server": [
+      "surrealdb-server:3.2.4+20260803.93ab219"
+    ],
+    "surrealdb_graph": [
+      "surrealdb-embedded:2.3.10 (sdk 2.0.0)"
+    ],
+    "surrealdb_graph_server": [
       "surrealdb-server:3.2.4+20260803.93ab219"
     ]
   },
@@ -100,6 +127,1998 @@
     }
   },
   "tables": [
+    {
+      "id": "l2",
+      "title": "Graph OLTP",
+      "dataset": "LDBC-SNB Interactive (SF1, SF10)",
+      "conditions": [
+        "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
+        "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.",
+        "Each repetition runs every read against a fresh set of start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
+        "FalkorDB at SF1 (10k people, 181k friendships) and SF10 (66k people, 1.9M friendships): its disk cells are 0.0 because the server container did not grow over its empty footprint during the run; read them as a floor under 0.01 GiB, not as a size.",
+        "Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ registers each batch as an Arrow table and INSERT ... SELECTs from it into the Person and knows tables, then defines the property graph over them; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts."
+      ],
+      "columns": [
+        "point p50 ms",
+        "point p99 ms",
+        "1-hop p50 ms",
+        "2-hop p50 ms",
+        "3-hop filtered p50 ms",
+        "insert p50 ms",
+        "update p50 ms",
+        "delete p50 ms",
+        "ingest vertices+edges/s",
+        "ingest total s",
+        "peak memory GiB",
+        "disk GiB"
+      ],
+      "withheld_scales": [],
+      "withheld_reason": null,
+      "entries": [
+        {
+          "backend": "ArcadeDB (embedded)",
+          "backend_key": "arcadedb_graph_embedded",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.485,
+              "min": 0.441,
+              "max": 0.496,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.906,
+              "min": 0.874,
+              "max": 0.97,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.454,
+              "min": 0.44,
+              "max": 0.462,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.711,
+              "min": 0.67,
+              "max": 0.767,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 5.568,
+              "min": 5.447,
+              "max": 5.738,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.492,
+              "min": 0.469,
+              "max": 0.496,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.2,
+              "min": 0.189,
+              "max": 0.202,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.494,
+              "min": 0.483,
+              "max": 0.509,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 87392.2018,
+              "min": 84298.6726,
+              "max": 89025.7009,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 2.18,
+              "min": 2.14,
+              "max": 2.26,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 2.7908,
+              "min": 2.7846,
+              "max": 2.8159,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0125,
+              "min": 0.0125,
+              "max": 0.0125,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server)",
+          "backend_key": "arcadedb_graph_server",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedb-c25:417314c18",
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 1.232,
+              "min": 1.19,
+              "max": 1.272,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 1.836,
+              "min": 1.705,
+              "max": 1.967,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.179,
+              "min": 1.08,
+              "max": 1.199,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 1.467,
+              "min": 1.411,
+              "max": 1.518,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 6.607,
+              "min": 6.46,
+              "max": 6.808,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 1.263,
+              "min": 1.163,
+              "max": 1.313,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.856,
+              "min": 0.795,
+              "max": 0.895,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 1.074,
+              "min": 1.027,
+              "max": 1.225,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 25267.2414,
+              "min": 25100.7905,
+              "max": 25572.4832,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 7.54,
+              "min": 7.45,
+              "max": 7.59,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 3.3579,
+              "min": 3.3522,
+              "max": 3.3923,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0124,
+              "min": 0.0124,
+              "max": 0.0124,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "backend_key": "arangodb_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.718,
+              "min": 0.694,
+              "max": 0.818,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.956,
+              "min": 0.929,
+              "max": 1.063,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.998,
+              "min": 0.853,
+              "max": 1.028,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 2.278,
+              "min": 2.125,
+              "max": 2.337,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 17.027,
+              "min": 16.49,
+              "max": 17.653,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.795,
+              "min": 0.762,
+              "max": 0.885,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.677,
+              "min": 0.588,
+              "max": 0.851,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.859,
+              "min": 0.85,
+              "max": 0.998,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 98203.6082,
+              "min": 97700.0,
+              "max": 98203.6082,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 1.94,
+              "min": 1.94,
+              "max": 1.95,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.501,
+              "min": 0.4742,
+              "max": 0.5168,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0481,
+              "min": 0.048,
+              "max": 0.0481,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "DuckPGQ",
+          "backend_key": "duckpgq_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "duckdb 1.5.4 + duckpgq f386a6c",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.253,
+              "min": 0.25,
+              "max": 0.253,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.293,
+              "min": 0.289,
+              "max": 0.337,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.931,
+              "min": 0.921,
+              "max": 0.937,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 2.241,
+              "min": 2.222,
+              "max": 2.297,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 3.302,
+              "min": 3.286,
+              "max": 3.386,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 10.479,
+              "min": 10.391,
+              "max": 10.549,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 9.057,
+              "min": 9.053,
+              "max": 9.093,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 10.495,
+              "min": 10.407,
+              "max": 10.505,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 186779.4118,
+              "min": 173195.4545,
+              "max": 196407.2165,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 1.02,
+              "min": 0.97,
+              "max": 1.1,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.1894,
+              "min": 0.1762,
+              "max": 0.1926,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0412,
+              "min": 0.0412,
+              "max": 0.0412,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "FalkorDB",
+          "backend_key": "falkordb_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",
+          "version_name": "falkordb 4.20.6",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.125,
+              "min": 0.098,
+              "max": 0.129,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.28,
+              "min": 0.269,
+              "max": 0.292,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.22,
+              "min": 0.171,
+              "max": 0.224,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.339,
+              "min": 0.278,
+              "max": 0.474,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 0.607,
+              "min": 0.466,
+              "max": 0.724,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.162,
+              "min": 0.127,
+              "max": 0.199,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.121,
+              "min": 0.095,
+              "max": 0.166,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.761,
+              "min": 0.556,
+              "max": 0.77,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 40535.1064,
+              "min": 40024.1597,
+              "max": 40621.5352,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 4.7,
+              "min": 4.69,
+              "max": 4.76,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.1772,
+              "min": 0.1764,
+              "max": 0.1773,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "LadybugDB",
+          "backend_key": "ladybug_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "ladybugdb 0.20.4",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.167,
+              "min": 0.166,
+              "max": 0.172,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.259,
+              "min": 0.244,
+              "max": 0.332,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.169,
+              "min": 1.161,
+              "max": 1.174,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 4.041,
+              "min": 4.02,
+              "max": 4.101,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 7.67,
+              "min": 7.629,
+              "max": 7.696,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 9.85,
+              "min": 9.812,
+              "max": 9.856,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 8.987,
+              "min": 8.971,
+              "max": 9.05,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 8.99,
+              "min": 8.954,
+              "max": 9.076,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 423366.6667,
+              "min": 414163.0435,
+              "max": 432988.6364,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 0.45,
+              "min": 0.44,
+              "max": 0.46,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.2296,
+              "min": 0.2274,
+              "max": 0.2326,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0048,
+              "min": 0.0048,
+              "max": 0.0048,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Memgraph",
+          "backend_key": "memgraph_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",
+          "version_name": "memgraph 3.13.1",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.15,
+              "min": 0.147,
+              "max": 0.151,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.346,
+              "min": 0.245,
+              "max": 0.399,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.154,
+              "min": 0.151,
+              "max": 0.155,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.212,
+              "min": 0.207,
+              "max": 0.213,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 1.171,
+              "min": 1.157,
+              "max": 1.196,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.154,
+              "min": 0.148,
+              "max": 0.156,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.144,
+              "min": 0.139,
+              "max": 0.145,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.143,
+              "min": 0.139,
+              "max": 0.145,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 71622.1805,
+              "min": 70561.1111,
+              "max": 73843.0233,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 2.66,
+              "min": 2.58,
+              "max": 2.7,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.4637,
+              "min": 0.4315,
+              "max": 0.4854,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0235,
+              "min": 0.0235,
+              "max": 0.0235,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "backend_key": "mongodb_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",
+          "version_name": "mongodb 8.2.12",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.09,
+              "min": 0.083,
+              "max": 0.099,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.278,
+              "min": 0.214,
+              "max": 0.288,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.272,
+              "min": 0.265,
+              "max": 0.292,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.903,
+              "min": 0.867,
+              "max": 0.915,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 78.88,
+              "min": 78.208,
+              "max": 80.396,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.226,
+              "min": 0.208,
+              "max": 0.228,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.086,
+              "min": 0.084,
+              "max": 0.087,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.315,
+              "min": 0.312,
+              "max": 0.317,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 131389.6552,
+              "min": 128726.3514,
+              "max": 132302.0833,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 1.45,
+              "min": 1.44,
+              "max": 1.48,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.2537,
+              "min": 0.2496,
+              "max": 0.2575,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0217,
+              "min": 0.0217,
+              "max": 0.0239,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Neo4j",
+          "backend_key": "neo4j_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",
+          "version_name": "neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 6.111,
+              "min": 6.049,
+              "max": 6.337,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 12.706,
+              "min": 12.259,
+              "max": 13.093,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 5.658,
+              "min": 5.512,
+              "max": 5.921,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 4.656,
+              "min": 4.449,
+              "max": 4.845,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 6.293,
+              "min": 5.97,
+              "max": 6.425,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 7.142,
+              "min": 6.953,
+              "max": 7.325,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 5.893,
+              "min": 5.74,
+              "max": 6.052,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 6.062,
+              "min": 5.828,
+              "max": 6.445,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 36567.1785,
+              "min": 36427.3423,
+              "max": 36637.5,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 5.21,
+              "min": 5.2,
+              "max": 5.23,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 4.7425,
+              "min": 4.7164,
+              "max": 4.7976,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0147,
+              "min": 0.0147,
+              "max": 0.0147,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.044,
+              "min": 0.044,
+              "max": 0.046,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.051,
+              "min": 0.049,
+              "max": 0.061,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.687,
+              "min": 0.672,
+              "max": 0.721,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 15.224,
+              "min": 14.219,
+              "max": 15.612,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 189.953,
+              "min": 185.437,
+              "max": 194.438,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.176,
+              "min": 0.174,
+              "max": 0.182,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.083,
+              "min": 0.082,
+              "max": 0.092,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.155,
+              "min": 0.153,
+              "max": 0.171,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 13805.4348,
+              "min": 13656.9892,
+              "max": 14324.4361,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 13.8,
+              "min": 13.3,
+              "max": 13.95,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.7997,
+              "min": 0.7835,
+              "max": 0.8522,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1041,
+              "min": 0.104,
+              "max": 0.1041,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_graph_server",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf1",
+          "scale_label": "SF1 (10k people, 181k friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.108,
+              "min": 0.095,
+              "max": 0.109,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.611,
+              "min": 0.233,
+              "max": 0.621,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.17,
+              "min": 0.154,
+              "max": 0.176,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.575,
+              "min": 0.514,
+              "max": 0.796,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 28.823,
+              "min": 28.332,
+              "max": 29.469,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 17.399,
+              "min": 17.203,
+              "max": 17.539,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 9.083,
+              "min": 9.044,
+              "max": 9.249,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 10.502,
+              "min": 10.393,
+              "max": 10.55,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 20033.123,
+              "min": 19400.7128,
+              "max": 20181.6737,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 9.51,
+              "min": 9.44,
+              "max": 9.82,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.3108,
+              "min": 0.3019,
+              "max": 0.3299,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0471,
+              "min": 0.0471,
+              "max": 0.0471,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (embedded)",
+          "backend_key": "arcadedb_graph_embedded",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.508,
+              "min": 0.5,
+              "max": 0.523,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 1.05,
+              "min": 0.98,
+              "max": 1.094,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.616,
+              "min": 0.605,
+              "max": 0.625,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 1.555,
+              "min": 1.441,
+              "max": 1.608,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 23.37,
+              "min": 22.682,
+              "max": 23.813,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.522,
+              "min": 0.521,
+              "max": 0.53,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.204,
+              "min": 0.197,
+              "max": 0.207,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.464,
+              "min": 0.457,
+              "max": 0.468,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 87137.4348,
+              "min": 86797.7913,
+              "max": 88172.5033,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 23.0,
+              "min": 22.73,
+              "max": 23.09,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 8.1942,
+              "min": 8.1648,
+              "max": 8.2245,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1257,
+              "min": 0.1257,
+              "max": 0.1257,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server)",
+          "backend_key": "arcadedb_graph_server",
+          "is_arcadedb": true,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arcadedb-c25:417314c18",
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 1.133,
+              "min": 1.032,
+              "max": 1.184,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 1.672,
+              "min": 1.583,
+              "max": 1.738,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.299,
+              "min": 1.21,
+              "max": 1.403,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 2.359,
+              "min": 2.296,
+              "max": 2.513,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 24.869,
+              "min": 24.569,
+              "max": 26.153,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 1.321,
+              "min": 1.184,
+              "max": 1.353,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.827,
+              "min": 0.796,
+              "max": 0.918,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 1.151,
+              "min": 1.005,
+              "max": 1.236,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 27878.1611,
+              "min": 27689.4308,
+              "max": 28053.7654,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 71.89,
+              "min": 71.44,
+              "max": 72.38,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 7.9851,
+              "min": 7.9786,
+              "max": 7.9925,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1433,
+              "min": 0.1256,
+              "max": 0.1819,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "backend_key": "arangodb_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.896,
+              "min": 0.73,
+              "max": 0.91,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 1.117,
+              "min": 0.96,
+              "max": 1.187,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.059,
+              "min": 0.9,
+              "max": 1.076,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 6.001,
+              "min": 5.795,
+              "max": 6.163,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 92.352,
+              "min": 90.598,
+              "max": 93.66,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.912,
+              "min": 0.839,
+              "max": 0.937,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.741,
+              "min": 0.574,
+              "max": 0.822,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.929,
+              "min": 0.862,
+              "max": 0.999,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 91305.7403,
+              "min": 91098.2273,
+              "max": 94047.9118,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 21.95,
+              "min": 21.31,
+              "max": 22.0,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.7785,
+              "min": 0.7632,
+              "max": 0.811,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.4085,
+              "min": 0.4081,
+              "max": 0.4085,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "DuckPGQ",
+          "backend_key": "duckpgq_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "duckdb 1.5.4 + duckpgq f386a6c",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.264,
+              "min": 0.257,
+              "max": 0.266,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.326,
+              "min": 0.305,
+              "max": 0.333,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.335,
+              "min": 1.331,
+              "max": 1.345,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 4.274,
+              "min": 4.234,
+              "max": 4.281,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 6.965,
+              "min": 6.817,
+              "max": 6.985,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 10.571,
+              "min": 10.455,
+              "max": 10.617,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 9.019,
+              "min": 8.949,
+              "max": 9.06,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 10.771,
+              "min": 10.601,
+              "max": 11.113,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 275296.8407,
+              "min": 261639.8172,
+              "max": 285900.2853,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 7.28,
+              "min": 7.01,
+              "max": 7.66,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.3094,
+              "min": 0.2948,
+              "max": 0.3162,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1553,
+              "min": 0.155,
+              "max": 0.1558,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "FalkorDB",
+          "backend_key": "falkordb_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",
+          "version_name": "falkordb 4.20.6",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.13,
+              "min": 0.122,
+              "max": 0.149,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.416,
+              "min": 0.36,
+              "max": 0.485,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.245,
+              "min": 0.202,
+              "max": 0.301,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.661,
+              "min": 0.577,
+              "max": 0.78,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 1.506,
+              "min": 1.458,
+              "max": 1.601,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.175,
+              "min": 0.144,
+              "max": 0.187,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.1,
+              "min": 0.094,
+              "max": 0.129,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.211,
+              "min": 0.16,
+              "max": 0.23,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 23506.4626,
+              "min": 23476.1743,
+              "max": 23536.8291,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 85.26,
+              "min": 85.15,
+              "max": 85.37,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.3709,
+              "min": 0.3635,
+              "max": 0.373,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0,
+              "min": 0.0,
+              "max": 0.0,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "LadybugDB",
+          "backend_key": "ladybug_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "ladybugdb 0.20.4",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.172,
+              "min": 0.169,
+              "max": 0.178,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.357,
+              "min": 0.275,
+              "max": 0.402,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.798,
+              "min": 1.74,
+              "max": 1.934,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 5.961,
+              "min": 5.949,
+              "max": 6.095,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 17.207,
+              "min": 17.034,
+              "max": 17.351,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 9.874,
+              "min": 9.818,
+              "max": 10.05,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 9.049,
+              "min": 8.992,
+              "max": 9.091,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 9.039,
+              "min": 9.027,
+              "max": 9.165,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 569363.9205,
+              "min": 541665.1351,
+              "max": 574258.1662,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 3.52,
+              "min": 3.49,
+              "max": 3.7,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.3665,
+              "min": 0.3293,
+              "max": 0.3865,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.0308,
+              "min": 0.0307,
+              "max": 0.0308,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Memgraph",
+          "backend_key": "memgraph_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",
+          "version_name": "memgraph 3.13.1",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.148,
+              "min": 0.142,
+              "max": 0.156,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.402,
+              "min": 0.234,
+              "max": 0.404,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.155,
+              "min": 0.148,
+              "max": 0.156,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 0.299,
+              "min": 0.282,
+              "max": 0.331,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 3.712,
+              "min": 3.557,
+              "max": 3.884,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.152,
+              "min": 0.15,
+              "max": 0.153,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.142,
+              "min": 0.14,
+              "max": 0.143,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.141,
+              "min": 0.14,
+              "max": 0.142,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 71246.3918,
+              "min": 70247.4939,
+              "max": 71653.9507,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 28.13,
+              "min": 27.97,
+              "max": 28.53,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 0.6602,
+              "min": 0.6164,
+              "max": 0.6621,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.2377,
+              "min": 0.2377,
+              "max": 0.2377,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "backend_key": "mongodb_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "mongo@sha256:41afd6e1183f57e4e4d03ab733070671fca8553da2b36f15d6e3fc9760494d17",
+          "version_name": "mongodb 8.2.12",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.089,
+              "min": 0.086,
+              "max": 0.092,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.325,
+              "min": 0.296,
+              "max": 0.361,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.404,
+              "min": 0.363,
+              "max": 0.575,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 1.709,
+              "min": 1.594,
+              "max": 1.724,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 345.151,
+              "min": 339.304,
+              "max": 347.828,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.223,
+              "min": 0.21,
+              "max": 0.235,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.086,
+              "min": 0.083,
+              "max": 0.089,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.318,
+              "min": 0.316,
+              "max": 0.321,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 160589.8237,
+              "min": 159949.0024,
+              "max": 161756.3358,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 12.48,
+              "min": 12.39,
+              "max": 12.53,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 1.102,
+              "min": 1.0822,
+              "max": 1.1279,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.1915,
+              "min": 0.1913,
+              "max": 0.1916,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "Neo4j",
+          "backend_key": "neo4j_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",
+          "version_name": "neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 7.184,
+              "min": 7.081,
+              "max": 7.435,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 12.251,
+              "min": 11.705,
+              "max": 13.185,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 7.073,
+              "min": 6.747,
+              "max": 7.286,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 6.226,
+              "min": 5.929,
+              "max": 6.433,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 13.2,
+              "min": 12.918,
+              "max": 13.986,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 7.535,
+              "min": 7.361,
+              "max": 7.614,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 6.23,
+              "min": 5.957,
+              "max": 6.301,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 6.452,
+              "min": 6.098,
+              "max": 6.585,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 44134.7941,
+              "min": 43587.6686,
+              "max": 44271.2834,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 45.41,
+              "min": 45.27,
+              "max": 45.98,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 13.0765,
+              "min": 13.0644,
+              "max": 13.085,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.6648,
+              "min": 0.6648,
+              "max": 0.665,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "backend_key": "surrealdb_graph",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.047,
+              "min": 0.047,
+              "max": 0.047,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.058,
+              "min": 0.055,
+              "max": 0.061,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 1.381,
+              "min": 1.218,
+              "max": 1.611,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 60.673,
+              "min": 59.152,
+              "max": 62.839,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 1216.755,
+              "min": 1149.879,
+              "max": 1237.818,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 0.201,
+              "min": 0.198,
+              "max": 0.244,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 0.089,
+              "min": 0.087,
+              "max": 0.103,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 0.184,
+              "min": 0.175,
+              "max": 0.207,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 11376.9357,
+              "min": 11369.1911,
+              "max": 11403.4765,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 176.16,
+              "min": 175.75,
+              "max": 176.28,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 5.6718,
+              "min": 5.6149,
+              "max": 5.6875,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 1.0923,
+              "min": 1.0923,
+              "max": 1.0923,
+              "n": 5
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "backend_key": "surrealdb_graph_server",
+          "is_arcadedb": false,
+          "precision": null,
+          "scale": "sf10",
+          "scale_label": "SF10 (66k people, 1.9M friendships)",
+          "workload": "oltp",
+          "n_docs": null,
+          "deployment": "server",
+          "image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",
+          "version_name": "surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "point p50 ms": {
+              "median": 0.173,
+              "min": 0.154,
+              "max": 0.224,
+              "n": 5
+            },
+            "point p99 ms": {
+              "median": 0.602,
+              "min": 0.556,
+              "max": 0.72,
+              "n": 5
+            },
+            "1-hop p50 ms": {
+              "median": 0.404,
+              "min": 0.378,
+              "max": 0.51,
+              "n": 5
+            },
+            "2-hop p50 ms": {
+              "median": 1.243,
+              "min": 1.12,
+              "max": 1.346,
+              "n": 5
+            },
+            "3-hop filtered p50 ms": {
+              "median": 210.485,
+              "min": 208.943,
+              "max": 215.943,
+              "n": 5
+            },
+            "insert p50 ms": {
+              "median": 17.441,
+              "min": 17.363,
+              "max": 17.543,
+              "n": 5
+            },
+            "update p50 ms": {
+              "median": 9.148,
+              "min": 9.071,
+              "max": 9.274,
+              "n": 5
+            },
+            "delete p50 ms": {
+              "median": 10.707,
+              "min": 10.602,
+              "max": 10.778,
+              "n": 5
+            },
+            "ingest vertices+edges/s": {
+              "median": 18011.6923,
+              "min": 17806.8503,
+              "max": 18024.6515,
+              "n": 5
+            },
+            "ingest total s": {
+              "median": 111.27,
+              "min": 111.19,
+              "max": 112.55,
+              "n": 5
+            },
+            "peak memory GiB": {
+              "median": 2.1424,
+              "min": 2.0491,
+              "max": 2.2093,
+              "n": 5
+            },
+            "disk GiB": {
+              "median": 0.2588,
+              "min": 0.2583,
+              "max": 0.2588,
+              "n": 5
+            }
+          }
+        }
+      ],
+      "instrument": "2026-10",
+      "directions": {
+        "point p50 ms": "down",
+        "point p99 ms": "down",
+        "1-hop p50 ms": "down",
+        "2-hop p50 ms": "down",
+        "3-hop filtered p50 ms": "down",
+        "insert p50 ms": "down",
+        "update p50 ms": "down",
+        "delete p50 ms": "down",
+        "ingest vertices+edges/s": "up",
+        "ingest total s": "down",
+        "peak memory GiB": "down",
+        "disk GiB": "down"
+      },
+      "declared_absences": [],
+      "source_paths": [
+        "benchmarks/experiments/results/runs_paper_oct.csv"
+      ],
+      "source_urls": [
+        "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper_oct.csv"
+      ],
+      "source_path": "benchmarks/experiments/results/runs_paper_oct.csv",
+      "source_url": "https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/results/runs_paper_oct.csv"
+    },
     {
       "id": "e2atom",
       "title": "Cross-model transaction: what survives a crash",
@@ -645,7 +2664,7 @@
         "The engines do not all run the same SHAPE of filtered search, and it shows in the recall column as much as the time one. ArangoDB, MongoDB, Neo4j (vector index), PostgreSQL + pgvector + AGE, Qdrant + Neo4j (no shared transaction), SurrealDB (embedded) and SurrealDB (server) restrict the candidate set first and rank what is left by distance, so they return that set's true nearest matches. ArcadeDB (one transaction) and ArcadeDB (server, one transaction) instead take an over-large global top-k and keep whichever candidates happen to fall inside it: more work, and a partial answer, because a global list of that size usually does not contain enough of the candidates. Read both columns for those arms as what this query shape costs rather than as what the engine can do.",
         "Disk is what the workload left on disk, in GiB: the engine's writable layer plus its volumes after the cell, minus the same engine's empty footprint.",
         "There is no cold column on this table, and the reason is recorded on the rows themselves: no cold/warm split: each operation runs against an already-built, already-warm database by construction",
-        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
         "So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.",
         "Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:), so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
@@ -2051,11 +4070,11 @@
       "dataset": "Every timed write, run twice, once at each durability setting",
       "conditions": [
         "Each row is one engine running ONE operation twice: once where a commit returns without waiting for the disk, which is the setting every other table on this page reports, and once where the commit waits for the log to be flushed and synced. Nothing else about the cell changes.",
-        "This table holds 1 cross-model transaction. The campaign measures ten timed writes in all -- six document operations, three graph writes and the cross-model transaction -- and the rest appear here as the runs that produce them finish. Read down the operations for one engine rather than across the engines for one operation, because what the setting costs is a property of the engine's commit and the rest of the page already compares the engines.",
+        "This table holds 3 graph writes and 1 cross-model transaction. The campaign measures ten timed writes in all -- six document operations, three graph writes and the cross-model transaction -- and the rest appear here as the runs that produce them finish. Read down the operations for one engine rather than across the engines for one operation, because what the setting costs is a property of the engine's commit and the rest of the page already compares the engines.",
         "The read is the control, and it is the row that makes the rest readable: it runs in both cells like everything else and commits nothing, so it is what the writes are moving against.",
         "The Size column names the operation rather than a corpus size: the three lanes that time a write do not write the same thing, so each engine is compared only against the engines running its own operation.",
         "The setting is a property of the cell, not a second measurement inside one: it lives on the database or on the server for most of these engines, so each pair of numbers is two runs.",
-        "Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
+        "DuckPGQ, LadybugDB, Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
         "SurrealDB (server) has no durability setting to read and what it does at commit could not be established from the engine, so the one number printed is in neither class. It is placed in the waiting column because that is the safer reading of an unknown, and this line is why it is there.",
         "The ratio is what the strict setting costs on that engine, at this corpus size and this operation count. It is not a claim about any other write. A large ratio is not a slow engine: it is an engine whose relaxed path was fast, measured against a flush that costs what a flush costs."
       ],
@@ -2067,6 +4086,918 @@
       "withheld_scales": [],
       "withheld_reason": null,
       "entries": [
+        {
+          "backend": "ArcadeDB (embedded)",
+          "is_arcadedb": true,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.5085,
+              "min": 0.469,
+              "max": 0.53,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 8.98,
+              "min": 8.835,
+              "max": 9.087,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 17.66,
+              "min": 17.66,
+              "max": 17.66,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server)",
+          "is_arcadedb": true,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 1.2795,
+              "min": 1.163,
+              "max": 1.353,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 11.2355,
+              "min": 10.887,
+              "max": 11.568,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 8.78,
+              "min": 8.78,
+              "max": 8.78,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.8815,
+              "min": 0.762,
+              "max": 0.937,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 10.543,
+              "min": 10.271,
+              "max": 10.653,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 11.96,
+              "min": 11.96,
+              "max": 11.96,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "duckdb 1.5.4 + duckpgq f386a6c",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 10.4085,
+              "min": 9.672,
+              "max": 10.617,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "FalkorDB",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "falkordb 4.20.6",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.166,
+              "min": 0.127,
+              "max": 0.199,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 8.8335,
+              "min": 8.71,
+              "max": 8.881,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 53.21,
+              "min": 53.21,
+              "max": 53.21,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "LadybugDB",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "ladybugdb 0.20.4",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 9.838,
+              "min": 9.716,
+              "max": 10.05,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "Memgraph",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "memgraph 3.13.1",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.1525,
+              "min": 0.148,
+              "max": 0.156,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 9.307,
+              "min": 9.028,
+              "max": 9.407,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 61.03,
+              "min": 61.03,
+              "max": 61.03,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "mongodb 8.2.12",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.2255,
+              "min": 0.208,
+              "max": 0.235,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 5.573,
+              "min": 4.25,
+              "max": 5.858,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 24.71,
+              "min": 24.71,
+              "max": 24.71,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "Neo4j",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 7.361,
+              "min": 6.953,
+              "max": 7.614,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.19,
+              "min": 0.174,
+              "max": 0.244,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 16.7345,
+              "min": 16.669,
+              "max": 16.905,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 88.08,
+              "min": 88.08,
+              "max": 88.08,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "scale": "graph_insert",
+          "scale_label": "one person and one edge inserted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 17.42,
+              "min": 17.203,
+              "max": 17.674,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (embedded)",
+          "is_arcadedb": true,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.2015,
+              "min": 0.189,
+              "max": 0.207,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 8.551,
+              "min": 8.358,
+              "max": 8.803,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 42.44,
+              "min": 42.44,
+              "max": 42.44,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server)",
+          "is_arcadedb": true,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.8415,
+              "min": 0.795,
+              "max": 0.918,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 10.501,
+              "min": 10.411,
+              "max": 10.69,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 12.48,
+              "min": 12.48,
+              "max": 12.48,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.714,
+              "min": 0.574,
+              "max": 0.851,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 10.41,
+              "min": 10.164,
+              "max": 10.482,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 14.58,
+              "min": 14.58,
+              "max": 14.58,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "duckdb 1.5.4 + duckpgq f386a6c",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 8.965,
+              "min": 8.325,
+              "max": 9.093,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "FalkorDB",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "falkordb 4.20.6",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.1135,
+              "min": 0.094,
+              "max": 0.166,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 8.676,
+              "min": 8.397,
+              "max": 8.989,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 76.44,
+              "min": 76.44,
+              "max": 76.44,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "LadybugDB",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "ladybugdb 0.20.4",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 8.984,
+              "min": 8.89,
+              "max": 9.091,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "Memgraph",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "memgraph 3.13.1",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.1425,
+              "min": 0.139,
+              "max": 0.145,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 9.1455,
+              "min": 8.878,
+              "max": 9.369,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 64.18,
+              "min": 64.18,
+              "max": 64.18,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "mongodb 8.2.12",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.086,
+              "min": 0.083,
+              "max": 0.089,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 4.0495,
+              "min": 3.785,
+              "max": 4.182,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 47.09,
+              "min": 47.09,
+              "max": 47.09,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "Neo4j",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 5.978,
+              "min": 5.609,
+              "max": 6.301,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.0875,
+              "min": 0.082,
+              "max": 0.103,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 8.5025,
+              "min": 8.362,
+              "max": 8.68,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 97.17,
+              "min": 97.17,
+              "max": 97.17,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "scale": "graph_update",
+          "scale_label": "one person's property updated (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 9.1205,
+              "min": 9.015,
+              "max": 9.274,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (embedded)",
+          "is_arcadedb": true,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.4755,
+              "min": 0.457,
+              "max": 0.509,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 9.296,
+              "min": 9.252,
+              "max": 9.597,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 19.55,
+              "min": 19.55,
+              "max": 19.55,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "ArcadeDB (server)",
+          "is_arcadedb": true,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 1.076,
+              "min": 1.005,
+              "max": 1.236,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 11.475,
+              "min": 11.236,
+              "max": 11.741,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 10.66,
+              "min": 10.66,
+              "max": 10.66,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "ArangoDB",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "arangodb 3.12.11",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.899,
+              "min": 0.85,
+              "max": 0.999,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 10.74,
+              "min": 10.274,
+              "max": 11.096,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 11.95,
+              "min": 11.95,
+              "max": 11.95,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "DuckPGQ",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "duckdb 1.5.4 + duckpgq f386a6c",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 10.4795,
+              "min": 9.979,
+              "max": 11.113,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "FalkorDB",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "falkordb 4.20.6",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.393,
+              "min": 0.16,
+              "max": 0.77,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 9.488,
+              "min": 8.517,
+              "max": 10.078,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 24.14,
+              "min": 24.14,
+              "max": 24.14,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "LadybugDB",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "ladybugdb 0.20.4",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 8.965,
+              "min": 8.842,
+              "max": 9.165,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "Memgraph",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "memgraph 3.13.1",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.1415,
+              "min": 0.139,
+              "max": 0.145,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 9.126,
+              "min": 9.05,
+              "max": 9.247,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 64.49,
+              "min": 64.49,
+              "max": 64.49,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "MongoDB",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "mongodb 8.2.12",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.316,
+              "min": 0.312,
+              "max": 0.321,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 5.8175,
+              "min": 5.187,
+              "max": 6.032,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 18.41,
+              "min": 18.41,
+              "max": 18.41,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "Neo4j",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "neo4j 2026.08.1",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 6.1385,
+              "min": 5.589,
+              "max": 7.041,
+              "n": 20
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (embedded)",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "embedded",
+          "image": null,
+          "version_name": "surrealdb 2.3.10",
+          "host": null,
+          "metrics": {
+            "no wait ms": {
+              "median": 0.173,
+              "min": 0.153,
+              "max": 0.207,
+              "n": 10
+            },
+            "waits for the disk ms": {
+              "median": 9.3835,
+              "min": 9.215,
+              "max": 9.46,
+              "n": 10
+            },
+            "cost of waiting": {
+              "median": 54.24,
+              "min": 54.24,
+              "max": 54.24,
+              "n": 10
+            }
+          }
+        },
+        {
+          "backend": "SurrealDB (server)",
+          "is_arcadedb": false,
+          "scale": "graph_delete",
+          "scale_label": "one person and its edges deleted (graph)",
+          "workload": "write",
+          "n_docs": null,
+          "deployment": "server",
+          "image": null,
+          "version_name": "surrealdb 3.2.4",
+          "host": null,
+          "metrics": {
+            "waits for the disk ms": {
+              "median": 10.524,
+              "min": 10.359,
+              "max": 10.894,
+              "n": 20
+            }
+          }
+        },
         {
           "backend": "ArcadeDB (one transaction)",
           "is_arcadedb": true,
@@ -2559,9 +5490,10 @@
       "dataset": "Every October table on this page, read for which engine has a row",
       "instrument": "2026-10",
       "conditions": [
-        "This table is derived from the four tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there; no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page."
+        "This table is derived from the five tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there; no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page."
       ],
       "columns": [
+        "Graph OLTP",
         "Cross-model transaction",
         "Cross-model transaction: what survives a crash",
         "What waiting for the disk costs",
@@ -2585,6 +5517,9 @@
           "version_name": "arcadedb 26.10.1-dev \u00b7 417314c18",
           "host": null,
           "metrics": {
+            "Graph OLTP": {
+              "text": "measured"
+            },
             "Cross-model transaction": {
               "text": "measured"
             },
@@ -2612,6 +5547,9 @@
           "version_name": "arangodb 3.12.11",
           "host": null,
           "metrics": {
+            "Graph OLTP": {
+              "text": "measured"
+            },
             "Cross-model transaction": {
               "text": "measured"
             },
@@ -2636,9 +5574,12 @@
           "deployment": "server",
           "precision": null,
           "image": null,
-          "version_name": "mongodb 8.2.12 + MongoDb Search Community Version 1.70.4",
+          "version_name": "mongodb 8.2.12 / mongodb 8.2.12 + MongoDb Search Community Version 1.70.4",
           "host": null,
           "metrics": {
+            "Graph OLTP": {
+              "text": "measured"
+            },
             "Cross-model transaction": {
               "text": "measured"
             },
@@ -2666,6 +5607,9 @@
           "version_name": "surrealdb 2.3.10 / surrealdb 3.2.4 / surrealdb 3.2.4",
           "host": null,
           "metrics": {
+            "Graph OLTP": {
+              "text": "measured"
+            },
             "Cross-model transaction": {
               "text": "measured"
             },
@@ -2694,14 +5638,18 @@
   "condition_provenance": {
     "generated": [
       {
-        "text": "This table holds 1 cross-model transaction. The campaign measures ten timed writes in all -- six document operations, three graph writes and the cross-model transaction -- and the rest appear here as the runs that produce them finish. Read down the operations for one engine rather than across the engines for one operation, because what the setting costs is a property of the engine's commit and the rest of the page already compares the engines.",
+        "text": "This table holds 3 graph writes and 1 cross-model transaction. The campaign measures ten timed writes in all -- six document operations, three graph writes and the cross-model transaction -- and the rest appear here as the runs that produce them finish. Read down the operations for one engine rather than across the engines for one operation, because what the setting costs is a property of the engine's commit and the rest of the page already compares the engines.",
         "values": [
+          "3",
           "1"
         ]
       },
       {
-        "text": "Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
+        "text": "DuckPGQ, LadybugDB, Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
         "values": [
+          "DuckPGQ",
+          "LadybugDB",
+          "Neo4j",
           "Neo4j (vector index)",
           "Qdrant + Neo4j (no shared transaction)"
         ]
@@ -2737,8 +5685,18 @@
         ]
       },
       {
-        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is DuckPGQ, LadybugDB, Neo4j, which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
         "values": [
+          "DuckPGQ",
+          "LadybugDB",
+          "Neo4j",
+          "SurrealDB (server)"
+        ]
+      },
+      {
+        "text": "Durability is matched at the relaxed end: on every engine that has the setting, a commit returns without waiting for the disk and the log is flushed by the engine's own background policy, which is ArcadeDB's engine default and a documented production mode for each of the others. Every engine's setting was read out of the engine rather than assumed, and each row records what it ran as `durability`. The exception on this table is Neo4j, Neo4j (vector index), Qdrant + Neo4j (no shared transaction), which have no setting to relax and wait for the disk at every commit; their write and transaction cells are paying for that. SurrealDB (server) exposes no durability setting at all and what it does at commit could not be established, so it is in neither class and its row says so rather than claiming one.",
+        "values": [
+          "Neo4j",
           "Neo4j (vector index)",
           "Qdrant + Neo4j (no shared transaction)",
           "SurrealDB (server)"
@@ -2748,6 +5706,22 @@
         "text": "Each printed cell is the median of 5 repetitions, with min and max carried alongside; nothing here is a single sample.",
         "values": [
           "5"
+        ]
+      },
+      {
+        "text": "Each repetition runs every read against a fresh set of start persons (SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200) and 1,000 each of the insert, update, and delete; the p50 and p99 are over those.",
+        "values": [
+          "SF1 (10k people, 181k friendships): 500, SF10 (66k people, 1.9M friendships): 200",
+          "1,000"
+        ]
+      },
+      {
+        "text": "FalkorDB at SF1 (10k people, 181k friendships) and SF10 (66k people, 1.9M friendships): its disk cells are 0.0 because the server container did not grow over its empty footprint during the run; read them as a floor under 0.01 GiB, not as a size.",
+        "values": [
+          "FalkorDB",
+          "SF1 (10k people, 181k friendships) and SF10 (66k people, 1.9M friendships)",
+          "0.0",
+          "0.01"
         ]
       },
       {
@@ -2807,9 +5781,9 @@
         ]
       },
       {
-        "text": "This table is derived from the four tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there; no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page.",
+        "text": "This table is derived from the five tables above and carries no measurement of its own. Each column is one of those tables. measured means the engine has at least one row on that table, counting every arm of one engine as one, so both ArcadeDB deployments are ArcadeDB and both SurrealDB modes are SurrealDB; declared means the table has no row for the engine and says why beneath itself, in the words printed there; no arm means the engine was not run on that workload, with neither a row nor a declared reason. The Mode column lists the deployments the engine has rows for anywhere on the page.",
         "values": [
-          "four"
+          "five"
         ]
       }
     ]
@@ -2817,7 +5791,6 @@
   "pending_tables": {
     "docs_oltp": "Still being measured at this version. This table appears here when its run finishes.",
     "docs_olap": "Still being measured at this version. This table appears here when its run finishes.",
-    "l2": "Still being measured at this version. This table appears here when its run finishes.",
     "l2olap": "Still being measured at this version. This table appears here when its run finishes.",
     "l3s": "Still being measured at this version. This table appears here when its run finishes.",
     "l3d": "Still being measured at this version. This table appears here when its run finishes.",
