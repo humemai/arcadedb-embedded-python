@@ -438,7 +438,59 @@ TEMPLATE = r'''<title>ArcadeDB Bottlenecks</title>
 '''
 
 
+def triage():
+    """Rank every cell by how far ArcadeDB trails, as candidates to investigate.
+
+    THE MEMO IS CURATED; THIS IS NOT. The memo above is a written argument with
+    chosen comparisons, which means a weakness nobody thought to write about
+    does not appear in it. This walks every published cell mechanically and
+    ranks by the gap, so the list is decided by the data rather than by what
+    last month's author found interesting.
+
+    Filing upstream is a standing part of this benchmark (the user, 2026-09-22:
+    "upstream is generally interested in the weaknesses of arcadedb ... you can
+    file issues upstream with detailed java explanations ... make it a routine
+    in this benchmarking"). This is the input to that routine; CAMPAIGN.md holds
+    the steps that turn a line here into a filed issue.
+
+    The bar is deliberately harsh -- our best arm against the single BEST
+    comparator in that column -- so most lines are "not the category leader"
+    rather than a defect. The gap is a place to LOOK, never a finding.
+    """
+    T, payload = load()
+    out = []
+    for tid, t in T.items():
+        ours = [e for e in t.get("entries", []) if e.get("is_arcadedb")]
+        others = [e for e in t.get("entries", []) if not e.get("is_arcadedb")]
+        if not ours or not others:
+            continue
+        for col in t.get("columns", []):
+            if not any(k in col for k in ("ms", "GiB", "/s", " s")):
+                continue
+            low = ("ms" in col) or ("GiB" in col) or col.endswith(" s")
+            ov = [(cell(e, col), e["backend"]) for e in ours if cell(e, col)]
+            cv = [(cell(e, col), e["backend"]) for e in others if cell(e, col)]
+            if not ov or not cv:
+                continue
+            (bo, ob), (bc, cb) = (min(ov), min(cv)) if low else (max(ov), max(cv))
+            gap = (bo / bc) if low else (bc / bo)
+            if gap > 1.0:
+                out.append((gap, tid, col, ob, bo, cb, bc))
+    out.sort(reverse=True)
+    print("Cells where ArcadeDB trails the BEST comparator, worst first.")
+    print("A gap is a place to look, not a finding: audit the harness before the engine,")
+    print("and see CAMPAIGN.md 'Filing an engine weakness upstream' before writing anything.\n")
+    print("%6s  %-10s %-32s %-26s %10s %10s" % ("gap", "table", "column", "best comparator", "ours", "theirs"))
+    for gap, tid, col, ob, bo, cb, bc in out[:25]:
+        print("%5.1fx  %-10s %-32s %-26s %10.4g %10.4g" % (gap, tid, col[:32], cb[:26], bo, bc))
+    print(f"\n{len(out)} cell(s) where ArcadeDB trails; "
+          f"{sum(1 for x in out if x[0] >= 2)} by 2x or more.")
+    return 0
+
+
 def main():
+    if "--triage" in sys.argv:
+        return triage()
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     body = build()
     with open(OUT, "w", encoding="utf-8") as fh:
