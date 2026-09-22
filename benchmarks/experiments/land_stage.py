@@ -72,6 +72,69 @@ def sh(cmd, cwd=None, check=True, capture=False, env=None, quiet=False):
                           capture_output=capture or quiet, env=env)
 
 
+def _warn_rows_predate_lane_changes(lanes, pin):
+    """Say when a lane's rows were measured before its own script changed.
+
+    THE GATES CANNOT SEE THIS. On 2026-09-22 an l4 landing passed all six with
+    DuckDB rows measured three days before the commit that gave DuckDB the
+    `(host, ts)` index every other arm on that lane has (BUGS F98). The rows
+    and their index declaration agreed with each other; what changed
+    afterwards was the DECISION, and nothing in the payload records that a
+    decision has a date. Publishing would have handicapped a comparator by an
+    omission we had already fixed -- flattering our own engine, which is the
+    direction that costs the most credibility.
+
+    A WARNING AND NOT A REFUSAL, because materiality needs judgment that this
+    cannot do. Adding a field to a row is harmless; changing which index an
+    arm builds is not, and both look identical from here. What it can do is
+    make sure nobody has to notice on their own: it lists the commits, newest
+    last, and leaves the call to the person reading.
+    """
+    if not lanes:
+        return
+    sys.path.insert(0, str(HERE))
+    try:
+        import runner as _R
+    except Exception:  # noqa: BLE001
+        return
+    rows_path = RESULTS / "runs.jsonl"
+    if not rows_path.exists():
+        return
+    newest = {}
+    with rows_path.open() as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if str(r.get("instrument") or "") != "2026-10":
+                continue
+            if pin and not str(r.get("engine_commit") or "").startswith(pin):
+                continue
+            lane = r.get("lane")
+            if lane in lanes:
+                newest[lane] = max(newest.get(lane, ""), str(r.get("ts_utc") or ""))
+    for lane in sorted(newest):
+        spec = _R.LANES.get(lane)
+        if not spec:
+            continue
+        out = sh(["git", "log", f"--since={newest[lane]}", "--format=%h %cI %s",
+                  "--", f"benchmarks/experiments/{spec[0]}"],
+                 cwd=REPO, check=False, capture=True, quiet=True).stdout.strip()
+        commits = [l for l in out.splitlines() if l.strip()]
+        if not commits:
+            continue
+        print(f"\n  NOTE {lane}: its newest row is {newest[lane][:16]} and "
+              f"{spec[0]} has changed {len(commits)} time(s) since. These rows "
+              f"were measured under an earlier version of their own lane:")
+        for c in reversed(commits):
+            print(f"       {c[:110]}")
+        print(f"       Additive fields are harmless; a changed DECISION is not "
+              f"(BUGS F98 shipped past all six gates this way).")
+
+
 def _published_lanes(payload_path, pin=None):
     """The lanes whose tables are already on the page being republished.
 
@@ -341,6 +404,8 @@ def main():
               f"the store is unchanged and the gates run over what it holds")
     else:
         sh([PY, str(HERE / "merge_campaign.py"), "--from-file", str(filtered), "--apply"], cwd=HERE)
+
+    _warn_rows_predate_lane_changes(lanes, args.pin)
 
     step(4, "publish through the gates (page-only, no site build)")
     log = SCRATCH / "refresh.log"
