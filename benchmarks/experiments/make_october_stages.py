@@ -415,6 +415,14 @@ done
 # looks inside dbbench:arcadedb.
 W=$(ls -t "$REPO"/bindings/python/dist/*.whl | head -1)
 [ -n "$W" ] || {{ say "$ID ABORT: no wheel in dist/"; exit 1; }}
+# ONE WHEEL, OR SAY WHICH. `ls -t | head -1` takes the newest by mtime and
+# says nothing about the ones it passed over, so a second wheel in dist/ --
+# a rebuild at a different pin, a copy kept "just in case" -- silently
+# decides what every cell of this stage measures. dist/ holds exactly one
+# today; the guard is here because the day it holds two is the day nobody
+# notices. Refusing rather than warning: this picks the ENGINE UNDER TEST.
+_NW=$(ls "$REPO"/bindings/python/dist/*.whl 2>/dev/null | wc -l)
+[ "$_NW" -eq 1 ] || {{ say "$ID ABORT: $_NW wheels in dist/, and ls -t would pick one by date: $(ls "$REPO"/bindings/python/dist/*.whl | tr '\n' ' ')"; exit 1; }}
 export ARCADEDB_WHEEL="$W" ARCADEDB_SERVER_IMAGE=arcadedb-c25:$PIN
 WV=$(basename "$W" | cut -d- -f2)
 BENCH_ALLOW_DEV=1 ./build_images.sh {images} >> "$S" 2>&1 || {{ say "$ID ABORT: image build"; exit 1; }}
