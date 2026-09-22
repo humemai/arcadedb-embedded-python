@@ -511,11 +511,33 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
                               "TAGS (host STRING) FIELDS (uu DOUBLE, us DOUBLE, ui DOUBLE) "
                               f"SHARDS {self.SHARDS}")
         url = f"{self.base}/ts/bench/write?precision=s"
+        # WHICH SIDE OF THE WIRE THE TIME IS ON. `ingest_s` is the whole of
+        # this method and keeps that meaning, but a served arm that posts line
+        # protocol pays two costs with nothing separating them: Python turning
+        # rows into text, and the engine accepting it. Comparing the served
+        # arm against the embedded one, or against QuestDB, without that split
+        # compares our serializer as much as anything else -- which is exactly
+        # how #5474 started, where our adapter turned out to be costing 2.87x
+        # and the engine was never the problem.
+        #
+        # Estimated off-line first and the estimate was not good enough: on
+        # mini's E-cores the formatting looked like 40% of this arm's total
+        # and on its P-cores more like 25%, and the lane runs on the P-cores.
+        # A number that moves that much with where you measure it is not a
+        # number to put in an upstream issue, so it is measured in place.
+        _ser = _post = 0.0
         for lo in range(0, len(pts), self.CHUNK):
+            _t = time.perf_counter()
             body = "\n".join(f"Point,host={h} uu={uu},us={us},ui={ui} {ts}"
-                             for h, ts, uu, us, ui in pts[lo:lo + self.CHUNK])
-            r = self.rq.post(url, data=body.encode(), headers={"Content-Type": "text/plain"}, timeout=900)
+                             for h, ts, uu, us, ui in pts[lo:lo + self.CHUNK]).encode()
+            _ser += time.perf_counter() - _t
+            _t = time.perf_counter()
+            r = self.rq.post(url, data=body, headers={"Content-Type": "text/plain"}, timeout=900)
+            _post += time.perf_counter() - _t
             r.raise_for_status()
+        self.ingest_serialize_s = round(_ser, 3)
+        self.ingest_post_s = round(_post, 3)
+        self.ingest_body_mb = round(sum(len(p[0]) + 60 for p in pts) / 1e6, 1)
 
     def q_last(self):
         return self._post("query", f"SELECT ts, uu FROM Point WHERE host = '{HOST}' ORDER BY ts DESC LIMIT 1")
@@ -1290,6 +1312,12 @@ def main():
     dt = time.perf_counter() - t0
     out["ingest_s"] = round(dt, 2)
     out["ingest_pts_per_s"] = round(len(pts) / dt, 1)
+    # Set only by arms that post a serialized body, so the field's absence
+    # means "this arm does not serialize", not "nobody measured it".
+    for _k in ("ingest_serialize_s", "ingest_post_s", "ingest_body_mb"):
+        _v = getattr(b, _k, None)
+        if _v is not None:
+            out[_k] = _v
     # THE SPLIT (FAIRNESS F14). `ingest_s` on THIS lane has always meant the
     # whole of ingest(), index build included, and it is what the page prints
     # as "ingest total s" -- so it keeps that meaning and the split is
