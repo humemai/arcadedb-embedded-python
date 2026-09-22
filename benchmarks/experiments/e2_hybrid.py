@@ -226,8 +226,26 @@ class ArcadeE2:
         with bench_common.index_timer(self):
             db.command("sql", "CREATE INDEX ON Product (pid) UNIQUE")
         db.command("sql", "CREATE EDGE TYPE RELATED")
+        # KEEP THE WRITE-AHEAD LOG ON, against graph_batch's own default.
+        #
+        # The helper relaxes durability for the duration of a bulk load and
+        # says so in its log: "relaxing durability for the bulk load (useWAL
+        # true->false)". That is a defensible default for an API whose job is
+        # to load a corpus you can regenerate. It is NOT defensible here: this
+        # table's ingest column is compared against ArangoDB's import_bulk,
+        # MongoDB's insert_many and Neo4j's UNWIND, none of which turns its
+        # log off, and the page tells the reader durability is "matched at the
+        # relaxed end" -- a commit that does not wait for the disk, not a
+        # commit that is never logged.
+        #
+        # Measured before choosing, 50,000 products and 150,000 edges, three
+        # runs each alternating: WAL off 10.73 s median, WAL on 10.41 s. Cost
+        # 0.97x -- keeping the log on is free at this scale, inside the noise.
+        # So the asymmetry bought nothing and is not worth having; when a knob
+        # moves only our own engine, take the setting that does not flatter us.
         with db.graph_batch(batch_size=BATCH, expected_edge_count=len(edges),
-                            bidirectional=True, commit_every=BATCH) as b:
+                            bidirectional=True, commit_every=BATCH,
+                            use_wal=True) as b:
             rows = [{"pid": i, "views": 0,
                      "embedding": vecs[i].tolist()} for i in range(len(vecs))]
             rids = b.create_vertices("Product", rows)
