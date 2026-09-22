@@ -2050,7 +2050,7 @@
       "dataset": "Every timed write, run twice, once at each durability setting",
       "conditions": [
         "Each row is one engine running ONE operation twice: once where a commit returns without waiting for the disk, which is the setting every other table on this page reports, and once where the commit waits for the log to be flushed and synced. Nothing else about the cell changes.",
-        "Every timed write on the page is here: the six document operations, the three graph writes, and the cross-model transaction. Read down the operations for one engine rather than across the engines for one operation, because what the setting costs is a property of the engine's commit and the rest of the page already compares the engines.",
+        "This table holds 1 cross-model transaction. The campaign measures ten timed writes in all -- six document operations, three graph writes and the cross-model transaction -- and the rest appear here as the runs that produce them finish. Read down the operations for one engine rather than across the engines for one operation, because what the setting costs is a property of the engine's commit and the rest of the page already compares the engines.",
         "The read is the control, and it is the row that makes the rest readable: it runs in both cells like everything else and commits nothing, so it is what the writes are moving against.",
         "The Size column names the operation rather than a corpus size: the three lanes that time a write do not write the same thing, so each engine is compared only against the engines running its own operation.",
         "The setting is a property of the cell, not a second measurement inside one: it lives on the database or on the server for most of these engines, so each pair of numbers is two runs.",
@@ -2692,6 +2692,12 @@
   ],
   "condition_provenance": {
     "generated": [
+      {
+        "text": "This table holds 1 cross-model transaction. The campaign measures ten timed writes in all -- six document operations, three graph writes and the cross-model transaction -- and the rest appear here as the runs that produce them finish. Read down the operations for one engine rather than across the engines for one operation, because what the setting costs is a property of the engine's commit and the rest of the page already compares the engines.",
+        "values": [
+          "1"
+        ]
+      },
       {
         "text": "Neo4j (vector index), Qdrant + Neo4j (no shared transaction) have no setting to relax, established by tracing the commits rather than assumed, so each prints one number, in the column for a commit that waits. Reading it against the other column would be reading a choice the engine does not offer.",
         "values": [
