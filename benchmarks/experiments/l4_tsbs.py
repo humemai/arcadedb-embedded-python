@@ -184,14 +184,29 @@ class ArcadeTS:
             db.command("sql", f"CREATE PROPERTY Point.{c} {t}")
         with bench_common.index_timer(self):
             db.command("sql", "CREATE INDEX ON Point (host, ts) UNIQUE")
-        db.begin()
-        for n, (h, ts, uu, us, ui) in enumerate(pts):
-            db.command("sql", "INSERT INTO Point SET host=:h, ts=:t, uu=:a, us=:b, ui=:c",
-                       {"h": h, "t": ts, "a": uu, "b": us, "c": ui})
-            if (n + 1) % 10_000 == 0:
-                db.commit()
-                db.begin()
-        db.commit()
+        # THE BULK PATH, NOT A PER-POINT SQL LOOP (F115, 2026-09-23). This arm
+        # used to issue one `INSERT INTO Point SET ...` per point inside a
+        # transaction committed every 10,000. Every OTHER arm on this lane
+        # already reaches its engine through that engine's bulk loader --
+        # DuckDB and SQLite `executemany`, MongoDB `insert_many`, TimescaleDB
+        # `COPY`, ArangoDB's bulk API, QuestDB's ILP socket, and ArcadeDB's own
+        # native TIMESERIES arm via `append_samples` -- so the document arm was
+        # the only one on the table driven a row at a time. PROTOCOL.md's
+        # escape-hatch table states the rule it broke: comparators use ordinary
+        # bulk paths, and DuckDB's entry is justified as the idiomatic bulk
+        # load. Measured on the laptop at 200,000 points, same schema and the
+        # same UNIQUE index in place: 11.34 s the old way against 5.07 s
+        # through `insert_many`, so the loop was charging this arm 2.24x (3.77x
+        # with the index dropped). That is a property of our adapter, not of
+        # the engine, and it sat on a published column.
+        #
+        # `commit_every` keeps the old cadence exactly, so the durability
+        # argument in PROTOCOL.md section "bulk ingest runs at ONE setting"
+        # still holds: this commits in batches of 10,000, not per row.
+        db.insert_many("Point",
+                       ({"host": h, "ts": ts, "uu": uu, "us": us, "ui": ui}
+                        for h, ts, uu, us, ui in pts),
+                       commit_every=10_000)
 
     def q_last(self):
         return self.db.query("sql",
@@ -266,13 +281,35 @@ class ArcadeTSServer(ArcadeTS):
             self._post("command", f"CREATE PROPERTY Point.{c} {t}")
         with bench_common.index_timer(self):
             self._post("command", "CREATE INDEX ON Point (host, ts) UNIQUE")
-        buf = []
-        for h, ts, uu, us, ui in pts:
-            buf.append(f"INSERT INTO Point SET host='{h}', ts={ts}, uu={uu}, us={us}, ui={ui}")
-            if len(buf) >= 5000:
-                self._post("command", ";".join(buf), language="sqlscript"); buf = []
-        if buf:
-            self._post("command", ";".join(buf), language="sqlscript")
+        # ONE STATEMENT PER BATCH, NOT 5,000 (F115, 2026-09-23). This used to
+        # join 5,000 `INSERT INTO Point SET ...` texts with ";" and post them as
+        # a sqlscript, which asks the server to parse 2.59M distinct statements
+        # to load 2.59M points. `INSERT INTO <type> CONTENT [ ...json array... ]`
+        # is the HTTP bulk form and lands the same rows in a single parse.
+        # Measured against this server at 200,000 points: 9.38 s the old way
+        # against 8.31 s (1.13x) with a 14.7 MB body rather than 17.5 MB. The
+        # parse is NOT where the served ingest goes -- that is worth recording,
+        # because it was the obvious suspect -- but the batch form is still the
+        # idiomatic one, and the lane's other served arms all use theirs.
+        # Split the same two costs the native served arm splits (FAIRNESS F14c:
+        # where one arm on a lane separates a phase, every arm that HAS that
+        # phase separates it). Both served arms now say how much of the ingest
+        # was Python building a body and how much was the engine accepting it.
+        _ser = _post = 0.0
+        _body = 0
+        for lo in range(0, len(pts), 5000):
+            _t = time.perf_counter()
+            body = "INSERT INTO Point CONTENT " + json.dumps(
+                [{"host": h, "ts": ts, "uu": uu, "us": us, "ui": ui}
+                 for h, ts, uu, us, ui in pts[lo:lo + 5000]], separators=(",", ":"))
+            _ser += time.perf_counter() - _t
+            _body += len(body)
+            _t = time.perf_counter()
+            self._post("command", body)
+            _post += time.perf_counter() - _t
+        self.ingest_serialize_s = round(_ser, 3)
+        self.ingest_post_s = round(_post, 3)
+        self.ingest_body_mb = round(_body / 1e6, 1)
 
     def q_last(self):
         return self._post("query", f"SELECT ts, uu FROM Point WHERE host='{HOST}' ORDER BY ts DESC LIMIT 1")

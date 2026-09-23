@@ -4221,7 +4221,13 @@ OCT_PROSE = {
         # per-host hourly cell was withheld. The October pin carries the fix
         # (see WITHHELD_CELLS above), the cell publishes, and the sentence is
         # no longer emitted, so its registration is gone with it.
-        "ingest": ("Ingest paths: the ArcadeDB document path issues INSERT per point through the Python package (embedded) or sqlscript batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP; SQLite executemany in batched transactions; MongoDB insert_many in batches into a time-series collection; TimescaleDB COPY; ArangoDB import_bulk; SurrealDB inserts through its Python SDK.", []),
+        # THE DOCUMENT ARM'S LOADER CHANGED WITH F115 (2026-09-23). It used to
+        # say "issues INSERT per point ... or sqlscript batches over HTTP", and
+        # that was accurate until this pin: the arm really was the only one on
+        # the table driven a row at a time. September's copy in INGEST_NOTES
+        # still says so, correctly, because September's rows were produced that
+        # way; only the October sentence moves.
+        "ingest": ("Ingest paths: the ArcadeDB document path bulk-inserts through the Python package in batched transactions (embedded) or posts INSERT ... CONTENT batches over HTTP (served); the native TIMESERIES type takes columns through the async executor's append_samples (embedded) or InfluxDB line protocol at /api/v1/ts/{db}/write (served); DuckDB inserts an Arrow table; QuestDB takes line protocol over TCP; SQLite executemany in batched transactions; MongoDB insert_many in batches into a time-series collection; TimescaleDB COPY; ArangoDB import_bulk; SurrealDB inserts through its Python SDK.", []),
     },
     "lifecycle": {
         "session": ("The SESSION is open + action + close. Reporting open and close alone hides work triggered between them.", []),
