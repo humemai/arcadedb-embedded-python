@@ -4170,6 +4170,18 @@ OCT_PROSE = {
                    [(r"in (\d+)-record transactions", lambda P, rows: _const("l3_sparse", "INGEST_BATCH"), "const")]),
     },
     "l3d": {
+        # WHY AN ANGULAR DATASET IS MEASURED WITH EVERY ENGINE ON L2. A fair
+        # question from a reader who knows this corpus, and until 2026-09-23
+        # the answer lived only in a code comment in load_dataset(). No number
+        # in it, so no pin.
+        "metric": ("Every engine searches this corpus with the same distance, squared Euclidean, "
+                   "although the corpus is one whose published neighbours were computed by angle. "
+                   "The two agree here: every vector and every query is scaled to unit length "
+                   "before anything is indexed, and once they are, ordering by Euclidean distance "
+                   "and ordering by angle produce the same list. So the recall column is measured "
+                   "against the dataset's own published neighbours, unchanged, while every engine "
+                   "runs one metric rather than each running its own -- which is what makes the "
+                   "latencies comparable at all.", []),
         "cold": ("Cold p50 and p99 are the first timed pass over the query set after the index is built; the lane runs a short untimed warm-up on held-out queries before it, so cold means an index that has not yet answered the timed queries, not a process that has done nothing. Warm columns, where present, are the passes after it from the multipass driver.", []),
         "degree": ("ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.", []),
         "arango_ivf": ("ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not HNSW, so the degree match above does not apply to it; its rows record nLists (about the square root of the corpus) and nProbe (an eighth of the lists) instead.", []),
@@ -4240,7 +4252,7 @@ OCT_PROSE["l2olap"]["ingest"] = OCT_PROSE["l2"]["ingest"]
 # that depend on which engines are on the table are added by _oct_conditions.
 OCT_TABLE_PROSE = {
     "l3s": ["recall", "one_timer", "es_pruning"],
-    "l3d": ["degree"],
+    "l3d": ["metric", "degree"],
     "l2": ["projection"],
     "l2olap": ["gav"],
     "e2atom": ["trial"],
