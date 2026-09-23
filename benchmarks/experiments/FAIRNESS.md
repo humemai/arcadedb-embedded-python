@@ -305,6 +305,7 @@ Two consequences:
 - **Vendor settle steps** that have no equivalent elsewhere (Elasticsearch forcemerge, Milvus flush+load, Qdrant green-wait, ArcadeDB `COMPACT INDEX`). Each engine gets *its own*; none goes unmatched by the others having theirs.
 - **Operating points deliberately not matched**, such as the dense fp32 arms with the build cache pinned to the corpus against INT8 at the engine default (DECISIONS #56), stated in the l3d condition.
 - **Quality and precision differences** (int8 against fp32 postings, ES pruning). Report recall next to latency, always.
+- **Intra-query parallelism at each engine's default.** ArcadeDB's SQL scans a type's buckets in parallel (`arcadedb.queryParallelScan`, on by default) only when the type has at least two buckets, and `arcadedb.typeDefaultBuckets` is 1. Every ArcadeDB type in this benchmark is created with the default, so its full scans run on one thread, as SQLite's and MongoDB's do, while DuckDB uses the whole cpuset. Not tuned: it is a knob that moves only ArcadeDB, so the default stands until a campaign decides otherwise (HANDOFF, 2026-09-23). The per-record cost that makes that one thread slow is engine code, filed as ArcadeData/arcadedb#8260.
 
 Anything else that differs is a defect, not an override.
 
