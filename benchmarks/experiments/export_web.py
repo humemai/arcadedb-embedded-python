@@ -32,6 +32,7 @@ import collections
 import ast as _ast
 import json
 import os
+import subprocess
 import re
 import statistics
 import sys
@@ -3163,6 +3164,62 @@ def _durability_scope_note(entries):
         *[str(ops[k]) for k in ("doc", "graph", "crossmodel") if ops[k]])
 
 
+# KNOWN ENGINE DEFECTS AT THE MEASURED BUILD (2026-09-23). A cell can be
+# measured correctly and still not mean what its column says, because the
+# engine under test had a defect that changes what the operation does. The
+# durability table published ArcadeDB's embedded cross-model commit at a
+# "cost of waiting" of 1.01x -- durable for free -- and the reason is an engine
+# defect, not a property: after an LSM_VECTOR index is built, later commits in
+# the same session skipped the write-ahead log entirely, so there was nothing
+# to wait for. Filed as ArcadeData/arcadedb#8129, fixed by #8221 (merge
+# a618b3ae5a) for 26.10.1, verified on the laptop against cbd0947c18.
+#
+# The campaign holds its pin, so the row stays and the page says why. Each note
+# RETIRES ITSELF: it prints only while the fix commit is not an ancestor of the
+# pin being published, so at the re-pin to a build that carries the fix it
+# disappears without anyone having to remember to delete it. When git cannot
+# answer -- the pin is unknown to this checkout -- it prints: for a number that
+# flatters our own engine, over-disclosing is the safe direction.
+ENGINE_DEFECTS_AT_PIN = {
+    "durability": [{
+        "backend": "ArcadeDB (one transaction)",
+        "fix": "a618b3ae5a",
+        "issue": "8129",
+        "release": "26.10.1",
+        "text": ("{backend} shows almost no cost of waiting because of a defect in the "
+                 "engine build measured here, ArcadeDB issue #{issue} "
+                 "(https://github.com/ArcadeData/arcadedb/issues/{issue}): after the "
+                 "vector index is built, later commits in the same session skip the "
+                 "write-ahead log, so there is nothing to wait for, and ArcadeDB "
+                 "{release} fixes it."),
+    }],
+}
+
+
+def _pin_carries(fix, pin):
+    """True when commit `fix` is an ancestor of `pin` in this checkout."""
+    if not pin:
+        return False
+    try:
+        return subprocess.run(
+            ["git", "-C", str(HERE), "merge-base", "--is-ancestor", fix, pin],
+            capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _engine_defect_notes(table_id, entries):
+    """One generated sentence per known defect whose arm is on this table and
+    whose fix the published pin does not carry."""
+    pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+    names = {str(e.get("backend")) for e in entries}
+    out = []
+    for d in ENGINE_DEFECTS_AT_PIN.get(table_id, []):
+        if d["backend"] in names and not _pin_carries(d["fix"], pin):
+            out.append(_gen(d["text"].format(**d), d["issue"], d["release"]))
+    return out
+
+
 def _durability_table(all_rows):
     """The same write per engine at both durability settings, with the ratio.
 
@@ -3333,6 +3390,7 @@ def _durability_table(all_rows):
                     f"number printed is in neither class. It is placed in the "
                     f"waiting column because that is the safer reading of an "
                     f"unknown, and this line is why it is there.", *_unverified)] if _unverified else []),
+            *_engine_defect_notes("durability", entries),
             _R("durability", "ratio"),
         ],
         "columns": ["no wait ms", "waits for the disk ms", "cost of waiting"],
