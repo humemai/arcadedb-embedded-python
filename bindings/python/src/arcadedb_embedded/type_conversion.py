@@ -61,20 +61,42 @@ _TYPE_CACHE = {
 }
 
 
+def _jclasses(*names):
+    """Resolve Java classes by fully qualified name, straight from the JVM.
+
+    NOT through JPype's ``java`` import hook. That hook resolves the top-level
+    name ``java`` through ``sys.path`` like any other Python import, so a
+    directory called ``java/`` anywhere on the path shadows it: a mixed
+    Java/Python project's own source folder, or ``bindings/python/src/java``
+    when running from a checkout of this repository. ``from java.lang import
+    String`` then raised ImportError, the type lookups below returned None,
+    every typed branch in ``_convert_and_register`` was skipped, and a Java
+    String fell through to the generic sequence fallback -- which iterated it.
+    ``to_list()`` returned ``[{'name': ['A', 'd', 'a']}]``, with no error.
+
+    ``jpype.JClass`` asks the JVM for the class by name and has no path to be
+    shadowed by. Returns None only when the JVM is not running, which is the
+    one case the old ImportError branch was meant for.
+    """
+    if not jpype.isJVMStarted():
+        return None
+    return tuple(jpype.JClass(name) for name in names)
+
+
 def _get_java_time_types():
     if _TYPE_CACHE["java_time"] is not None:
         return _TYPE_CACHE["java_time"]
 
-    try:
-        from java.time import (
-            Instant,
-            LocalDate,
-            LocalDateTime,
-            OffsetDateTime,
-            ZonedDateTime,
-        )
-    except ImportError:
+    got = _jclasses(
+        "java.time.Instant",
+        "java.time.LocalDate",
+        "java.time.LocalDateTime",
+        "java.time.OffsetDateTime",
+        "java.time.ZonedDateTime",
+    )
+    if got is None:
         return None
+    Instant, LocalDate, LocalDateTime, OffsetDateTime, ZonedDateTime = got
 
     _TYPE_CACHE["java_time"] = _JavaTimeTypes(
         instant=Instant,
@@ -93,26 +115,44 @@ def _get_java_core_types():
     ):
         return _TYPE_CACHE["java_core"], _TYPE_CACHE["java_collections"]
 
-    try:
-        from java.lang import (
-            Boolean,
-            Byte,
-            Character,
-            Double,
-            Float,
-            Integer,
-            Long,
-            Short,
-            String,
-        )
-        from java.math import BigDecimal, BigInteger
-        from java.util import Collection as JavaCollection
-        from java.util import Date as JavaDate
-        from java.util import List as JavaList
-        from java.util import Map as JavaMap
-        from java.util import Set as JavaSet
-    except ImportError:
+    got = _jclasses(
+        "java.lang.Boolean",
+        "java.lang.Byte",
+        "java.lang.Character",
+        "java.lang.Double",
+        "java.lang.Float",
+        "java.lang.Integer",
+        "java.lang.Long",
+        "java.lang.Short",
+        "java.lang.String",
+        "java.math.BigDecimal",
+        "java.math.BigInteger",
+        "java.util.Collection",
+        "java.util.Date",
+        "java.util.List",
+        "java.util.Map",
+        "java.util.Set",
+    )
+    if got is None:
         return None, None
+    (
+        Boolean,
+        Byte,
+        Character,
+        Double,
+        Float,
+        Integer,
+        Long,
+        Short,
+        String,
+        BigDecimal,
+        BigInteger,
+        JavaCollection,
+        JavaDate,
+        JavaList,
+        JavaMap,
+        JavaSet,
+    ) = got
 
     _TYPE_CACHE["java_core"] = _JavaCoreTypes(
         boolean=Boolean,
@@ -141,14 +181,17 @@ def _get_java_python_types():
     if _TYPE_CACHE["python_to_java"] is not None:
         return _TYPE_CACHE["python_to_java"]
 
-    try:
-        from java.math import BigDecimal
-        from java.time import LocalDate
-        from java.util import ArrayList
-        from java.util import Date as JavaDate
-        from java.util import HashMap, HashSet
-    except ImportError:
+    got = _jclasses(
+        "java.math.BigDecimal",
+        "java.time.LocalDate",
+        "java.util.ArrayList",
+        "java.util.Date",
+        "java.util.HashMap",
+        "java.util.HashSet",
+    )
+    if got is None:
         return None
+    BigDecimal, LocalDate, ArrayList, JavaDate, HashMap, HashSet = got
 
     _TYPE_CACHE["python_to_java"] = _PythonToJavaTypes(
         array_list=ArrayList,

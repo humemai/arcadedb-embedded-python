@@ -7,6 +7,8 @@ ArcadeDB server for HTTP API and Studio web interface.
 import os
 from typing import Any, Dict, Optional
 
+import jpype
+
 from .core import Database
 from .exceptions import ArcadeDBError
 from .jvm import start_jvm
@@ -67,8 +69,11 @@ class ArcadeDBServer:
                 Example: {"heap_size": "8g"}
         """
         start_jvm(**(jvm_kwargs or {}))
-        from com.arcadedb import ContextConfiguration
-        from com.arcadedb.server import ArcadeDBServer as JavaArcadeDBServer
+        # By name through the JVM, not the `com` import hook: a `com/` folder
+        # on sys.path (the top of any Maven-layout source tree) shadows the
+        # hook the same way a `java/` folder shadowed type_conversion's.
+        ContextConfiguration = jpype.JClass("com.arcadedb.ContextConfiguration")
+        JavaArcadeDBServer = jpype.JClass("com.arcadedb.server.ArcadeDBServer")
 
         self._config = config or {}
         self._root_path = root_path
