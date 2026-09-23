@@ -70,9 +70,6 @@ FORK_GITHUB_ALLOWLIST=(
     # Fork-only: upstream runs the same SHA-pin check in mvn-test.yml, so this
     # is deliberately NOT in make-upstream-pr-branch.sh's INCLUDE_PATHS.
     ".github/workflows/lint-workflows.yml"
-    # Fork-only: guards the JPype boundary in both the bindings and the
-    # benchmark adapters (BUGS F116-F118). Upstream has no equivalent.
-    ".github/workflows/jvm-payload-check.yml"
 )
 
 PROTECTED_SOURCE_REV=""
