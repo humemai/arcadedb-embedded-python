@@ -66,7 +66,6 @@ import com.arcadedb.server.network.PreAuthConnectionGate;
 import com.arcadedb.server.security.ServerSecurityException;
 import com.arcadedb.server.security.ServerSecurityUser;
 import io.micrometer.core.instrument.Metrics;
-import com.arcadedb.utility.DateUtils;
 import com.arcadedb.utility.FileUtils;
 import com.arcadedb.utility.Pair;
 import com.arcadedb.utility.StringUtils;
@@ -151,7 +150,9 @@ public class PostgresNetworkExecutor extends Thread {
   // (issue #7233). Still sampled once per connection, which is what they always were.
   private final boolean                     DEBUG;
   private final boolean                     QUOTED_IDENTIFIERS;
-  private final Map<String, Object>         connectionProperties  = new HashMap<>();
+  // What this connection's SET commands and startup packet established, and what SHOW answers (issue #8217). Per
+  // connection, as a PostgreSQL SET is session-scoped: nothing a client sets here reaches the schema or another session.
+  private final PostgresSessionSettings     sessionSettings       = new PostgresSessionSettings();
   // The exact query spellings to answer with nothing, and the application_name values that gated them, used
   // to be listed here: see PostgresCatalog, which answers those questions by shape for every client (#6412).
 
@@ -187,6 +188,11 @@ public class PostgresNetworkExecutor extends Thread {
    * {@code errorInTransaction} survives.
    */
   private boolean  skipUntilSync              = false;
+  /**
+   * The type of the frontend message being handled, for the main loop's catch-all: it decides whether an exception
+   * escaping a handler raises {@link #skipUntilSync} (extended protocol) or not (simple query protocol).
+   */
+  private char     currentMessageType         = 0;
 
   private interface ReadMessageCallback {
     void read(char type, long length) throws IOException;
@@ -309,6 +315,7 @@ public class PostgresNetworkExecutor extends Thread {
             // again (issue #6410): before the read blocked, false only meant "no byte yet".
             if (!readMessage("any", (type, length) -> {
               consecutiveErrors = 0;
+              currentMessageType = type;
 
               switch (type) {
               case 'P' -> parseCommand();
@@ -331,12 +338,19 @@ public class PostgresNetworkExecutor extends Thread {
               return;
 
           } catch (final Exception e) {
-            // An exception escaping a handler outright, rather than through its own catch. The message type is no
-            // longer in scope here, so this is the conservative answer for both protocols: raising skipUntilSync
-            // means the Sync that ends an extended-protocol pipeline discards it instead of committing a block one
-            // of whose messages blew up unanswered. The simple query protocol catches everything inside
-            // queryCommand(), so what reaches here from it is a dead socket, where the flag is never read again.
-            setExtendedProtocolError();
+            // An exception escaping a handler outright, rather than through its own catch. For an extended-protocol
+            // message, raising skipUntilSync means the Sync that ends the pipeline discards it instead of committing
+            // a block one of whose messages blew up unanswered. Not for a 'Q' (issue #8175): queryCommand() discards
+            // every simple query while skipUntilSync is set, and a client that only speaks the simple protocol never
+            // sends the Sync that would clear it, so every statement it sent afterwards would go unanswered.
+            // currentMessageType is stale when readMessage() fails before its callback runs, but every such failure
+            // is a PostgresProtocolException, which closes the connection just below: the stale value picks a flag
+            // nothing reads again. A 'Q' also aborts the transaction it ran in outside an explicit block (issue #8214),
+            // exactly as queryCommand()'s own failure arms do.
+            if (currentMessageType == 'Q')
+              abortSimpleQueryTransaction();
+            else
+              setExtendedProtocolError();
 
             if (e instanceof PostgresProtocolException) {
               LogManager.instance().log(this, Level.SEVERE, e.getMessage(), e);
@@ -847,7 +861,20 @@ public class PostgresNetworkExecutor extends Thread {
     return commandContext;
   }
 
-  private void queryCommand() {
+  private void queryCommand() throws IOException {
+    if (skipUntilSync) {
+      // A 'Q' interleaved into an extended-protocol pipeline that failed and has not reached its Sync yet (issue
+      // #8175). PostgreSQL's backend loop drops every message but Sync and Terminate while ignore_till_sync is set,
+      // 'Q' included: the message is read, nothing runs and nothing is answered, not even a ReadyForQuery. Running
+      // it here let a COMMIT persist the block the Sync is about to discard, and an ordinary statement execute and
+      // be acknowledged inside it. The body is consumed so the next message is read from its own boundary; the
+      // Sync that follows rolls the block back and, for an explicit block, leaves errorInTransaction to it.
+      // readUntilTerminator() rather than readString(): nothing reads the text, and a statement longer than the
+      // buffer must be discarded like any other rather than fail with a protocol error that closes the connection.
+      readUntilTerminator(0);
+      return;
+    }
+
     final QueryProfile profile = new QueryProfile();
     QueryProfile.pushCurrent(profile);
     Query query = null;
@@ -883,6 +910,8 @@ public class PostgresNetworkExecutor extends Thread {
 
       if (queryText.isEmpty()) {
         profile.addDeserializationNanos(System.nanoTime() - deserStart);
+        // PostgreSQL closes the transaction even for an empty query string (issue #8214)
+        commitSimpleQueryTransaction();
         emptyQueryResponse();
         return;
       }
@@ -899,6 +928,9 @@ public class PostgresNetworkExecutor extends Thread {
         final PostgresCopyStatement copy = PostgresCopyStatement.parse(query.query);
         final Statement inner = "sql".equalsIgnoreCase(query.language) ? parseStatement(copy.getQuery()) : null;
         final int rows = copyOut(copy, query.language, NO_PARAMETERS, inner, profile);
+        // Unlike the ordinary path below, the CopyData/CopyDone are already sent when this commits, so a failed
+        // commit is reported after them - the same order as PostgreSQL, whose finish_xact_command() follows DoCopy()
+        commitSimpleQueryTransaction();
         writeCommandComplete("COPY", rows);
         return;
       }
@@ -910,7 +942,7 @@ public class PostgresNetworkExecutor extends Thread {
       // will be persisted by the next COMMIT. Refusing it - and aborting the transaction the same way any other
       // statement is refused once the session is aborted - is the only reply that cannot silently lose data.
       if (query.query.toUpperCase(Locale.ENGLISH).startsWith("ROLLBACK TO ")) {
-        setErrorInTx();
+        abortSimpleQueryTransaction();
         writeError(ERROR_SEVERITY.ERROR, ROLLBACK_TO_NOT_SUPPORTED_MESSAGE, PostgresCopyStatement.SQLSTATE_FEATURE_NOT_SUPPORTED);
         return;
       }
@@ -988,6 +1020,9 @@ public class PostgresNetworkExecutor extends Thread {
         }
       }
       final List<Result> cachedResultSet = browseAndCacheBoundedResultSet(resultSet);
+      // Committed before anything is written back, so a commit that fails is answered with an ErrorResponse rather
+      // than after a RowDescription and a CommandComplete that already told the client the statement succeeded
+      commitSimpleQueryTransaction();
       profile.addEngineNanos(System.nanoTime() - engineStart);
 
       final long serStart = System.nanoTime();
@@ -1011,14 +1046,14 @@ public class PostgresNetworkExecutor extends Thread {
 
     } catch (final PostgresCopyStatement.CopyException e) {
       // A COPY this server declines is not a syntax error, and the message says what to do instead.
-      setErrorInTx();
+      abortSimpleQueryTransaction();
       writeError(ERROR_SEVERITY.ERROR, e.getMessage(), e.sqlState);
     } catch (final CommandParsingException e) {
       // See the note on the same arm in executeCommand about the "Syntax error" wording.
-      setErrorInTx();
+      abortSimpleQueryTransaction();
       writeError(ERROR_SEVERITY.ERROR, "Syntax error on executing query: " + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()), sqlStateFor(e));
     } catch (final Exception e) {
-      setErrorInTx();
+      abortSimpleQueryTransaction();
       writeError(ERROR_SEVERITY.ERROR, "Error on executing query: " + e.getMessage(), sqlStateFor(e));
     } finally {
       if (!explicitTransactionStarted)
@@ -2836,8 +2871,8 @@ public class PostgresNetworkExecutor extends Thread {
    * must resolve to the same {@code datestyle} parameter name as a plain {@code SET datestyle = 'ISO'}, not
    * a literal {@code "session datestyle"}/{@code "local datestyle"} that no special case ever matches.
    * ArcadeDB has no notion of transaction-scoped config distinct from session-scoped config, so both
-   * modifiers - and no modifier at all - end up folded into the same connection-wide
-   * {@link #connectionProperties} map; that already matches the de facto behavior of a plain {@code SET}
+   * modifiers - and no modifier at all - end up folded into the same connection's
+   * {@link PostgresSessionSettings}; that already matches the de facto behavior of a plain {@code SET}
    * today.
    * <p>
    * A command can only use one of the two separators, but its value may legitimately contain the other
@@ -2845,7 +2880,9 @@ public class PostgresNetworkExecutor extends Thread {
    * whichever separator - the first '=' or the first case-insensitive ' TO ' - occurs FIRST in the string
    * and splits on that one only, leaving every other occurrence of either inside the value untouched
    * (issue #6423). {@code paramName} is lower-cased for case-insensitive comparison; a quoted {@code value}
-   * has its surrounding quotes stripped. Returns null when the command has neither separator.
+   * has its surrounding quotes stripped. An unquoted {@code DEFAULT} keyword comes back as a null value, meaning "reset
+   * to the default" (issue #8217), so it stays distinct from the quoted string literal {@code 'DEFAULT'}, as in
+   * PostgreSQL. Returns null when the command has neither separator.
    */
   static String[] parseSetCommand(final String query) {
     final int setLength = "SET ".length();
@@ -2883,7 +2920,8 @@ public class PostgresNetworkExecutor extends Thread {
       if (value.length() < 2 || value.charAt(value.length() - 1) != quote)
         return null;
       value = value.substring(1, value.length() - 1);
-    }
+    } else if ("DEFAULT".equalsIgnoreCase(value))
+      value = null;
 
     return new String[] { paramName, value };
   }
@@ -2902,9 +2940,9 @@ public class PostgresNetworkExecutor extends Thread {
    * records it on the portal. The marker is cleared once applied, like {@code applyTransactionControl()}'s: a new
    * Bind of the prepared statement copies it afresh out of the template, so a cached SET re-executed through a new
    * Bind applies again, while re-running the same already-executed portal does not. Cleared only AFTER it applied:
-   * {@code SET datestyle} can be refused ({@code LocalSchema.setDateTimeFormat()} checks
-   * {@code UPDATE_DATABASE_SETTINGS}), and a marker consumed by the refused attempt would let a retry of the same
-   * portal answer {@code CommandComplete SET} having applied nothing.
+   * a SET can be refused ({@link PostgresSessionSettings#set} refuses a read-only parameter or an invalid value, as
+   * PostgreSQL does), and a marker consumed by the refused attempt would let a retry of the same portal answer
+   * {@code CommandComplete SET} having applied nothing.
    */
   private void applyPendingSetting(final PostgresPortal portal) {
     final String[] setting = portal.setting;
@@ -2914,15 +2952,15 @@ public class PostgresNetworkExecutor extends Thread {
     portal.setting = null;
   }
 
+  /**
+   * Records a {@code SET} in this connection's own settings (issue #8217). It never touches the database: a
+   * {@code SET datestyle} used to rewrite the schema's date-time format, shared by every session on every protocol,
+   * and needed {@code UPDATE_DATABASE_SETTINGS} for a statement PostgreSQL treats as purely per-session. Dates already
+   * travel in ISO whatever that format says ({@code PostgresType.toText()}), so the schema write bought this
+   * connection nothing.
+   */
   private void applySetting(final String paramName, final String value) {
-    if ("datestyle".equals(paramName)) {
-      if ("ISO".equalsIgnoreCase(value))
-        database.getSchema().setDateTimeFormat(DateUtils.DATE_TIME_ISO_8601_FORMAT);
-      else
-        LogManager.instance().log(this, Level.INFO, "datestyle '%s' not supported", value);
-    }
-
-    connectionProperties.put(paramName, value);
+    sessionSettings.set(paramName, value);
   }
 
   /**
@@ -2945,15 +2983,7 @@ public class PostgresNetworkExecutor extends Thread {
   }
 
   private String getShowConfigValue(final String varName) {
-    return switch (varName) {
-      case "server_version" -> PG_SERVER_VERSION;
-      case "standard_conforming_strings" -> "on";
-      case "integer_datetimes" -> "on";
-      case "client_encoding" -> "UTF8";
-      case "server_encoding" -> "UTF8";
-      case "timezone" -> "UTC";
-      default -> "";
-    };
+    return sessionSettings.show(varName);
   }
 
   private void sendServerParameter(final String name, final String value) {
@@ -3081,9 +3111,11 @@ public class PostgresNetworkExecutor extends Thread {
       case "replication":
         // NOT SUPPORTED, IGNORE IT
         break;
+      default:
+        // A run-time parameter (DateStyle, TimeZone, application_name, ...): the connection starts with it set, and
+        // SHOW answers it (issue #8217).
+        sessionSettings.setFromStartup(paramName, paramValue);
       }
-
-      connectionProperties.put(paramName, paramValue);
     }
   }
 
@@ -3111,6 +3143,8 @@ public class PostgresNetworkExecutor extends Thread {
   static String sqlStateFor(final Throwable error) {
     if (error instanceof PostgresCopyStatement.CopyException copy)
       return copy.sqlState;
+    if (error instanceof PostgresSessionSettings.SettingException setting)
+      return setting.sqlState;
     return switch (ErrorCategory.of(error)) {
       case RETRY -> "40001";          // serialization_failure - the code drivers auto-retry on
       case ARITHMETIC -> arithmeticSqlState(error);
@@ -3480,6 +3514,37 @@ public class PostgresNetworkExecutor extends Thread {
   private void setErrorInTx() {
     if (explicitTransactionStarted)
       errorInTransaction = true;
+  }
+
+  /**
+   * Ends the transaction a successful simple query ran in, the way PostgreSQL's {@code exec_simple_query()} does with
+   * {@code finish_xact_command()} (issue #8214). Outside an explicit BEGIN block a 'Q' is a transaction of its own,
+   * but it can arrive while an extended-protocol pipeline's implicit block is still open - opened at Execute by
+   * {@link #beginImplicitTransactionBlock}, normally ended by a Sync - and then it runs inside that block. Leaving the
+   * block open after acknowledging the 'Q' let a later failure in the same pipeline make the Sync roll back a write
+   * the client had already been told was complete. PostgreSQL commits the pipeline's pending writes together with
+   * the 'Q''s own; the rest of the pipeline runs in a fresh block its next write opens. Inside an explicit block
+   * the 'Q' just joins it, and nothing is committed before the client's COMMIT.
+   * <p>
+   * A no-op for the ordinary autocommit 'Q', which leaves no transaction behind: its statement-level implicit
+   * transaction has already committed itself.
+   */
+  private void commitSimpleQueryTransaction() {
+    if (!explicitTransactionStarted && database.isTransactionActive())
+      database.commit();
+  }
+
+  /**
+   * The failure half of {@link #commitSimpleQueryTransaction()} (issue #8214): PostgreSQL aborts the transaction a
+   * failed simple query ran in, so outside an explicit block the pending writes of an open pipeline the 'Q' was
+   * interleaved into are discarded with it, instead of being left for the pipeline's Sync to commit. The simple
+   * query protocol does not enter skip-until-Sync, so the rest of the pipeline still runs. Inside an explicit block
+   * the block is aborted instead, and only the client's COMMIT/ROLLBACK/END ends it.
+   */
+  private void abortSimpleQueryTransaction() {
+    setErrorInTx();
+    if (!explicitTransactionStarted && database.isTransactionActive())
+      database.rollback();
   }
 
   /**
