@@ -12,14 +12,14 @@ This fork tracks `ArcadeData/arcadedb` through the local `upstream-main` branch.
 
 ## What it does
 
-- Updates `upstream-main` to match `upstream/main`
-- Merges `upstream-main` into `main`
-- Preserves this fork's root `README.md`
-- Keeps fork-excluded files (such as `CLAUDE.md`) out of the fork
-- Keeps removed upstream workflows from being reintroduced:
-  `.github/workflows/mvn-test.yml`, `.github/workflows/mvn-deploy.yml`,
-  `.github/workflows/mvn-release.yml`, `.github/workflows/license-compliance.yml`, and
-  `.github/workflows/meterian.yml`, and `.github/workflows/studio-security-audit.yml`
+- Refuses to start if the working tree has uncommitted changes.
+- Updates `upstream-main` to match `upstream/main`.
+- Asks `Continue with merge? [y/N]` and waits. There is no flag to skip it; from a non-interactive shell, pipe the answer (`printf y | ./sync-upstream.sh`), or the script exits silently at the prompt without merging.
+- Merges `upstream-main` into `main`.
+- Keeps this fork's own copies of the paths listed in `FORK_OWNED_PATHS` in the script (the root `README.md`, `pyproject.toml`, `uv.lock` and a few others), and keeps the paths in `FORK_EXCLUDED_PATHS` (such as `CLAUDE.md`) out of the fork.
+- Treats `.github/` as an **allowlist**: after the merge it deletes every tracked file under `.github/` that is not named in `FORK_GITHUB_ALLOWLIST`, so no upstream workflow arrives. A list of files to delete could only name the ones that existed when it was written; the allowlist also stops the ones upstream adds later. Adding a workflow of our own therefore means adding it to that list in the same commit, or the next sync deletes it.
+
+The lists live in `sync-upstream.sh` and nowhere else on purpose: this page used to repeat the workflows by name and had gone stale.
 
 ## After sync
 
