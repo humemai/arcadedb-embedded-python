@@ -1,0 +1,53 @@
+name: JVM payload check
+
+# A Python list must never be what crosses into the JVM. JPype copies a NumPy
+# array over in one crossing and marshals a list element by element, so the
+# cost scales with the length of every vector -- and the bulk path declines the
+# list SILENTLY, which is why three of these survived review, tests and every
+# publish gate (BUGS F116, F117, F118).
+#
+# Its own workflow rather than a job inside test-python-bindings.yml, because
+# the call sites live in TWO trees: the bindings (src, examples, tests, docs)
+# and the benchmark adapters. That workflow triggers on bindings/python/** only,
+# and widening it would pull the JAR download and the full test matrix along
+# for a check that takes seconds.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'bindings/python/**'
+      - 'benchmarks/experiments/**'
+      - '.github/workflows/jvm-payload-check.yml'
+  pull_request:
+    paths:
+      - 'bindings/python/**'
+      - 'benchmarks/experiments/**'
+      - '.github/workflows/jvm-payload-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jvm-payload:
+    name: No python lists crossing into the JVM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # FIRST, because a check that has stopped matching looks exactly like a
+      # clean tree. This asserts it still finds the five real pre-fix shapes
+      # and still stays quiet on six legitimate comparator patterns.
+      - name: Prove the check has not gone blind
+        run: python benchmarks/experiments/jvm_payload_check.py --selftest
+
+      - name: Scan the bindings and the benchmark adapters
+        run: python benchmarks/experiments/jvm_payload_check.py
