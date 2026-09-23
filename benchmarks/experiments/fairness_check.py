@@ -887,6 +887,21 @@ INDEX_DECISIONS = {
 }
 
 
+# INDEX DDL A "NONE" ARM STILL TIMES (BUGS F122). index_timer covers every index
+# statement in build(), not only the lane's selective one, so an arm that declares
+# NONE for l_shipdate can still time a key index its transactional workload needs.
+# DuckDB builds o_okey on the EMPTY orders_new table: 0.008-0.012 s, where the
+# l_shipdate index it declares away costs 3.4-3.6 s at SF1 (laptop, DuckDB 1.5.4,
+# 2026-09-23, three reps each). The bound sits 10x above the first and 34x below
+# the second at SF1, further below at SF10, so the check still catches the removed
+# index coming back. Without this entry the gate refused qOE's first DuckDB rows
+# (index_s=0.01) as "an index that was removed has come back", found by the
+# landing rehearsal before the stage finished.
+NONE_ARM_TIMED_DDL = {
+    ("l1tpc", "duckdb"): ("o_okey, the order-key index, built on the empty orders_new table", 0.1),
+}
+
+
 def _check_index_rows(rows):
     """F14b: the DECLARATION is a claim; `index_s` on the row is the evidence.
 
@@ -939,7 +954,9 @@ def _check_index_rows(rows):
                 continue
             checked += 1
             built = [float(r["index_s"]) for r in got]
-            any_built = any(v > 0 for v in built)
+            # A NONE arm may time other index DDL; see NONE_ARM_TIMED_DDL.
+            _other, _bound = NONE_ARM_TIMED_DDL.get((lane, arm), (None, 0.0))
+            any_built = any(v > (0.0 if builds else _bound) for v in built)
             if builds and not any_built:
                 print(f"  FAIL {lane}/{arm}: declares an index with a measured ratio "
                       f"({decl}) and every one of its {len(got)} row(s) records "
@@ -947,8 +964,9 @@ def _check_index_rows(rows):
                       f"and they disagree.")
                 bad += 1
             elif not builds and any_built:
+                _allow = (f" (above the {_bound} s allowed for {_other})" if _other else "")
                 print(f"  FAIL {lane}/{arm}: declares NONE ({decl}) and records "
-                      f"index_s={max(built)}. An index that was removed for costing "
+                      f"index_s={max(built)}{_allow}. An index that was removed for costing "
                       f"this engine has come back.")
                 bad += 1
     if no_split:
