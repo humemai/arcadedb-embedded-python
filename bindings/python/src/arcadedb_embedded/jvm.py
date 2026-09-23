@@ -8,6 +8,7 @@ import glob
 import os
 import platform
 import shlex
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -26,6 +27,31 @@ def _project_dir() -> Path:
 
 
 def _extract_runtime_resource(resource_name: str) -> Path:
+    """Locate a packaged runtime resource (``jars`` or ``jre``).
+
+    An installed wheel ships the resource next to this file and returns
+    immediately. Running from a source checkout, it does not exist there, so it
+    is extracted from the most recently built wheel in ``dist/`` into
+    ``.runtime-cache/`` -- and that cache is the reason this function is
+    careful.
+
+    IT USED TO BE EXTRACTED ONCE AND TRUSTED FOREVER (2026-09-23). A cache
+    extracted on 2026-06-04 from that day's 26.6.1 wheel was still being
+    served three months later, beside a 26.10.1 wheel built that morning.
+    Every source-tree run in between -- tests included -- executed against
+    June's engine without the python bridge jar: strings came back as lists of
+    characters, and twelve vector tests failed for reasons that had nothing to
+    do with the code under test. Nothing said so; the only symptom was wrong
+    answers.
+
+    So the cache is now stamped with the wheel it came from (name, size and
+    mtime) and re-extracted whenever that stamp no longer matches the wheel
+    this call would pick.
+
+    "Most recently built" is by modification time, NOT by filename. A reverse
+    string sort ranks ``26.9.1`` above ``26.10.1`` because ``"9" > "1"``, so
+    with both wheels in ``dist/`` it picked the older engine.
+    """
     package_dir = Path(__file__).resolve().parent
     resource_dir = package_dir / resource_name
     if resource_dir.exists():
@@ -33,25 +59,46 @@ def _extract_runtime_resource(resource_name: str) -> Path:
 
     project_dir = _project_dir()
     dist_dir = project_dir / "dist"
-    wheels = sorted(dist_dir.glob("arcadedb_embedded-*.whl"), reverse=True)
+    wheels = sorted(
+        dist_dir.glob("arcadedb_embedded-*.whl"),
+        key=lambda p: p.stat().st_mtime_ns,
+        reverse=True,
+    )
     if not wheels:
         return resource_dir
+    wheel = wheels[0]
+    st = wheel.stat()
+    stamp = f"{wheel.name} {st.st_size} {st.st_mtime_ns}"
 
     cache_root = project_dir / ".runtime-cache"
     extracted_root = cache_root / "arcadedb_embedded"
     extracted_resource_dir = extracted_root / resource_name
+    stamp_file = cache_root / f".extracted-from-{resource_name}"
+
     if extracted_resource_dir.exists():
-        return extracted_resource_dir
+        try:
+            if stamp_file.read_text(encoding="utf-8") == stamp:
+                return extracted_resource_dir
+        except OSError:
+            pass  # no stamp: a cache from before stamping, which is exactly the stale case
+        # NOT ignore_errors. A wipe that half-fails and is followed by an
+        # extraction overlays the new wheel on the old one, and a classpath
+        # carrying two engines is worse than an error.
+        shutil.rmtree(extracted_resource_dir)
+        stamp_file.unlink(missing_ok=True)
 
     cache_root.mkdir(parents=True, exist_ok=True)
     prefix = f"arcadedb_embedded/{resource_name}/"
 
-    with zipfile.ZipFile(wheels[0]) as wheel_zip:
+    with zipfile.ZipFile(wheel) as wheel_zip:
         members = [name for name in wheel_zip.namelist() if name.startswith(prefix)]
         if not members:
             return resource_dir
         wheel_zip.extractall(cache_root, members)
 
+    # Written only after a complete extraction, so an interrupted one is
+    # retried on the next start rather than trusted.
+    stamp_file.write_text(stamp, encoding="utf-8")
     return extracted_resource_dir
 
 
