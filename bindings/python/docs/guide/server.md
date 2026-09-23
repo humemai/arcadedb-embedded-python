@@ -229,6 +229,45 @@ per-protocol host setting. Enabling a plugin on a multi-homed or
 internet-facing machine exposes it beyond localhost. Use a firewall or a
 container network namespace; do not rely on the `host` default to contain them.
 
+### Arrow (ADBC) clients over the Postgres wire
+
+From **26.10.1**, Arrow's native PostgreSQL ADBC driver
+(`adbc-driver-postgresql`, measured with 1.12.0) connects to a server started
+from this wheel with the Postgres plugin, and `fetch_arrow_table()` returns
+Arrow tables directly. On **26.9.1 it cannot connect**: the driver's type
+bootstrap fails with "Expected 5 or 6 columns from type resolver pg_type query
+but got 0" (ArcadeDB [#7178][7178], fixed for 26.10.1).
+
+```python
+import adbc_driver_postgresql.dbapi as pg
+
+with pg.connect("postgresql://root:<password>@localhost:5432/mydb") as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT n, s, x FROM Typed WHERE n > $1", parameters=(10,))
+        table = cur.fetch_arrow_table()   # a pyarrow.Table
+```
+
+**Declared properties arrive typed; computed columns arrive as strings.** A
+property declared in the schema (`LONG`, `STRING`, `DOUBLE`, `BOOLEAN`) comes
+back as `int64`, `string`, `double`, `bool`. A computed column does not:
+`count(*)`, `sum(...)`, `max(...)`, `id * 2` and `name.length()` all arrive as
+`string` (`'3'`, not `3`). The server describes a prepared statement's computed
+columns as `varchar` (OID 1043) and states the real type only when the
+statement runs; the ADBC driver builds its Arrow schema from that describe.
+`psycopg` reads the type from the executed result and receives `int` and
+`float` for the same queries. Until that changes, cast computed columns on the
+client, or read aggregates with `psycopg`.
+
+Measured on a laptop against the 26.10.1 development wheel;
+`tests/test_server_wire_protocols.py` connects with the driver, checks the
+typed columns, values, and a bound parameter, and pins the string behaviour so
+the test fails the day it changes.
+
+The other ADBC route, adbcBridge over the psqlodbc driver, is described in
+ArcadeDB's announcement and was not measured here.
+
+[7178]: https://github.com/ArcadeData/arcadedb/issues/7178
+
 ### Not bundled
 
 Mongo wire, gRPC, and Raft replication are excluded from the wheel to keep it

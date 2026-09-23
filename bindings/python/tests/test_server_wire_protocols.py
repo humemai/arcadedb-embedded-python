@@ -18,6 +18,7 @@ anything the day the default changed.
 
 import socket
 import time
+from urllib.parse import quote
 
 import pytest
 
@@ -133,6 +134,65 @@ def test_postgres_wire_answers_a_query(wire_server):
             cur.execute("SELECT name FROM Item")
             rows = cur.fetchall()
     assert any("alpha" in str(r) for r in rows), rows
+
+
+def test_postgres_wire_answers_arrow_adbc(wire_server):
+    """Arrow's native PostgreSQL ADBC driver connects and fetches typed columns.
+
+    Needs 26.10.1: on 26.9.1 the driver cannot connect at all ("Expected 5 or 6
+    columns from type resolver pg_type query but got 0", ArcadeDB #7178).
+
+    Declared schema properties arrive as their Arrow types. A COMPUTED column
+    (count(*), sum(), an expression) arrives as a string: the server describes a
+    prepared statement's computed columns as varchar (OID 1043) and states the
+    real type only when it executes, and the driver builds its Arrow schema from
+    the describe. psycopg reads the executed type and is unaffected. The last
+    assertion pins that gap, so the day upstream closes it this test fails and
+    docs/guide/server.md gets updated instead of going stale.
+    """
+    pytest.importorskip(
+        "pyarrow"
+    )  # fetch_arrow_table needs it; the driver alone imports fine
+    dbapi = pytest.importorskip("adbc_driver_postgresql.dbapi")
+    server, ports = wire_server
+    assert _wait(ports["postgres"]), "postgres plugin never bound its port"
+
+    db = server.get_database("wiretest")
+    db.command("sql", "CREATE DOCUMENT TYPE Typed")
+    for name, kind in (
+        ("n", "LONG"),
+        ("s", "STRING"),
+        ("x", "DOUBLE"),
+        ("b", "BOOLEAN"),
+    ):
+        db.command("sql", f"CREATE PROPERTY Typed.{name} {kind}")
+    rows = [{"n": i, "s": f"v{i}", "x": i * 0.5, "b": i % 2 == 0} for i in range(3)]
+    db.insert_many("Typed", rows)
+
+    uri = (
+        f"postgresql://root:{quote(ROOT_PASSWORD, safe='')}"
+        f"@127.0.0.1:{ports['postgres']}/wiretest"
+    )
+    with dbapi.connect(uri) as conn, conn.cursor() as cur:
+        cur.execute("SELECT n, s, x, b FROM Typed ORDER BY n")
+        table = cur.fetch_arrow_table()
+        assert [str(f.type) for f in table.schema] == [
+            "int64",
+            "string",
+            "double",
+            "bool",
+        ]
+        assert table.to_pylist() == rows
+
+        cur.execute("SELECT s FROM Typed WHERE n = $1", parameters=(2,))
+        assert cur.fetchone()[0] == "v2"
+
+        cur.execute("SELECT count(*) AS c FROM Typed")
+        table = cur.fetch_arrow_table()
+        assert (str(table.schema.field(0).type), table.column(0)[0].as_py()) == (
+            "string",
+            "3",
+        ), "computed columns now arrive typed over ADBC: update docs/guide/server.md"
 
 
 def test_redis_port_setting_is_honored(wire_server):

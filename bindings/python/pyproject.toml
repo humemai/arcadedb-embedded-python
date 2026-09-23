@@ -52,6 +52,7 @@ test = [
     # reaches an end user's install, and without them three shipped protocols
     # are covered by nothing but the jars being present in the archive.
     "psycopg[binary]>=3.1",  # Postgres wire
+    "adbc-driver-postgresql>=1.12",  # Postgres wire, Arrow ADBC (26.10.1+)
     "redis>=5.0",            # Redis wire
     "neo4j>=5.0",            # Bolt
     "pyarrow>=23.0.1",       # ResultSet.to_arrow(); <23.0.1 has PYSEC-2026-113
