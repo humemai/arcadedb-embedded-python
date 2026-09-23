@@ -120,9 +120,22 @@ class ResultSet:
         Convert all results to list of dictionaries.
 
         More efficient than iterating manually as it processes in bulk, but it
-        still builds one Python dict per row. For large results use
-        ``to_columns()``, ``to_dataframe()``, or ``to_arrow()``, which move the
-        data as columns; see the performance guide.
+        still builds one Python dict per row, and each VALUE crosses the JVM
+        boundary on its own -- which is what buys full Python-type fidelity and
+        what makes this the slowest way to materialize a large result.
+
+        For large results, in increasing order of how much they change your
+        code:
+
+        - ``to_json_list()`` returns the SAME shape, a list of dicts, and is
+          measured ~10x faster on a 10,000-row scan (482 ms against 48 ms).
+          The trade-off is JSON-native values: temporal values arrive as ISO
+          strings and DECIMALs as floats, so it is a drop-in only when the
+          result carries neither.
+        - ``to_columns()``, ``to_dataframe()`` or ``to_arrow()`` move the data
+          as columns and are faster still (~16x on the same scan).
+
+        See the performance guide.
 
         Args:
             convert_types: Convert Java types to Python (default: True)
