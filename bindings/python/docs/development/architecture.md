@@ -239,6 +239,7 @@ numpy_array = to_python_array(java_array)
 | `list` | `ArrayList` | Manual conversion |
 | `dict` | `HashMap` | Manual conversion |
 | `np.ndarray` | `float[]` | via `to_java_float_array()` |
+| `np.ndarray` (integer dtype) | `int[]` | via `to_java_int_array()` |
 
 ---
 

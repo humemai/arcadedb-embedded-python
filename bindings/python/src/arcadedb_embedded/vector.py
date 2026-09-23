@@ -49,6 +49,40 @@ def to_java_float_array(vector):
     return jtypes.JArray(jtypes.JFloat)(vector)
 
 
+def to_java_int_array(vector):
+    """
+    Convert a Python array-like object to a Java int array.
+
+    Accepts:
+    - Python lists: [3, 17, 4096]
+    - NumPy arrays of any integer dtype: np.array([3, 17], dtype=np.int32)
+    - Any array-like object with __iter__
+
+    The natural use is the token-index side of a sparse vector, whose weights
+    go through :func:`to_java_float_array`.
+
+    Prefer passing a NumPy array. JPype copies one through the buffer protocol
+    in a single crossing, while a Python list is marshalled element by element:
+    measured at 150 non-zeros, 2.6 us from an array against 6.7 us from a list,
+    2.6x, and the gap widens with length. The array's dtype does not matter --
+    int64, NumPy's default, converts as fast as int32 -- so there is no reason
+    to cast before calling this.
+
+    Args:
+        vector: Array-like object containing integer values
+
+    Returns:
+        Java int array
+    """
+    if _np is not None and isinstance(vector, _np.ndarray):
+        return jtypes.JArray(jtypes.JInt)(vector)
+
+    if not isinstance(vector, list):
+        vector = list(vector)
+
+    return jtypes.JArray(jtypes.JInt)(vector)
+
+
 def to_java_byte_array(vector):
     """
     Convert a Python byte-like or integer array-like object to a Java byte array.

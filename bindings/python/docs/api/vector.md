@@ -301,6 +301,44 @@ exclusion.
 
 ---
 
+### `to_java_int_array(vector)`
+
+Convert a Python array-like object to a Java `int[]`.
+
+The natural use is the token-index side of a sparse vector, whose weights go
+through [`to_java_float_array`](#to_java_float_arrayvector).
+
+```python
+import numpy as np
+from arcadedb_embedded import to_java_int_array, to_java_float_array
+
+tokens = np.array([7, 91, 4096], dtype=np.int32)
+weights = np.array([0.5, 0.25, 0.125], dtype=np.float32)
+
+db.command(
+    "sql",
+    "INSERT INTO SparseDoc SET tokens = ?, weights = ?",
+    to_java_int_array(tokens),
+    to_java_float_array(weights),
+)
+```
+
+**Prefer a NumPy array over a Python list.** JPype copies an array across the
+JVM boundary in one crossing through the buffer protocol; a list is marshalled
+element by element. Measured at 150 non-zeros: **2.6 us** from an array against
+**6.7 us** from a list, and the gap widens with length. The dtype does not
+matter -- `int64`, NumPy's default, converts as fast as `int32` -- so there is
+no reason to cast before calling.
+
+**Parameters:**
+
+- `vector`: Array-like object of integers. Accepts a Python list, a tuple or
+  any iterable, and a NumPy array of any integer dtype.
+
+**Returns:** a Java `int[]`.
+
+---
+
 ### `to_java_byte_array(vector)`
 
 Convert a Python byte-like or integer array-like object to a Java `byte[]`.

@@ -70,6 +70,51 @@ def test_to_java_float_array_accepts_numpy_directly(jvm):
     ) == pytest.approx([1.0, 2.0, 3.0])
 
 
+def test_to_java_int_array(jvm):
+    """to_java_int_array should take lists, iterables and NumPy of any int dtype."""
+    assert list(arcadedb.to_java_int_array([3, 17, 4096])) == [3, 17, 4096]
+    assert list(arcadedb.to_java_int_array((1, 2, 3))) == [1, 2, 3]
+    assert list(arcadedb.to_java_int_array(range(4))) == [0, 1, 2, 3]
+    assert list(arcadedb.to_java_int_array([])) == []
+    assert list(arcadedb.to_java_int_array([-5, 0, 2147483647])) == [-5, 0, 2147483647]
+
+
+def test_to_java_int_array_accepts_numpy_directly(jvm):
+    """NumPy arrays convert in one crossing, whatever their integer dtype."""
+    np = pytest.importorskip("numpy")
+
+    for dtype in (np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint16):
+        assert list(arcadedb.to_java_int_array(np.array([1, 2, 3], dtype=dtype))) == [
+            1,
+            2,
+            3,
+        ]
+
+
+def test_to_java_int_array_round_trips_through_a_sparse_vector(test_db):
+    """The token side of a sparse vector: store from NumPy, read the values back."""
+    np = pytest.importorskip("numpy")
+
+    test_db.command("sql", "CREATE DOCUMENT TYPE SparseDoc")
+    test_db.command("sql", "CREATE PROPERTY SparseDoc.tokens ARRAY_OF_INTEGERS")
+    test_db.command("sql", "CREATE PROPERTY SparseDoc.weights ARRAY_OF_FLOATS")
+
+    tokens = np.array([7, 91, 4096], dtype=np.int32)
+    weights = np.array([0.5, 0.25, 0.125], dtype=np.float32)
+
+    with test_db.transaction():
+        test_db.command(
+            "sql",
+            "INSERT INTO SparseDoc SET tokens = ?, weights = ?",
+            arcadedb.to_java_int_array(tokens),
+            arcadedb.to_java_float_array(weights),
+        )
+
+    row = test_db.query("sql", "SELECT tokens, weights FROM SparseDoc").first()
+    assert list(row.get("tokens")) == [7, 91, 4096]
+    assert list(row.get("weights")) == pytest.approx([0.5, 0.25, 0.125])
+
+
 class TestLSMVectorIndex:
     """Test LSM Vector Index functionality."""
 

@@ -174,7 +174,7 @@ Support exists, but the current repository guidance is:
 #### 8. Vector Search
 
 - ✅ Vector index creation - SQL `CREATE INDEX ... LSM_VECTOR`
-- ✅ NumPy array support - `to_java_float_array()`, `to_python_array()`
+- ✅ NumPy array support - `to_java_float_array()`, `to_java_int_array()`, `to_java_byte_array()`, `to_python_array()`
 - ✅ Similarity search - SQL `vectorNeighbors`
 - ✅ Distance functions - cosine, euclidean, inner_product
 - ✅ Index tuning parameters (connections, beam width, quantization)
