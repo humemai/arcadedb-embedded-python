@@ -246,8 +246,22 @@ class ArcadeE2:
         with db.graph_batch(batch_size=BATCH, expected_edge_count=len(edges),
                             bidirectional=True, commit_every=BATCH,
                             use_wal=True) as b:
+            # A JAVA float[], NOT A PYTHON LIST (F116, 2026-09-23). The list
+            # crosses JPype element by element; the array crosses once. This
+            # is not about which API loads the vertices -- `create_vertices`
+            # against a per-vector SQL INSERT is worth 1.38x, and the payload
+            # is worth 7-10x. Measured at this lane's own shape (50,000
+            # products, dim 64, 150,000 edges, best of three): 11.98 s with
+            # lists against 2.80 s with arrays, so 4.29x and +9.19 s of a
+            # 11.98 s build were our own type conversion. It corroborates
+            # against the WAL measurement three comments up, which timed this
+            # same build at 10.41 s.
+            #
+            # l3d already does this and is why the sweep cleared it; the
+            # SERVED arm below keeps lists on purpose, because it posts JSON
+            # over HTTP and there is no JVM on that side of the wire.
             rows = [{"pid": i, "views": 0,
-                     "embedding": vecs[i].tolist()} for i in range(len(vecs))]
+                     "embedding": a.to_java_float_array(vecs[i])} for i in range(len(vecs))]
             rids = b.create_vertices("Product", rows)
             b.new_edges([rids[s] for s, _ in edges], "RELATED",
                         [rids[d] for _, d in edges])
