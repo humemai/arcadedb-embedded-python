@@ -873,7 +873,8 @@ class Database:
             light_edges: Create property-less edges as light edges when True.
             bidirectional: Connect incoming edges as well as outgoing edges.
             commit_every: Commit cadence within a flush. `0` means one commit per flush.
-            use_wal: Enable WAL during import for higher durability.
+            use_wal: Write-ahead log during the import. Off by default, so a crash mid-import can lose its
+                tail; pass True for a crash-safe import (ArcadeData/arcadedb#8287).
             wal_flush: WAL flush mode: `"no"`, `"yes_nometadata"`, `"yes_full"`.
             pre_allocate_edge_chunks: Pre-allocate edge chunks during `create_vertex()`.
             parallel_flush: Parallelize flush/close connectivity work across buckets.

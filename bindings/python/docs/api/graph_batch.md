@@ -25,11 +25,16 @@ Create a configured batch helper tied to the current database.
 
 **Common options:**
 
-- `batch_size`: buffered edge batch size before flush
-- `expected_edge_count`: sizing hint for large runs
+- `batch_size`: buffered edge batch size before flush; usually leave it unset and
+  give `expected_edge_count` instead
+- `expected_edge_count`: the number of edges you are about to load; with no
+  `batch_size`, the batch size is tuned to it (clamped to 100,000-5,000,000), and
+  a single flush is the optimal shape
 - `light_edges`: create property-less light edges when appropriate
 - `commit_every`: commit cadence during batch work
-- `use_wal`: enable WAL for stronger durability
+- `use_wal`: write-ahead log during the import. **Off by default**: a crash in
+  the middle of the import can lose its tail, with nothing to replay. Pass
+  `use_wal=True` for an import that must survive a crash
 - `wal_flush`: flush policy such as `no`, `yes_nometadata`, `yes_full`
 - `parallel_flush`: flush deferred work in parallel
 - `commit_retries`: retries for a vertex commit that hits a transient
@@ -42,10 +47,21 @@ Create a configured batch helper tied to the current database.
   connection pass runs early from `flush()` instead of once at `close()`
   (default 5,000,000, `0` defers everything to close)
 
+**Recommended settings for a crash-safe bulk load** (ArcadeDB's maintainers,
+`ArcadeData/arcadedb#8287`): `use_wal=True` and `expected_edge_count`, with
+`batch_size`, `commit_every`, and `parallel_flush` left at their defaults
+(`commit_every` is 50,000 with the WAL on and one commit per flush with it off;
+`parallel_flush` is on). Measured on 26.10.1-dev with 50,000 vertices and
+1,045,738 edges: about 7.5 s with the WAL on, against about 30 s for the same
+graph through `newVertex`/`newEdge` one element at a time. The size hint made
+no measurable difference at that size. The same options exist for a server as
+query parameters of `POST /api/v1/batch/{db}` (`wal=true`,
+`expectedEdgeCount=...`), the served bulk path.
+
 **Example:**
 
 ```python
-with db.graph_batch(batch_size=1000, expected_edge_count=50000) as batch:
+with db.graph_batch(use_wal=True, expected_edge_count=50000) as batch:
     alice = batch.create_vertex("Person", name="Alice")
     bob = batch.create_vertex("Person", name="Bob")
     batch.new_edge(alice, "Knows", bob, since=2024)
