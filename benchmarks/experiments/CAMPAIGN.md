@@ -257,7 +257,7 @@ October's campaign is DECISIONS #74 as amended through #108, and it starts with 
 
 | # | change | scope | status | evidence |
 |---|---|---|---|---|
-| 1 | Both graph arms load through ArcadeDB's bulk path: `graph_batch(use_wal=True, expected_edge_count=N)` embedded, `POST /api/v1/batch?wal=true&expectedEdgeCount=N` served, the WAL kept on | ArcadeDB only | recommended by the maintainers (ArcadeData/arcadedb#8287); awaiting the user. Warm gap 3.2-4.0x embedded, 6-7x served | BUGS F123 |
+| 1 | Both graph arms load through ArcadeDB's bulk path: `graph_batch(use_wal=True, expected_edge_count=N)` embedded, `POST /api/v1/batch?wal=true&expectedEdgeCount=N` served, the WAL kept on | ArcadeDB only | recommended by the maintainers (ArcadeData/arcadedb#8287); awaiting the user. Warm gap 3.2-4.0x embedded, 6-7x served. **Prototyped** (2026-09-24): laptop micro smoke, every answer digest identical to the current loaders; the message half still needs a smoke on the bench host (LDBC corpus) | BUGS F123 |
 | 2 | Every timed statement binds its values: the graph template, the served documents CRUD, the cross-model transaction, the served dense search | **comparators too**: every Cypher engine on the graph table, SurrealDB, PG+AGE | recommended (ArcadeData/arcadedb#8132, #8286); awaiting the user, including the scope | BUGS F114, F125; the two bullets below |
 | 3 | Dense ingest through `graph_batch(use_wal=True)` with Java float arrays | ArcadeDB only | candidate (1.4x); awaiting the user | HANDOFF vector-lane audit |
 | 4 | A served bulk path for DOCUMENT and vector types (served vector arms load through `sqlscript`; `/batch` is vertex/edge JSONL) | ArcadeDB only | ask upstream first (step 7c) | HANDOFF vector-lane audit |
