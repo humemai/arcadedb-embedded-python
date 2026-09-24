@@ -247,29 +247,34 @@ with pg.connect("postgresql://root:<password>@localhost:5432/mydb") as conn:
         table = cur.fetch_arrow_table()   # a pyarrow.Table
 ```
 
-**Declared properties arrive typed; computed columns arrive as strings.** A
-property declared in the schema (`LONG`, `STRING`, `DOUBLE`, `BOOLEAN`) comes
-back as `int64`, `string`, `double`, `bool`. A computed column does not:
-`count(*)`, `sum(...)`, `max(...)`, `id * 2` and `name.length()` all arrive as
-`string` (`'3'`, not `3`). The server describes a prepared statement's computed
-columns as `varchar` (OID 1043) and states the real type only when the
-statement runs; the ADBC driver builds its Arrow schema from that describe.
-`psycopg` reads the type from the executed result and receives `int` and
-`float` for the same queries. The same describe reaches pgjdbc's
-`PreparedStatement`, which returns these columns as `String`; reported upstream
-as ArcadeDB [#8285][8285]. Until that changes, cast computed columns on the
-client, or read aggregates with `psycopg`.
+**Declared properties and computed columns both arrive typed.** A property
+declared in the schema (`LONG`, `STRING`, `DOUBLE`, `BOOLEAN`) comes back as
+`int64`, `string`, `double`, `bool`, and a computed column as its real type:
+`count(*)` and `max(n)` as `int64`, `sum(x)` as `double`, `n * 2` as `int64`.
+Development builds before 2026-09-24 described computed columns as `varchar`
+before execution, so the driver returned them as strings (`'3'`, not `3`), and
+pgjdbc's `PreparedStatement` returned them as `String`; fixed for 26.10.1
+(ArcadeDB [#8285][8285]).
 
-Measured on a laptop against the 26.10.1 development wheel;
-`tests/test_server_wire_protocols.py` connects with the driver, checks the
-typed columns, values, and a bound parameter, and pins the string behaviour so
-the test fails the day it changes.
+**Bound parameters are served from indexes.** Postgres-wire clients send a
+bound value as `$1`; from 26.10.1 an equality on an indexed property with a
+`$1` uses the index, where earlier builds scanned the whole type (ArcadeDB
+[#8288][8288]). pgjdbc also works at its default `prepareThreshold` from
+26.10.1; earlier builds failed a prepared statement's sixth execution
+(ArcadeDB [#8244][8244]).
+
+Measured on a laptop against the 26.10.1 development wheel (engine
+`3440a871a9`); `tests/test_server_wire_protocols.py` connects with the driver,
+checks the typed columns, values, a bound parameter, and a computed column's
+type, so the test fails the day any of it changes.
 
 The other ADBC route, adbcBridge over the psqlodbc driver, is described in
 ArcadeDB's announcement and was not measured here.
 
 [7178]: https://github.com/ArcadeData/arcadedb/issues/7178
 [8285]: https://github.com/ArcadeData/arcadedb/issues/8285
+[8288]: https://github.com/ArcadeData/arcadedb/issues/8288
+[8244]: https://github.com/ArcadeData/arcadedb/issues/8244
 
 ### Not bundled
 

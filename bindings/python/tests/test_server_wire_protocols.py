@@ -142,14 +142,12 @@ def test_postgres_wire_answers_arrow_adbc(wire_server):
     Needs 26.10.1: on 26.9.1 the driver cannot connect at all ("Expected 5 or 6
     columns from type resolver pg_type query but got 0", ArcadeDB #7178).
 
-    Declared schema properties arrive as their Arrow types. A COMPUTED column
-    (count(*), sum(), an expression) arrives as a string: the server describes a
-    prepared statement's computed columns as varchar (OID 1043) and states the
-    real type only when it executes, and the driver builds its Arrow schema from
-    the describe (reported upstream as ArcadeDB #8285). psycopg reads the
-    executed type and is unaffected. The last
-    assertion pins that gap, so the day upstream closes it this test fails and
-    docs/guide/server.md gets updated instead of going stale.
+    Declared schema properties arrive as their Arrow types, and so does a
+    COMPUTED column (count(*) as int64): until 2026-09-24 the server described a
+    prepared statement's computed columns as varchar before execution, and the
+    driver builds its Arrow schema from that describe, so they arrived as
+    strings (ArcadeDB #8285, fixed for 26.10.1). The last assertion pins the
+    fixed behaviour; docs/guide/server.md states it.
     """
     pytest.importorskip(
         "pyarrow"
@@ -191,9 +189,9 @@ def test_postgres_wire_answers_arrow_adbc(wire_server):
         cur.execute("SELECT count(*) AS c FROM Typed")
         table = cur.fetch_arrow_table()
         assert (str(table.schema.field(0).type), table.column(0)[0].as_py()) == (
-            "string",
-            "3",
-        ), "computed columns now arrive typed over ADBC: update docs/guide/server.md"
+            "int64",
+            3,
+        ), "a computed column no longer arrives typed over ADBC (#8285): update docs/guide/server.md"
 
 
 def test_redis_port_setting_is_honored(wire_server):
