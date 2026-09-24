@@ -255,7 +255,9 @@ back as `int64`, `string`, `double`, `bool`. A computed column does not:
 columns as `varchar` (OID 1043) and states the real type only when the
 statement runs; the ADBC driver builds its Arrow schema from that describe.
 `psycopg` reads the type from the executed result and receives `int` and
-`float` for the same queries. Until that changes, cast computed columns on the
+`float` for the same queries. The same describe reaches pgjdbc's
+`PreparedStatement`, which returns these columns as `String`; reported upstream
+as ArcadeDB [#8285][8285]. Until that changes, cast computed columns on the
 client, or read aggregates with `psycopg`.
 
 Measured on a laptop against the 26.10.1 development wheel;
@@ -267,6 +269,7 @@ The other ADBC route, adbcBridge over the psqlodbc driver, is described in
 ArcadeDB's announcement and was not measured here.
 
 [7178]: https://github.com/ArcadeData/arcadedb/issues/7178
+[8285]: https://github.com/ArcadeData/arcadedb/issues/8285
 
 ### Not bundled
 

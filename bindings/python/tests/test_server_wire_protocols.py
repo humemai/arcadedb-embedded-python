@@ -146,7 +146,8 @@ def test_postgres_wire_answers_arrow_adbc(wire_server):
     (count(*), sum(), an expression) arrives as a string: the server describes a
     prepared statement's computed columns as varchar (OID 1043) and states the
     real type only when it executes, and the driver builds its Arrow schema from
-    the describe. psycopg reads the executed type and is unaffected. The last
+    the describe (reported upstream as ArcadeDB #8285). psycopg reads the
+    executed type and is unaffected. The last
     assertion pins that gap, so the day upstream closes it this test fails and
     docs/guide/server.md gets updated instead of going stale.
     """
