@@ -69,12 +69,21 @@ def test_marker_wait():
 
 
 def test_pgrep_wait():
-    """The September form, which must keep working."""
+    """The September form: still a wait EDGE (so a cycle through it is seen)."""
     g = _graph({
         "qEA": HEAD,
         "qEB": HEAD + 'while pgrep -x -f "/bin/bash /home/tk/qEA.sh" > /dev/null; do sleep 300; done\n',
     })
     _check("pgrep wait", g.get("qEB"), {"qEA"})
+
+
+def test_pgrep_wait_is_flagged():
+    """...but refused as a wait: it holds only for one exact launch line (BUGS F59)."""
+    old = HEAD + 'while pgrep -x -f "/bin/bash /home/tk/qEA.sh" > /dev/null; do sleep 300; done\n'
+    new = HEAD + 'while ! grep -q "qEA ALL-DONE" "$S"; do sleep 300; done\n'
+    flag = lambda b: [p for p in queue_lint.check_paths_and_python("qEB", b) if "BUGS F59" in p[1]]
+    _check("process-name wait is flagged", len(flag(old)), 1)
+    _check("marker wait is not flagged", flag(new), [])
 
 
 def test_cycle_is_visible():
@@ -115,7 +124,7 @@ def test_container_path_through_a_helper():
 
 
 def main():
-    for t in (test_marker_wait, test_pgrep_wait, test_cycle_is_visible,
+    for t in (test_marker_wait, test_pgrep_wait, test_pgrep_wait_is_flagged, test_cycle_is_visible,
               test_container_path_through_a_helper):
         print(f"\n== {t.__name__}")
         t()

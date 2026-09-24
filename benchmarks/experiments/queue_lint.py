@@ -157,6 +157,18 @@ def check_paths_and_python(name, body):
         # which every commit-pinned campaign needs; qDJ aborted on its first
         # line without it (2026-09-12) and the next script in the chain
         # started at once because its wait target had vanished.
+        # A PROCESS-NAME wait holds only while the predecessor's command line
+        # is literally `/bin/bash /home/tk/qXX.sh`. Launched the usual way,
+        # `setsid nohup bash ~/qXX.sh`, it reads `bash /home/tk/qXX.sh`, so
+        # `pgrep -x -f` never matches and the loop falls straight through: the
+        # stage starts at once, on top of the one it was meant to wait for
+        # (BUGS F59). The ALL-DONE marker wait has no such dependency and is
+        # the form every October stage uses. Still read as a wait edge by
+        # check_cycles, so a cycle through it stays visible.
+        if re.search(r"pgrep\s+-x\s+-f\s+[\"']/bin/bash /home/tk/q[A-Z]+[0-9]*\.sh", line):
+            problems.append((i, "process-name wait (pgrep -x -f) holds only if the predecessor was launched "
+                                "as exactly `/bin/bash /home/tk/qXX.sh`; wait on its ALL-DONE marker instead "
+                                "(BUGS F59)"))
         if "build_images.sh" in line and "BENCH_ALLOW_DEV=1" not in line:
             problems.append((i, "build_images.sh without BENCH_ALLOW_DEV=1 refuses the commit-pinned wheel"))
         in_cell = any(r in line for r in CELL_RUNNERS) or any(
