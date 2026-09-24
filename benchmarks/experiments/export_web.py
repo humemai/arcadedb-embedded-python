@@ -5725,9 +5725,25 @@ def _zero_growth_notes(table_id):
         # printed for all and the cause only where it was established. An
         # engine whose floor we have not traced gets a sentence that says what
         # was measured and stops, which is the honest shape.
-        _why = (f", which for this engine is a preallocated write-ahead log of about "
-                f"{mb} MB that the whole corpus fits inside at this size"
-                if "SurrealDB" in str(label) else "")
+        # FALKORDB'S CAUSE, TRACED 2026-09-24 on the pinned image
+        # (falkordb/falkordb@sha256:0a9fe4d1...): `CONFIG GET save` answers
+        # "3600 1 300 100 60 10000", `appendonly` is "no", the data directory
+        # /var/lib/falkordb/data starts empty, and the image declares no volume.
+        # At the relaxed class the harness leaves that default (runner.py adds an
+        # append-only file only for strict), and its rows measured exactly the
+        # empty footprint at both sizes: no snapshot had been written, so the
+        # graph was in memory only and the cell says nothing about its size on
+        # disk. The timer values stay out of the sentence: a digit on the page
+        # needs a pin, and the cause does not depend on them.
+        if "SurrealDB" in str(label):
+            _why = (f", which for this engine is a preallocated write-ahead log of about "
+                    f"{mb} MB that the whole corpus fits inside at this size")
+        elif "FalkorDB" in str(label):
+            _why = (": at the relaxed setting FalkorDB persists only by timed snapshots, "
+                    "with no append-only file, and none had been taken when disk was "
+                    "measured, so the graph was held in memory only")
+        else:
+            _why = ""
         # AGREEMENT FOLLOWS THE GROUPING. Merging two sizes into one sentence
         # left it reading "FalkorDB at SF1 and SF10: its disk cell is 0.0",
         # singular over two cells. Generated prose has to survive its own
@@ -5739,7 +5755,7 @@ def _zero_growth_notes(table_id):
             f"{label} at {sl}: {_cell} 0.0 because the server container did not "
             f"grow over its empty footprint during the run{_why}; {_read} as a floor "
             f"under {gib} GiB, not as a size.",
-            label, sl, "0.0", *( [mb, gib] if _why else [gib] )))
+            label, sl, "0.0", *( [mb, gib] if "SurrealDB" in str(label) else [gib] )))
     return notes
 
 
