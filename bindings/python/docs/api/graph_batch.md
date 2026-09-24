@@ -61,6 +61,13 @@ Create and persist a single vertex.
 
 Create many vertices efficiently and return their RIDs.
 
+**Vector properties: pass `to_java_float_array(vec)`, not a Python list.** A plain
+list of floats is JSON-representable, so it takes the JSON bulk path, and for a
+vector that path is the slow one: 100,000 vectors of 128 floats loaded at 3.6k
+vectors/s as lists against 31k/s as `to_java_float_array` values, 8.6x (measured
+2026-09-24 on 26.10.1-dev, same data, stored vectors identical). The list form
+was also slower than inserting one vector per `db.command(...)`.
+
 ### `new_edge(source, edge_type, destination, **properties)`
 
 Buffer an edge for creation during flush/close.
