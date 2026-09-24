@@ -186,33 +186,28 @@ class ArcadeGraphEmbedded(Base):
             jvm_kwargs={"heap_size": heap, "jvm_args": f"-Xms{heap}"})
 
     def build(self, n_persons):
-        # Native Java API with batched commits — ArcadeDB's embedded bulk path
-        jdb = self.db.get_java_database()
-        verts = {}  # keyed by person id (sparse longs under the LDBC source)
-        jdb.begin()
-        n = 0
-        for i, name, age, city in gen_persons(n_persons):
-            v = jdb.newVertex("Person")
-            v.set("id", i)
-            v.set("name", name)
-            v.set("age", age)
-            v.set("city", city)
-            v.save()
-            verts[i] = v
-            n += 1
-            if n % INGEST_BATCH == 0:
-                jdb.commit()
-                jdb.begin()
-        jdb.commit()
-        jdb.begin()
-        n = 0
-        for src, dst, since in gen_edges(n_persons):
-            verts[src].newEdge("KNOWS", verts[dst], "since", since)
-            n += 1
-            if n % INGEST_BATCH == 0:
-                jdb.commit()
-                jdb.begin()
-        jdb.commit()
+        # ArcadeDB's bulk graph path at the maintainers' recommended crash-safe
+        # settings (ArcadeData/arcadedb#8287; BUGS F123): GraphBatch with the
+        # write-ahead log ON and the edge count given, so the batch size tunes
+        # itself; batch size, commit cadence and parallel flush stay at their
+        # defaults. The edges are staged in memory first because the count has
+        # to be known before the batch opens -- the same kind of staging
+        # LadybugDB's CSV COPY does inside its timer. Every comparator on this
+        # table loads through its own bulk path.
+        persons = [{"id": i, "name": name, "age": age, "city": city}
+                   for i, name, age, city in gen_persons(n_persons)]
+        edges = list(gen_edges(n_persons))
+        self._person_rid = {}
+        with self.db.graph_batch(use_wal=True, expected_edge_count=len(edges)) as gb:
+            for s in range(0, len(persons), INGEST_BATCH):
+                chunk = persons[s:s + INGEST_BATCH]
+                for p, rid in zip(chunk, gb.create_vertices("Person", chunk)):
+                    self._person_rid[p["id"]] = rid
+            for s in range(0, len(edges), INGEST_BATCH):
+                chunk = edges[s:s + INGEST_BATCH]
+                gb.new_edges([self._person_rid[a] for a, _, _ in chunk], "KNOWS",
+                             [self._person_rid[b] for _, b, _ in chunk],
+                             [{"since": since} for _, _, since in chunk])
 
     # MESSAGE-HALF SCHEMA, shared by both ArcadeDB arms. Message is an abstract
     # supertype and Post/Comment EXTEND it, so `MATCH (m:Message)` reaches both
@@ -241,48 +236,43 @@ class ArcadeGraphEmbedded(Base):
         return ddl
 
     def build_messages(self):
-        # Native Java API with index lookups, the same batched-commit path the
-        # persons+KNOWS load uses. Person is already loaded with a unique id
-        # index (connect()), so its endpoints resolve by lookupByKey too.
+        # The same GraphBatch path and settings as build(). Endpoints resolve
+        # from the RIDs create_vertices returned (Person's from build()), so
+        # nothing is looked up by index during the load. The edge count is not
+        # given: at the full-network tier staging every message edge would cost
+        # gigabytes, and the hint measured no difference (#8287). An edge whose
+        # endpoint a capped slice dropped is skipped, as before.
         import ldbc_snb as _ldbc
         mc = _ldbc.MessageCorpus(self._scale)
         for ddl in self._msg_schema_ddl():
             self.db.command("sql", ddl)
-        jdb = self.db.get_java_database()
+        rid = {"Person": self._person_rid}
         vcount = ecount = 0
-        jdb.begin()
-        n = 0
-        for label, ids in mc.vertex_spec():
-            for vid in ids:
-                v = jdb.newVertex(label)
-                v.set("id", vid)
-                v.save()
-                vcount += 1
-                n += 1
-                if n % INGEST_BATCH == 0:
-                    jdb.commit()
-                    jdb.begin()
-        jdb.commit()
-
-        def _lookup(label, vid):
-            cur = jdb.lookupByKey(label, "id", vid)
-            return cur.next().getRecord() if cur.hasNext() else None
-
-        jdb.begin()
-        n = 0
-        for rel, src_label, dst_label, gen in mc.edge_spec():
-            for s, d in gen():
-                sv = _lookup(src_label, s)
-                dv = _lookup(dst_label, d)
-                if sv is None or dv is None:
-                    continue          # a capped slice can drop an endpoint
-                sv.newEdge(rel, dv)
-                ecount += 1
-                n += 1
-                if n % INGEST_BATCH == 0:
-                    jdb.commit()
-                    jdb.begin()
-        jdb.commit()
+        with self.db.graph_batch(use_wal=True) as gb:
+            for label, ids in mc.vertex_spec():
+                m = rid.setdefault(label, {})
+                ids = list(ids)
+                for s in range(0, len(ids), INGEST_BATCH):
+                    chunk = ids[s:s + INGEST_BATCH]
+                    for vid, r in zip(chunk, gb.create_vertices(label, [{"id": v} for v in chunk])):
+                        m[vid] = r
+                    vcount += len(chunk)
+            for rel, src_label, dst_label, gen in mc.edge_spec():
+                sm, dm = rid.get(src_label, {}), rid.get(dst_label, {})
+                src, dst = [], []
+                for s_id, d_id in gen():
+                    sr, dr = sm.get(s_id), dm.get(d_id)
+                    if sr is None or dr is None:
+                        continue          # a capped slice can drop an endpoint
+                    src.append(sr)
+                    dst.append(dr)
+                    if len(src) == INGEST_BATCH:
+                        gb.new_edges(src, rel, dst)
+                        ecount += len(src)
+                        src, dst = [], []
+                if src:
+                    gb.new_edges(src, rel, dst)
+                    ecount += len(src)
         self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
 
     def post_build(self, workload):
@@ -381,61 +371,72 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
         r.raise_for_status()
         return r.json().get("result", [])
 
+    def _batch(self, lines, query):
+        """POST JSONL to /api/v1/batch, streamed: the server consumes the body
+        while it loads, so the client never holds a whole payload."""
+        def body():
+            buf = []
+            for ln in lines:
+                buf.append(ln)
+                if len(buf) >= INGEST_BATCH:
+                    yield ("\n".join(buf) + "\n").encode()
+                    buf = []
+            if buf:
+                yield ("\n".join(buf) + "\n").encode()
+        r = self.rq.post(f"{self.base}/batch/bench?{query}", data=body(),
+                         headers={"Content-Type": "application/x-ndjson"}, timeout=36000)
+        r.raise_for_status()
+        return r.json()
+
     def build(self, n_persons):
-        # SQL-over-HTTP sqlscript batches — the server's remote bulk surface
-        buf = []
-        for i, name, age, city in gen_persons(n_persons):
-            # literal SQL: escape string payloads (LDBC names contain quotes)
-            name_q = name.replace("\\", "\\\\").replace("'", "\\'")
-            city_q = city.replace("\\", "\\\\").replace("'", "\\'")
-            buf.append(f"CREATE VERTEX Person SET id = {i}, name = '{name_q}', "
-                       f"age = {age}, city = '{city_q}'")
-            if len(buf) >= INGEST_BATCH:
-                self._http("command", "sqlscript", ";".join(buf))
-                buf = []
-        if buf:
-            self._http("command", "sqlscript", ";".join(buf))
-        buf = []
-        for src, dst, since in gen_edges(n_persons):
-            buf.append("CREATE EDGE KNOWS FROM (SELECT FROM Person WHERE id = "
-                       f"{src}) TO (SELECT FROM Person WHERE id = {dst}) "
-                       f"SET since = {since}")
-            if len(buf) >= INGEST_BATCH:
-                self._http("command", "sqlscript", ";".join(buf))
-                buf = []
-        if buf:
-            self._http("command", "sqlscript", ";".join(buf))
+        # ArcadeDB's served bulk graph path, POST /api/v1/batch (GraphBatch
+        # under the hood), at the maintainers' recommended crash-safe settings
+        # (ArcadeData/arcadedb#8287; BUGS F123): the WAL on and the edge count
+        # given. JSONL, vertices first; edges name their endpoints by the
+        # vertices' @id. idMapping=true returns every Person's RID, which the
+        # message half references across requests (a later request can only
+        # name an earlier one's vertices by RID).
+        edges = list(gen_edges(n_persons))
+        def lines():
+            for i, name, age, city in gen_persons(n_persons):
+                yield json.dumps({"@type": "vertex", "@class": "Person", "@id": f"p{i}",
+                                  "id": i, "name": name, "age": age, "city": city})
+            for src, dst, since in edges:
+                yield json.dumps({"@type": "edge", "@class": "KNOWS", "@from": f"p{src}",
+                                  "@to": f"p{dst}", "since": since})
+        res = self._batch(lines(), f"wal=true&expectedEdgeCount={len(edges)}&idMapping=true")
+        self._person_rid = {int(k[1:]): v for k, v in res["idMapping"].items()}
 
     def build_messages(self):
-        # HTTP sqlscript, the server's remote bulk surface, over the SAME schema
-        # the embedded arm builds (_msg_schema_ddl: Message supertype, Post and
-        # Comment EXTENDS it, a unique id index on each). The LSQB Cypher is
-        # identical to the embedded arm's, which is the tested one; only this
-        # ingest text is the server arm's own. INFERRED, not run on the laptop.
+        # The same /batch path and settings as build(), in ONE streamed request:
+        # message vertices first, then every edge, message endpoints by @id and
+        # Person endpoints by the RIDs build() got back. An edge whose endpoint
+        # a capped slice dropped is skipped here, because /batch refuses an
+        # unknown reference; the counts are the server's own. The edge count is
+        # not given, for the reason the embedded arm states.
         import ldbc_snb as _ldbc
         mc = _ldbc.MessageCorpus(self._scale)
         for ddl in self._msg_schema_ddl():
             self._http("command", "sql", ddl)
-        vcount = ecount = 0
-        buf = []
-        for label, ids in mc.vertex_spec():
-            for vid in ids:
-                buf.append(f"CREATE VERTEX {label} SET id = {vid}")
-                vcount += 1
-                if len(buf) >= INGEST_BATCH:
-                    self._http("command", "sqlscript", ";".join(buf)); buf = []
-        if buf:
-            self._http("command", "sqlscript", ";".join(buf)); buf = []
-        for rel, src_label, dst_label, gen in mc.edge_spec():
-            for s, d in gen():
-                buf.append(f"CREATE EDGE {rel} FROM (SELECT FROM {src_label} WHERE id = "
-                           f"{s}) TO (SELECT FROM {dst_label} WHERE id = {d})")
-                ecount += 1
-                if len(buf) >= INGEST_BATCH:
-                    self._http("command", "sqlscript", ";".join(buf)); buf = []
-        if buf:
-            self._http("command", "sqlscript", ";".join(buf))
-        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+        loaded = {}
+        def ref(label, vid):
+            if label == "Person":
+                return self._person_rid.get(vid)
+            return f"{label}:{vid}" if vid in loaded.get(label, ()) else None
+        def lines():
+            for label, ids in mc.vertex_spec():
+                seen = loaded.setdefault(label, set())
+                for vid in ids:
+                    seen.add(vid)
+                    yield json.dumps({"@type": "vertex", "@class": label, "@id": f"{label}:{vid}", "id": vid})
+            for rel, src_label, dst_label, gen in mc.edge_spec():
+                for s_id, d_id in gen():
+                    sr, dr = ref(src_label, s_id), ref(dst_label, d_id)
+                    if sr is None or dr is None:
+                        continue          # a capped slice can drop an endpoint
+                    yield json.dumps({"@type": "edge", "@class": rel, "@from": sr, "@to": dr})
+        res = self._batch(lines(), "wal=true&idMapping=false")
+        self.msg_counts = {"msg_vertices": res.get("verticesCreated"), "msg_edges": res.get("edgesCreated")}
 
     def post_build(self, workload):
         if workload != "olap":
