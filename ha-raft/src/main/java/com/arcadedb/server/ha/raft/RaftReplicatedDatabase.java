@@ -94,10 +94,13 @@ import com.arcadedb.serializer.BinarySerializer;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.ForwardedRequestIdContext;
 import com.arcadedb.server.HAReplicatedDatabase;
 import com.arcadedb.server.HAServerPlugin;
 import com.arcadedb.server.LeaderForwardContext;
+import com.arcadedb.server.http.IdempotencyCache;
 import com.arcadedb.server.http.handler.LeaderDial;
+import org.apache.ratis.protocol.RaftPeerId;
 
 import java.io.IOException;
 import java.net.ConnectException;
@@ -124,6 +127,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.IntPredicate;
@@ -3565,17 +3569,38 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     // here, so the caller retries - which re-resolves the leader from scratch - rather than this node posting a
     // non-idempotent write a second time on a path that cannot prove the first one did not execute.
     if (LeaderForwardContext.isAlreadyForwarded()) {
+      // The peer says which node it meant to reach, and that separates the two causes (issue #7603). If it meant
+      // THIS node, the address was right and leadership moved while the write travelled: an ordinary election the
+      // retry gets past. The refusal then names no leader, which the HTTP layer answers 503 - retryable - rather
+      // than the 400 a named leader gets, and it leaves the warning latch to the misconfiguration it reports.
+      final RaftPeerId localPeer = raft.getLocalPeerId();
+      final LeaderForwardContext.Refusal refusal = LeaderForwardContext.classifyRefusal(
+          localPeer != null ? localPeer.toString() : null);
+      if (refusal == LeaderForwardContext.Refusal.LEADERSHIP_MOVED) {
+        final String currentLeader = raft.getLeaderName();
+        throw new ServerIsNotTheLeaderException(
+            "A cluster peer forwarded this write here as the leader, and leadership moved away from this node while "
+                + "the request was in flight" + (currentLeader != null ? " (the leader is now " + currentLeader + ")" : "")
+                + ". The write was not executed: retry it", null);
+      }
+
+      final boolean misidentified = refusal == LeaderForwardContext.Refusal.ADDRESS_DOES_NOT_IDENTIFY_LEADER;
       // Said once in this node's own log too: the refusal travels back to the peer that forwarded the write
       // and from there to the client, so without this line the only node that can name the misconfiguration -
       // the one that proved the address wrong by receiving the request - says nothing about it anywhere.
       if (forwardedAgainWarned.compareAndSet(false, true))
         LogManager.instance().log(this, Level.WARNING,
             "A cluster peer forwarded a write to this node as the leader, but this node is not the leader (db=%s). "
-                + "That peer resolved an HTTP address for the leader which does not identify it - unless leadership "
-                + "just moved, declare every node's HTTP port explicitly with the 'host:raftPort:httpPort' syntax in "
+                + "That peer resolved an HTTP address for the leader which does not identify it - "
+                + (misidentified ? "it meant to reach another node, so " : "unless leadership just moved, ")
+                + "declare every node's HTTP port explicitly with the 'host:raftPort:httpPort' syntax in "
                 + "%s. The write is refused rather than forwarded on. This notice is logged only once per database.",
             getName(), GlobalConfiguration.HA_SERVER_LIST.getKey());
-      throw new ServerIsNotTheLeaderException(
+      throw new ServerIsNotTheLeaderException(misidentified ?
+          "Refusing to forward a write that a cluster peer already forwarded to the leader: it arrived on this node, "
+              + "which is neither the leader nor the node that peer meant to reach, so the HTTP address that peer "
+              + "resolved for the leader does not identify it. Declaring every node's HTTP port "
+              + "('host:raftPort:httpPort') in " + GlobalConfiguration.HA_SERVER_LIST.getKey() + " prevents this" :
           "Refusing to forward a write that a cluster peer already forwarded to the leader: it arrived on this node, "
               + "which is not the leader. Either leadership moved while the request was in flight - retry - or the "
               + "HTTP address that peer resolved for the leader does not identify it, which is what declaring every "
@@ -3588,7 +3613,14 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     // bounded time for a leader to appear and forward as soon as one does. If this node becomes the leader
     // while waiting, getLeaderHttpAddress() returns its own address and the POST to self executes locally.
     final long leaderWaitMs = server.getConfiguration().getValueAsLong(GlobalConfiguration.HA_FORWARD_LEADER_WAIT_TIMEOUT_MS);
-    final String leaderHttpAddress = awaitLeaderAddress(raft::getLeaderHttpAddress, leaderWaitMs, LEADER_WAIT_POLL_INTERVAL_MS);
+    //
+    // The leader's peer id is captured with every read of its address, so the id this write names on the wire is the
+    // one the address was resolved for (issue #7603) - checked again once the dial below is resolved.
+    final AtomicReference<RaftPeerId> leaderIdAtAddressRead = new AtomicReference<>();
+    final String leaderHttpAddress = awaitLeaderAddress(() -> {
+      leaderIdAtAddressRead.set(raft.getLeaderId());
+      return raft.getLeaderHttpAddress();
+    }, leaderWaitMs, LEADER_WAIT_POLL_INTERVAL_MS);
     if (leaderHttpAddress == null)
       throw new TransactionException("Cannot forward command to leader: leader HTTP address is not available "
           + "(no leader elected within " + leaderWaitMs + "ms; tune " + GlobalConfiguration.HA_FORWARD_LEADER_WAIT_TIMEOUT_MS.getKey() + ")");
@@ -3600,6 +3632,11 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     // further down cannot vet one address and dial another across a leadership change in between.
     final HAServerPlugin haPlugin = server.getHA();
     final LeaderDial dial = haPlugin != null ? LeaderDial.resolve(haPlugin, httpClient) : null;
+    final RaftPeerId leaderIdBeforeDial = leaderIdAtAddressRead.get();
+    final RaftPeerId leaderIdAfterDial = raft.getLeaderId();
+    final String intendedLeaderId = LeaderForwardContext.stableLeaderId(
+        leaderIdBeforeDial != null ? leaderIdBeforeDial.toString() : null,
+        leaderIdAfterDial != null ? leaderIdAfterDial.toString() : null);
 
     // The cluster named an HTTPS endpoint for the leader and this node cannot reach it. Posting the write to the
     // plain listener instead would put it, and the cluster token below, on the wire in clear; refuse with the
@@ -3624,7 +3661,11 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     // Asked only when the write is about to travel on that plain-HTTP address: isOwnHttpAddress answers for this
     // node's HTTP listener and cannot speak for an HTTPS endpoint, which getLeaderHttpsAddress() withholds when
     // it is this node's own.
-    if (!raft.isLeader() && leaderHttpsAddress == null && raft.isOwnHttpAddress(leaderHttpAddress)) {
+    //
+    // Captured once: the same answer also decides, further down, whether the request id is relayed (issue #8323), so
+    // the two decisions are about the one destination the write is actually posted to.
+    final boolean postsToItself = leaderHttpsAddress == null && raft.isOwnHttpAddress(leaderHttpAddress);
+    if (!raft.isLeader() && postsToItself) {
       if (selfForwardWarned.compareAndSet(false, true))
         LogManager.instance().log(this, Level.WARNING,
             "The HTTP address resolved for the leader (%s) is this node's own, so a write forwarded to it would come "
@@ -3663,16 +3704,33 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
         ? "https://" + leaderHttpsAddress
         : "http://" + leaderHttpAddress) + "/api/v1/command/" + getName();
 
-    // The response deadline (issues #7527/#7543): the command's own arcadedb.command.timeout when one is set,
-    // because a forwarded command's legitimate duration is bounded by the query rather than by a fixed
+    // Captured once, ahead of the deadline that depends on it, so the headroom below and the catch blocks further
+    // down both use the connect timeout THIS forward actually dials with, not necessarily this instance's own
+    // plain-HTTP httpClient (an HTTPS-scheme forward uses dial.client() instead, whose connect timeout is read
+    // from its own cache).
+    final HttpClient dialClient = leaderHttpsAddress != null ? dial.client() : httpClient;
+
+    // The response deadline (issues #7527/#7543): driven by the command's own arcadedb.command.timeout when one
+    // is set, because a forwarded command's legitimate duration is bounded by the query rather than by a fixed
     // administrative deadline - arcadedb.ha.proxyReadTimeout cannot make that distinction, which is why it is
     // not used here. Falling back to arcadedb.ha.proxyCommandTimeout otherwise, since arcadedb.command.timeout
     // defaults to 0 (unbounded) and the wait still has to be finite: it is an HTTP worker, wire-protocol, or
     // embedded caller's thread parked on send() below.
+    //
+    // The command budget plus headroom, never the budget alone (issue #7737). The leader enforces the same
+    // arcadedb.command.timeout against the same command, but its clock starts strictly later - after connect,
+    // transit, HTTP parse, auth and dispatch - and it does not count the Raft quorum commit or the response
+    // transit that follow execution. A deadline equal to the budget therefore always expired here first: a
+    // write the leader committed inside its budget came back as an unknown, do-not-retry failure, and the
+    // leader's own TimeoutException naming arcadedb.command.timeout could never reach the client. The headroom
+    // is the leader's quorum wait (arcadedb.ha.quorumTimeout) plus this dial's connect budget, which bounds the
+    // round trip on the same order of magnitude, so the leader always gets to answer first.
     final long configuredCommandTimeout = configuration.getValueAsLong(GlobalConfiguration.COMMAND_TIMEOUT);
     final long resolvedTimeoutMs;
     if (configuredCommandTimeout > 0)
-      resolvedTimeoutMs = configuredCommandTimeout;
+      resolvedTimeoutMs = commandTimeoutWithHeadroom(configuredCommandTimeout,
+          server.getConfiguration().getValueAsLong(GlobalConfiguration.HA_QUORUM_TIMEOUT),
+          dialClient.connectTimeout().map(Duration::toMillis).orElse(0L));
     else {
       resolvedTimeoutMs = server.getConfiguration().getValueAsLong(GlobalConfiguration.HA_PROXY_COMMAND_TIMEOUT);
       if (resolvedTimeoutMs < LeaderDial.MIN_FORWARD_TIMEOUT_MS && commandTimeoutClampWarned.compareAndSet(false, true))
@@ -3698,6 +3756,10 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       // (issue #6191). Sent only with the token, because that is the only form in which a receiving node
       // trusts the marker - same pairing as PostServerCommandHandler's forward.
       builder.header(LeaderForwardContext.FORWARDED_TO_LEADER_HEADER, "true");
+      // Which node this write means to reach, so a node that has to refuse the hop can tell a leadership change in
+      // flight from an address that names the wrong node (issue #7603). Same gate as the marker.
+      if (intendedLeaderId != null)
+        builder.header(LeaderForwardContext.FORWARDED_LEADER_ID_HEADER, intendedLeaderId);
     }
 
     String proxiedUser = proxied.getCurrentUserName();
@@ -3719,10 +3781,38 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     }
     builder.header("X-ArcadeDB-Forwarded-User", proxiedUser);
 
-    // Captured once so the catch blocks below can report the connect timeout THIS forward actually dialled
-    // with, not necessarily this instance's own plain-HTTP httpClient (an HTTPS-scheme forward uses
-    // dial.client() instead, whose connect timeout is a different setting entirely).
-    final HttpClient dialClient = leaderHttpsAddress != null ? dial.client() : httpClient;
+    // The client's request id, so the leader executes this write inside its own idempotency cache (issue #8323). The
+    // HTTP handler that served the request on this node reserves the id too, but it caches only what the leader
+    // answered: without the relay a retry after a lost answer - above all after the deadline below expires - that
+    // lands on another node, or here again once the reservation is gone, ran the write on the leader a second time.
+    // Published by AbstractServerHttpHandler only for a request it treats as idempotent, so a session-scoped or
+    // streamed request, a request with no id, and an embedded caller relay nothing. A second forward taken by the
+    // same request carries its ordinal beside the id (see ForwardedRequestIdContext), so two forwards of one statement
+    // never share a cache key on the leader. The ordinal is honored there only under the cluster token, so without a
+    // token a forward after the first relays no id at all: sent bare, it would share the first forward's key. The id
+    // is read from a thread-local, so it reaches this forward only when the command runs on the HTTP worker thread
+    // that published it; a caller that ran it on another thread would relay nothing, which is the pre-#8323
+    // behaviour and never a wrong replay.
+    //
+    // Not when the POST goes to this node itself - it became the leader while waiting above, the only way past the
+    // self-address refusal: this node's cache is then the leader's cache and the request being served already holds
+    // its reservation, and a forward whose body happens to match the client's would find that reservation pending and
+    // wait out the in-flight timeout for nothing. Decided on the destination captured above, not on a fresh
+    // isLeader() read, so a leadership change in between cannot make the two disagree.
+    final int forwardOrdinal = ForwardedRequestIdContext.nextForwardOrdinal();
+    final boolean ordinalTrusted = clusterToken != null && !clusterToken.isBlank();
+    if (forwardOrdinal > 0 && !postsToItself && (forwardOrdinal == 1 || ordinalTrusted)) {
+      try {
+        builder.header(IdempotencyCache.HEADER_REQUEST_ID, ForwardedRequestIdContext.requestId());
+        if (forwardOrdinal > 1)
+          builder.header(ForwardedRequestIdContext.FORWARD_ORDINAL_HEADER, Integer.toString(forwardOrdinal));
+      } catch (final IllegalArgumentException e) {
+        // A value the JDK client refuses to put on the wire: the write still runs, only without the leader-side
+        // replay protection, exactly as it did before the relay existed.
+        LogManager.instance().log(this, Level.FINE, "Request id not relayed on the forward to the leader: %s", e.getMessage());
+      }
+    }
+
     try {
       final HttpResponse<String> response = dialClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
       if (response.statusCode() != 200)
@@ -3775,6 +3865,23 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
               + "ms; whether the command reached the leader is unknown - it must not be blindly retried", e);
     } catch (final Exception e) {
       throw new TransactionException("Error forwarding command to leader at " + leaderUrl, e);
+    }
+  }
+
+  /**
+   * The follower's response deadline for a forwarded command that carries its own {@code arcadedb.command.timeout}:
+   * that budget plus the leader's quorum wait plus the connect budget of the dial (issue #7737), so the leader, whose
+   * identical deadline starts later and does not cover the commit or the response transit, always answers first.
+   * A non-positive component adds nothing, and the sum saturates at the command budget rather than overflowing:
+   * a budget that large is already effectively unbounded, and an overflowed deadline would be negative.
+   */
+  static long commandTimeoutWithHeadroom(final long commandTimeoutMs, final long quorumTimeoutMs,
+      final long connectTimeoutMs) {
+    try {
+      return Math.addExact(commandTimeoutMs, Math.addExact(Math.max(quorumTimeoutMs, 0L), Math.max(connectTimeoutMs, 0L)));
+    } catch (final ArithmeticException e) {
+      // Either sum overflowed: the budget is already effectively unbounded, so it is kept as it is.
+      return commandTimeoutMs;
     }
   }
 

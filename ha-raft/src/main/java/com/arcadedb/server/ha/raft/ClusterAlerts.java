@@ -338,12 +338,15 @@ public class ClusterAlerts {
         .put("severity", SEVERITY_CRITICAL)
         .put("title", "This node's HA layer has given up restarting itself")
         .put("message", "The health monitor restarted this node's Raft layer repeatedly without it staying up, and "
-            + "has stopped trying. Nothing automatic is left: the node does not rejoin the cluster on its own, and "
-            + "/api/v1/health answers unhealthy so a Kubernetes liveness probe restarts the pod.")
-        .put("recommendation", "Restart this node, and read its log from the first restart in the loop rather than "
-            + "the last - the escalation reports the loop, not the fault that started it. A node that escalates "
-            + "again after the restart has a persistent local cause (storage, ports, clock) rather than a transient "
-            + "one.")
+            + "has stopped trying. The escalation is recorded next to the Raft storage: /api/v1/health answers "
+            + "unhealthy once, so a Kubernetes liveness probe restarts the pod a single time, and a restarted process "
+            + "that inherits the record does not re-run the restarts or the Raft-storage reformat - it stays out of "
+            + "the Service but alive, for the operator.")
+        .put("recommendation", "Read this node's log from the first restart in the loop rather than the last - the "
+            + "escalation reports the loop, not the fault that started it. A node still escalated after a restart "
+            + "has a persistent cause: a term-inverted log or snapshot served by the leader needs a coordinated "
+            + "full-cluster Raft-storage reformat. Deleting the 'crash-loop-escalated' file in the Raft storage "
+            + "directory re-arms the automatic recovery for the next start.")
         .put("details", new JSONObject().put("escalated", true)));
   }
 
@@ -569,8 +572,9 @@ public class ClusterAlerts {
   /**
    * Pure alert builder (package-private for unit testing): appends a "lagging follower" alert when any
    * follower is {@code FALLING_BEHIND} or {@code STALLED} (issue #4812). A {@code STALLED} follower
-   * (matchIndex stuck while the leader advances) is {@code critical} because it will eventually force
-   * an election; a merely {@code FALLING_BEHIND} one is a {@code warning}. The alert names each slow
+   * (matchIndex stuck while the leader advances, or behind with no progress at all for
+   * {@link ClusterMonitor#ZERO_PROGRESS_STALL_GRACE_MS}, issue #8341) is {@code critical} because it does not
+   * count toward the quorum; a merely {@code FALLING_BEHIND} one is a {@code warning}. The alert names each slow
    * node with its lag and how long it has been lagging, so the operator can act on the right node.
    */
   static void addLaggingFollowerAlert(final List<FollowerSample> samples, final JSONArray alerts) {
@@ -603,8 +607,11 @@ public class ClusterAlerts {
             : "Follower(s) falling behind the leader")
         .put("message", nodes.length() + " follower(s) cannot keep up with the leader's write rate. "
             + (anyStalled
-                ? "At least one is STALLED (its matchIndex is stuck while the leader advances), which will eventually "
-                    + "trigger a leader election and stalls quorum acknowledgements, forcing replication backpressure."
+                ? "At least one is STALLED (its matchIndex is not moving, either while the leader advances or for long "
+                    + "enough that it is not catching up), so it does not count toward the quorum. If the remaining "
+                    + "replicas cannot form an advancing quorum, quorum acknowledgements stall and replication backpressure "
+                    + "follows; otherwise the cluster has lost its fault tolerance, and losing one more node can stop all "
+                    + "writes."
                 : "They are FALLING_BEHIND (lag is growing), which raises replication backpressure and risks election "
                     + "churn if it continues.")
             + " The slowest node is the bottleneck for the whole cluster.")

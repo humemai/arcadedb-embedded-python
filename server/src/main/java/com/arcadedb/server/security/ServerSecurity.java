@@ -1685,9 +1685,13 @@ public class ServerSecurity implements ServerPlugin, SecurityManager {
    * lands at all, which is the residual failure both admission verbs now report.
    * <p>
    * <b>It also reports a cluster that has simply never replicated a security document</b>, because such a cluster
-   * has no node with a recorded fingerprint and there is no local way to tell the two apart. That is why the
-   * readiness gate consuming this is bounded by a window that is zero by default: see
-   * {@code arcadedb.ha.securityConvergenceReadinessTimeout}.
+   * has no node with a recorded fingerprint and there is no way to tell the two apart from the documents alone.
+   * That is why the readiness gate consuming this is armed only on a node that joined the cluster at runtime
+   * ({@code HAServerPlugin.hasJoinedClusterAtRuntime()}, issue #7819), and bounded by
+   * {@code arcadedb.ha.securityConvergenceReadinessTimeout}. On such a node the gate does not take an empty answer
+   * here as convergence either: a node re-added with its config volume retained has a fingerprint for every document
+   * from its previous membership, so the gate also requires an install after the change that re-added it (issue
+   * #8317, {@code HAServerPlugin.securityDocumentsNotInstalledSinceRuntimeJoin()}).
    * <p>
    * Free of this object's monitor and of any filesystem access - the repository answers from the map it read at
    * construction - so a readiness probe may call it on any thread as often as it likes.

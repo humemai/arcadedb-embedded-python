@@ -569,6 +569,24 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   }
 
   @Override
+  public String getLeaderPeerId() {
+    final RaftHAServer s = raftHAServer;
+    if (s == null)
+      return null;
+    final RaftPeerId leaderId = s.getLeaderId();
+    return leaderId != null ? leaderId.toString() : null;
+  }
+
+  @Override
+  public String getLocalPeerId() {
+    final RaftHAServer s = raftHAServer;
+    if (s == null)
+      return null;
+    final RaftPeerId localId = s.getLocalPeerId();
+    return localId != null ? localId.toString() : null;
+  }
+
+  @Override
   public HAServerPlugin.ELECTION_STATUS getElectionStatus() {
     if (raftHAServer == null)
       return ELECTION_STATUS.DONE;
@@ -590,6 +608,12 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   }
 
   @Override
+  public boolean isCrashLoopRestartPending() {
+    final RaftHAServer s = raftHAServer;
+    return s != null && s.isCrashLoopRestartPending();
+  }
+
+  @Override
   public String getRaftLogFailure() {
     final RaftHAServer s = raftHAServer;
     return s != null ? s.getRaftLogFailure() : null;
@@ -599,6 +623,23 @@ public class RaftHAPlugin implements HAServerPlugin, HAReplicationStatsProvider 
   public String getBootstrapWindowReason() {
     final RaftHAServer s = raftHAServer;
     return s != null ? s.getBootstrapWindowReason() : null;
+  }
+
+  @Override
+  public boolean hasJoinedClusterAtRuntime() {
+    final RaftHAServer s = raftHAServer;
+    return s != null && s.hasJoinedClusterAtRuntime();
+  }
+
+  /**
+   * All three documents when the Raft server is not readable: the gate asks this only after
+   * {@link #hasJoinedClusterAtRuntime()} said yes, and a Raft server that went away between the two reads is no
+   * evidence that anything converged (issue #8317). The gate's own bounded window still applies.
+   */
+  @Override
+  public List<String> securityDocumentsNotInstalledSinceRuntimeJoin() {
+    final RaftHAServer s = raftHAServer;
+    return s != null ? s.securityDocumentsNotInstalledSinceRuntimeJoin() : RuntimeJoinDetector.allSecurityDocumentNames();
   }
 
   @Override
