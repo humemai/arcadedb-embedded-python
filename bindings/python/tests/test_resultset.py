@@ -122,7 +122,7 @@ def test_resultset_count(temp_db_path):
 
         with db.transaction():
             for i in range(50):
-                db.command("sql", f"INSERT INTO Counter SET num = {i}")
+                db.command("sql", "INSERT INTO Counter SET num = ?", i)
 
         result = db.query("sql", "SELECT FROM Counter")
 
@@ -200,7 +200,7 @@ def test_resultset_iteration_patterns(temp_db_path):
 
         with db.transaction():
             for i in range(10):
-                db.command("sql", f"INSERT INTO IterTest SET num = {i}")
+                db.command("sql", "INSERT INTO IterTest SET num = ?", i)
 
         # Test traditional iteration
         result = db.query("sql", "SELECT FROM IterTest ORDER BY num")

@@ -659,6 +659,9 @@ def create_graph_indexes(db) -> None:
 def insert_vertices(db, vertex_type: str, rows: List[Dict[str, Any]]) -> None:
     if not rows:
         return
+    # WAL off (use_wal=False, GraphBatch's default): this example rebuilds its database from
+    # the source files, so a crash mid-import costs a re-run. An import that must survive a
+    # crash passes use_wal=True (ArcadeDB's recommendation, ArcadeData/arcadedb#8287).
     with db.graph_batch(
         batch_size=max(1, len(rows)),
         expected_edge_count=0,
@@ -693,6 +696,9 @@ def insert_edges(
     if not rows:
         return
 
+    # WAL off (use_wal=False, GraphBatch's default): this example rebuilds its database from
+    # the source files, so a crash mid-import costs a re-run. An import that must survive a
+    # crash passes use_wal=True (ArcadeDB's recommendation, ArcadeData/arcadedb#8287).
     with db.graph_batch(
         batch_size=max(1, len(rows)),
         expected_edge_count=max(1, len(rows)),
@@ -1352,12 +1358,6 @@ def create_sql_vector_index(db, vertex_type: str) -> float:
     return time.time() - start
 
 
-def to_sql_vector_literal(vector: Any) -> str:
-    if hasattr(vector, "tolist"):
-        vector = vector.tolist()
-    return "[" + ", ".join(str(float(value)) for value in vector) + "]"
-
-
 def normalize_value(value: Any) -> Any:
     if isinstance(value, float):
         return round(value, 7)
@@ -1375,17 +1375,18 @@ def hash_rows(rows: List[Dict[str, Any]]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def run_sql(db, query: str) -> List[Dict[str, Any]]:
-    return list(db.query("sql", query))
+def run_sql(db, query: str, *args: Any) -> List[Dict[str, Any]]:
+    # Values are bound as parameters, never pasted into the query text: a new
+    # text per call is parsed again every time (ArcadeDB #8286).
+    return list(db.query("sql", query, *args))
 
 
-def run_cypher(db, query: str) -> List[Dict[str, Any]]:
+def run_cypher(
+    db, query: str, params: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    if params:
+        return list(db.query("opencypher", query, params))
     return list(db.query("opencypher", query))
-
-
-def quote_cypher_string(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
-    return f"'{escaped}'"
 
 
 def timed_step(name: str, fn: Callable[[], Any]) -> Dict[str, Any]:
@@ -1537,17 +1538,15 @@ def build_activity_timeseries(db, top_tag_limit: int) -> Dict[str, Any]:
     )
 
     if top_tags:
-        cypher_tags = (
-            "[" + ", ".join(quote_cypher_string(tag) for tag in top_tags) + "]"
-        )
         source_events["question_tagged"] = accumulate_daily_series(
             db.query(
                 "opencypher",
-                f"""
+                """
                 MATCH (q:Question)-[:TAGGED_WITH]->(t:Tag)
-                WHERE q.CreationDate IS NOT NULL AND t.TagName IN {cypher_tags}
+                WHERE q.CreationDate IS NOT NULL AND t.TagName IN $tags
                 RETURN q.CreationDate AS ts, q.Score AS score, t.TagName AS tag
                 """,
+                {"tags": top_tags},
             ),
             series,
             event_type="question",
@@ -1640,6 +1639,9 @@ def run_hybrid_queries(
     min_reputation: int,
 ) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
+    # Query vectors are bound as Java float arrays, not pasted into the SQL text
+    # as a 384-number literal (a new query text per search, parsed every time).
+    to_java_float_array = get_arcadedb_module().to_java_float_array
 
     # Q1: SQL -> Vector
     steps = []
@@ -1663,7 +1665,7 @@ def run_hybrid_queries(
     allowed_rids = [
         str(row.get("rid")) for row in step["result"] if row.get("rid") is not None
     ]
-    query_vector_sql = to_sql_vector_literal(
+    query_vector = to_java_float_array(
         model.encode(
             ["How do I parse JSON in Python?"],
             show_progress_bar=False,
@@ -1679,13 +1681,15 @@ def run_hybrid_queries(
             SELECT Id AS question_id, Title AS title, Score AS score, distance
             FROM (
                             SELECT expand(vectorNeighbors(
-                'Question[embedding]', {query_vector_sql}, {max(candidate_limit, top_k)}
+                'Question[embedding]', ?, ?
               ))
             )
             WHERE @rid IN {allowed_rids_sql}
             ORDER BY distance ASC, question_id ASC
             LIMIT {top_k}
             """,
+            query_vector,
+            max(candidate_limit, top_k),
         ),
     )
     steps.append(step2)
@@ -1731,10 +1735,6 @@ def run_hybrid_queries(
     tags = [
         str(row.get("TagName")) for row in top_tags_step["result"] if row.get("TagName")
     ]
-    if tags:
-        cypher_tags = "[" + ", ".join(quote_cypher_string(tag) for tag in tags) + "]"
-    else:
-        cypher_tags = "[]"
     step = timed_step(
         "cypher_expand",
         lambda: run_cypher(
@@ -1742,12 +1742,13 @@ def run_hybrid_queries(
             f"""
             MATCH (q:Question)-[:TAGGED_WITH]->(t:Tag)
             MATCH (u:User)-[:ASKED]->(q)
-            WHERE t.TagName IN {cypher_tags}
+            WHERE t.TagName IN $tags
                  RETURN t.TagName AS tag, u.Id AS user_id,
                      u.DisplayName AS name, count(q) AS questions
             ORDER BY questions DESC, user_id ASC
             LIMIT {top_k}
             """,
+            {"tags": tags},
         ),
     )
     steps.append(step)
@@ -1832,7 +1833,7 @@ def run_hybrid_queries(
 
     # Q4: Vector -> Cypher
     steps = []
-    seed_query_sql = to_sql_vector_literal(
+    seed_query_vector = to_java_float_array(
         model.encode(
             ["database indexing best practices for performance"],
             show_progress_bar=False,
@@ -1843,15 +1844,17 @@ def run_hybrid_queries(
         "vector_seed",
         lambda: run_sql(
             db,
-            f"""
+            """
             SELECT Id AS question_id, Title AS title, distance
             FROM (
                             SELECT expand(vectorNeighbors(
-                'Question[embedding]', {seed_query_sql}, {top_k}
+                'Question[embedding]', ?, ?
               ))
             )
             ORDER BY distance ASC, question_id ASC
             """,
+            seed_query_vector,
+            top_k,
         ),
     )
     steps.append(step)
@@ -1903,7 +1906,7 @@ def run_hybrid_queries(
 
     # Q5: Vector -> Cypher -> SQL
     steps = []
-    q5_query_sql = to_sql_vector_literal(
+    q5_query_vector = to_java_float_array(
         model.encode(
             ["concurrency control and transaction isolation"],
             show_progress_bar=False,
@@ -1914,15 +1917,17 @@ def run_hybrid_queries(
         "vector_seed",
         lambda: run_sql(
             db,
-            f"""
+            """
             SELECT Id AS question_id, distance
             FROM (
                             SELECT expand(vectorNeighbors(
-                'Question[embedding]', {q5_query_sql}, {top_k}
+                'Question[embedding]', ?, ?
               ))
             )
             ORDER BY distance ASC, question_id ASC
             """,
+            q5_query_vector,
+            top_k,
         ),
     )
     steps.append(step)

@@ -127,12 +127,25 @@ while True:
 # Alternative: OFFSET-based pagination (slower, not recommended for large datasets)
 page = 0
 page_size = 100
-result = db.query("sql", f"SELECT FROM User LIMIT {page_size} SKIP {page * page_size}")
+result = db.query(
+    "sql",
+    "SELECT FROM User SKIP :skip LIMIT :limit",
+    {"skip": page * page_size, "limit": page_size},
+)
 ```
 
 ### Parameters
 
-Always use parameters to prevent SQL injection:
+Always bind values as parameters instead of pasting them into the query text,
+for two reasons. **Safety**: a pasted value can change the statement (SQL
+injection), and a quote in a name breaks it. **Speed**: ArcadeDB caches parsed
+statements and plans by their text, so every distinct value pasted in is a new
+text that is parsed again, and the stream of one-off texts evicts the cached
+statements that do repeat (ArcadeDB
+[#8286](https://github.com/ArcadeData/arcadedb/issues/8286)). Measured on an
+indexed point lookup, 20,000 records: Cypher 0.87 ms with the value pasted in
+against 0.09 ms with `$id` bound, SQL 0.48 ms against 0.09 ms. Identifiers
+(type, property, bucket names) cannot be bound and belong in the text.
 
 ```python
 # Named parameters (recommended)
@@ -485,6 +498,17 @@ assert "Alice" in names or "Bob" in names
 result = db.query("opencypher", "MATCH (p:Person) RETURN count(p) as count")
 results = list(result)
 count = results[0].get("count") if results else 0
+```
+
+Bind values in Cypher as `$name` parameters with a dict, exactly as in SQL; the
+same reasons apply (see [Parameters](#parameters)):
+
+```python
+result = db.query(
+    "opencypher",
+    "MATCH (p:Person {name: $name}) RETURN p.age AS age",
+    {"name": "Alice"},
+)
 ```
 
 ### Graph Traversals

@@ -295,13 +295,17 @@ For large datasets, use batch operations:
 import arcadedb_embedded as arcadedb
 
 with arcadedb.open_database("./social_network_db") as db:
-    # Batch vertex creation (all inside single transaction)
+    # A few vertices, one transaction, values bound as parameters (never pasted
+    # into the query text: a new text per call is re-parsed every time, and a
+    # quote in a name breaks it)
     large_dataset = [{"name": "Person1"}, {"name": "Person2"}]  # Example data
 
     with db.transaction():
         for person_data in large_dataset:
-            db.command("sql", f"CREATE VERTEX Person SET name = '{person_data['name']}'")
+            db.command("sql", "CREATE VERTEX Person SET name = ?", person_data["name"])
             # Transaction automatically commits at end of 'with' block
+
+    # Thousands or more: use db.graph_batch(), the bulk path (see the GraphBatch API)
 ```
 
 ## Try It Yourself

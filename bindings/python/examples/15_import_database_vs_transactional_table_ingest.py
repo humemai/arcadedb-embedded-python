@@ -158,7 +158,7 @@ def collect_table_sample(
     row_id: int,
     columns: List[ColumnDef],
 ) -> dict:
-    row = db.query("sql", f"SELECT FROM {table_name} WHERE id = {row_id}").one()
+    row = db.query("sql", f"SELECT FROM {table_name} WHERE id = ?", row_id).one()
     sample: dict = {}
 
     for column_name, column_type in columns:

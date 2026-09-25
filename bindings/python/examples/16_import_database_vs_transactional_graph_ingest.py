@@ -681,6 +681,9 @@ def run_graph_batch_graph_load(
 
         rid_lookup: Dict[int, str] = {}
 
+        # WAL off (use_wal=False, GraphBatch's default): this example rebuilds its database from
+        # the source files, so a crash mid-import costs a re-run. An import that must survive a
+        # crash passes use_wal=True (ArcadeDB's recommendation, ArcadeData/arcadedb#8287).
         with db.graph_batch(
             batch_size=batch_size,
             expected_edge_count=edge_count,

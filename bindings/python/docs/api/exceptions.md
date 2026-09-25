@@ -272,7 +272,7 @@ from arcadedb_embedded import ArcadeDBError
 def get_user_safely(db, email):
     """Get user with fallback on error."""
     try:
-        result = db.query("sql", f"SELECT FROM User WHERE email = '{email}'")
+        result = db.query("sql", "SELECT FROM User WHERE email = ?", email)
         return result.first()  # Result or None if no rows
 
     except ArcadeDBError as e:
@@ -491,7 +491,7 @@ def validate_schema(db, type_name, properties):
     """Validate schema before operations."""
     try:
         # Check if type exists
-        schema_info = db.command("sql", f"SELECT FROM schema:types WHERE name = '{type_name}'")
+        schema_info = db.command("sql", "SELECT FROM schema:types WHERE name = ?", type_name)
 
         if not schema_info:
             raise ValueError(f"Type {type_name} does not exist")

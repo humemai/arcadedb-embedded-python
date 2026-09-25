@@ -94,6 +94,7 @@ Measured limits that remain by design, and the recommended pattern for each:
 | Per-row materialization of huge results (`to_list`, per-row `.get()`) | 15–21× Java | Use `to_columns()`/`to_dataframe()` (~1.6×) or `to_json_list()` (~2.6×) for bulk consumption |
 | Threading plateaus around 4 threads (~45k qps vs Java's 107k at 8 threads) | GIL bounds Python's per-op share | Keep write concurrency at ~4 threads with `run_in_transaction(retries=)`, or use multiprocessing for more parallelism |
 | Async per-operation Python callbacks | ~104µs vs 5.5µs per completion | Not a bulk-write path: `async_executor().command(...)` silently dropped records above parallel level 1 before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625). Use `insert_many()` or `graph_batch()` for volume |
+| Values pasted into the query text (`f"... WHERE id = {x}"`) | Indexed point lookup, 20k records: Cypher 0.87 ms vs 0.09 ms bound, SQL 0.48 ms vs 0.09 ms | Bind them: `?`/`:name` in SQL, `$name` in Cypher. Every distinct text is parsed again and churns the statement cache ([queries guide](core/queries.md#parameters)) |
 | Record mutation (`modify().set().save()`) | 16.5µs vs 3.4µs per record | Absolute cost is small; use SQL `UPDATE` or bulk ingest paths for volume |
 | List-typed columns convert per element | 14.6ms for a 10k-element LIST via `.get()` | Prefer typed array properties (e.g. `ARRAY_OF_FLOATS`) or `to_json_list()` |
 

@@ -364,6 +364,9 @@ class VertexCreator:
                     "ORDER BY userId"
                 )
                 pending: list[dict[str, Any]] = []
+                # WAL off (use_wal=False, GraphBatch's default): this example rebuilds its database from
+                # the source files, so a crash mid-import costs a re-run. An import that must survive a
+                # crash passes use_wal=True (ArcadeDB's recommendation, ArcadeData/arcadedb#8287).
                 with self.db.graph_batch(
                     parallel_flush=self.parallel_level > 1
                 ) as batch:
@@ -492,6 +495,9 @@ class VertexCreator:
                 str(self.data_loader.source_db_path)
             ) as source_db:
                 last_rid = "#-1:-1"
+                # WAL off (use_wal=False, GraphBatch's default): this example rebuilds its database from
+                # the source files, so a crash mid-import costs a re-run. An import that must survive a
+                # crash passes use_wal=True (ArcadeDB's recommendation, ArcadeData/arcadedb#8287).
                 with self.db.graph_batch(
                     parallel_flush=self.parallel_level > 1
                 ) as batch:

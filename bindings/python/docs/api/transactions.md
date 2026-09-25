@@ -596,7 +596,7 @@ with db.transaction():
 
     # Write
     rid = counter.get("@rid")
-    db.command("sql", f"UPDATE {rid} SET value = {new_value}")
+    db.command("sql", f"UPDATE {rid} SET value = ?", new_value)  # the RID names the record; the value is bound
 ```
 
 ---
@@ -638,7 +638,7 @@ def update_with_retry(db, rid, new_value, max_retries=3):
                     raise ValueError("Record not found")
 
                 # Update (ArcadeDB handles version checking)
-                db.command("sql", f"UPDATE {rid} SET value = '{new_value}'")
+                db.command("sql", f"UPDATE {rid} SET value = ?", new_value)
 
                 return True
 

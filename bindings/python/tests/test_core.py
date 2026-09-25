@@ -994,7 +994,7 @@ def test_resultset_close_and_context_manager(temp_db_path):
         db.command("sql", "CREATE DOCUMENT TYPE C")
         with db.transaction():
             for i in range(5):
-                db.command("sql", f"INSERT INTO C SET n = {i}")
+                db.command("sql", "INSERT INTO C SET n = ?", i)
 
         with db.query("sql", "SELECT FROM C") as rs:
             first = rs.first()

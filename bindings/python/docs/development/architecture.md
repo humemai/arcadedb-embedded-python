@@ -459,7 +459,7 @@ with db.transaction():
 users = db.query("sql", "SELECT FROM User")
 for user in users:
     # Separate query per user!
-    orders = db.query("sql", f"SELECT FROM Order WHERE user_id = '{user.get('id')}'")
+    orders = db.query("sql", "SELECT FROM Order WHERE user_id = ?", user.get("id"))
 
 # Good: Single query with traversal
 result = db.query("sql", """

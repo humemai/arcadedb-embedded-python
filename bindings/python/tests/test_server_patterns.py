@@ -140,7 +140,7 @@ def test_server_thread_safety(cleanup_test_dirs):
 
     with db.transaction():
         for i in range(20):
-            db.command("sql", f"INSERT INTO `Item` SET id = {i}, value = {i * 10}")
+            db.command("sql", "INSERT INTO `Item` SET id = ?, value = ?", i, i * 10)
 
     print("   ✅ Created 20 items")
 

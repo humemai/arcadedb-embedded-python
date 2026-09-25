@@ -80,7 +80,9 @@ def test_thread_safety(cleanup_db):
 
     with db.transaction():
         for i in range(20):
-            db.command("sql", f"INSERT INTO Person SET name = 'Person{i}', id = {i}")
+            db.command(
+                "sql", "INSERT INTO Person SET name = ?, id = ?", f"Person{i}", i
+            )
     print("   ✅ Created 20 Person records")
 
     print("\n2. Running 4 threads concurrently...")

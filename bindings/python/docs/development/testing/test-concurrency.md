@@ -147,7 +147,7 @@ def increment_counter(thread_id, iterations):
             current = list(result)[0].get("value")
 
             # Increment
-            db.command("sql", f"UPDATE Counter SET value = {current + 1}")
+            db.command("sql", "UPDATE Counter SET value = ?", current + 1)
 
 # Create multiple threads
 threads = []

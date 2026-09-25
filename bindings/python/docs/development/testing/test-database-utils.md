@@ -19,7 +19,7 @@ with arcadedb.create_database(temp_db_path) as db:
     db.command("sql", "CREATE DOCUMENT TYPE User")
     with db.transaction():
         for i in range(10):
-            db.command("sql", f"INSERT INTO User SET name = 'User{i}'")
+            db.command("sql", "INSERT INTO User SET name = ?", f"User{i}")
 
     assert db.count_type("User") == 10
     assert db.count_type("NonExistent") == 0

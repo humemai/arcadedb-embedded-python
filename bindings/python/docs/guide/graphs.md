@@ -12,6 +12,21 @@ loading vertices and edges. Prefer its bulk methods — `create_vertices()` and
 `new_edges()` — over per-record calls: they cost one JVM crossing per batch and
 run at or near Java speed (see the [Performance guide](performance.md)).
 
+**Settings, as ArcadeDB's maintainers recommend them**
+(`ArcadeData/arcadedb#8287`): pass `use_wal=True` for an import that must
+survive a crash, because `GraphBatch` turns the write-ahead log **off** by
+default while it imports; pass `expected_edge_count` so the batch size tunes
+itself; and leave `batch_size`, `commit_every`, and `parallel_flush` at their
+defaults. Measured on 50,000 vertices and 1,045,738 edges: about 7.5 s with the
+WAL on, against about 30 s one element at a time. See the
+[GraphBatch API](../api/graph_batch.md).
+
+**Against a server**, the bulk path is `POST /api/v1/batch/{db}` (JSONL with
+`@type`/`@class`/`@id` and `@from`/`@to`, `GraphBatch` underneath), with the
+same options as query parameters (`wal=true`, `expectedEdgeCount=...`). A
+`sqlscript` of `CREATE VERTEX`/`CREATE EDGE` statements parses and plans every
+statement and measured 6 to 7 times slower for the same graph.
+
 Async SQL graph insert is not a bulk graph ingest path at all. Before 26.10.1, above
 parallel level 1 the async executor silently discarded a share of the commands submitted
 to it, with no error on the per-command callback, nothing logged, and a normal return

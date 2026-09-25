@@ -72,6 +72,8 @@ def test_dense_search_beam_argument(temp_db):
         for i in range(300):
             v = [round(_rnd.random(), 6) for _ in range(16)]
             _vecs[i] = v
+            # A literal array on purpose: this test exercises the index over the vector as SQL stores a
+            # literal list; a bound Python list takes a different conversion path.
             temp_db.command("sql", f"INSERT INTO VDoc SET id = {i}, emb = {v}")
     temp_db.command(
         "sql",

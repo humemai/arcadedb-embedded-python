@@ -1143,6 +1143,9 @@ def arcadedb_insert_vertices(db, vertex_type: str, rows: List[Dict[str, Any]]):
     if not rows:
         return
     parallel_flush = db.async_executor().get_parallel_level() > 1
+    # WAL off (use_wal=False, GraphBatch's default): this example rebuilds its database from
+    # the source files, so a crash mid-import costs a re-run. An import that must survive a
+    # crash passes use_wal=True (ArcadeDB's recommendation, ArcadeData/arcadedb#8287).
     with db.graph_batch(
         batch_size=max(1, len(rows)),
         expected_edge_count=0,
@@ -1184,6 +1187,9 @@ def arcadedb_insert_edges(
     if not rows:
         return
     parallel_flush = db.async_executor().get_parallel_level() > 1
+    # WAL off (use_wal=False, GraphBatch's default): this example rebuilds its database from
+    # the source files, so a crash mid-import costs a re-run. An import that must survive a
+    # crash passes use_wal=True (ArcadeDB's recommendation, ArcadeData/arcadedb#8287).
     with db.graph_batch(
         batch_size=max(1, len(rows)),
         expected_edge_count=max(1, len(rows)),
