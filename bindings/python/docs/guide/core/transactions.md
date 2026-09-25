@@ -188,7 +188,8 @@ db = arcadedb.create_database(path, jvm_kwargs={"jvm_args": "-Darcadedb.txWalFlu
 ```
 
 A server started with `config={"mode": "production"}` sets it to 1 by itself, along with ArcadeDB's other
-production defaults; see [Server Mode](../server.md).
+production defaults, and for the whole process: every database opened in that Python process afterwards, embedded
+ones included, inherits it. See [Server Mode](../server.md).
 
 **`db.set_wal_flush()` changes only the calling thread.** It sets the flush for the transactions that thread commits
 and leaves every other thread at the JVM's setting. Measured on 26.10.1-SNAPSHOT: the thread that called

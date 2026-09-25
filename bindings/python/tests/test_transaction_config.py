@@ -37,24 +37,40 @@ def test_set_wal_flush_is_per_thread(temp_db):
 
     Pinned because the docs tell users so (guide/core/transactions.md,
     "Durability") and ArcadeData/arcadedb#8352 asks whether it is intended: if
-    this starts failing with "other" == "YES_NOMETADATA", the setter became
-    database-wide and those docs must change with it.
+    this starts failing because another thread follows the caller, the setter
+    became database-wide and those docs must change with it.
+
+    ORDER-INDEPENDENT ON PURPOSE. The other thread keeps the PROCESS default,
+    which is not always "NO": a server started in production mode anywhere in
+    the process sets it to 1 for every database opened afterwards
+    (test_server.py does, and CI runs it first). So the default is read from a
+    fresh thread, and the caller is given a mode that differs from it.
     """
     import threading
+
+    to_python = {"NO": "no", "YES_NOMETADATA": "yes_nometadata", "YES_FULL": "yes_full"}
 
     def flush_of_this_thread():
         with temp_db.transaction():
             return str(temp_db._java_db.getTransaction().getWALFlush())
 
-    temp_db.set_wal_flush("yes_nometadata")
-    seen = {"caller": flush_of_this_thread()}
-    other = threading.Thread(
-        target=lambda: seen.__setitem__("other", flush_of_this_thread())
-    )
-    other.start()
-    other.join()
-    temp_db.set_wal_flush("no")
-    assert seen == {"caller": "YES_NOMETADATA", "other": "NO"}
+    def flush_of_a_new_thread():
+        seen = {}
+        t = threading.Thread(
+            target=lambda: seen.setdefault("flush", flush_of_this_thread())
+        )
+        t.start()
+        t.join()
+        return seen["flush"]
+
+    default = flush_of_a_new_thread()
+    chosen = "YES_FULL" if default != "YES_FULL" else "NO"
+    temp_db.set_wal_flush(to_python[chosen])
+    try:
+        assert flush_of_this_thread() == chosen
+        assert flush_of_a_new_thread() == default
+    finally:
+        temp_db.set_wal_flush(to_python[default])
 
 
 def test_set_read_your_writes(temp_db):

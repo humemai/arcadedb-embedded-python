@@ -33,15 +33,18 @@ temp_db.set_wal_flush("no")
 
 ### test_set_wal_flush_is_per_thread
 
-Pins that `set_wal_flush()` reaches only the calling thread's transactions: the calling thread commits with
-`YES_NOMETADATA`, a second thread still with `NO`. The durability section of the transactions guide tells users this,
+Pins that `set_wal_flush()` reaches only the calling thread's transactions: the calling thread commits with the
+mode it set, and a new thread still with the process default. The default is read from a fresh thread first rather
+than assumed to be `NO`, because a production-mode server anywhere in the process raises it to 1 for every database
+opened afterwards (`test_server.py` starts one, and CI runs it first). The durability section of the transactions guide tells users this,
 and `ArcadeData/arcadedb#8352` asks upstream whether it is intended; if the setter becomes database-wide, this test
 fails and the guide must change with it.
 
 **Pattern:**
 ```python
-temp_db.set_wal_flush("yes_nometadata")
-# a transaction on this thread carries YES_NOMETADATA, one on another thread carries NO
+default = flush_of_a_new_thread()          # the process default, NO unless something raised it
+temp_db.set_wal_flush("yes_full")           # or "no" when the default is already YES_FULL
+# this thread's transactions carry YES_FULL; a new thread's still carry the default
 ```
 
 ---
