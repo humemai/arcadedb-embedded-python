@@ -85,7 +85,11 @@ def main():
     sys.argv = ["deployment_decomp_probe.py", "--docker", f"http://{host}:{port}",
                 "--docker-password", "dbbenchpass", "--heap", heap,
                 "--out", args.out, "--root", "/tmp/e4_root"]
-    probe.main()
+    # THE PROBE'S VERDICT IS THE CELL'S. It returns 1 when its paths disagree
+    # (row counts, and since F129 the rows themselves), and this wrapper used to
+    # discard that, so a void comparison still produced an ordinary row. The
+    # payload is still written and stamped below, then the cell fails.
+    probe_rc = probe.main()
     payload = json.load(open(args.out))
     meta = payload.get("meta", {})
     # The runner's row: what the lane measured, in fields a reader of runs.jsonl
@@ -103,7 +107,23 @@ def main():
     payload["durability_class"] = bench_common.DURABILITY_CLASS
     for n, d in payload.get("results", {}).get("embedded", {}).items():
         payload[f"embedded_{n}_p50_ms"] = d.get("p50_ms")
+    # THE ANSWER, in the fields the equivalence gate reads (DECISIONS #88, BUGS
+    # F129): one digest per size, the embedded path's, which the probe has
+    # already required every other path to match. One engine, so the gate lists
+    # these as unchecked across engines; what it does check is that repetitions
+    # agree with each other (E2), and E6 no longer fails the lane for silence.
+    for n, per in (meta.get("answers") or {}).items():
+        d = per.get("embedded")
+        if d:
+            payload[f"res_limit{n}_digest"] = d["digest"]
+            payload[f"res_limit{n}_sample"] = d["sample"]
+            payload[f"res_limit{n}_n"] = d["n"]
     json.dump(payload, open(args.out, "w"))
+    # A VOID REP NEVER REACHES THE PAGE'S ARTIFACT DIRECTORY: fail before the copy
+    # below, since export_web reads every rep file it finds there.
+    if probe_rc:
+        raise SystemExit(f"E4: the deployment paths disagree (rows {meta.get('row_count_agreement')}, "
+                         f"answers {meta.get('answer_agreement')}); this comparison is void")
     pin = os.environ.get("ARCADEDB_ENGINE_COMMIT", "").strip()
     m = re.search(r"_r(\d+)$", os.environ.get("RUN_LABEL", ""))
     if pin and m:
@@ -112,7 +132,8 @@ def main():
         dst = os.path.join(dst_dir, f"decomp3m_{pin}_rep{m.group(1)}.json")
         shutil.copyfile(args.out, dst)
         print(f"artifact -> {dst}", flush=True)
-    print(f"E4 rep done: rows={meta.get('rows')} arms={sorted(payload.get('results', {}))}", flush=True)
+    print(f"E4 rep done: rows={meta.get('rows')} arms={sorted(payload.get('results', {}))} "
+          f"answers={meta.get('answer_agreement')}", flush=True)
 
 
 if __name__ == "__main__":

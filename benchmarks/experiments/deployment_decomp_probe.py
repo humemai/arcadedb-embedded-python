@@ -52,7 +52,7 @@ import os
 import statistics as st
 import time
 
-from bench_common import latstats, run_conditions
+from bench_common import latstats, result_digest, run_conditions
 
 SIZES = [int(x) for x in os.environ.get("SIZES", "1,10,100,1000,10000,100000").split(",")]
 ROWS = int(os.environ.get("ROWS", "200000"))
@@ -225,6 +225,28 @@ def report(results: dict) -> None:
             print("total    = what E4 reports today, now split into its two parts")
 
 
+# THE COLUMNS EVERY PATH IS ASKED FOR, so metadata a path adds to a row (an
+# @rid, a @type) is not part of its answer.
+ANSWER_COLUMNS = ["id", "customer_id", "amount", "region"]
+
+
+def http_rows(session, base_url: str, auth, db_name: str):
+    """The same request as http_runner, returning the rows instead of their count.
+
+    Used only for the answer check after the timed sweep, never inside it, so
+    the timed path is exactly what it was.
+    """
+
+    def rows(n: int) -> list:
+        r = session.post(f"{base_url}/api/v1/query/{db_name}", auth=auth,
+                         json={"language": "sql", "command": query(n), "limit": -1},
+                         timeout=300)
+        r.raise_for_status()
+        return r.json().get("result", [])
+
+    return rows
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--docker", metavar="URL",
@@ -326,6 +348,19 @@ def main() -> int:
                 line += f"  {arm} {st['x_p50_ms']:8.3f} ms"
             print(line, flush=True)
 
+        # WHAT EACH PATH RETURNED, not only how many rows (DECISIONS #88, BUGS
+        # F129). The row-count guard below catches a truncated answer; it cannot
+        # catch a path returning different rows, and this lane recorded no answer
+        # digest at all, which the equivalence gate's E6 rule fails. Fetched once
+        # per size AFTER the timed sweep, so no timed call changes; digested the
+        # way every lane digests (order-free: the query defines no order).
+        fetch = {"embedded": lambda k: db.query("sql", query(k)).to_json_list(),
+                 "inproc_http": http_rows(sess, base, auth, DB_NAME)}
+        if args.docker:
+            fetch["docker_http"] = http_rows(dsess, args.docker.rstrip("/"), dauth, DB_NAME)
+        answers = {n: {arm: result_digest(f(n), columns=ANSWER_COLUMNS) for arm, f in fetch.items()}
+                   for n in SIZES}
+
         meta.update(run_conditions(lane="e4_decomp", role="embedded+inproc_server"))
 
     # Every arm must have returned the same rows, or the comparison is void.
@@ -337,6 +372,12 @@ def main() -> int:
     meta["row_count_agreement"] = "ok" if not mismatch else mismatch
     if mismatch:
         print(f"\n!! ARMS DISAGREE ON ROW COUNTS, comparison is void: {mismatch}")
+    answer_mismatch = [(n, {a: d["digest"] for a, d in per.items()})
+                       for n, per in answers.items() if len({d["digest"] for d in per.values()}) > 1]
+    meta["answers"] = {str(n): per for n, per in answers.items()}
+    meta["answer_agreement"] = "ok" if not answer_mismatch else answer_mismatch
+    if answer_mismatch:
+        print(f"\n!! ARMS RETURNED DIFFERENT ROWS, comparison is void: {answer_mismatch}")
 
     report(results)
 
@@ -345,7 +386,7 @@ def main() -> int:
         json.dump({"meta": meta, "results": {a: {str(k): v for k, v in d.items()}
                                              for a, d in results.items()}}, f, indent=2)
     print(f"\nwrote {args.out}")
-    return 1 if mismatch else 0
+    return 1 if (mismatch or answer_mismatch) else 0
 
 
 if __name__ == "__main__":
