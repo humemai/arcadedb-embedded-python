@@ -164,3 +164,40 @@ with db.transaction():
             WHERE title = 'Call dentist'""",
     )
 ```
+
+## Durability: what a commit survives
+
+A commit is written to the write-ahead log (WAL) before it returns, so it survives the Python process or the JVM
+crashing. Whether it also survives a power cut or an OS crash depends on whether the WAL is flushed to disk at
+commit, which ArcadeDB does **not** do by default:
+
+| `arcadedb.txWalFlush` | at each commit | a process crash | a power cut or OS crash |
+|---|---|---|---|
+| `0` (default) | no flush | survives | the last commits can be lost |
+| `1` | `fdatasync` (the data) | survives | survives |
+| `2` | `fsync` (data and metadata) | survives | survives |
+
+PostgreSQL, MySQL/InnoDB, and SQLite all flush at every commit by default. `1` is the same kind of sync that
+SQLite's `synchronous=FULL` and PostgreSQL's default use on Linux, and it is what ArcadeDB's own production server
+mode picks.
+
+**For data you cannot recreate, set `1` when the JVM starts**, so that it covers every thread and every database:
+
+```python
+db = arcadedb.create_database(path, jvm_kwargs={"jvm_args": "-Darcadedb.txWalFlush=1"})
+```
+
+A server started with `config={"mode": "production"}` sets it to 1 by itself, along with ArcadeDB's other
+production defaults; see [Server Mode](../server.md).
+
+**`db.set_wal_flush()` changes only the calling thread.** It sets the flush for the transactions that thread commits
+and leaves every other thread at the JVM's setting. Measured on 26.10.1-SNAPSHOT: the thread that called
+`set_wal_flush("yes_nometadata")` synced every commit (7.5 ms each), and a second thread synced none (0.8 ms each).
+Use it for a deliberate per-thread choice, not as a database setting (`ArcadeData/arcadedb#8352`).
+
+**The cost is one disk sync per commit**, about 7 ms on a laptop NVMe drive, so commit in batches: one transaction
+per chunk of writes, not one per row (`insert_many`, or the chunked pattern above).
+
+**Bulk imports are the exception:** `db.graph_batch()` and the server's `/api/v1/batch` turn the WAL off by default
+for speed. Pass `use_wal=True` (served: `wal=true`) unless you would rather delete the database and re-run the import
+after a crash; see [GraphBatch](../../api/graph_batch.md).

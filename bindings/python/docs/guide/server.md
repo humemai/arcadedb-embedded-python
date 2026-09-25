@@ -160,7 +160,7 @@ server = arcadedb.create_server(
 | `root_password` | None | Root user password (recommended) |
 | `http_port` | 2480 | HTTP API/Studio port (binding pins to a single port; Java default is the 2480-2489 range) |
 | `host` | "localhost" | Host to bind to |
-| `mode` | "development" | Server mode (`development` or `production`) |
+| `mode` | "development" | Server mode (`development` or `production`). `production` also flushes the WAL at every commit (`arcadedb.txWalFlush=1`, unless you set it yourself), serves no Studio, and refuses LOAD CSV file URLs; see [Durability](core/transactions.md#durability-what-a-commit-survives) |
 
 Any other key is forwarded to ArcadeDB as `arcadedb.<key with _ replaced by
 .>`. That is how the wire protocols below are configured.

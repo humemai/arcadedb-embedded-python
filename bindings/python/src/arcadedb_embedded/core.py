@@ -696,23 +696,29 @@ class Database:
 
     def set_wal_flush(self, mode: str):
         """
-        Configure Write-Ahead Log (WAL) flush strategy.
+        Configure the Write-Ahead Log (WAL) flush at commit for the calling thread.
 
-        Controls how aggressively changes are flushed to disk. This affects the
-        durability/performance trade-off for transactions.
+        The setting applies to the transactions THIS thread commits and stays on
+        this thread. Every other thread keeps the JVM's ``arcadedb.txWalFlush``
+        (0, no flush, unless set), so calling this once does not make a
+        multi-threaded application durable (ArcadeData/arcadedb#8352). For a
+        setting that covers every thread, start the JVM with
+        ``jvm_kwargs={"jvm_args": "-Darcadedb.txWalFlush=1"}``, or run the server
+        with ``config={"mode": "production"}``, which sets it to 1.
 
         Args:
             mode: WAL flush mode, one of:
-                - 'no': No flush, maximum performance (default)
-                - 'yes_nometadata': Flush data but not metadata
-                - 'yes_full': Flush everything, maximum durability
+                - 'no': no flush at commit (the default); a commit survives a
+                  process crash but not a power cut
+                - 'yes_nometadata': flush the data at commit (fdatasync)
+                - 'yes_full': flush data and metadata at commit (fsync)
 
         Raises:
             ValueError: If mode is not valid
 
         Example:
-            >>> db.set_wal_flush('yes_full')  # Maximum durability
-            >>> db.set_wal_flush('no')  # Maximum performance
+            >>> db.set_wal_flush('yes_nometadata')  # this thread's commits survive a power cut
+            >>> db.set_wal_flush('no')  # this thread's commits do not wait for the disk
         """
         self._check_not_closed()
         import jpype

@@ -32,6 +32,31 @@ def test_set_wal_flush_invalid_mode(temp_db):
         temp_db.set_wal_flush("YES_FULL")  # Must be lowercase
 
 
+def test_set_wal_flush_is_per_thread(temp_db):
+    """set_wal_flush() reaches only the calling thread's transactions.
+
+    Pinned because the docs tell users so (guide/core/transactions.md,
+    "Durability") and ArcadeData/arcadedb#8352 asks whether it is intended: if
+    this starts failing with "other" == "YES_NOMETADATA", the setter became
+    database-wide and those docs must change with it.
+    """
+    import threading
+
+    def flush_of_this_thread():
+        with temp_db.transaction():
+            return str(temp_db._java_db.getTransaction().getWALFlush())
+
+    temp_db.set_wal_flush("yes_nometadata")
+    seen = {"caller": flush_of_this_thread()}
+    other = threading.Thread(
+        target=lambda: seen.__setitem__("other", flush_of_this_thread())
+    )
+    other.start()
+    other.join()
+    temp_db.set_wal_flush("no")
+    assert seen == {"caller": "YES_NOMETADATA", "other": "NO"}
+
+
 def test_set_read_your_writes(temp_db):
     """Test read-your-writes configuration."""
     # Default is True

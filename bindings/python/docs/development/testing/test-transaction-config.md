@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_transaction_config.py){ .md-button }
 
-There are 9 tests covering WAL flush modes, read-your-writes, auto-transaction control, and combinations of these settings (plus error handling on a closed database).
+There are 10 tests covering WAL flush modes and their per-thread scope, read-your-writes, auto-transaction control, and combinations of these settings (plus error handling on a closed database).
 
 ## Key Config Options
 
@@ -27,6 +27,21 @@ temp_db.set_wal_flush("no")
 temp_db.set_wal_flush("yes_nometadata")
 temp_db.set_wal_flush("yes_full")
 temp_db.set_wal_flush("no")
+```
+
+---
+
+### test_set_wal_flush_is_per_thread
+
+Pins that `set_wal_flush()` reaches only the calling thread's transactions: the calling thread commits with
+`YES_NOMETADATA`, a second thread still with `NO`. The durability section of the transactions guide tells users this,
+and `ArcadeData/arcadedb#8352` asks upstream whether it is intended; if the setter becomes database-wide, this test
+fails and the guide must change with it.
+
+**Pattern:**
+```python
+temp_db.set_wal_flush("yes_nometadata")
+# a transaction on this thread carries YES_NOMETADATA, one on another thread carries NO
 ```
 
 ---
