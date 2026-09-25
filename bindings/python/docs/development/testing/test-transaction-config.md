@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_transaction_config.py){ .md-button }
 
-There are 10 tests covering WAL flush modes and their per-thread scope, read-your-writes, auto-transaction control, and combinations of these settings (plus error handling on a closed database).
+There are 10 tests covering WAL flush modes and their database-wide scope, read-your-writes, auto-transaction control, and combinations of these settings (plus error handling on a closed database).
 
 ## Key Config Options
 
@@ -31,20 +31,20 @@ temp_db.set_wal_flush("no")
 
 ---
 
-### test_set_wal_flush_is_per_thread
+### test_set_wal_flush_is_database_wide
 
-Pins that `set_wal_flush()` reaches only the calling thread's transactions: the calling thread commits with the
-mode it set, and a new thread still with the process default. The default is read from a fresh thread first rather
-than assumed to be `NO`, because a production-mode server anywhere in the process raises it to 1 for every database
-opened afterwards (`test_server.py` starts one, and CI runs it first). The durability section of the transactions guide tells users this,
-and `ArcadeData/arcadedb#8352` asks upstream whether it is intended; if the setter becomes database-wide, this test
-fails and the guide must change with it.
+Pins that `set_wal_flush()` reaches the transactions of every thread on the database: a thread that never called it
+commits with the mode another thread set. Until `ArcadeData/arcadedb#8397` (26.10.1) the setter changed only the
+calling thread (`#8352`), and this test pinned that instead; if the scope ever goes back, the test fails and the
+durability section of the transactions guide must change with it. The process default is read from a fresh thread
+first rather than assumed to be `NO`, because a production-mode server anywhere in the process raises it to 1 for
+every database opened afterwards (`test_server.py` starts one, and CI runs it first).
 
 **Pattern:**
 ```python
 default = flush_of_a_new_thread()          # the process default, NO unless something raised it
 temp_db.set_wal_flush("yes_full")           # or "no" when the default is already YES_FULL
-# this thread's transactions carry YES_FULL; a new thread's still carry the default
+# this thread's transactions and a new thread's both carry YES_FULL
 ```
 
 ---

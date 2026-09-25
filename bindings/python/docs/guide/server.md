@@ -399,6 +399,52 @@ In-process, the same type is fed with `db.async_executor().append_samples(...)`
 skips the parse and the socket; the HTTP path is what any client without the
 wheel gets.
 
+## Bulk Loading over the Server
+
+Which served path loads fastest depends on what the rows carry. Measured on a
+laptop on 26.10.1-SNAPSHOT with a lineitem-shaped type, 2,000 rows per request and the
+write-ahead log on in every path (`ArcadeData/arcadedb#8337`), in rows per
+second:
+
+| Path | Plain rows | Rows with a 96-float vector |
+|------|------------|-----------------------------|
+| `sqlscript` of `INSERT ... SET` with the values in the text | 13k | 4.8k |
+| `INSERT INTO T CONTENT :rows`, the batch bound as one parameter | 21k | 8.3k |
+| Postgres wire, prepared `INSERT`, `executeBatch` | 12.6k | 12.1k |
+| gRPC `BulkInsert` | 20.6k | 7.9k |
+
+Upstream's recommendation, from the same issue:
+
+- **Documents:** `POST /api/v1/command` with `INSERT INTO <Type> CONTENT :rows`
+  and the batch bound as a list. The statement is parsed once and the rows
+  travel as data, with no quoting to get wrong. gRPC `BulkInsert` is equally
+  good if the client already speaks gRPC.
+- **Rows with a vector property:** the Postgres wire with `float4[]`
+  parameters. HTTP and gRPC send each float as its own value, and neither has a
+  packed vector encoding yet.
+- **Vertices and edges:** `POST /api/v1/batch?wal=true` (see
+  [Graphs](graphs.md)).
+- **Batch size:** 2,000 rows is reasonable; 5,000 to 10,000 can amortize a
+  little more for small rows, 2,000 to 5,000 for vector rows. The curve is flat,
+  so try 2k, 5k and 10k on your hardware and keep the best.
+- **Durability:** all four paths commit through ordinary transactions with the
+  WAL on. Only the `GraphBatch`-based loaders (`/api/v1/batch` and gRPC
+  `GraphBatchLoad`) skip it unless you pass `wal=true`.
+
+```python
+rows = [{"k": i, "name": f"item-{i}", "x": i * 0.5} for i in range(2000)]
+r = requests.post(
+    "http://localhost:2480/api/v1/command/mydb",
+    auth=("root", password),
+    json={"language": "sql", "command": "INSERT INTO Item CONTENT :rows",
+          "params": {"rows": rows}},
+)
+r.raise_for_status()
+```
+
+In-process, `db.insert_many(...)` is the equivalent and skips the parse and
+the socket.
+
 ## Multi-Process Access
 
 ArcadeDB's embedded mode uses file-based locking, which prevents multiple processes from accessing the same database simultaneously. **Server mode solves this problem** by providing a central HTTP endpoint that multiple processes (or applications) can connect to.

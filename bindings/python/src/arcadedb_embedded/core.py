@@ -696,13 +696,13 @@ class Database:
 
     def set_wal_flush(self, mode: str):
         """
-        Configure the Write-Ahead Log (WAL) flush at commit for the calling thread.
+        Configure the Write-Ahead Log (WAL) flush at commit for this database.
 
-        The setting applies to the transactions THIS thread commits and stays on
-        this thread. Every other thread keeps the JVM's ``arcadedb.txWalFlush``
-        (0, no flush, unless set), so calling this once does not make a
-        multi-threaded application durable (ArcadeData/arcadedb#8352). For a
-        setting that covers every thread, start the JVM with
+        The setting applies to the transactions of every thread that commits on
+        this database (ArcadeData/arcadedb#8352, fixed in #8397 for 26.10.1; on
+        engines before that fix it changed only the calling thread). It does not
+        reach other databases in the process: for a default that covers every
+        database, start the JVM with
         ``jvm_kwargs={"jvm_args": "-Darcadedb.txWalFlush=1"}``, or run the server
         with ``config={"mode": "production"}``, which sets it to 1.
 
@@ -717,8 +717,8 @@ class Database:
             ValueError: If mode is not valid
 
         Example:
-            >>> db.set_wal_flush('yes_nometadata')  # this thread's commits survive a power cut
-            >>> db.set_wal_flush('no')  # this thread's commits do not wait for the disk
+            >>> db.set_wal_flush('yes_nometadata')  # every commit survives a power cut
+            >>> db.set_wal_flush('no')  # commits do not wait for the disk
         """
         self._check_not_closed()
         import jpype

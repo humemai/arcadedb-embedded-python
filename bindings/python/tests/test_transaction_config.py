@@ -32,19 +32,21 @@ def test_set_wal_flush_invalid_mode(temp_db):
         temp_db.set_wal_flush("YES_FULL")  # Must be lowercase
 
 
-def test_set_wal_flush_is_per_thread(temp_db):
-    """set_wal_flush() reaches only the calling thread's transactions.
+def test_set_wal_flush_is_database_wide(temp_db):
+    """set_wal_flush() reaches the transactions of every thread on the database.
 
-    Pinned because the docs tell users so (guide/core/transactions.md,
-    "Durability") and ArcadeData/arcadedb#8352 asks whether it is intended: if
-    this starts failing because another thread follows the caller, the setter
-    became database-wide and those docs must change with it.
+    ArcadeData/arcadedb#8352: until #8397 (26.10.1) the setter changed only the
+    calling thread, and this test pinned that so the docs would change with it.
+    It now pins the fix: a thread that never called set_wal_flush() commits with
+    the mode another thread set. If it starts failing with the new thread still
+    at the process default, the setter went back to per-thread scope and
+    guide/core/transactions.md ("Durability") is wrong.
 
-    ORDER-INDEPENDENT ON PURPOSE. The other thread keeps the PROCESS default,
-    which is not always "NO": a server started in production mode anywhere in
-    the process sets it to 1 for every database opened afterwards
-    (test_server.py does, and CI runs it first). So the default is read from a
-    fresh thread, and the caller is given a mode that differs from it.
+    ORDER-INDEPENDENT ON PURPOSE. The process default is not always "NO": a
+    server started in production mode anywhere in the process sets it to 1 for
+    every database opened afterwards (test_server.py does, and CI runs it
+    first). So the default is read from a fresh thread first, and the mode set
+    is one that differs from it.
     """
     import threading
 
@@ -68,7 +70,7 @@ def test_set_wal_flush_is_per_thread(temp_db):
     temp_db.set_wal_flush(to_python[chosen])
     try:
         assert flush_of_this_thread() == chosen
-        assert flush_of_a_new_thread() == default
+        assert flush_of_a_new_thread() == chosen
     finally:
         temp_db.set_wal_flush(to_python[default])
 

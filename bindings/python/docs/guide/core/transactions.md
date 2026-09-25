@@ -191,12 +191,13 @@ A server started with `config={"mode": "production"}` sets it to 1 by itself, al
 production defaults, and for the whole process: every database opened in that Python process afterwards, embedded
 ones included, inherits it. See [Server Mode](../server.md).
 
-**`db.set_wal_flush()` changes only the calling thread.** It sets the flush for the transactions that thread commits
-and leaves every other thread at the JVM's setting. Measured on 26.10.1-SNAPSHOT: the thread that called
-`set_wal_flush("yes_nometadata")` synced every commit (7.5 ms each), and a second thread synced none (0.8 ms each).
-Use it for a deliberate per-thread choice, not as a database setting (`ArcadeData/arcadedb#8352`).
+**`db.set_wal_flush()` sets it for one database, on every thread** (26.10.1 and later). Before that release it
+changed only the calling thread: measured on an earlier 26.10.1-SNAPSHOT, the thread that called
+`set_wal_flush("yes_nometadata")` synced every commit and a second thread synced none (`ArcadeData/arcadedb#8352`,
+fixed in #8397; now both threads sync, about 9.8 ms per commit each). It still covers only the database it is called
+on, so for a process-wide default the JVM flag above remains the simplest choice.
 
-**The cost is one disk sync per commit**, about 7 ms on a laptop NVMe drive, so commit in batches: one transaction
+**The cost is one disk sync per commit**, 7 to 10 ms on a laptop NVMe drive, so commit in batches: one transaction
 per chunk of writes, not one per row (`insert_many`, or the chunked pattern above).
 
 **Bulk imports are the exception:** `db.graph_batch()` and the server's `/api/v1/batch` turn the WAL off by default
