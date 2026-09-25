@@ -468,6 +468,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
   private          LSMVectorIndexCompacted compactedSubIndex;
   private volatile boolean                 valid      = true;
   private volatile BUILD_STATE             buildState = BUILD_STATE.READY;
+  // A schema reload has published another instance in place of this one (issue #8310): it may still serve a query
+  // that resolved it before the swap, but it starts no maintenance of its own any more. Separate from `valid`, which
+  // an in-flight query must keep reading as true. Volatile for runInactivityRebuild(), the one reader outside the
+  // instance monitor.
+  private volatile boolean                 superseded;
 
   // Page tracking for inserts (avoids getTotalPages() issue with transaction-local pages)
   // Protected by write lock, reset to -1 after transaction commits or graph rebuilds
@@ -4599,6 +4604,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (asyncRebuildInProgress)
       return; // Another rebuild is already running
 
+    if (superseded)
+      return; // Retired by a schema reload: its successor does this work (issue #8310)
+
     // Still cooling down from a rebuild that did not fit the heap (issue #6503). Checked HERE, before the thread
     // is spawned, rather than inside admitOnlineRebuild(): the point is to not pay for the attempt at all - no
     // daemon thread, no JVM-wide permit acquire and release, no O(allocated chunks) getActiveCount() - on a path
@@ -7206,6 +7214,39 @@ public class LSMVectorIndex implements Index, IndexInternal {
       final int efSearch, final Set<RID> allowedRIDs, final Function<RID, Object> groupKeyResolver) {
     if (limit <= 0 || groupSize <= 0)
       return Collections.emptyList();
+    return groupedSearch(queryVector, limit, groupSize, efSearch, allowedRIDs, groupKeyResolver, null,
+        Float.POSITIVE_INFINITY);
+  }
+
+  /**
+   * The nearest {@code groupSize} members of each of a FIXED set of groups (issue #8002), nearer than
+   * {@code maxDistance}. No group outside {@code groupKeys} is admitted.
+   * <p>
+   * The second phase of a grouped search merged from several indexes (one per bucket): each index answers with its own
+   * nearest {@code limit} groups, which settles the winners overall but not their members - an index that ranked a
+   * winner outside its local top {@code limit} may still hold members of it. The caller asks such an index for exactly
+   * those groups, and passes as {@code maxDistance} the distance beyond which nothing could displace a member it
+   * already holds, so the walk stops as soon as it is past that point.
+   *
+   * @param groupKeys   the groups to fill; a key with no member here simply comes back absent
+   * @param maxDistance only rows strictly nearer than this are returned; {@link Float#POSITIVE_INFINITY} for no bound
+   */
+  public List<Pair<RID, Float>> findNeighborsFromVectorForGroups(final float[] queryVector, final Set<Object> groupKeys,
+      final int groupSize, final int efSearch, final Set<RID> allowedRIDs, final Function<RID, Object> groupKeyResolver,
+      final float maxDistance) {
+    if (groupKeys == null || groupKeys.isEmpty() || groupSize <= 0)
+      return Collections.emptyList();
+    return groupedSearch(queryVector, groupKeys.size(), groupSize, efSearch, allowedRIDs, groupKeyResolver, groupKeys,
+        maxDistance);
+  }
+
+  /**
+   * Both grouped searches: {@code onlyGroups == null} is {@link #findNeighborsFromVectorGrouped}, anything else is
+   * {@link #findNeighborsFromVectorForGroups} with {@code limit == onlyGroups.size()}.
+   */
+  private List<Pair<RID, Float>> groupedSearch(final float[] queryVector, final int limit, final int groupSize,
+      final int efSearch, final Set<RID> allowedRIDs, final Function<RID, Object> groupKeyResolver,
+      final Set<Object> onlyGroups, final float maxDistance) {
     if (groupKeyResolver == null)
       throw new IllegalArgumentException("groupKeyResolver must not be null");
 
@@ -7264,8 +7305,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
           // No graph to walk yet - but the delta buffer can still answer, which is the same courtesy
           // findNeighborsFromVector extends. Before issue #6501 this returned an empty list even when every vector
           // in the index was sitting in the buffer.
-          final GroupedSearchState deltaOnly = new GroupedSearchState(limit, groupSize, maxRows, allowedRIDs,
-              groupKeyResolver, queryVectorFloat, deltaSnapshot);
+          final GroupedSearchState deltaOnly = new GroupedSearchState(limit, groupSize, onlyGroups, maxDistance, maxRows,
+              allowedRIDs, groupKeyResolver, queryVectorFloat, deltaSnapshot);
           if (!deltaOnly.mergesDelta())
             return Collections.emptyList();
           deltaOnly.drainDelta();
@@ -7286,8 +7327,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
         if (allowedRIDs != null && !allowedRIDs.isEmpty()
             && allowListQualifiesForPreFilter(allowedRIDs, ordinalMap, GlobalConfiguration.VECTOR_INDEX_PREFILTER_MAX_SELECTIVITY)) {
           metrics.incrementPreFilterSearches();
-          return preFilterGrouped(queryVectorFloat, limit, groupSize, maxRows, allowedRIDs, groupKeyResolver, vectors,
-              ordinalMap, deltaSnapshot, overlay);
+          return preFilterGrouped(queryVectorFloat, limit, groupSize, onlyGroups, maxDistance, maxRows, allowedRIDs,
+              groupKeyResolver, vectors, ordinalMap, deltaSnapshot, overlay);
         }
 
         // Liveness-only Bits filter. Unlike the first grouped implementation, we do NOT apply
@@ -7297,8 +7338,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
         final Bits bitsFilter = new LiveVectorBitsFilter(allowedRIDs, ordinalMap, vectorIndex(),
             supersededRIDs(overlay));
 
-        final GroupedSearchState state = new GroupedSearchState(limit, groupSize, maxRows, allowedRIDs,
-            groupKeyResolver, queryVectorFloat, deltaSnapshot);
+        final GroupedSearchState state = new GroupedSearchState(limit, groupSize, onlyGroups, maxDistance, maxRows,
+            allowedRIDs, groupKeyResolver, queryVectorFloat, deltaSnapshot);
 
         final GraphSearcherPool pool = getSearcherPool();
         final long poolEpoch = searcherPoolEpoch();
@@ -7361,6 +7402,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
             if (state.isFull())
               break;
+            // A restricted search (issue #8002) has nothing to gain past its distance bound. Tested on the NEAREST
+            // candidate of the pass, not its farthest: a resumed pass mostly moves outward, but it expands nodes the
+            // previous one left on the frontier and can surface a candidate nearer than that pass's tail (see
+            // finish()). Once even a pass's best is past the bound, the walk has moved beyond it.
+            if (returned > 0 && maxDistance != Float.POSITIVE_INFINITY
+                && scoreToDistance(metadata.similarityFunction, searchResult.getNodes()[0].score) >= maxDistance)
+              break;
             // A pass that could not fill its beam ran the candidate queue dry: the reachable graph is
             // exhausted and no further pass can add anything. This is also what makes the loop terminate -
             // every pass that does not break here grew `examined` by a full beam.
@@ -7393,7 +7441,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
 
         final List<Pair<RID, Float>> results = state.finish();
 
-        if (state.distinctGroups() < limit) {
+        // A restricted search is asked about groups this index may not hold at all, so coming back short is its normal
+        // outcome and says nothing about efSearch.
+        if (onlyGroups == null && state.distinctGroups() < limit) {
           if (graphExhausted) {
             // Issue #6559 item 1/4: the walk ran the reachable graph dry rather than hitting the candidate budget -
             // raising efSearch cannot add candidates that do not exist. Counted separately so it does not pin the
@@ -7501,7 +7551,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
    * plan used to answer it empty.
    */
   private List<Pair<RID, Float>> preFilterGrouped(final VectorFloat<?> queryVectorFloat, final int limit, final int groupSize,
-      final int maxRows, final Set<RID> allowedRIDs, final Function<RID, Object> groupKeyResolver,
+      final Set<Object> onlyGroups, final float maxDistance, final int maxRows, final Set<RID> allowedRIDs,
+      final Function<RID, Object> groupKeyResolver,
       final RandomAccessVectorValues vectors, final int[] ordinalMap, final List<DeltaVectorEntry> deltaSnapshot,
       final TransactionVectorOverlay overlay) {
     final int[] candidates = collectAllowedOrdinals(allowedRIDs, ordinalMap);
@@ -7512,10 +7563,10 @@ public class LSMVectorIndex implements Index, IndexInternal {
       scoreOrdinal(ordinal, queryVectorFloat, allowedRIDs, scored, vectors, ordinalMap, seenRIDs, pageValues, overlay);
     scored.sort(Comparator.comparing(Pair::getSecond));
 
-    final GroupedSearchState state = new GroupedSearchState(limit, groupSize, maxRows, allowedRIDs, groupKeyResolver,
-        queryVectorFloat, deltaSnapshot);
+    final GroupedSearchState state = new GroupedSearchState(limit, groupSize, onlyGroups, maxDistance, maxRows,
+        allowedRIDs, groupKeyResolver, queryVectorFloat, deltaSnapshot);
     for (final Pair<RID, Float> candidate : scored) {
-      if (state.isFull())
+      if (state.isFull() || candidate.getSecond() >= maxDistance)
         break;
       state.drainDeltaUpTo(candidate.getSecond());
       if (state.isFull())
@@ -7528,7 +7579,7 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (state.mergedFromDelta() > 0)
       metrics.incrementGroupedSearchesMergingDelta();
 
-    if (state.distinctGroups() < limit) {
+    if (onlyGroups == null && state.distinctGroups() < limit) {
       // Issue #6559 item 1: this plan has no efSearch/candidate-budget concept at all - every allow-listed candidate
       // is scored up front - so a shortfall here is never the "raise efSearch" case groupedSearchesShortOfLimit
       // means on the graph-walk plan. It counts under groupedSearchesGroupsUnavailable instead, alongside that
@@ -7579,6 +7630,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
     private final Set<RID>               allowedRIDs;
     private final Function<RID, Object>  groupKeyResolver;
     private final GroupAdmissionState    groups;
+    /** Rows at or beyond this distance are never admitted (issue #8002); positive infinity for no bound. */
+    private final float                  maxDistance;
     private final List<Pair<RID, Float>> results;
 
     // The delta buffer, scored once and drained in rank order. The cursor's payloads are positions in the snapshot,
@@ -7599,12 +7652,13 @@ public class LSMVectorIndex implements Index, IndexInternal {
     private int duplicates;
     private int fromDelta;
 
-    private GroupedSearchState(final int limit, final int groupSize, final int maxRows, final Set<RID> allowedRIDs,
-        final Function<RID, Object> groupKeyResolver, final VectorFloat<?> queryVectorFloat,
-        final List<DeltaVectorEntry> deltaSnapshot) {
+    private GroupedSearchState(final int limit, final int groupSize, final Set<Object> onlyGroups, final float maxDistance,
+        final int maxRows, final Set<RID> allowedRIDs, final Function<RID, Object> groupKeyResolver,
+        final VectorFloat<?> queryVectorFloat, final List<DeltaVectorEntry> deltaSnapshot) {
       this.allowedRIDs = allowedRIDs;
       this.groupKeyResolver = groupKeyResolver;
-      this.groups = new GroupAdmissionState(limit, groupSize);
+      this.groups = onlyGroups == null ? new GroupAdmissionState(limit, groupSize) : new GroupAdmissionState(onlyGroups, groupSize);
+      this.maxDistance = maxDistance;
       // maxRows, not limit * groupSize: the caller has already clamped that product in long and to what the index
       // can address (issue #6066) - recomputing it here in int would reopen the same overflow the caller closed.
       this.results = new ArrayList<>(maxRows);
@@ -7647,6 +7701,8 @@ public class LSMVectorIndex implements Index, IndexInternal {
      * allow-list happened to route to.
      */
     private void admit(final RID rid, final float distance) {
+      if (distance >= maxDistance)
+        return;
       // Redundant for two of the three sources - scoreDeltaCandidates filters the cursor on the way in, and
       // preFilterGrouped's scoreOrdinal filtered before it sorted - and kept anyway, at one hash lookup per
       // candidate. Making it conditional on where the candidate came from is how the whitelist ends up enforced on
@@ -9554,6 +9610,18 @@ public class LSMVectorIndex implements Index, IndexInternal {
   }
 
   /**
+   * Retires this instance after a schema reload has published its successor (issue #8310): cancels the inactivity
+   * rebuild timer and refuses to arm it again or to start an async rebuild. Left alone on purpose: a graph build
+   * already running, which a query that resolved this instance before the swap may be waiting on, and the graph
+   * build pool it runs on. {@link #releaseBackgroundResources()} would cancel both.
+   */
+  @Override
+  public synchronized void onSuperseded() {
+    superseded = true;
+    cancelInactivityRebuildTimer();
+  }
+
+  /**
    * Stops the inactivity rebuild timer, the graph build pool and the pooled graph searchers (issue #5418). Split
    * out of {@link #close()} because {@code LocalDatabase} must be able to stop them on every database close and
    * drop WITHOUT closing the index files, which stay open until the pending pages have been flushed.
@@ -11112,6 +11180,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (!isValid())
       return; // Index closed or dropped - no point scheduling
 
+    if (superseded)
+      return; // Retired by a schema reload: a write landing here after the swap must not arm it again (issue #8310)
+
     if (delayMs <= 0)
       return; // Disabled
 
@@ -11166,6 +11237,9 @@ public class LSMVectorIndex implements Index, IndexInternal {
     if (timeoutMs <= 0)
       return; // Disabled since this task was armed
 
+    if (superseded)
+      return; // Retired by a schema reload while this task was already running: cancel() cannot stop it (issue #8310)
+
     // The deadline is read here, not enforced by the scheduling: a write that landed after this task was armed
     // moved it, and the remaining wait is what is left of the window from that write (issue #7357).
     final long quietMs = (System.nanoTime() - lastMutationNanos) / 1_000_000L;
@@ -11210,7 +11284,11 @@ public class LSMVectorIndex implements Index, IndexInternal {
       // retries at the next interval rather than staying stuck with pending mutations.
       if (REBUILD_SEMAPHORE.tryAcquire()) {
         try {
-          buildGraphFromScratch();
+          // Asked again right before the build, not only at the top: a retirement landing in between would
+          // otherwise still pay for one full build on the retired instance (issue #8310). What is left after this
+          // read is the same case as a build already running when the retirement arrives - bounded and finished.
+          if (!superseded)
+            buildGraphFromScratch();
         } finally {
           REBUILD_SEMAPHORE.release();
         }

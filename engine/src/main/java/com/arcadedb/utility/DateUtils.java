@@ -53,6 +53,17 @@ import java.util.concurrent.atomic.AtomicLong;
 public class DateUtils {
   public static final  String                                       DATE_TIME_ISO_8601_FORMAT = "yyyy-MM-dd'T'HH:mm:ssZ";
   public static final  long                                         MS_IN_A_DAY               = 24 * 60 * 60 * 1000L; // 86_400_000
+  /**
+   * The timestamp in every generated file name (backup and export archives). Pinned to {@link Locale#ROOT} so the name
+   * is Gregorian with ASCII digits whatever the JVM's default locale: the server's backup retention parses these names
+   * back and orders them, and a locale-formatted name was either misdated (th-TH's Buddhist year) or unreadable
+   * (ar-EG's digits) to it (issue #8301). One shared constant so no generator can drift from the others.
+   */
+  public static final  DateTimeFormatter                            FILE_NAME_TIMESTAMP         = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmssSSS", Locale.ROOT);
+  /**
+   * {@link #FILE_NAME_TIMESTAMP} at second precision, for log and profiler files rotated by name order.
+   */
+  public static final  DateTimeFormatter                            FILE_NAME_TIMESTAMP_SECONDS = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT);
   private static final ZoneId                                       UTC_ZONE_ID               = ZoneId.of("UTC");
   private static final ConcurrentHashMap<String, DateTimeFormatter> CACHED_FORMATTERS         = new ConcurrentHashMap<>();
   /**
@@ -116,13 +127,15 @@ public class DateUtils {
       if (destinationPrecision == ChronoUnit.MICROS || destinationPrecision == ChronoUnit.NANOS)
         throw new IllegalArgumentException(
             "java.util.Date implementation cannot handle datetime with precision " + destinationPrecision);
-      value = new Date(convertedTimestamp);
+      // #8253: java.util.Date's constructor always takes MILLIS since the epoch, regardless of destinationPrecision
+      value = new Date(destinationPrecision == ChronoUnit.SECONDS ? TimeUnit.SECONDS.toMillis(convertedTimestamp) : convertedTimestamp);
     } else if (dateTimeImplementation.equals(Calendar.class)) {
       if (destinationPrecision == ChronoUnit.MICROS || destinationPrecision == ChronoUnit.NANOS)
         throw new IllegalArgumentException(
             "java.util.Calendar implementation cannot handle datetime with precision " + destinationPrecision);
       value = Calendar.getInstance(database.getSchema().getTimeZone());
-      ((Calendar) value).setTimeInMillis(convertedTimestamp);
+      // #8253: setTimeInMillis() always takes MILLIS since the epoch, regardless of destinationPrecision
+      ((Calendar) value).setTimeInMillis(destinationPrecision == ChronoUnit.SECONDS ? TimeUnit.SECONDS.toMillis(convertedTimestamp) : convertedTimestamp);
     } else if (dateTimeImplementation.equals(LocalDateTime.class)) {
       if (destinationPrecision.equals(ChronoUnit.SECONDS))
         value = LocalDateTime.ofInstant(Instant.ofEpochSecond(convertedTimestamp), UTC_ZONE_ID);

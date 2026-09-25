@@ -18,6 +18,7 @@
  */
 package com.arcadedb.postgres;
 
+import com.arcadedb.database.Database;
 import com.arcadedb.query.sql.executor.Result;
 import com.arcadedb.query.sql.parser.Statement;
 import com.arcadedb.schema.DocumentType;
@@ -53,6 +54,17 @@ public class PostgresPortal {
    */
   public boolean                   columnsDescribed     = false;
   /**
+   * True when a {@code Describe('S')} of this statement answered {@code NoData}: a promise that its portals return no
+   * result set, which {@code executeCommand()} must keep, because a DataRow is only legal after a RowDescription and
+   * Execute never sends one (issue #8379). Set on the prepared-statement template; a bound portal reads it through
+   * {@link #statement}, so a portal bound BEFORE the statement was described is held to it too.
+   */
+  public boolean                   describedNoData      = false;
+  /** The prepared statement this portal was bound from, or null for a statement template itself (issue #8379). */
+  public PostgresPortal            statement;
+  /** True once a {@code Describe('P')} answered this portal with a RowDescription, which supersedes a statement-level NoData. */
+  public boolean                   rowsDescribed        = false;
+  /**
    * Memoizes {@code PostgresNetworkExecutor.resolveQueryTargetType(sqlStatement)} (issue #6447): a portal can
    * be described and executed - possibly executed repeatedly, for a cursor-based fetch with a LIMIT - several
    * times over its lifetime, and the schema type its FROM target names does not change between them.
@@ -78,6 +90,11 @@ public class PostgresPortal {
    * no Bind or Execute - open, commit or roll back a transaction it never executed.
    */
   public TransactionControl        transactionControl;
+  /**
+   * The isolation level a {@code BEGIN ISOLATION <level>} asked for, recorded next to {@link #transactionControl} and
+   * applied with it at Execute (issue #8273). Null for a plain BEGIN and for every other statement.
+   */
+  public Database.TRANSACTION_ISOLATION_LEVEL isolationLevel;
   /**
    * The parsed {@code SET}/{@code RESET} statement, or null for everything else (issue #8135). Parse only
    * parses and RECORDS it here, exactly as it does {@link #transactionControl}; {@code executeCommand()} applies it
@@ -153,6 +170,14 @@ public class PostgresPortal {
    * its fresh default, so each returned portal starts its own independent
    * lifecycle.
    */
+  /**
+   * True when this portal's statement promised, through a {@code Describe('S')} answered with {@code NoData}, that no
+   * result set follows, and no {@code Describe('P')} of the portal itself has announced one since (issue #8379).
+   */
+  public boolean promisedNoData() {
+    return !rowsDescribed && (describedNoData || statement != null && statement.describedNoData);
+  }
+
   public static PostgresPortal bindFrom(final PostgresPortal template) {
     final PostgresPortal portal = new PostgresPortal(template.query, template.language);
     portal.sqlStatement = template.sqlStatement;
@@ -161,12 +186,14 @@ public class PostgresPortal {
     portal.isExpectingResult = template.isExpectingResult;
     portal.catalogQuery = template.catalogQuery;
     portal.transactionControl = template.transactionControl;
+    portal.isolationLevel = template.isolationLevel;
     portal.setting = template.setting;
     portal.copyStatement = template.copyStatement;
     portal.executed = template.executed;
     portal.cachedResultSet = template.cachedResultSet;
     portal.columns = template.columns;
     portal.columnsDescribed = template.columnsDescribed;
+    portal.statement = template;
     portal.queryTargetType = template.queryTargetType;
     portal.queryTargetTypeResolved = template.queryTargetTypeResolved;
     portal.aliasToSourceProperty = template.aliasToSourceProperty;

@@ -23,6 +23,7 @@ import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.log.LogManager;
 import com.arcadedb.network.binary.ServerIsNotTheLeaderException;
 import com.arcadedb.serializer.json.JSONObject;
+import com.arcadedb.server.ForwardedRequestIdContext;
 import com.arcadedb.server.HAServerPlugin;
 import com.arcadedb.server.LeaderForwardContext;
 import com.arcadedb.server.http.HttpServer;
@@ -39,6 +40,7 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpConnectTimeoutException;
+import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
@@ -70,7 +72,9 @@ import java.util.logging.Level;
  * {@code PUT} and {@code DELETE /api/v1/server/users} - running {@code ServerSecurity.*ClusterWide} on
  * whichever node served the request, and from there submitting a Raft entry from a follower (issue #7380).
  * One HTTP API cannot answer the same request two ways depending on which route the client picked, so the
- * forwarding moved here and all four call sites share it.
+ * forwarding moved here and all four call sites share it. The group and API-token routes -
+ * {@code POST}/{@code DELETE /api/v1/server/groups} and {@code /api/v1/server/api-tokens} - joined them in issue
+ * #8109, so every HTTP security mutation runs on the leader.
  * <p>
  * gRPC refuses these calls rather than forwarding them ({@code ArcadeDbGrpcAdminService.requireLeader},
  * issues #7304 and #7309). That is not a different policy: gRPC has no request proxy, so a refusal that
@@ -79,8 +83,8 @@ import java.util.logging.Level;
  * <b>This class performs no authorization.</b> The caller checks it first - every current call site runs
  * {@code AbstractServerHttpHandler.checkRootUser} before asking to forward.
  * <p>
- * <b>Every forward is bounded.</b> {@code forwardIfReplica} runs on an Undertow worker thread - all four call
- * sites return {@code true} from {@code mustExecuteOnWorkerThread()} - so a leader that accepts the connection
+ * <b>Every forward is bounded.</b> {@code forwardIfReplica} runs on an Undertow worker thread - every call
+ * site returns {@code true} from {@code mustExecuteOnWorkerThread()} - so a leader that accepts the connection
  * and then never answers would hold that worker until the OS tore the socket down, and enough of them would
  * stop the follower serving anything (issue #7507). {@link Transport} therefore gives the client a connect
  * timeout and every request a response deadline, and turns a blown deadline into an HTTP 504 rather than a
@@ -98,6 +102,19 @@ public final class LeaderCommandForwarder {
   static final         String     ACCEPT_HEADER     = "Accept";
   static final         String     EVENT_STREAM      = "text/event-stream";
   private static final HttpString X_ACCEL_BUFFERING = new HttpString("X-Accel-Buffering");
+
+  /**
+   * The response headers of the leader's answer that a follower relays to its client along with the status and the
+   * body (issue #8343). An allow-list, the mirror of the request headers {@code relayHeader} copies onto the forward:
+   * the leader's other response headers describe the leader's own connection and exchange - its content length, its
+   * correlation id, its session - and must not be passed off as this node's.
+   * <p>
+   * {@code Retry-After} is the machine-readable back-off of the answers that ask the client to come back later: the
+   * {@code 409} for a retry whose {@code X-Request-Id} twin is still executing (issue #8324) and the {@code 503}
+   * during a snapshot install. A client that reached the leader through a follower used to see the status and the
+   * body that says "retry later", but not the back-off a client talking to the leader gets.
+   */
+  static final String[] RELAYED_RESPONSE_HEADERS = { "Retry-After" };
 
   private final HttpServer httpServer;
   private final Transport  transport;
@@ -326,6 +343,15 @@ public final class LeaderCommandForwarder {
     // node reserves the id too, but it caches only what the leader answered: without the relay a retry after a
     // 504 - the outcome that most invites one - executed on the leader again, because nothing there had seen the id.
     relayHeader(exchange, builder, IdempotencyCache.HEADER_REQUEST_ID);
+    // With it the key the client's request has on this node (issue #8347). The body relayed above is the payload
+    // re-serialized, not the client's bytes, so the leader keys this forward differently from a retry the client sends
+    // it directly; the leader claims this key too, and that retry then finds the forward's entry. This forward is the
+    // client's whole request, answered by the same handler on the leader, so the entry is the answer the retry would
+    // have got. Published only for a request this node itself treats as idempotent, and sent only beside the cluster
+    // token, the one form in which the leader honors it.
+    final String clientKey = ForwardedRequestIdContext.clientKey();
+    if (clientKey != null && clusterToken != null && !clusterToken.isBlank())
+      builder.header(ForwardedRequestIdContext.CLIENT_KEY_HEADER, clientKey);
     // The encoding the client negotiated, so the leader streams a restore's or an import's progress when it was
     // asked to rather than answering one buffered object at the end (issue #7603).
     relayHeader(exchange, builder, ACCEPT_HEADER);
@@ -369,6 +395,18 @@ public final class LeaderCommandForwarder {
       LogManager.instance().log(LeaderCommandForwarder.class, Level.FINE,
           "Header %s is not relayed to the leader: the HTTP client refuses its value (%s)", name, e.getMessage());
     }
+  }
+
+  /**
+   * The leader's answer as this node relays it: its status, its body and the {@link #RELAYED_RESPONSE_HEADERS} it
+   * carries. The one place a relayed answer is built, so the buffered, the non-stream and the batch relays cannot
+   * disagree about which headers cross the hop.
+   */
+  static ExecutionResponse relayedResponse(final int statusCode, final String body, final HttpHeaders leaderHeaders) {
+    final ExecutionResponse response = new ExecutionResponse(statusCode, body);
+    for (final String name : RELAYED_RESPONSE_HEADERS)
+      leaderHeaders.firstValue(name).ifPresent(value -> response.setHeader(name, value));
+    return response;
   }
 
   static boolean isEventStreamRequested(final HttpServerExchange exchange) {
@@ -493,7 +531,7 @@ public final class LeaderCommandForwarder {
           longRunningCommand);
       if (awaited.answer() != null)
         return awaited.answer();
-      return new ExecutionResponse(awaited.response().statusCode(), awaited.response().body());
+      return relayedResponse(awaited.response().statusCode(), awaited.response().body(), awaited.response().headers());
     }
 
     /**
@@ -544,7 +582,7 @@ public final class LeaderCommandForwarder {
           Thread.currentThread().interrupt();
           throw new IOException("Interrupted while forwarding server command to leader at " + leaderHttpAddress, e);
         }
-        return new ExecutionResponse(response.statusCode(), whole.toString(StandardCharsets.UTF_8));
+        return relayedResponse(response.statusCode(), whole.toString(StandardCharsets.UTF_8), response.headers());
       }
 
       final OutputStream out;

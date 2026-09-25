@@ -31,6 +31,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.net.InetAddress;
@@ -137,29 +138,34 @@ class Issue8323SqlForwardRequestIdTest {
     }
   }
 
-  private static void forward(final RaftReplicatedDatabase db, final String command) throws Exception {
+  static void forward(final RaftReplicatedDatabase db, final String command) throws Exception {
     final Method m = RaftReplicatedDatabase.class.getDeclaredMethod("forwardCommandToLeaderViaRaft",
         String.class, String.class, Map.class, Object[].class, ContextConfiguration.class);
     m.setAccessible(true);
     m.invoke(db, "sql", command, null, new Object[0], config());
   }
 
-  private static ContextConfiguration config() {
+  static ContextConfiguration config() {
     final ContextConfiguration cfg = new ContextConfiguration();
     cfg.setValue(GlobalConfiguration.HA_PROXY_COMMAND_TIMEOUT, 30_000L);
     return cfg;
   }
 
-  private static RaftReplicatedDatabase database(final RecordingLeader leader) {
+  static RaftReplicatedDatabase database(final RecordingLeader leader) {
     return database(leader, false);
   }
 
-  private static RaftReplicatedDatabase database(final RecordingLeader leader, final boolean localIsLeader) {
+  static RaftReplicatedDatabase database(final RecordingLeader leader, final boolean localIsLeader) {
     return database(leader, localIsLeader, "test-token");
   }
 
-  private static RaftReplicatedDatabase database(final RecordingLeader leader, final boolean localIsLeader,
+  static RaftReplicatedDatabase database(final RecordingLeader leader, final boolean localIsLeader,
       final String clusterToken) {
+    return database(leader, localIsLeader, clusterToken, mock(LocalDatabase.class));
+  }
+
+  static RaftReplicatedDatabase database(final RecordingLeader leader, final boolean localIsLeader,
+      final String clusterToken, final LocalDatabase proxied) {
     final ContextConfiguration cfg = config();
     final ArcadeDBServer server = mock(ArcadeDBServer.class);
     when(server.getConfiguration()).thenReturn(cfg);
@@ -170,21 +176,37 @@ class Issue8323SqlForwardRequestIdTest {
     when(raft.isLeader()).thenReturn(localIsLeader);
     // A node that became the leader resolves the leader's address to its own.
     when(raft.isOwnHttpAddress(leader.address())).thenReturn(localIsLeader);
-    return new RaftReplicatedDatabase(server, mock(LocalDatabase.class), raft);
+    return new RaftReplicatedDatabase(server, proxied, raft);
   }
 
-  /** A leader that answers every command with one empty-result success and records its request id and ordinal. */
-  private static final class RecordingLeader implements AutoCloseable {
+  /**
+   * A leader that answers every command with one empty-result success and records its request id, ordinal and client
+   * key (issue #8347).
+   */
+  static final class RecordingLeader implements AutoCloseable {
     private final HttpServer   server;
     private final List<String> requestIds = new CopyOnWriteArrayList<>();
     private final List<String> ordinals   = new CopyOnWriteArrayList<>();
+    private final List<String> clientKeys = new CopyOnWriteArrayList<>();
+    private final List<String> bodies     = new CopyOnWriteArrayList<>();
+    private final String       answer;
 
     RecordingLeader() throws IOException {
+      this(new JSONObject().put("result", new JSONArray()).toString());
+    }
+
+    /** A leader that answers every command with the given body (issue #8359). */
+    RecordingLeader(final String answer) throws IOException {
+      this.answer = answer;
       server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 16);
       server.createContext("/", exchange -> {
         requestIds.add(exchange.getRequestHeaders().getFirst(IdempotencyCache.HEADER_REQUEST_ID));
         ordinals.add(exchange.getRequestHeaders().getFirst(ForwardedRequestIdContext.FORWARD_ORDINAL_HEADER));
-        final byte[] bytes = new JSONObject().put("result", new JSONArray()).toString().getBytes(StandardCharsets.UTF_8);
+        clientKeys.add(exchange.getRequestHeaders().getFirst(ForwardedRequestIdContext.CLIENT_KEY_HEADER));
+        try (final InputStream in = exchange.getRequestBody()) {
+          bodies.add(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+        }
+        final byte[] bytes = this.answer.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(200, bytes.length);
         try (final OutputStream out = exchange.getResponseBody()) {
@@ -200,6 +222,14 @@ class Issue8323SqlForwardRequestIdTest {
 
     List<String> ordinals() {
       return ordinals;
+    }
+
+    List<String> clientKeys() {
+      return clientKeys;
+    }
+
+    List<String> bodies() {
+      return bodies;
     }
 
     String address() {

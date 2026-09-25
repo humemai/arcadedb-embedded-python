@@ -18,6 +18,7 @@
  */
 package com.arcadedb.server.ha.raft;
 
+import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.log.LogManager;
@@ -107,6 +108,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.BiConsumer;
+import java.util.function.LongSupplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -297,6 +299,15 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   private          int                       leaderCommitProbeFailures;
   private          int                       leaderCommitProbeSkipTicks;
   private          RaftPeerId                leaderCommitProbeLastLeader;
+  // Issue #8342: this follower's own view of a zero-progress stall behind its leader, measured against
+  // leaderReportedCommitIndex above. Written by the health-monitor thread (trackFollowerStall), read by
+  // GET /api/v1/cluster. The clock is a field so a unit test can move time without sleeping.
+  // followerStallLeader deliberately duplicates leaderCommitProbeLastLeader: the probe skips ticks while it backs
+  // off, so the two hooks can see a leader change on different ticks, and each must reset on the tick IT sees it.
+  // Merging them would make one of the two resets late.
+  private final    FollowerStallTracker      followerStallTracker   = new FollowerStallTracker();
+  private          RaftPeerId                followerStallLeader;
+  private volatile LongSupplier              followerStallClock     = System::currentTimeMillis;
   /**
    * The HTTPS client that requests forwarded to the leader are sent on (issue #7508). A second cache rather than
    * a share of {@link #capabilityHttpsClients}: that one is asked by a single scheduled thread, sequentially, and
@@ -1479,6 +1490,15 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   @Override
+  public void retryPendingBootstrapReplacements() {
+    if (raftServer == null || shutdownRequested)
+      return;
+    final ArcadeStateMachine sm = stateMachine;
+    if (sm != null)
+      sm.retryPendingBootstrapReplacements();
+  }
+
+  @Override
   public void reportResyncProgress() {
     final FollowerResyncProgressTracker tracker = resyncProgressTracker;
     if (tracker == null || raftServer == null || shutdownRequested || isLeader())
@@ -2170,6 +2190,18 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   /**
+   * {@link #stop()} clears {@code transactionBroker} while callers holding this instance - HTTP writes, admin
+   * requests, leader-change notifications - can still reach it (issue #8356). Static so a Mockito double of this
+   * class still runs the check against its stubbed {@link #getTransactionBroker()}.
+   */
+  static RaftTransactionBroker requireTransactionBroker(final RaftHAServer raft) {
+    final RaftTransactionBroker broker = raft.getTransactionBroker();
+    if (broker == null)
+      throw new NeedRetryException("Raft transaction broker is not available (server may be stopping)");
+    return broker;
+  }
+
+  /**
    * Closes the current RaftClient and creates a new one with fresh gRPC channels.
    * <p>
    * After a network partition, gRPC channels to partitioned peers enter TRANSIENT_FAILURE
@@ -2244,6 +2276,14 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    */
   public List<String> securityDocumentsNotInstalledSinceRuntimeJoin() {
     return runtimeJoinDetector.securityDocumentsNotInstalledSinceJoin();
+  }
+
+  /**
+   * Records that the leader found this node's security documents, read at {@code appliedIndex}, equal to its own
+   * (issue #8346). See {@link RuntimeJoinDetector#onSecurityDocumentsMatchedLeader(long)}.
+   */
+  void onSecurityDocumentsMatchedLeader(final long appliedIndex) {
+    runtimeJoinDetector.onSecurityDocumentsMatchedLeader(appliedIndex);
   }
 
   public ArcadeStateMachine getStateMachine() {
@@ -3487,13 +3527,16 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
 
   /**
    * Health-monitor hook (issue #7619): asks the current leader for its commit index, for the readiness gate in
-   * {@link #isReadyForTraffic(long)}. A follower cannot compute this itself - Ratis clamps its commit index to
-   * its own flush index, and every commit index a follower learns rides the same leader-to-follower appends
-   * whose absence is the thing to detect - so it has to come from the leader over a separate call.
+   * {@link #isReadyForTraffic(long)} and for this follower's own stall signal ({@link #trackFollowerStall()},
+   * issue #8342). A follower cannot compute this itself - Ratis clamps its commit index to its own flush index,
+   * and every commit index a follower learns rides the same leader-to-follower appends whose absence is the thing
+   * to detect - so it has to come from the leader over a separate call.
    * <p>
-   * Runs only where the answer is read: on a follower with a known leader, and only when
-   * {@code arcadedb.server.readinessRequiresHA} is on, since otherwise nothing consults it and a call to the
-   * leader on every tick would be pure cost. The value is replaced rather than maxed with the previous one: every
+   * Runs on a follower with a known leader, whatever {@code arcadedb.server.readinessRequiresHA} says (issue
+   * #8342): the stall signal in {@code GET /api/v1/cluster} reads the answer on every node, and a follower whose
+   * log stopped receiving entries at the current term has no other way to see that it is behind. The cost is one
+   * small in-memory group-info call to the leader per health tick ({@code arcadedb.ha.healthCheckInterval},
+   * default 3 s), on a client kept open between ticks. The value is replaced rather than maxed with the previous one: every
    * sample is a commit index a leader really reported, so every sample is a safe lower bound, and replacing lets
    * a node that outlived a wholesale reset of the cluster's Raft state forget a figure from the old log. A failed
    * call keeps the previous value, which is still a lower bound.
@@ -3510,7 +3553,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    */
   @Override
   public void refreshLeaderCommitIndex() {
-    if (shutdownRequested || !configuration.getValueAsBoolean(GlobalConfiguration.SERVER_READINESS_REQUIRES_HA))
+    if (shutdownRequested)
       return;
     final RaftServer server = raftServer;
     if (server == null)
@@ -3551,6 +3594,69 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       leaderCommitProbeFailures = Math.min(leaderCommitProbeFailures + 1, 30);
       leaderCommitProbeSkipTicks = leaderCommitProbeSkipTicksAfter(leaderCommitProbeFailures);
     }
+  }
+
+  /**
+   * Health-monitor hook (issue #8342): tracks whether this follower is stalled behind its leader, from its own
+   * point of view. See {@link FollowerStallTracker} for the rule, which is the one the leader's
+   * {@link ClusterMonitor} applies to this same replica, with the same lag threshold
+   * ({@code arcadedb.ha.replicationLagWarning}).
+   * <p>
+   * Only a running follower of a known leader with no resync in flight is tracked. A resync has its own
+   * {@code local-resync-in-progress} alert and applies nothing while it downloads, and the leader, a node with no
+   * leader and a division that is not {@code RUNNING} (whose last indices survive a close, issue #5271) have
+   * nothing to be stalled behind. A leader change starts the spell over: the new leader realigns the follower's
+   * log, and what the old one failed to send says nothing about it.
+   * <p>
+   * Measured against {@link #leaderReportedCommitIndex}, which {@link #refreshLeaderCommitIndex()} refreshes later
+   * in the same tick, so a figure is at most one tick old. Every figure it holds is a commit index a leader really
+   * reported, so a stale one can only under-state the lag.
+   */
+  @Override
+  public void trackFollowerStall() {
+    final RaftServer server = raftServer;
+    if (server == null || shutdownRequested) {
+      followerStallTracker.reset();
+      return;
+    }
+    final boolean eligible;
+    final long applied;
+    final long logIndex;
+    try {
+      final var division = server.getDivision(raftGroup.getGroupId());
+      final var info = division.getInfo();
+      final RaftPeerId leaderId = info.getLeaderId();
+      if (leaderId == null || !leaderId.equals(followerStallLeader)) {
+        followerStallLeader = leaderId;
+        followerStallTracker.reset();
+      }
+      final ArcadeStateMachine sm = stateMachine;
+      eligible = leaderId != null && !info.isLeader() && info.getLifeCycleState() == LifeCycle.State.RUNNING
+          && sm != null && !sm.isResyncInProgress();
+      applied = info.getLastAppliedIndex();
+      final TermIndex last = division.getRaftLog().getLastEntryTermIndex();
+      logIndex = last != null ? last.getIndex() : -1L;
+    } catch (final Exception e) {
+      // Same Ratis IllegalStateException window as isReadyForTraffic() (issue #5271): no judgement this tick.
+      LogManager.instance().log(this, Level.FINE, "Cannot read the Raft state to track a follower stall", e);
+      followerStallTracker.reset();
+      return;
+    }
+    followerStallTracker.observe(followerStallClock.getAsLong(), eligible, leaderReportedCommitIndex, applied,
+        logIndex, clusterMonitor.getLagWarningThreshold());
+  }
+
+  /**
+   * This follower's stall behind its leader, or {@code null} when it is not stalled (issue #8342). See
+   * {@link #trackFollowerStall()}. Always {@code null} while the health monitor is not running.
+   */
+  FollowerStallTracker.Stall getFollowerStallBehindLeader() {
+    return followerStallTracker.current();
+  }
+
+  /** Test seam for {@link #trackFollowerStall()}: the clock its spell is measured with. */
+  void setFollowerStallClock(final LongSupplier clock) {
+    this.followerStallClock = clock;
   }
 
   /** Upper bound of the probe's failure backoff, in health ticks (issue #7619, review of PR #8322). */
@@ -5420,11 +5526,11 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    * schema-delta decision. Since issue #7549 it runs in every role, so on a node that has been up for one
    * refresh period the cached answer below is already the full one and nothing is dialled here; what remains is
    * the window before a freshly started node's first round lands, and the round below is what covers it. The
-   * consumer this exists for is not leader-side: the group and API-token REST routes do not forward, so
-   * {@code ServerSecurity.saveGroupClusterWide} and friends run on whichever node the client or load balancer
-   * picked, and submit through a Raft client that routes to the leader. On a FOLLOWER the registry is empty by
-   * design, so a refusal built on the cached answer alone would refuse every group change ever made on a
-   * follower, on a perfectly healthy single-version cluster.
+   * consumer this exists for was not leader-side when it was written: the group and API-token REST routes did not
+   * forward, so {@code ServerSecurity.saveGroupClusterWide} and friends ran on whichever node the client or load
+   * balancer picked. They forward to the leader since issue #8109, but a submission can still be decided on a node
+   * that lost leadership between the forward and the submit, so a node's answer still has to be right in any
+   * role.
    * <p>
    * So the cached answer is consulted first and one synchronous round is run only when it is not already a full
    * "yes". That keeps the leader's hot path free - a warm registry answers without dialling anything - and makes
