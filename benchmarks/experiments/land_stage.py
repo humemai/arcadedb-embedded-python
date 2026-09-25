@@ -55,8 +55,8 @@ REMOTE = os.environ.get("BENCH_LAND_REMOTE",
                         "~/repos/humemai/arcadedb-embedded-python/benchmarks/experiments/results")
 PY = str(REPO / ".venv" / "bin" / "python")
 SCRATCH = Path(os.environ.get("BENCH_LAND_SCRATCH", "/tmp/claude-1000/land_stage"))
-TRAILER = ("\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n"
-           "Claude-Session: https://claude.ai/code/session_01JB6Hg77dQVqABoTJmiUnV2")
+TRAILER = ("\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>\n"
+           "Claude-Session: https://claude.ai/code/session_01M8NdUMbUoCLwNJEWPir4YL")
 
 
 def sh(cmd, cwd=None, check=True, capture=False, env=None, quiet=False):
@@ -161,8 +161,19 @@ def _published_lanes(payload_path, pin=None):
         os.environ["BENCH_ENGINE_COMMIT"] = pin
     try:
         from export_web import _TABLE_LANE
-    except Exception:  # noqa: BLE001  (a landing must not die on this helper)
-        return set()
+    except Exception as exc:  # noqa: BLE001
+        # AN EMPTY ANSWER HERE IS NOT HARMLESS. It used to return set() "so a
+        # landing does not die on this helper", and a landing then scoped the
+        # page to its own lane, rebuilt it without every lane already
+        # published, and was refused two steps later for tables that "would
+        # disappear" -- after merging, and with the cause (here: export_web
+        # imports numpy, and the interpreter had none) nowhere in the output.
+        # Rehearsing qOE's landing on 2026-09-25 with the system python3 did
+        # exactly that. There is no safe way to land without this answer.
+        raise SystemExit(
+            f"REFUSING: cannot read which lanes {payload_path} already carries: "
+            f"export_web did not import ({type(exc).__name__}: {exc}). Run land_stage.py "
+            f"with the repository's environment ({PY}).") from exc
     finally:
         if pin and not _had:
             os.environ.pop("BENCH_ENGINE_COMMIT", None)
@@ -172,6 +183,31 @@ def _published_lanes(payload_path, pin=None):
         if got:
             out.add(got[0])
     return out
+
+
+def _restore_this_runs_writes(dirty_before, site_files):
+    """Put back what a publish that is NOT going ahead regenerated, in both repos.
+
+    The bindings side is exact: only results paths that became dirty during
+    this run (`dirty_before` is the set taken before the merge). The site side
+    is the generated files the publish writes -- payload and images, never the
+    hand-written prose under `/items/` -- restricted to tracked paths, because
+    `git checkout` fails the whole command on an untracked one. Shared by the
+    dry run, a refused gate, and the step-5 refusal: until 2026-09-25 only the
+    dry run restored the site, and a step-5 refusal restored nothing, leaving
+    six regenerated artifacts and the refused preview payload in the trees.
+    """
+    ours = sorted(_dirty_results() - dirty_before)
+    if ours:
+        sh(["git", "checkout", "--"] + ours, cwd=REPO)
+        print(f"  restored {len(ours)} regenerated artifact(s) this run rewrote")
+    written = [f for f in site_files if "/items/" not in f]
+    tracked = [f for f in written
+               if sh(["git", "ls-files", "--error-unmatch", f], cwd=SITE,
+                     check=False, quiet=True).returncode == 0]
+    if tracked:
+        sh(["git", "checkout", "--"] + tracked, cwd=SITE)
+        print(f"  restored the site's generated file(s): {', '.join(tracked)}")
 
 
 def _dirty_results():
@@ -210,6 +246,14 @@ def step(n, title):
 PIN_DEFAULT = "8d6af9475"
 
 def main():
+    # RUN UNDER THE REPOSITORY'S ENVIRONMENT, whatever interpreter started us.
+    # Every step this script shells out to already uses PY; the one piece that
+    # runs in-process, _published_lanes' import of export_web, needs that
+    # environment's packages too (numpy, through e2_hybrid). Started with the
+    # system python3 it silently lost the published lanes (2026-09-25).
+    if Path(PY).exists() and Path(sys.prefix).resolve() != (REPO / ".venv").resolve():
+        print(f"(re-running under {PY})", flush=True)
+        os.execv(PY, [PY, str(Path(__file__).resolve())] + sys.argv[1:])
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pin", default=os.environ.get("BENCH_ENGINE_COMMIT", PIN_DEFAULT))
     ap.add_argument("--only-lanes", default="",
@@ -431,11 +475,7 @@ def main():
         # already regenerated the payload, the freeze and the .tex tables from
         # the scoped rows. Leaving them means the file a reader opens to ask
         # what is published answers with a payload the gates just refused.
-        _refused = sorted(_dirty_results() - _dirty_before)
-        if _refused:
-            sh(["git", "checkout", "--"] + _refused, cwd=REPO)
-            print(f"  restored {len(_refused)} regenerated artifact(s); the refused "
-                  f"payload is not left in the tree")
+        _restore_this_runs_writes(_dirty_before, site_files)
         return 1
 
     step(5, "what changed on the page")
@@ -466,6 +506,7 @@ def main():
         print(f"\n  REFUSING: {len(gone)} table(s) on the page would disappear: "
               f"{gone}. A landing adds to the page; it does not replace it.",
               file=sys.stderr)
+        _restore_this_runs_writes(_dirty_before, site_files)
         return 1
     if not changed:
         print("  no table changed; the stage was not page material or its rows were excluded")
@@ -498,19 +539,7 @@ def main():
         # ways: it may not keep what it wrote, and it may not drop what it did
         # not write. The prose file is never written here, so it is never
         # restored here.
-        # The bindings tree first: same rule, other repo.
-        _now = _dirty_results()
-        _ours = sorted(_now - _dirty_before)
-        if _ours:
-            sh(["git", "checkout", "--"] + _ours, cwd=REPO)
-            print(f"  restored {len(_ours)} regenerated artifact(s) this run rewrote")
-
-        _written = [f for f in site_files if "/items/" not in f]
-        _tracked = [f for f in _written
-                    if sh(["git", "ls-files", "--error-unmatch", f], cwd=SITE,
-                          check=False, quiet=True).returncode == 0]
-        if _tracked:
-            sh(["git", "checkout", "--"] + _tracked, cwd=SITE)
+        _restore_this_runs_writes(_dirty_before, site_files)
         print("\nDRY RUN: stopping before build and commit; site payload restored. Re-run with --apply to publish.")
         return 0
 

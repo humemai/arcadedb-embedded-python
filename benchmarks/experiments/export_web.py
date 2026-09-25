@@ -6200,7 +6200,8 @@ def _restructure_tables(tables, rows):
         base = {"withheld_scales": [], "withheld_reason": None,
                 "source_paths": src.get("source_paths"), "source_urls": src.get("source_urls")}
         tables.append({"id": "docs_oltp", "title": "Document OLTP",
-                       "dataset": "TPC-C new-order on the TPC-H SF1 tables",
+                       "dataset": ("TPC-C new-order on the TPC-H tables (SF1, SF10)" if _oct else
+                                   "TPC-C new-order on the TPC-H SF1 tables"),
                        "conditions": list(src["conditions"]),
                        "columns": (OCT_OLTP_COLS if _oct else
                                    ["new-order p50 ms", "new-order p99 ms", "OLTP ops/s"]),
@@ -6215,10 +6216,18 @@ def _restructure_tables(tables, rows):
         # `BETWEEN` is correct). Both errors make ArcadeDB's numbers faster than
         # the truth, so the cells come down rather than stand with a caveat, and
         # October re-measures them with the answers checked.
-        _withdrawn = [e for e in src["entries"]
-                      if str(e.get("backend", "")).lower().startswith("arcadedb")]
-        _olap_entries = [clone(e, OLAP_KEEP) for e in src["entries"]
-                         if not str(e.get("backend", "")).lower().startswith("arcadedb")]
+        #
+        # SEPTEMBER'S ROWS ONLY. October runs the corrected query texts, and its
+        # answers are checked: at SF1 all ten engines, both ArcadeDB arms
+        # included, return the same digest for all five queries, and at SF10
+        # both ArcadeDB arms match DuckDB and SQLite on all five. Applied to the
+        # October payload too, this block withdrew those checked rows and
+        # printed September's reason under a table whose own condition
+        # sentences described ArcadeDB's SF10 cells (caught rehearsing qOE's
+        # landing, 2026-09-25, BUGS F127).
+        _withdrawn = [] if _oct else [e for e in src["entries"]
+                                      if str(e.get("backend", "")).lower().startswith("arcadedb")]
+        _olap_entries = [clone(e, OLAP_KEEP) for e in src["entries"] if e not in _withdrawn]
         # GENERATED, NOT TYPED. Under the October instrument every sentence
         # must be one or the other, and this one was a bare string: September
         # never checked, so the withdrawal that has been on the page since
@@ -6229,7 +6238,7 @@ def _restructure_tables(tables, rows):
                        "excluded the boundary discount because the engine reads `>= 0.05` against a "
                        "decimal literal as strictly greater. Both errors made its numbers faster than "
                        "the truth, so they are withdrawn rather than shown with a caveat, and the next "
-                       "the real run measures them with every engine's answer compared.", "0.05")
+                       "run measures them with every engine's answer compared.", "0.05")
         # THE SENTENCE IS NOT THE DECLARATION. A reader gets the prose above; the
         # coverage gate reads `declared_absences`, and under the 2026-10
         # instrument it fails a registered arm that has neither a row nor an
@@ -6240,8 +6249,9 @@ def _restructure_tables(tables, rows):
         for _e in _withdrawn:
             _declare_absence("docs_olap", str(_e.get("backend")), None, "withdrawn", _withdrawal)
         tables.append({"id": "docs_olap", "title": "Document OLAP",
-                       "dataset": "TPC-H Q1 and Q6 at SF1",
-                       "conditions": list(src["conditions"]) + [_withdrawal],
+                       "dataset": ("TPC-H Q1, Q6, top parts, ship mode, and by month (SF1, SF10)" if _oct else
+                                   "TPC-H Q1 and Q6 at SF1"),
+                       "conditions": list(src["conditions"]) + ([_withdrawal] if _withdrawn else []),
                        "columns": (OCT_OLAP_COLS if _oct else
                                    ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"]),
                        "entries": _olap_entries, **base})
