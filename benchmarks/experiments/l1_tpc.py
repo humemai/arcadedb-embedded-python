@@ -1104,6 +1104,9 @@ class ArcadeTPC:
 
 class ArcadeServerTPC(ArcadeTPC):
     name = "arcadedb_server"
+    # Rows per `INSERT ... CONTENT :rows` request (#8337: 2,000 reasonable,
+    # 5,000-10,000 may amortize more for small rows); swept on the bench host.
+    load_batch = int(os.environ.get("BENCH_SERVED_LOAD_BATCH") or 2000)
     # The served twin's txWalFlush is a JAVA_OPTS entry on its container, which
     # runner.py sets for the strict class and records as durability_server_flags.
     # There is no HTTP read-back for it, and the string says so rather than
@@ -1128,10 +1131,11 @@ class ArcadeServerTPC(ArcadeTPC):
         except Exception as e:
             self.version = f"server:unknown ({e.__class__.__name__})"
 
-    def _cmd(self, command, timeout=1800, language="sql"):
-        r = self.rq.post(f"{self.base}/command/bench",
-                         json={"language": language, "command": command},
-                         timeout=timeout)
+    def _cmd(self, command, timeout=1800, language="sql", params=None):
+        body = {"language": language, "command": command}
+        if params is not None:
+            body["params"] = params
+        r = self.rq.post(f"{self.base}/command/bench", json=body, timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])
 
@@ -1157,28 +1161,38 @@ class ArcadeServerTPC(ArcadeTPC):
                     "CREATE PROPERTY Crud.ckey LONG",
                     "CREATE INDEX ON Crud (ckey) UNIQUE"):
             self._cmd(ddl)
-        buf = []
+        # THE SERVED BULK PATH THE MAINTAINERS RECOMMEND (ArcadeData/arcadedb#8337,
+        # DECISIONS #116): one `INSERT ... CONTENT :rows` per batch with the rows
+        # bound as a list, parsed once, instead of a sqlscript of BATCH
+        # `INSERT ... SET` statements with the values written into the text,
+        # each tokenized and parsed (1.5x slower on the laptop). Every comparator
+        # already loads through its vendor's bulk path, so this is parity. The
+        # batch size is swept 2k/5k/10k on the bench host at the re-pin and the
+        # best kept; the row records which one ran.
+        batch = self.load_batch
+        def _flush(type_name, rows):
+            self._cmd(f"INSERT INTO {type_name} CONTENT :rows", params={"rows": rows})
+        rows = []
         for t in li.records():
-            buf.append("INSERT INTO LineItem SET l_orderkey=%d, l_partkey=%d, "
-                       "l_quantity=%f, l_extendedprice=%f, l_discount=%f, "
-                       "l_returnflag='%s', l_linestatus='%s', l_shipdate='%s', l_shipmode='%s'"
-                       % (t.l_orderkey, t.l_partkey, t.l_quantity,
-                          t.l_extendedprice, t.l_discount, t.l_returnflag,
-                          t.l_linestatus, t.l_shipdate, t.l_shipmode))
-            if len(buf) >= 2_000:
-                self._cmd(";".join(buf), language="sqlscript")
-                buf = []
-        if buf:
-            self._cmd(";".join(buf), language="sqlscript")
-        buf = []
+            rows.append({"l_orderkey": int(t.l_orderkey), "l_partkey": int(t.l_partkey),
+                         "l_quantity": float(t.l_quantity), "l_extendedprice": float(t.l_extendedprice),
+                         "l_discount": float(t.l_discount), "l_returnflag": str(t.l_returnflag),
+                         "l_linestatus": str(t.l_linestatus), "l_shipdate": str(t.l_shipdate),
+                         "l_shipmode": str(t.l_shipmode)})
+            if len(rows) >= batch:
+                _flush("LineItem", rows)
+                rows = []
+        if rows:
+            _flush("LineItem", rows)
+        rows = []
         for t in part.itertuples(index=False):
-            buf.append("INSERT INTO Part SET p_partkey=%d, p_retailprice=%f, "
-                       "stock=100" % (t.p_partkey, t.p_retailprice))
-            if len(buf) >= 2_000:
-                self._cmd(";".join(buf), language="sqlscript")
-                buf = []
-        if buf:
-            self._cmd(";".join(buf), language="sqlscript")
+            rows.append({"p_partkey": int(t.p_partkey), "p_retailprice": float(t.p_retailprice),
+                         "stock": 100})
+            if len(rows) >= batch:
+                _flush("Part", rows)
+                rows = []
+        if rows:
+            _flush("Part", rows)
         with index_timer(self):
             self._cmd("CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
 
@@ -1415,6 +1429,8 @@ def main():
     # load under the tier's label (the l2 lane's shortfall rule).
     out["n_lineitem_streamed"] = li.n_streamed
     out["li_batches"] = li.n_batches
+    if getattr(b, "load_batch", None):
+        out["served_load_batch"] = b.load_batch
     if li.n_streamed != len(li):
         raise SystemExit(
             f"streamed {li.n_streamed:,} line items against {len(li):,} in "
