@@ -25,6 +25,7 @@ import json
 import os
 import random
 import statistics
+import sys
 import time
 import bench_common
 
@@ -516,9 +517,8 @@ class SurrealE2:
     URL = "surrealkv:///tmp/e2_surrealkv"
     INDEX_DDL = f"DEFINE INDEX pe ON product FIELDS embedding HNSW DIMENSION {DIM} DIST EUCLIDEAN"
     # The embedded core (2.3.10) maintains the index during the insert, so the
-    # index goes first and the load is timed with it. The served twin differs
-    # (F134, below).
-    INDEX_AFTER_LOAD = False
+    # load is timed with it. The served twin differs (F134, below).
+    SETTLE_HNSW = False
 
     def __init__(self):
         # SURREAL_SYNC_DATA before the datastore opens (DECISIONS #90).
@@ -540,9 +540,8 @@ class SurrealE2:
         # A fresh cell gets a fresh server; a reused one (laptop smoke) must
         # not fail on "index already exists".
         q("REMOVE TABLE IF EXISTS related; REMOVE TABLE IF EXISTS product")
-        if not self.INDEX_AFTER_LOAD:
-            with bench_common.index_timer(self):
-                q(self.INDEX_DDL)
+        with bench_common.index_timer(self):
+            q(self.INDEX_DDL)
         for s in range(0, len(vecs), BATCH):
             # id is the RECORD-ID PART, not the full thing. Passing
             # f"product:{i}" here stores product:<product:i>, and every later
@@ -564,17 +563,11 @@ class SurrealE2:
             self.db.insert_relation("related", [
                 {"in": RecordID("product", a), "out": RecordID("product", b)}
                 for a, b in edges[s:s + BATCH]])
-        if self.INDEX_AFTER_LOAD:
+        if self.SETTLE_HNSW:
             with bench_common.index_timer(self):
-                q(self.INDEX_DDL)
-            # REFUSED, not assumed: the synchronous build must cover every
-            # product, or the reads would time a partial index (F134).
-            info = q("INFO FOR INDEX pe ON product")
-            building = info.get("building", {}) if isinstance(info, dict) else {}
-            self.index_build_initial = building.get("initial")
-            if building.get("status") != "ready" or building.get("initial") != len(vecs):
-                raise RuntimeError(f"surrealdb server: HNSW index not built over the load ({building!r}, "
-                                   f"{len(vecs):,} products); the reads would time a partial index (F134)")
+                self.settle = surreal_common.await_hnsw_settled(
+                    self.db, "product", "embedding", DIM,
+                    log=lambda m: print(m, file=sys.stderr, flush=True))
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         q = self.db.query
@@ -653,12 +646,14 @@ class SurrealServedE2(SurrealE2):
     """SurrealDB 3.2.4 server on RocksDB, reached over WebSocket; the same
     SurrealQL as the embedded arm."""
     name = "surrealdb_e2_server"
-    # AFTER THE LOAD ON THE SERVER (BUGS F134, DECISIONS #117). The 3.2.4
-    # server builds an index defined on an empty table in the background: the
-    # build timer stopped long before the index existed and the reads were timed
-    # inside that build (e2_500k: retrieval 6.7 s p50 at recall 0.67). Defined
-    # after the load it is built synchronously inside the timed build.
-    INDEX_AFTER_LOAD = True
+    # THE BUILD WAITS FOR THE SERVER'S BACKGROUND INDEX (BUGS F134, DECISIONS
+    # #117). The 3.2.4 server fills an HNSW index defined before the load in
+    # the background; the build timer used to stop long before the index held
+    # the rows and the reads were timed inside that build (e2_500k: retrieval
+    # 6.7 s p50 at recall 0.67). Defining it after the load runs one RocksDB
+    # transaction, which failed with a transaction conflict here at 50k. So the
+    # build waits, inside the index timer, for surreal_common.await_hnsw_settled.
+    SETTLE_HNSW = True
 
     def __init__(self):
         # One shared client for every served arm (DECISIONS #91): it sets the
@@ -1406,8 +1401,8 @@ def main():
     # none would report 0.0, and on this lane none does.
     out["ingest_s"], out["index_s"], out["index_before_load"] = \
         bench_common.index_split(b, out["build_s"])
-    if getattr(b, "index_build_initial", None) is not None:
-        out["index_build_initial"] = b.index_build_initial   # F134: the rows the index covered
+    for _k, _v in (getattr(b, "settle", None) or {}).items():
+        out[_k] = _v   # F134: the wait for a background-built index, and its evidence
     # AFTER THE BUILD, not before it. ArangoDB's waitForSync lives on the
     # collection, so the adapter can only read it back once build() has created
     # one; stamping before the build took the map's relaxed constant and a

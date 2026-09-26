@@ -388,3 +388,86 @@ def stamp_reconnects(out, adapter):
         out["surreal_ws_options"] = "in-process: no connection to drop"
         return 0
     return None
+
+
+# THE SERVER BUILDS ITS HNSW INDEX IN THE BACKGROUND (BUGS F134, DECISIONS
+# #117). On the 3.2.4 server an HNSW index defined before a bulk load is filled
+# asynchronously: the insert returns long before the index holds the rows, and
+# INFO FOR INDEX says `ready` throughout (it also says `ready` four seconds
+# into a `DEFINE ... CONCURRENTLY` over 50k rows whose queries still take six
+# seconds). Until the index catches up, each KNN query also brute-forces the
+# rows it has not indexed yet, so its latency stays in seconds while that
+# backlog lasts and drops to milliseconds once it is gone (laptop, pinned
+# image, 50k x 64: 6.1, 7.8, 8.9 s, then 5.8 ms after 282 s). Defining the index AFTER the load avoids the
+# background build but runs it as one RocksDB transaction, which failed with
+# "Transaction conflict ... MemTable" in the lane at 50k and cannot be relied
+# on at 500k or 1M.
+#
+# So the served arms keep the engine's own order (index first, then the load)
+# and wait here, INSIDE the timed build, until the index has caught up: the
+# build then counts the index work and the first timed query meets a finished
+# index. The signal is the only one the server gives: a one-neighbour KNN probe
+# whose latency has stopped falling. Probes are spaced ten times their own
+# duration (at least SETTLE_MIN_GAP_S), so while a backlog drains the latency
+# keeps falling between probes, and the probes cost the build at most a tenth
+# of the wall time. Two conditions, because either alone can be fooled:
+#   FLAT: the last SETTLE_WINDOW probes sit within max(50%, 25 ms) of their
+#     minimum (an absolute floor, because a settled 10 ms query jitters by
+#     tens of percent);
+#   DRAINED: the latest probe is at most a twentieth of the first one, or the first
+#     one was already fast (under SETTLE_FAST_MS), meaning there was no
+#     backlog. A large backlog draining slowly can look flat for a window; it
+#     cannot also have fallen to a twentieth of where it started (a probe's
+#     brute-force share is proportional to the backlog, so a twentieth means
+#     at most 5% of the rows are still unindexed, and a window of four flat
+#     probes cannot fit inside the last 5% of a drain that falls by a sixth
+#     between probes).
+SETTLE_WINDOW = 4
+SETTLE_REL_BAND = 0.5
+SETTLE_ABS_BAND_MS = 25.0
+SETTLE_DRAINED = 0.05
+SETTLE_FAST_MS = 500.0
+SETTLE_MIN_GAP_S = 10.0
+SETTLE_GAP_FACTOR = 10.0
+# With no backlog (the first probe already fast) the window only confirms, and
+# ten-second gaps would add half a minute of our own waiting to the engine's
+# build time; the confirmations are then taken half a second apart.
+SETTLE_FAST_GAP_S = 0.5
+
+
+def await_hnsw_settled(db, table, field, dim, deadline_s=None, sleep=None, log=None):
+    """Block until a KNN probe on `table.field` answers at steady latency.
+
+    Returns the evidence for the row: seconds waited, probes taken, the first
+    and last probe latency. Raises if `deadline_s` passes first, so a cell
+    never times queries against an index that has not caught up.
+    """
+    import random as _random
+    import time as _time
+    sleep = sleep or _time.sleep
+    rnd = _random.Random(20260926)
+    vec = [rnd.gauss(0.0, 1.0) for _ in range(dim)]
+    norm = sum(x * x for x in vec) ** 0.5 or 1.0
+    vec = [x / norm for x in vec]
+    sql = f"SELECT id FROM {table} WHERE {field} <|1,40|> $q"
+    t0 = _time.perf_counter()
+    lat = []
+    while True:
+        s = _time.perf_counter()
+        db.query(sql, {"q": vec})
+        ms = (_time.perf_counter() - s) * 1000.0
+        lat.append(ms)
+        if log:
+            log(f"hnsw-settle probe={len(lat)} ms={ms:.1f} t={_time.perf_counter() - t0:.0f}s")
+        win = lat[-SETTLE_WINDOW:]
+        flat = (len(win) == SETTLE_WINDOW
+                and max(win) - min(win) <= max(SETTLE_REL_BAND * min(win), SETTLE_ABS_BAND_MS))
+        drained = ms <= SETTLE_DRAINED * lat[0] or lat[0] < SETTLE_FAST_MS
+        if flat and drained:
+            return {"settle_s": round(_time.perf_counter() - t0, 2), "settle_probes": len(lat),
+                    "settle_first_ms": round(lat[0], 2), "settle_last_ms": round(ms, 2)}
+        if deadline_s is not None and _time.perf_counter() - t0 > deadline_s:
+            raise RuntimeError(f"HNSW index on {table}.{field} did not settle in {deadline_s:.0f}s "
+                               f"(probe latencies ms: {[round(x) for x in lat[-6:]]})")
+        _floor = SETTLE_FAST_GAP_S if lat[0] < SETTLE_FAST_MS else SETTLE_MIN_GAP_S
+        sleep(max(_floor, SETTLE_GAP_FACTOR * ms / 1000.0))
