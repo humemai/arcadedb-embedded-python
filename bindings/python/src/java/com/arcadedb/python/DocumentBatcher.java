@@ -47,7 +47,10 @@ public final class DocumentBatcher {
       final MutableDocument doc = db.newDocument(typeName);
       fill(doc, rows.getJSONObject(i));
       doc.save();
-      if (commitEvery > 0 && (i + 1) % commitEvery == 0) {
+      // Batches commit only a transaction this call opened: inside the
+      // caller's transaction the caller's commit or rollback decides the whole
+      // load, as the Python fallback path and the documentation already had it.
+      if (!wasActive && commitEvery > 0 && (i + 1) % commitEvery == 0) {
         db.commit();
         db.begin();
       }

@@ -345,3 +345,38 @@ class TestVectorColumnsDataFrame:
         df = temp_db.query("sql", "SELECT v FROM EmbDf").to_dataframe()
         assert len(df) == 10
         assert len(df["v"].iloc[3]) == 2
+
+
+class TestInsertManyInsideACallersTransaction:
+    """insert_many inside an open transaction belongs to that transaction.
+
+    The documented contract is that `commit_every` is ignored when a
+    transaction is already open, so the caller's commit or rollback decides
+    the whole batch. The Java fast path (DocumentBatcher.insertManyJson)
+    committed and reopened the caller's transaction every `commit_every` rows
+    regardless, so a rollback left every completed chunk behind (found
+    2026-09-26 by a docs audit; the Python fallback path already guarded it).
+    """
+
+    def test_rollback_after_insert_many_leaves_nothing(self, temp_db):
+        temp_db.command("sql", "CREATE DOCUMENT TYPE TxBatch")
+        rows = [{"id": i} for i in range(25)]
+
+        class Boom(Exception):
+            pass
+
+        with pytest.raises(Boom):
+            with temp_db.transaction():
+                temp_db.insert_many("TxBatch", rows, commit_every=10)
+                raise Boom()
+
+        assert _count(temp_db, "TxBatch") == 0
+
+    def test_commit_after_insert_many_keeps_every_row(self, temp_db):
+        temp_db.command("sql", "CREATE DOCUMENT TYPE TxBatchOk")
+        rows = [{"id": i} for i in range(25)]
+
+        with temp_db.transaction():
+            assert temp_db.insert_many("TxBatchOk", rows, commit_every=10) == 25
+
+        assert _count(temp_db, "TxBatchOk") == 25
