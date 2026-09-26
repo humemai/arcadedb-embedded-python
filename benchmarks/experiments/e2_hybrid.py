@@ -1088,6 +1088,8 @@ class PgAgeE2:
         # ms. Binding exists to take a harness-made parse off the timed path,
         # not to put an engine on a path 6-13x slower, so the list stays in the
         # text. A single pid binds and is faster for it (0.77 -> 0.15 ms).
+        # Reported upstream as apache/age#2582 (2026-09-27): bind the list
+        # once a pinned AGE release plans a list parameter as `= ANY`.
         lst = ",".join(str(int(p)) for p in pids)
         c.execute(f"SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) "
                   f"WHERE a.pid IN [{lst}] RETURN b.pid $$) AS (pid agtype)")
