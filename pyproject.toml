@@ -23,6 +23,14 @@ dependencies = [
     "numpy>=1.20.0",
     "requests>=2.0.0",   # HTTP API / docs-example tests
     "py7zr>=0.20.0",     # Stack Exchange data downloads in examples
+    # The rest of the package's `test` extra (bindings/python/pyproject.toml).
+    # Without them their tests call importorskip and a local run reports green
+    # while the wire-protocol and Arrow tests never execute.
+    "psycopg[binary]>=3.1",
+    "adbc-driver-postgresql>=1.12",
+    "redis>=5.0",
+    "neo4j>=5.0",
+    "pyarrow>=23.0.1",
 ]
 
 [dependency-groups]
@@ -83,5 +91,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
 markers = [
+    "server: tests that require server/studio support",
+    "server_wire: speaks a bundled wire protocol with its real client",
     "integration: tests that require external components",
 ]
