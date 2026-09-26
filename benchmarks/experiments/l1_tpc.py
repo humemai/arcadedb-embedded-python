@@ -769,28 +769,46 @@ class SurrealTPC:
         q = {"q1": self.Q1, "q6": self.Q6}.get(which) or self.OLAP[which]
         return self._rows(self.db.query(q))
 
+    # BOUND VALUES, SurrealDB's own way (DECISIONS #116 item 2: every engine,
+    # not ArcadeDB alone): `$vars` passed to query(), record ids as RecordID
+    # objects, so nothing is written into the SurrealQL text. Verified on the
+    # pinned SDK (surrealdb==2.0.0, core 2.3.10, embedded surrealkv): the same
+    # orders, stock, and reads as the pasted form. Timing is a wash on the
+    # laptop: three interleaved rounds of new-order put pasted ids, RecordID
+    # vars, and type::thing all within 0.72 to 0.94 ms p50, below the laptop's
+    # reliable range; mini measures it at the re-pin. The served arm inherits these.
     def new_order(self, i, pkey):
-        self.db.query(f"BEGIN; SELECT p_retailprice, stock FROM ONLY part:{pkey}; "
-                      f"CREATE orders_new:{i} SET okey = {i}, pkey = {pkey}, qty = 1, paid = 0; "
-                      f"UPDATE part:{pkey} SET stock -= 1; COMMIT;")
+        from surrealdb import RecordID
+        self.db.query("BEGIN; SELECT p_retailprice, stock FROM ONLY $part; "
+                      "CREATE $order SET okey = $o, pkey = $pk, qty = 1, paid = 0; "
+                      "UPDATE $part SET stock -= 1; COMMIT;",
+                      {"part": RecordID("part", int(pkey)), "order": RecordID("orders_new", int(i)),
+                       "o": int(i), "pk": int(pkey)})
 
     def payment(self, okey):
-        self.db.query(f"BEGIN; SELECT pkey, qty FROM ONLY orders_new:{okey}; "
-                      f"UPDATE orders_new:{okey} SET paid = 1; "
-                      f"CREATE payments SET okey = {okey}, amount = 1.0; COMMIT;")
+        from surrealdb import RecordID
+        self.db.query("BEGIN; SELECT pkey, qty FROM ONLY $order; "
+                      "UPDATE $order SET paid = 1; "
+                      "CREATE payments SET okey = $o, amount = 1.0; COMMIT;",
+                      {"order": RecordID("orders_new", int(okey)), "o": int(okey)})
 
     # The four single-record operations (#82a), by record id.
     def crud_insert(self, i, pkey):
-        self.db.query(f"CREATE crud:{i} SET ckey = {i}, pkey = {pkey}, qty = 1, price = 9.99")
+        from surrealdb import RecordID
+        self.db.query("CREATE $r SET ckey = $c, pkey = $pk, qty = 1, price = 9.99",
+                      {"r": RecordID("crud", int(i)), "c": int(i), "pk": int(pkey)})
 
     def crud_read(self, i):
-        return self._rows(self.db.query(f"SELECT ckey, pkey, qty FROM crud:{i}"))
+        from surrealdb import RecordID
+        return self._rows(self.db.query("SELECT ckey, pkey, qty FROM $r", {"r": RecordID("crud", int(i))}))
 
     def crud_update(self, i):
-        self.db.query(f"UPDATE crud:{i} SET qty = 2")
+        from surrealdb import RecordID
+        self.db.query("UPDATE $r SET qty = 2", {"r": RecordID("crud", int(i))})
 
     def crud_delete(self, i):
-        self.db.query(f"DELETE crud:{i}")
+        from surrealdb import RecordID
+        self.db.query("DELETE $r", {"r": RecordID("crud", int(i))})
 
     def crud_scan(self):
         return self._rows(self.db.query("SELECT ckey, pkey, qty FROM crud"))
@@ -1199,34 +1217,40 @@ class ArcadeServerTPC(ArcadeTPC):
     def olap(self, which):
         return self._cmd(ARCADE_OLAP[which])
 
+    # BOUND VALUES (DECISIONS #116 item 2), as the embedded arm has always
+    # passed them. Each transaction stays ONE sqlscript request, so it stays
+    # atomic and one round trip; the named parameters reach every statement in
+    # the script (verified on the laptop: one :pk used by all three statements,
+    # stock and orders updated as with literals).
     def new_order(self, i, pkey):
-        self._cmd(f"SELECT p_retailprice, stock FROM Part WHERE p_partkey={pkey};"
-                  f"INSERT INTO OrderNew SET okey={i}, pkey={pkey}, qty=1, paid=0;"
-                  f"UPDATE Part SET stock = stock - 1 WHERE p_partkey={pkey}",
-                  language="sqlscript")
+        self._cmd("SELECT p_retailprice, stock FROM Part WHERE p_partkey = :pk;"
+                  "INSERT INTO OrderNew SET okey = :o, pkey = :pk, qty = 1, paid = 0;"
+                  "UPDATE Part SET stock = stock - 1 WHERE p_partkey = :pk",
+                  language="sqlscript", params={"pk": int(pkey), "o": int(i)})
 
     def payment(self, okey):
         # The UPDATE goes last: the server appends "limit 20001" to a script
         # that opens with SELECT, and an INSERT ... SET as the final statement
         # cannot parse it (laptop, 2026-09-14); new-order ends with UPDATE too.
-        self._cmd(f"SELECT pkey, qty FROM OrderNew WHERE okey={okey};"
-                  f"INSERT INTO Payment SET okey={okey}, amount=1.0;"
-                  f"UPDATE OrderNew SET paid = 1 WHERE okey={okey}",
-                  language="sqlscript")
+        self._cmd("SELECT pkey, qty FROM OrderNew WHERE okey = :o;"
+                  "INSERT INTO Payment SET okey = :o, amount = 1.0;"
+                  "UPDATE OrderNew SET paid = 1 WHERE okey = :o",
+                  language="sqlscript", params={"o": int(okey)})
 
     # The four single-record operations (#82a), one HTTP command each, which
     # on this server is one transaction each.
     def crud_insert(self, i, pkey):
-        self._cmd(f"INSERT INTO Crud SET ckey={i}, pkey={pkey}, qty=1, price=9.99")
+        self._cmd("INSERT INTO Crud SET ckey = :c, pkey = :pk, qty = 1, price = 9.99",
+                  params={"c": int(i), "pk": int(pkey)})
 
     def crud_read(self, i):
-        return self._cmd(f"SELECT ckey, pkey, qty FROM Crud WHERE ckey={i}")
+        return self._cmd("SELECT ckey, pkey, qty FROM Crud WHERE ckey = :c", params={"c": int(i)})
 
     def crud_update(self, i):
-        self._cmd(f"UPDATE Crud SET qty = 2 WHERE ckey={i}")
+        self._cmd("UPDATE Crud SET qty = 2 WHERE ckey = :c", params={"c": int(i)})
 
     def crud_delete(self, i):
-        self._cmd(f"DELETE FROM Crud WHERE ckey={i}")
+        self._cmd("DELETE FROM Crud WHERE ckey = :c", params={"c": int(i)})
 
     def crud_scan(self):
         return self._cmd("SELECT ckey, pkey, qty FROM Crud LIMIT 1000000")
