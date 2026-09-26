@@ -590,6 +590,7 @@ class SurrealE2:
 
     FILTER_MODE = ("pre-filter: the candidate set is restricted first and ranked by "
                    "vector::distance::euclidean")
+    FILTER_ACCESS = "record ids"   # F132: the candidates are read by record id, not scanned for
 
     def _vec_topk(self, qvec, k, ef=100):
         vec = json.dumps([float(x) for x in qvec])
@@ -1430,6 +1431,11 @@ def main():
         srng = random.Random(SEED + 7)
         starts = [srng.randrange(PRODUCTS) for _ in range(READ_OPS)]
         out["filtered_mode"] = getattr(b, "FILTER_MODE", "not declared")
+        # How the filtered search reaches the candidates, where an arm had to be
+        # told (BUGS F132): the page's withholding of SurrealDB's pre-fix cells
+        # recognises the re-measured rows by this field.
+        if getattr(b, "FILTER_ACCESS", None):
+            out["filtered_access"] = b.FILTER_ACCESS
         out["filtered_overfetch"] = FILTER_OVERFETCH
         out["filtered_hops"] = FILTER_HOPS
         out["read_ops"] = READ_OPS

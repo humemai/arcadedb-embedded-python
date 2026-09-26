@@ -1683,34 +1683,61 @@ EQUIVALENCE_TABLE_OF = {
 WITHHELD_CELLS = {}
 
 # HARNESS DEFECTS THAT TIMED THE WRONG THING (DECISIONS #117). Not a wrong
-# answer -- the answers agree -- but a latency that measured our query shape or
-# an unsettled index rather than the engine, fixed and re-run in qOM. A key may
-# carry a fourth member, the scale, when only one tier is affected.
+# answer -- the answers agree -- but a latency that measured our query shape,
+# an unsettled index, or a stand-in engine rather than the engine named, fixed
+# in the lanes and re-run in qOM.
+#
+# KEYED ON THE ROWS, NOT ON A DATE. Each entry says how to recognise a row
+# measured BEFORE its fix, and the cell (or, with column None, the whole row)
+# comes down only while the rows behind it are such rows. The re-run's rows
+# supersede them under the canonical-row rule and are not recognised, so the
+# numbers return at the landing that carries them with nothing to remember
+# and no list to edit. (table id, backend key, column or None) -> (why, stale).
 _F132 = ("SurrealDB's graph-filtered search is withheld: our query scanned every product instead of "
          "reading the candidates by record id, the access path every other engine on this table was "
-         "given (BUGS F132). It is being re-measured with the fix.")
+         "given. It is being re-measured with the fix.")
 _F134 = ("SurrealDB (server) retrieval at the 500k tier is withheld: the server was still building "
-         "its vector index in the background when these queries ran, because the index was defined "
-         "before the load (BUGS F134). It is being re-measured with the index defined after the load.")
-WITHHELD_CELLS.update({
-    ("e2", "SurrealDB (embedded)", "graph-filtered search p50 ms"): _F132,
-    ("e2", "SurrealDB (server)", "graph-filtered search p50 ms"): _F132,
-    ("e2", "SurrealDB (server)", "retrieval p50 ms", "e2_500k"): _F134,
-    ("e2", "SurrealDB (server)", "retrieval recall@10", "e2_500k"): _F134,
-})
-
-# ROWS WITHDRAWN WHOLE (DECISIONS #117): (table id, backend label) -> why. The
-# row answered the table's questions with something other than the engine it
-# is labelled with, so no cell of it stands. Other tables keep the arm (the
-# composed stack's atomicity trials do not depend on this).
-WITHDRAWN_ROWS = {
-    ("e2", "Qdrant + Neo4j (no shared transaction)"): (
-        "Qdrant + Neo4j has no row on this table while it is re-measured. Its vector half ran in the "
-        "Qdrant client's in-memory local mode, a pure-Python reimplementation rather than the Qdrant "
-        "server, so every time, recall, and disk value it produced described that reimplementation "
-        "(BUGS F133). It is being re-run against the Qdrant server the vector table uses. Its "
-        "all-or-nothing result on the table above does not depend on this."),
+         "its vector index in the background when these queries ran. It is being re-measured with the "
+         "build waiting for the index to catch up.")
+_F133 = ("Qdrant + Neo4j has no row on this table while it is re-measured. Its vector half ran in the "
+         "Qdrant client's in-memory local mode, a pure-Python reimplementation rather than the Qdrant "
+         "server, so every time, recall, and disk value it produced described that reimplementation. "
+         "It is being re-run against the Qdrant server the vector table uses. Its all-or-nothing result "
+         "on the table above does not depend on this.")
+_BEFORE_F132 = lambda r: str(r.get("filtered_access") or "") != "record ids"      # noqa: E731
+_BEFORE_F134 = lambda r: not str(r.get("settle_s") or "").strip()                  # noqa: E731
+_BEFORE_F133 = lambda r: "qdrant-local" in str(r.get("engine_version") or "")     # noqa: E731
+STALE_UNTIL_RERUN = {
+    ("e2", "surrealdb_e2", "graph-filtered search p50 ms", None): (_F132, _BEFORE_F132),
+    ("e2", "surrealdb_e2_server", "graph-filtered search p50 ms", None): (_F132, _BEFORE_F132),
+    ("e2", "surrealdb_e2_server", "retrieval p50 ms", "e2_500k"): (_F134, _BEFORE_F134),
+    ("e2", "surrealdb_e2_server", "retrieval recall@10", "e2_500k"): (_F134, _BEFORE_F134),
+    ("e2", "composed_qdrant_neo4j", None, None): (_F133, _BEFORE_F133),
 }
+
+
+def _rows_behind(table_id, backend_key, scale=None):
+    """The frozen rows a table entry is built from: its lane and workload, the
+    relaxed class where the cell has one (the main tables drop a strict row
+    beside a relaxed one)."""
+    lane_wl = _TABLE_LANE.get(table_id)
+    if not lane_wl:
+        return []
+    lane, wl = lane_wl
+    rs = [r for r in (_FROZEN_ROWS or []) if r.get("lane") == lane and r.get("workload") == wl
+          and r.get("backend") == backend_key and (scale is None or str(r.get("scale")) == str(scale))]
+    relaxed = [r for r in rs if str(r.get("durability_class")) == "relaxed"]
+    return relaxed or rs
+
+
+def _stale(table_id, backend_key, scale, pred):
+    return any(pred(r) for r in _rows_behind(table_id, backend_key, scale))
+
+
+def _withdrawn_now(table_id):
+    """Backend keys whose whole row on `table_id` is down right now."""
+    return {bk for (tid, bk, col, _sc), (_why, pred) in STALE_UNTIL_RERUN.items()
+            if tid == table_id and col is None and _stale(tid, bk, None, pred)}
 
 
 # EVERY ABSENCE ON A TABLE, AS DATA RATHER THAN AS PROSE.
@@ -1889,27 +1916,34 @@ def _declare_absence(table_id, backend, column, kind, why):
 def _withhold_cells(tables):
     """Take out the cells whose answer was wrong, and say so on the table."""
     notes = collections.defaultdict(list)
-    for key, why in WITHHELD_CELLS.items():
-        tid, backend, column = key[:3]
-        scale = key[3] if len(key) > 3 else None
+    for (tid, backend, column), why in WITHHELD_CELLS.items():
         for t in tables:
             if t.get("id") != tid:
                 continue
             for e in t.get("entries", []):
-                if (str(e.get("backend")) == backend and (scale is None or e.get("scale") == scale)
-                        and column in (e.get("metrics") or {})):
+                if str(e.get("backend")) == backend and column in (e.get("metrics") or {}):
                     e["metrics"].pop(column)
-                    notes[tid].append(_gen(why))
+                    notes[tid].append(why)
                     _declare_absence(tid, backend, column, "withheld", why)
-    for (tid, backend), why in WITHDRAWN_ROWS.items():
+    for (tid, bkey, column, only_scale), (why, pred) in STALE_UNTIL_RERUN.items():
         for t in tables:
             if t.get("id") != tid:
                 continue
-            _before = len(t.get("entries", []))
-            t["entries"] = [e for e in t.get("entries", []) if str(e.get("backend")) != backend]
-            if len(t["entries"]) < _before:
-                notes[tid].append(_gen(why))
-                _declare_absence(tid, backend, None, "withdrawn", why)
+            keep = []
+            for e in t.get("entries", []):
+                hit = (str(e.get("backend_key")) == bkey
+                       and (only_scale is None or str(e.get("scale")) == only_scale)
+                       and _stale(tid, bkey, e.get("scale"), pred))
+                if hit and column is None:
+                    notes[tid].append(_gen(why))
+                    _declare_absence(tid, str(e.get("backend")), None, "withdrawn", why)
+                    continue
+                if hit and column in (e.get("metrics") or {}):
+                    e["metrics"].pop(column)
+                    notes[tid].append(_gen(why))
+                    _declare_absence(tid, str(e.get("backend")), column, "withheld", why)
+                keep.append(e)
+            t["entries"] = keep
     for t in tables:
         for why in dict.fromkeys(notes.get(t.get("id"), [])):
             t.setdefault("conditions", [])
@@ -5269,7 +5303,7 @@ def _index_note(table_id):
         return []
     if not decided:
         return []
-    _gone = {b for (t, b) in WITHDRAWN_ROWS if t == table_id}
+    _gone = {display_name(bk) for bk in _withdrawn_now(table_id)}
     have = sorted({display_name(be) for be, d in decided.items()
                    if not d.startswith("NONE")} - _gone)
     none = sorted({display_name(be) for be, d in decided.items()
