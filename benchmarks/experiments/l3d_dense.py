@@ -717,12 +717,18 @@ class ArcadeServer(Base):
         self.index_s = round(time.perf_counter() - _t1, 2)
 
     def search(self, qvec, k):
-        w = ", ".join("%.9g" % x for x in qvec)  # see build(): float32 round-trip
+        # BOUND, AS THE EMBEDDED ARM ALREADY IS (DECISIONS #116 item 2): the
+        # query vector travels as a JSON array parameter instead of 128 numbers
+        # written into the SQL text for the server to parse on every query.
+        # Laptop, 20k SIFT, 300 queries: identical top-10 on all 300, p50 5.40
+        # -> 4.37 ms (repros/vector-query/served_bound_vector_probe.py).
+        # tolist() of a float32 array is the exact float32 values.
         r = self.rq.post(f"{self.base}/query/bench", json={
             "language": "sql",
-            "command": f"SELECT vid FROM (SELECT expand(vectorNeighbors("
-                       f"'Article[embedding]', [{w}], {k}, {EF_SEARCH}))) "
-                       f"ORDER BY distance"}, timeout=600)
+            "command": "SELECT vid FROM (SELECT expand(vectorNeighbors("
+                       ":idx, :q, :k, :ef))) ORDER BY distance",
+            "params": {"idx": "Article[embedding]", "q": np.asarray(qvec, dtype=np.float32).tolist(),
+                       "k": int(k), "ef": EF_SEARCH}}, timeout=600)
         r.raise_for_status()
         return [int(x["vid"]) for x in r.json().get("result", [])]
 
