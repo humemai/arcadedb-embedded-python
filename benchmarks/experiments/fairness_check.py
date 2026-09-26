@@ -862,10 +862,16 @@ INDEX_DECISIONS = {
         "pg_age_e2":              "product(pid) PRIMARY KEY",
         "neo4j_e2":               "index on :Product(pid)",
         "mongodb_e2":             "pid as the vector index's filter path",
-        "surrealdb_e2":           "record id carries pid",
-        "surrealdb_e2_server":    "record id carries pid",
+        # Every read now ADDRESSES the record id, including the candidate
+        # ranking, which scanned `WHERE pid INSIDE [...]` until DECISIONS #117
+        # (BUGS F132: 3,638 -> 15.7 ms on the laptop at 50k).
+        "surrealdb_e2":           "record id carries pid (every read addresses it; F132)",
+        "surrealdb_e2_server":    "record id carries pid (every read addresses it; F132)",
         "arangodb_e2":            "persistent(pid): 22.52 -> 3.21 ms, 7.0x (added 2026-09-22)",
-        "composed_qdrant_neo4j":  "Neo4j's index on :Product(pid); Qdrant keys by point id",
+        # The Qdrant half is the server since DECISIONS #117 (BUGS F133); the
+        # candidate filter reads a payload index on pid: 24.4 -> 3.15 ms, 7.7x
+        # (laptop, 50k), and in local mode no index of any kind existed.
+        "composed_qdrant_neo4j":  "Neo4j's index on :Product(pid); Qdrant payload index on pid (F133)",
     },
     "l4": {
         "arcadedb_ts_doc":            "(host, ts)",

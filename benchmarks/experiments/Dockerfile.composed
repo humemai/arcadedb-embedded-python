@@ -1,0 +1,32 @@
+# The composed cross-model stack's server: Neo4j 2026.08.1-community + Qdrant
+# v1.19.1 in one container (BUGS F133, DECISIONS #117).
+#
+# WHY. The composed stack's vector half was QdrantClient(location=":memory:"),
+# the qdrant-client package's pure-Python local mode, which the comparator
+# review had already rejected ("Qdrant local mode (a pure-Python
+# reimplementation)", DECISIONS #68 era) and which the dense lane never used.
+# Its graph-filtered search measured a Python loop over every point (543 ms at
+# 50k, 5,342 ms at 500k); the real server answers the same query in 3 ms with a
+# payload index on pid (laptop, pinned image, 50k).
+#
+# WHY ONE CONTAINER. The runner starts one server container per arm and caps,
+# pins and measures that one cgroup; a second container would sit outside the
+# cap and outside the memory and disk readings. MongoDB Search solved the same
+# problem the same way (Dockerfile.mongosearch).
+#
+# Both halves are pinned by digest: Neo4j is the digest every Neo4j arm runs
+# (runner.BACKENDS), Qdrant the one the dense lane runs. The Qdrant binary and
+# the libunwind it links are copied from the pinned Qdrant image (both images
+# are Debian 13), so nothing is fetched from a package mirror.
+#
+# Built as dbbench:composed by build_images.sh.
+FROM qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738 AS qdrant
+FROM neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960
+COPY --from=qdrant /qdrant /qdrant
+COPY --from=qdrant /lib/x86_64-linux-gnu/libunwind-ptrace.so.0 /lib/x86_64-linux-gnu/libunwind-x86_64.so.8 /lib/x86_64-linux-gnu/libunwind.so.8 /lib/x86_64-linux-gnu/
+COPY docker-conf/composed-entrypoint.sh /usr/local/bin/composed-entrypoint.sh
+RUN chmod 755 /usr/local/bin/composed-entrypoint.sh && mkdir -p /qdrant/storage /qdrant/snapshots \
+ && /qdrant/qdrant --version
+EXPOSE 7687 6333
+ENTRYPOINT ["/usr/local/bin/composed-entrypoint.sh"]
+CMD ["neo4j"]

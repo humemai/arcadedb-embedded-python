@@ -1003,7 +1003,13 @@ BACKENDS = {
     "composed_qdrant_neo4j": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        # NEO4J + QDRANT IN ONE CONTAINER since DECISIONS #117 (BUGS F133): the
+        # Neo4j digest every Neo4j arm runs (2026.08.1-community) with the
+        # Qdrant server binary from the dense lane's pinned v1.19.1 image,
+        # built by build_images.sh from Dockerfile.composed, so the one server
+        # cgroup caps, pins and measures both halves. The vector half was the
+        # client's in-memory local mode until then.
+        "server_image": "dbbench:composed",
         "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
                        "-e", "NEO4J_server_memory_heap_initial__size={heap}",
                        "-e", "NEO4J_server_memory_heap_max__size={heap}",

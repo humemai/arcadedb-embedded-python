@@ -86,8 +86,16 @@ case "$_pin" in
 esac
 echo "arcadedb pin: $_pin"
 
-targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age mongo-search)
+targets=("$@"); [ ${#targets[@]} -eq 0 ] && targets=(arcadedb duckdb client dense pg-age mongo-search composed)
 for be in "${targets[@]}"; do
+  if [ "$be" = "composed" ]; then
+    # Neo4j + Qdrant in one container (Dockerfile.composed), the composed
+    # cross-model stack's server (BUGS F133, DECISIONS #117). Both halves
+    # pinned by digest inside the Dockerfile.
+    echo "=== dbbench:composed (Dockerfile.composed)"
+    docker build -q -t dbbench:composed -f Dockerfile.composed . >/dev/null && echo "  ok"
+    continue
+  fi
   if [ "$be" = "mongo-search" ]; then
     # MongoDB Community 8.2.12 + mongot (MongoDB Search Community) 1.70.4 in
     # one container (Dockerfile.mongosearch), the dense and cross-model arms'

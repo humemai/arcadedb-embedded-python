@@ -514,6 +514,11 @@ class SurrealE2:
     runs the 3.2.4 server on RocksDB."""
     name = "surrealdb_e2"
     URL = "surrealkv:///tmp/e2_surrealkv"
+    INDEX_DDL = f"DEFINE INDEX pe ON product FIELDS embedding HNSW DIMENSION {DIM} DIST EUCLIDEAN"
+    # The embedded core (2.3.10) maintains the index during the insert, so the
+    # index goes first and the load is timed with it. The served twin differs
+    # (F134, below).
+    INDEX_AFTER_LOAD = False
 
     def __init__(self):
         # SURREAL_SYNC_DATA before the datastore opens (DECISIONS #90).
@@ -535,9 +540,9 @@ class SurrealE2:
         # A fresh cell gets a fresh server; a reused one (laptop smoke) must
         # not fail on "index already exists".
         q("REMOVE TABLE IF EXISTS related; REMOVE TABLE IF EXISTS product")
-        with bench_common.index_timer(self):
-            q(f"DEFINE INDEX pe ON product FIELDS embedding "
-              f"HNSW DIMENSION {DIM} DIST EUCLIDEAN")
+        if not self.INDEX_AFTER_LOAD:
+            with bench_common.index_timer(self):
+                q(self.INDEX_DDL)
         for s in range(0, len(vecs), BATCH):
             # id is the RECORD-ID PART, not the full thing. Passing
             # f"product:{i}" here stores product:<product:i>, and every later
@@ -559,6 +564,17 @@ class SurrealE2:
             self.db.insert_relation("related", [
                 {"in": RecordID("product", a), "out": RecordID("product", b)}
                 for a, b in edges[s:s + BATCH]])
+        if self.INDEX_AFTER_LOAD:
+            with bench_common.index_timer(self):
+                q(self.INDEX_DDL)
+            # REFUSED, not assumed: the synchronous build must cover every
+            # product, or the reads would time a partial index (F134).
+            info = q("INFO FOR INDEX pe ON product")
+            building = info.get("building", {}) if isinstance(info, dict) else {}
+            self.index_build_initial = building.get("initial")
+            if building.get("status") != "ready" or building.get("initial") != len(vecs):
+                raise RuntimeError(f"surrealdb server: HNSW index not built over the load ({building!r}, "
+                                   f"{len(vecs):,} products); the reads would time a partial index (F134)")
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         q = self.db.query
@@ -603,13 +619,20 @@ class SurrealE2:
         return _srows(self.db.query(f"SELECT pid, views FROM [{lst}]"))
 
     def _rank_candidates(self, qvec, cands, k):
+        # OVER THE CANDIDATES' RECORD IDS, as _docs and _hop address them
+        # (BUGS F132, DECISIONS #117). It was `FROM product WHERE pid INSIDE
+        # [...]`: product has no index on pid, so every filtered query scanned
+        # every product -- published at 442 ms (embedded, 50k) where every other
+        # engine reaches this step through an index on pid in 1-15 ms. Record
+        # ids ARE SurrealDB's primary-key path, which is what F98's rule names
+        # for it. Same answers; laptop 50k, 200 candidates: 3,638 -> 15.7 ms.
         if not cands:
             return []
         vec = json.dumps([float(x) for x in qvec])
-        lst = ",".join(str(int(p)) for p in cands)
+        lst = ",".join(f"product:{int(p)}" for p in cands)
         rows = _srows(self.db.query(
-            f"SELECT pid, vector::distance::euclidean(embedding, {vec}) AS d FROM product "
-            f"WHERE pid INSIDE [{lst}] ORDER BY d ASC LIMIT {k}"))
+            f"SELECT pid, vector::distance::euclidean(embedding, {vec}) AS d FROM [{lst}] "
+            f"ORDER BY d ASC LIMIT {k}"))
         return [int(r["pid"]) for r in rows]
 
     def total_views(self):
@@ -630,6 +653,12 @@ class SurrealServedE2(SurrealE2):
     """SurrealDB 3.2.4 server on RocksDB, reached over WebSocket; the same
     SurrealQL as the embedded arm."""
     name = "surrealdb_e2_server"
+    # AFTER THE LOAD ON THE SERVER (BUGS F134, DECISIONS #117). The 3.2.4
+    # server builds an index defined on an empty table in the background: the
+    # build timer stopped long before the index existed and the reads were timed
+    # inside that build (e2_500k: retrieval 6.7 s p50 at recall 0.67). Defined
+    # after the load it is built synchronously inside the timed build.
+    INDEX_AFTER_LOAD = True
 
     def __init__(self):
         # One shared client for every served arm (DECISIONS #91): it sets the
@@ -1122,7 +1151,19 @@ class Neo4jE2:
 
 
 class ComposedE2:
-    """qdrant-local (vector) + Neo4j server (graph+doc) with glue code.
+    """Qdrant server (vector) + Neo4j server (graph+doc) with glue code, both in
+    one container (Dockerfile.composed, dbbench:composed).
+
+    THE QDRANT SERVER SINCE DECISIONS #117 (BUGS F133). This arm ran
+    QdrantClient(location=":memory:"), the client package's pure-Python local
+    mode, which the comparator review had rejected and the dense lane never
+    used: its graph-filtered search was a Python loop over every point (543 ms
+    at 50k, 5,342 ms at 500k published). Now the vector half is the pinned
+    server the dense lane runs, with Qdrant's HNSW defaults (m=16,
+    ef_construct=100), hnsw_ef at the ef every arm on this table searches with,
+    and a payload index on pid for the candidate filter, which is Qdrant's
+    documented configuration for a filtered field (laptop, 50k: filtered 3.15
+    ms with it, 24.4 ms without, all exact).
 
     The counter lives in Neo4j; qdrant carries a views payload copy that a
     real composed app would keep for filtered search. One logical op writes
@@ -1134,31 +1175,32 @@ class ComposedE2:
     def __init__(self):
         from qdrant_client import QdrantClient
         from neo4j import GraphDatabase
-        self.qc = QdrantClient(location=":memory:")
         host = os.environ.get("BENCH_SERVER_HOST", "localhost")
+        self.qc = QdrantClient(host=host, port=6333, timeout=600)
         self.neo = GraphDatabase.driver(f"bolt://{host}:7687",
                                         auth=("neo4j", "dbbenchpass"))
         # BOTH HALVES, with versions (#156). A composed stack whose row names
         # two engines and versions neither cannot be reproduced, and this arm
         # is the comparator our atomicity claim rests on.
-        from importlib.metadata import version as _v
         try:
-            _qv = _v("qdrant-client")
-        except Exception:
-            _qv = "?"
+            _qv = str(self.qc.info().version)   # the SERVER's version, not the client's
+        except Exception as e:
+            _qv = f"unknown ({e.__class__.__name__})"
         try:
             with self.neo.session() as _s:
                 _nv = _s.run("CALL dbms.components() YIELD versions "
                              "RETURN versions[0] AS v").single()["v"]
         except Exception as e:
             _nv = f"unknown ({e.__class__.__name__})"
-        self.version = f"qdrant-local:{_qv}+neo4j:{_nv}"
+        self.version = f"qdrant:{_qv}+neo4j:{_nv}"
 
     def build(self, vecs, edges):
         from qdrant_client import models as qm
         self.qc.create_collection(
             "product",
-            vectors_config=qm.VectorParams(size=DIM, distance=qm.Distance.EUCLID))
+            vectors_config=qm.VectorParams(
+                size=DIM, distance=qm.Distance.EUCLID,
+                hnsw_config=qm.HnswConfigDiff(m=16, ef_construct=100)))
         for s in range(0, len(vecs), BATCH):
             n = min(BATCH, len(vecs) - s)
             self.qc.upsert("product", points=qm.Batch(
@@ -1177,6 +1219,19 @@ class ComposedE2:
                 s2.run("UNWIND $rows AS r MATCH (a:Product {pid: r.s}), "
                        "(b:Product {pid: r.d}) CREATE (a)-[:RELATED]->(b)",
                        rows=eb[s:s + BATCH]).consume()
+        # THE VECTOR HALF'S INDEXES, SETTLED INSIDE THE BUILD. The payload index
+        # the candidate filter reads, then green status, which Qdrant reaches
+        # when its optimizer has finished indexing (the dense lane's settle).
+        # Refused rather than timed on a collection still optimizing.
+        with bench_common.index_timer(self):
+            self.qc.create_payload_index("product", "pid",
+                                         field_schema=qm.PayloadSchemaType.INTEGER, wait=True)
+            for _ in range(3600):
+                if self.qc.get_collection("product").status == qm.CollectionStatus.GREEN:
+                    break
+                time.sleep(1)
+            else:
+                raise RuntimeError("composed: the Qdrant collection never reached green (still optimizing)")
 
     def hybrid_op(self, qvec, crash=False, mirror=False):
         """mirror=True copies the actual counter into qdrant, which costs an
@@ -1185,7 +1240,9 @@ class ComposedE2:
         composed stack in the LATENCY workload -- adding a round-trip to the
         rival's op would flatter us. So the timed path keeps the cheap batched
         write it always had, and only the atomicity path mirrors."""
+        from qdrant_client import models as qm
         hits = self.qc.query_points("product", query=qvec.tolist(),
+                                    search_params=qm.SearchParams(hnsw_ef=100),
                                     limit=K).points
         pids = [int(h.payload["pid"]) for h in hits]
         with self.neo.session() as s:
@@ -1224,7 +1281,9 @@ class ComposedE2:
                    "and sent to Qdrant as a filter")
 
     def _vec_topk(self, qvec, k, ef=100):
-        hits = self.qc.query_points("product", query=list(map(float, qvec)), limit=k).points
+        from qdrant_client import models as qm
+        hits = self.qc.query_points("product", query=list(map(float, qvec)), limit=k,
+                                    search_params=qm.SearchParams(hnsw_ef=max(ef, k))).points
         return [int(h.payload["pid"]) for h in hits]
 
     def _hop(self, pids):
@@ -1250,7 +1309,8 @@ class ComposedE2:
         flt = qm.Filter(must=[qm.FieldCondition(
             key="pid", match=qm.MatchAny(any=[int(p) for p in cands]))])
         hits = self.qc.query_points("product", query=list(map(float, qvec)),
-                                    query_filter=flt, limit=k).points
+                                    query_filter=flt, limit=k,
+                                    search_params=qm.SearchParams(hnsw_ef=100)).points
         return [int(h.payload["pid"]) for h in hits]
 
     def total_views(self):
@@ -1346,6 +1406,8 @@ def main():
     # none would report 0.0, and on this lane none does.
     out["ingest_s"], out["index_s"], out["index_before_load"] = \
         bench_common.index_split(b, out["build_s"])
+    if getattr(b, "index_build_initial", None) is not None:
+        out["index_build_initial"] = b.index_build_initial   # F134: the rows the index covered
     # AFTER THE BUILD, not before it. ArangoDB's waitForSync lives on the
     # collection, so the adapter can only read it back once build() has created
     # one; stamping before the build took the map's relaxed constant and a

@@ -1682,6 +1682,36 @@ EQUIVALENCE_TABLE_OF = {
 # without the declaration would fail the gate.
 WITHHELD_CELLS = {}
 
+# HARNESS DEFECTS THAT TIMED THE WRONG THING (DECISIONS #117). Not a wrong
+# answer -- the answers agree -- but a latency that measured our query shape or
+# an unsettled index rather than the engine, fixed and re-run in qOM. A key may
+# carry a fourth member, the scale, when only one tier is affected.
+_F132 = ("SurrealDB's graph-filtered search is withheld: our query scanned every product instead of "
+         "reading the candidates by record id, the access path every other engine on this table was "
+         "given (BUGS F132). It is being re-measured with the fix.")
+_F134 = ("SurrealDB (server) retrieval at the 500k tier is withheld: the server was still building "
+         "its vector index in the background when these queries ran, because the index was defined "
+         "before the load (BUGS F134). It is being re-measured with the index defined after the load.")
+WITHHELD_CELLS.update({
+    ("e2", "SurrealDB (embedded)", "graph-filtered search p50 ms"): _F132,
+    ("e2", "SurrealDB (server)", "graph-filtered search p50 ms"): _F132,
+    ("e2", "SurrealDB (server)", "retrieval p50 ms", "e2_500k"): _F134,
+    ("e2", "SurrealDB (server)", "retrieval recall@10", "e2_500k"): _F134,
+})
+
+# ROWS WITHDRAWN WHOLE (DECISIONS #117): (table id, backend label) -> why. The
+# row answered the table's questions with something other than the engine it
+# is labelled with, so no cell of it stands. Other tables keep the arm (the
+# composed stack's atomicity trials do not depend on this).
+WITHDRAWN_ROWS = {
+    ("e2", "Qdrant + Neo4j (no shared transaction)"): (
+        "Qdrant + Neo4j has no row on this table while it is re-measured. Its vector half ran in the "
+        "Qdrant client's in-memory local mode, a pure-Python reimplementation rather than the Qdrant "
+        "server, so every time, recall, and disk value it produced described that reimplementation "
+        "(BUGS F133). It is being re-run against the Qdrant server the vector table uses. Its "
+        "all-or-nothing result on the table above does not depend on this."),
+}
+
 
 # EVERY ABSENCE ON A TABLE, AS DATA RATHER THAN AS PROSE.
 #
@@ -1859,15 +1889,27 @@ def _declare_absence(table_id, backend, column, kind, why):
 def _withhold_cells(tables):
     """Take out the cells whose answer was wrong, and say so on the table."""
     notes = collections.defaultdict(list)
-    for (tid, backend, column), why in WITHHELD_CELLS.items():
+    for key, why in WITHHELD_CELLS.items():
+        tid, backend, column = key[:3]
+        scale = key[3] if len(key) > 3 else None
         for t in tables:
             if t.get("id") != tid:
                 continue
             for e in t.get("entries", []):
-                if str(e.get("backend")) == backend and column in (e.get("metrics") or {}):
+                if (str(e.get("backend")) == backend and (scale is None or e.get("scale") == scale)
+                        and column in (e.get("metrics") or {})):
                     e["metrics"].pop(column)
-                    notes[tid].append(why)
+                    notes[tid].append(_gen(why))
                     _declare_absence(tid, backend, column, "withheld", why)
+    for (tid, backend), why in WITHDRAWN_ROWS.items():
+        for t in tables:
+            if t.get("id") != tid:
+                continue
+            _before = len(t.get("entries", []))
+            t["entries"] = [e for e in t.get("entries", []) if str(e.get("backend")) != backend]
+            if len(t["entries"]) < _before:
+                notes[tid].append(_gen(why))
+                _declare_absence(tid, backend, None, "withdrawn", why)
     for t in tables:
         for why in dict.fromkeys(notes.get(t.get("id"), [])):
             t.setdefault("conditions", [])
@@ -4265,8 +4307,7 @@ OCT_PROSE = {
     "e2": {
         "atomic": ("Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.", []),
         "interesting": ("So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.", []),
-        "caveat": ("Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:), so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.", []),
-        "disk_split": ("Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.", []),
+        "disk_split": ("SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.", []),
         "ingest": ("ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; Neo4j and the composed stack load the graph with UNWIND over bolt, and the composed stack upserts its vectors into Qdrant; PostgreSQL + pgvector + AGE loads the products with COPY under a pgvector HNSW index and creates the graph with UNWIND inside Cypher; ArangoDB import_bulk; MongoDB insert_many.",
                    [(r"graph_batch \(([\d,]+) records per commit", lambda P, rows: _const("e2_hybrid", "BATCH"), "const")]),
     },
@@ -4320,7 +4361,7 @@ OCT_TABLE_PROSE = {
     "l2": ["projection"],
     "l2olap": ["gav"],
     "e2atom": ["trial"],
-    "e2": ["atomic", "interesting", "caveat", "disk_split"],
+    "e2": ["atomic", "interesting", "disk_split"],
 }
 
 
@@ -5228,10 +5269,11 @@ def _index_note(table_id):
         return []
     if not decided:
         return []
+    _gone = {b for (t, b) in WITHDRAWN_ROWS if t == table_id}
     have = sorted({display_name(be) for be, d in decided.items()
-                   if not d.startswith("NONE")})
+                   if not d.startswith("NONE")} - _gone)
     none = sorted({display_name(be) for be, d in decided.items()
-                   if d.startswith("NONE")})
+                   if d.startswith("NONE")} - _gone)
     if not have and not none:
         return []
     parts = []
@@ -6400,6 +6442,15 @@ def main() -> int:
             _stale_pin = bool(image and _row_digest and "@" in image and image.split("@")[1] != _row_digest)
             if _stale_pin:
                 image = image.split("@")[0] + "@" + _row_digest
+            # THE ARM MOVED IMAGE, NOT JUST DIGEST (DECISIONS #117: the composed
+            # stack became dbbench:composed). The stale-pin repair above only
+            # swaps a digest inside the same repository, so an arm whose rows
+            # ran neo4j@sha256:... would print the new local image beside
+            # numbers that image never produced. Its rows say what they ran.
+            _row_ref = rs[0].get("server_image_ref")
+            if (_row_ref and image and not str(backend).startswith("arcadedb")
+                    and str(_row_ref).split("@")[0].split(":")[0] != str(image).split("@")[0].split(":")[0]):
+                image = str(_row_ref)
             label = display_name(backend)
             if lane == "l3d":
                 prec = DENSE_PRECISION.get(backend)
