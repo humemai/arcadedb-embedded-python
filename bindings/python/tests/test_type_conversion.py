@@ -367,6 +367,29 @@ def test_python_to_java_conversion(temp_db_path):
         assert unique_items is not None
 
 
+def test_bytes_keep_every_byte(temp_db_path):
+    """Python bytes are stored as byte[], through set() and a bound parameter.
+
+    They used to reach Java as a String: b"Hello" came back as "Hello" and
+    non-UTF-8 bytes as "", with no error. A byte[] reads back as signed ints.
+    """
+    payload = b"\xff\x00\xfe\x80Hello"
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE Blob")
+        with db.transaction():
+            doc = db.new_document("Blob")
+            doc.set("k", "set").set("data", payload).save()
+            db.command(
+                "sql", "INSERT INTO Blob SET k = 'param', data = ?", bytearray(payload)
+            )
+
+        for key in ("set", "param"):
+            got = db.query("sql", "SELECT data FROM Blob WHERE k = ?", key).first()
+            data = got.get("data")
+            assert isinstance(data, list), (key, data)
+            assert bytes(b & 0xFF for b in data) == payload, key
+
+
 def test_array_conversion(temp_db_path):
     """Test Java list to Python list conversion."""
     with arcadedb.create_database(temp_db_path) as db:

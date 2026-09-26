@@ -87,7 +87,7 @@ class Database:
         for arg in args:
             if _np is not None and isinstance(arg, _np.ndarray):
                 converted_args.append(to_java_float_array(arg))
-            elif isinstance(arg, (Mapping, list, tuple, set)):
+            elif isinstance(arg, (Mapping, list, tuple, set, bytes, bytearray)):
                 # A collection AMONG multiple args is a single collection-typed
                 # parameter (e.g. a query vector). Plain Python collections
                 # don't participate in JPype's varargs overload resolution, so

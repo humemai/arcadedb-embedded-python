@@ -495,5 +495,13 @@ def convert_python_to_java(value: Any) -> Any:
         dt = datetime.combine(value, time.min)
         return convert_python_to_java(dt)
 
+    if isinstance(value, (bytes, bytearray)):
+        # Left to JPype, bytes reach an Object parameter as a Java String:
+        # b"Hello" was stored as "Hello" and non-UTF-8 bytes as "", silently.
+        # A byte[] keeps every byte; it reads back as a list of signed ints.
+        if java_python_types is None:
+            return value
+        return jpype.JArray(jpype.JByte)(bytes(value))
+
     # Return as-is for other types (JPype will handle them)
     return value

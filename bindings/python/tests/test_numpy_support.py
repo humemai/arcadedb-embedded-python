@@ -47,9 +47,17 @@ def test_numpy_array_conversion_in_query(temp_db):
     db.command("sql", "CREATE VERTEX TYPE VectorData")
     db.command("sql", "CREATE PROPERTY VectorData.vector ARRAY_OF_FLOATS")
 
-    # Insert data manually first
+    # Insert data manually first. The vector goes in as ONE array parameter:
+    # a bare Python list as the only argument is the positional-parameter
+    # array itself, so it would bind vector = 0.1.
     with db.transaction():
-        db.command("sql", "INSERT INTO VectorData SET vector = ?", [0.1, 0.2, 0.3])
+        db.command(
+            "sql",
+            "INSERT INTO VectorData SET vector = ?",
+            np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        )
+    stored = db.query("sql", "SELECT vector FROM VectorData").first().get("vector")
+    assert np.allclose(stored, [0.1, 0.2, 0.3])
 
     vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
 
