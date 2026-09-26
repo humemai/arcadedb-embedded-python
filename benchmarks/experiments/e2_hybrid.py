@@ -420,30 +420,48 @@ class ArcadeE2Server(ArcadeE2):
         r.raise_for_status()
         return r.json().get("result", [])
 
-    def _script(self, statements, sid=None):
-        return self._post("command", ";".join(statements), language="sqlscript", sid=sid)
-
     def build(self, vecs, edges):
         for ddl in ("CREATE VERTEX TYPE Product", "CREATE PROPERTY Product.pid INTEGER",
                     "CREATE PROPERTY Product.views INTEGER",
                     "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS",
                     "CREATE INDEX ON Product (pid) UNIQUE", "CREATE EDGE TYPE RELATED"):
             self._post("command", ddl)
-        buf = []
-        for i in range(len(vecs)):
-            emb = ",".join(f"{x:.6g}" for x in vecs[i].tolist())
-            buf.append(f"CREATE VERTEX Product SET pid = {i}, views = 0, embedding = [{emb}]")
-            if len(buf) >= 1000:
-                self._script(buf); buf = []
-        if buf:
-            self._script(buf); buf = []
-        for sidx, didx in edges:
-            buf.append(f"CREATE EDGE RELATED FROM (SELECT FROM Product WHERE pid = {sidx}) "
-                       f"TO (SELECT FROM Product WHERE pid = {didx})")
-            if len(buf) >= 1000:
-                self._script(buf); buf = []
-        if buf:
-            self._script(buf)
+        # ArcadeDB's served bulk graph path (DECISIONS #116 items 1 and 4; the
+        # maintainers' recommendation on #8287): POST /api/v1/batch, GraphBatch
+        # under the hood, with the WAL on and the edge count given, as the
+        # graph lane's served arm loads. JSONL, products first, each embedding
+        # as a JSON array of the float32 values' exact doubles; edges name
+        # their endpoints by the products' @id. It replaces CREATE VERTEX and
+        # CREATE EDGE ... FROM (SELECT ...) statements with every value pasted
+        # into sqlscript, where the embeddings went across at six significant
+        # digits, so the served arm stored different vectors than the
+        # embedded one.
+        def lines():
+            for i in range(len(vecs)):
+                yield json.dumps({"@type": "vertex", "@class": "Product", "@id": f"p{i}",
+                                  "pid": i, "views": 0,
+                                  "embedding": np.asarray(vecs[i], dtype=np.float32).tolist()})
+            for sidx, didx in edges:
+                yield json.dumps({"@type": "edge", "@class": "RELATED",
+                                  "@from": f"p{sidx}", "@to": f"p{didx}"})
+
+        def body():
+            buf = []
+            for ln in lines():
+                buf.append(ln)
+                if len(buf) >= BATCH:
+                    yield ("\n".join(buf) + "\n").encode()
+                    buf = []
+            if buf:
+                yield ("\n".join(buf) + "\n").encode()
+
+        r = self.rq.post(f"{self.base}/batch/bench?wal=true&expectedEdgeCount={len(edges)}",
+                         data=body(), headers={"Content-Type": "application/x-ndjson"}, timeout=36000)
+        r.raise_for_status()
+        res = r.json()
+        if res.get("verticesCreated") != len(vecs) or res.get("edgesCreated") != len(edges):
+            raise RuntimeError(f"/batch loaded {res.get('verticesCreated')} products and "
+                               f"{res.get('edgesCreated')} edges of {len(vecs)} and {len(edges)}")
         with bench_common.index_timer(self):
             self._post("command", f'''CREATE INDEX ON Product (embedding) LSM_VECTOR
                        METADATA {{ "dimensions": {DIM}, "similarity": "EUCLIDEAN",
