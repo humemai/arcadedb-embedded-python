@@ -78,8 +78,15 @@ def pick_query_ids(n_persons, n_queries, seed=PICK_SEED):
 
 
 # ---------------------------------------------------------------- workloads
-# Cypher text templates; {id} formatted in by adapters (literal params keep
-# every engine on the same query plan surface).
+# Cypher text templates with BOUND PARAMETERS ($id, $new_id, $name), passed
+# by each adapter through its own driver (DECISIONS #116 item 2; BUGS F125).
+# Until the re-pin to 26.10.1 the values were pasted into the text, so every
+# call was a new text: engines that cache plans by text (ArcadeDB, Neo4j)
+# re-planned each call, engines that do not (Memgraph) paid nothing, and the
+# table measured that difference instead of the lookups (#8132, #8286).
+# Binding is every engine's documented way to send a value. The one engine
+# that cannot take parameters in a graph query (DuckPGQ, cwida/duckpgq-
+# extension#75) pastes into its own SQL/PGQ texts and says so on its class.
 #   (WHERE form, not inline property maps — portable across ArcadeDB
 #   opencypher, Neo4j, and LadybugDB)
 OLTP_READS = {
@@ -89,33 +96,35 @@ OLTP_READS = {
     # ArangoDB hooks -- and a digest cannot compare three spellings of one
     # column (DECISIONS #88). The alias costs nothing and makes the answer
     # comparable.
-    "point": ("MATCH (p:Person) WHERE p.id = {id} "
+    "point": ("MATCH (p:Person) WHERE p.id = $id "
               "RETURN p.name AS name, p.age AS age"),
-    "hop1": ("MATCH (p:Person)-[:KNOWS]->(f:Person) WHERE p.id = {id} "
+    "hop1": ("MATCH (p:Person)-[:KNOWS]->(f:Person) WHERE p.id = $id "
              "RETURN count(f) AS n, avg(f.age) AS a"),
     "hop2": ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(fof:Person) "
-             "WHERE p.id = {id} RETURN count(DISTINCT fof) AS n"),
+             "WHERE p.id = $id RETURN count(DISTINCT fof) AS n"),
     # 2026-10 (DECISIONS #82): three hops with a property filter on the far
     # end, the interactive workload's characteristic shape, where the planner
     # decides whether the filter or the expansion goes first.
     "hop3f": ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(x:Person) "
-              "WHERE p.id = {id} AND x.age > 30 RETURN count(DISTINCT x) AS n"),
+              "WHERE p.id = $id AND x.age > 30 RETURN count(DISTINCT x) AS n"),
 }
-# write op: create a person and link them to an existing one (one txn)
-OLTP_WRITE = ("MATCH (p:Person) WHERE p.id = {id} "
-              "CREATE (q:Person {{id: {new_id}, name: 'w{new_id}', age: 33, "
-              "city: 'city_0'}}) "
-              "CREATE (p)-[:KNOWS {{since: 2026}}]->(q)")
+# write op: create a person and link them to an existing one (one txn).
+# $name is "w" + new_id, passed by the caller, so the text has no string
+# building in it.
+OLTP_WRITE = ("MATCH (p:Person) WHERE p.id = $id "
+              "CREATE (q:Person {id: $new_id, name: $name, age: 33, "
+              "city: 'city_0'}) "
+              "CREATE (p)-[:KNOWS {since: 2026}]->(q)")
 
 # 2026-10 (DECISIONS #82): the write's partner. Delete the person the write
 # created, with the edge that linked them, one transaction; the page then
 # carries a delete per engine, which no table did.
-OLTP_DELETE = "MATCH (q:Person) WHERE q.id = {new_id} DETACH DELETE q"
+OLTP_DELETE = "MATCH (q:Person) WHERE q.id = $new_id DETACH DELETE q"
 
 # 2026-10 (DECISIONS #82a): the fourth single-record operation. One property
 # of one record, set to a fixed value so the post-state is deterministic and
 # every engine must agree on it.
-OLTP_UPDATE = "MATCH (q:Person) WHERE q.id = {new_id} SET q.age = 44"
+OLTP_UPDATE = "MATCH (q:Person) WHERE q.id = $new_id SET q.age = 44"
 UPDATE_AGE = 44
 
 # HOW LOCAL IS THE THREE-HOP READ? The page will say the filtered three-hop
@@ -126,7 +135,7 @@ UPDATE_AGE = 44
 # same ids the timed loop uses, so a reader can check "stays local" against a
 # number instead of a word.
 HOP3_VISITED = ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(x:Person) "
-                "WHERE p.id = {id} RETURN count(DISTINCT x) AS n")
+                "WHERE p.id = $id RETURN count(DISTINCT x) AS n")
 VISITED_SAMPLE = 20
 
 # EVERY "ORDER BY ... LIMIT" CARRIES A TOTAL ORDER, and it did not until

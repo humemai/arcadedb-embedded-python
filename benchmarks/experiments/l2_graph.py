@@ -95,8 +95,10 @@ class Base:
         """
         raise NotImplementedError(f"{self.name} has no reopen path")
 
-    def run_cypher(self, text):
-        """Execute one cypher statement and RETURN ITS ROWS.
+    def run_cypher(self, text, params=None):
+        """Execute one cypher statement and RETURN ITS ROWS. `params` are the
+        statement's bound values, passed through the engine's own driver
+        (DECISIONS #116 item 2); None for the constant analytics texts.
 
         Returned the row COUNT until 2026-09-14, which is why this lane could
         not record a result digest: the answer was thrown away inside the
@@ -106,35 +108,38 @@ class Base:
         """
         raise NotImplementedError
 
-    def run_cypher_write(self, text):
-        self.run_cypher(text)
+    def run_cypher_write(self, text, params=None):
+        self.run_cypher(text, params)
 
     # NAME-BASED HOOKS (2026-09-11): the loops call these, and the defaults
     # format the shared Cypher text, so an engine without Cypher (SurrealDB)
     # can answer the same question in its own language by overriding three
     # methods while the mix, counts and statistics stay identical.
+    # Each statement gets exactly the parameters its text names: LadybugDB
+    # rejects a parameter the statement does not use.
     def run_read(self, op, pid):
-        return self.run_cypher(OLTP_READS[op].format(id=pid))
+        return self.run_cypher(OLTP_READS[op], {"id": int(pid)})
 
     def run_write(self, pid, new_id):
-        self.run_cypher_write(OLTP_WRITE.format(id=pid, new_id=new_id))
+        self.run_cypher_write(OLTP_WRITE, {"id": int(pid), "new_id": int(new_id),
+                                           "name": f"w{int(new_id)}"})
 
     def run_delete(self, new_id):
-        self.run_cypher_write(OLTP_DELETE.format(new_id=new_id))
+        self.run_cypher_write(OLTP_DELETE, {"new_id": int(new_id)})
 
     def run_update(self, new_id):
         """One property of one record (DECISIONS #82a)."""
-        self.run_cypher_write(OLTP_UPDATE.format(new_id=new_id))
+        self.run_cypher_write(OLTP_UPDATE, {"new_id": int(new_id)})
 
     def run_visited(self, pid):
         """Untimed: the distinct persons at three hops, before the age filter."""
-        return self.run_cypher(HOP3_VISITED.format(id=pid))
+        return self.run_cypher(HOP3_VISITED, {"id": int(pid)})
 
     def person_scan(self, id_from):
         """Untimed read-back of the persons the CRUD phases wrote."""
         return self.run_cypher(
-            f"MATCH (q:Person) WHERE q.id >= {id_from} "
-            f"RETURN q.id AS id, q.name AS name, q.age AS age, q.city AS city")
+            "MATCH (q:Person) WHERE q.id >= $f "
+            "RETURN q.id AS id, q.name AS name, q.age AS age, q.city AS city", {"f": int(id_from)})
 
     def run_olap(self, qname):
         return self.run_cypher(OLAP_QUERIES[qname])
@@ -315,12 +320,17 @@ class ArcadeGraphEmbedded(Base):
             time.sleep(1)
         raise RuntimeError("GAV not READY within timeout")
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
+        if params:
+            return self.db.query("opencypher", text, params).to_json_list()
         return self.db.query("opencypher", text).to_json_list()
 
-    def run_cypher_write(self, text):
+    def run_cypher_write(self, text, params=None):
         with self.db.transaction():
-            self.db.command("opencypher", text)
+            if params:
+                self.db.command("opencypher", text, params)
+            else:
+                self.db.command("opencypher", text)
 
     def close(self):
         self.db.close()
@@ -362,8 +372,10 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
                     "CREATE PROPERTY KNOWS.since INTEGER"]:
             self._http("command", "sql", ddl)
 
-    def _http(self, endpoint, language, command):
+    def _http(self, endpoint, language, command, params=None):
         body = {"language": language, "command": command}
+        if params:
+            body["params"] = params
         if endpoint == "query":
             body["limit"] = HTTP_LIMIT   # only the query endpoint takes a row cap
         r = self.rq.post(f"{self.base}/{endpoint}/bench", json=body,
@@ -470,11 +482,11 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
             time.sleep(1)
         raise RuntimeError("GAV not READY within timeout")
 
-    def run_cypher(self, text):
-        return self._http("query", "cypher", text)
+    def run_cypher(self, text, params=None):
+        return self._http("query", "cypher", text, params)
 
-    def run_cypher_write(self, text):
-        self._http("command", "cypher", text)
+    def run_cypher_write(self, text, params=None):
+        self._http("command", "cypher", text, params)
 
     def close(self):
         pass
@@ -597,13 +609,13 @@ class Neo4jGraph(Base):
         with self.driver.session() as s:
             self._await_indexes(s)
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         with self.driver.session() as s:
-            return [dict(r) for r in s.run(text)]
+            return [dict(r) for r in s.run(text, params or {})]
 
-    def run_cypher_write(self, text):
+    def run_cypher_write(self, text, params=None):
         with self.driver.session() as s:
-            s.run(text).consume()
+            s.run(text, params or {}).consume()
 
     def close(self):
         self.driver.close()
@@ -892,15 +904,17 @@ class FalkorGraph(Base):
     def run_olap(self, qname):
         return self.run_cypher(self.LSQB.get(qname) or OLAP_QUERIES[qname])
 
-    def run_cypher(self, text):
-        res = self.g.query(text)
+    def run_cypher(self, text, params=None):
+        # The client sends parameters as a `CYPHER id=...` header ahead of the
+        # text; the server caches the plan on the text after it.
+        res = self.g.query(text, params)
         # header entries are [type, name]; the RETURN aliases are the names
         # the digest compares against.
         cols = [h[1] if isinstance(h, (list, tuple)) else h for h in res.header]
         return [dict(zip(cols, row)) for row in res.result_set]
 
-    def run_cypher_write(self, text):
-        self.g.query(text)
+    def run_cypher_write(self, text, params=None):
+        self.g.query(text, params)
 
     def close(self):
         self.conn.close()
@@ -955,6 +969,7 @@ class LadybugGraph(Base):
         import ladybug
         self._mod = ladybug
         self._open_fitted(ladybug)
+        self._prepared = {}   # per connection: a prepared statement belongs to one
         self.version = f"ladybug:{getattr(ladybug, '__version__', '?')}"
         self.conn.execute(
             "CREATE NODE TABLE Person(id INT64, name STRING, age INT64, "
@@ -1094,6 +1109,7 @@ class LadybugGraph(Base):
         import ladybug
         self._mod = ladybug
         self._open_fitted(ladybug)
+        self._prepared = {}   # per connection: a prepared statement belongs to one
 
     # MESSAGE-HALF loader + LSQB queries (DECISIONS #103b/#104). INFERRED, NOT
     # RUN: LadybugDB (Kùzu) has no type inheritance and no multi-label, so it
@@ -1227,10 +1243,17 @@ class LadybugGraph(Base):
         # LSQB queries need LadybugDB's typed-rel-table spelling.
         return self.run_cypher(self.LSQB.get(qname) or OLAP_QUERIES[qname])
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         # Rows come back positional, in the RETURN clause's order, which is the
         # declared column order the digest compares against.
-        return [list(r) for r in self.conn.execute(text)]
+        if not params:
+            return [list(r) for r in self.conn.execute(text)]
+        # PREPARED ONCE PER TEXT, the documented way to run a statement many
+        # times: execute(text, params) would prepare it again on every call.
+        stmt = self._prepared.get(text)
+        if stmt is None:
+            stmt = self._prepared[text] = self.conn.prepare(text)
+        return [list(r) for r in self.conn.execute(stmt, params)]
 
 
 class DuckpgqGraph(Base):
@@ -1508,11 +1531,18 @@ class DuckpgqGraph(Base):
                     "WHERE g.p1 <> g.p3 AND ka.src IS NULL AND kb.src IS NULL)"),
     }
 
+    # THE ONE ENGINE ON THIS TABLE WHOSE READS PASTE THEIR VALUE (DECISIONS
+    # #116 item 2). DuckPGQ rejects a parameter anywhere in a query that holds
+    # a GRAPH_TABLE -- named, `?` or `$1`, inside MATCH or in the outer WHERE:
+    # "Parameter argument/count mismatch" on duckdb 1.5.4 (laptop, 2026-09-26),
+    # an open extension issue since 2024 (cwida/duckpgq-extension#75). DuckDB
+    # keeps no plan cache keyed on the text, so pasting costs it a parse, not a
+    # lost cached plan. Its writes are plain SQL and bind.
     def run_read(self, op, pid):
-        return self.cx.execute(self.READS[op].format(id=pid)).fetchall()
+        return self.cx.execute(self.READS[op].format(id=int(pid))).fetchall()
 
     def run_visited(self, pid):
-        return self.cx.execute(self.VISITED.format(id=pid)).fetchall()
+        return self.cx.execute(self.VISITED.format(id=int(pid))).fetchall()
 
     def run_olap(self, qname):
         if qname == "lsqb_q7":
@@ -1531,8 +1561,8 @@ class DuckpgqGraph(Base):
 
     def person_scan(self, id_from):
         return self.cx.execute(
-            f"SELECT id, name, age, city FROM Person WHERE id >= {id_from} "
-            "ORDER BY id").fetchall()
+            "SELECT id, name, age, city FROM Person WHERE id >= ? "
+            "ORDER BY id", [int(id_from)]).fetchall()
 
     def run_write(self, pid, new_id):
         # One transaction, the Cypher's CREATE-and-link: the person and the edge
@@ -1553,7 +1583,7 @@ class DuckpgqGraph(Base):
         self.cx.execute("DELETE FROM Person WHERE id = ?", [new_id])
         self.cx.execute("COMMIT")
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         raise NotImplementedError("DuckPGQ runs SQL/PGQ through the name-based hooks")
 
     def close(self):
@@ -1674,39 +1704,53 @@ class SurrealGraph(Base):
             res = res[-1]["result"]
         return res if isinstance(res, list) else ([res] if res is not None else [])
 
+    # BOUND VALUES (DECISIONS #116 item 2): `$vars` with RecordID objects, so
+    # record-id addressing is kept and nothing is written into the SurrealQL
+    # text (same answers as the pasted form, laptop 2026-09-26).
+    READS = {
+        "point": "SELECT name, age FROM ONLY $p",
+        "hop1": "SELECT count(->knows->person) AS n, math::mean(->knows->person.age) AS a FROM ONLY $p",
+        "hop2": "SELECT array::len(array::distinct(->knows->person->knows->person)) AS n FROM ONLY $p",
+        "hop3f": ("SELECT array::len(array::distinct(->knows->person->knows->person->knows->(person WHERE age > 30))) "
+                  "AS n FROM ONLY $p"),
+    }
+
+    @staticmethod
+    def _rid(i):
+        from surrealdb import RecordID
+        return RecordID("person", int(i))
+
     def run_read(self, op, pid):
-        if op == "point":
-            r = self.db.query(f"SELECT name, age FROM ONLY person:{pid}")
-        elif op == "hop1":
-            r = self.db.query(f"SELECT count(->knows->person) AS n, math::mean(->knows->person.age) AS a FROM ONLY person:{pid}")
-        elif op == "hop3f":
-            r = self.db.query(f"SELECT array::len(array::distinct(->knows->person->knows->person->knows->(person WHERE age > 30))) AS n FROM ONLY person:{pid}")
-        else:
-            r = self.db.query(f"SELECT array::len(array::distinct(->knows->person->knows->person)) AS n FROM ONLY person:{pid}")
-        return self._rows(r)
+        return self._rows(self.db.query(self.READS[op], {"p": self._rid(pid)}))
 
     def run_visited(self, pid):
         return self._rows(self.db.query(
-            f"SELECT array::len(array::distinct(->knows->person->knows->person->knows->person)) AS n "
-            f"FROM ONLY person:{pid}"))
+            "SELECT array::len(array::distinct(->knows->person->knows->person->knows->person)) AS n "
+            "FROM ONLY $p", {"p": self._rid(pid)}))
 
     def run_update(self, new_id):
-        self.db.query(f"UPDATE person:{new_id} SET age = {UPDATE_AGE}")
+        self.db.query("UPDATE $p SET age = $a", {"p": self._rid(new_id), "a": UPDATE_AGE})
 
     def person_scan(self, id_from):
         return self._rows(self.db.query(
-            f"SELECT pid, name, age, city FROM person WHERE pid >= {id_from}"))
+            "SELECT pid, name, age, city FROM person WHERE pid >= $f", {"f": int(id_from)}))
 
     def run_write(self, pid, new_id):
-        self.db.query(f"CREATE person:{new_id} SET pid = {new_id}, name = 'w{new_id}', age = 33, city = 'city_0'; "
-                      f"RELATE person:{pid}->knows->person:{new_id} SET since = 2026")
+        # ONE TRANSACTION, as on every other engine. Until the re-pin the two
+        # statements went without BEGIN/COMMIT, and SurrealDB runs each
+        # statement of a request in its own transaction: a failed RELATE left
+        # the person behind, and the SDK did not raise (BUGS F130).
+        self.db.query("BEGIN; CREATE $n SET pid = $nid, name = $name, age = 33, city = 'city_0'; "
+                      "RELATE $p->knows->$n SET since = 2026; COMMIT;",
+                      {"n": self._rid(new_id), "nid": int(new_id), "name": f"w{int(new_id)}",
+                       "p": self._rid(pid)})
 
     def run_delete(self, new_id):
         # One transaction: the edges into the record, then the record.
-        # person:{id}<->knows deletes the edges touching the record through
+        # $n<->knows deletes the edges touching the record through
         # the graph (laptop, 2026-09-14: the WHERE form scanned the edge table,
         # 777 ms at micro); then the record, one transaction.
-        self.db.query(f"BEGIN; DELETE person:{new_id}<->knows; DELETE person:{new_id}; COMMIT;")
+        self.db.query("BEGIN; DELETE $n<->knows; DELETE $n; COMMIT;", {"n": self._rid(new_id)})
 
     OLAP = {
         "top_degree": "SELECT pid, count(->knows) AS d FROM person ORDER BY d DESC, pid ASC LIMIT 10",
@@ -1936,7 +1980,7 @@ class SurrealGraph(Base):
     def run_olap(self, qname):
         return self._rows(self.db.query(self.LSQB.get(qname) or self.OLAP[qname]))
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         raise NotImplementedError("SurrealDB runs SurrealQL through the name-based hooks")
 
     def close(self):
@@ -2302,7 +2346,7 @@ class ArangoGraph(Base):
     def run_olap(self, qname):
         return self._n(self.LSQB.get(qname) or self.OLAP[qname])
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         raise NotImplementedError("ArangoDB runs AQL through the name-based hooks")
 
     def close(self):
@@ -2764,7 +2808,7 @@ class MongoGraph(Base):
                                                {"$eq": ["$c2.d", "$c3.d"]}]}}},
                 {"$count": "n"}], allowDiskUse=True)))
 
-    def run_cypher(self, text):
+    def run_cypher(self, text, params=None):
         raise NotImplementedError("MongoDB runs aggregation pipelines through the name-based hooks")
 
     def close(self):
