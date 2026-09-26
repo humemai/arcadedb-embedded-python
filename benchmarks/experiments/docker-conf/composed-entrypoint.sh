@@ -8,7 +8,11 @@
 # cannot appear while the vector half is still coming up.
 set -u
 cd /qdrant
-./qdrant &
+# RUN_MODE=production is the Qdrant image's own ENV, which a FROM-neo4j image does
+# not inherit. Without it Qdrant loads its DEVELOPMENT config: it binds
+# 127.0.0.1 (unreachable from the client container) and logs at DEBUG. The
+# dense lane runs the image as shipped, so this arm runs the same mode.
+RUN_MODE=production ./qdrant &
 QDRANT_PID=$!
 for _ in $(seq 1 240); do
   if wget -qO- http://127.0.0.1:6333/readyz >/dev/null 2>&1; then
