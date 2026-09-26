@@ -564,14 +564,19 @@ class ArcadeEmbedded(Base):
         db.command("sql", "CREATE PROPERTY Article.vid INTEGER")
         db.command("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
         _t0 = time.perf_counter()
-        db.begin()
-        for vid in range(len(vecs)):
-            db.command("sql", "INSERT INTO Article SET vid = :v, embedding = :e",
-                       {"v": vid, "e": self._a.to_java_float_array(vecs[vid])})
-            if (vid + 1) % BATCH == 0:
-                db.commit()
-                db.begin()
-        db.commit()
+        # THE ENGINE'S BULK LOADER, WAL ON (DECISIONS #116 item 3): GraphBatch
+        # with the write-ahead log kept on, as the maintainers recommended for
+        # graph loads on #8287 and as the cross-model lane already loads its
+        # products, each vector handed across as ONE Java float[] (F116). It
+        # replaces a SQL INSERT per vector in BATCH-row transactions: 22k
+        # against 31-32k vectors/s on the laptop (HANDOFF vector-lane audit,
+        # 2026-09-24). Fed a BATCH at a time, so the Java arrays alive at once
+        # stay bounded at deep10m; each batch commits, as before.
+        with db.graph_batch(batch_size=BATCH, commit_every=BATCH, use_wal=True) as gb:
+            for s0 in range(0, len(vecs), BATCH):
+                gb.create_vertices("Article", [
+                    {"vid": s0 + j, "embedding": self._a.to_java_float_array(vecs[s0 + j])}
+                    for j in range(min(BATCH, len(vecs) - s0))])
         self.ingest_s = round(time.perf_counter() - _t0, 2)
         quant = resolve_quant(os.environ.get("BENCH_DENSE_QUANT", ""))
         qline = f'"quantization": "{quant}", ' if quant else ""
