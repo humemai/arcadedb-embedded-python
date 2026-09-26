@@ -4830,6 +4830,64 @@ def _filter_strategy_note(table):
         *pre, *post)
 
 
+def _txn_scope_note(table):
+    """What the timed transaction holds, per engine (DECISIONS #118).
+
+    The cross-model operation is a vector search, a one-hop expansion, and an
+    update of the touched products. Every engine commits the update
+    atomically; they differ in whether the two READS run inside the same
+    transaction. The user decided on 2026-09-26 that the operation is defined
+    by the atomic update, with the reads allowed outside, since that is what
+    every engine here can do (MongoDB refuses $vectorSearch inside a
+    multi-document transaction, and says so on its own rows), and that each
+    engine's scope is stated rather than equalised. ArcadeDB keeps its reads
+    inside, the setting that does not flatter it.
+
+    Read from the rows where they recorded it (MongoDB asks its server) and
+    from each adapter's declaration otherwise, so the sentence names what ran.
+    """
+    if table.get("id") != "e2":
+        return None
+    try:
+        import e2_hybrid as _e2
+    except Exception:  # noqa: BLE001 - the page must still build without it
+        return None
+    groups = {"whole": set(), "update": set(), "none": set()}
+    refuses = set()
+    for e in table.get("entries", []):
+        bk = str(e.get("backend_key"))
+        scope = getattr(_e2.BACKENDS.get(bk), "TXN_SCOPE", None)
+        recorded = next((str(r.get("txn_scope")) for r in _FROZEN_ROWS
+                         if r.get("lane") == "e2" and r.get("backend") == bk
+                         and str(r.get("txn_scope") or "") not in ("", "None", "not declared")), None)
+        if recorded in groups:
+            scope = recorded
+        elif recorded and "CANNOT" in recorded:
+            scope = "update"
+            refuses.add(display_name(bk))
+        if scope in groups:
+            groups[scope].add(display_name(bk))
+    if not groups["whole"] or not groups["update"]:
+        return None
+    whole, upd = sorted(groups["whole"]), sorted(groups["update"])
+    none_ = sorted(groups["none"])
+    tail = (f" {_join_and(none_)} {'has' if len(none_) == 1 else 'have'} no transaction spanning "
+            f"{'its' if len(none_) == 1 else 'their'} two systems, which is what "
+            f"{'that row' if len(none_) == 1 else 'those rows'} exist{'s' if len(none_) == 1 else ''} to show.") if none_ else ""
+    why = ""
+    if refuses:
+        r = _join_and(sorted(refuses))
+        why = (f" ({r} cannot do otherwise: {'it refuses' if len(refuses) == 1 else 'they refuse'} "
+               f"a vector search inside a multi-document transaction, and {'its' if len(refuses) == 1 else 'their'} "
+               f"rows record the refusal)")
+    return _gen(
+        f"The transaction is the update, and every engine here commits it all or nothing. "
+        f"{_join_and(whole)} also run the vector search and the hop inside it; "
+        f"{_join_and(upd)} run those two reads first and wrap only the update{why}. "
+        f"One client runs at a time, so the answers are the same either way.{tail}",
+        *whole, *upd, *none_, *sorted(refuses))
+
+
 def _filtered_modes():
     """backend display name -> the `filtered_mode` its rows recorded."""
     out = {}
@@ -4857,6 +4915,9 @@ def _oct_conditions(table):
     f = _filter_strategy_note(table)
     if f:
         head.append(f)
+    ts = _txn_scope_note(table)
+    if ts:
+        head.append(ts)
     if tid == "l3d":
         split = _ingest_split_note(table)
         if split:

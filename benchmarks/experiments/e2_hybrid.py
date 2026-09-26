@@ -197,6 +197,9 @@ def gen_data():
 
 class ArcadeE2:
     name = "arcadedb_e2"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the vector search, the
+    # hop, and the update, all inside one transaction.
+    TXN_SCOPE = "whole"
 
     def __init__(self):
         import arcadedb_embedded as arcadedb
@@ -378,6 +381,9 @@ class ArcadeE2Server(ArcadeE2):
     positional binding.
     """
     name = "arcadedb_e2_server"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the vector search, the
+    # hop, and the update, all inside one transaction.
+    TXN_SCOPE = "whole"
 
     def __init__(self):
         self.durability = (bench_common.at_class(bench_common.DURABILITY_ARCADEDB)
@@ -514,6 +520,9 @@ class SurrealE2:
     table was allowed). The SDK bundles core 2.3.10 behind an SDK version of 2.0.0; the served twin below
     runs the 3.2.4 server on RocksDB."""
     name = "surrealdb_e2"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the two reads run first
+    # and only the update is wrapped in a transaction.
+    TXN_SCOPE = "update"
     URL = "surrealkv:///tmp/e2_surrealkv"
     INDEX_DDL = f"DEFINE INDEX pe ON product FIELDS embedding HNSW DIMENSION {DIM} DIST EUCLIDEAN"
     # The embedded core (2.3.10) maintains the index during the insert, so the
@@ -672,6 +681,9 @@ class ArangoE2:
     document updates inside one stream transaction that the crash trial
     aborts before commit."""
     name = "arangodb_e2"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the two reads run first
+    # and only the update is wrapped in a transaction.
+    TXN_SCOPE = "update"
 
     def __init__(self):
         self.cl, self.db, self.version = arango_common.connect()
@@ -796,6 +808,9 @@ class MongoE2:
     even in principle.
     """
     name = "mongodb_e2"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the two reads run first
+    # and only the update is wrapped in a transaction.
+    TXN_SCOPE = "update"
 
     def __init__(self):
         self.cl, self.db, mongod = mongo_common.connect(auth=True)
@@ -923,6 +938,9 @@ class PgAgeE2:
     transaction. The strongest "one engine" rival to the claim this lane
     tests (2026-09-11)."""
     name = "pg_age_e2"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the vector search, the
+    # hop, and the update, all inside one transaction.
+    TXN_SCOPE = "whole"
 
     def __init__(self):
         import psycopg
@@ -1060,6 +1078,9 @@ class Neo4jE2:
     vector index, RELATED edges, the views counter on the node; the hit, the
     hop and the update run in one explicit transaction (2026-09-11)."""
     name = "neo4j_e2"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): the vector search, the
+    # hop, and the update, all inside one transaction.
+    TXN_SCOPE = "whole"
 
     def __init__(self):
         from neo4j import GraphDatabase
@@ -1167,6 +1188,9 @@ class ComposedE2:
     injects a failure between the two writes.
     """
     name = "composed_qdrant_neo4j"
+    # WHAT THE TIMED TRANSACTION HOLDS (DECISIONS #118): nothing spans the two
+    # systems, which is what this arm exists to show.
+    TXN_SCOPE = "none"
 
     def __init__(self):
         from qdrant_client import QdrantClient
