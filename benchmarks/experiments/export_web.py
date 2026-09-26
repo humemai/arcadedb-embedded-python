@@ -4938,6 +4938,29 @@ _CENSORED_CACHE = None
 _CENSORED_PHASE = {}   # (lane, scale, backend, workload) -> phase phrase
 
 
+def _server_hit_envelope(r):
+    """A served cell whose SERVER was killed at its memory cap (2026-09-26).
+
+    `oom_killed` is the client container's state. Rows since the runner reads
+    the server's own State.OOMKilled carry `server_oom_killed`; older rows are
+    recognised by the server's ANONYMOUS memory reaching its cap on a cell
+    that failed. Anonymous memory cannot be reclaimed, so at the cap the
+    kernel kills; the total peak is not evidence, because file cache counts
+    toward it and is given back (ArcadeDB's lifecycle 10M row sat at its 28g
+    total with 87.8% anonymous and was not killed). The served SurrealDB SF10
+    analytics cell reached 32,676 MiB anonymous of 32g and died at its first
+    query; its error text (a name-resolution failure while reconnecting to the
+    dead container) would otherwise have printed it as a dropped connection."""
+    if str(r.get("server_oom_killed")).lower() == "true":
+        return True
+    try:
+        cap_mib = float(r.get("server_mem_cap_g")) * 1024.0
+        anon = float(r.get("server_peak_anon_mib"))
+    except (TypeError, ValueError):
+        return False
+    return bool(r.get("error")) and anon >= 0.99 * cap_mib
+
+
 def _censored_cells():
     """Cells at the pin whose every attempt ended in a timeout: (lane, scale,
     backend, workload) -> budget seconds. A timeout is a censored observation
@@ -5016,7 +5039,7 @@ def _censored_cells():
             _ph = _timeout_phase(r.get("timeout_phase_hint"))
             if _ph:
                 _CENSORED_PHASE[key] = _ph
-        elif r.get("oom_killed"):
+        elif r.get("oom_killed") or _server_hit_envelope(r):
             # AN ENVELOPE FAILURE IS NOT A TIMEOUT (DECISIONS #103g).
             # The cell was killed by the kernel at the memory cap; it
             # did not run out of TIME, and "failed inside its budget"
@@ -5028,7 +5051,8 @@ def _censored_cells():
             # or a log tail that tells a reader nothing.
             _cap = str(r.get("mem_cap") or (f"{r.get('server_mem_cap_g')}g"
                                             if r.get("server_mem_cap_g") else "") or "")
-            _peak = (r.get("peak_mib_sum") or r.get("client_peak_mib")
+            _peak = ((r.get("server_peak_mib") if _server_hit_envelope(r) else None)
+                     or r.get("peak_mib_sum") or r.get("client_peak_mib")
                      or r.get("server_peak_mib"))
             timeouts[key] = ("envelope", _cap, _peak)
         else:
@@ -6063,6 +6087,17 @@ def _finish_table(table: dict) -> dict:
                             if isinstance(st, dict) and st.get("text") == "re-run"}
     if _marks:
         table["conditions"] = table["conditions"] + _mark_legend(_marks)
+    # ONE ROW PER ENGINE AND SIZE. A cell killed after its load finished
+    # leaves rows that carry the load's numbers (ingest, peak, disk) beside
+    # the error, and the table builder made a measured-looking entry of them
+    # next to the censored one: the served SurrealDB SF10 analytics cell would
+    # have printed twice, once with 55 minutes of ingest and once as `OOM`
+    # (rehearsal of qOE's landing, 2026-09-26). A cell is censored only when
+    # it has no clean row, so an entry sharing its engine and size was built
+    # from failed rows alone; the censored row and its note stand for it.
+    _cens = {(str(m.get("backend_key")), str(m.get("scale"))) for m in _marked}
+    table["entries"] = [e for e in table["entries"]
+                        if e.get("outcome") or (str(e.get("backend_key")), str(e.get("scale"))) not in _cens]
     entries = table["entries"] + _marked
     seen = []
     for e in entries:

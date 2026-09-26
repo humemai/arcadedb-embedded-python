@@ -2660,6 +2660,21 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                     row["server_log"] = os.path.basename(_lp)
             except Exception as _e:                       # noqa: BLE001
                 row["server_log_error"] = f"{type(_e).__name__}: {_e}"
+            # THE SERVER'S OWN OOM KILL, read before removal like the client's
+            # (2026-09-26). `oom_killed` is the CLIENT container's state, so a
+            # server killed at its memory cap left the row saying False and its
+            # error text saying whatever the client hit next: the served
+            # SurrealDB SF10 analytics cell reached 32,768.2 MiB of a 32g cap,
+            # died at its first query, and the row read "Temporary failure in
+            # name resolution" (the client re-resolving a container that no
+            # longer existed).
+            try:
+                _si = subprocess.run(["docker", "inspect", "-f", "{{.State.OOMKilled}}", server_cid],
+                                     capture_output=True, text=True)
+                if _si.returncode == 0 and _si.stdout.strip() in ("true", "false"):
+                    row["server_oom_killed"] = _si.stdout.strip() == "true"
+            except Exception as _e:                       # noqa: BLE001
+                row["server_oom_error"] = f"{type(_e).__name__}: {_e}"
             d = container_disk(server_cid)
             row["server_disk_mb"] = d["disk_mb"]
             row["server_disk_rw_mb"] = d["disk_rw_mb"]
