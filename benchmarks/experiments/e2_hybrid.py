@@ -1059,9 +1059,18 @@ class PgAgeE2:
         if not pids:
             return []
         c = self._cur()
-        c.execute("SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) "
-                  "WHERE a.pid IN $pids RETURN b.pid $$, %s) AS (pid agtype)",
-                  (json.dumps({"pids": [int(p) for p in pids]}),))
+        # THE ONE LIST THIS ARM KEEPS IN THE TEXT (DECISIONS #116 item 2, the
+        # DuckPGQ treatment). AGE drops the expression index on pid for any
+        # BOUND list: 30 ids over 20k products, pasted `IN [..]` 2.0 ms, bound
+        # `IN $pids` 26.4 ms, bound `UNWIND $pids ... WHERE a.pid = p` 12.0 ms,
+        # answers identical (laptop 2026-09-26, repros/bound-values/
+        # age_list_param_probe.py); the lane smoke saw retrieval 10.4 -> 76.2
+        # ms. Binding exists to take a harness-made parse off the timed path,
+        # not to put an engine on a path 6-13x slower, so the list stays in the
+        # text. A single pid binds and is faster for it (0.77 -> 0.15 ms).
+        lst = ",".join(str(int(p)) for p in pids)
+        c.execute(f"SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) "
+                  f"WHERE a.pid IN [{lst}] RETURN b.pid $$) AS (pid agtype)")
         r = [int(str(x[0])) for x in c.fetchall()]
         self.cx.commit()
         return r
