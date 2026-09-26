@@ -3,6 +3,7 @@ Tests for enhanced ResultSet and Result functionality.
 """
 
 import arcadedb_embedded as arcadedb
+import pytest
 
 
 def test_resultset_to_list(temp_db_path):
@@ -36,11 +37,7 @@ def test_resultset_to_list(temp_db_path):
 
 def test_resultset_to_dataframe(temp_db_path):
     """Test ResultSet.to_dataframe() method."""
-    try:
-        import pandas as pd
-    except ImportError:
-        # Skip test if pandas not installed
-        return
+    pd = pytest.importorskip("pandas")
 
     with arcadedb.create_database(temp_db_path) as db:
         db.command("sql", "CREATE DOCUMENT TYPE Product")
