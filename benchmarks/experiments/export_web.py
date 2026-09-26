@@ -4560,7 +4560,9 @@ def _jvm_memory_note(table):
     found = {}
     for e in table.get("entries", []):
         cell = (e.get("metrics") or {}).get("peak memory GiB")
-        if not cell:
+        # A MARK IS NOT A VALUE (DECISIONS #111, #117): a censored or `re-run`
+        # row carries text where the median would be.
+        if not cell or e.get("outcome") or cell.get("median") is None:
             continue
         # SCALE-EXACT FIRST, THEN THE LANE. The cell's own scale is the right
         # match and is what most tables need, but some take their memory figure
@@ -4889,6 +4891,15 @@ def _oct_conditions(table):
         pg = _pg_memory_note(table)
         if pg:
             tail.append(pg)
+    # THE JVM HALF OF THE SAME DISCLOSURE, which the October path never
+    # carried: October's tables said why PostgreSQL's memory cell reads low and
+    # not why a JVM engine's reads close to its heap, the one-sided case
+    # _jvm_memory_note's own docstring names as the asymmetry. September's
+    # tables have carried it since f5a6ccedcb (the user settled on 2026-09-22
+    # that the disclosure stays); this is the same generated sentence.
+    jvm = _jvm_memory_note(table)
+    if jvm:
+        tail.append(jvm)
     return head, tail
 
 
