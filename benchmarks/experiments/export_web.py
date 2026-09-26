@@ -5225,11 +5225,12 @@ def _count_word(n):
 
 
 def _join_and(items):
-    """"a", "a and b", "a, b and c" -- the page writes lists as sentences."""
+    """"a", "a and b", "a, b, and c" -- the page writes lists as sentences,
+    with the serial comma (the house style for the page and the papers)."""
     items = list(items)
     if len(items) < 3:
         return " and ".join(items)
-    return ", ".join(items[:-1]) + " and " + items[-1]
+    return ", ".join(items[:-1]) + ", and " + items[-1]
 
 
 def _mark_legend(marks):
@@ -5244,7 +5245,7 @@ def _mark_legend(marks):
                   key=lambda m: (m.endswith("m"), int(m[1:-1])))
     if caps:
         joined = (" and ".join(f"`{c}`" for c in caps) if len(caps) < 3
-                  else ", ".join(f"`{c}`" for c in caps[:-1]) + f" and `{caps[-1]}`")
+                  else ", ".join(f"`{c}`" for c in caps[:-1]) + f", and `{caps[-1]}`")
         parts.append(joined + (" mean" if len(caps) > 1 else " means")
                      + " the cell ran past its tier's cap and was not retried"
                      + ("; each tier has its own cap, the same for every engine on it"
@@ -5502,7 +5503,7 @@ def _censored_notes(table_id):
         elif len(engines) == 2:
             who = f"{engines[0]} and {engines[1]}"
         else:
-            who = ", ".join(engines[:-1]) + f" and {engines[-1]}"
+            who = ", ".join(engines[:-1]) + f", and {engines[-1]}"
         why = _gen(who + tail, who, *[p for p in pins if p is not None])
         notes.append(why)
         for e in engines:
