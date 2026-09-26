@@ -1,6 +1,6 @@
 # What is in `results/`, and who reads it
 
-> **WHICH HOST.** This describes `results/` **on the bench host (mini)**, where the campaigns write. A developer checkout does not have the same tree: nearly all of `results/` is gitignored (`runs.jsonl` and every `runs_*.jsonl` at `.gitignore:580` and `:599`, `raw/` at `:601`), so overlays and campaign files exist on mini as untracked paths and simply are not in your checkout.
+> **WHICH HOST.** This describes `results/` **on the bench host (mini)**, where the campaigns write. A developer checkout does not have the same tree: nearly all of `results/` is gitignored (the rule is the allowlist at the end of the repo-root `.gitignore`, from `benchmarks/experiments/results/**` at about line 630: everything under `results/` is ignored and the tracked artifacts are named one by one), so overlays and campaign files exist on mini as untracked paths and simply are not in your checkout.
 >
 > Two consequences, both of which have bitten:
 >
@@ -20,7 +20,7 @@ A `runs_*_<pin>.jsonl` is the only copy of its data until it is merged. Archivin
 
 A campaign file reports "no reader" when you grep the publishing scripts. That is what step 1 not having run yet looks like, not a dead file.
 
-`runs_paper.csv` is regenerated from `runs.jsonl` by the freeze step, and the canonical store keys on `(lane, scale, n_docs, workload, backend, gav, rep)` with the latest `ts_utc` winning, so a re-measured row supersedes the old one on merge. **Do not hand-edit the frozen CSV**; re-freeze after the campaign.
+`runs_paper.csv` is regenerated from `runs.jsonl` by the freeze step, and the canonical store keys on `(lane, scale, n_docs, workload, backend, gav, rep, durability_class)` with the latest `ts_utc` winning, so a re-measured row supersedes the old one on merge. **Do not hand-edit the frozen CSV**; re-freeze after the campaign.
 
 ## Canonical data
 
@@ -41,6 +41,8 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 |---|---|---|
 | `runs_paper.csv` | `make_paper_tables.py` (the freeze) | every gate, the exporter, the release asset |
 | `web_benchmarks.json` | `export_web.py` | `page_check`, `version_consistency_check`, `refresh_web_page` |
+| `runs_paper_oct.csv` | `make_paper_tables.py` under `BENCH_INSTRUMENT=2026-10` (the October freeze, DECISIONS #84) | the gates and the exporter under the same switch, `land_stage.py --preview` |
+| `web_benchmarks_next.json` | `export_web.py` under `BENCH_INSTRUMENT=2026-10` | the preview route (`/projects/arcadedb/next`), `page_check --preview`, `version_consistency_check --preview`, `refresh_web_page --preview` |
 | `generated/tables/*`, `generated/*.md`, `withheld_recall.json` | `make_paper_tables.py` | `page_check`, the exporter's withheld-cell notes |
 | `generated_oct/**` | `make_paper_tables.py` under `BENCH_INSTRUMENT=2026-10` | the same readers, under the same switch |
 | `generated/memo_bottlenecks.html` | `memo_bottlenecks.py` | the maintainers' memo, not the page |
@@ -48,7 +50,6 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `e3_q17/*.json` | `e3_recovery.py`, one shot per trial | `claims_check.py`; the recovery table is planned, not built |
 | `ingest_ab/ab_r*.json` | `async_ingest_probe.py`, one shot per repetition | `claims_check.py` |
 | `tentag/tentag_ab.json` | `ts_stride_probe.py`, one shot | `claims_check.py` |
-
 | `manifest-*.json` | per-invocation image digests, cpuset, heap, reps; every row names its manifest by timestamp | nothing opens them; kept as provenance by reference |
 | `runs-*.csv` | per-invocation summary written by `runner.py` | nothing. Delete them when they pile up; the writer stays. Swept 2026-09-19: 103 files, all 106 rows `tier=sweep` and 88 of them `bench_host=laptop`, zero paper-tier rows, so none could ever reach a page. Check that before deleting, not after |
 | `runs.jsonl.before-merge-<stamp>` | `merge_campaign.py`'s rollback copy of the canonical file | nothing reads them. ONE is kept, the copy of the most recent merge; the script now prunes the rest itself. Eleven had reached 73 MB by 2026-09-19 before this. Verify containment line by line before deleting any: `runs.jsonl` has lost rows once, to a git checkout during a live campaign |
@@ -70,7 +71,7 @@ The answer digest and its readable sample, the `durability` string, and the ther
 
 Every other directory under `results/` is evidence, quarantine, or output; nothing generated reads it.
 
-**All-or-nothing.** `make_paper_tables.dense_mp_dir()` is the ONE resolver for the dense overlays: it returns `results/dense_mp5_<BENCH_ENGINE_COMMIT>` only when every one of the 13 mandatory arms (`fp32 int8 arcsrv arcsrv_int8 milvus milvus_int8 qdrant qdrant_int8 chroma duckvss lancedb sqlitevec sqlitevec_int8`) has all five `mp_<arm>_b<n>.json` files, else it refuses. `neo4jvec`, `pgvector`, `surreal`, `surrealsrv`, and `arango` are optional arms (`MP_ARMS_OPTIONAL`) that join the table when all five of their files exist, are absent with none, and refuse the publish with some, so a partial arm never prints as a row. `dense_mp5_small_<pin>` feeds the 1M tier with `MP_ARMS_SMALL`. T5, f4/f8's dense bars, the page's dense table, F4 in `fairness_check` and `provenance_check`'s `FEEDS` all call the one resolver, so they cannot disagree.
+**All-or-nothing.** `make_paper_tables.dense_mp_dir()` is the ONE resolver for the dense overlays: it returns `results/dense_mp5_<BENCH_ENGINE_COMMIT>` only when every one of the 13 mandatory arms (`fp32 int8 arcsrv arcsrv_int8 milvus milvus_int8 qdrant qdrant_int8 chroma duckvss lancedb sqlitevec sqlitevec_int8`) has all five `mp_<arm>_b<n>.json` files, else it refuses. `neo4jvec`, `pgvector`, `surreal`, `surrealsrv`, `arango`, and `mongo` are optional arms (`MP_ARMS_OPTIONAL`) that join the table when all five of their files exist, are absent with none, and refuse the publish with some, so a partial arm never prints as a row. `dense_mp5_small_<pin>` feeds the 1M tier with `MP_ARMS_SMALL`. T5, f4/f8's dense bars, the page's dense table, F4 in `fairness_check` and `provenance_check`'s `FEEDS` all call the one resolver, so they cannot disagree.
 
 The rule exists because a partial pinned directory does not make a table visibly short: callers skip missing files, so it publishes whichever subset exists. One such directory held 1 of 12 files, and that one was an ArcadeDB arm, so a pinned export would have shipped a six-engine comparison as a single ArcadeDB row.
 

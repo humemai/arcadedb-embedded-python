@@ -1051,7 +1051,10 @@ MP_ARMS_SMALL = ("fp32", "int8", "arcsrv", "arcsrv_int8", "milvus",
 # comparators. An optional arm with all MP_BUILDS files is published; with
 # none it is absent; with some it REFUSES, so a publish mid-run cannot show
 # an arm built from one rep. The required lists above are the August set.
-MP_ARMS_OPTIONAL = ("neo4jvec", "pgvector", "surreal", "surrealsrv", "arango")
+# MongoDB joined the dense lane in October (MongoDB Search, dbbench:mongo-search);
+# the runner writes mp_mongo_b*.json and export_web has its row, but without it
+# here the arm was filtered out of the table silently (docs audit, 2026-09-26).
+MP_ARMS_OPTIONAL = ("neo4jvec", "pgvector", "surreal", "surrealsrv", "arango", "mongo")
 
 
 def _optional_arms_present(cand, label):

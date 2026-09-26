@@ -7,8 +7,9 @@ express it. Backends:
 
   arcadedb_e2            embedded, one ACID transaction per op
   surrealdb_e2           embedded (in-process Rust), one transaction per op
-  composed_qdrant_neo4j  qdrant-local (in-process vector) + Neo4j server
-                         (graph+doc) with glue code -- NO cross-system txn
+  composed_qdrant_neo4j  Qdrant server (vector) + Neo4j server (graph+doc)
+                         in one container (dbbench:composed, DECISIONS #117)
+                         with glue code -- NO cross-system txn
 
 Workloads:
   hybrid     N warm ops, end-to-end latency percentiles (result-checked)

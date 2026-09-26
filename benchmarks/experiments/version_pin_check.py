@@ -42,7 +42,7 @@ import subprocess  # nosec B404
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CODE_FILES = ["runner.py", "build_images.sh", "Dockerfile.pgage", "Dockerfile.mongosearch"]
+CODE_FILES = ["runner.py", "build_images.sh", "Dockerfile.pgage", "Dockerfile.mongosearch", "Dockerfile.composed"]
 DOC = "COMPARATORS.md"
 _DIGEST = re.compile(r"sha256:([0-9a-f]{8,64})")
 # `name==1.2.3` in a PKGS line or in the doc's prose

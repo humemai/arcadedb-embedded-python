@@ -1,8 +1,10 @@
 # ArcadeDB benchmarks: harnesses and results
 
-Two suites. Both reach ArcadeDB through the Python package, run every
-backend in Docker under the same CPU and memory caps, report five repetitions
-per cell, and publish the rows their numbers are computed from. They differ
+Two suites. Both reach embedded ArcadeDB through the Python package (the
+live harness's served arms reach it over HTTP instead, on a server built from
+the same upstream commit as the wheel), run every backend in Docker under the
+same CPU and memory caps, report five repetitions per cell, and publish the
+rows their numbers are computed from. They differ
 in scope and in where they publish, not in the kind of thing they measure.
 
 - `experiments/` is the **live harness**: ArcadeDB, embedded and served,

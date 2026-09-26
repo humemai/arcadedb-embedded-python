@@ -833,7 +833,7 @@ BACKENDS = {
     "pg_age_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "dbbench:pg-age",  # PostgreSQL 17.11 + pgvector 0.8.6 + AGE 1.7.0, built from Dockerfile.pgage
+        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
                        "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],

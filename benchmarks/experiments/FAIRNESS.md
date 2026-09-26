@@ -2,7 +2,7 @@
 
 Every number on the page compares systems. A comparison is only worth printing if both sides were given the same thing. This file says what "the same thing" means, what is allowed to differ, and what is checked mechanically rather than remembered.
 
-`fairness_check.py` is one of the FIVE gates `refresh_web_page.py` runs (`equivalence_check`, `provenance_check`, `fairness_check`, `page_check`, `version_consistency_check`). It fails loudly rather than warning quietly.
+`fairness_check.py` is one of the SIX gates `refresh_web_page.py` runs (`equivalence_check`, `provenance_check`, `fairness_check`, `page_check`, `version_consistency_check`, `version_pin_check`). It fails loudly rather than warning quietly.
 
 The failure mode this contract exists to close is **a correct number measured under conditions the row beside it did not get**. `claims_check` and `provenance_check` cannot see it: both verify a number against its own artifact, and such a number is correct about its own run.
 
@@ -130,9 +130,11 @@ does at commit was not established, and the row says
 cannot spread silently to another engine.
 
 Every row records what it ran as `durability`; `fairness_check.check_durability`
-refuses a 2026-10 row with none, a strict string on an engine that has the knob,
-an unverified string on an engine not named above, or a PostgreSQL row whose
-server answered anything but `off`. The same check refuses two `instrument`
+refuses a 2026-10 row with none, a row whose engine reports a class other than
+the one its cell asked for in `durability_class` (DECISIONS #90), a row that
+declares no setting or carries an unverified string on an engine not named
+above, or a PostgreSQL row whose server answered anything but its class's
+setting (`off` relaxed, `on` strict). The same check refuses two `instrument`
 values in one table (rows before 2026-10 carry none and are the September
 instrument), and it refuses a time-series table whose engines disagree on the
 row counts of the two data-dependent queries (`q_groupby_rows`, `q_high_rows`),
@@ -271,7 +273,7 @@ Three things follow, and they are what make this checkable rather than a good in
 
 * **A new arm must declare its index decision.** `fairness_check` fails a lane backend that declares nothing, the way the capability table refuses a kind its legend cannot define. Silence is the state this invariant exists to remove.
 * **And the declaration is checked against the rows, not trusted (F14b).** A map saying an arm builds an index is a claim; `index_s` on that arm's rows is the evidence. The gate fails an arm whose declaration cites a measured with/without ratio and whose every row records `index_s=0`, and fails one that declares `NONE` and records a build -- an index removed for costing that engine coming back. Only those two directions are asserted: a declaration like "record id carries pid" or "native TIMESERIES type" describes an index with no build step to time, and those arms are reported as not asserted rather than pattern-matched into an expectation. The count of arms checked, arms not asserted, and arms whose rows predate the ingest/index split is printed every run, so the coverage is visible rather than implied.
-* **And where one arm times the two phases, every arm does (F14c).** The ingest/index split turns "this engine took 40 s to build the corpus" into "12 s writing, 28 s indexing", and it arrives per adapter -- so it is exactly the kind of thing that stops arriving when someone adds the next engine to a lane and writes a `build()` without knowing its neighbours time two phases inside theirs. The cost is not a missing number but an unfair TABLE: the column exists because the other arms fill it, so the new arm prints a blank where everyone else prints a figure, and a blank in a benchmark reads as a result. Three states pass -- the arm splits, or it declares `index_before_load` (the index is defined before the first row lands and its work is spread through the load, as SurrealDB does on the cross-model lane), or no arm on that lane splits at all because every engine there builds its index as it ingests (sparse) or creates it in the schema before loading (graph). The finding is the fourth: a lane where some arms split, one does not, and it says nothing. On the dense lane the two phases are independent timers inside `build_s` rather than a division of it, so those rows also carry `setup_s` for the remainder, and the three add up (BUGS F101).
+* **And where one arm times the two phases, every arm does (F14c).** The ingest/index split turns "this engine took 40 s to build the corpus" into "12 s writing, 28 s indexing", and it arrives per adapter -- so it is exactly the kind of thing that stops arriving when someone adds the next engine to a lane and writes a `build()` without knowing its neighbours time two phases inside theirs. The cost is not a missing number but an unfair TABLE: the column exists because the other arms fill it, so the new arm prints a blank where everyone else prints a figure, and a blank in a benchmark reads as a result. Three states pass -- the arm splits, or it declares `index_before_load` (the index is defined before the first row lands and its work is spread through the load, as SurrealDB does on the document and time-series lanes), or no arm on that lane splits at all because every engine there builds its index as it ingests (sparse) or creates it in the schema before loading (graph). The finding is the fourth: a lane where some arms split, one does not, and it says nothing. On the dense lane the two phases are independent timers inside `build_s` rather than a division of it, so those rows also carry `setup_s` for the remainder, and the three add up (BUGS F101).
 * **The decision names its evidence.** "No index" is a finding when it is measured (ArangoDB, DuckDB on the document lane) and a defect when it is an omission (PostgreSQL on the document lane, DuckDB on the time-series lane, both until 2026-09-22).
 * **Index build time is its own column** wherever the engine has a boundary to time. The dense vector table has always separated `ingest s` from `index s`; the rest folded index build into ingest, which hides both the cost and the asymmetry -- SurrealDB's document arm must build its index BEFORE the load, so about 5.3 s of index work sits inside an ingest number every other engine pays without any.
 
@@ -302,7 +304,7 @@ Two consequences:
 
 ## Allowed to differ (must be DISCLOSED, per PROTOCOL.md section 7)
 
-- **Vendor settle steps** that have no equivalent elsewhere (Elasticsearch forcemerge, Milvus flush+load, Qdrant green-wait, ArcadeDB `COMPACT INDEX`). Each engine gets *its own*; none goes unmatched by the others having theirs.
+- **Vendor settle steps** that have no equivalent elsewhere (Elasticsearch forcemerge, Milvus flush+load, Qdrant green-wait, ArcadeDB `COMPACT INDEX`). Each engine gets *its own*; none goes unmatched by the others having theirs. The one settle step this harness defines rather than a vendor is the SurrealDB server's HNSW wait on the dense and cross-model lanes, a latency probe recorded as `settle_s` (BUGS F134, DECISIONS #117), and PROTOCOL.md section 7 lists it as such.
 - **Operating points deliberately not matched**, such as the dense fp32 arms with the build cache pinned to the corpus against INT8 at the engine default (DECISIONS #56), stated in the l3d condition.
 - **Quality and precision differences** (int8 against fp32 postings, ES pruning). Report recall next to latency, always.
 - **Intra-query parallelism at each engine's default.** ArcadeDB's SQL scans a type's buckets in parallel (`arcadedb.queryParallelScan`, on by default) only when the type has at least two buckets, and `arcadedb.typeDefaultBuckets` is 1. Every ArcadeDB type in this benchmark is created with the default, so its full scans run on one thread, as SQLite's and MongoDB's do, while DuckDB uses the whole cpuset. Not tuned: it is a knob that moves only ArcadeDB, so the default stands until a campaign decides otherwise (HANDOFF, 2026-09-23). The per-record cost that makes that one thread slow is engine code, filed as ArcadeData/arcadedb#8260.

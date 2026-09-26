@@ -771,9 +771,10 @@ def check_close_cost(rows):
 # "relaxed" (a commit returns without waiting for the disk); an engine that
 # cannot be relaxed says so with a string starting "fsync at commit" and is
 # the named exception on its tables (Neo4j, DuckDB, LadybugDB). Anything
-# else on a 2026-10 row is a FAIL (FAIRNESS.md F10): a row with no durability, a "strict"
-# string on an engine that has the knob, or a PostgreSQL row whose server
-# answered anything but synchronous_commit=off.
+# else on a 2026-10 row is a FAIL (FAIRNESS.md F10): a row with no durability,
+# a row whose engine reports a class other than the one its cell asked for in
+# `durability_class` (DECISIONS #90), or a PostgreSQL row whose server did not
+# answer its class's synchronous_commit (off relaxed, on strict).
 STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo4j",
                   "ladybug_graph", "duckdb", "duckdb_vss_dense", "duckpgq_graph"}
 
@@ -782,7 +783,7 @@ STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo
 # token in its binary, and none of its 110 SURREAL_* variables names sync, WAL,
 # fsync, or durability -- so its behaviour at commit could not be established
 # (evidence in bench_common). Its string says "not verified" rather than
-# claiming a class, and these four arms are the only ones permitted to carry
+# claiming a class, and these five arms are the only ones permitted to carry
 # such a string. Any other backend that starts saying "not verified" is an
 # engine whose default nobody checked, which is exactly what #81 forbids.
 UNVERIFIED_ALLOWED = {"surrealdb_tpc_server", "surrealdb_graph_server",
@@ -1030,11 +1031,11 @@ def check_phase_split(rows):
     THREE STATES, AND ONLY ONE IS A FINDING. An arm may record the split; or
     declare `index_before_load`, which is the honest answer where the index is
     defined before the first row lands and its work is spread through the load
-    (SurrealDB on the cross-model lane); or belong to a lane where no arm
-    splits at all, because every engine there builds its index as it ingests
-    (the sparse lane) or creates it in the schema before loading (the graph
-    lane). The finding is the fourth case: a lane where some arms split and
-    one does not, and does not say why.
+    (SurrealDB on the document and time-series lanes); or belong to a lane
+    where no arm splits at all, because every engine there builds its index as
+    it ingests (the sparse lane) or creates it in the schema before loading
+    (the graph lane). The finding is the fourth case: a lane where some arms
+    split and one does not, and does not say why.
     """
     print("\n=== F14c: on a lane that splits ingest from index, every arm does ===")
     lanes = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0, 0]))

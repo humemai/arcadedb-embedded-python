@@ -40,16 +40,19 @@ Every step was once done by hand, and the hand-done ones were where the mistakes
 
 ## What blocks a bad publish
 
-Four gate scripts (`page_check` has two sections), then two structural checks. All of them fail the run rather than warn:
+Six gate scripts (`refresh_web_page.GATES`; `page_check` has two sections), then three structural checks. All of them fail the run rather than warn:
 
 | Check | Asks |
 |---|---|
 | `provenance_check` | does every cell trace to a run |
-| `fairness_check` | F1 to F12 comparison invariants, durability class and instrument included |
+| `fairness_check` | F1 to F14 comparison invariants, durability class and instrument included |
 | `equivalence_check` | do the engines of a table agree on the answer, and is every operation an engine cannot express declared (DECISIONS #88) |
 | `page_check.MAPPING` | do the page's table cells agree with the generated tables |
 | `page_check.PROSE` | do the page's hand-typed prose numbers agree with the tables and the page-derived pins |
+| `version_consistency_check` | does one engine wear two version strings across the page's tables, or a comparator an ArcadeDB release number |
+| `version_pin_check` | do `runner.py`, `build_images.sh`, the three Dockerfiles, and COMPARATORS.md agree on every image digest and package pin (it reads no rows) |
 | `_check_no_orphan_figures` | is every generated figure cited |
+| refresh step 3, `tableId` coverage | does every table the page's prose names by `tableId` exist in the payload, and does every table in the payload have a section on the page to render it; a scoped landing declares the tables it lacks in `pending_tables` instead of being refused |
 | refresh step 5 | is every figure the page references a generated one |
 
 `MAPPING` and `PROSE` split the page because the two surfaces fail differently. Cells are written by the exporter straight from the frozen results, so a wrong one is nearly impossible. Prose is typed by hand, so a wrong one is nearly inevitable: a caption once gave one engine's dense latency from the canonical CSV and the other's from the matched overlay, inside one sentence, with no published cell wrong and nothing invented.
@@ -80,12 +83,15 @@ One command, the same order every time, refuses by default:
 
 ```
 .venv/bin/python benchmarks/experiments/land_stage.py \
+    --only-lanes <lanes the stage measured, comma list> \
     --exclude-backends <backends still running on mini, comma list> \
     [--overlay neo4jvec] [--exclude-since 2026-09-12T12:00] [--preview --pin <commit>] \
     --message "<one line: what joined>" [--dry-run | --apply]
 ```
 
-It pulls `runs_page_<pin>.jsonl` (and, with `--overlay`, an arm's dense multipass files at both sizes), drops the rows of the backends named as still running so a stage in progress never reaches the freeze, merges, publishes through the gates, and prints which page tables changed. Without `--apply` it stops there and restores the site's payload; with `--apply` it builds the site, commits both repositories, and pushes. The merge into `runs.jsonl` is idempotent, so a run without `--apply` followed by one with it is the normal sequence.
+It pulls `runs_page_<pin>.jsonl` (and, with `--overlay`, an arm's dense multipass files at both sizes, and always the deployment decomposition's `e4decomp_<pin>/` files, since the `e4` table is a directory of artifacts rather than rows in the log and the export stops without it), drops the rows of the backends named as still running so a stage in progress never reaches the freeze, merges, publishes through the gates, and prints which page tables changed.
+
+**`--only-lanes` scopes a staged landing, and the scope is cumulative.** Rows of every lane not named stay on the host for a later landing, because the gates read the whole freeze and would fail a landing on lanes it was not publishing; empty lands everything. The scope is the lanes named PLUS every lane already on the page, read from the published payload, so a landing adds to the page rather than rebuilding it as though no other lane existed (BUGS F111; PAGE-SPEC.md section 2). Under that sits a refusal: a landing that would make any table on the page disappear is REFUSED and the site's payload restored, because "the page lost a table" is the one diff nobody accepts on purpose. After the merge it also WARNS, without refusing, when a landed lane's rows were measured before a later commit to that lane's own script, and lists the commits: the gates cannot tell a harmless new field from a changed index decision, and an l4 landing once passed all six with DuckDB rows that predated the index every other arm had (BUGS F98). Without `--apply` it stops there and restores the site's payload; with `--apply` it builds the site, commits both repositories, and pushes. The merge into `runs.jsonl` is idempotent, so a run without `--apply` followed by one with it is the normal sequence.
 
 **`--apply` governs the PUBLISH, not the merge, and `--dry-run` is the flag that writes nothing.** A run without `--apply` still performs steps 2 and 3, and step 3 merges. That reading cost nothing only by luck on 2026-09-19, when a test of an unrelated guard was killed by a closed pipe one step before the merge. Use `--dry-run` to pull, filter, and stop: it prints how many rows WOULD merge and which of them carry errors, and leaves `runs.jsonl` byte-identical. It is also the mode a pre-campaign rehearsal wants -- the rehearsal that found six defects before October's first cell was assembled by hand with `BENCH_RUNS_JSONL` and a scratch log, which nobody should have to reconstruct.
 

@@ -2391,11 +2391,13 @@ LANES = {
         "only_workload": "hybrid",
         # Nothing on this table is blanked for running in memory any more:
         # SurrealDB embedded re-ran on the SDK's SurrealKV disk store (qDN,
-        # 2026-09-12) and carries a disk cell. The composed arm's Qdrant half
-        # is still :memory: until qDT, but its disk value is Neo4j's and is
-        # printed as such (the condition below says so). The key stays for
-        # the mechanism at the disk_data_mb skip; it was surrealdb_e2 until
-        # 2026-09-13.
+        # 2026-09-12) and carries a disk cell. September's composed arm ran
+        # its Qdrant half as :memory:, so its disk value is Neo4j's and is
+        # printed as such (the condition below says so); October runs the
+        # Qdrant server beside Neo4j in one container (DECISIONS #117, BUGS
+        # F133) and October tables do not carry these conditions. The key
+        # stays for the mechanism at the disk_data_mb skip; it was
+        # surrealdb_e2 until 2026-09-13.
         "in_memory": (),
         "conditions": [
             "Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.",
