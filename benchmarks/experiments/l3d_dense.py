@@ -1284,6 +1284,40 @@ class SurrealDenseServer(SurrealDense):
         self.db = surreal_common.served_client()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
+    # THE INDEX GOES IN AFTER THE LOAD ON THE SERVER (BUGS F134, DECISIONS
+    # #117). An HNSW index defined on the empty table is built by the 3.2.4
+    # server IN THE BACKGROUND as the rows arrive: INFO FOR INDEX reports
+    # `ready` from the first second while the server works for minutes, the
+    # build timer stops long before the index exists, and every query timed in
+    # that window is slow and different (laptop, pinned image, 50k x 64: 5.1 to
+    # 6.7 s per query with recall 0.78-0.94, then 12 ms with recall 0.69 once
+    # it finishes). September published this arm at 1,510 ms p50 at 1M. Defined
+    # after the load, the server builds the index SYNCHRONOUSLY over the rows
+    # already there (8 s load + 287 s index at 50k on the laptop), so the build
+    # timer holds the whole cost and the first query meets a finished index.
+    # The embedded twin (core 2.3.10) maintains its index during the insert and
+    # keeps the order it has.
+    def build(self, vecs):
+        from surrealdb import RecordID
+        _t = time.perf_counter()
+        for i in range(0, len(vecs), 5_000):
+            chunk = vecs[i:i + 5_000]
+            self.db.insert("article", [{"id": RecordID("article", i + j), "vid": i + j, "embedding": chunk[j].tolist()}
+                                       for j in range(len(chunk))])
+        self.ingest_s = round(time.perf_counter() - _t, 2)
+        _t = time.perf_counter()
+        self.db.query(f"DEFINE INDEX art_emb ON article FIELDS embedding HNSW DIMENSION {DIM} DIST EUCLIDEAN TYPE F32 "
+                      f"EFC {EF_CONSTRUCTION} M {COMPARATOR_M}")
+        self.index_s = round(time.perf_counter() - _t, 2)
+        # REFUSED, not assumed: the synchronous build must have covered every
+        # row, or the queries below would time a partial index again.
+        info = self.db.query("INFO FOR INDEX art_emb ON article")
+        building = (info or {}).get("building", {}) if isinstance(info, dict) else {}
+        self.index_build_initial = building.get("initial")
+        if building.get("status") != "ready" or building.get("initial") != len(vecs):
+            raise RuntimeError(f"surrealdb server: HNSW index not built over the load ({building!r}, "
+                               f"{len(vecs):,} rows loaded); the queries would time a partial index (F134)")
+
 
 class MongoDense(Base):
     """MongoDB 8.2.12 with MongoDB Search (mongot) Community 1.70.4, served
@@ -2043,7 +2077,7 @@ def main():
     # the index sit inside build_s and outside both timers. Landed mid-chain
     # on 2026-09-14 because it cannot move a published number; the arms that
     # need their procedure reordered wait for October.
-    for _k in ("ingest_s", "index_s"):
+    for _k in ("ingest_s", "index_s", "index_build_initial"):
         _v = getattr(b, _k, None)
         if _v is not None:
             out[_k] = _v
