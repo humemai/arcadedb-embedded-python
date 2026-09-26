@@ -1,8 +1,8 @@
 # Java Bridge (`arcadedb-python-bridge.jar`)
 
 The bindings ship a small Java helper jar alongside the engine JARs. Its
-sources live in `bindings/python/src/java/com/arcadedb/python/` — five
-classes, ~506 lines total:
+sources live in `bindings/python/src/java/com/arcadedb/python/`, six
+classes:
 
 | Class | Purpose |
 |---|---|
@@ -11,6 +11,7 @@ classes, ~506 lines total:
 | `DocumentBatcher` | Inserts a whole batch of documents from one JSON-rows string (transactional or async parallel writers); also boxes numpy numeric arrays for `append_samples` |
 | `EdgeBatcher` | Buffers a whole batch of edges into `GraphBatch` from one call (RID strings, or JSON rows for edges with properties) |
 | `VertexBatcher` | Creates a whole batch of vertices from one JSON-rows string, returning all RIDs as one joined string |
+| `TimeSeriesBatcher` | Fills the engine's primitive `TimeSeriesBatch` one column per call, so numeric samples are never boxed |
 
 ## Why it exists
 
@@ -35,6 +36,7 @@ crossing per batch**, receiving a bulk payload it can decode at C speed — the
 | `ResultSet.to_columns()` / fast `to_dataframe()` | `ColumnBatcher` |
 | `Database.insert_many()` | `DocumentBatcher` |
 | `AsyncExecutor.append_samples()` (numpy numeric-column boxing) | `DocumentBatcher` |
+| `AsyncExecutor.append_samples(..., primitive=True)` | `TimeSeriesBatcher` |
 | `GraphBatch.new_edges()` (with and without properties) | `EdgeBatcher` |
 | `GraphBatch.create_vertices()` bulk path | `VertexBatcher` |
 | `Database.export_to_csv()` (streams JSON batches) | `RowBatcher` |
@@ -61,6 +63,8 @@ source on every wheel build.
 - **Every caller has a fallback.** Each Python API that rides the bridge
   falls back to a pure-JPype implementation if the jar (or a required method)
   is absent — a source checkout without the jar still works, just slower.
+  The exception is `AsyncExecutor.append_samples()`: its numpy-column path and
+  its `primitive=True` path load the bridge classes directly and need the jar.
 - `RowBatcher` serializes rows property-by-property rather than via
   `Result.toJSON()` to work around upstream
   [#4967](https://github.com/ArcadeData/arcadedb/issues/4967) (primitive

@@ -4,7 +4,7 @@
 
 A repeated query set returns the same neighbours as its first pass: the warm second pass the project page reports is a cache effect, not a different answer.
 
-There are 1 tests.
+There is 1 test.
 
 ## Test Cases
 

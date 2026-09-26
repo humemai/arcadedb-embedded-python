@@ -54,7 +54,7 @@ Create a new vertex type. Returns the underlying Java `VertexType` object.
 **Parameters:**
 
 - `name` (str): Name of the vertex type
-- `buckets` (Optional[int]): Number of buckets (engine default 3 when omitted)
+- `buckets` (Optional[int]): Number of buckets (engine default 1 when omitted)
 
 **Returns:**
 
@@ -87,7 +87,7 @@ Create a new edge type. Returns the underlying Java `EdgeType` object.
 **Parameters:**
 
 - `name` (str): Name of the edge type
-- `buckets` (Optional[int]): Number of buckets (engine default 3 when omitted)
+- `buckets` (Optional[int]): Number of buckets (engine default 1 when omitted)
 
 **Returns:**
 
@@ -120,7 +120,7 @@ Create a new document type. Returns the underlying Java `DocumentType` object.
 **Parameters:**
 
 - `name` (str): Name of the document type
-- `buckets` (Optional[int]): Number of buckets (engine default 3 when omitted)
+- `buckets` (Optional[int]): Number of buckets (engine default 1 when omitted)
 
 **Returns:**
 
@@ -824,7 +824,7 @@ schema.create_index("Event", ["userId", "timestamp"])
 ```python
 # ✅ Good: Scale buckets with data size
 if expected_records < 100000:
-    buckets = 3  # Default
+    buckets = 1  # Default
 elif expected_records < 1000000:
     buckets = 10
 else:

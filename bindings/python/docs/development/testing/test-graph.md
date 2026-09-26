@@ -1,8 +1,8 @@
-# Graph API Tests
+# GraphBatch Bulk Path Tests
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_graph.py)
 
-There are 3 tests.
+Despite the file name, these tests cover the `GraphBatch` bulk paths (`new_edges` and `create_vertices`), not the graph wrapper API; that is in [Graph API Tests](test-graph-api.md).
 
 ## Test Cases
 

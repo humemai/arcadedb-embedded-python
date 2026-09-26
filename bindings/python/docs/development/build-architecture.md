@@ -38,12 +38,12 @@ We use a **hybrid build approach** to create platform-specific wheels:
 2. **macOS platform:** Native builds
     - Uses platform-specific GitHub Actions runner
     - Native `jlink` creates correct JRE for the platform
-    - Pre-filtered JARs from artifact (eliminates glob issues)
+    - JARs from the `download-jars` artifact, filtered by `scripts/build-native.sh`
 
 3. **Windows platform:** Native builds
     - Uses platform-specific GitHub Actions runner
     - Native `jlink` creates correct JRE for the platform
-    - Pre-filtered JARs from artifact (eliminates glob issues)
+    - JARs from the `download-jars` artifact, filtered by `scripts/build-native.sh`
 
 **Critical:** All wheels are **platform-specific** (not `py3-none-any`). This is achieved by:
 
@@ -107,7 +107,7 @@ See `bindings/python/setup.py` for the complete implementation.
 jobs:
   download-jars:
     runs-on: ubuntu-24.04
-    # Downloads 84 ArcadeDB JARs, filters to 83, uploads artifact
+    # Copies the ArcadeDB JARs out of the upstream image, uploads artifact
 
   test:
     needs: download-jars
@@ -119,17 +119,15 @@ jobs:
 
 ### Job 1: download-jars (Ubuntu)
 
-**Purpose:** Single point of JAR filtering to avoid cross-platform issues.
+**Purpose:** Give the native builds (macOS, Windows) the ArcadeDB JAR set without Docker.
 
 **Steps:**
 
-1. Download the ArcadeDB JAR set from the upstream Docker image
-2. Read `jar_exclusions.txt` (single source of truth)
-3. Filter out excluded JARs (for example `arcadedb-grpcw-*.jar`, `arcadedb-ha-raft-*.jar`)
-4. Result: a smaller filtered JAR set used by native builds
-5. Upload as artifact for native builds
+1. Copy the ArcadeDB JAR set out of the upstream Docker image
+2. Upload it as an artifact for native builds
 
-**Why Ubuntu?** Bash filtering works reliably and avoids cross-platform glob differences.
+The JARs are filtered later, by the build that packages them (see
+[JAR Exclusion System](#jar-exclusion-system)).
 
 ### Job 2: test (Matrix)
 
@@ -146,8 +144,9 @@ jobs:
 
 #### macOS Platform (Native)
 
-1. Download pre-filtered JARs artifact
+1. Download the JAR artifact
 2. Run `scripts/build-native.sh`:
+    - Removes the JARs listed in `jar_exclusions.txt`
     - Uses system Java (GitHub runner provides Java 25)
     - Runs `jlink` natively → platform-specific JRE
     - Builds wheel with `python -m build`
@@ -155,8 +154,9 @@ jobs:
 
 #### Windows Platform (Native)
 
-1. Download pre-filtered JARs artifact
+1. Download the JAR artifact
 2. Run `scripts/build-native.sh`:
+    - Removes the JARs listed in `jar_exclusions.txt`
     - Uses system Java (GitHub runner provides Java 25)
     - Runs `jlink` natively → platform-specific JRE
     - Builds wheel with `python -m build`
@@ -177,25 +177,20 @@ arcadedb-ha-raft-*.jar
 
 **Used by:**
 
-1. `.github/workflows/test-python-bindings.yml` (download-jars job)
-2. `bindings/python/scripts/Dockerfile.build` (Docker builds)
-3. `bindings/python/scripts/build-native.sh` (native builds)
+1. `bindings/python/scripts/Dockerfile.build` (Docker builds)
+2. `bindings/python/scripts/build-native.sh` (native builds)
 
 **Result:** The wheel excludes optional Java components that are not part of the default Python distribution.
 
 ### Implementation
 
-**Before (Broken):** Each build step filtered independently
+Filtering happens in the build that packages the JARs, so every wheel gets the same filter:
 
-- `scripts/build-native.sh`: Filtered with bash on macOS
-- `scripts/Dockerfile.build`: Filtered with bash on Linux
-- **Problem:** Glob patterns varied across shells, causing duplication and inconsistency
-
-**After (Fixed):** Single upstream filter
-
-- `download-jars` job: Filters once on Ubuntu (reliable bash)
-- Native builds: Use pre-filtered JARs from artifact
-- Docker builds: Filter independently (different source)
+- `scripts/Dockerfile.build` (Linux): the `jre-builder` stage copies
+  `jar_exclusions.txt` into the image and deletes each matching JAR with `find -name "$pattern" -delete`
+- `scripts/build-native.sh` (macOS, Windows): `apply_jar_exclusions` deletes each matching JAR
+  from `src/arcadedb_embedded/jars`, stripping a trailing CR from each pattern so a CRLF checkout
+  on Windows still matches
 - **Result:** Consistent filtered JAR contents across all platforms
 
 ## Test Parsing
@@ -227,21 +222,20 @@ errors=$(grep -oE 'errors="[0-9]+"' test-results.xml | grep -oE '[0-9]+')
 ### Stages
 
 ```dockerfile
-# Stage 1: java-builder (downloads JARs from ArcadeDB image)
-FROM arcadedata/arcadedb:24.11.1 AS java-builder
-# Downloads the upstream JAR set to /jars
+# Stage 1: java-builder (the ArcadeDB image; ARCADEDB_TAG is a required build arg)
+FROM arcadedata/arcadedb:${ARCADEDB_TAG} AS java-builder
 
 # Stage 2: jre-builder (filters JARs, creates JRE)
 FROM amazoncorretto:25 AS jre-builder
-COPY --from=java-builder /jars/*.jar /jars/
+COPY --from=java-builder /home/arcadedb/lib /build/upstream-jars/
 # Reads jar_exclusions.txt
 # Filters out excluded JARs before packaging
-# Runs jlink → creates /jre (platform-specific!)
+# Runs jlink → creates /build/jre (platform-specific!)
 
 # Stage 3: python-builder (builds wheel)
-FROM python:3.12-slim
-COPY --from=jre-builder /jars/*.jar /jars/
-COPY --from=jre-builder /jre /jre
+FROM python:${PYTHON_VERSION}-slim AS python-builder
+COPY --from=jre-builder /build/jars /build/jars/
+COPY --from=jre-builder /build/jre /build/jre/
 # Builds wheel with bundled JRE
 ```
 
@@ -255,11 +249,11 @@ COPY --from=jre-builder /jre /jre
 ### `scripts/build-native.sh` Workflow
 
 ```bash
-# 1. Check for pre-filtered JARs (from artifact)
+# 1. Use JARs already in src/arcadedb_embedded/jars (the CI artifact)
 if [ -d "$JARS_DIR" ]; then
-  echo "Using existing JARs from artifact"
+  echo "Using existing JARs"
 else
-  # Fallback: download from Docker (not used in CI)
+  # Fallback: copy from the ArcadeDB Docker image (not used in CI)
   download_jars_from_docker
 fi
 
@@ -271,7 +265,7 @@ jlink --output jre \
   --strip-debug \
   --no-man-pages \
   --no-header-files \
-  --compress zip-6
+  --compress zip-9
 
 # 4. Remove Windows-only non-runtime artifacts when needed
 
@@ -281,9 +275,9 @@ jlink --output jre \
 python -m build --wheel
 ```
 
-**Current behavior:** Native builds prefer the pre-filtered JAR artifact from CI, but still
-re-apply `jar_exclusions.txt` locally so fallback Docker downloads and Windows checkouts remain
-consistent.
+**Current behavior:** Native builds use the JAR artifact from CI when it is present, and apply
+`jar_exclusions.txt` themselves, so the artifact, fallback Docker downloads, and Windows checkouts
+all end up with the same JAR set.
 
 ## GitHub ARM64 Runners (linux/arm64)
 
@@ -320,7 +314,7 @@ Since the runner itself is ARM64, Docker builds run natively without emulation.
 ```text
 bindings/python/
 ├── scripts/build.sh            # Main build entrypoint
-├── scripts/build-native.sh     # Native builds (macOS)
+├── scripts/build-native.sh     # Native builds (macOS, Windows)
 ├── scripts/jar_exclusions.txt  # Single source of truth for JAR filtering
 ├── scripts/Dockerfile.build    # Docker builds (Linux)
 ├── scripts/setup_jars.py       # Copies JARs/JRE to package
@@ -338,15 +332,15 @@ bindings/python/
 
 **Key sections:**
 
-1. **download-jars job** (lines 18-89)
-    - Downloads and filters JARs once
+1. **download-jars job**
+    - Copies the ArcadeDB JARs out of the upstream image
     - Uploads artifact for native builds
 
-2. **test job matrix** (lines 91-364)
+2. **test job matrix**
     - Builds 4 platforms
         - Platform-specific steps (native runners, artifact download, tests)
 
-3. **Test parsing** (lines 200-237)
+3. **Test parsing**
     - JUnit XML generation and parsing
     - Cross-platform compatible
 
@@ -372,7 +366,7 @@ bindings/python/
 
 ### Issue 4: Linux Builds Downloaded Unnecessary Artifact
 
-**Problem:** Linux Docker builds downloaded pre-filtered artifact but didn't use it.
+**Problem:** Linux Docker builds downloaded the JAR artifact but didn't use it.
 
 **Solution:** Skip artifact download for Linux platforms (Docker gets JARs directly).
 
@@ -402,13 +396,18 @@ Sizes are ballpark values and vary by platform and version:
 ### Local Build
 
 ```bash
-# Build for current platform
+# Build for the current platform (Docker on Linux, native on macOS and Windows)
 cd bindings/python
-./scripts/build-native.sh
+./scripts/build.sh
 
-# Or use Docker (Linux only)
-docker build -f scripts/Dockerfile.build -t arcadedb-python-builder ../..
+# Or pick the target platform and Python version
+./scripts/build.sh linux/amd64 3.12
 ```
+
+`build.sh` reads the ArcadeDB tag from `pom.xml` and passes it on. If you call the lower-level
+scripts directly, `build-native.sh` needs `PLATFORM PACKAGE_NAME PACKAGE_DESCRIPTION ARCADEDB_TAG`
+(the tag comes from `python3 scripts/extract_version.py --format=docker`), and `Dockerfile.build`
+needs `--build-arg ARCADEDB_TAG=<tag>`.
 
 ### Test Locally
 

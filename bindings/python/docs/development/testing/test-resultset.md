@@ -61,7 +61,7 @@ Iterating a `ResultSet` consumes it: first iteration returns two `ReuseTest` row
 
 ### get_rid and get_vertex
 
-For a `Person` vertex, `get_rid()` returns a string starting with `#`, and `get_vertex()` returns the underlying Java vertex with `name == 'Alice'`.
+For a `Person` vertex, `get_rid()` returns a string starting with `#`, and `get_vertex()` returns the Python `Vertex` wrapper (or `None` when the row is not a vertex) with `get('name') == 'Alice'`.
 
 ### to_json with arrays
 
@@ -76,7 +76,7 @@ users = db.query("sql", "SELECT FROM User ORDER BY name").to_list(convert_types=
 # Chunked iteration
 chunks = list(db.query("sql", "SELECT FROM Item ORDER BY id").iter_chunks(size=100))
 
-# Count without consuming to Python objects
+# Count the remaining rows (iterates in Python and consumes the ResultSet)
 count = db.query("sql", "SELECT FROM Counter").count()
 
 # first() vs one()
@@ -84,7 +84,7 @@ first_row = db.query("sql", "SELECT FROM FirstTest ORDER BY value").first()
 only_row = db.query("sql", "SELECT FROM OneTest WHERE value = 'unique'").one()
 ```
 
-Key behaviors: ResultSet is single-use for iteration, `count()` runs server-side, `one()` validates cardinality, and empty results return `None` for `first()` and an empty list/chunks for conversions.
+Key behaviors: ResultSet is single-use for iteration, `count()` iterates the rows in Python and consumes them (use `SELECT count(*)` to count in the engine), `one()` validates cardinality, and empty results return `None` for `first()` and an empty list/chunks for conversions.
 3. **Chunk large results** - Use `iter_chunks()` for memory efficiency
 4. **Convert to DataFrame** - For data analysis
 5. **Check for empty** - Use `first()` to check if results exist

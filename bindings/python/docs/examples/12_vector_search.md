@@ -26,13 +26,18 @@ Example 12 is the search-only vector benchmark.
 
 ## Run
 
-From `bindings/python/examples`:
+From `bindings/python/examples`. `--db-path` is the directory Example 11 created under its
+`--db-root` (default `my_test_databases`). Example 11 names it after its parameters, as
+`backend=<backend>_dataset=<dataset>_label=..._count=<n>_run=<run-label or default>`:
 
 ```bash
+DB_PATH=$(find ./my_test_databases -maxdepth 1 -type d \
+  -name 'backend=arcadedb_sql_dataset=stackoverflow-tiny_*' | head -n 1)
+
 python 12_vector_search.py \
   --backend arcadedb_sql \
   --dataset stackoverflow-tiny \
-  --db-path ./my_test_databases/stackoverflow_tiny_vector_index_arcadedb_sql \
+  --db-path "$DB_PATH" \
   --k 50 \
   --query-limit 1000 \
   --ef-search-values 50,75,100,150,200 \

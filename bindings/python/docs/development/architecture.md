@@ -118,15 +118,16 @@ arcadedb_embedded/
 ### Java Bridge Jar
 
 Alongside the engine JARs, the wheel ships `arcadedb-python-bridge.jar` —
-five small Java helpers (`RowBatcher`, `ColumnBatcher`, `DocumentBatcher`,
-`EdgeBatcher`, `VertexBatcher`, sources in
+six small Java helpers (`RowBatcher`, `ColumnBatcher`, `DocumentBatcher`,
+`EdgeBatcher`, `VertexBatcher`, and `TimeSeriesBatcher`, sources in
 `bindings/python/src/java/com/arcadedb/python/`)
 that move per-row/per-record loops to the Java side so bulk operations cost
 one JPype crossing per batch instead of several per row. It backs
 `to_json_list()`, `to_columns()`/`to_dataframe()`, `insert_many()`,
 `GraphBatch.new_edges()`, the `create_vertices()` bulk path, and
 `export_to_csv()`; every caller falls back to pure JPype if the jar is
-absent. See [Java Bridge](bridge.md) for
+absent. `AsyncExecutor.append_samples()` also uses it (`DocumentBatcher` for
+numpy columns, `TimeSeriesBatcher` for `primitive=True`) and has no fallback. See [Java Bridge](bridge.md) for
 details.
 
 ## JPype Integration
@@ -141,6 +142,10 @@ def start_jvm(
     common_pool_parallelism=None,
 ):
     if jpype.isJVMStarted():
+        # No explicit settings: join the running JVM.
+        # Same settings as the first start: return.
+        # Different settings: raise ArcadeDBError (the JVM is configured once).
+        ...
         return
 
     # Locate bundled JRE + packaged JARs
@@ -700,26 +705,22 @@ stays minimal. The extras' floors are audited in CI, so treat
 
 ### JAR Management
 
-```python
-# scripts/setup_jars.py - Download and package JARs
+`scripts/setup_jars.py` downloads nothing. It runs inside the Docker build
+(`scripts/Dockerfile.build`, `python-builder` stage) and stages what earlier
+stages produced into the package:
 
-import requests
-import os
+- `find_jar_files()` looks for the already-filtered JARs in `/build/jars`
+  (the Docker build location) or `/home/arcadedb/lib`
+- `copy_jars_to_package()` clears `src/arcadedb_embedded/jars/` and copies
+  those JARs into it
+- `copy_jre()` replaces `src/arcadedb_embedded/jre/` with the `jlink` JRE
+  from `/build/jre`
+- `main()` runs the two copies and exits non-zero if either fails
 
-def download_arcadedb_jars(version):
-    """Download ArcadeDB distribution JARs."""
-
-    base_url = f"https://repo1.maven.org/maven2/com/arcadedata/"
-
-    # Core JAR
-    jar_url = f"{base_url}arcadedb/{version}/arcadedb-{version}.jar"
-    download_jar(jar_url, f"arcadedb-{version}.jar")
-
-    # Download all dependencies (GraphQL, etc.)
-    pass
-
-# Called during package build
-```
+The JARs themselves come from the `arcadedata/arcadedb` image, and
+`jar_exclusions.txt` is applied before this script runs. Native builds
+(`scripts/build-native.sh`) do the same staging themselves and do not call it.
+See [Build Architecture](build-architecture.md).
 
 ## See Also
 

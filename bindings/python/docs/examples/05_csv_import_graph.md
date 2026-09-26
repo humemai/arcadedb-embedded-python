@@ -60,9 +60,6 @@ python 05_csv_import_graph.py --dataset movielens-small --method java
 # Run with export for roundtrip validation
 python 05_csv_import_graph.py --dataset movielens-small --batch-size 5000 --method java --no-async --export
 
-# Comprehensive benchmark (all 6 configurations in parallel)
-./run_benchmark_05_csv_import_graph.sh movielens-small 5000 4 all_6 --export
-
 # See all options
 python 05_csv_import_graph.py --help
 ```
@@ -465,7 +462,7 @@ class VertexCreator:
 # See full implementation in the Python file for the Java-API paths.
 ```
 
-The default `--method java` path builds the same vertices through `GraphBatch`, which
+The `--method java` path builds the same vertices through `GraphBatch`, which
 hands each batch to Java in one call and returns one RID per row:
 
 ```python
@@ -484,8 +481,9 @@ instead of producing a quietly incomplete graph.
 
 ```python
 # EdgeCreator paginates the source Rating type (database-level streaming),
-# resolves User/Movie RIDs once per batch via a cache (IN [...] lookups that
-# use the userId/movieId indexes), then creates edges directly between RIDs.
+# resolves User/Movie RIDs once per batch via a cache (`IN :ids` lookups, with
+# the ids bound as one list parameter so every chunk reuses the same query text
+# and the userId/movieId indexes), then creates edges directly between RIDs.
 class EdgeCreator:
     def _create_rated_edges(self, total_ratings: int):
         """Create RATED edges from Rating records."""
@@ -556,25 +554,14 @@ python 05_csv_import_graph.py --dataset movielens-small --batch-size 5000 --meth
 
 ### Comprehensive Benchmark (All 6 Configurations)
 
-```bash
-# Run all 6 methods in parallel
-./run_benchmark_05_csv_import_graph.sh movielens-small 5000 4 all_6
+Each configuration is one run of `05_csv_import_graph.py` with the flags shown:
 
-# With export and roundtrip validation
-./run_benchmark_05_csv_import_graph.sh movielens-small 5000 4 all_6 --export
-
-# Large dataset (takes several hours)
-./run_benchmark_05_csv_import_graph.sh movielens-large 50000 4 all_6 --export
-```
-
-**6 Configurations:**
-
-1. `java` - Java API with GraphBatch vertices and indexes
-2. `java_noasync` - Java API with synchronous vertex transactions and indexes
-3. `java_noindex` - Java API with GraphBatch vertices, no indexes
-4. `java_noindex_noasync` - Java API with synchronous vertex transactions, no indexes
-5. `sql` - SQL with indexes (always synchronous)
-6. `sql_noindex` - SQL without indexes (always synchronous)
+1. `java` (`--method java`) - Java API with GraphBatch vertices and indexes
+2. `java_noasync` (`--method java --no-async`) - Java API with synchronous vertex transactions and indexes
+3. `java_noindex` (`--method java --no-index`) - Java API with GraphBatch vertices, no indexes
+4. `java_noindex_noasync` (`--method java --no-index --no-async`) - Java API with synchronous vertex transactions, no indexes
+5. `sql` (`--method sql`) - SQL with indexes (always synchronous)
+6. `sql_noindex` (`--method sql --no-index`) - SQL without indexes (always synchronous)
 
 Configurations 1 and 3 changed on 2026-09-15: they used the async executor before that
 date. Their rows in the tables above are the pre-change measurements.

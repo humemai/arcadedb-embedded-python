@@ -66,7 +66,8 @@ Documentation is versioned using [mike](https://github.com/jimporter/mike) and a
 1. **Create a GitHub Release** with tag like `X.Y.Z`
 2. **GitHub Actions** automatically:
     - Builds documentation with MkDocs
-    - Deploys version `X.Y.Z` to GitHub Pages
+    - Deploys version `X.Y.Z` under `arcadedb/` on the `main` branch of
+      [humemai/humemai-docs](https://github.com/humemai/humemai-docs), which serves docs.humem.ai
     - Sets it as the `latest` version
     - Updates version selector
 
@@ -114,24 +115,49 @@ This creates a test deployment without affecting the stable docs.
 
 ### Version Management
 
+The deploy workflow (`.github/workflows/deploy-python-docs.yml`) does not use a `gh-pages` branch.
+It checks out `humemai/humemai-docs` (branch `main`) into `humemai-docs/` at the repo root and runs
+mike from there with `--deploy-prefix arcadedb --branch main`. Use the same layout and flags by hand
+(push access to `humemai/humemai-docs` is required for `--push`):
+
+```bash
+# From the repo root
+git clone -b main https://github.com/humemai/humemai-docs.git humemai-docs
+cd humemai-docs
+```
+
 List all deployed versions:
 
 ```bash
-uv run mike list -F bindings/python/mkdocs.yml
+uv run --project .. --group docs mike list \
+  --deploy-prefix arcadedb \
+  --branch main \
+  --config-file ../bindings/python/mkdocs.yml
 ```
 
-Delete a version (requires push access):
+Delete a version:
 
 ```bash
 # Replace X.Y.Z with version to delete
-uv run mike delete X.Y.Z --push -F bindings/python/mkdocs.yml
+uv run --project .. --group docs mike delete \
+  --deploy-prefix arcadedb \
+  --branch main \
+  --push \
+  --config-file ../bindings/python/mkdocs.yml \
+  X.Y.Z
 ```
 
-Set a different version as default:
+Point `latest` at a different version (the workflow sets the default to the `latest` alias, so
+moving the alias is enough):
 
 ```bash
-# Replace X.Y.Z with version to set as default
-uv run mike set-default X.Y.Z --push -F bindings/python/mkdocs.yml
+# Replace X.Y.Z with the version that should become latest
+uv run --project .. --group docs mike alias --update-aliases \
+  --deploy-prefix arcadedb \
+  --branch main \
+  --push \
+  --config-file ../bindings/python/mkdocs.yml \
+  X.Y.Z latest
 ```
 
 ### Version Alignment
@@ -340,12 +366,33 @@ uv sync --group docs
 
 ### Version selector not showing
 
-The version selector appears after deploying at least 2 versions with mike:
+The version selector appears after deploying at least 2 versions with mike. The deploy workflow
+runs these from its `humemai-docs/` checkout (see [Version Management](#version-management)):
 
 ```bash
-# Example: Deploy two versions
-uv run mike deploy X.Y.Z latest -F bindings/python/mkdocs.yml
-uv run mike deploy dev -F bindings/python/mkdocs.yml
+# A release, set as latest
+mike deploy --update-aliases \
+  --deploy-prefix arcadedb \
+  --branch main \
+  --push \
+  --config-file ../bindings/python/mkdocs.yml \
+  X.Y.Z latest \
+  --title "X.Y.Z"
+mike set-default \
+  --deploy-prefix arcadedb \
+  --branch main \
+  --push \
+  --config-file ../bindings/python/mkdocs.yml \
+  latest
+
+# A version that is not latest (for example a manual `dev` run)
+mike deploy \
+  --deploy-prefix arcadedb \
+  --branch main \
+  --push \
+  --config-file ../bindings/python/mkdocs.yml \
+  dev \
+  --title "dev"
 ```
 
 ## Next Steps

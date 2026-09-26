@@ -6,7 +6,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 
 | Package | Wheel Size | Installed Size | Java Required | Studio UI | Query Languages |
 |---------|-----------|------------------------------|---------------|----------------|
-| **arcadedb-embedded** | ~67MB | ~94MB | ❌ No | ✅ | SQL, OpenCypher |
+| **arcadedb-embedded** | ~69 MiB | ~96 MiB | ❌ No | ✅ | SQL, OpenCypher |
 
 **Installation:**
 
@@ -20,10 +20,10 @@ pip install arcadedb-embedded
 
 The package includes everything you need:
 
-- **ArcadeDB JARs** (~31MB, uncompressed): Core database plus the optional server/Studio stack
-- **Bundled JRE** (~63MB, uncompressed): Platform-specific Java 25 runtime (via jlink)
+- **ArcadeDB JARs** (~33 MiB, uncompressed): Core database plus the optional server/Studio stack
+- **Bundled JRE** (~63 MiB, uncompressed): Platform-specific Java 25 runtime (via jlink)
 
-**Current Linux x86_64 package info:** ~67MB compressed wheel, ~63MB JRE, ~31MB JARs, and ~94MB installed.
+**Current Linux x86_64 package info:** ~69 MiB compressed wheel, ~63 MiB JRE, ~33 MiB JARs, and ~96 MiB installed (26.10.1 development wheel, measured 2026-09-27).
 
 These numbers are measured from the built wheel file and the extracted
 `site-packages/arcadedb_embedded/` directory, and they vary by platform and version.
@@ -44,7 +44,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 
 **Core Features:**
 
-- ✅ **No Java Installation Required**: Platform-specific JRE bundled (~63MB uncompressed)
+- ✅ **No Java Installation Required**: Platform-specific JRE bundled (~63 MiB uncompressed)
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
 - ✅ **Query Languages**: SQL, OpenCypher (all included)
 - ✅ **Vector Search**: Graph-based indexing for embeddings
@@ -58,9 +58,9 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
   protocol). See `scripts/jar_exclusions.txt` in the repository for the full
   list.
 - The bundled server is in-process, so its lifetime is your Python process's.
-  For a standalone server, HA/replication, TLS, or the Postgres/Redis/Mongo
-  wire protocols, run the official
-  [ArcadeDB server](https://docs.arcadedb.com/#Server) — see
+  It bundles the Postgres, Redis, and Bolt wire protocols (opt-in). For a
+  standalone server, HA/replication, TLS, or the Mongo wire protocol, run the
+  official [ArcadeDB server](https://docs.arcadedb.com/#Server) — see
   [Access Methods](../api-access-methods.md).
 
 ## Use Cases
@@ -111,13 +111,13 @@ Simple and consistent across all platforms!
 Current sizes are ballpark values and can move with ArcadeDB, the bundled JRE, the
 target platform, and filesystem overhead after installation:
 
-- **Wheel (compressed)**: ~67MB
-- **Installed package**: ~94MB
+- **Wheel (compressed)**: ~69 MiB
+- **Installed package**: ~96 MiB
 
 **Components (uncompressed):**
 
-- **ArcadeDB JARs**: ~31MB (63 JARs, of which 12 are the optional server stack at 7.65MB)
-- **Bundled JRE**: ~63MB (platform-specific Java 25 runtime via jlink, 16 modules)
+- **ArcadeDB JARs**: ~33 MiB (64 JARs, including the optional server stack; [Server Mode](../guide/server.md#what-it-costs-you) breaks down its cost as measured on 26.8.1)
+- **Bundled JRE**: ~63 MiB (platform-specific Java 25 runtime via jlink, 20 modules)
 
 **Optimizations:**
 

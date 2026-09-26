@@ -73,20 +73,25 @@ with arcadedb.create_database("./test_db") as db:
 
     # Insert test vertices with embeddings
     with db.transaction():
-        doc1 = db.new_vertex("Doc", docId=1, embedding=[1.0, 0.0, 0.0])
+        doc1 = db.new_vertex("Doc")
+        doc1.set("docId", 1)
+        doc1.set("embedding", arcadedb.to_java_float_array([1.0, 0.0, 0.0]))
         doc1.save()
-        doc2 = db.new_vertex("Doc", docId=2, embedding=[0.0, 1.0, 0.0])
+        doc2 = db.new_vertex("Doc")
+        doc2.set("docId", 2)
+        doc2.set("embedding", arcadedb.to_java_float_array([0.0, 1.0, 0.0]))
         doc2.save()
 
-    # Search with filters
+    # Search with filters (the WHERE goes on an outer query over the expanded
+    # neighbours; on the expand() query itself it matches nothing)
     query = [1.0, 0.0, 0.0]
     allowed_rids_sql = f"['{doc1.get_rid()}', '{doc2.get_rid()}']"
     query_literal = "[" + ", ".join(str(float(v)) for v in query) + "]"
     results = db.query(
         "sql",
         (
-            "SELECT expand(vectorNeighbors('Doc[embedding]', "
-            f"{query_literal}, 2, 100)) WHERE @rid IN {allowed_rids_sql}"
+            "SELECT FROM (SELECT expand(vectorNeighbors('Doc[embedding]', "
+            f"{query_literal}, 2, 100))) WHERE @rid IN {allowed_rids_sql}"
         ),
     ).to_list()
 ```

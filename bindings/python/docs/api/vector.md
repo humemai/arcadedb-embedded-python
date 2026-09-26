@@ -890,9 +890,9 @@ db.close()
 
 **max_connections (connections per node):**
 
-- **Lower (12)**: Faster build, less memory, lower recall
-- **Medium (16)**: Balanced (default)
-- **Higher (32)**: Better recall, more memory, slower build
+- **Lower (16)**: Faster build, less memory, lower recall
+- **Medium (32)**: Balanced (default)
+- **Higher (64)**: Better recall, more memory, slower build
 
 **ef_search (exact search beam width):**
 
@@ -924,7 +924,7 @@ db.close()
 **Inner Product:**
 
 - Best for: Collaborative filtering, when vectors aren't normalized
-- Range: (-∞, ∞), higher is better (note: inverted!)
+- Range: (-∞, ∞), lower is better (the score is the negative dot product)
 - Use when: Magnitude information is important
 
 ### Memory Considerations

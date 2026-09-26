@@ -127,13 +127,15 @@ flushes deterministically and releases the lock for other processes.
 
 ### Database Locked
 
-**Symptom:** `ArcadeDBError: Database is locked by another process`
+**Symptom:** `ArcadeDBError: ... Database '<name>' is locked by another process (path=...)`
 
-**Cause:** Another process has the database open.
+**Cause:** Another process has the database open. The engine holds an OS lock on
+`database.lck` in the database directory while the database is open, and the OS
+releases that lock when the process exits, even after a crash.
 
 **Solution:**
 
-1. **Close other connections:**
+1. **Close the database in the process that holds it:**
 ```python
 # Ensure previous database is closed
 db.close()
@@ -145,11 +147,13 @@ ps aux | grep python
 kill <PID>
 ```
 
-3. **Remove lock file (last resort):**
-```bash
-# Only if you're sure no process is using the database
-rm ./mydb/.lock
-```
+3. **Share the database through a server** if several processes need it at once
+   (see [Server Patterns](testing/test-server-patterns.md)).
+
+!!! warning "Do not delete `database.lck`"
+    A `database.lck` left on disk after a crash does not block anything: no process
+    holds its lock any more. It is the marker that tells the next open to replay the
+    WAL, and a clean close deletes it. Deleting it by hand skips that recovery.
 
 ---
 

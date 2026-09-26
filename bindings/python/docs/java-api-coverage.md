@@ -244,7 +244,6 @@ management. For those scenarios, use the Java APIs directly.
 
 ## 🚧 Future Work
 
-- SQL-level vector syntax in ArcadeDB (when available upstream)
 - Expanded performance benchmarks and scale testing
 - Continued alignment with upstream Java releases
 

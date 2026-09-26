@@ -4,8 +4,6 @@
 
 The wire protocols the wheel bundles are actually reachable.
 
-There are 4 tests.
-
 ## Test Cases
 
 ### 1) plugins are opt in
@@ -16,11 +14,15 @@ A default server starts HTTP and nothing else.
 
 Postgres wire is the binary protocol the wheel actually ships.
 
-### 3) redis port setting is honored
+### 3) postgres wire answers arrow adbc
+
+Arrow's native PostgreSQL ADBC driver connects and fetches typed columns, including a computed `count(*)` column as int64. Needs 26.10.1.
+
+### 4) redis port setting is honored
 
 arcadedb.redis.port is honoured, like the Postgres and Bolt ports.
 
-### 4) bolt wire answers a cypher query
+### 5) bolt wire answers a cypher query
 
 See the source for the exact assertions.
 

@@ -496,7 +496,10 @@ creation). Manages its own transactions unless one is already active.
   with other types (e.g. `datetime`, `bytes`) fall back transparently to
   the per-row path.
 - `commit_every` (int): Transaction batch size in synchronous mode
-  (0 = single transaction; ignored when a transaction is already open)
+  (0 = single transaction; ignored when a transaction is already open).
+  Wheels before 26.10.1 did not ignore it on the JSON fast path: they
+  committed the caller's open transaction every `commit_every` rows
+  (fixed 2026-09-27).
 - `parallel` (bool): Route rows through the async executor's parallel
   bucket writers and wait for completion (out-of-order writes)
 

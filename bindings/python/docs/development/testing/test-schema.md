@@ -18,6 +18,7 @@ Schema tests cover:
 - ✅ **Index Deletion** - Removing indexes
 - ✅ **Property Types** - All ArcadeDB property types, including LIST/MAP
 - ✅ **Vector Indexes** - Retrieval/listing via Schema API and LSM vector index operations
+- ✅ **MAP Indexes** - `BY KEY` and `BY VALUE` indexes on a MAP property
 
 ## Test Classes
 
@@ -390,6 +391,14 @@ Tests LSM vector index schema operations created via `db.create_vector_index(...
 - `test_list_lsm_vector_indexes()` - After `create_vector_index("Doc", "embedding", dimensions=3)`, `list_vector_indexes()` includes the new index
 - `test_get_lsm_vector_index_existing()` - `get_vector_index("Doc", "embedding")` returns a `VectorIndex` instance
 - `test_get_lsm_vector_index_persistence()` - `get_vector_index` can load a persisted LSM index; `get_size()` reflects inserted vectors
+
+### TestMapIndexByKeyValue
+
+Tests `CREATE INDEX ON <type> (<prop> BY KEY)` and `(<prop> BY VALUE)` on a MAP property (new in 26.8).
+
+**Tests:**
+
+- `test_map_index_by_key_and_value()` - Creates both indexes on `Movie.thumbs`, checks `CONTAINSKEY` and `CONTAINSVALUE` queries return the right rows, and asserts `Movie[thumbsbykey]` and `Movie[thumbsbyvalue]` exist as distinct indexes
 
 ## Test Patterns
 

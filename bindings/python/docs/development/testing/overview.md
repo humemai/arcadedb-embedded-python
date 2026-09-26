@@ -75,15 +75,15 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 
 | Test File | Description |
 | --------- | ----------- |
-| [`test_async_executor.py`](test-async-executor.md) | Async command/query execution, callback behavior, and command-path exactness at parallel level 1 |
-| `test_bulk_insert.py` | Recommended bulk paths land every row, plus `Database.insert_many`, `AsyncExecutor.create_record`, vector columns, and numpy `append_samples` bulk ingest |
+| [`test_async_executor.py`](test-async-executor.md) | Async command/query execution, callback behavior, and exact command-path counts at parallel levels 1 and 4 |
+| [`test_bulk_insert.py`](test-bulk-insert.md) | Recommended bulk paths land every row, plus `Database.insert_many`, `AsyncExecutor.create_record`, vector columns, and numpy `append_samples` bulk ingest |
 | [`test_core.py`](test-core.md) | Core database operations, CRUD, transactions, queries |
 | [`test_database_utils.py`](test-database-utils.md) | Database utility helpers and initialization behavior |
 | [`test_docs_examples.py`](test-docs-examples.md) | Executes representative Python snippets from the documentation site |
 | [`test_exporter.py`](test-exporter.md) | Database export formats and CSV result export helpers |
 | [`test_graph_api.py`](test-graph-api.md) | Graph wrapper behavior for vertices, edges, and traversal helpers |
 | [`test_importer_api.py`](test-importer.md) | Narrow `db.import_documents(...)` wrapper coverage |
-| `test_logging_helper.py` | Logging helper configuration behavior |
+| [`test_logging_helper.py`](test-logging-helper.md) | Internal `_logging` helper configuration behavior |
 | [`test_numpy_support.py`](test-numpy-support.md) | NumPy integration and array conversion behavior |
 | [`test_resultset.py`](test-resultset.md) | Result and ResultSet iteration, accessors, and export helpers |
 | [`test_schema.py`](test-schema.md) | Schema, property, and index management behavior |
@@ -93,7 +93,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_import_database.py`](test-importer.md) | SQL `IMPORT DATABASE` scenarios and format coverage |
 | [`test_cypher.py`](test-opencypher.md) | OpenCypher query language |
 | [`test_graph_batch.py`](test-graph-batch.md) | Bulk graph-ingest helper coverage |
-| `test_graph.py` | `GraphBatch.new_edges` bulk edge creation coverage |
+| [`test_graph.py`](test-graph.md) | `GraphBatch.new_edges` and `create_vertices` bulk path coverage |
 | [`test_geo_predicate_sql.py`](test-geo-predicate-sql.md) | Geospatial SQL predicate semantics |
 | [`test_timeseries_sql.py`](test-timeseries-sql.md) | Time-series SQL type creation, range filters, and bucketing |
 | [`test_materialized_view_sql.py`](test-materialized-view-sql.md) | Materialized view lifecycle and refresh behavior |
@@ -106,35 +106,29 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_vector.py`](test-vector.md) | Vector API and nearest-neighbor search behavior |
 | [`test_vector_params_verification.py`](test-vector-params-verification.md) | Vector param validation |
 | [`test_vector_sql.py`](test-vector-sql.md) | SQL vector functions, index creation, and search flows |
-| [`test_bulk_insert.py`](test-bulk-insert.md) | Tests for Database.insert_many and AsyncExecutor.create_record. |
-| [`test_cross_model_atomicity.py`](test-cross-model-atomicity.md) | The project page's cross-model story, at test size: search, hop and update in one transact |
+| [`test_cross_model_atomicity.py`](test-cross-model-atomicity.md) | Search, hop, and update in one transaction survive an interruption between the writes with nothing torn; without a transaction they are torn every time |
 | [`test_example11_degree_matching.py`](test-example11-degree-matching.md) | Example 11 compares ArcadeDB against hnswlib-derived vector backends. |
-| [`test_graph.py`](test-graph.md) | Graph API Tests |
 | [`test_jar_provenance.py`](test-jar-provenance.md) | The wheel can say which engine it carries, not just which version it is. |
+| [`test_java_package_shadowing.py`](test-java-package-shadowing.md) | A folder named `java/` or `com/` must not change what a query returns |
 | [`test_jvm.py`](test-jvm.md) | Tests for start_jvm() re-entry behavior once the JVM is running. |
-| [`test_logging_helper.py`](test-logging-helper.md) | Tests for the internal _logging helper. |
+| [`test_jvm_payload.py`](test-jvm-payload.md) | A Python list must never be what crosses into the JVM |
 | [`test_resultset_arrow.py`](test-resultset-arrow.md) | Tests for ResultSet.to_arrow(). |
-| [`test_server_http_endpoints.py`](test-server-http-endpoints.md) | The three server HTTP features the bindings document but do not wrap (guide/server.md, "Tr |
+| [`test_runtime_cache.py`](test-runtime-cache.md) | The dev-mode runtime cache must follow the wheel it was extracted from |
+| [`test_server_http_endpoints.py`](test-server-http-endpoints.md) | The three server HTTP features the bindings document but do not wrap: multi-request transactions, server database commands, and line-protocol time-series writes |
 | [`test_server_packaging.py`](test-server-packaging.md) | The server stack is actually IN the wheel, and the API is reachable. |
 | [`test_server_wire_protocols.py`](test-server-wire-protocols.md) | The wire protocols the wheel bundles are actually reachable. |
-| [`test_sparse_quantization_compact.py`](test-sparse-quantization-compact.md) | Sparse index weight precision and the settle step, plus the dense search beam argument: th |
-| [`test_vector_second_pass.py`](test-vector-second-pass.md) | A repeated query set returns the same neighbours as its first pass: the warm second pass t |
-| [`test_wheel_platform_tag.py`](test-wheel-platform-tag.md) | Regression tests for issue #4037: wheel manylinux platform tag. |
-| `test_wheel_platform_tag.py` | Built wheel platform tag verification |
+| [`test_sparse_quantization_compact.py`](test-sparse-quantization-compact.md) | Sparse index weight precision and the settle step, plus the dense search beam argument |
+| [`test_vector_delta_visibility.py`](test-vector-delta-visibility.md) | Vectors written after an index build are searchable, exactly, before any rebuild |
+| [`test_vector_second_pass.py`](test-vector-second-pass.md) | A repeated query set returns the same neighbours as its first pass |
+| [`test_wheel_platform_tag.py`](test-wheel-platform-tag.md) | Built wheel manylinux platform tag verification (regression tests for issue #4037) |
 
 ## Common Testing Workflows
 
 ### Development Workflow
 
 ```bash
-# Watch mode - rerun tests on file changes
-pytest --watch
-
 # Run only failed tests from last run
 pytest --lf
-
-# Run tests in parallel (faster)
-pytest -n auto
 ```
 
 ### Debugging Tests
@@ -155,17 +149,37 @@ pytest -vv -s
 
 ## Test Markers
 
-Tests are organized with pytest markers (`server`, `integration`, `graph_export`):
+The markers are registered in `bindings/python/pyproject.toml` (`server`, `server_wire`, and
+`integration`) and in `tests/conftest.py` (`server` and `graph_export`). These are the ones the
+suite uses:
+
+| Marker | Tests |
+| ------ | ----- |
+| `server` | The four server tests in `test_server.py`, `test_server_starts_and_serves_http` in `test_server_packaging.py`, and `test_docs_api_access_examples` in `test_docs_examples.py` |
+| `server_wire` | Every test in `test_server_wire_protocols.py` (module-level `pytestmark`) |
+| `graph_export` | `test_export_graphml` and `test_export_graphson` in `test_exporter.py` |
+
+`integration` is registered, but no test uses it.
 
 ```bash
-# Run only server tests
+# Run only the tests marked server
 pytest -m server
 
-# Run only OpenCypher tests
+# Run only OpenCypher tests (a keyword match, not a marker)
 pytest -k cypher
 
-# Run all except server tests
+# Run all except the tests marked server
 pytest -m "not server"
+```
+
+`-m "not server"` skips only the tests marked `server`. Other tests that start a server still
+run: `test_server_patterns.py`, `test_server_http_endpoints.py`, and `test_server_wire_protocols.py`
+(marked `server_wire`, not `server`). To leave out every server-starting test:
+
+```bash
+pytest -m "not server and not server_wire" \
+  --ignore=tests/test_server_patterns.py \
+  --ignore=tests/test_server_http_endpoints.py
 ```
 
 ## Expected Output

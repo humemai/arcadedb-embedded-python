@@ -142,24 +142,34 @@ cd bindings/python
 
 # Build for specific platform (requires Docker for Linux builds)
 ./scripts/build.sh linux/amd64
-./scripts/build.sh darwin/arm64
+./scripts/build.sh darwin/arm64   # only on an Apple Silicon Mac
 
 # Check the wheels
 ls -lh dist/
 ```
 
-### Test all platforms (requires Docker):
+### Test all platforms:
+
+One machine cannot build all four wheels. `build.sh` builds the Linux targets in Docker,
+but it exits with an error for a `darwin/*` or `windows/*` target unless it runs on a
+host with that OS and architecture, because `jlink` only creates a JRE for the platform
+it runs on. CI builds each wheel on its own native runner; to do the same by hand, run
+`build.sh` on each host:
 
 ```bash
 cd bindings/python
 
-for platform in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do
-  echo "Building $platform..."
-    ./scripts/build.sh "$platform"
-done
+# Linux x86_64 host (Docker)
+./scripts/build.sh linux/amd64
 
-# Should have 4 wheels
-ls -1 dist/*.whl | wc -l  # Should output: 4
+# Linux ARM64 host (Docker)
+./scripts/build.sh linux/arm64
+
+# Apple Silicon Mac (native)
+./scripts/build.sh darwin/arm64
+
+# Windows x86_64, from Git Bash (native)
+./scripts/build.sh windows/amd64
 ```
 
 ## Troubleshooting

@@ -113,7 +113,7 @@ Start a server with default configuration:
 import arcadedb_embedded as arcadedb
 
 # Create and start server
-server = arcadedb.create_server("./databases")
+server = arcadedb.create_server("./databases", root_password="my_secure_password")
 server.start()
 
 print(f"🚀 Server started at: {server.get_studio_url()}")
@@ -129,7 +129,7 @@ server.stop()
 Use a context manager for automatic cleanup:
 
 ```python
-with arcadedb.create_server("./databases") as server:
+with arcadedb.create_server("./databases", root_password="my_secure_password") as server:
     print(f"🚀 Server running at: {server.get_studio_url()}")
 
     # Server automatically stops on exit
@@ -157,7 +157,7 @@ server = arcadedb.create_server(
 | Option | Default | Description |
 |--------|---------|-------------|
 | `root_path` | `"./databases"` | Directory for database storage |
-| `root_password` | None | Root user password (recommended) |
+| `root_password` | None | Root user password (recommended). `None` on a fresh `root_path` makes `start()` prompt for it on stdin |
 | `http_port` | 2480 | HTTP API/Studio port (binding pins to a single port; Java default is the 2480-2489 range) |
 | `host` | "localhost" | Host to bind to |
 | `mode` | "development" | Server mode (`development` or `production`). `production` also flushes the WAL at every commit (`arcadedb.txWalFlush=1`, unless you set it yourself), serves no Studio, and refuses LOAD CSV file URLs; see [Durability](core/transactions.md#durability-what-a-commit-survives) |
@@ -196,23 +196,21 @@ server = arcadedb.create_server(
 |---|---|---|---|
 | Postgres wire | `com.arcadedb.postgres.PostgresProtocolPlugin` | `postgres_port` | yes, connect + query |
 | Bolt (Neo4j drivers) | `com.arcadedb.bolt.BoltProtocolPlugin` | `bolt_port` | yes, connect + Cypher |
-| Redis | `com.arcadedb.redis.RedisProtocolPlugin` | `redis_port` (**ignored**) | port setting broken |
+| Redis | `com.arcadedb.redis.RedisProtocolPlugin` | `redis_port` | yes, binds the given port |
 
-`tests/test_server_wire_protocols.py` speaks each protocol with its real
-client (`psycopg`, `neo4j`, `redis`), so these rows are measured rather than
-inferred from the jars being present.
+`tests/test_server_wire_protocols.py` speaks Postgres and Bolt with their real
+clients (`psycopg`, `neo4j`) and checks that Redis binds its port, so these
+rows are measured rather than inferred from the jars being present.
 
 ### Two things to know before exposing these
 
-**`redis_port` is accepted and ignored.** Measured on 26.8.1: with a distinct port passed to each plugin, Postgres and Bolt
-bind what they were given and the Redis listener binds the hardcoded 6379
-anyway. Plan for 6379 or do not enable Redis.
-
-Root-caused and filed as [ArcadeDB #5796][5796]. `ServerPlugin.configure()`
-receives the server's `ContextConfiguration`; Postgres and Bolt read the port
-from it, while Redis drops the argument and reads the static
-`GlobalConfiguration` default at `startService()`. Bolt carried the identical
-bug until #3809 fixed it.
+**`redis_port` is honoured.** On 26.8.1 it was accepted and ignored: the
+Redis listener bound the hardcoded 6379 while Postgres and Bolt bound what they
+were given. Root-caused and filed as [ArcadeDB #5796][5796] (the Redis plugin
+dropped the server's `ContextConfiguration` and read the static
+`GlobalConfiguration` default), fixed upstream on 2026-08-07.
+`tests/test_server_wire_protocols.py` checks that Redis binds the port it is
+given.
 
 [5796]: https://github.com/ArcadeData/arcadedb/issues/5796
 
@@ -222,12 +220,12 @@ anonymously must now present credentials, so enabling this plugin is a
 breaking change for anything already talking to it. `arcadedb.redis.tls` is
 new in the same release if you want the transport encrypted.
 
-**The wire listeners bind all interfaces.** `host` tightens the HTTP listener
-to loopback by default, but the protocol plugins log
-`Listening ... on 0.0.0.0:<port>` regardless, and ArcadeDB exposes no
-per-protocol host setting. Enabling a plugin on a multi-homed or
-internet-facing machine exposes it beyond localhost. Use a firewall or a
-container network namespace; do not rely on the `host` default to contain them.
+**The wire listeners bind all interfaces by default.** `host` tightens the HTTP
+listener to loopback by default, but it does not reach the protocol plugins:
+each one has its own host setting, and each defaults to `0.0.0.0`. Pass
+`postgres_host`, `bolt_host`, or `redis_host` (for example `"127.0.0.1"`) to
+bind a plugin to one interface. Without them, enabling a plugin on a
+multi-homed or internet-facing machine exposes it beyond localhost.
 
 ### Arrow (ADBC) clients over the Postgres wire
 
@@ -411,14 +409,15 @@ second:
 | `sqlscript` of `INSERT ... SET` with the values in the text | 13k | 4.8k |
 | `INSERT INTO T CONTENT :rows`, the batch bound as one parameter | 21k | 8.3k |
 | Postgres wire, prepared `INSERT`, `executeBatch` | 12.6k | 12.1k |
-| gRPC `BulkInsert` | 20.6k | 7.9k |
+| gRPC `BulkInsert`, official server only (gRPC is not bundled in the wheel) | 20.6k | 7.9k |
 
 Upstream's recommendation, from the same issue:
 
 - **Documents:** `POST /api/v1/command` with `INSERT INTO <Type> CONTENT :rows`
   and the batch bound as a list. The statement is parsed once and the rows
   travel as data, with no quoting to get wrong. gRPC `BulkInsert` is equally
-  good if the client already speaks gRPC.
+  good if the client already speaks gRPC, on the official server only (gRPC is
+  not bundled in the wheel).
 - **Rows with a vector property:** the Postgres wire with `float4[]`
   parameters. HTTP and gRPC send each float as its own value, and neither has a
   packed vector encoding yet.
@@ -429,7 +428,7 @@ Upstream's recommendation, from the same issue:
   so try 2k, 5k and 10k on your hardware and keep the best.
 - **Durability:** all four paths commit through ordinary transactions with the
   WAL on. Only the `GraphBatch`-based loaders (`/api/v1/batch` and gRPC
-  `GraphBatchLoad`) skip it unless you pass `wal=true`.
+  `GraphBatchLoad`, official server only) skip it unless you pass `wal=true`.
 
 ```python
 rows = [{"k": i, "name": f"item-{i}", "x": i * 0.5} for i in range(2000)]
@@ -469,7 +468,7 @@ db2 = arcadedb.create_database("./mydb")  # ❌ ERROR: Lock conflict!
 import arcadedb_embedded as arcadedb
 
 # Start server once (Process 1)
-with arcadedb.create_server("./databases") as server:
+with arcadedb.create_server("./databases", root_password="my_secure_password") as server:
     print(f"Server at: {server.get_studio_url()}")
 
     # Now ANY number of clients can connect via HTTP
@@ -517,14 +516,12 @@ with arcadedb.create_database("./mydb") as db:
         with db.transaction():
             db.command("sql", "INSERT INTO Log SET thread = ?", thread_id)
 
-# Start multiple threads
-threads = [Thread(target=worker, args=(i,)) for i in range(10)]
-for t in threads:
-    t.start()
-for t in threads:
-    t.join()
-
-db.close()
+    # Start multiple threads, and join them before the block closes the database
+    threads = [Thread(target=worker, args=(i,)) for i in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 ```
 
 For more details, see [Concurrency Tests](../development/testing/test-concurrency.md).

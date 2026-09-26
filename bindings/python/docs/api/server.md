@@ -40,10 +40,12 @@ Create an ArcadeDB server instance.
     - Automatically created if it doesn't exist
 - `root_password` (Optional[str]): Root user password (default: `None`)
     - **Strongly recommended for production**
-    - If `None`, uses default password (insecure!)
+    - At least 8 characters
+    - If `None` on a fresh `root_path` (no root user stored yet), `start()`
+      prompts for the root password on stdin, which blocks a script or service.
+      There is no default password.
 - `config` (Optional[Dict[str, Any]]): Configuration dictionary (default: `None`)
     - `http_port` (int): HTTP API port (default: 2480)
-    - `binary_port` (int): Binary protocol port (default: 2424)
     - `host` (str): Host to bind to (default: "localhost"). Pass "0.0.0.0" explicitly to expose the server on all IPv4 interfaces, or "::" for all IPv6 interfaces.
     - `mode` (str): Server mode - "development" or "production" (default: "development")
     - Additional ArcadeDB configuration keys (see Advanced Configuration)
@@ -58,7 +60,7 @@ Create an ArcadeDB server instance.
 import arcadedb_embedded as arcadedb
 
 # Basic server (development)
-server = arcadedb.create_server()
+server = arcadedb.create_server(root_password="password123")
 
 # Custom root path and password
 server = arcadedb.create_server(
@@ -69,7 +71,7 @@ server = arcadedb.create_server(
 # Custom configuration
 server = arcadedb.create_server(
     root_path="./dbs",
-    root_password="secret",
+    root_password="secret123",
     config={
         "http_port": 8080,
         "host": "127.0.0.1",
@@ -111,7 +113,7 @@ Start the ArcadeDB server and begin listening for connections.
 ```python
 import arcadedb_embedded as arcadedb
 
-server = arcadedb.create_server()
+server = arcadedb.create_server(root_password="password123")
 server.start()
 
 print(f"Server running at: {server.get_studio_url()}")
@@ -132,7 +134,7 @@ Stop the ArcadeDB server and release resources.
 **Example:**
 
 ```python
-server = arcadedb.create_server()
+server = arcadedb.create_server(root_password="password123")
 server.start()
 
 try:
@@ -155,7 +157,7 @@ Check if the server is currently running.
 **Example:**
 
 ```python
-server = arcadedb.create_server()
+server = arcadedb.create_server(root_password="password123")
 print(server.is_started())  # False
 
 server.start()
@@ -186,7 +188,7 @@ Get an existing database from the server.
 **Example:**
 
 ```python
-server = arcadedb.create_server()
+server = arcadedb.create_server(root_password="password123")
 server.start()
 
 # Get existing database
@@ -211,7 +213,7 @@ Create a new database on the server.
 
 - `name` (str): Database name
     - Alphanumeric and underscores recommended
-    - Will be created under `root_path/{name}/`
+    - Will be created under `root_path/databases/{name}/`
 
 **Returns:**
 
@@ -224,7 +226,7 @@ Create a new database on the server.
 **Example:**
 
 ```python
-server = arcadedb.create_server()
+server = arcadedb.create_server(root_password="password123")
 server.start()
 
 # Create new database
@@ -271,7 +273,7 @@ Get the full URL for the Studio web interface.
 **Example:**
 
 ```python
-server = arcadedb.create_server()
+server = arcadedb.create_server(root_password="password123")
 server.start()
 
 print(f"Open Studio at: {server.get_studio_url()}")
@@ -287,7 +289,7 @@ The server supports Python context managers for automatic start/stop:
 ```python
 import arcadedb_embedded as arcadedb
 
-with arcadedb.create_server() as server:
+with arcadedb.create_server(root_password="password123") as server:
     # Server automatically started
     db = server.create_database("temp_db")
     db.command("sql", "CREATE DOCUMENT TYPE Test")
@@ -310,7 +312,6 @@ with arcadedb.create_server() as server:
 ```python
 config = {
     "http_port": 2480,           # HTTP API port
-    "binary_port": 2424,         # Binary protocol port (for Java clients)
     "host": "localhost",         # Bind address (default loopback; "0.0.0.0" = all IPv4 interfaces)
     "mode": "development",       # "development" or "production"
 }
@@ -339,18 +340,19 @@ You can pass any ArcadeDB configuration via the `config` dict:
 config = {
     "http_port": 8080,
     "mode": "production",
-    # Additional ArcadeDB settings (with _ instead of .)
-    "server_database_directory": "./custom_dbs",
-    "server_http_session_expire": "30m",
-    "profile_default": "high-performance"
+    # Additional ArcadeDB settings (with _ instead of ., camelCase kept)
+    "server_databaseDirectory": "./custom_dbs",
+    "server_httpSessionExpireTimeout": 30,  # seconds
 }
 
 server = arcadedb.create_server(config=config)
 ```
 
-**Note:** Python uses underscores (`_`), which are automatically converted to dots (`.`) for Java config keys:
+**Note:** Python uses underscores (`_`), which are automatically converted to dots (`.`) for Java config keys. Keep the camelCase of the Java name:
 
-- `server_http_session_expire` → `arcadedb.server.http.session.expire`
+- `server_httpSessionExpireTimeout` → `arcadedb.server.httpSessionExpireTimeout`
+
+A key that names no ArcadeDB setting is stored and ignored without an error.
 
 ---
 
@@ -389,7 +391,7 @@ os.environ["ARCADEDB_JVM_ERROR_FILE"] = "/var/log/arcade/errors.log"
 # Now import and use
 import arcadedb_embedded as arcadedb
 
-server = arcadedb.create_server()
+server = arcadedb.create_server(root_password="password123")
 # Crash logs will go to /var/log/arcade/errors.log
 ```
 
@@ -496,7 +498,7 @@ if __name__ == "__main__":
 import arcadedb_embedded as arcadedb
 
 # Context manager for automatic cleanup
-with arcadedb.create_server() as server:
+with arcadedb.create_server(root_password="password123") as server:
     # Create multiple databases
     users_db = server.create_database("users")
     products_db = server.create_database("products")
@@ -562,7 +564,7 @@ signal.signal(signal.SIGINT, shutdown_handler)
 # Start server
 server = arcadedb.create_server(
     root_path="./dev_databases",
-    root_password="dev",
+    root_password="dev_password",
     config={
         "http_port": 2480,
         "mode": "development"
@@ -588,7 +590,7 @@ print(f"Development Server Running")
 print(f"{'=' * 60}")
 print(f"Studio UI:  {server.get_studio_url()}")
 print(f"HTTP API:   http://localhost:{server.get_http_port()}/api/v1/")
-print(f"Database:   'dev' (password: 'dev')")
+print(f"Database:   'dev' (password: 'dev_password')")
 print(f"\nPress Ctrl+C to stop")
 print(f"{'=' * 60}\n")
 
@@ -626,8 +628,7 @@ server = arcadedb.create_server(
         "http_port": HTTP_PORT,
         "host": "0.0.0.0",
         "mode": "production",
-        "server_http_session_expire": "30m",
-        "profile_default": "high-performance"
+        "server_httpSessionExpireTimeout": 30  # seconds
     }
 )
 
@@ -708,7 +709,7 @@ curl -X POST http://localhost:2480/api/v1/command/mydb \
 from arcadedb_embedded import ArcadeDBError
 
 try:
-    server = arcadedb.create_server()
+    server = arcadedb.create_server(root_password="password123")
     server.start()
 
     # May fail if database doesn't exist

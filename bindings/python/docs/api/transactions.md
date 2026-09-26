@@ -49,7 +49,7 @@ It is important to distinguish between operations that require explicit transact
 
 ```python
 # ✅ CORRECT: Queries outside transaction
-results = db.query("SELECT * FROM Person")
+results = db.query("sql", "SELECT * FROM Person")
 for result in results:
     name = result.get("name")  # Safe, read-only
 
@@ -100,9 +100,12 @@ with db.transaction():
 
 Manually begin a transaction.
 
+If a transaction is already active, `begin()` starts a nested transaction (see
+[Nested Transactions](#nested-transactions)).
+
 **Raises:**
 
-- `ArcadeDBError`: If transaction already active
+- `ArcadeDBError`: If the transaction cannot begin (for example, the database is closed)
 
 **Example:**
 
@@ -280,26 +283,28 @@ with db.transaction():
 
 ---
 
-### Nested Context (Not Nested Transactions)
+### Nested Transactions
 
-**Important:** ArcadeDB doesn't support true nested transactions. Nested contexts use the same transaction:
+**Important:** `begin()` inside an active transaction starts a **new, independent** transaction on the same thread. The inner transaction commits or rolls back on its own, and the outer one continues after it:
 
 ```python
-# This uses ONE transaction
-with db.transaction():
-    db.command("sql", "INSERT INTO Outer SET layer = ?", "outer")
-
-    # This does NOT create a new transaction
-    # It uses the same transaction as above
+try:
     with db.transaction():
-        db.command("sql", "INSERT INTO Inner SET layer = ?", "inner")
+        db.command("sql", "INSERT INTO Outer SET layer = ?", "outer")
 
-    # Both doc1 and doc2 commit together
+        # This DOES create a new transaction
+        with db.transaction():
+            db.command("sql", "INSERT INTO Inner SET layer = ?", "inner")
+        # The inner insert is committed here
 
-# Both commits together or both roll back
+        raise RuntimeError("rolls back the outer transaction only")
+except RuntimeError:
+    pass
+
+# The "inner" record survives; the "outer" record is rolled back
 ```
 
-**Recommendation:** Avoid nesting `db.transaction()` - it's confusing and doesn't create nested transactions.
+**Recommendation:** Avoid nesting `db.transaction()` unless you want the inner block to commit independently of the outer one.
 
 ---
 
@@ -444,13 +449,13 @@ with db.transaction():
 ```python
 # Schema constraints enforced in transactions
 db.command("sql", "CREATE DOCUMENT TYPE User")
-db.command("sql", "CREATE PROPERTY User.email STRING")
+db.command("sql", "CREATE PROPERTY User.email STRING (mandatory true)")
 db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 
 # This will fail - email is mandatory
 try:
     with db.transaction():
-    db.command("sql", "INSERT INTO User SET name = 'Alice'")
+        db.command("sql", "INSERT INTO User SET name = 'Alice'")
 except Exception as e:
     print(f"Constraint violation: {e}")
     # Transaction rolled back automatically
@@ -458,8 +463,8 @@ except Exception as e:
 # This will fail - email must be unique
 try:
     with db.transaction():
-    db.command("sql", "INSERT INTO User SET email = 'alice@example.com'")
-    db.command("sql", "INSERT INTO User SET email = 'alice@example.com'")  # Duplicate!
+        db.command("sql", "INSERT INTO User SET email = 'alice@example.com'")
+        db.command("sql", "INSERT INTO User SET email = 'alice@example.com'")  # Duplicate!
 except Exception as e:
     print(f"Unique constraint violation: {e}")
     # Both user1 and user2 rolled back
@@ -660,7 +665,7 @@ def update_with_retry(db, rid, new_value, max_retries=3):
 2. **Keep Transactions Short**: Long-running transactions can block other operations
 3. **Batch Related Operations**: Group related writes in one transaction
 4. **Handle Exceptions**: Always handle exceptions to ensure rollback
-5. **Avoid Nested Contexts**: Don't nest `db.transaction()` - it's confusing
+5. **Avoid Nested Contexts**: A nested `db.transaction()` commits independently of the outer one
 6. **Don't Hold Transactions**: Don't keep transactions open during I/O or network calls
 7. **Commit Regularly for Large Batches**: For imports >100K records, commit periodically
 

@@ -680,11 +680,11 @@ for result in result_set:
 
 ### Converting Results to Vertices for Modification
 
-Query results are **read-only** by default. To modify a vertex or edge returned from a query, convert it to a mutable `Vertex` or `Edge` object using `.get_vertex()` or `.get_edge()`.
+Query results are **read-only** by default. To modify a vertex or edge returned from a query, get its `Vertex` or `Edge` object with `.get_vertex()` or `.get_edge()`, then call `.modify()` on it for a mutable copy. The object from `.get_vertex()` or `.get_edge()` is itself immutable: calling `.set()` on it raises `AttributeError`.
 
 #### `get_vertex() -> Optional[Vertex]`
 
-Convert a Result to a mutable Vertex object (if the result is a vertex).
+Get the Vertex object of a Result (if the result is a vertex). Call `.modify()` on it before `.set()`.
 
 ```python
 import arcadedb_embedded as arcadedb
@@ -696,10 +696,11 @@ result_set = db.query("sql", "SELECT FROM Person WHERE name = 'Alice'")
 
 with db.transaction():
     for result in result_set:
-        # Convert Result to mutable Vertex
+        # Get the Vertex, then a mutable copy of it
         vertex = result.get_vertex()
 
         if vertex:
+            vertex = vertex.modify()
             # Now you can modify it
             vertex.set("age", 31)
             vertex.set("updated", True)
@@ -710,7 +711,7 @@ with db.transaction():
 
 #### `get_edge() -> Optional[Edge]`
 
-Convert a Result to a mutable Edge object (if the result is an edge).
+Get the Edge object of a Result (if the result is an edge). Call `.modify()` on it before `.set()`.
 
 ```python
 # Query edges
@@ -718,10 +719,11 @@ result_set = db.query("sql", "SELECT FROM FRIEND_OF")
 
 with db.transaction():
     for result in result_set:
-        # Convert Result to mutable Edge
+        # Get the Edge, then a mutable copy of it
         edge = result.get_edge()
 
         if edge:
+            edge = edge.modify()
             edge.set("strength", 0.95)
             edge.save()
 ```
@@ -755,11 +757,13 @@ print(f"Processing {len(movies)} movies...")
 
 with db.transaction():
     for movie_result in movies:
-        # Convert to mutable vertex
+        # Get the vertex, then a mutable copy of it
         movie = movie_result.get_vertex()
 
         if not movie:
             continue
+
+        movie = movie.modify()
 
         # Modify the vertex
         title = movie_result.get("title")
@@ -779,9 +783,9 @@ db.close()
 | Object | Read | Write |
 |--------|------|-------|
 | `Result` (from query) | ✅ Yes | ❌ No |
-| `Vertex`/`Edge` (mutable) | ✅ Yes | ✅ Yes |
+| `Vertex`/`Edge` from `.get_vertex()`/`.get_edge()` | ✅ Yes | After `.modify()` |
 | Created with `db.new_vertex()` | ✅ Yes | ✅ Yes |
-| Looked up with `db.lookup_by_rid()` | ✅ Yes | ✅ Yes |
+| Looked up with `db.lookup_by_rid()` | ✅ Yes | After `.modify()` |
 
 ---
 

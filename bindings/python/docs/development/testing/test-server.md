@@ -69,7 +69,7 @@ assert not server.is_started()
 
 ```python
 with arcadedb.create_server(root_path="./databases") as server:
-    server.start()
+    # Server auto-starts in the context manager
 
     # Create database through server
     db = server.create_database("testdb")

@@ -103,15 +103,17 @@ ArcadeDB has **three distinct types of logs** stored in **two different location
 
 - Current: `arcadedb.log.0`
 - Previous: `arcadedb.log.1`, `arcadedb.log.2`, etc.
-- Default: 5 files, 10MB each
+- Default: 10 files, 100 MB each
 
-**Verbosity**: Controlled by Java system properties:
+**Verbosity**: Controlled by a `java.util.logging` properties file. Copy
+ArcadeDB's `arcadedb-log.properties`, change the levels (for example
+`com.arcadedb.level = FINE`), and point the JVM at it:
 
 ```python
 from arcadedb_embedded.jvm import start_jvm
 
 # Set before the first database or server is created
-start_jvm(jvm_args="-Djava.util.logging.level=DEBUG -Darcadedb.log.level=FINE")
+start_jvm(jvm_args="-Djava.util.logging.config.file=/path/to/arcadedb-log.properties")
 ```
 
 ## Database Files (Embedded Mode)

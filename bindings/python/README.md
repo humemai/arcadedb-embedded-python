@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 397 Passed | **Platforms**: 4 Supported
+**Status**: ✅ Production Ready | **Tests**: 471 test functions | **Platforms**: 4 Supported
 
 ---
 
@@ -56,11 +56,11 @@ with arcadedb.create_database("./mydb") as db:
 
 ## ✨ Features
 
-- ☕ **No Java Installation Required**: Bundled JRE (~63MB uncompressed)
+- ☕ **No Java Installation Required**: Bundled JRE (~63 MiB uncompressed)
 - 🌍 **4 Platforms Supported**: Linux (x86_64, ARM64), macOS (ARM64), Windows (x86_64)
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network)
 - 🌐 **Server Mode**: Optional in-process HTTP server with the Studio web UI — costs ~8MB of wheel and nothing at runtime until you call `create_server()`
-- 📦 **Self-contained**: All dependencies bundled (~67MB current Linux wheel)
+- 📦 **Self-contained**: All dependencies bundled (~69 MiB current Linux wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
 - 🔍 **Multiple query languages**: SQL, OpenCypher
 - ⚡ **High performance**: Direct JVM integration via JPype
@@ -76,15 +76,15 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 
 **Package Contents (current Linux x86_64 dev build; varies by platform and version):**
 
-- **Wheel size (compressed)**: ~67MB
-- **ArcadeDB JARs (uncompressed)**: ~31MB across 63 JARs
-- **Bundled JRE (uncompressed)**: ~63MB (platform-specific Java 25 runtime via jlink)
-- **Installed package size**: ~94MB
+- **Wheel size (compressed)**: ~69 MiB
+- **ArcadeDB JARs (uncompressed)**: ~33 MiB across 64 JARs
+- **Bundled JRE (uncompressed)**: ~63 MiB (platform-specific Java 25 runtime via jlink)
+- **Installed package size**: ~96 MiB
 
 The compressed wheel size is measured from `dist/*.whl`, and the installed package size
 is measured from the extracted `site-packages/arcadedb_embedded/` directory.
 
-Of that, the optional **server stack is 12 JARs, 7.65MB uncompressed**, and it adds
+Of that, the optional **server stack is 12 JARs, 7.65MB uncompressed** (measured on 26.8.1), and it adds
 ~8MB to the wheel (the extra ~0.8MB beyond the JARs is JRE modules that only the
 server needs). [Server Mode](https://docs.humem.ai/arcadedb/latest/guide/server/)
 breaks the cost down and explains what you pay at runtime (nothing, until you start
@@ -98,7 +98,7 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 397 passed
+**Status**: 471 test functions (counted 2026-09-27)
 
 Tests run against the built wheel via the uv project at the repo root — no
 virtualenv activation needed, and `uv run` works from anywhere in the repo:

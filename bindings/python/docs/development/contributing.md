@@ -92,37 +92,54 @@ arcadedb-embedded-python/bindings/python/
 │       └── vector.py              # Vector search support
 ├── tests/
 │   ├── __init__.py
-│   ├── conftest.py                # pytest fixtures
-│   ├── README.md                  # Testing documentation
-│   ├── test_async_executor.py     # Async execution tests
-│   ├── test_concurrency.py        # Concurrency tests
-│   ├── test_core.py               # Core tests
-│   ├── test_cypher.py             # OpenCypher tests
-│   ├── test_database_utils.py     # Database utilities tests
-│   ├── test_docs_examples.py      # Docs example tests
-│   ├── test_exporter.py           # Exporter tests
-│   ├── test_geo_predicate_sql.py  # Geospatial SQL tests
-│   ├── test_graph_algorithms_sql.py # Graph algorithm SQL tests
-│   ├── test_graph_api.py          # Graph API tests
-│   ├── test_graph_batch.py        # GraphBatch tests
-│   ├── test_hash_index_schema.py  # HASH index schema tests
-│   ├── test_import_database.py    # Import database tests
-│   ├── test_importer_api.py       # Import helper tests
-│   ├── test_jvm_args.py           # JVM argument tests
-│   ├── test_logging_helper.py     # Logging helper tests
-│   ├── test_materialized_view_sql.py # Materialized view SQL tests
-│   ├── test_numpy_support.py      # NumPy integration tests
-│   ├── test_resultset.py          # Result handling tests
-│   ├── test_schema.py             # Schema tests
-│   ├── test_server.py             # Server tests
-│   ├── test_server_patterns.py    # Server pattern tests
-│   ├── test_timeseries_sql.py     # Timeseries SQL tests
-│   ├── test_transaction_config.py # Transaction tests
-│   ├── test_type_conversion.py    # Type conversion tests
-│   ├── test_vector.py             # Vector search tests
-│   ├── test_vector_sql.py         # Vector SQL tests
-│   ├── test_vector_params_verification.py # Vector parameter validation tests
-│   └── test_wheel_platform_tag.py # Wheel platform tag tests
+│   ├── conftest.py                         # Shared fixtures
+│   ├── README.md                           # Testing documentation
+│   ├── test_async_executor.py              # Async execution tests
+│   ├── test_bulk_insert.py                 # insert_many / create_record bulk ingest tests
+│   ├── test_concurrency.py                 # Concurrency tests
+│   ├── test_core.py                        # Core operations
+│   ├── test_cross_model_atomicity.py       # Search, hop, and update in one transaction
+│   ├── test_cypher.py                      # OpenCypher tests
+│   ├── test_database_utils.py              # Database utility tests
+│   ├── test_docs_examples.py               # Runnable docs example tests
+│   ├── test_example11_degree_matching.py   # Example 11 backend degree matching
+│   ├── test_exporter.py                    # Exporter tests
+│   ├── test_geo_predicate_sql.py           # Geospatial SQL predicate tests
+│   ├── test_graph.py                       # GraphBatch new_edges / create_vertices bulk tests
+│   ├── test_graph_algorithms_sql.py        # shortestPath / dijkstra / astar
+│   ├── test_graph_api.py                   # Graph API tests
+│   ├── test_graph_batch.py                 # Bulk graph ingest helper
+│   ├── test_hash_index_schema.py           # HASH index schema tests
+│   ├── test_import_database.py             # SQL import workflow tests
+│   ├── test_importer_api.py                # Import helper wrapper tests
+│   ├── test_jar_provenance.py              # Engine provenance carried by the wheel
+│   ├── test_java_package_shadowing.py      # java/ or com/ folders on the path
+│   ├── test_jvm.py                         # start_jvm() re-entry tests
+│   ├── test_jvm_args.py                    # JVM argument tests
+│   ├── test_jvm_payload.py                 # No Python list crosses into the JVM
+│   ├── test_logging_helper.py              # Internal logging helper tests
+│   ├── test_materialized_view_sql.py       # Materialized view lifecycle
+│   ├── test_numpy_support.py               # NumPy integration tests
+│   ├── test_restore_sql.py                 # RESTORE DOCUMENT / VERTEX tests
+│   ├── test_resultset.py                   # Result handling tests
+│   ├── test_resultset_arrow.py             # ResultSet.to_arrow() tests
+│   ├── test_runtime_cache.py               # Dev-mode runtime cache tests
+│   ├── test_schema.py                      # Schema tests
+│   ├── test_server.py                      # Server tests
+│   ├── test_server_http_endpoints.py       # Server HTTP features the bindings do not wrap
+│   ├── test_server_packaging.py            # Server stack bundled in the wheel
+│   ├── test_server_patterns.py             # Embedded/server access patterns
+│   ├── test_server_wire_protocols.py       # Bundled wire protocols
+│   ├── test_sparse_quantization_compact.py # Sparse precision, settle step, dense beam
+│   ├── test_timeseries_sql.py              # Timeseries SQL coverage
+│   ├── test_transaction_config.py          # Transaction config tests
+│   ├── test_type_conversion.py             # Type conversion tests
+│   ├── test_vector.py                      # Vector API tests
+│   ├── test_vector_delta_visibility.py     # Vectors searchable before a rebuild
+│   ├── test_vector_params_verification.py  # Vector parameter validation tests
+│   ├── test_vector_second_pass.py          # Repeated query sets return the same neighbours
+│   ├── test_vector_sql.py                  # Vector SQL tests
+│   └── test_wheel_platform_tag.py          # Wheel platform tag tests
 ├── docs/                          # MkDocs documentation
 │   ├── getting-started/
 │   ├── guide/
@@ -237,12 +254,16 @@ pytest tests/test_cypher.py -k cypher
 ### Test Markers
 
 ```bash
-# Skip server tests
+# Skip the tests marked server (other server-starting tests still run)
 pytest -m "not server"
 
-# Only OpenCypher tests
+# Only OpenCypher tests (a keyword match, not a marker)
 pytest -k cypher
 ```
+
+The markers in use are `server`, `server_wire`, and `graph_export`; `integration` is registered
+but unused. See [Test Markers](testing/overview.md#test-markers) for which tests each one covers
+and how to leave out every server-starting test.
 
 ### Writing Tests
 
@@ -295,7 +316,7 @@ def test_transaction_rollback(tmp_path):
 
 We follow **PEP 8** with some modifications:
 
-- Line length: 100 characters (not 79)
+- Line length: 88 characters (black's default; no override is configured)
 - Use double quotes for strings
 - Use trailing commas in multi-line structures
 
@@ -338,8 +359,8 @@ def create_user(db,name,email):
 # Format with black
 black src/ tests/
 
-# Sort imports
-isort src/ tests/
+# Sort imports (pre-commit runs isort with the black profile)
+isort --profile black src/ tests/
 
 # Type checking
 mypy src/
@@ -808,7 +829,7 @@ rm -rf src/arcadedb_embedded/jre/
 
 ```bash
 # Run specific test with verbose output
-pytest tests/test_core.py::test_create_database -vv
+pytest tests/test_core.py::test_database_creation -vv
 
 # Run with debugging
 pytest --pdb tests/test_core.py
@@ -823,8 +844,10 @@ pytest --cov=arcadedb_embedded --cov-report=term-missing
 # Clean Docker cache
 docker system prune -a
 
-# Rebuild without cache
-docker build --no-cache -f scripts/Dockerfile.build ../..
+# Rebuild without cache (Dockerfile.build needs ARCADEDB_TAG; build.sh normally passes it)
+docker build --no-cache -f scripts/Dockerfile.build \
+  --build-arg ARCADEDB_TAG="$(python3 scripts/extract_version.py --format=docker)" \
+  ../..
 ```
 
 ## Getting Help

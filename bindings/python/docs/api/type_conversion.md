@@ -8,9 +8,9 @@ The `type_conversion` module enables:
 
 - **Automatic Conversion**: Seamless Python ↔ Java type conversion
 - **Collection Handling**: Lists, sets, maps, and nested structures
-- **Date/Time Support**: datetime, date, and time objects
+- **Date/Time Support**: datetime and date objects (`datetime.time` is not converted)
 - **Decimal Precision**: High-precision decimal numbers
-- **Binary Data**: Bytes and byte arrays
+- **Binary Data**: `bytes` and `bytearray` are stored as Java `byte[]` (from 26.10.1)
 - **Type Safety**: Validation and error handling
 
 ## Why Type Conversion?
@@ -220,23 +220,25 @@ emoji = row.get("emoji")                       # Full Unicode support
 ### Dates and Times
 
 ```python
-from datetime import datetime, date, time
+from datetime import datetime, date
 
-# datetime/date/time with SQL parameter binding
+# datetime/date with SQL parameter binding
 with db.transaction():
     db.command(
         "sql",
-        "INSERT INTO Event SET timestamp = ?, birthDate = ?, startTime = ?",
+        "INSERT INTO Event SET timestamp = ?, birthDate = ?",
         datetime.now(),
         date(1990, 1, 15),
-        time(14, 30, 0),
     )
 
-row = db.query("sql", "SELECT timestamp, birthDate, startTime FROM Event LIMIT 1").first()
+row = db.query("sql", "SELECT timestamp, birthDate FROM Event LIMIT 1").first()
 timestamp = row.get("timestamp")               # datetime
 birth_date = row.get("birthDate")              # date
-start_time = row.get("startTime")              # time
 ```
+
+A `datetime.time` value is not converted: `set()` raises `TypeError` and a
+bound SQL parameter raises `ArcadeDBError`. Store a time of day as a string
+or as seconds since midnight.
 
 ---
 
@@ -248,16 +250,24 @@ start_time = row.get("startTime")              # time
 ### Binary Data
 
 ```python
+import arcadedb_embedded as arcadedb
+
 # bytes → byte[] (requires an active transaction)
 binary_data = b"Hello World"
 with db.transaction():
     vertex = db.new_vertex("File")
     vertex.set("data", binary_data)
 
-    # Reading back
-    data = vertex.get("data")                  # bytes
-    print(data.decode("utf-8"))                # "Hello World"
+    # Reading back: a byte[] comes back as a list of signed ints
+    data = vertex.get("data")                  # [72, 101, 108, ...]
+    print(bytes(b & 0xFF for b in data))       # b"Hello World"
 ```
+
+`bytes` and `bytearray` are stored as `byte[]` both through `set()` and as a
+bound SQL parameter. Before 26.10.1 they reached Java as a `String`: text bytes
+came back as `str`, and bytes that are not valid UTF-8 were stored as an empty
+string without an error. On those wheels, wrap the value in
+`arcadedb.to_java_byte_array()`, which stores the same `byte[]`.
 
 ---
 
@@ -429,7 +439,7 @@ java_map = convert_python_to_java(python_data)
 
 # Use Java object directly (requires an active transaction)
 with db.transaction():
-    java_record = db.new_vertex("User")._java_object
+    java_record = db.new_vertex("User").get_java_document()
     java_record.set("profile", java_map)
 
 # Manual Java → Python

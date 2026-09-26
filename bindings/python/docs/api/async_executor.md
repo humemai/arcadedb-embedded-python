@@ -134,7 +134,8 @@ Set auto-commit batch size. Commits transaction every N operations.
 
 **Parameters:**
 
-- `count` (int): Number of operations before commit (0 = no auto-commit)
+- `count` (int): Number of operations before commit (must be at least 1;
+  a smaller value raises `ValueError`)
 
 **Returns:**
 

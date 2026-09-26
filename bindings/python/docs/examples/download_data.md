@@ -18,6 +18,8 @@ All datasets are stored under `bindings/python/examples/data/`.
 - **MovieLens**: `movielens-small`, `movielens-large`
 - **Stack Exchange**: `stackoverflow-tiny`, `stackoverflow-small`, `stackoverflow-medium`, `stackoverflow-large`, `stackoverflow-xlarge`, `stackoverflow-full`
 - **MSMARCO v2.1**: `msmarco-1m`, `msmarco-5m`, `msmarco-10m`
+- **TPC-H**: `tpch-sf1`, `tpch-sf10`, `tpch-sf100`
+- **LDBC SNB Interactive**: `ldbc-snb-sf1`, `ldbc-snb-sf10`, `ldbc-snb-sf100`
 
 ## Usage
 
@@ -35,6 +37,11 @@ python download_data.py stackoverflow-large
 python download_data.py stackoverflow-xlarge
 python download_data.py stackoverflow-full
 python download_data.py msmarco-1m
+python download_data.py tpch-sf1
+python download_data.py ldbc-snb-sf1
+
+# Check an existing dataset without downloading it again
+python download_data.py stackoverflow-small --verify-only
 ```
 
 ## Notes
@@ -47,6 +54,11 @@ python download_data.py msmarco-1m
 - For Stack Exchange datasets, the script emits a copy-friendly entity count block after run
     (`User`, `Post`, `Comment`, `Badge`, `Vote`, `PostLink`, `Tag`, `PostHistory`, `Total`) so you can paste directly into markdown.
 - **MSMARCO** downloads parquet shards and converts them to vector shards with a ground-truth file.
+- **TPC-H** downloads the `dbgen` source and generates the tables with Docker.
+- **LDBC SNB** generates the Interactive dataset with the LDBC datagen in Docker.
+- `--verify-only` checks a dataset that is already on disk and skips the download. For
+    MovieLens and Stack Exchange it samples up to 100K rows; for MSMARCO, TPC-H, and LDBC SNB it
+    only checks that the dataset's marker file exists.
 
 ## Dependencies
 
@@ -63,6 +75,8 @@ Install only what you need for the datasets you plan to download:
 - Stack Exchange vectors: `examples/data/stackoverflow-<size>/vectors/`
     - Includes per-corpus files (`questions`, `answers`, `comments`) and combined `all` files
 - MSMARCO: `examples/data/MSMARCO-<size>/`
+- TPC-H: `examples/data/tpch-sf<scale>/`
+- LDBC SNB: `examples/data/ldbc-snb-sf<scale>/`
 
 ## Formats & Schemas
 

@@ -90,8 +90,8 @@ The Python bindings use an **automated versioning system** that extracts version
 |-------------------------|----------------|----------|
 | `25.10.1-SNAPSHOT` | `25.10.1.dev0` | Development builds |
 | `25.9.1` | `25.9.1` | Release builds |
-| `25.9.1` (with --python-patch 1) | `25.9.1.post1` | Python-specific patches |
-| `25.9.1` (with --python-patch 2) | `25.9.1.post2` | Additional Python patches |
+| `25.9.1` (with `--python-patch=1`) | `25.9.1.post1` | Python-specific patches |
+| `25.9.1` (with `--python-patch=2`) | `25.9.1.post2` | Additional Python patches |
 
 ### Development Mode vs Release Mode
 
@@ -115,7 +115,7 @@ For Python-only bug fixes that don't require a new ArcadeDB version:
 
 ```bash
 # Compute the version with a Python patch number
-python scripts/extract_version.py --python-patch 1
+python scripts/extract_version.py --python-patch=1
 
 # Results in version: 25.9.1.post1 (if base ArcadeDB version is 25.9.1)
 ```
@@ -125,7 +125,7 @@ python scripts/extract_version.py --python-patch 1
 The conversion is handled by `bindings/python/scripts/extract_version.py` (see file for detailed implementation). Key features:
 
 - **Automatic Detection**: Distinguishes development vs release mode automatically
-- **Command Line Interface**: Supports `--python-patch` parameter for .postN versions
+- **Command Line Interface**: Supports `--python-patch=N` parameter for .postN versions
 - **Error Handling**: Validates input and provides clear error messages
 - **Flexible Usage**: Can be called from build scripts, Docker, or manually
 
@@ -208,14 +208,26 @@ uvx twine yank arcadedb-embedded 25.9.1
 
 **Documentation** (can delete version):
 
+Docs live under `arcadedb/` on the `main` branch of `humemai/humemai-docs`, not on a `gh-pages`
+branch. Run mike from a `humemai-docs/` checkout at the repo root, with the same flags as
+`.github/workflows/deploy-python-docs.yml`:
+
 ```bash
-cd bindings/python
+# From the repo root (mike lives in the `docs` dependency group)
+git clone -b main https://github.com/humemai/humemai-docs.git humemai-docs
+cd humemai-docs
 
-# Delete version from docs (mike lives in the `docs` dependency group)
-uv run --group docs mike delete 25.9.1 --push
+# Delete version from docs
+uv run --project .. --group docs mike delete \
+  --deploy-prefix arcadedb --branch main --push \
+  --config-file ../bindings/python/mkdocs.yml \
+  25.9.1
 
-# Set previous version as latest
-uv run --group docs mike set-default 25.9.0 --push
+# Point the latest alias (the default version) at the previous release
+uv run --project .. --group docs mike alias --update-aliases \
+  --deploy-prefix arcadedb --branch main --push \
+  --config-file ../bindings/python/mkdocs.yml \
+  25.9.0 latest
 ```
 
 **GitHub Release:**
@@ -246,14 +258,14 @@ uv run --group docs mike set-default 25.9.0 --push
 **mike command error:**
 
 - Ensure `git config` is set in workflow
-- Check branch permissions
-- Verify `gh-pages` branch exists
+- Check that the `HUMEMAI_DOCS_TOKEN` secret is set and can push to `humemai/humemai-docs`
+- Verify the `main` branch of `humemai/humemai-docs` exists (docs deploy there under `arcadedb/`)
 
 **Version not appearing:**
 
 - Check GitHub Actions logs
 - Verify tag format: `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN`
-- Manually run: `mike list` to see deployed versions
+- Manually run `mike list --deploy-prefix arcadedb --branch main --config-file ../bindings/python/mkdocs.yml` from a `humemai-docs/` checkout to see deployed versions
 
 **Broken links:**
 

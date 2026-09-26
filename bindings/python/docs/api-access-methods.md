@@ -311,7 +311,9 @@ docker run -d --name arcadedb -p 2480:2480 -p 2424:2424 \
 ```
 
 Choose it when you need a server that outlives any one client, HA/replication,
-TLS termination, or the other wire protocols (Postgres, Redis, Mongo, Gremlin).
+TLS termination, or the wire protocols the wheel does not bundle (Mongo, gRPC,
+Gremlin). Postgres, Redis, and Bolt are bundled; see
+[Server Mode](guide/server.md#wire-protocols).
 To move data across, use [`export_database`](api/database.md) / SQL
 `IMPORT DATABASE` — the on-disk format and export archives are compatible.
 

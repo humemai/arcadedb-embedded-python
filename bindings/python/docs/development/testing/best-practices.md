@@ -16,7 +16,7 @@ with arcadedb.create_database("./mydb") as db:
 ```python
 # Also good for servers
 with arcadedb.create_server("./databases") as server:
-    server.start()
+    # The context manager starts the server; do not call start() again
     # "mydb" will be created at ./databases/databases/mydb
     db = server.create_database("mydb")
     # ... work ...

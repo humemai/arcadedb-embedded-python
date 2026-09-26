@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_vector_sql.py){ .md-button }
 
-There are 35 tests covering SQL vector functions for math, aggregations, distance metrics, normalization, quantization, native INT8 encoding, sparse vectors, and `LSM_VECTOR` index creation and search.
+These tests cover SQL vector functions for math, aggregations, distance metrics, normalization, quantization, native INT8 encoding, sparse vectors, `LSM_VECTOR` index creation and search, and vector conversions, plus regression tests for the Python conversion fast paths.
 
 ## Overview
 
@@ -74,6 +74,19 @@ Tests validate:
 - **test_vector_delete_and_search_others_sql**: Inserts 100 random vectors, deletes every 10th, and verifies nearest-match search with `vectorL2Distance` and `ORDER BY`.
 - **test_document_vector_search_sql**: KNN search on a `DOCUMENT` type using `vectorL2Distance` and `ORDER BY ... LIMIT`.
 
+### Vector Conversions (`TestVectorConversionSQL`)
+
+- **test_as_string_formats**: `asString()` emits the `NUMPY`, `MATLAB`, `MATLAB_COLUMN`, and `JULIA` layouts (the `NUMPY` output parses with `numpy`).
+- **test_as_vector_round_trip**: `asVector()` parses a space-separated string, a `NUMPY` string, and a single number back into a float vector.
+- **test_as_sparse_round_trip**: `asSparse()` converts dense to sparse, and `vector.sparseToDense` inverts it.
+- **test_quantize_dequantize_binary**: `vector.dequantizeBinary` reconstructs `+1`/`-1` (or custom low/high values) from `vector.quantizeBinary`.
+
+### Conversion Fast Paths (`TestConversionFastPaths`)
+
+- **test_plain_list_query_params**: Plain Python lists work as query parameters among several arguments.
+- **test_float_array_property_round_trip**: `ARRAY_OF_FLOATS` properties come back as Python `float` lists.
+- **test_find_nearest_repeated_calls_consistent**: Consecutive `find_nearest` calls on the same index return identical results.
+
 ## Pattern
 
 ```python
@@ -111,4 +124,5 @@ rows = db.query(
 - **Schema**: `ARRAY_OF_FLOATS` (dense), `ARRAY_OF_INTEGERS` + `ARRAY_OF_FLOATS` (sparse), `BINARY` (native-encoded) properties
 - **Indexes**: `LSM_VECTOR`, `LSM_SPARSE_VECTOR`
 - **Search**: `vectorNeighbors()`, `vector.neighbors()`, `vector.sparseNeighbors()`
+- **Conversion**: `asString()`, `asVector()`, `asSparse()`, `vector.sparseToDense()`, `vector.quantizeBinary()` / `vector.dequantizeBinary()`
 ```

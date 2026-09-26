@@ -79,7 +79,7 @@ Preferred split:
 ## Distance Functions (scoring behavior)
 
 - `cosine` (default): returns cosine distance in [0,2]; lower is better.
-- `euclidean`: returns similarity score $1 / (1 + d^2)$; higher is better.
+- `euclidean`: returns squared Euclidean distance $d^2$; lower is better.
 - `inner_product`: returns negative dot product; lower is better.
 
 Important:
@@ -331,12 +331,12 @@ with arcadedb.create_database("./vector_demo_int8") as db:
     )
 
     with db.transaction():
-    db.command(
-        "sql",
-        "INSERT INTO ByteDoc SET id = ?, embedding = ?",
-        "doc_a",
-        arcadedb.to_java_byte_array([127, 0, 0, 0]),
-    )
+        db.command(
+            "sql",
+            "INSERT INTO ByteDoc SET id = ?, embedding = ?",
+            "doc_a",
+            arcadedb.to_java_byte_array([127, 0, 0, 0]),
+        )
 ```
 
 Use `encoding="INT8"` only with `quantization="NONE"`. Combining INT8 storage encoding

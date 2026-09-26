@@ -4,7 +4,13 @@ The `ArcadeDBError` exception is the base class for all errors raised by the Arc
 
 ## Overview
 
-All errors from ArcadeDB operations raise `ArcadeDBError` or its subclasses (currently just the base class). This provides a single exception type to catch for all ArcadeDB-related errors.
+Most errors from ArcadeDB operations raise `ArcadeDBError` (there are no subclasses yet). From 26.10.1, when it is raised from a Java exception, its `str()` ends with `(caused by <Java class>: <message>)` naming the Java root cause, unless that message is already in the text. Earlier wheels often showed only the engine's generic outer message. Some calls raise other exceptions:
+
+- `ValueError`: invalid arguments, for example `ResultSet.one()` with zero or several rows, an unknown `set_wal_flush()` mode, or `AsyncExecutor.set_commit_every()` with a count below 1
+- `AttributeError`: `set()` on an immutable record, such as one returned by a query; call `.modify()` first
+- `TimeoutError`: `AsyncExecutor.wait_completion(timeout_ms)` when the timeout expires
+- `TypeError`: a value that JPype cannot convert, for example a `datetime.time` passed to `set()`
+- Java exceptions, not wrapped: `Schema` calls that go directly to Java, such as `exists_type()`, `get_types()`, `get_indexes()`, and `exists_index()`
 
 **Error Sources:**
 
@@ -115,17 +121,11 @@ except ArcadeDBError as e:
 
 ```python
 try:
-    # Start transaction
-    db.begin()
-
-    db.command("sql", "INSERT INTO Test SET data = ?", "value")
-
-    # Try to start another (not allowed)
-    db.begin()  # Error!
+    # Commit without a transaction (not allowed)
+    db.commit()  # Error: Transaction not begun
 
 except ArcadeDBError as e:
     print(f"Transaction error: {e}")
-    db.rollback()
 ```
 
 **Solution:** Use context managers (`with db.transaction()`) to avoid manual transaction management errors.
@@ -155,7 +155,7 @@ except ArcadeDBError as e:
 ```python
 from arcadedb_embedded import create_server, ArcadeDBError
 
-server = create_server()
+server = create_server(root_password="password123")
 server.start()
 
 try:
@@ -175,7 +175,7 @@ finally:
 
 ```python
 try:
-    server = create_server(config={"http_port": 2480})
+    server = create_server(root_password="password123", config={"http_port": 2480})
     server.start()
 except ArcadeDBError as e:
     if "bind" in str(e).lower() or "port" in str(e).lower():
@@ -300,7 +300,7 @@ db = None
 
 try:
     # Start server
-    server = create_server()
+    server = create_server(root_password="password123")
     server.start()
 
     # Create database

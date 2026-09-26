@@ -188,7 +188,7 @@ We provide a **single, self-contained package** that works on all major platform
 
 | Platforms | Package Name | Size | What's Included |
 |----------|-------------|------|-----------------|
-| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | `arcadedb-embedded` | ~67MB wheel, ~94MB installed | Full ArcadeDB + Bundled JRE + Studio UI |
+| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | `arcadedb-embedded` | ~69 MiB wheel, ~96 MiB installed | Full ArcadeDB + Bundled JRE + Studio UI |
 
 The package uses the standard import:
 
@@ -233,13 +233,13 @@ import arcadedb_embedded as arcadedb
     variation by platform, version, and filesystem:
 
     - **Bundled JRE**
-    (Platform-specific Java 25 runtime trimmed with jlink to only what's required for ArcadeDB, ~63MB uncompressed)
+    (Platform-specific Java 25 runtime trimmed with jlink to only what's required for ArcadeDB, ~63 MiB uncompressed)
     - **ArcadeDB JARs**
-    (~31MB uncompressed)
+    (~33 MiB uncompressed)
     - **Wheel download**
-    (~67MB compressed)
+    (~69 MiB compressed)
     - **Installed package on disk**
-    (~94MB)
+    (~96 MiB)
     - **JPype** (Bridge between Python and the bundled JVM)
 
 ## Community & Support

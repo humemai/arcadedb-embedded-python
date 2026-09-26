@@ -10,7 +10,7 @@ Hands-on examples demonstrating ArcadeDB Python bindings in real-world scenarios
 ### 🏁 Getting Started
 
 **[Dataset Downloader](download_data.md)**
-Download and prepare datasets used by the examples (MovieLens, Stack Exchange, MSMARCO).
+Download and prepare datasets used by the examples (MovieLens, Stack Exchange, MSMARCO, TPC-H, and LDBC SNB).
 
 **[01 - Simple Document Store](01_simple_document_store.md)**
 Foundation example covering document types, CRUD operations, comprehensive data types (DATE, DATETIME, DECIMAL, FLOAT, INTEGER, STRING, BOOLEAN, LIST OF STRING), and NULL value handling (INSERT NULL, UPDATE to NULL, IS NULL queries).
@@ -82,6 +82,15 @@ Batched Python/Java boundary crossings for bulk workloads: `Database.insert_many
 **[23 - Server Mode And HTTP Access](23_server_mode_http_access.md)**
 Embedded-first server workflow covering `create_server(...)`, HTTP auth (Basic and bearer token), server-managed database creation, and mixed embedded plus HTTP access to the same data.
 
+**[24 - Transactions, Database Commands and Time-Series Writes over HTTP](24_server_http_transactions_timeseries.md)**
+The server HTTP features a second process needs next: one transaction across several requests through `arcadedb-session-id`, `close database` / `open database` server commands, and InfluxDB line-protocol writes to a TIMESERIES type read back with SQL.
+
+**[25 - Sparse Vectors, Weight Precision And Compaction](25_sparse_quantization_and_compact.md)**
+Sparse retrieval on a synthetic SPLADE-style corpus built twice: INT8 versus FP32 posting weights in `LSM_SPARSE_VECTOR`, and `COMPACT INDEX` as the settle step after a bulk load, with size, compaction time, query latency, and top-10 agreement.
+
+**[26 - Cross-Model Transaction Atomicity](26_cross_model_transaction_atomicity.md)**
+Vector search, graph hop, and document update in one transaction, interrupted between the writes: rolled back cleanly inside a transaction, torn every time without one.
+
 ## Quick Start
 
 **⚠️ Important: Always run examples from the `examples/` directory.**
@@ -111,6 +120,9 @@ python 01_simple_document_store.py
 16. **Graph Analytical View Workflow** (21) - Manage GAV lifecycle entirely through SQL and inspect `schema:graphAnalyticalViews`
 17. **numpy Bulk I/O** (22) - Batched bulk ingest with `insert_many` and `append_samples`, plus columnar numpy export with `to_columns()`
 18. **Server Mode Workflow** (23) - Start the in-process server, create schema over HTTP, and verify mixed embedded plus HTTP access
+19. **Server HTTP Transactions And Time Series** (24) - Multi-request transactions, server database commands, and line-protocol writes over HTTP
+20. **Sparse Vectors And Compaction** (25) - Sparse index weight precision and the `COMPACT INDEX` settle step
+21. **Cross-Model Atomicity** (26) - Search, hop, and update in one transaction that survives an interruption with nothing torn
 
 ---
 

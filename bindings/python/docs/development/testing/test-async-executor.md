@@ -2,14 +2,14 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_async_executor.py){ .md-button }
 
-The file contains **11 tests** (one of them skipped) covering asynchronous SQL command/query execution and executor configuration.
+The file covers asynchronous SQL command/query execution and executor configuration.
 
 ## Overview
 
 AsyncExecutor tests cover:
 
 - ✅ **Async SQL commands** – `async_exec.command("sql", ...)` with positional and named args
-- ✅ **Record loss above parallel level 1** – exact submitted-versus-stored counts, including a skipped test that starts passing when the engine is fixed
+- ✅ **Record loss above parallel level 1** – exact submitted-versus-stored counts, including the regression test for the parallel-level-4 loss fixed in 26.10.1
 - ✅ **Async SQL queries** – `async_exec.query("sql", ...)` with a per-row callback
 - ✅ **Auto-commit cadence** – `set_commit_every()` batching
 - ✅ **Parallel execution** – `set_parallel_level()` worker threads

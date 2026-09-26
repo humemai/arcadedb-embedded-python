@@ -14,7 +14,7 @@ Inserts three documents, deletes one, restores it, and checks that `count(*)` ag
 
 ### 2) the restored record is intact
 
-Confirms the record comes back with its original RID and the properties given in the `SET` clause. Delete and restore run in **separate** transactions, which is the only shape that currently works.
+Confirms the record comes back with its original RID and the properties given in the `SET` clause. Delete and restore run in **separate** transactions here; the same-transaction shape has its own test (4 below).
 
 ### 3) `RESTORE VERTEX` restores the record count
 

@@ -143,8 +143,13 @@ results = db.query(
     `db.query()` and `db.command()` accept a NumPy array as a bound parameter
     directly -- that is exactly what `test_numpy_array_conversion_in_command`
     and `test_numpy_array_conversion_in_query` above assert. A Python list is
-    not a drop-in for it and raises `TypeError`, because a list argument is
-    not a single array-valued parameter.
+    not a drop-in for it, and it raises no error either. When the list is the
+    only argument, it is the positional-parameter array itself, one element
+    per `?` (`test_single_list_arg_is_positional_param_array` in
+    `test_core.py`): `db.command("sql", "INSERT INTO VectorData SET vector = ?",
+    [0.1, 0.2, 0.3])` stores the scalar `0.1`, not the vector. Among several
+    arguments, as in the query above, a list is one collection parameter, but
+    it crosses into the JVM element by element.
 
     `to_java_float_array()` is accepted here too and is about 1.3x faster than
     letting the binding convert (0.84 s against 1.08 s over 20,000 inserts of

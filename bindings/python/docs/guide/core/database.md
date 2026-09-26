@@ -205,7 +205,7 @@ with arcadedb.open_database("./mydb") as db:
 ├── statistics.json         # Database statistics
 ├── User_0.*.bucket         # User type data files
 ├── HasFriend_0.*.bucket    # Edge type data files
-└── .lock                   # Lock file (when open)
+└── database.lck            # Lock file (when open)
 ```
 
 ### Database Location
@@ -267,10 +267,12 @@ with arcadedb.open_database("./database1") as db1, \
 
 **Lock File:**
 
-- Created when database opens: `.lock`
+- Created when database opens: `database.lck`, with an OS file lock held on it
 - Prevents concurrent access from same/different processes
 - Automatically removed on clean close
-- Manual removal only if process crashed
+- After a crash the OS releases the lock and the file stays behind. A leftover
+  file blocks nothing: the next open sees it and replays the WAL to recover.
+  Do not delete it by hand: deleting it skips that recovery.
 
 ```python
 # If database locked by another process
@@ -280,12 +282,8 @@ try:
 except Exception as e:
     print(f"Database locked: {e}")
 
-    # Check if process is still running
-    # If not, remove lock file
-    import os
-    lock_file = "./mydb/.lock"
-    if os.path.exists(lock_file):
-        os.remove(lock_file)
+    # Another running process holds the lock: close that process.
+    # Do not delete ./mydb/database.lck (see above).
 ```
 
 ## Common Patterns
