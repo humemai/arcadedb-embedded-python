@@ -4413,9 +4413,9 @@ OCT_PROSE = {
         "milvus": ("Milvus's dense rows run with segments sealed at 50% of the maximum segment size, where the image default is 12%, so a large ingest lands in the few-large-segments layout that Milvus's own compaction otherwise reaches at an unpredictable moment. One line changed from the image's configuration; sparse rows are at the default.",
                    [(r"sealed at (\d+)%", lambda P, rows: _milvus_seal_proportion() * 100, "const"),
                     (r"image default is (\d+)%", lambda P, rows: _const("runner", "MILVUS_IMAGE_SEAL_PROPORTION") * 100, "const")]),
-        "ingest": ("Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served sends 500-statement sqlscript batches over HTTP with each vector spelled out as text, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany; pgvector COPY FROM STDIN then CREATE INDEX; Neo4j loads then builds its vector index; MongoDB insert_many then its vector search index; ArangoDB import_bulk then its FAISS IVF index; SurrealDB inserts through its Python SDK under the HNSW index it defines first; the server builds that index in the background, so the served build time includes waiting until a query probe shows the index has caught up.",
+        "ingest": ("Ingest paths: ArcadeDB embedded issues INSERT per vector in 10,000-row transactions through the Python package, then CREATE INDEX ... LSM_VECTOR; served binds 2,000-row INSERT ... CONTENT batches over HTTP with each vector as a JSON array, then the same CREATE INDEX; Chroma add() in batches of 5,000; LanceDB an Arrow table then create_index; Qdrant and Milvus upsert in batches; DuckDB VSS and sqlite-vec executemany; pgvector COPY FROM STDIN then CREATE INDEX; Neo4j loads then builds its vector index; MongoDB insert_many then its vector search index; ArangoDB import_bulk then its FAISS IVF index; SurrealDB inserts through its Python SDK under the HNSW index it defines first; the server builds that index in the background, so the served build time includes waiting until a query probe shows the index has caught up.",
                    [(r"in ([\d,]+)-row transactions", lambda P, rows: _const("l3d_dense", "BATCH"), "const"),
-                    (r"sends (\d+)-statement", lambda P, rows: _const("l3d_dense", "SERVER_BATCH"), "const"),
+                    (r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l3d_dense", "ArcadeServer").load_batch, "const"),
                     (r"batches of ([\d,]+); LanceDB", lambda P, rows: _const("l3d_dense", "CHROMA_BATCH"), "const")]),
     },
     "l2": {
@@ -4477,8 +4477,9 @@ OCT_PROSE = {
         "ratio": ("The ratio is what the strict setting costs on that engine, at this corpus size and this operation count. It is not a claim about any other write. A large ratio is not a slow engine: it is an engine whose relaxed path was fast, measured against a flush that costs what a flush costs.", []),
     },
     "docs_oltp": {
-        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Python package's insert_many in 10,000-row batches, one JSON payload per batch; served sends INSERT statements as sqlscript batches over HTTP; PostgreSQL COPY FROM STDIN; DuckDB CREATE TABLE AS SELECT from in-memory frames; SQLite executemany; MongoDB insert_many; ArangoDB import_bulk; SurrealDB inserts through its Python SDK.",
-                   [(r"in ([\d,]+)-row batches", lambda P, rows: _const("l1_tpc", "BATCH"), "const")]),
+        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Python package's insert_many in 10,000-row batches, one JSON payload per batch; served binds 2,000-row INSERT ... CONTENT batches over HTTP; PostgreSQL COPY FROM STDIN; DuckDB CREATE TABLE AS SELECT from in-memory frames; SQLite executemany; MongoDB insert_many; ArangoDB import_bulk; SurrealDB inserts through its Python SDK.",
+                   [(r"in ([\d,]+)-row batches", lambda P, rows: _const("l1_tpc", "BATCH"), "const"),
+                    (r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l1_tpc", "ArcadeServerTPC").load_batch, "const")]),
     },
 }
 OCT_PROSE["docs_olap"] = {"ingest": OCT_PROSE["docs_oltp"]["ingest"]}

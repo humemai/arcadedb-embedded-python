@@ -1644,7 +1644,7 @@ SEPT_CONDITION_PINS = [
     ("l3d", r"sealed at (\d+)%", lambda P, rows: _const("export_web", "_milvus_seal_proportion")() * 100, "const"),
     ("l3d", r"image default is (\d+)%", lambda P, rows: _const("runner", "MILVUS_IMAGE_SEAL_PROPORTION") * 100, "const"),
     ("l3d", r"in ([\d,]+)-row transactions", lambda P, rows: _const("l3d_dense", "BATCH"), "const"),
-    ("l3d", r"sends (\d+)-statement", lambda P, rows: _const("l3d_dense", "SERVER_BATCH"), "const"),
+    ("l3d", r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l3d_dense", "ArcadeServer").load_batch, "const"),
     ("l3d", r"batches of ([\d,]+); LanceDB", lambda P, rows: _const("l3d_dense", "CHROMA_BATCH"), "const"),
     ("l3d", r"corpus size \(([\d,]+)\)", lambda P, rows: _const("l3d_dense", "SCALE_DOCS")["deep10m"], "const"),
     ("l2", r"SF1 \(11k people\): (\d+)", _oltp_queries("sf1"), "const"),

@@ -79,10 +79,9 @@ SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000,
               "deep10m": 9_990_000}
 N_QUERIES = 1_000
 BATCH = 10_000
-# The served build's sqlscript batch and Chroma's add() batch, named so the
-# page's ingest-path sentence can pin its numbers to these rather than type
-# them (page_check, condition pins, 2026-09-16). Behaviour unchanged.
-SERVER_BATCH = 500
+# Chroma's add() batch, named so the page's ingest-path sentence can pin its
+# number to it rather than type it (page_check, condition pins, 2026-09-16).
+# The served build's batch is ArcadeServer.load_batch (DECISIONS #116 item 4).
 CHROMA_BATCH = 5_000
 # What an IVF arm records instead of a degree (arango_common); the lane and
 # the multipass driver read the same tuple so they cannot disagree.
@@ -649,6 +648,9 @@ class ArcadeServer(Base):
     quantization = "fp32"
     _quant_ddl = ""
     name = "arcadedb_dense_server"
+    # Rows per `INSERT ... CONTENT :rows` request; #8337 suggests 2,000-5,000
+    # for vector rows; swept on the bench host at the re-pin, recorded per row.
+    load_batch = int(os.environ.get("BENCH_SERVED_LOAD_BATCH") or 2000)
 
     def connect(self):
         import requests
@@ -663,10 +665,11 @@ class ArcadeServer(Base):
         except Exception:
             self.version = "server:?"
 
-    def _cmd(self, language, command, timeout=1800):
-        r = self.rq.post(f"{self.base}/command/bench",
-                         json={"language": language, "command": command},
-                         timeout=timeout)
+    def _cmd(self, language, command, timeout=1800, params=None):
+        body = {"language": language, "command": command}
+        if params is not None:
+            body["params"] = params
+        r = self.rq.post(f"{self.base}/command/bench", json=body, timeout=timeout)
         r.raise_for_status()
         return r.json().get("result", [])
 
@@ -675,23 +678,25 @@ class ArcadeServer(Base):
         self._cmd("sql", "CREATE PROPERTY Article.vid INTEGER")
         self._cmd("sql", "CREATE PROPERTY Article.embedding ARRAY_OF_FLOATS")
         _t0 = time.perf_counter()
-        buf = []
+        # BOUND ROWS, NOT VALUES WRITTEN INTO SQL TEXT (ArcadeData/arcadedb#8337,
+        # DECISIONS #116 item 4). One `INSERT ... CONTENT :rows` per batch, the
+        # vectors travelling as JSON arrays. #8337 found the Postgres wire the
+        # fastest vector path FROM JAVA (12.1k rows/s against 8.3k); from this
+        # harness's Python it is not, because psycopg adapts every float in
+        # Python: 50k x 96 on the laptop, sqlscript literals 2,754 rows/s,
+        # psycopg binary 3,990, CONTENT 4,980 (batch 2,000), every path storing
+        # the float32 values exactly. So the arm takes the path that is fastest
+        # for a Python client, which is also the one needing no server plugin.
+        # tolist() of a float32 array gives the exact float32 values as Python
+        # floats, so both deployments still index the same numbers.
+        rows = []
         for vid in range(len(vecs)):
-            # 9 significant digits: exact float32 round-trip, matching the
-            # sparse adapter. The embedded side passes exact float32 arrays via
-            # to_java_float_array, so anything lossy here means the two
-            # deployments index different numbers. Measured before changing it:
-            # the previous "%.6f" kept ~4.5 significant digits and changed 0 of
-            # 500 top-10 sets at 200k docs, so this is not a correction to any
-            # published number, just removal of a question a reviewer would
-            # rightly ask. Not tested at 10M, where neighbour gaps are tighter.
-            w = ", ".join("%.9g" % x for x in vecs[vid])
-            buf.append(f"INSERT INTO Article SET vid = {vid}, embedding = [{w}]")
-            if len(buf) >= SERVER_BATCH:
-                self._cmd("sqlscript", ";".join(buf))
-                buf = []
-        if buf:
-            self._cmd("sqlscript", ";".join(buf))
+            rows.append({"vid": vid, "embedding": vecs[vid].tolist()})
+            if len(rows) >= self.load_batch:
+                self._cmd("sql", "INSERT INTO Article CONTENT :rows", params={"rows": rows})
+                rows = []
+        if rows:
+            self._cmd("sql", "INSERT INTO Article CONTENT :rows", params={"rows": rows})
         self.ingest_s = round(time.perf_counter() - _t0, 2)
         _t1 = time.perf_counter()
         self._cmd("sql", f'''CREATE INDEX ON Article (embedding) LSM_VECTOR
