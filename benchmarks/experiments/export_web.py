@@ -1693,13 +1693,13 @@ WITHHELD_CELLS = {}
 # supersede them under the canonical-row rule and are not recognised, so the
 # numbers return at the landing that carries them with nothing to remember
 # and no list to edit. (table id, backend key, column or None) -> (why, stale).
-_F132 = ("SurrealDB's graph-filtered search is withheld: our query scanned every product instead of "
+_F132 = ("SurrealDB's graph-filtered search is marked `re-run`: our query scanned every product instead of "
          "reading the candidates by record id, the access path every other engine on this table was "
          "given. It is being re-measured with the fix.")
-_F134 = ("SurrealDB (server) retrieval at the 500k tier is withheld: the server was still building "
+_F134 = ("SurrealDB (server) retrieval at the 500k tier is marked `re-run`: the server was still building "
          "its vector index in the background when these queries ran. It is being re-measured with the "
          "build waiting for the index to catch up.")
-_F133 = ("Qdrant + Neo4j has no row on this table while it is re-measured. Its vector half ran in the "
+_F133 = ("Qdrant + Neo4j's row is marked `re-run`. Its vector half ran in the "
          "Qdrant client's in-memory local mode, a pure-Python reimplementation rather than the Qdrant "
          "server, so every time, recall, and disk value it produced described that reimplementation. "
          "It is being re-run against the Qdrant server the vector table uses. Its all-or-nothing result "
@@ -1925,25 +1925,30 @@ def _withhold_cells(tables):
                     e["metrics"].pop(column)
                     notes[tid].append(why)
                     _declare_absence(tid, backend, column, "withheld", why)
+    # A MARK, NOT A GAP (DECISIONS #117, the user: "just write place holders").
+    # The row stays and its cells say `re-run`, so a reader sees the engine is
+    # on the table and why its number is not; `outcome` keeps everything that
+    # ranks or averages from reading the row as a measurement.
     for (tid, bkey, column, only_scale), (why, pred) in STALE_UNTIL_RERUN.items():
         for t in tables:
             if t.get("id") != tid:
                 continue
-            keep = []
             for e in t.get("entries", []):
                 hit = (str(e.get("backend_key")) == bkey
                        and (only_scale is None or str(e.get("scale")) == only_scale)
                        and _stale(tid, bkey, e.get("scale"), pred))
-                if hit and column is None:
+                if not hit:
+                    continue
+                if column is None:
+                    e["outcome"] = "withdrawn"
+                    e["version_name"] = None   # the stand-in's version would read as the engine's
+                    e["metrics"] = {c: {"text": "re-run"} for c in (t.get("columns") or [])}
                     notes[tid].append(_gen(why))
                     _declare_absence(tid, str(e.get("backend")), None, "withdrawn", why)
-                    continue
-                if hit and column in (e.get("metrics") or {}):
-                    e["metrics"].pop(column)
+                elif column in (e.get("metrics") or {}):
+                    e["metrics"][column] = {"text": "re-run"}
                     notes[tid].append(_gen(why))
                     _declare_absence(tid, str(e.get("backend")), column, "withheld", why)
-                keep.append(e)
-            t["entries"] = keep
     for t in tables:
         for why in dict.fromkeys(notes.get(t.get("id"), [])):
             t.setdefault("conditions", [])
@@ -5106,6 +5111,9 @@ _MARK_MEANINGS = {
     "OOM": "killed at the cell's memory envelope rather than running out of time",
     "lost": "the connection dropped mid-query",
     "err": "the cell failed inside its budget; the note says what it reported",
+    # DECISIONS #117. Not a dash: on this page a dash means an operation the
+    # engine cannot express, and these ran; they measured our mistake.
+    "re-run": "the cell was measured before a fix to our harness and is being measured again; the note says what was wrong",
 }
 
 
@@ -6037,7 +6045,12 @@ def _finish_table(table: dict) -> dict:
     # DECISIONS #111. Added AFTER every note and number is computed, so
     # nothing that averages, ranks or counts a measurement can see them.
     _marked, _marks = _censored_entries(table)
-    if _marked:
+    # ONE LEGEND for every mark on the table: the censored rows' and the
+    # `re-run` cells the #117 withholding placed on rows that stand.
+    _marks = set(_marks) | {st["text"] for e in table.get("entries", [])
+                            for st in (e.get("metrics") or {}).values()
+                            if isinstance(st, dict) and st.get("text") == "re-run"}
+    if _marks:
         table["conditions"] = table["conditions"] + _mark_legend(_marks)
     entries = table["entries"] + _marked
     seen = []
