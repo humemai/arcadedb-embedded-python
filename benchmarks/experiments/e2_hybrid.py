@@ -649,13 +649,15 @@ class SurrealE2:
         # engine reaches this step through an index on pid in 1-15 ms. Record
         # ids ARE SurrealDB's primary-key path, which is what F98's rule names
         # for it. Same answers; laptop 50k, 200 candidates: 3,638 -> 15.7 ms.
+        # BOUND on the re-pin (DECISIONS #116 item 2): the vector as $q, the
+        # candidates as RecordID objects; k is a constant in a cell. Same
+        # answers and the same record-id path (laptop 50k: 15.7 ms).
         if not cands:
             return []
-        vec = json.dumps([float(x) for x in qvec])
-        lst = ",".join(f"product:{int(p)}" for p in cands)
         rows = _srows(self.db.query(
-            f"SELECT pid, vector::distance::euclidean(embedding, {vec}) AS d FROM [{lst}] "
-            f"ORDER BY d ASC LIMIT {k}"))
+            f"SELECT pid, vector::distance::euclidean(embedding, $q) AS d FROM $ids "
+            f"ORDER BY d ASC LIMIT {int(k)}",
+            {"q": [float(x) for x in qvec], "ids": self._rids(cands)}))
         return [int(r["pid"]) for r in rows]
 
     def total_views(self):
