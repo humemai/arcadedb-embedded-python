@@ -171,41 +171,9 @@ jobs:
           JAR_COUNT=$(ls -1 src/arcadedb_embedded/jars/*.jar 2>/dev/null | wc -l)
           echo "✅ Downloaded $JAR_COUNT JAR files"
 
-      - name: Remove excluded JARs
-        shell: bash
-        run: |
-          cd bindings/python
-
-          JARS_DIR="src/arcadedb_embedded/jars"
-          EXCLUSIONS_FILE="jar_exclusions.txt"
-
-          if [[ -f "$EXCLUSIONS_FILE" ]]; then
-            echo "🗑️  Removing excluded JARs from jar_exclusions.txt..."
-            EXCLUSION_COUNT=0
-
-            while IFS= read -r pattern || [[ -n "$pattern" ]]; do
-              # Skip empty lines and comments
-              if [[ -n "$pattern" ]] && [[ ! "$pattern" =~ ^# ]]; then
-                echo "   Processing pattern: $pattern"
-
-                # Remove matching JARs
-                for jar in "$JARS_DIR"/$pattern; do
-                  if [[ -f "$jar" ]]; then
-                    rm -f "$jar"
-                    echo "   - Removed: $(basename "$jar")"
-                    EXCLUSION_COUNT=$((EXCLUSION_COUNT + 1))
-                  fi
-                done
-              fi
-            done < "$EXCLUSIONS_FILE"
-
-            JAR_COUNT_AFTER=$(ls -1 "$JARS_DIR"/*.jar 2>/dev/null | wc -l)
-            echo "✅ Removed $EXCLUSION_COUNT JAR(s), $JAR_COUNT_AFTER remaining"
-          else
-            echo "⚠️  No jar_exclusions.txt found, skipping exclusions"
-          fi
-
-      - name: Upload filtered JARs as artifact
+      # Unfiltered on purpose: build-native.sh applies scripts/jar_exclusions.txt
+      # to whatever lands in the jars directory, so the list lives in one place.
+      - name: Upload JARs as artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: arcadedb-jars
