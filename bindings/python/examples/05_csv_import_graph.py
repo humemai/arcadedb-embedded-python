@@ -962,41 +962,34 @@ class EdgeCreator:
 
         if self.use_java_api:
             # Fetch Java vertex objects
+            # The ids travel as one list parameter, so every chunk runs the
+            # same query text and ArcadeDB reuses its plan (it still reads the
+            # userId index for `IN :ids`).
             if user_ids:
-                user_ids_str = ",".join(str(uid) for uid in user_ids)
-                query = f"SELECT FROM User WHERE userId IN [{user_ids_str}]"
-                for result in self.db.query("sql", query):
+                query = "SELECT FROM User WHERE userId IN :ids"
+                for result in self.db.query("sql", query, {"ids": user_ids}):
                     uid = result.get("userId")
                     vertex = result.get_vertex()
                     user_cache[uid] = vertex
 
             if movie_ids:
-                movie_ids_str = ",".join(str(mid) for mid in movie_ids)
-                query = f"SELECT FROM Movie WHERE movieId IN [{movie_ids_str}]"
-                for result in self.db.query("sql", query):
+                query = "SELECT FROM Movie WHERE movieId IN :ids"
+                for result in self.db.query("sql", query, {"ids": movie_ids}):
                     mid = result.get("movieId")
                     vertex = result.get_vertex()
                     movie_cache[mid] = vertex
         else:
             # Fetch RIDs for SQL CREATE EDGE
             if user_ids:
-                user_ids_str = ",".join(str(uid) for uid in user_ids)
-                query = (
-                    f"SELECT @rid as rid, userId FROM User "
-                    f"WHERE userId IN [{user_ids_str}]"
-                )
-                for result in self.db.query("sql", query):
+                query = "SELECT @rid as rid, userId FROM User WHERE userId IN :ids"
+                for result in self.db.query("sql", query, {"ids": user_ids}):
                     uid = result.get("userId")
                     rid = result.get("rid").toString()
                     user_cache[uid] = rid
 
             if movie_ids:
-                movie_ids_str = ",".join(str(mid) for mid in movie_ids)
-                query = (
-                    f"SELECT @rid as rid, movieId FROM Movie "
-                    f"WHERE movieId IN [{movie_ids_str}]"
-                )
-                for result in self.db.query("sql", query):
+                query = "SELECT @rid as rid, movieId FROM Movie WHERE movieId IN :ids"
+                for result in self.db.query("sql", query, {"ids": movie_ids}):
                     mid = result.get("movieId")
                     rid = result.get("rid").toString()
                     movie_cache[mid] = rid

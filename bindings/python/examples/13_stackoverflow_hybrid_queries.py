@@ -1794,7 +1794,6 @@ def run_hybrid_queries(
         if row.get("user_id") is not None
     ]
     if user_ids:
-        ids_sql = ",".join(str(v) for v in user_ids)
         step2 = timed_step(
             "sql_profile_rank",
             lambda: run_sql(
@@ -1802,10 +1801,11 @@ def run_hybrid_queries(
                 f"""
                 SELECT Id, DisplayName, Reputation
                 FROM User
-                WHERE Id IN [{ids_sql}]
+                WHERE Id IN :ids
                 ORDER BY Reputation DESC, Id ASC
                 LIMIT {top_k}
                 """,
+                {"ids": list(user_ids)},
             ),
         )
         steps.append(step2)
@@ -1957,7 +1957,6 @@ def run_hybrid_queries(
             if row.get("user_id") is not None
         ]
         if user_ids:
-            ids_sql = ",".join(str(v) for v in user_ids)
             step3 = timed_step(
                 "sql_post_filter",
                 lambda: run_sql(
@@ -1965,12 +1964,13 @@ def run_hybrid_queries(
                     f"""
                     SELECT Id, DisplayName, Reputation, Views
                     FROM User
-                                        WHERE Id IN [{ids_sql}]
-                                            AND Reputation IS NOT NULL
-                                            AND Reputation >= {int(min_reputation)}
+                    WHERE Id IN :ids
+                      AND Reputation IS NOT NULL
+                      AND Reputation >= :min_rep
                     ORDER BY Reputation DESC, Views DESC, Id ASC
                     LIMIT {top_k}
                     """,
+                    {"ids": list(user_ids), "min_rep": int(min_reputation)},
                 ),
             )
             steps.append(step3)
