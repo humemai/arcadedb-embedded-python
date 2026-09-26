@@ -340,6 +340,11 @@ jobs:
 
       - name: Run pytest on host
         id: pytest
+        # A HUNG TEST ENDS THE STEP, NOT THE DAY. On 2026-09-25 the windows/3.13
+        # job sat in test_lsm_vector_quantization_int8_comprehensive for 86 minutes
+        # (re-run: passed in 7), and with no limit it would have held the run for
+        # GitHub's 6-hour default. The step takes 108-319 s on every platform.
+        timeout-minutes: 30
         shell: bash
         run: |
           cd bindings/python
