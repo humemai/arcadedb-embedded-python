@@ -285,14 +285,18 @@ class ArcadeE2:
                 "Product[embedding]", a.to_java_float_array(qvec), K, 100
             ).to_list()
             pids = [int(r["pid"]) for r in rows]
+            # BOUND (DECISIONS #116 item 2): every statement of the
+            # transaction is one text whatever the ids.
             rel = db.query(
                 "sql",
-                f"SELECT expand(out('RELATED')) FROM Product WHERE pid = {pids[0]}"
+                "SELECT expand(out('RELATED')) FROM Product WHERE pid = :p", {"p": pids[0]}
             ).to_list()
             touched = pids[:3] + [int(r["pid"]) for r in rel[:3]]
-            for p in set(touched):
-                db.command("sql",
-                           f"UPDATE Product SET views = views + 1 WHERE pid = {p}")
+            # ONE SET-BASED UPDATE, as every other engine sends (PostgreSQL
+            # `pid = ANY(%s)`, Neo4j UNWIND, ArangoDB FOR, MongoDB update_many);
+            # it was one UPDATE per product until the re-pin (BUGS F131).
+            db.command("sql", "UPDATE Product SET views = views + 1 WHERE pid IN :ids",
+                       {"ids": sorted(set(int(p) for p in touched))})
             if crash:
                 raise RuntimeError("injected-crash")  # txn context rolls back
         return len(touched)
@@ -336,28 +340,32 @@ class ArcadeE2:
             "Product[embedding]", self._a.to_java_float_array(qvec), k, max(ef, k)).to_list()
         return [int(r["pid"]) for r in rows]
 
+    # BOUND ID LISTS (DECISIONS #116 item 2): `pid IN :ids` still reads the
+    # unique index (EXPLAIN: FETCH FROM INDEX Product[pid]), with the same
+    # answers as the pasted list and faster (50k products, 30 ids, laptop
+    # 2026-09-26: documents 1.26 against 1.50 ms p50, one hop 0.41 against
+    # 0.56 ms). k is constant in a cell, so LIMIT stays in the text.
     def _hop(self, pids):
         if not pids:
             return []
-        lst = ",".join(str(int(p)) for p in pids)
-        rows = self.db.query("sql", f"SELECT pid FROM (SELECT expand(out('RELATED')) "
-                                    f"FROM Product WHERE pid IN [{lst}])").to_list()
+        rows = self.db.query("sql", "SELECT pid FROM (SELECT expand(out('RELATED')) "
+                                    "FROM Product WHERE pid IN :ids)",
+                             {"ids": [int(p) for p in pids]}).to_list()
         return [int(r["pid"]) for r in rows]
 
     def _docs(self, pids):
         if not pids:
             return []
-        lst = ",".join(str(int(p)) for p in pids)
-        return self.db.query("sql", f"SELECT pid, views FROM Product WHERE pid IN [{lst}]").to_list()
+        return self.db.query("sql", "SELECT pid, views FROM Product WHERE pid IN :ids",
+                             {"ids": [int(p) for p in pids]}).to_list()
 
     def _rank_candidates(self, qvec, cands, k):
         if not cands:
             return []
-        lst = ",".join(str(int(p)) for p in cands)
         rows = self.db.query(
             "sql", f"SELECT pid, vector.l2Distance(embedding, :q) AS d FROM Product "
-                   f"WHERE pid IN [{lst}] ORDER BY d ASC LIMIT {k}",
-            {"q": [float(x) for x in qvec]}).to_list()
+                   f"WHERE pid IN :ids ORDER BY d ASC LIMIT {int(k)}",
+            {"q": [float(x) for x in qvec], "ids": [int(p) for p in cands]}).to_list()
         return [int(r["pid"]) for r in rows]
 
     def total_views(self):
@@ -449,10 +457,14 @@ class ArcadeE2Server(ArcadeE2):
             rows = self._post("query", "SELECT pid FROM (SELECT expand(vectorNeighbors(:idx, :q, :k, :ef)))",
                               {"idx": "Product[embedding]", "q": [float(x) for x in qvec], "k": K, "ef": 100}, sid=sid)
             pids = [int(r["pid"]) for r in rows]
-            rel = self._post("query", f"SELECT expand(out('RELATED')) FROM Product WHERE pid = {pids[0]}", sid=sid)
+            rel = self._post("query", "SELECT expand(out('RELATED')) FROM Product WHERE pid = :p",
+                             {"p": pids[0]}, sid=sid)
             touched = pids[:3] + [int(r["pid"]) for r in rel[:3]]
-            for p_ in set(touched):
-                self._post("command", f"UPDATE Product SET views = views + 1 WHERE pid = {p_}", sid=sid)
+            # ONE REQUEST for the update, as every other engine sends one
+            # set-based statement; it was one HTTP round trip per product (up
+            # to six) until the re-pin (BUGS F131).
+            self._post("command", "UPDATE Product SET views = views + 1 WHERE pid IN :ids",
+                       {"ids": sorted(set(int(p) for p in touched))}, sid=sid)
             if crash:
                 raise RuntimeError("injected-crash")
             self.rq.post(f"{self.base}/commit/bench", headers={"arcadedb-session-id": sid}, timeout=60).raise_for_status()
@@ -478,25 +490,23 @@ class ArcadeE2Server(ArcadeE2):
     def _hop(self, pids):
         if not pids:
             return []
-        lst = ",".join(str(int(p)) for p in pids)
-        rows = self._post("query", f"SELECT pid FROM (SELECT expand(out('RELATED')) "
-                                   f"FROM Product WHERE pid IN [{lst}])")
+        rows = self._post("query", "SELECT pid FROM (SELECT expand(out('RELATED')) "
+                                   "FROM Product WHERE pid IN :ids)", {"ids": [int(p) for p in pids]})
         return [int(r["pid"]) for r in rows]
 
     def _docs(self, pids):
         if not pids:
             return []
-        lst = ",".join(str(int(p)) for p in pids)
-        return self._post("query", f"SELECT pid, views FROM Product WHERE pid IN [{lst}]")
+        return self._post("query", "SELECT pid, views FROM Product WHERE pid IN :ids",
+                          {"ids": [int(p) for p in pids]})
 
     def _rank_candidates(self, qvec, cands, k):
         if not cands:
             return []
-        lst = ",".join(str(int(p)) for p in cands)
         rows = self._post("query",
                           f"SELECT pid, vector.l2Distance(embedding, :q) AS d FROM Product "
-                          f"WHERE pid IN [{lst}] ORDER BY d ASC LIMIT {k}",
-                          {"q": [float(x) for x in qvec]})
+                          f"WHERE pid IN :ids ORDER BY d ASC LIMIT {int(k)}",
+                          {"q": [float(x) for x in qvec], "ids": [int(p) for p in cands]})
         return [int(r["pid"]) for r in rows]
 
     def total_views(self):
@@ -579,23 +589,29 @@ class SurrealE2:
                     self.db, "product", "embedding", DIM,
                     log=lambda m: print(m, file=sys.stderr, flush=True))
 
+    # BOUND VALUES (DECISIONS #116 item 2): the query vector as $q, record ids
+    # as RecordID objects. K and ef stay in the KNN operator's text, which
+    # takes only integer literals there; both are constants.
     def hybrid_op(self, qvec, crash=False, mirror=False):
+        from surrealdb import RecordID
         q = self.db.query
-        vec = json.dumps([float(x) for x in qvec])
-        res = q(f"SELECT pid FROM product WHERE embedding <|{K},100|> {vec}")
+        res = q(f"SELECT pid FROM product WHERE embedding <|{K},100|> $q", {"q": [float(x) for x in qvec]})
         rows = _srows(res)
         pids = [r["pid"] for r in rows][:K]
         best = pids[0]
-        rel = q(f"SELECT VALUE ->related->product.pid FROM product:{best}")
+        rel = q("SELECT VALUE ->related->product.pid FROM $b", {"b": RecordID("product", int(best))})
         relp = _srows(rel)
         flat = relp[0] if relp and isinstance(relp[0], list) else relp
         touched = list(pids[:3]) + list(flat[:3] if flat else [])
-        upd = ";".join(f"UPDATE product:{p} SET views += 1" for p in set(touched))
+        # One set-based UPDATE over the touched records, as every engine on
+        # the table now sends (BUGS F131); it was one UPDATE per record in the
+        # same request.
+        vars_ = {"ids": [RecordID("product", p) for p in sorted(set(int(p) for p in touched))]}
         if crash:
             # injected failure inside the transaction -> CANCEL (rollback)
-            q(f"BEGIN; {upd}; THROW 'injected-crash'; COMMIT;")
+            q("BEGIN; UPDATE $ids SET views += 1; THROW 'injected-crash'; COMMIT;", vars_)
         else:
-            q(f"BEGIN; {upd}; COMMIT;")
+            q("BEGIN; UPDATE $ids SET views += 1; COMMIT;", vars_)
         return len(touched)
 
     FILTER_MODE = ("pre-filter: the candidate set is restricted first and ranked by "
@@ -603,24 +619,27 @@ class SurrealE2:
     FILTER_ACCESS = "record ids"   # F132: the candidates are read by record id, not scanned for
 
     def _vec_topk(self, qvec, k, ef=100):
-        vec = json.dumps([float(x) for x in qvec])
-        rows = _srows(self.db.query(f"SELECT pid FROM product WHERE embedding <|{k},{max(ef, k)}|> {vec}"))
+        rows = _srows(self.db.query(f"SELECT pid FROM product WHERE embedding <|{int(k)},{int(max(ef, k))}|> $q",
+                                    {"q": [float(x) for x in qvec]}))
         return [int(r["pid"]) for r in rows]
+
+    @staticmethod
+    def _rids(pids):
+        from surrealdb import RecordID
+        return [RecordID("product", int(p)) for p in pids]
 
     def _hop(self, pids):
         if not pids:
             return []
-        lst = ",".join(f"product:{int(p)}" for p in pids)
         out = []
-        for r in _srows(self.db.query(f"SELECT VALUE ->related->product.pid FROM [{lst}]")):
+        for r in _srows(self.db.query("SELECT VALUE ->related->product.pid FROM $ids", {"ids": self._rids(pids)})):
             out.extend(r if isinstance(r, list) else [r])
         return [int(x) for x in out if x is not None]
 
     def _docs(self, pids):
         if not pids:
             return []
-        lst = ",".join(f"product:{int(p)}" for p in pids)
-        return _srows(self.db.query(f"SELECT pid, views FROM [{lst}]"))
+        return _srows(self.db.query("SELECT pid, views FROM $ids", {"ids": self._rids(pids)}))
 
     def _rank_candidates(self, qvec, cands, k):
         # OVER THE CANDIDATES' RECORD IDS, as _docs and _hop address them
@@ -1008,7 +1027,10 @@ class PgAgeE2:
         pids = [int(r[0]) for r in c.fetchall()]
         # WHERE a.pid = x, not {pid: x}: the map form scanned (17 ms), the
         # WHERE form uses the expression index on pid (1.0 ms), same probe.
-        c.execute(f"SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) WHERE a.pid = {pids[0]} RETURN b.pid $$) AS (pid agtype)")
+        # BOUND through cypher()'s third argument (DECISIONS #116 item 2), the
+        # agtype map the ingest already passes.
+        c.execute("SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) WHERE a.pid = $pid RETURN b.pid $$, %s) AS (pid agtype)",
+                  (json.dumps({"pid": int(pids[0])}),))
         rel = [int(str(r[0])) for r in c.fetchall()]
         touched = pids[:3] + rel[:3]
         c.execute("UPDATE product SET views = views + 1 WHERE pid = ANY(%s)", (list(set(touched)),))
@@ -1037,9 +1059,9 @@ class PgAgeE2:
         if not pids:
             return []
         c = self._cur()
-        lst = ",".join(str(int(p)) for p in pids)
-        c.execute(f"SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) "
-                  f"WHERE a.pid IN [{lst}] RETURN b.pid $$) AS (pid agtype)")
+        c.execute("SELECT * FROM cypher('e2graph', $$ MATCH (a:Product)-[:RELATED]->(b) "
+                  "WHERE a.pid IN $pids RETURN b.pid $$, %s) AS (pid agtype)",
+                  (json.dumps({"pids": [int(p) for p in pids]}),))
         r = [int(str(x[0])) for x in c.fetchall()]
         self.cx.commit()
         return r

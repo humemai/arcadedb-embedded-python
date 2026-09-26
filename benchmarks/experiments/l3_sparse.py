@@ -303,19 +303,25 @@ class ArcadeServer(ArcadeEmbedded):
         r.raise_for_status()
         return r.json().get("result", [])
 
+    # The served bulk path the maintainers recommend (#8337; DECISIONS #116
+    # items 2 and 4): each batch is one INSERT ... CONTENT :rows request with
+    # the rows bound as a JSON array, one transaction per request, instead of
+    # INSERT statements with every weight written into the text. The weights
+    # travel as the float32 values' exact doubles, so ingest still equals the
+    # ground truth's weights. The size is swept on mini at the re-pin.
+    load_batch = int(os.environ.get("BENCH_SERVED_LOAD_BATCH") or 2000)
+
     def build(self, n_docs):
-        buf = []
+        import numpy as np
+        rows = []
         for i, idx, vals in gen_docs(n_docs):
-            t = ",".join(map(str, idx))
-            # 9 decimals: exact float32 round-trip, keeps ingest == GT weights
-            w = ",".join(f"{v:.9f}" for v in vals)
-            buf.append(f"INSERT INTO Doc SET id = {i}, tokens = [{t}], "
-                       f"weights = [{w}]")
-            if len(buf) >= INGEST_BATCH:
-                self._cmd("sqlscript", ";".join(buf))
-                buf = []
-        if buf:
-            self._cmd("sqlscript", ";".join(buf))
+            rows.append({"id": int(i), "tokens": [int(t) for t in idx],
+                         "weights": [float(v) for v in np.asarray(vals, dtype=np.float32)]})
+            if len(rows) >= self.load_batch:
+                self._cmd("sql", "INSERT INTO Doc CONTENT :rows", {"rows": rows})
+                rows = []
+        if rows:
+            self._cmd("sql", "INSERT INTO Doc CONTENT :rows", {"rows": rows})
 
     def search(self, idx, vals, k):
         rows = self._query(

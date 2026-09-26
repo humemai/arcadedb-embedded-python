@@ -4391,8 +4391,9 @@ OCT_PROSE = {
             "operator takes one dense array (https://surrealdb.com/docs/surrealql/operators). Nothing "
             "indexes a sparse vector, so the sparse nearest-neighbour search this table times cannot "
             "be expressed.", []),
-        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served sends INSERT statements as sqlscript batches over HTTP; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load); pgvector COPY FROM STDIN in sparsevec text form, then CREATE INDEX.",
-                   [(r"in (\d+)-record transactions", lambda P, rows: _const("l3_sparse", "INGEST_BATCH"), "const")]),
+        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Java API (newDocument with int and float arrays) in 500-record transactions, then COMPACT INDEX; served binds 2,000-row INSERT ... CONTENT batches over HTTP with the tokens and weights as JSON arrays; Qdrant, Milvus, and Elasticsearch upsert or bulk-index in batches, then settle (Elasticsearch refresh and force-merge, Milvus flush and load); pgvector COPY FROM STDIN in sparsevec text form, then CREATE INDEX.",
+                   [(r"in (\d+)-record transactions", lambda P, rows: _const("l3_sparse", "INGEST_BATCH"), "const"),
+                    (r"binds ([\d,]+)-row INSERT", lambda P, rows: _const("l3_sparse", "ArcadeServer").load_batch, "const")]),
     },
     "l3d": {
         # WHY AN ANGULAR DATASET IS MEASURED WITH EVERY ENGINE ON L2. A fair
@@ -4420,8 +4421,8 @@ OCT_PROSE = {
     },
     "l2": {
         "projection": ("Every engine traverses the same persons-and-KNOWS projection, with edges stored in both directions.", []),
-        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Java API (newVertex, newEdge) in 5,000-record transactions; served sends CREATE VERTEX and CREATE EDGE statements as sqlscript batches over HTTP; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ registers each batch as an Arrow table and INSERT ... SELECTs from it into the Person and knows tables, then defines the property graph over them; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts.",
-                   [(r"in ([\d,]+)-record transactions", lambda P, rows: _const("l2_graph", "INGEST_BATCH"), "const")]),
+        "ingest": ("Ingest paths: ArcadeDB embedded loads through the Python package's graph_batch, the engine's bulk graph loader, with the WAL on, fed 5,000 records at a time; served streams the vertices and edges as JSONL to the HTTP batch endpoint with the WAL on; Neo4j and Memgraph UNWIND batches over bolt; FalkorDB the same UNWIND batches over the Redis protocol; LadybugDB COPY from CSV, its native bulk path; DuckPGQ registers each batch as an Arrow table and INSERT ... SELECTs from it into the Person and knows tables, then defines the property graph over them; ArangoDB import_bulk; MongoDB insert_many; SurrealDB inserts the persons through its Python SDK and the KNOWS edges as bulk relation inserts.",
+                   [(r"fed ([\d,]+) records at a time", lambda P, rows: _const("l2_graph", "INGEST_BATCH"), "const")]),
     },
     "l2olap": {
         "gav": ("The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Rows labelled GAV ran with it built, once, before any query was timed, and the view build column is what that took.", []),

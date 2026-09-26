@@ -619,11 +619,13 @@ class ArcadeEmbedded(Base):
         db.commit()
 
     def delete_vectors(self, ids):
+        # BOUND (DECISIONS #116 item 2): the batch's ids travel as one list
+        # parameter, so every batch is the same text.
         db = self.db
         for lo in range(0, len(ids), 200):
-            lst = ",".join(str(int(v)) for v in ids[lo:lo + 200])
             db.begin()
-            db.command("sql", f"DELETE FROM Article WHERE vid IN [{lst}]")
+            db.command("sql", "DELETE FROM Article WHERE vid IN :ids",
+                       {"ids": [int(v) for v in ids[lo:lo + 200]]})
             db.commit()
 
     def close(self):
@@ -733,20 +735,18 @@ class ArcadeServer(Base):
         return [int(x["vid"]) for x in r.json().get("result", [])]
 
     def insert_vectors(self, ids, vecs):
-        buf = []
-        for j, vid in enumerate(ids):
-            w = ", ".join("%.9g" % x for x in vecs[j])
-            buf.append(f"INSERT INTO Article SET vid = {int(vid)}, embedding = [{w}]")
-            if len(buf) >= 200:
-                self._cmd("sqlscript", ";".join(buf))
-                buf = []
-        if buf:
-            self._cmd("sqlscript", ";".join(buf))
+        # The build's bound path (#8337, DECISIONS #116 items 2 and 4) at the
+        # mutate phase's 200-row batch: one INSERT ... CONTENT :rows request,
+        # one transaction, per batch, instead of 200 statements of literals.
+        for lo in range(0, len(ids), 200):
+            self._cmd("sql", "INSERT INTO Article CONTENT :rows", params={"rows": [
+                {"vid": int(v), "embedding": np.asarray(vecs[lo + j], dtype=np.float32).tolist()}
+                for j, v in enumerate(ids[lo:lo + 200])]})
 
     def delete_vectors(self, ids):
         for lo in range(0, len(ids), 200):
-            lst = ",".join(str(int(v)) for v in ids[lo:lo + 200])
-            self._cmd("sql", f"DELETE FROM Article WHERE vid IN [{lst}]")
+            self._cmd("sql", "DELETE FROM Article WHERE vid IN :ids",
+                      params={"ids": [int(v) for v in ids[lo:lo + 200]]})
 
 
 class Chroma(Base):
@@ -856,6 +856,9 @@ class LanceDB(Base):
                 pa.array(arr.ravel(), type=pa.float32()), DIM)}))
 
     def delete_vectors(self, ids):
+        # PASTED BY THE API, not by choice (DECISIONS #116 item 2): LanceDB's
+        # Table.delete takes only a predicate string; there is no parameter
+        # form to bind to.
         for lo in range(0, len(ids), 500):
             lst = ",".join(str(int(v)) for v in ids[lo:lo + 500])
             self.tbl.delete(f"id IN ({lst})")
@@ -1026,9 +1029,12 @@ class DuckVSS(Base):
                             [(int(v), vecs[j].tolist()) for j, v in enumerate(ids)])
 
     def delete_vectors(self, ids):
+        # BOUND (DECISIONS #116 item 2): the batch as one BIGINT[] parameter.
+        # Same rows and same time as the literal IN list (2,000 of 20k on an
+        # HNSW table, 279 against 277 ms, duckdb 1.5.4, laptop 2026-09-26).
         for lo in range(0, len(ids), 500):
-            lst = ",".join(str(int(v)) for v in ids[lo:lo + 500])
-            self.cx.execute(f"DELETE FROM t WHERE id IN ({lst})")
+            self.cx.execute("DELETE FROM t WHERE id IN (SELECT unnest(?::BIGINT[]))",
+                            [[int(v) for v in ids[lo:lo + 500]]])
 
 
 class Qdrant(Base):
@@ -1263,8 +1269,13 @@ class SurrealDense(Base):
         return res if isinstance(res, list) else ([res] if res is not None else [])
 
     def search(self, qvec, k):
-        q = "[" + ",".join("%.9g" % float(x) for x in qvec) + "]"
-        rows = self._rows(self.db.query(f"SELECT vid FROM article WHERE embedding <|{k},{EF_SEARCH}|> {q}"))
+        # BOUND (DECISIONS #116 item 2): the query vector as $q. k and ef stay
+        # in the text because the KNN operator takes only integer literals
+        # there ("expected an unsigned integer" for a parameter, SDK 2.0.0);
+        # both are constant in a cell, so the text still repeats. Same top-10
+        # as the pasted form (laptop, 2026-09-26).
+        rows = self._rows(self.db.query(f"SELECT vid FROM article WHERE embedding <|{int(k)},{EF_SEARCH}|> $q",
+                                        {"q": np.asarray(qvec, dtype=np.float32).tolist()}))
         return [int(r["vid"]) for r in rows]
 
     def insert_vectors(self, ids, vecs):
@@ -1274,8 +1285,12 @@ class SurrealDense(Base):
              "embedding": [float(x) for x in vecs[j]]} for j, v in enumerate(ids)])
 
     def delete_vectors(self, ids):
+        # ONE STATEMENT, ONE TRANSACTION PER BATCH, bound (BUGS F130; DECISIONS
+        # #116 item 2). It was 200 `DELETE article:N` joined by `;`, which
+        # SurrealDB runs as 200 transactions, where ArcadeDB commits once per 200.
+        from surrealdb import RecordID
         for lo in range(0, len(ids), 200):
-            self.db.query(";".join(f"DELETE article:{int(v)}" for v in ids[lo:lo + 200]))
+            self.db.query("DELETE $ids", {"ids": [RecordID("article", int(v)) for v in ids[lo:lo + 200]]})
 
     def close(self):
         try:
@@ -1748,9 +1763,10 @@ class Milvus(Base):
         self.cl.load_collection("articles")
 
     def delete_vectors(self, ids):
+        # By primary key through the client's ids= argument (DECISIONS #116
+        # item 2), not a filter expression with the ids written into it.
         for lo in range(0, len(ids), 500):
-            lst = ",".join(str(int(v)) for v in ids[lo:lo + 500])
-            self.cl.delete("articles", filter=f"id in [{lst}]")
+            self.cl.delete("articles", ids=[int(v) for v in ids[lo:lo + 500]])
         self.cl.flush("articles")
         self.cl.load_collection("articles")
 
