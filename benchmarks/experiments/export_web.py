@@ -4617,6 +4617,46 @@ def _surreal_pair_note(table):
         ev, sv)
 
 
+def _entry_heaps(e, lane, wl, exact_only=False):
+    """The JVM heaps the rows behind a table entry ran with ('4g', ...); empty
+    for an engine that records none. Shared by the memory note and the heap
+    column (DECISIONS #116 item 7), so the two cannot name different heaps."""
+    # SCALE-EXACT FIRST, THEN THE LANE. The cell's own scale is the right
+    # match and is what most tables need, but some take their memory figure
+    # from an overlay rather than from the lane's rows (the dense table's
+    # warm pass is a separate driver), and there the exact match finds
+    # nothing. Dropping the scale for everyone was worse -- an arm that ran
+    # two heaps across scales then reads as ambiguous and says nothing, which
+    # took the note from four tables to two. So: try the cell's scale, fall
+    # back to the whole lane, and if THAT is ambiguous say nothing rather
+    # than pick a heap.
+    # THE DENSE TABLE APPENDS A QUANTIZATION to the arm's name, so its
+    # entries read "ArcadeDB (embedded, fp32)" where display_name() gives
+    # "ArcadeDB (embedded)". An equality match found nothing there and the
+    # note went missing from the one vector table that has it.
+    def _same_arm(r, _eb=e.get("backend")):
+        dn = display_name(str(r.get("backend")))
+        if _eb == dn:
+            return True
+        # "ArcadeDB (embedded)" -> "ArcadeDB (embedded, fp32)"
+        if dn.endswith(")") and str(_eb).startswith(dn[:-1] + ","):
+            return True
+        # "Neo4j" -> "Neo4j (fp32)": an arm with no deployment in its name
+        # still gets the quantization appended on the vector tables, and
+        # missing it left Neo4j's 37.7 GiB cell unexplained beside four
+        # ArcadeDB ones that were.
+        return "(" not in dn and str(_eb).startswith(dn + " (")
+
+    _match = lambda r: (r.get("lane") == lane and (not wl or r.get("workload") == wl)
+                        and _same_arm(r))
+    rs = [r for r in _FROZEN_ROWS if _match(r) and str(r.get("scale")) == str(e.get("scale"))]
+    if not rs and not exact_only:
+        rs = [r for r in _FROZEN_ROWS if _match(r)]
+    heaps = {str(r.get("heap") or r.get("server_heap") or "").strip() for r in rs}
+    heaps = {h for h in heaps if h and h[-1].lower() == "g" and h[:-1].replace(".", "").isdigit()}
+    return heaps
+
+
 def _jvm_memory_note(table):
     """What the memory column measures for an engine running on a JVM.
 
@@ -4658,39 +4698,7 @@ def _jvm_memory_note(table):
         # row carries text where the median would be.
         if not cell or e.get("outcome") or cell.get("median") is None:
             continue
-        # SCALE-EXACT FIRST, THEN THE LANE. The cell's own scale is the right
-        # match and is what most tables need, but some take their memory figure
-        # from an overlay rather than from the lane's rows (the dense table's
-        # warm pass is a separate driver), and there the exact match finds
-        # nothing. Dropping the scale for everyone was worse -- an arm that ran
-        # two heaps across scales then reads as ambiguous and says nothing, which
-        # took the note from four tables to two. So: try the cell's scale, fall
-        # back to the whole lane, and if THAT is ambiguous say nothing rather
-        # than pick a heap.
-        # THE DENSE TABLE APPENDS A QUANTIZATION to the arm's name, so its
-        # entries read "ArcadeDB (embedded, fp32)" where display_name() gives
-        # "ArcadeDB (embedded)". An equality match found nothing there and the
-        # note went missing from the one vector table that has it.
-        def _same_arm(r, _eb=e.get("backend")):
-            dn = display_name(str(r.get("backend")))
-            if _eb == dn:
-                return True
-            # "ArcadeDB (embedded)" -> "ArcadeDB (embedded, fp32)"
-            if dn.endswith(")") and str(_eb).startswith(dn[:-1] + ","):
-                return True
-            # "Neo4j" -> "Neo4j (fp32)": an arm with no deployment in its name
-            # still gets the quantization appended on the vector tables, and
-            # missing it left Neo4j's 37.7 GiB cell unexplained beside four
-            # ArcadeDB ones that were.
-            return "(" not in dn and str(_eb).startswith(dn + " (")
-
-        _match = lambda r: (r.get("lane") == lane and (not wl or r.get("workload") == wl)
-                            and _same_arm(r))
-        rs = [r for r in _FROZEN_ROWS if _match(r) and str(r.get("scale")) == str(e.get("scale"))]
-        if not rs:
-            rs = [r for r in _FROZEN_ROWS if _match(r)]
-        heaps = {str(r.get("heap") or r.get("server_heap") or "").strip() for r in rs}
-        heaps = {h for h in heaps if h and h[-1].lower() == "g" and h[:-1].replace(".", "").isdigit()}
+        heaps = _entry_heaps(e, lane, wl)
         if not heaps:
             continue
         # A JVM ARM WITH AN AMBIGUOUS HEAP STILL GETS THE EXPLANATION, just not
@@ -6326,6 +6334,24 @@ def _finish_table(table: dict) -> dict:
                 DEPLOYMENT_ORDER.get(e.get("deployment"), 2),
                 PRECISION_ORDER.get(e.get("precision"), 2))
     table["entries"] = sorted(entries, key=key)
+    # THE HEAP BESIDE THE PEAK (DECISIONS #116 item 7, decided 2026-09-26: the
+    # memory column stays the peak an operator has to provision, with the heap
+    # printed beside it for JVM engines). A JVM engine's peak sits close to the
+    # heap it was given, so the setting belongs next to the number. From the
+    # rows behind the cell at its own size only; an engine that records no
+    # heap, or a cell whose rows ran two, prints none.
+    _lw = _TABLE_LANE.get(table.get("id"))
+    if _lw:
+        _hl, _hw = _lw
+        if _hl == "l1tpc":
+            _hw = "oltp"
+        for _e in table["entries"]:
+            _pk = (_e.get("metrics") or {}).get("peak memory GiB")
+            if _e.get("outcome") or not isinstance(_pk, dict) or _pk.get("median") is None:
+                continue
+            _hs = _entry_heaps(_e, _hl, _hw, exact_only=True)
+            if len(_hs) == 1:
+                _e["metrics"]["JVM heap"] = {"text": _hs.pop()}
     # Every metric a row carries is a column the page shows. l3smp carried
     # peak memory and disk in its rows and listed neither, so the page showed
     # neither (the renderer trusts `columns`).
@@ -6335,7 +6361,7 @@ def _finish_table(table: dict) -> dict:
         for m in e.get("metrics", {}):
             if m not in cols and m not in extra:
                 extra.append(m)
-    tail = [m for m in ("peak memory GiB", "disk GiB") if m in extra]
+    tail = [m for m in ("peak memory GiB", "JVM heap", "disk GiB") if m in extra]
     cols = cols + [m for m in extra if m not in tail] + tail
     # ONE ORDER FOR EVERY TABLE (2026-09-11): the workload's own columns in
     # the order its spec lists them, then recall, then the ingest pair (rate,
@@ -6351,6 +6377,8 @@ def _finish_table(table: dict) -> dict:
             return 2 if "/s" in c else 3
         if c == "peak memory GiB":
             return 4
+        if c == "JVM heap":
+            return 4.5
         if c == "disk GiB":
             return 5
         return 0
