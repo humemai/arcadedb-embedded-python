@@ -926,8 +926,11 @@ def main() -> int:
     print("\nno sentence names an arm the page does not print (OFF_PAGE_ARMS)")
     o_bad = _check_off_page_names(payload)
     print(f"  {o_bad} off-page name(s) in page sentences")
+    print("\nthe zero ages are disclosed wherever rows measured them (BUGS F146)")
+    z_bad = _check_zero_age_disclosure(payload, rows)
+    print(f"  {z_bad} graph table(s) missing the disclosure")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
-                 or r_bad or m_bad or not u_ok or k_bad or o_bad) else 0
+                 or r_bad or m_bad or not u_ok or k_bad or o_bad or z_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1777,6 +1780,24 @@ def _check_conditions(payload, rows):
         for f in findings:
             print(f"    {f}")
         bad += len(findings)
+    return bad
+
+
+def _check_zero_age_disclosure(payload, rows):
+    """A graph table built from rows measured on the zero ages carries the
+    sentence that says so (BUGS F146, DECISIONS #119). The exporter decides
+    from the rows; this re-decides from the same rows and holds the payload to
+    it, so a refactor that drops the note fails here instead of publishing a
+    "filtered" column whose filter matched no one. Returns bad count."""
+    import export_web as EW
+    bad = 0
+    for t in payload.get("tables", []):
+        want = EW._ldbc_age_note(t.get("id"), rows)
+        if want and want not in (t.get("conditions") or []):
+            print(f"    MISSING {t['id']}: rows measured on the zero ages and no sentence says so")
+            bad += 1
+        elif want:
+            print(f"  {t['id']}: disclosed")
     return bad
 
 

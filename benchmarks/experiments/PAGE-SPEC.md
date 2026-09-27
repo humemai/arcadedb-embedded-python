@@ -319,6 +319,15 @@ What belongs beside the pinned ratio: the view's cost per session is real. Its b
 | unexplained column | a rendered column is named by no condition and no methodology entry |
 | false protocol sentence | a page sentence asserts an n that any cell it covers does not meet |
 | unpinned literal | a numeric literal appears in page prose outside a pinned entry or a generated cell |
+| labels | a corpus name, size, or dimension on the page disagrees with the artifact constant |
+| close cost | a clean close exceeds 100 ms, or grows with rows while nothing was written |
+| mixed instrument | one table holds rows measured under two instruments |
+| durability class | a table's engines committed under different rules, or a row carries no `durability` |
+| disagreeing answers | two engines of one table answer the same query differently at one scale, or an engine skipped an operation without declaring it unexpressible |
+| one engine, two versions | a comparator wears two version strings across the page's tables, or an ArcadeDB release number appears on a comparator's row. Declared splits name two genuinely different artifacts and carry their reason; a skeleton is exempt for ArcadeDB alone |
+| missing measurement | a table omits one of the standard measurements and states no reason |
+| off-page name | a page sentence names an arm the page does not print (`OFF_PAGE_ARMS`) |
+| undisclosed zero ages | a graph table is built from LDBC rows without the fixed age parse and does not carry the sentence saying their ages loaded as zero (BUGS F146, DECISIONS #119) |
 
 ## What the October page may say while the campaign runs (DECISIONS #102)
 
@@ -329,13 +338,6 @@ Three kinds of text exist on the page, and only two are allowed before the freez
 - **Interpretation**: which engine moves between passes, which benefit is uneven, how far the comparators sit from one another, what the ratios say. Not written while the campaign runs. Written once at the freeze, when every row is in, each sentence with a pin, so a later re-measure that changes the number fails the publish.
 
 A condition sentence on an October payload that is neither generated nor registered fails `page_check`. No sentence that serves the September page is reused for October, whatever its content; the September sentences are deleted from the exporter at the switch.
-| labels | a corpus name, size, or dimension on the page disagrees with the artifact constant |
-| close cost | a clean close exceeds 100 ms, or grows with rows while nothing was written |
-| mixed instrument | one table holds rows measured under two instruments |
-| durability class | a table's engines committed under different rules, or a row carries no `durability` |
-| disagreeing answers | two engines of one table answer the same query differently at one scale, or an engine skipped an operation without declaring it unexpressible |
-| one engine, two versions | a comparator wears two version strings across the page's tables, or an ArcadeDB release number appears on a comparator's row. Declared splits name two genuinely different artifacts and carry their reason; a skeleton is exempt for ArcadeDB alone |
-| missing measurement | a table omits one of the standard measurements and states no reason |
 
 ---
 

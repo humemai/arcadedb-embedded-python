@@ -1957,6 +1957,42 @@ def _withhold_cells(tables):
     return tables
 
 
+# THE ZERO AGES (BUGS F146, DECISIONS #119). Until the re-pin the LDBC loader
+# read the epoch-millisecond `birthday` as a date string, so every person's age
+# loaded as 0: the three-hop read's filter matched no one on any engine, and
+# "average friend age" is 0 for every city. The fixed loader writes
+# `ldbc_age_parse` into every graph row; a row without it was measured on the
+# zero ages, and the sentence below stays until no such row is left behind the
+# table. The rows that lack the marker ran the October query, whose threshold
+# was this number (graph_common before HOP3F_MIN_AGE existed).
+_ZERO_AGE_HOP3F_MIN_AGE = 30
+
+
+def _ldbc_age_note(table_id, rows):
+    """The zero-ages sentence for the graph table or the graph analytics
+    table, or None when every LDBC row behind it carries the fixed parse."""
+    workload = {"l2": "oltp", "l2olap": "olap"}.get(table_id)
+    if workload is None or not _OCTOBER_ENV:
+        # The September page stays as it was frozen (#83, #119 point 2).
+        return None
+    stale = [r for r in rows
+             if r.get("lane") == "l2" and r.get("workload") == workload
+             and str(r.get("graph_source") or "").startswith("ldbc")
+             and not r.get("ldbc_age_parse")]
+    if not stale:
+        return None
+    if table_id == "l2":
+        return _gen("In this measurement every person's age loaded as zero, through a date-parsing "
+                    f"error in our data loader, so the 3-hop filtered read (age above "
+                    f"{_ZERO_AGE_HOP3F_MIN_AGE}) matched no one on any engine: its times are three "
+                    "hops plus a check on every end node. The next measurement parses the ages "
+                    "correctly.", _ZERO_AGE_HOP3F_MIN_AGE)
+    return _gen("In this measurement every person's age loaded as zero, through a date-parsing "
+                "error in our data loader, so average friend age is zero for every city; its "
+                "times still read every friend's age. The next measurement parses the ages "
+                "correctly.")
+
+
 def _equivalence_notes(rows):
     """table id -> one sentence about what its answer check could not compare."""
     import bench_common
@@ -6872,6 +6908,12 @@ def main() -> int:
             _t.setdefault("conditions", [])
             if _eq not in _t["conditions"]:
                 _t["conditions"].append(_eq)
+    for _t in tables:
+        _ages = _ldbc_age_note(_t.get("id"), rows)
+        if _ages:
+            _t.setdefault("conditions", [])
+            if _ages not in _t["conditions"]:
+                _t["conditions"].append(_ages)
     for _t in tables:
         _cold = _cold_note(_t.get("id"), rows, _t.get("columns") or [])
         if _cold:
