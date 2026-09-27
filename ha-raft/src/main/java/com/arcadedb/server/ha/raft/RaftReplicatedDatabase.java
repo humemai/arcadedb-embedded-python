@@ -83,6 +83,7 @@ import com.arcadedb.query.opencypher.optimizer.statistics.GraphStatisticsCache;
 import com.arcadedb.query.opencypher.query.CypherPlanCache;
 import com.arcadedb.query.opencypher.query.CypherStatementCache;
 import com.arcadedb.query.select.Select;
+import com.arcadedb.query.sql.executor.CommandTimeoutOverride;
 import com.arcadedb.query.sql.executor.InternalResultSet;
 import com.arcadedb.query.sql.executor.ResultInternal;
 import com.arcadedb.query.sql.executor.ResultSet;
@@ -1188,7 +1189,7 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       // see issue #4039), where the local page cache lags behind the asynchronous state
       // machine apply and produces inconsistent IDs across the cluster.
       if (queryEngine.isExecutedByTheLeader() || analyzed.isDDL() || !analyzed.isIdempotent())
-        return forwardCommandToLeaderViaRaft(language, query, null, args, configuration);
+        return forwardCommandToLeaderViaRaft(language, query, null, args);
       // Read-only command executed locally on this follower: honor the read-consistency header
       // exactly like query() does. /api/v1/command can carry read-only statements (a SELECT), and
       // a LINEARIZABLE/READ_YOUR_WRITES caller must not get a silently weaker guarantee than via
@@ -1229,7 +1230,7 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       final QueryEngine queryEngine = proxied.getQueryEngineManager().getEngine(language, this);
       final QueryEngine.AnalyzedQuery analyzed = queryEngine.analyze(query);
       if (queryEngine.isExecutedByTheLeader() || analyzed.isDDL() || !analyzed.isIdempotent())
-        return forwardCommandToLeaderViaRaft(language, query, args, null, configuration);
+        return forwardCommandToLeaderViaRaft(language, query, args, null);
       // Read-only command executed locally on this follower: honor the read-consistency header.
       applyReadConsistencyForReadOnlyCommand(analyzed);
       // Executed here, so a write it forwards is a part of the client's request, not the whole of it (issue #8347).
@@ -1348,6 +1349,11 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
   @Override
   public Map<String, Object> getStats() {
     return proxied.getStats();
+  }
+
+  @Override
+  public long getModificationCount() {
+    return proxied.getModificationCount();
   }
 
   @Override
@@ -3649,14 +3655,28 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
    * caller's slot is about to be released regardless (the {@code finally} in {@code ServerControlPlane}) - so
    * silently returning would hand out the "drop finished" guarantee on nothing but hope. Throwing surfaces a
    * clear failure instead of a directory that might still be there when the next operation starts.
+   * <p>
+   * The caller must hold this database's maintenance slot as an exclusive operation ({@code DROP}, or
+   * {@code RESTORE} for the drop a restore performs): the local apply of the entry relies on it rather than
+   * reserving the slot a second time (issue #8035, see {@link LocalDropVerbs}).
    */
   @Override
   public void dropInReplicas() {
     final long committedLogIndex;
     try {
       final RaftHAServer raft = requireRaftServer();
-      committedLogIndex = RaftHAServer.requireTransactionBroker(raft).replicateDropDatabase(getName());
-      raft.waitForAppliedIndex(getName(), committedLogIndex, true);
+      // Registered for the length of the submit and the wait (issue #8035): the caller holds this database's
+      // maintenance slot, and the apply of this entry on THIS node reserves the same slot before it drops the
+      // database. The registration is how the apply knows the slot is already held for it, rather than waiting on
+      // the request thread that is waiting on it.
+      final LocalDropVerbs localDropVerbs = raft.getLocalDropVerbs();
+      final LocalDropVerbs.Registration registration = localDropVerbs.register(getName());
+      try {
+        committedLogIndex = RaftHAServer.requireTransactionBroker(raft).replicateDropDatabase(getName());
+        raft.waitForAppliedIndex(getName(), committedLogIndex, true);
+      } finally {
+        localDropVerbs.release(getName(), registration);
+      }
     } catch (final TransactionException e) {
       throw e;
     } catch (final Exception e) {
@@ -3676,7 +3696,7 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
    * {@link ResultSet} so the caller sees results transparently.
    */
   private ResultSet forwardCommandToLeaderViaRaft(final String language, final String query,
-      final Map<String, Object> mapArgs, final Object[] positionalArgs, final ContextConfiguration configuration) {
+      final Map<String, Object> mapArgs, final Object[] positionalArgs) {
     final RaftHAServer raft = requireRaftServer();
 
     // This request is already the result of a peer redirecting it to what it believed was the leader, and it
@@ -3848,7 +3868,13 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     // leader's own TimeoutException naming arcadedb.command.timeout could never reach the client. The headroom
     // is the leader's quorum wait (arcadedb.ha.quorumTimeout) plus this dial's connect budget, which bounds the
     // round trip on the same order of magnitude, so the leader always gets to answer first.
-    final long configuredCommandTimeout = configuration.getValueAsLong(GlobalConfiguration.COMMAND_TIMEOUT);
+    //
+    // The budget is the one this command would run under here - this database's arcadedb.command.timeout - resolved by
+    // the same rule every command context applies, and it travels with the forward so the leader enforces that number
+    // rather than whatever its own configuration holds (issue #8313). It used to be read from the configuration the
+    // caller passed to command(), which no command context reads and which the convenience overloads fill with the
+    // SERVER configuration: the two sides agreed only when all of those happened to hold the same number.
+    final long configuredCommandTimeout = CommandTimeoutOverride.effectiveTimeout(proxied);
     final long resolvedTimeoutMs;
     if (configuredCommandTimeout > 0)
       resolvedTimeoutMs = commandTimeoutWithHeadroom(configuredCommandTimeout,
@@ -3882,6 +3908,11 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
       // flight from an address that names the wrong node (issue #7603). Same gate as the marker.
       if (intendedLeaderId != null)
         builder.header(LeaderForwardContext.FORWARDED_LEADER_ID_HEADER, intendedLeaderId);
+      // The budget the deadline above is sized from, so the leader aborts the command when this node would expect it
+      // to (issue #8313). Not sent when unbounded: the leader then applies its own setting, and this node still waits
+      // for arcadedb.ha.proxyCommandTimeout. Same gate as the marker: the leader honours it under the token only.
+      if (configuredCommandTimeout > 0)
+        builder.header(LeaderForwardContext.FORWARDED_COMMAND_TIMEOUT_HEADER, Long.toString(configuredCommandTimeout));
     }
 
     String proxiedUser = proxied.getCurrentUserName();
@@ -3941,7 +3972,12 @@ public class RaftReplicatedDatabase implements DatabaseInternal, HAReplicatedDat
     }
 
     try {
-      final HttpResponse<String> response = dialClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+      // Bounded over the whole exchange, body included, on every JDK (issue #8325): the request timeout above stops at
+      // the response headers on JDK 21-25, so a leader that stalled inside its body parked this thread unbounded. The
+      // request timeout stays: on JDK 26+ it covers the same span with the same value, and either one firing lands in
+      // the HttpTimeoutException arm below.
+      final HttpResponse<String> response = LeaderDial.sendBounded(dialClient, builder.build(),
+          HttpResponse.BodyHandlers.ofString(), deadlineMs);
       if (response.statusCode() != 200)
         throw reconstructLeaderException(response.statusCode(), response.body(),
             response.headers().firstValue("Retry-After").orElse(null));

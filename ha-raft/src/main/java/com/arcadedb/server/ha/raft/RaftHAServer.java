@@ -183,6 +183,11 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    * (issue #8329). Assigned in the constructor before the first state machine is built and handed this instance.
    */
   private final    RuntimeJoinDetector     runtimeJoinDetector;
+  /**
+   * The drops this node's own verb is waiting on (issue #8035). Held here rather than by the state machine so a
+   * Ratis restart that rebuilds the state machine mid-drop does not lose the registration.
+   */
+  private final    LocalDropVerbs          localDropVerbs          = new LocalDropVerbs();
   private final    ClusterMonitor          clusterMonitor;
   private final    Quorum                  quorum;
   /**
@@ -310,11 +315,10 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   private volatile LongSupplier              followerStallClock     = System::currentTimeMillis;
   /**
    * The HTTPS client that requests forwarded to the leader are sent on (issue #7508). A second cache rather than
-   * a share of {@link #capabilityHttpsClients}: that one is asked by a single scheduled thread, sequentially, and
-   * its rebuild path is documented against exactly that. This one is asked by HTTP worker threads, concurrently,
-   * so a truststore rotation makes one of them close the previous client - an orderly shutdown that waits for the
-   * forwards still in flight on it - while the others wait on the cache's monitor. That is bounded by their own
-   * request timeouts and happens only when the operator rotates a certificate.
+   * a share of {@link #capabilityHttpsClients}, so the forwards keep their own connection pool. This one is asked
+   * by HTTP worker threads, concurrently, so a truststore rotation happens while other threads have forwards in
+   * flight on the previous client. The cache retires that client with a non-blocking {@code shutdown()} rather
+   * than waiting for those forwards under its monitor, and without cancelling them (issue #8025).
    */
   private final    TrustedHttpClientCache    forwardHttpsClients    = new TrustedHttpClientCache();
   // Runs leader-driven stalled-replica resyncs off the lag-monitor thread (issue #4728). One worker is
@@ -1398,7 +1402,10 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       lastLagCheckAppliedIndex = -1; // already known to be resyncing: re-baseline when normal checks resume
       return false;
     }
-    final long commit = getCommitIndex();
+    // Against the leader's commit index when this follower has learned a larger one (issue #8321): a follower whose
+    // inbound replication channel is wedged has its own commit index clamped to what it received, reads a lag of 0,
+    // and this recovery never armed on it.
+    final long commit = getFollowerCommitIndex();
     final long applied = getLastAppliedIndex();
     // The catch-up flag exempts the follower only while the catch-up is actually applying (issue #8341). The flag is
     // cleared only by an apply that reaches the commit index, so a catch-up that stops applying kept it set, and
@@ -1507,7 +1514,8 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     if (sm == null || sm.isSnapshotDownloadPending())
       return; // the snapshot path logs its own bookends
     final long applied = getLastAppliedIndex();
-    final long commit = getCommitIndex();
+    // The leader's commit index when it is ahead of the local one, as for isFollowerLaggingBeyond (issue #8321).
+    final long commit = getFollowerCommitIndex();
     final FollowerResyncProgressTracker.Tick tick = tracker.onTick(applied, commit, System.currentTimeMillis());
     if (tick.event() != FollowerResyncProgressTracker.Event.NONE)
       LogManager.instance().log(this, Level.INFO, tick.message());
@@ -1739,7 +1747,10 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     if (!isRaftStorageUnderPressure())
       return;
     final ArcadeStateMachine sm = stateMachine;
-    if (sm == null || sm.isApplyThread() || sm.getLifeCycleState() != LifeCycle.State.RUNNING) {
+    // An install holding the #7958 install lock can have the apply thread - the one that serves this request - waiting
+    // on it; the install purged before taking the lock (ArcadeStateMachine.installLeaderCopy).
+    if (sm == null || sm.isApplyThread() || sm.isHoldingInstallApplyGate()
+        || sm.getLifeCycleState() != LifeCycle.State.RUNNING) {
       LogManager.instance().log(this, Level.FINE,
           "Skipping the Raft log purge before installing '%s': the state machine cannot serve a snapshot request now",
           databaseName);
@@ -1763,7 +1774,9 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
    */
   private RuntimeJoinDetector createRuntimeJoinDetector() {
     try {
-      return new RuntimeJoinDetector(runtimeJoinMarkerFile(getRaftStorageDir()), resolvePersistStorage(configuration));
+      final File raftStorageDir = getRaftStorageDir();
+      return new RuntimeJoinDetector(runtimeJoinMarkerFile(raftStorageDir), snapshotInstallHoldMarkerFile(raftStorageDir),
+          resolvePersistStorage(configuration));
     } catch (final RuntimeException e) {
       LogManager.instance().log(this, Level.WARNING,
           "Cannot resolve the runtime-join marker location, the runtime-join state of this peer will not survive a "
@@ -1783,6 +1796,16 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   /**
+   * Where the snapshot-install hold of a node that did NOT join at runtime is kept while it is open (issue #8465): a
+   * sibling of the Raft storage directory for the same reason as {@link #runtimeJoinMarkerFile}, and a file of its own
+   * so reading it back never arms a static member (issue #7819).
+   */
+  static File snapshotInstallHoldMarkerFile(final File raftStorageDir) {
+    return new File(raftStorageDir.getAbsoluteFile().getParentFile(),
+        raftStorageDir.getName() + ".snapshot-install-hold");
+  }
+
+  /**
    * Builds a fully wired {@link ArcadeStateMachine}. Both collaborators must be set: {@code setServer}
    * gives it the {@link ArcadeDBServer} and {@code setRaftHAServer} the owning {@code RaftHAServer}.
    * Missing the latter leaves {@code raftHAServer} null on the new machine, so the recovered node can
@@ -1796,6 +1819,7 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
     sm.setServer(arcadeServer);
     sm.setRaftHAServer(this);
     sm.setRuntimeJoinDetector(runtimeJoinDetector);
+    sm.setLocalDropVerbs(localDropVerbs);
     return sm;
   }
 
@@ -2279,6 +2303,30 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   /**
+   * The log index of the configuration that (last) added this node, or the join boundary a snapshot install moved
+   * it to; {@code -1} when none is known (issue #8414). See {@link RuntimeJoinDetector#joinIndex()}.
+   */
+  public long getRuntimeJoinIndex() {
+    return runtimeJoinDetector.joinIndex();
+  }
+
+  /**
+   * On a node that did not join at runtime, the security documents not confirmed since its latest leader-driven
+   * snapshot install (issue #8432). See {@link RuntimeJoinDetector#securityDocumentsNotConfirmedSinceSnapshotInstall()}.
+   */
+  public List<String> securityDocumentsNotConfirmedSinceSnapshotInstall() {
+    return runtimeJoinDetector.securityDocumentsNotConfirmedSinceSnapshotInstall();
+  }
+
+  /**
+   * The index of the latest leader-driven snapshot install on this node while unarmed, {@code -1} when none (issue
+   * #8432). See {@link RuntimeJoinDetector#lastSnapshotInstallIndex()}.
+   */
+  public long getLastSnapshotInstallIndex() {
+    return runtimeJoinDetector.lastSnapshotInstallIndex();
+  }
+
+  /**
    * Records that the leader found this node's security documents, read at {@code appliedIndex}, equal to its own
    * (issue #8346). See {@link RuntimeJoinDetector#onSecurityDocumentsMatchedLeader(long)}.
    */
@@ -2288,6 +2336,11 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
 
   public ArcadeStateMachine getStateMachine() {
     return stateMachine;
+  }
+
+  /** The drops this node's own {@code drop database} verb is waiting on; see {@link LocalDropVerbs}. */
+  LocalDropVerbs getLocalDropVerbs() {
+    return localDropVerbs;
   }
 
   public ClusterMonitor getClusterMonitor() {
@@ -3526,6 +3579,27 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
   }
 
   /**
+   * The commit index a FOLLOWER measures its own lag against (issue #8321): the larger of its own commit index and the
+   * one its leader last reported. Ratis clamps a follower's commit index to the entries it holds, so on a follower
+   * whose inbound replication channel is wedged the local figure stops where the channel stopped and the lag computed
+   * from it reads 0; the leader's figure, learned over the health monitor's follower-to-leader probe, does not. Every
+   * figure that probe keeps is a commit index a leader really reported, so the result never over-states the lag.
+   * <p>
+   * The local commit index, unchanged, on the leader - whose own figure is the cluster's - and whenever the local
+   * figure cannot be read ({@code -1}), so a reader that treats a negative index as "unknown" still sees it as such.
+   */
+  long getFollowerCommitIndex() {
+    return followerCommitIndex(getCommitIndex(), isLeader() ? -1L : leaderReportedCommitIndex);
+  }
+
+  /** Pure form of {@link #getFollowerCommitIndex()}. Package-private for testing. */
+  static long followerCommitIndex(final long localCommitIndex, final long leaderReportedCommitIndex) {
+    if (localCommitIndex < 0)
+      return localCommitIndex;
+    return Math.max(localCommitIndex, leaderReportedCommitIndex);
+  }
+
+  /**
    * Health-monitor hook (issue #7619): asks the current leader for its commit index, for the readiness gate in
    * {@link #isReadyForTraffic(long)} and for this follower's own stall signal ({@link #trackFollowerStall()},
    * issue #8342). A follower cannot compute this itself - Ratis clamps its commit index to its own flush index,
@@ -4423,6 +4497,26 @@ public class RaftHAServer implements HealthMonitor.HealthTarget {
       return raftServer.getDivision(raftGroup.getGroupId()).getRaftLog().getLastCommittedIndex();
     } catch (final Exception e) {
       // See getLastAppliedIndex: degrade to "unknown" during an in-place restart (issue #5271).
+      return -1;
+    }
+  }
+
+  /**
+   * This node's own Raft log start index ({@code RaftLog.getStartIndex()}), or {@code -1} when the division cannot
+   * be read (same degrade-to-unknown reasoning as {@link #getCommitIndex()}, issue #5271). It does not check the role:
+   * the value is only meaningful to the lag monitor on the leader, which checks {@link #isLeader()} before reading it.
+   * <p>
+   * Fed to {@link ClusterMonitor#updateReplicaMatchIndex(String, long, long, long, long)} so it can tell a
+   * follower whose {@code nextIndex} has fallen at or below this leader's own compacted log start - the
+   * condition under which {@code LogAppender.shouldInstallSnapshot} keeps re-notifying the follower instead of
+   * replicating - from an ordinary lag (issue #8457).
+   */
+  public long getRaftLogStartIndex() {
+    if (raftServer == null)
+      return -1;
+    try {
+      return raftServer.getDivision(raftGroup.getGroupId()).getRaftLog().getStartIndex();
+    } catch (final Exception e) {
       return -1;
     }
   }

@@ -21,6 +21,8 @@ package com.arcadedb.server.ha.raft;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Binary;
 import com.arcadedb.database.BootstrapFingerprint;
+import com.arcadedb.database.Database;
+import com.arcadedb.database.DatabaseFactory;
 import com.arcadedb.database.DatabaseInternal;
 import com.arcadedb.database.LocalDatabase;
 import com.arcadedb.engine.ComponentFile;
@@ -33,6 +35,7 @@ import com.arcadedb.engine.WALFile;
 import com.arcadedb.engine.timeseries.TimeSeriesSealedInstallLock;
 import com.arcadedb.engine.timeseries.TimeSeriesSealedStore;
 import com.arcadedb.exception.ConcurrentModificationException;
+import com.arcadedb.exception.DatabaseIsClosedException;
 import com.arcadedb.exception.NeedRetryException;
 import com.arcadedb.exception.SchemaException;
 import com.arcadedb.exception.WALVersionGapException;
@@ -43,6 +46,7 @@ import com.arcadedb.schema.LocalTimeSeriesType;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
 import com.arcadedb.server.ServerDatabase;
+import com.arcadedb.server.backup.BackupCoordinator;
 import com.arcadedb.server.ha.raft.ratis.RatisSnapshotDigestWarningFilter;
 import com.arcadedb.server.security.ApiTokenConfiguration;
 import com.arcadedb.server.security.ReplicatedSecurityConfigPersistenceException;
@@ -75,16 +79,20 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -103,6 +111,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.regex.Matcher;
 import java.util.zip.CRC32;
@@ -351,6 +360,9 @@ public class ArcadeStateMachine extends BaseStateMachine {
    */
   private volatile DeferredDatabaseDeleter deferredDatabaseDeleter = new DeferredDatabaseDeleter();
 
+  /** The drops this node's own verb is waiting on (issue #8035); see {@link #applyDropDatabaseEntry}. */
+  private volatile LocalDropVerbs localDropVerbs = new LocalDropVerbs();
+
   /**
    * Per-database bootstrap baseline committed via {@link RaftLogEntryType#BOOTSTRAP_FINGERPRINT_ENTRY}.
    * Populated when the entry is applied (locally on every peer), used by the catch-up decision
@@ -420,6 +432,53 @@ public class ArcadeStateMachine extends BaseStateMachine {
   private final ConcurrentHashMap<String, Integer> bootstrapInstallsInFlight = new ConcurrentHashMap<>();
 
   /**
+   * One lock per database that orders a snapshot install of that database against the Raft apply thread (issue
+   * #7958). The apply thread holds it while it applies an entry for the database; every install of a database this
+   * node holds takes it for the whole install, download included - see {@link #installLeaderCopy}.
+   * <p>
+   * Without it, an install driven from anywhere but the apply thread (the full and targeted resyncs on the
+   * {@code lifecycleExecutor}, the bootstrap retries, the operator resync on an HTTP worker) downloaded the leader's
+   * copy as it stood when the leader served it, while the apply thread went on applying committed entries to the
+   * live copy the swap was about to discard. Every entry applied in between was lost: the applied index had already
+   * moved past it, so nothing applied it again, and nothing logged anything. A type created in that window existed
+   * on every other node and never on this one - the {@code BoltFollowerWrite} divergence of issue #7259.
+   * <p>
+   * Reentrant because the apply thread itself installs from two entry types (a forced-snapshot
+   * {@code INSTALL_DATABASE_ENTRY} and a mismatched bootstrap baseline) while it already holds the lock. Never
+   * removed: one small lock per database name this node has ever applied an entry for.
+   */
+  private final ConcurrentHashMap<String, InstallApplyGate> installApplyGates = new ConcurrentHashMap<>();
+
+  /**
+   * A database's install lock (issue #7958), which also remembers the highest Raft index the apply thread applied to
+   * that database while holding it (issue #8454).
+   * <p>
+   * The index is recorded BEFORE the lock is released, which is what an install needs: it takes the lock and reads
+   * the index, and has to see every entry that went to the copy it is about to replace. {@code lastAppliedIndex} is
+   * not enough on its own, because {@code applyTransaction} advances it only after it has released the lock, so an
+   * install that takes the lock in that gap would read the index of the entry BEFORE the one just applied.
+   */
+  static final class InstallApplyGate extends ReentrantLock {
+    private volatile long appliedUnderGate = -1L;
+
+    /** Called by the apply thread, holding this lock, for every entry it applied (or tried to) to the database. */
+    void recordApplied(final long index) {
+      if (index > appliedUnderGate)
+        appliedUnderGate = index;
+    }
+
+    long appliedUnderGate() {
+      return appliedUnderGate;
+    }
+  }
+
+  /**
+   * Test-only hook called with the database name when the apply thread finds that database's install lock held and
+   * is about to wait on it (issue #7958). {@code null} in production (one reference read per contended apply).
+   */
+  static volatile Consumer<String> applyWaitsForInstallForTesting = null;
+
+  /**
    * Databases whose copy the committed bootstrap baseline ordered replaced, whose replacement has failed at least
    * once, and which nothing has replaced since (issue #8367). Each name owns exactly one holder in
    * {@link #bootstrapInstallsInFlight}, handed over by {@link #installFromLeaderForBootstrapWithRetry} when the first
@@ -435,10 +494,20 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * with the leader's calls (the same paths that clear the #6124 unreconciled mark), and by the DROP of the
    * database. Re-driven by {@link #retryPendingBootstrapReplacements()} on the {@link HealthMonitor} tick.
    * <p>
-   * In memory on purpose, NOT the durable {@link #bootstrapUnreconciledDatabases}: that set means "this node kept a
-   * FRESHER copy and an operator must choose a side" and is published as a CRITICAL with a drastic remedy, which
-   * misdiagnoses the ordinary "no leader yet" failure (PR #7964). Never populated by the #6124 "local is fresher,
-   * refuse to overwrite" branch either, which returns before any install is attempted.
+   * Deliberately NOT the {@link #bootstrapUnreconciledDatabases} mark: that set means "this node kept a FRESHER copy
+   * and an operator must choose a side" and is published as a CRITICAL with a drastic remedy, which misdiagnoses the
+   * ordinary "no leader yet" failure (PR #7964). Never populated by the #6124 "local is fresher, refuse to overwrite"
+   * branch either, which returns before any install is attempted.
+   * <p>
+   * <b>Durable</b> (issue #8411), as its own {@code pendingReplacement} flag of the database's entry in
+   * {@code .raft/bootstrap-baselines}, next to - and independent of - the {@code unreconciled} one. Kept in memory
+   * only, a restart before the replacement landed lost it for good: {@code applyTransaction} has already persisted
+   * the baseline entry's index as applied, so its replay is skipped for a registered database, and once a Ratis
+   * snapshot is taken past it the entry is not replayed at all. The node came back serving the copy the committed
+   * baseline rejected, in the Service and with nothing retrying the replacement. The loader restores the name
+   * together with the one readiness holder it owns, so the node comes back out of the Service and the health tick
+   * goes on retrying. Every add and every removal goes through {@link #bootstrapBaselinesFileLock} and rewrites the
+   * file.
    */
   private final Set<String> bootstrapReplacementsPending = ConcurrentHashMap.newKeySet();
 
@@ -466,8 +535,12 @@ public class ArcadeStateMachine extends BaseStateMachine {
    */
   private final ConcurrentHashMap<String, PendingBootstrapPass> bootstrapPassesPending = new ConcurrentHashMap<>();
 
-  /** The pass holding a database ({@code passId}) and when the hold lapses on its own ({@link System#nanoTime()}). */
-  private record PendingBootstrapPass(String passId, long deadlineNanos) {
+  /**
+   * The pass holding a database ({@code passId}) and when the hold lapses on its own ({@link System#nanoTime()}), or
+   * {@code unbounded} for the hold the leader running the pass takes on its own copies, which only its pass settles
+   * (issue #8409).
+   */
+  private record PendingBootstrapPass(String passId, long deadlineNanos, boolean unbounded) {
   }
 
   // Upper bound on a single hold, so a misconfigured bootstrap timeout cannot turn the deadline into "never" (and
@@ -567,6 +640,10 @@ public class ArcadeStateMachine extends BaseStateMachine {
   // is published from a per-database verdict: exactly the databases the install did not bring to snapshotIndex are
   // clamped, and the healthy co-located ones keep serving unclamped reads. Entries are removed when the database is
   // genuinely refreshed (a later install, a targeted resync, or a full resync).
+  // DURABLE since issue #8137, like the quarantine it always travels with: mirrored into the "floors" object of
+  // .raft/applied-index under appliedIndexFileLock, in the same write as the quarantine, and read back by
+  // ensureAppliedIndexLoaded(). In memory only, a restart kept the database quarantined but dropped its clamp, so a
+  // LINEARIZABLE read reaching the node directly was served from the copy the install had given up on.
   private final ConcurrentHashMap<String, Long> staleDatabaseAppliedFloors = new ConcurrentHashMap<>();
   // Set to true after applyTransaction hits a genuinely unrecoverable, node-wide condition: a JVM
   // Error (OOM, StackOverflow - the JVM itself is unstable), an unknown committed entry type (#4798,
@@ -681,6 +758,8 @@ public class ArcadeStateMachine extends BaseStateMachine {
   public void setServer(final ArcadeDBServer server) {
     this.server = server;
     reconciler.setServer(server);
+    // The Ratis-initiated installs go through the same #7958 install lock as every other install.
+    reconciler.setInstallGate(this::runUnderInstallGate);
   }
 
   /** The database reconciliation collaborator, used by {@code GetClusterHandler} and {@code ClusterAlerts}. */
@@ -724,6 +803,9 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // checkpoints again.
     pruneSnapshotMarkersAtStartup();
     reinitialize();
+    // Eagerly, not on first use: a bootstrap replacement left pending by the previous session must hold readiness and
+    // the request gate from the first request on, not from whichever read happens to load the file (issue #8411).
+    ensureBootstrapBaselinesLoaded();
     // Recover any snapshot installations that were interrupted by a crash
     if (server != null) {
       final String dbDir = server.getConfiguration().getValueAsString(
@@ -1140,19 +1222,30 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // than a field: applyWithRetry can re-run the lambda, and a field would outlive this entry.
       final boolean[] securitySuperseded = new boolean[1];
 
-      applyWithRetry(index, decoded.databaseName(), () -> {
-        securitySuperseded[0] = false;
-        switch (decoded.type()) {
-        case TX_ENTRY -> applyTxEntry(decoded, index, context instanceof AppendedEntry appended ? appended.pages() : null);
-        case SCHEMA_ENTRY -> applySchemaEntry(decoded, index, originatedLocally);
-        case INSTALL_DATABASE_ENTRY -> applyInstallDatabaseEntry(decoded, index);
-        case DROP_DATABASE_ENTRY -> applyDropDatabaseEntry(decoded);
-        case SECURITY_USERS_ENTRY -> securitySuperseded[0] = !applySecurityUsersEntry(decoded, index);
-        case SECURITY_GROUPS_ENTRY -> securitySuperseded[0] = !applySecurityGroupsEntry(decoded, index);
-        case SECURITY_API_TOKENS_ENTRY -> securitySuperseded[0] = !applySecurityApiTokensEntry(decoded, index);
-        case BOOTSTRAP_FINGERPRINT_ENTRY -> applyBootstrapFingerprintEntry(decoded, index, originatedLocally);
+      // Not applied to a copy an install is replacing (issue #7958): see installApplyGates.
+      final InstallApplyGate installGate = enterInstallApplyGate(decoded.databaseName(), index);
+      try {
+        applyWithRetry(index, decoded.databaseName(), () -> {
+          securitySuperseded[0] = false;
+          switch (decoded.type()) {
+          case TX_ENTRY -> applyTxEntry(decoded, index, context instanceof AppendedEntry appended ? appended.pages() : null);
+          case SCHEMA_ENTRY -> applySchemaEntry(decoded, index, originatedLocally);
+          case INSTALL_DATABASE_ENTRY -> applyInstallDatabaseEntry(decoded, index);
+          case DROP_DATABASE_ENTRY -> applyDropDatabaseEntry(decoded);
+          case SECURITY_USERS_ENTRY -> securitySuperseded[0] = !applySecurityUsersEntry(decoded, index);
+          case SECURITY_GROUPS_ENTRY -> securitySuperseded[0] = !applySecurityGroupsEntry(decoded, index);
+          case SECURITY_API_TOKENS_ENTRY -> securitySuperseded[0] = !applySecurityApiTokensEntry(decoded, index);
+          case BOOTSTRAP_FINGERPRINT_ENTRY -> applyBootstrapFingerprintEntry(decoded, index, originatedLocally);
+          }
+        });
+      } finally {
+        if (installGate != null) {
+          // Recorded even when the apply failed: the floor an install derives from it can only be too high, which
+          // costs a retry, never too low, which would cost the entry (issue #8454).
+          installGate.recordApplied(index);
+          installGate.unlock();
         }
-      });
+      }
 
       final long previousApplied = lastAppliedIndex.getAndSet(index);
       updateLastAppliedTermIndex(termIndex.getTerm(), index);
@@ -2072,26 +2165,47 @@ public class ArcadeStateMachine extends BaseStateMachine {
           reconciler.reconcileDatabasesFromLeader(leaderHttpAddr, leaderHttpsAddr, clusterToken);
       final Set<String> notInstalled = reconcileResult.notInstalled();
 
-      // Compute the installed snapshot TermIndex. firstTermIndexInLog is the first log entry
-      // AFTER the snapshot, so the snapshot covers all entries up to getIndex()-1.
-      // Returning firstTermIndexInLog itself (as the old code did) caused two bugs:
-      // 1. SnapshotInstallationHandler called state.reloadStateMachine(firstTermIndexInLog) which
-      //    purged log entries up to firstTermIndexInLog.getIndex() instead of getIndex()-1.
-      // 2. StateMachineUpdater.reload() calls getLatestSnapshot().getIndex() and expects it to match
-      //    the TermIndex we return; returning firstTermIndexInLog while storage was never updated
-      //    caused NullPointerException (and before that, IllegalStateException from the PAUSED check).
-      final long snapshotIndex = Math.max(0L, firstTermIndexInLog.getIndex() - 1);
+      // Compute the installed snapshot TermIndex: normally firstTermIndexInLog - 1, the end of what the snapshot covers,
+      // or firstTermIndexInLog itself when the leader's marker is past it (issue #8449, see
+      // resolveInstalledSnapshotBoundary). Whatever is returned must also be what registerSnapshotMarker() records
+      // below: StateMachineUpdater.reload() reads getLatestSnapshot() back and expects the two to match - returning a
+      // TermIndex storage never recorded caused a NullPointerException (and before that, an IllegalStateException
+      // from the PAUSED check). SnapshotInstallationHandler then purges this follower's log up to the returned index,
+      // which the copied databases cover in both cases.
       final TermIndex leaderSnapshotTermIndex = reconcileResult.leaderSnapshotTermIndex();
-      if (leaderSnapshotTermIndex != null && !leaderSnapshotMatches(snapshotIndex, leaderSnapshotTermIndex))
+      final TermIndex installedTermIndex = resolveInstalledSnapshotBoundary(firstTermIndexInLog, leaderSnapshotTermIndex);
+      final long snapshotIndex = installedTermIndex.getIndex();
+      final long snapshotTerm = installedTermIndex.getTerm();
+      // Logged from the decision's result, so the message cannot drift from what was registered
+      if (leaderSnapshotTermIndex == null)
         LogManager.instance().log(this, Level.WARNING,
-            "Leader-reported snapshot boundary %s does not match the computed install index %d; falling back to "
-                + "the approximate term of the next log entry (issue #8360). This is expected only on a race with "
-                + "the leader's own compaction or against an older leader build; if it persists, the follower "
-                + "risks the same stuck-at-stale-term symptom this fallback existed to avoid.",
+            "Leader %s reported no snapshot marker (a build that predates issue #8360); registering the approximate "
+                + "term of the next log entry for install index %d. A term change exactly at that boundary would stall "
+                + "this follower until the leader compacts past it; upgrading the leader closes the window (issue #8374).",
+            leaderId, snapshotIndex);
+      else if (installedTermIndex.equals(firstTermIndexInLog))
+        // Segment-granularity purging left the leader's log start at or before its marker: the index before it is
+        // neither in the leader's log nor its marker, so LogAppender.getPrevious would answer null and the leader
+        // would re-notify this install forever (issue #8449).
+        LogManager.instance().log(this, Level.INFO,
+            "Leader snapshot marker %s is past its log start %s; registering the log start as the install boundary "
+                + "so the leader can resume replication (issue #8449).",
+            leaderSnapshotTermIndex, firstTermIndexInLog);
+      else if (!leaderSnapshotMatches(snapshotIndex, leaderSnapshotTermIndex))
+        // Unexpected: Ratis purges only up to its snapshot, so the notifying leader's marker is at least S-1. A leader
+        // change between the notification and the marker read could produce it; the approximation is kept
+        // (issues #8360, #8449).
+        LogManager.instance().log(this, Level.FINE,
+            "Leader-reported snapshot boundary %s is older than the install index %d; registering the approximate "
+                + "term of the next log entry (issue #8360).",
             leaderSnapshotTermIndex, snapshotIndex);
-      final long snapshotTerm = resolveInstalledSnapshotTerm(snapshotIndex, firstTermIndexInLog.getTerm(),
-          leaderSnapshotTermIndex);
-      final TermIndex installedTermIndex = TermIndex.valueOf(snapshotTerm, snapshotIndex);
+
+      // Issue #8353: the entries this install skips may include the removal and the re-add of THIS node, which then
+      // never reaches the runtime-join detector as a configuration change, so its previous membership's security
+      // installs would keep counting toward readiness. Every install is a join boundary on an armed node instead.
+      // BEFORE the snapshot marker and the applied index: a restart must not find the marker without the boundary,
+      // and a catch-up match read concurrently must be judged against the boundary, not against the old join.
+      runtimeJoinDetector.onSnapshotInstalledFromLeader(snapshotIndex);
 
       // Register the snapshot in SimpleStateMachineStorage. StateMachineUpdater.reload() calls
       // getLatestSnapshot() immediately after reinitialize() and requires a non-null result.
@@ -2107,7 +2221,10 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // replay-skip honest after a full resync (issue #4824).
       lastAppliedIndex.set(snapshotIndex);
       updateLastAppliedTermIndex(snapshotTerm, snapshotIndex);
-      writePersistedAppliedIndexForAllDatabases(snapshotIndex, notInstalled);
+      // The applied positions, the healed diverged marks and read floors of every database the install refreshed, and
+      // the re-armed ones of those it did not reinstall, all in ONE durable write (issues #6760, #8137): a crash between
+      // separate writes could leave a position at snapshotIndex with no quarantine for a database it gave up on
+      completeSnapshotInstall(snapshotIndex, notInstalled);
       // The install brought every database up to the snapshot point, so any read floor an earlier
       // stale marker published is now satisfied. Cleared BEFORE the notify below so a woken waiter
       // re-checks against the restored state instead of the floor (issue #6111).
@@ -2116,16 +2233,12 @@ public class ArcadeStateMachine extends BaseStateMachine {
       LogManager.instance().log(this, Level.INFO,
           "HA resync finished (mode=snapshot, result=%s): snapshotIndex=%d",
           notInstalled.isEmpty() ? "ok" : "partial", snapshotIndex);
-      clearDivergedState();
       // A leader-driven install reinstalls every database present on this node, so a copy the bootstrap
       // overwrite guard had kept is gone and its divergence mark with it (issue #6124).
       clearAllBootstrapUnreconciled();
       // Likewise every pending bootstrap replacement it did reinstall (issue #8367); one it gave up on is still the
       // copy the baseline rejected, so it stays pending.
       settleBootstrapReplacementsExcept(notInstalled);
-      // ... except the ones it did not reinstall. Re-arm those AFTER clearDivergedState()/clearStaleSnapshotFloor()
-      // above, which are written for the all-databases-refreshed case (issue #6760).
-      markDatabasesNotAtSnapshotIndex(notInstalled, snapshotIndex);
 
       // Wake any threads blocked in RaftHAServer.waitForAppliedIndex()/waitForLocalApply(): this
       // leader-driven snapshot install advances the applied index without going through
@@ -2134,8 +2247,8 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // LAST, after every floor and diverged mark of this install is in its final state. notifyApplied() holds
       // applyNotifier only long enough to notifyAll(), so a waiter can reacquire it and re-check
       // getTrustedAppliedIndex(db) immediately. Notifying any earlier than this leaves a window in which the
-      // global floor is already cleared and the per-database one is not yet published - clearDivergedState()
-      // above has just wiped it, or the first give-up never had one - so the woken waiter sees the raw Ratis
+      // global floor is already cleared and the per-database one is not yet published - the first give-up never
+      // had one - so the woken waiter sees the raw Ratis
       // index, which already equals snapshotIndex, and a LINEARIZABLE or read-your-writes read of a database
       // this install did NOT refresh passes its wait and is served from the stale copy. That is precisely the
       // outcome issue #6760 exists to prevent, so the notify has to come after the re-arm, not before it.
@@ -2214,18 +2327,17 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * {@code ServerState.containsTermIndex} - which answers the {@code AppendEntries} log-matching check the LEADER
    * runs for every subsequent replication attempt starting right after this boundary - accepts only an EXACT
    * {@code equals()} match. A wrong term therefore does not degrade gracefully: every future {@code AppendEntries}
-   * whose {@code previous} is this boundary is rejected forever, the leader cannot walk further back (that is
-   * exactly why it drove a snapshot install here in the first place), and it can only re-notify another install -
-   * which recomputes the identical wrong term and reproduces the same stuck boundary index on every reformat.
+   * whose {@code previous} is this boundary is rejected, the leader cannot walk further back (that is exactly why
+   * it drove a snapshot install here in the first place), and its re-notification at the same
+   * {@code firstAvailableLogIndex} is answered {@code ALREADY_INSTALLED} by Ratis without calling this state machine
+   * again. The wrong term stays until the leader compacts past the boundary (issue #8374).
    * <p>
-   * {@code leaderSnapshotTermIndex} is the leader's own answer, fetched over the same bootstrap-state RPC this
-   * install already makes for database reconciliation ({@link #getLatestSnapshotTermIndex()} on the leader). It is
-   * trusted only when its index matches {@code snapshotIndex}: {@code firstAvailableLogIndex} the leader hands
-   * Ratis is always exactly one past the leader's own last-taken snapshot index (a Raft log purge always stops at
-   * its snapshot boundary), so the indices coincide on every clean read; a mismatch means a race (the leader's own
-   * compaction advanced between answering Ratis and answering this query) or an older leader build that has not
-   * yet started reporting this field, and falls back to the approximation rather than trusting a term for an index
-   * it was not actually reported against.
+   * {@code leaderSnapshotTermIndex} is the leader's own answer, read over the bootstrap-state RPC
+   * ({@link #getLatestSnapshotTermIndex()} on the leader). The reconciler fails the install when it cannot ask, so
+   * {@code null} here means only a leader build that predates the field. It is trusted only when its index matches
+   * {@code snapshotIndex}. A mismatch is not harmless: {@code LogAppender.getPrevious} then returns {@code null},
+   * which makes the leader re-notify the install instead of sending entries. That is an INDEX problem, handled by
+   * {@link #resolveInstalledSnapshotBoundary} before this method is consulted (issue #8449).
    * <p>
    * Package-private and static so the decision is unit-testable without a live Raft cluster.
    */
@@ -2239,6 +2351,45 @@ public class ArcadeStateMachine extends BaseStateMachine {
   /** The one rule for trusting the leader's marker, shared by the decision and the fallback WARNING. */
   static boolean leaderSnapshotMatches(final long snapshotIndex, final TermIndex leaderSnapshotTermIndex) {
     return leaderSnapshotTermIndex != null && leaderSnapshotTermIndex.getIndex() == snapshotIndex;
+  }
+
+  /**
+   * Picks the {@link TermIndex} to REGISTER for a leader-driven snapshot install - the boundary, not just the term
+   * (issue #8449).
+   * <p>
+   * {@code computedSnapshotIndex} is {@code firstTermIndexInLog - 1}, where {@code firstTermIndexInLog} is the
+   * leader's log start S with the term its log holds there ({@code LogAppender.shouldNotifyToInstallSnapshot}).
+   * After the install the follower's next index is the registered index + 1, and the leader resumes replication only
+   * if {@code LogAppender.getPrevious(next)} is non-null. That method reads the leader's LOG first, and falls back to
+   * the leader's latest snapshot marker only when the marker ends exactly at {@code next - 1}.
+   * <p>
+   * Registering S-1 is therefore right only when the leader's marker M is S-1 itself. Ratis purges whole log
+   * segments, so the log start routinely stays BEFORE the marker (S &lt;= M): S-1 is then neither in the log nor the
+   * marker, {@code getPrevious(S)} is {@code null}, and {@code shouldInstallSnapshot} keeps answering {@code true} -
+   * the leader re-notifies, the follower answers {@code ALREADY_INSTALLED}, forever. In that case this method
+   * registers S itself, with its log term: S is in the leader's log, so {@code getPrevious(S + 1)} returns exactly
+   * {@code firstTermIndexInLog} and the follower's log-matching check (an exact {@code equals()}) passes. The
+   * marker's own TermIndex is NOT used for an index inside the log: {@code getPrevious} would answer with the log
+   * term, and a marker term can differ from it ({@code takeSnapshot} pairs the applied index with the applied term,
+   * which a configuration entry can advance on its own).
+   * <p>
+   * The follower's data covers S: M was fetched before the database copy on every
+   * {@code DatabaseReconciler.reconcileDatabasesFromLeader} path, the copy is the leader's live state, and
+   * S &lt;= M. Entries S+1..M are replayed on top of the copy, as S..M already were before this change.
+   * <p>
+   * When M is S-1, or older, or unknown, S-1 is kept with the term {@link #resolveInstalledSnapshotTerm} picks
+   * (issues #8360, #8374).
+   * <p>
+   * Package-private and static so the decision is unit-testable without a live Raft cluster.
+   */
+  static TermIndex resolveInstalledSnapshotBoundary(final TermIndex firstTermIndexInLog,
+      final TermIndex leaderSnapshotTermIndex) {
+    final long computedSnapshotIndex = Math.max(0L, firstTermIndexInLog.getIndex() - 1);
+    if (leaderSnapshotTermIndex != null && leaderSnapshotTermIndex.getIndex() > computedSnapshotIndex)
+      return firstTermIndexInLog;
+    return TermIndex.valueOf(
+        resolveInstalledSnapshotTerm(computedSnapshotIndex, firstTermIndexInLog.getTerm(), leaderSnapshotTermIndex),
+        computedSnapshotIndex);
   }
 
   public long getElectionCount() {
@@ -3676,8 +3827,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
       try {
         // install() keeps the database open during the download and rolls back on failure, so a
         // failed restore never leaves it closed.
-        SnapshotInstaller.install(databaseName, SnapshotInstaller.resolveDatabasePath(localServer, databaseName),
-            leaderHttpAddr, leaderHttpsAddr, clusterToken, localServer);
+        installLeaderCopy(databaseName, leaderHttpAddr, leaderHttpsAddr, clusterToken);
       } catch (final IOException e) {
         throw new RuntimeException("Failed to install snapshot for restored database '" + databaseName + "'", e);
       }
@@ -3723,8 +3873,12 @@ public class ArcadeStateMachine extends BaseStateMachine {
    *       created or mutated on this node has its whole history inside the Raft log: the baseline sampled for
    *       it is stale by construction and replication, not bootstrap, is what keeps the copies in step. The
    *       entry is ignored for that database. The decision keys on this database's persisted applied index
-   *       being below the entry's index, which is the same on every peer because the log order is, so every
-   *       peer ignores or honours the same entry.</li>
+   *       being below the entry's index. That index is NOT guaranteed to be the same on every peer: it is also
+   *       written outside log order, by {@link #writePersistedAppliedIndexForAllDatabases} after a snapshot
+   *       install, and it reads as {@code -1} for every database on the first restart after upgrading from a
+   *       legacy plain-number {@code applied-index} file. A peer reading a higher value takes the replay-skip
+   *       below, and a peer reading {@code -1} re-runs the verification, whose "local is fresher" arm logs a
+   *       SEVERE rather than diverging silently (both walked in issue #7958).</li>
    *   <li><b>Bootstrap source.</b> The peer that committed the entry sampled the baseline from its own copy,
    *       which is the copy the snapshot ships to everyone else. Its copy advancing past the sampled
    *       {@code lastTxId} between the sample and the local apply (18 ms in the report) is the expected
@@ -4002,7 +4156,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
         // The holder goes to the pending-replacement set rather than to the retry (issue #8367): it is released
         // when this node's copy is actually replaced, not when one retry happens to end. A name already pending
         // (a replay of the same entry) already owns its holder, so this one is released in the finally below.
-        holderHandedOver = bootstrapReplacementsPending.add(dbName);
+        holderHandedOver = markBootstrapReplacementPending(dbName);
       }
 
       // We are inside the catch on the Raft StateMachineUpdater thread: a RejectedExecutionException from
@@ -4129,6 +4283,112 @@ public class ArcadeStateMachine extends BaseStateMachine {
   }
 
   /**
+   * The install lock of {@code dbName}, taken by the apply thread before it applies an entry for that database
+   * (issue #7958), or {@code null} for an entry that targets no database. An install of the database holds it for
+   * as long as the install runs, and the entry waits for the installed copy rather than going to the one being
+   * replaced - logged once per wait, so a replication pause while a snapshot downloads has a line that explains it.
+   */
+  private InstallApplyGate enterInstallApplyGate(final String dbName, final long index) {
+    if (dbName == null)
+      return null;
+    final InstallApplyGate gate = installApplyGate(dbName);
+    if (!gate.tryLock()) {
+      LogManager.instance().log(this, Level.INFO,
+          "Applying entry %d for database '%s' waits for the snapshot install replacing this node's copy of it: the "
+              + "copy the install replaces must not receive entries its replacement does not carry", index, dbName);
+      final Consumer<String> waiting = applyWaitsForInstallForTesting;
+      if (waiting != null)
+        waiting.accept(dbName);
+      gate.lock();
+    }
+    return gate;
+  }
+
+  /**
+   * Whether the current thread holds the install lock of any database (issue #7958): it is then running an install
+   * that may have the apply thread waiting on it, so it must not wait on the apply thread in turn.
+   */
+  boolean isHoldingInstallApplyGate() {
+    for (final InstallApplyGate gate : installApplyGates.values())
+      if (gate.isHeldByCurrentThread())
+        return true;
+    return false;
+  }
+
+  private InstallApplyGate installApplyGate(final String dbName) {
+    return installApplyGates.computeIfAbsent(dbName, name -> new InstallApplyGate());
+  }
+
+  /**
+   * Replaces this node's copy of {@code dbName} with the leader's, with the apply thread held off the database for
+   * the whole install (issue #7958). Every install of a database this node holds goes through here.
+   * <p>
+   * The lock is taken BEFORE the download starts, not around the swap: the leader serves the snapshot as of the
+   * moment it receives the request, so what has to be excluded is every entry this node would otherwise apply
+   * between that moment and the swap. Holding it from the start means everything this node applied to the old copy
+   * was applied before it asked for the new one; the entries committed after that wait, and are applied to the
+   * installed copy once the lock is released. An entry that is ALSO already in the leader's copy is applied a second
+   * time, which the apply path tolerates by design (page versions and file existence are checked, the same replay
+   * safety a restart relies on).
+   * <p>
+   * The cost is that replication of this database pauses for as long as the install runs, download retries
+   * included, and every database behind it with it, since the apply thread is shared - the same cost the installs
+   * that already ran ON the apply thread have always had. An install that fails leaves the old copy in place and the
+   * waiting entries are applied to it, which is correct: nothing replaced it.
+   */
+  private void installLeaderCopy(final String dbName, final Supplier<String> leaderHttpAddr,
+      final Supplier<String> leaderHttpsAddr, final String clusterToken) throws IOException {
+    // Read once: the field is volatile, and the path and the install must be about the same server.
+    final ArcadeDBServer localServer = this.server;
+    runUnderInstallGate(dbName, () -> SnapshotInstaller.install(dbName,
+        SnapshotInstaller.resolveDatabasePath(localServer, dbName), leaderHttpAddr, leaderHttpsAddr, clusterToken,
+        localServer));
+  }
+
+  /**
+   * Runs {@code install} holding {@code dbName}'s install lock, as {@link #installLeaderCopy} describes. Also the
+   * {@link DatabaseReconciler.InstallGate} of the Ratis-initiated installs: Ratis pauses the state machine only after
+   * {@link #notifyInstallSnapshotFromLeader} has completed, so the apply thread can still be applying the entries
+   * below the snapshot while the reconciler replaces the copy they target.
+   */
+  void runUnderInstallGate(final String dbName, final DatabaseReconciler.InstallAction install) throws IOException {
+    // The pre-install Raft log purge (issue #7037) asks Ratis for a snapshot, which the apply thread serves - and the
+    // apply thread may be about to wait on the lock taken below. Purged here, before the lock, so it is not left
+    // timing out against it; the install's own attempt then stands down (isHoldingInstallApplyGate()).
+    final RaftHAServer raftHA = this.raftHAServer;
+    if (raftHA != null)
+      raftHA.compactRaftLogBeforeSnapshotInstall(dbName);
+    final InstallApplyGate gate = installApplyGate(dbName);
+    gate.lock();
+    try {
+      // The lock excludes the entries this node would apply AFTER it asked for the leader's copy; it says nothing
+      // about the ones it applied BEFORE, which the copy has to carry because nothing will apply them again. The
+      // leader publishes an entry's pages on its own apply thread, so it can serve a copy that is still behind an
+      // entry this node has already applied (issue #8454). The install refuses such a copy and asks again: every
+      // entry up to this floor went to the copy being replaced.
+      final long floor = Math.max(gate.appliedUnderGate(), lastAppliedIndex.get());
+      SnapshotInstaller.runRequiringSourceAppliedIndex(floor, install);
+    } finally {
+      gate.unlock();
+    }
+  }
+
+  /**
+   * The applied index a snapshot this node serves is at least as current as (issue #8454): every entry up to it has
+   * been applied here, its pages published, before this is read, so a copy captured after the read carries them.
+   * Sent to the installing follower as {@link SnapshotManager#APPLIED_INDEX_HEADER}.
+   */
+  long appliedIndexForServedSnapshot() {
+    return lastAppliedIndex.get();
+  }
+
+  /** {@link #installLeaderCopy(String, Supplier, Supplier, String)} with addresses resolved once, by the caller. */
+  private void installLeaderCopy(final String dbName, final String leaderHttpAddr, final String leaderHttpsAddr,
+      final String clusterToken) throws IOException {
+    installLeaderCopy(dbName, () -> leaderHttpAddr, () -> leaderHttpsAddr, clusterToken);
+  }
+
+  /**
    * Close the local database and pull a full snapshot from the current leader. Same low-level
    * snapshot install machinery as {@code applyInstallDatabaseEntry(forceSnapshot=true)}.
    * <p>
@@ -4172,8 +4432,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // Resolved through the same guard as every other snapshot pull: the supplier answers null - which
       // install() treats as "no leader to pull from" and retries - rather than handing back an address that
       // names this node or no single peer (issue #6202).
-      SnapshotInstaller.install(dbName, SnapshotInstaller.resolveDatabasePath(server, dbName),
-          this::guardedLeaderHttpAddress, this::guardedLeaderHttpsAddress, clusterToken, server);
+      installLeaderCopy(dbName, this::guardedLeaderHttpAddress, this::guardedLeaderHttpsAddress, clusterToken);
       LogManager.instance().log(this, Level.INFO,
           "Database '%s' reinstalled after bootstrap mismatch", dbName);
       clearBootstrapUnreconciled(dbName);
@@ -4210,14 +4469,39 @@ public class ArcadeStateMachine extends BaseStateMachine {
   }
 
   /**
+   * Arms a pending bootstrap replacement of {@code dbName} and durably records it (issue #8411), under
+   * {@link #bootstrapBaselinesFileLock} so the set and the file change together. Returns whether this call armed it,
+   * i.e. whether the caller's readiness holder now belongs to the pending replacement: a name already pending (a
+   * replay of the same entry, or one restored from the file) already owns its holder.
+   */
+  private boolean markBootstrapReplacementPending(final String dbName) {
+    synchronized (bootstrapBaselinesFileLock) {
+      ensureBootstrapBaselinesLoaded();
+      if (!bootstrapReplacementsPending.add(dbName))
+        return false;
+      persistBootstrapBaselinesFile();
+      return true;
+    }
+  }
+
+  /**
    * Retires a pending bootstrap replacement of {@code dbName} and releases the readiness holder it owns (issue
    * #8367). Called from every path that actually replaces this node's copy with the leader's, and from the DROP of
    * the database. The removal from the set is the ownership test, so the holder is released exactly once however
    * many of those paths race; a database with nothing pending costs one read of an empty set.
    */
   private void settleBootstrapReplacement(final String dbName) {
-    if (bootstrapReplacementsPending.isEmpty() || !bootstrapReplacementsPending.remove(dbName))
+    // Loaded first: a replacement pending from before a restart is not in the set until the file is read, and a path
+    // that replaced the copy before anything else read it would otherwise leave the flag on disk for the loader to
+    // re-arm afterwards (issue #8411).
+    ensureBootstrapBaselinesLoaded();
+    if (bootstrapReplacementsPending.isEmpty())
       return;
+    synchronized (bootstrapBaselinesFileLock) {
+      if (!bootstrapReplacementsPending.remove(dbName))
+        return;
+      persistBootstrapBaselinesFile();
+    }
     endBootstrapInstall(dbName);
     LogManager.instance().log(this, Level.INFO,
         "Database '%s' now carries the leader's copy: the pending bootstrap replacement is complete", dbName);
@@ -4225,6 +4509,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
 
   /** {@link #settleBootstrapReplacement} for every pending name not in {@code notReplaced}, for the full installs. */
   private void settleBootstrapReplacementsExcept(final Set<String> notReplaced) {
+    ensureBootstrapBaselinesLoaded();
     if (bootstrapReplacementsPending.isEmpty())
       return;
     for (final String dbName : new ArrayList<>(bootstrapReplacementsPending))
@@ -4238,6 +4523,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * holder in {@link #getBootstrapInstallsInFlight()}.
    */
   List<String> getPendingBootstrapReplacements() {
+    ensureBootstrapBaselinesLoaded();
     if (bootstrapReplacementsPending.isEmpty())
       return Collections.emptyList();
     final List<String> names = new ArrayList<>(bootstrapReplacementsPending);
@@ -4266,6 +4552,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * the one the baseline rejected - and says so once per window, naming the leadership transfer that unblocks it.
    */
   public void retryPendingBootstrapReplacements() {
+    ensureBootstrapBaselinesLoaded();
     if (bootstrapReplacementsPending.isEmpty())
       return;
     final RaftHAServer raftHA = this.raftHAServer;
@@ -4345,6 +4632,8 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * Asked on every client request, so the common answer - nothing in flight at all - costs one map read.
    */
   public boolean isBootstrapInstallInFlight(final String dbName) {
+    // One volatile read once loaded; restores a replacement left pending before a restart (issue #8411).
+    ensureBootstrapBaselinesLoaded();
     return !bootstrapInstallsInFlight.isEmpty() && bootstrapInstallsInFlight.containsKey(dbName);
   }
 
@@ -4358,6 +4647,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * nothing about it.
    */
   List<String> getBootstrapInstallsInFlight() {
+    ensureBootstrapBaselinesLoaded();
     // The overwhelmingly common answer, and this is on the readiness-probe path: allocate nothing for it.
     if (bootstrapInstallsInFlight.isEmpty())
       return Collections.emptyList();
@@ -4381,14 +4671,29 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * that budget of the pass starting and the hold ends at most {@code holdMs} after it.
    */
   void announceBootstrapPass(final String passId, final Collection<String> dbNames, final long holdMs) {
-    if (passId == null || dbNames == null || dbNames.isEmpty() || !hasNeverAppliedApplicationEntry())
-      return;
-    ensureBootstrapBaselinesLoaded();
     // A negative hold can only come from an overflowed configuration (2 x an absurd bootstrap timeout): fail towards
     // holding, which costs availability, rather than towards not holding, which is the bug this hold exists for.
     final long hold = holdMs < 0 ? MAX_BOOTSTRAP_PASS_HOLD_MS : Math.min(holdMs, MAX_BOOTSTRAP_PASS_HOLD_MS);
-    final PendingBootstrapPass pending = new PendingBootstrapPass(passId,
-        System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(hold));
+    hold(passId, dbNames,
+        new PendingBootstrapPass(passId, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(hold), false));
+  }
+
+  /**
+   * The leader running pass {@code passId} holds its own copies of {@code dbNames} while it decides (issue #8409), with
+   * NO deadline. The deadline of {@link #announceBootstrapPass} exists because a leader that dies mid-pass sends its
+   * followers no conclusion; this hold is taken and settled by the pass itself - {@code BootstrapElection.runIfEligible}
+   * concludes it on every exit, and replaces it with a bounded announce before a transfer - so a deadline, even the
+   * one-hour ceiling, could only lapse while the pass is still fingerprinting or collecting, and let a client reach a
+   * copy the pass may reject. It is in memory only, so a crash takes it with the process.
+   */
+  void holdOwnBootstrapPass(final String passId, final Collection<String> dbNames) {
+    hold(passId, dbNames, new PendingBootstrapPass(passId, 0L, true));
+  }
+
+  private void hold(final String passId, final Collection<String> dbNames, final PendingBootstrapPass pending) {
+    if (passId == null || dbNames == null || dbNames.isEmpty() || !hasNeverAppliedApplicationEntry())
+      return;
+    ensureBootstrapBaselinesLoaded();
     for (final String dbName : dbNames) {
       if (dbName == null || dbName.startsWith(".") || bootstrapBaselines.containsKey(dbName))
         continue;
@@ -4436,7 +4741,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
     final PendingBootstrapPass pending = bootstrapPassesPending.get(dbName);
     if (pending == null)
       return false;
-    if (System.nanoTime() - pending.deadlineNanos() < 0)
+    if (pending.unbounded() || System.nanoTime() - pending.deadlineNanos() < 0)
       return true;
     bootstrapPassesPending.remove(dbName, pending);
     return false;
@@ -4603,8 +4908,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // once a complete snapshot is on disk, rolling back on failure. A failed resync therefore never
       // leaves the database closed (the cause of the operator-visible DatabaseIsClosedException).
       final String clusterToken = raft.getClusterToken();
-      SnapshotInstaller.install(dbName, SnapshotInstaller.resolveDatabasePath(server, dbName),
-          this::guardedLeaderHttpAddress, this::guardedLeaderHttpsAddress, clusterToken, server);
+      installLeaderCopy(dbName, this::guardedLeaderHttpAddress, this::guardedLeaderHttpsAddress, clusterToken);
       LogManager.instance().log(this, Level.INFO, "Database '%s' resynced from leader on operator request", dbName);
       // This is the action the bootstrap-divergence alert asks the operator for: the local copy the
       // overwrite guard kept has just been replaced, so the mark goes with it (issue #6124) - and so does a
@@ -5048,35 +5352,99 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // persisted applied index above), and a database recreated under the same name starts from a clean ledger.
     pageVersions.clear(databaseName);
 
-    // Idempotent on replay: if the database is already gone, nothing to do beyond evicting any
-    // persisted baseline. applyBootstrapFingerprintEntry records a baseline by name even when the
-    // database is not present locally (the late-joiner path), so a node can hold a persisted baseline
-    // for a database it never had locally; evict it here so it does not linger in the file for the
-    // node lifetime. This branch never calls drop(), so the eviction cannot precede a failed drop.
-    if (!server.existsDatabase(databaseName)) {
-      evictBootstrapBaseline(databaseName);
-      clearDroppedDatabaseQuarantine(databaseName);
-      HALog.log(this, HALog.TRACE, "Database '%s' already absent, skipping drop-database entry", databaseName);
+    // Checked before the maintenance slot below, so replaying the entry of a database that is already gone never
+    // waits on anything. "Gone" is the registry AND the disk (issue #8451): `close database` deregisters a database
+    // and leaves its files in place, it is not leader-forwarded, and the next request on this node would reopen that
+    // directory - so a closed database still has something to drop.
+    if (!server.existsDatabase(databaseName) && closedDatabaseDirectory(databaseName) == null) {
+      retireAbsentDatabase(databaseName);
       return;
     }
 
+    // This node's per-database maintenance slot, as DROP, before the database is closed and its directory renamed
+    // away (issue #8035). A drop is issued on the leader, whose verb takes DROP there (#7641), but it is APPLIED on
+    // every peer, and without this the apply on the others took nothing: a backup, export or import running on a
+    // follower - the scheduled backup runs on every node by default, and none of those verbs is leader-forwarded -
+    // had the instance it was working through closed and its directory deleted underneath it. Operation.CLOSE was
+    // enrolled for exactly that reason (#7469); the replicated drop is the same close, and worse.
+    //
+    // On the node whose own verb submitted this entry the slot is already held, on the request thread that is
+    // waiting for this very apply, and the reservation is not reentrant: taking it here would wait on itself.
+    // LocalDropVerbs says whether that is the case, and holds the verb's registration across the drop so a verb
+    // whose wait timed out cannot release its slot in the middle of it. Only trusted while the slot is actually
+    // held by an exclusive operation: a registration without one takes the slot like any other peer.
+    final BackupCoordinator coordinator = server.getBackupCoordinator();
+    if (coordinator != null
+        && (coordinator.isInProgress(databaseName, BackupCoordinator.Operation.DROP)
+        || coordinator.isInProgress(databaseName, BackupCoordinator.Operation.RESTORE))
+        && localDropVerbs.runUnderLocalVerb(databaseName, () -> dropHoldingMaintenanceSlot(databaseName)))
+      return;
+
+    // Bounded, and proceeding when the bound expires, for the reason SnapshotInstaller.install gives for the
+    // replicated restore: this applies a committed Raft entry, and a peer that declined it would diverge from the
+    // cluster. The wait is the same knob, "how long a committed destructive entry waits for local maintenance".
+    // A null coordinator is not a production state; the unit tests that drive this method hand it a bare server.
+    final BackupCoordinator.Operation refusedBy = coordinator == null ? null
+        : coordinator.begin(databaseName, BackupCoordinator.Operation.DROP,
+            server.getConfiguration().getValueAsLong(GlobalConfiguration.HA_SNAPSHOT_INSTALL_BACKUP_WAIT_MS));
+    final boolean slotHeld = coordinator != null && refusedBy == null;
+    if (refusedBy != null)
+      LogManager.instance().log(this, Level.WARNING,
+          "Dropping database '%s' on this node while %s of it is still running: the drop applies a committed Raft "
+              + "entry and cannot be declined, so it proceeds and that operation will fail or produce an incomplete "
+              + "result. Raise '%s' to give it longer to finish", null, databaseName, refusedBy.phrase(),
+          GlobalConfiguration.HA_SNAPSHOT_INSTALL_BACKUP_WAIT_MS.getKey());
+
+    try {
+      dropHoldingMaintenanceSlot(databaseName);
+    } finally {
+      // Only what was actually reserved: a wait that expired took nothing, and releasing then would drop the
+      // reservation the operation still in flight is holding.
+      if (slotHeld)
+        coordinator.end(databaseName, BackupCoordinator.Operation.DROP);
+    }
+  }
+
+  /**
+   * The drop itself, with this node's maintenance slot already held (or deliberately given up on) by
+   * {@link #applyDropDatabaseEntry}.
+   */
+  private void dropHoldingMaintenanceSlot(final String databaseName) {
     // Only the rename below runs on the apply thread: the recursive delete costs one unlink per file and is
     // unbounded in the size of the database, and this loop is sequential and shared by every database
     // multiplexed on the state machine. Close, deregister and rename hold the databases lock as one unit -
     // mirroring the snapshot installer's swap - so no concurrent open can reopen the directory in between.
     final Path staged;
+    final boolean absent;
     synchronized (server.getDatabasesLock()) {
-      // Resolved inside the lock: getDatabase reopens a database that is registered-but-closed, so resolving
-      // it outside would let another holder of this lock deregister it between the lookup and the close, and
-      // this thread would reopen the directory from disk only to close it again.
-      final DatabaseInternal embedded = ((DatabaseInternal) server.getDatabase(databaseName)).getEmbedded();
-      final Path databaseDirectory = Path.of(embedded.getDatabasePath());
-      embedded.closeForDrop();
-      server.removeDatabase(databaseName);
+      final Path databaseDirectory;
+      if (server.existsDatabase(databaseName)) {
+        // Resolved inside the lock: getDatabase reopens a database that is registered-but-closed, so resolving
+        // it outside would let another holder of this lock deregister it between the lookup and the close, and
+        // this thread would reopen the directory from disk only to close it again.
+        final DatabaseInternal embedded = ((DatabaseInternal) server.getDatabase(databaseName)).getEmbedded();
+        databaseDirectory = Path.of(embedded.getDatabasePath());
+        embedded.closeForDrop();
+        server.removeDatabase(databaseName);
+      } else {
+        // Deregistered, either before this entry arrived or while the apply waited for the slot: a `close
+        // database` leaves the files on disk, and getDatabase would reopen them on the next request (issue
+        // #8451). Deleted from the configured directory WITHOUT opening it - opening only to drop would replay
+        // its WAL and take its file locks for nothing.
+        databaseDirectory = closedDatabaseDirectory(databaseName);
+        if (databaseDirectory != null)
+          closeUnregisteredInstance(databaseDirectory);
+      }
       // stageForDeletion falls back to deleting inline when the rename is impossible, and that fallback
       // belongs inside the lock even though it is slow: the directory still carries its live name, so
       // releasing the lock first would let a concurrent create of the same name meet a half-deleted one.
-      staged = deferredDatabaseDeleter.stageForDeletion(databaseDirectory);
+      staged = databaseDirectory == null ? null : deferredDatabaseDeleter.stageForDeletion(databaseDirectory);
+      absent = databaseDirectory == null;
+    }
+    if (absent) {
+      // Neither registered nor on disk any more: the removal this entry asks for already happened elsewhere.
+      retireAbsentDatabase(databaseName);
+      return;
     }
     // Queued outside the lock: a saturated deletion queue runs the delete on this thread, and that must not
     // extend to holding the databases lock for the length of a recursive delete.
@@ -5092,6 +5460,80 @@ public class ArcadeStateMachine extends BaseStateMachine {
 
     LogManager.instance().log(this, Level.INFO, "Database '%s' dropped via Raft drop-database entry%s", databaseName,
         staged != null ? " (files staged as '" + staged.getFileName() + "' for background deletion)" : "");
+  }
+
+  /**
+   * Idempotent on replay: if the database is already gone, nothing to do beyond evicting any persisted baseline.
+   * applyBootstrapFingerprintEntry records a baseline by name even when the database is not present locally (the
+   * late-joiner path), so a node can hold a persisted baseline for a database it never had locally; evict it here so
+   * it does not linger in the file for the node lifetime. This branch never calls drop(), so the eviction cannot
+   * precede a failed drop.
+   */
+  private void retireAbsentDatabase(final String databaseName) {
+    evictBootstrapBaseline(databaseName);
+    clearDroppedDatabaseQuarantine(databaseName);
+    HALog.log(this, HALog.TRACE, "Database '%s' already absent, skipping drop-database entry", databaseName);
+  }
+
+  /**
+   * The on-disk directory of a database that is NOT in the server registry, or {@code null} when there is none
+   * (issue #8451). It is the directory {@code ArcadeDBServer.getDatabase} would load the name from, so it is exactly
+   * what a later request on this node would reopen.
+   * <p>
+   * The name arrives in a committed log entry rather than in a request this node validated, and what is found here is
+   * deleted, so a name the server would refuse to open - one that resolves outside the databases directory - is
+   * reported as having no directory rather than trusted.
+   * <p>
+   * Only a path that is confirmed missing counts as "no directory". A stat that fails for any other reason (permission,
+   * I/O error) fails the apply instead: reading it as absent would retire the database's bookkeeping and advance the
+   * applied index past the drop while its files are still there, to be reopened once the filesystem recovers.
+   *
+   * @throws UncheckedIOException when the filesystem cannot say whether the directory exists
+   */
+  private Path closedDatabaseDirectory(final String databaseName) {
+    try {
+      server.checkDatabaseNameIsValid(databaseName);
+    } catch (final IllegalArgumentException e) {
+      LogManager.instance().log(this, Level.WARNING,
+          "Drop-database entry names '%s', which is not a valid database name on this node: nothing on disk is "
+              + "removed for it (%s)", databaseName, e.getMessage());
+      return null;
+    }
+    final Path directory = Path.of(server.getConfiguration().getValueAsString(GlobalConfiguration.SERVER_DATABASE_DIRECTORY),
+        databaseName);
+    final BasicFileAttributes attributes;
+    try {
+      attributes = Files.readAttributes(directory, BasicFileAttributes.class);
+    } catch (final NoSuchFileException e) {
+      return null;
+    } catch (final IOException e) {
+      // Deliberately NOT a ReplicationException: applyWithRetry rethrows that one unchanged, so the database would be
+      // neither quarantined nor resynced, and the next entry to apply would checkpoint straight past this drop. A plain
+      // runtime exception takes the handleUnexpectedApplyError path: quarantine, targeted resync, and no snapshot while
+      // the quarantine holds, so the entry stays replayable.
+      throw new UncheckedIOException(
+          "Cannot tell whether database '" + databaseName + "' still has files at '" + directory + "' to drop", e);
+    }
+    return attributes.isDirectory() ? directory : null;
+  }
+
+  /**
+   * Closes an instance of {@code databaseDirectory} that is still open in this JVM although the server no longer
+   * registers it - a close that failed half way, or an embedded open outside the server - so its files are not
+   * renamed from under open file handles. A no-op in the ordinary case, where {@code close database} closed it.
+   */
+  private static void closeUnregisteredInstance(final Path databaseDirectory) {
+    final Database active = DatabaseFactory.getActiveDatabaseInstance(databaseDirectory.toString());
+    if (active == null || !active.isOpen())
+      return;
+    try {
+      ((DatabaseInternal) active).getEmbedded().closeForDrop();
+    } catch (final DatabaseIsClosedException e) {
+      // Its holder is not serialized by the databases lock - it is not registered - so it can close it between the
+      // isOpen() above and closeForDrop(). Closed is exactly what this method wanted; anything else still fails.
+      if (active.isOpen())
+        throw e;
+    }
   }
 
   /**
@@ -5121,6 +5563,14 @@ public class ArcadeStateMachine extends BaseStateMachine {
         "Database '%s' was quarantined when it was dropped: retiring its read floor and diverged marker, "
             + "since a dropped database has no resync left to wait for (issue #6760)", databaseName);
     clearDivergedDatabase(databaseName);
+  }
+
+  /**
+   * Shares the owning {@link RaftHAServer}'s registry of local drop verbs, which outlives this state machine across a
+   * Ratis restart. Left at its own empty registry by the unit tests that build a state machine without one.
+   */
+  void setLocalDropVerbs(final LocalDropVerbs localDropVerbs) {
+    this.localDropVerbs = localDropVerbs;
   }
 
   // @VisibleForTesting
@@ -5434,6 +5884,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
               for (final String name : perDb.keySet())
                 appliedIndexByDb.put(name, perDb.getLong(name, -1));
               restorePersistedQuarantine(json.getJSONObject("quarantine", new JSONObject()));
+              restorePersistedFloors(json.getJSONObject("floors", new JSONObject()));
             } else
               // Legacy format: a single plain number is the global Raft-log position.
               globalAppliedIndex = Long.parseLong(content);
@@ -5496,6 +5947,35 @@ public class ArcadeStateMachine extends BaseStateMachine {
   }
 
   /**
+   * Seeds {@link #staleDatabaseAppliedFloors} from the {@code floors} object of the persisted applied-index file
+   * (issue #8137). Called from {@link #ensureAppliedIndexLoaded()} right after the quarantine is restored, under
+   * {@link #appliedIndexFileLock}.
+   * <p>
+   * A floor only means something beside its quarantine, so one whose database is no longer quarantined is ignored.
+   * A database quarantined by an incomplete snapshot install but carrying no floor - a file written by a build that
+   * persisted the quarantine (#7735) but not yet the floor - is clamped at its own persisted applied position, which
+   * is where {@code settleDivergedStateAfterInstall} put the floor in the first place: the install deliberately
+   * left that position behind for it.
+   */
+  private void restorePersistedFloors(final JSONObject floors) {
+    for (final String name : floors.keySet())
+      if (divergedDatabases.containsKey(name))
+        staleDatabaseAppliedFloors.putIfAbsent(name, Math.max(0L, floors.getLong(name, 0L)));
+
+    for (final Map.Entry<String, DivergenceCause> entry : divergedDatabases.entrySet())
+      if (entry.getValue() == DivergenceCause.SNAPSHOT_INSTALL_INCOMPLETE) {
+        final Long applied = appliedIndexByDb.get(entry.getKey());
+        staleDatabaseAppliedFloors.putIfAbsent(entry.getKey(), Math.max(0L, applied != null ? applied : -1L));
+      }
+
+    for (final Map.Entry<String, Long> entry : staleDatabaseAppliedFloors.entrySet())
+      LogManager.instance().log(this, Level.SEVERE,
+          "Database '%s' is still behind a snapshot install from a previous run: clamping its LINEARIZABLE / "
+              + "read-your-writes reads at appliedIndex=%d until a resync succeeds (issue #8137)",
+          entry.getKey(), entry.getValue());
+  }
+
+  /**
    * Serialises the in-memory applied-index bookkeeping to {@code .raft/applied-index} via a temp file
    * and atomic rename, so a crash mid-write never leaves a corrupt file.
    * <p>
@@ -5526,6 +6006,13 @@ public class ArcadeStateMachine extends BaseStateMachine {
         for (final Map.Entry<String, DivergenceCause> entry : divergedDatabases.entrySet())
           quarantine.put(entry.getKey(), entry.getValue().name());
         json.put("quarantine", quarantine);
+      }
+      // The read floors qualify the quarantine and go with it (issue #8137); omitted when none is outstanding
+      if (!staleDatabaseAppliedFloors.isEmpty()) {
+        final JSONObject floors = new JSONObject();
+        for (final Map.Entry<String, Long> entry : staleDatabaseAppliedFloors.entrySet())
+          floors.put(entry.getKey(), entry.getValue().longValue());
+        json.put("floors", floors);
       }
 
       Files.createDirectories(file.getParent());
@@ -5603,6 +6090,17 @@ public class ArcadeStateMachine extends BaseStateMachine {
               // alone without dropping a mark on the floor.
               if (entry.getBoolean("unreconciled", false))
                 bootstrapUnreconciledDatabases.add(name);
+              // The pending bootstrap replacement (issue #8411), restored with the readiness holder it owns, so a
+              // node restarted before the replacement landed does not come back serving the copy the committed
+              // baseline rejected. Absent in files written before #8411, which read as "nothing pending".
+              if (entry.getBoolean("pendingReplacement", false) && bootstrapReplacementsPending.add(name)) {
+                beginBootstrapInstall(name);
+                LogManager.instance().log(this, Level.WARNING,
+                    "Database '%s' is still waiting to be replaced by the leader's copy the cluster's bootstrap baseline "
+                        + "chose (recorded before the restart). This node keeps it out of the Service and refuses client "
+                        + "requests on it until it is; the periodic health check retries the install once a leader is "
+                        + "reachable. To force it, run POST /api/v1/cluster/resync/%s on this node.", name, name);
+              }
             }
           }
         }
@@ -5718,11 +6216,16 @@ public class ArcadeStateMachine extends BaseStateMachine {
         // issue #6124 and an older build reading it simply ignores the extra key.
         if (bootstrapUnreconciledDatabases.contains(e.getKey()))
           entry.put("unreconciled", true);
+        // Same rule for the pending bootstrap replacement (issue #8411): written only while one is pending.
+        if (bootstrapReplacementsPending.contains(e.getKey()))
+          entry.put("pendingReplacement", true);
         json.put(e.getKey(), entry);
       }
       // Iterating the baselines alone is sufficient for the marks too: a mark is only ever added right
       // after its baseline was recorded, and the loader refuses one on an entry that carries no
       // fingerprint, so a marked database without a baseline cannot exist in memory to be missed here.
+      // The pending replacement follows the same rule: it is only armed by the bootstrap-mismatch arm of
+      // applyBootstrapFingerprintEntry, which records the baseline first, and a DROP evicts both together.
       FileUtils.atomicWriteFile(file.toFile(), json.toString());
     } catch (final Exception e) {
       // WARNING, not FINE: unlike the applied-index file (whose loss merely re-runs an idempotent
@@ -5895,8 +6398,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
       // install() keeps the database open during the download and rolls back on failure, so a
       // watchdog-triggered resync never leaves it closed.
       if (server.existsDatabase(dbName)) {
-        SnapshotInstaller.install(dbName, SnapshotInstaller.resolveDatabasePath(server, dbName),
-            leaderHttpAddr, leaderHttpsAddr, clusterToken, server);
+        installLeaderCopy(dbName, leaderHttpAddr, leaderHttpsAddr, clusterToken);
         // Per database, right after its own install, rather than once at the end: a later database failing must
         // not leave this one reported as still carrying the copy the bootstrap baseline rejected (issue #8367).
         settleBootstrapReplacement(dbName);
@@ -6062,34 +6564,84 @@ public class ArcadeStateMachine extends BaseStateMachine {
   public long getDatabaseAppliedFloor(final String dbName) {
     if (dbName == null)
       return -1;
+    // A floor restored from disk must clamp the very first read after a restart (issue #8137). Latched after the
+    // first read, so this costs a volatile field test
+    ensureAppliedIndexLoaded();
     final Long floor = staleDatabaseAppliedFloors.get(dbName);
     return floor != null ? floor : -1;
   }
 
   /**
-   * Records that a snapshot install completed WITHOUT bringing {@code databases} to {@code snapshotIndex}
-   * (issue #6760).
+   * Settles the diverged marks and read floors after a leader-driven snapshot install: every database it refreshed is
+   * healed, and every one it did NOT bring to {@code snapshotIndex} is marked diverged with a read floor (issue #6760),
+   * in one durable write (issue #8137).
    * <p>
-   * Each one keeps its diverged mark - so the node does not advertise readiness while it holds a copy it knows is
+   * Each database left behind keeps its diverged mark - so the node does not advertise readiness while it holds a copy it knows is
    * behind - and publishes a read floor at its own honest applied position, so a LINEARIZABLE or read-your-writes
    * read targeting it fails or degrades instead of being served from the stale copy. Recovery is the existing
    * machinery: the mark keeps {@link #isResyncInProgress()} true, and {@link #retryUnfilledSnapshotGap()} re-drives
    * the resync on the HealthMonitor tick until the database is refreshed for real.
    */
-  private void markDatabasesNotAtSnapshotIndex(final Set<String> databases, final long snapshotIndex) {
-    // One quarantine write for the whole batch (code review on PR #8146). Since the quarantine became durable
-    // (#7735) a per-database markStateDiverged() would re-serialise the applied-index file and fsync+rename it
-    // once per database, back to back, while holding the lock the apply thread also needs - N synchronous
-    // rewrites where this loop used to do pure in-memory work. The set is what one install gave up on, so it
-    // can be more than a couple on a node with many co-located databases.
-    quarantineDatabases(databases, DivergenceCause.SNAPSHOT_INSTALL_INCOMPLETE);
+  // @VisibleForTesting
+  void settleDivergedStateAfterInstall(final Set<String> notInstalled, final long snapshotIndex) {
+    settleDivergedStateAfterInstall(notInstalled, snapshotIndex, false);
+  }
 
-    for (final String dbName : databases) {
-      // The persisted position was deliberately NOT advanced for this database above, so it still carries whatever
-      // this node genuinely applied. -1 (never recorded) clamps to 0, which is the honest answer for a database
-      // nothing is known about.
-      final long floor = Math.max(0L, readPersistedAppliedIndex(dbName));
-      staleDatabaseAppliedFloors.put(dbName, floor);
+  /**
+   * {@link #settleDivergedStateAfterInstall} that also records {@code snapshotIndex} as the applied position, globally
+   * and for every present database the install refreshed, in the same write - what
+   * {@link #writePersistedAppliedIndexForAllDatabases(long, Set)} records on its own.
+   */
+  // @VisibleForTesting
+  void completeSnapshotInstall(final long snapshotIndex, final Set<String> notInstalled) {
+    settleDivergedStateAfterInstall(notInstalled, snapshotIndex, true);
+  }
+
+  private void settleDivergedStateAfterInstall(final Set<String> notInstalled, final long snapshotIndex,
+      final boolean recordAppliedPositions) {
+    final Map<String, Long> published = new LinkedHashMap<>();
+    // The final state - every database the install refreshed healed, every one it gave up on quarantined with its floor -
+    // is built under the lock and written ONCE (issue #8137). Clearing everything first and re-marking the give-ups in a
+    // second write left a file with neither their quarantine nor their floor in between, and a crash there restarted
+    // the node ready and unclamped on the copies the install had given up on. The give-ups are never removed from the
+    // in-memory maps either, so no reader sees them unclamped for an instant.
+    synchronized (appliedIndexFileLock) {
+      ensureAppliedIndexLoaded();
+      if (recordAppliedPositions) {
+        globalAppliedIndex = snapshotIndex;
+        if (server != null)
+          for (final String dbName : server.getDatabaseNames())
+            if (!notInstalled.contains(dbName))
+              appliedIndexByDb.put(dbName, snapshotIndex);
+      }
+      for (final String dbName : notInstalled) {
+        // The install deliberately did NOT advance the persisted position of this database, so it still carries whatever
+        // this node genuinely applied. -1 (never recorded) clamps to 0, which is the honest answer for a database
+        // nothing is known about.
+        final long floor = Math.max(0L, readPersistedAppliedIndex(dbName));
+        staleDatabaseAppliedFloors.put(dbName, floor);
+        // The install is the newest verdict on the database, so its cause replaces an earlier one
+        divergedDatabases.put(dbName, DivergenceCause.SNAPSHOT_INSTALL_INCOMPLETE);
+        published.put(dbName, floor);
+      }
+      staleDatabaseAppliedFloors.keySet().removeIf(dbName -> !notInstalled.contains(dbName));
+      divergedDatabases.keySet().removeIf(dbName -> !notInstalled.contains(dbName));
+
+      if (!persistAppliedIndexFile() && !closed && !published.isEmpty())
+        LogManager.instance().log(this, Level.WARNING,
+            "Database(s) %s are quarantined (%s) with their read floors but could NOT be written to %s: a restart "
+                + "before this is fixed serves them ready and their LINEARIZABLE reads unclamped. Check that the .raft "
+                + "directory is writable and has free space (issues #7735, #8137)", published.keySet(),
+            DivergenceCause.SNAPSHOT_INSTALL_INCOMPLETE, getAppliedIndexFile());
+    }
+    // As clearDivergedState() does after a full resync: whatever was diverged before this install has been reinstalled
+    // or re-marked above
+    lastDivergedResyncLogByDb.clear();
+    divergedSwallowedErrors.set(0);
+
+    for (final Map.Entry<String, Long> entry : published.entrySet()) {
+      final String dbName = entry.getKey();
+      final long floor = entry.getValue();
       // The cause is named above, because the alert quotes it: nothing failed while APPLYING anything here, the
       // install is what did not finish the job, and an operator sent to look for an apply error would find none
       // (issue #7741).
@@ -6100,6 +6652,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
           dbName, snapshotIndex, floor, dbName);
     }
   }
+
 
   /**
    * Triggers a targeted snapshot resync of a single database from the leader (issue #4797).
@@ -6159,8 +6712,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
             // install() keeps the database open during the download and rolls back on failure, so a
             // targeted resync never leaves it closed.
             if (server.existsDatabase(dbName)) {
-              SnapshotInstaller.install(dbName, SnapshotInstaller.resolveDatabasePath(server, dbName),
-                  leaderHttpAddr, leaderHttpsAddr, clusterToken, server);
+              installLeaderCopy(dbName, leaderHttpAddr, leaderHttpsAddr, clusterToken);
               LogManager.instance().log(this, Level.INFO,
                   "Targeted snapshot resync of quarantined database '%s' completed", dbName);
               clearDivergedDatabase(dbName);
@@ -6196,12 +6748,13 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // quarantined after the next restart - the inverse of the bug, and just as wrong.
     synchronized (appliedIndexFileLock) {
       ensureAppliedIndexLoaded();
-      if (divergedDatabases.remove(dbName) != null)
+      // The resync restored this database, so its read floor is satisfied (issue #6760). Dropped in the same write
+      // as the quarantine, so the file never keeps one without the other (issue #8137)
+      final boolean floorRemoved = staleDatabaseAppliedFloors.remove(dbName) != null;
+      if (divergedDatabases.remove(dbName) != null || floorRemoved)
         persistAppliedIndexFile();
     }
     lastDivergedResyncLogByDb.remove(dbName);
-    // The resync restored this database, so its read floor is satisfied (issue #6760).
-    staleDatabaseAppliedFloors.remove(dbName);
     if (divergedDatabases.isEmpty())
       divergedSwallowedErrors.set(0);
   }
@@ -6251,11 +6804,13 @@ public class ArcadeStateMachine extends BaseStateMachine {
    * The single writer of a quarantine: records {@code dbName} as diverged under {@code cause} and durably
    * persists the quarantine, returning {@code true} only for the call that established it (issue #7735).
    * <p>
-   * Every path that quarantines a database goes through here - the WAL version gap in
+   * Every path that quarantines a single database goes through here - the WAL version gap in
    * {@link #applyReplicatedTransaction}, the apply error and the undecodable entry in
-   * {@link #handleUnexpectedApplyError}, and the incomplete snapshot install in
-   * {@code markDatabasesNotAtSnapshotIndex} through {@link #markStateDiverged(String, DivergenceCause)} - so
-   * there is one place the durability can be missing from rather than four.
+   * {@link #handleUnexpectedApplyError} - so there is one place the durability can be missing from rather than three.
+   * The only other writer is {@code settleDivergedStateAfterInstall}, which a snapshot install needs to REPLACE the
+   * whole diverged state (quarantines, read floors and applied positions) in one write rather than add to it, which is
+   * why it cannot be a loop over this method: both hold {@link #appliedIndexFileLock} across their mutation and write
+   * the same file through {@link #persistAppliedIndexFile()}.
    * <p>
    * Written under {@link #appliedIndexFileLock}, the same lock {@link #ensureAppliedIndexLoaded()} and the
    * applied-index writers take, so the mark and the applied position it qualifies land in one atomic rename.
@@ -6290,42 +6845,6 @@ public class ArcadeStateMachine extends BaseStateMachine {
   }
 
   /**
-   * {@link #quarantineDatabase} for a whole batch, in ONE file write (code review on PR #8146).
-   * <p>
-   * Same lock, same load-before-mutate, same first-cause-wins semantics; the only difference is that the file is
-   * rewritten once for the set rather than once per member. Used by the snapshot-install path, which learns
-   * about every database it gave up on at the same moment.
-   * <p>
-   * Deliberately does NOT drive a resync per database the way {@link #handleUnexpectedApplyError} does: its one
-   * caller publishes a read floor beside each mark and leaves recovery to
-   * {@link #retryUnfilledSnapshotGap()}, which is what #6760 chose.
-   *
-   * @return the databases this call newly quarantined, empty when every one of them already was
-   */
-  // @VisibleForTesting
-  Set<String> quarantineDatabases(final Collection<String> dbNames, final DivergenceCause cause) {
-    if (dbNames == null || dbNames.isEmpty())
-      return Set.of();
-    synchronized (appliedIndexFileLock) {
-      ensureAppliedIndexLoaded();
-      final Set<String> added = new HashSet<>();
-      for (final String dbName : dbNames)
-        if (dbName != null && !dbName.isEmpty() && divergedDatabases.putIfAbsent(dbName, cause) == null)
-          added.add(dbName);
-      if (added.isEmpty())
-        return Set.of();
-      if (!persistAppliedIndexFile() && !closed)
-        LogManager.instance().log(this, Level.WARNING,
-            "Database(s) %s are quarantined (%s) but the quarantine could NOT be written to %s: a restart before "
-                + "this is fixed comes back without it. The log is not checkpointed while a database is "
-                + "quarantined, so the skipped entries stay replayable, but check that the .raft directory is "
-                + "writable and has free space (issue #7735)",
-            added, cause, getAppliedIndexFile());
-      return added;
-    }
-  }
-
-  /**
    * Clears the diverged-database set and the bounded-escalation counter after a snapshot resync has
    * restored consistent state across all databases. A resync always reinstalls every database from
    * the leader, so clearing the whole set (rather than a single database) matches what the resync
@@ -6336,17 +6855,17 @@ public class ArcadeStateMachine extends BaseStateMachine {
     // Same reasoning as clearDivergedDatabase: the persisted copy has to go with the in-memory one (issue #7735).
     synchronized (appliedIndexFileLock) {
       ensureAppliedIndexLoaded();
-      if (!divergedDatabases.isEmpty()) {
+      // A resync reinstalls every database, so every per-database read floor is satisfied too (issue #6760). The
+      // snapshot-install path re-publishes the floors of the databases it could NOT reinstall right after calling
+      // this, so clearing wholesale here stays correct. Same write as the quarantine (issue #8137)
+      if (!divergedDatabases.isEmpty() || !staleDatabaseAppliedFloors.isEmpty()) {
         divergedDatabases.clear();
+        staleDatabaseAppliedFloors.clear();
         persistAppliedIndexFile();
       }
     }
     lastDivergedResyncLogByDb.clear();
     divergedSwallowedErrors.set(0);
-    // A resync reinstalls every database, so every per-database read floor is satisfied too (issue #6760). The
-    // snapshot-install path re-publishes the floors of the databases it could NOT reinstall right after calling
-    // this, so clearing wholesale here stays correct.
-    staleDatabaseAppliedFloors.clear();
   }
 
   // @VisibleForTesting
@@ -6514,7 +7033,7 @@ public class ArcadeStateMachine extends BaseStateMachine {
       return;
     LogManager.instance().log(this, Level.WARNING,
         "Persistent follower lag detected (applied=%d, commit=%d): re-arming snapshot download from leader",
-        lastAppliedIndex.get(), raftHA.getCommitIndex());
+        lastAppliedIndex.get(), raftHA.getFollowerCommitIndex());
     lifecycleExecutor.submit(this::triggerSnapshotDownload);
   }
 

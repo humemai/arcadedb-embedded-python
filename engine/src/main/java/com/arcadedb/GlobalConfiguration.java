@@ -686,6 +686,18 @@ public enum GlobalConfiguration {
   SQL_STATEMENT_CACHE("arcadedb.sqlStatementCache", SCOPE.DATABASE, "Maximum number of parsed statements to keep in cache",
       Integer.class, 300),
 
+  SQL_LET_SUBQUERY_CACHE_SIZE("arcadedb.sql.letSubqueryCacheSize", SCOPE.DATABASE,
+      """
+      Maximum number of distinct correlated bindings whose result a per-record LET subquery \
+      (SELECT ... LET $x = (SELECT ...)) remembers within one execution of the enclosing query. When many rows feed \
+      the subquery the same values - many rows sharing one parent, office or category - the subquery runs once per \
+      distinct binding instead of once per row. The binding is the set of outer variables the subquery actually \
+      read, observed while it ran. A subquery that calls a non-deterministic or user-defined function, or that is \
+      not a read-only statement, is never cached, and any change to the database drops the cache. Least recently \
+      used bindings are evicted first; results larger than 1000 rows are not cached, so one LET can retain up to \
+      this many times 1000 rows for the length of the execution. 0 disables the cache.""",
+      Integer.class, 128),
+
   SQL_MAX_EXPRESSION_DEPTH("arcadedb.sql.maxExpressionDepth", SCOPE.DATABASE,
       """
       Maximum nesting depth allowed for parentheses in a single SQL statement (WHERE conditions, sub-expressions, \
@@ -2114,8 +2126,12 @@ public enum GlobalConfiguration {
       installed all of the cluster's replicated security documents: server-users.jsonl, server-groups.json, \
       server-api-tokens.json (issues #7532, #7819). Until they land such a node enforces credentials from its own \
       config directory rather than the cluster's. A node that has been a member since the first configuration \
-      it observed - a statically configured cluster, restarted or not - is never held, even when its cluster has \
-      never replicated a security document. Requires arcadedb.server.readinessRequiresHA, and is bounded on \
+      it observed - a statically configured cluster, restarted or not - is not held for that, even when its \
+      cluster has never replicated a security document; it is held only after it catches up by a snapshot \
+      install from the leader, which carries no security document, until the leader confirms its copies or \
+      seeds them (issue #8432), a hold that survives a restart until that confirmation arrives (issue #8465). \
+      A node that leads is never held, since nobody can confirm its copies while it leads: it is held again, \
+      with a fresh window, once it steps down - unless its window had already expired, which stays final. Requires arcadedb.server.readinessRequiresHA, and is bounded on \
       purpose: when the window expires the node reports READY and logs, once, at SEVERE, exactly which documents \
       never converged, so a scale-up or a rolling restart cannot stall behind a seed nobody is going to send. 0 \
       disables the wait entirely.""",
@@ -2282,7 +2298,7 @@ public enum GlobalConfiguration {
       Long.class, 5000L),
 
   HA_SNAPSHOT_INSTALL_BACKUP_WAIT_MS("arcadedb.ha.snapshotInstallBackupWaitMs", SCOPE.SERVER,
-      "Milliseconds a snapshot install waits for a backup or an import of the same database, already running on this node, to finish before it replaces the database files anyway. An install applies a committed Raft entry, so the wait has to be bounded: when it expires the install proceeds and logs a warning. 0 refuses to wait at all.",
+      "Milliseconds a snapshot install, or the apply of a replicated drop database, waits for a backup, an export or an import of the same database, already running on this node, to finish before it replaces or drops the database files anyway. Both apply a committed Raft entry, so the wait has to be bounded: when it expires the operation proceeds and logs a warning. 0 refuses to wait at all.",
       Long.class, 60_000L),
 
   HA_PROXY_READ_TIMEOUT("arcadedb.ha.proxyReadTimeout", SCOPE.SERVER,

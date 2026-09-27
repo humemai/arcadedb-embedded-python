@@ -23,6 +23,7 @@ import com.arcadedb.log.LogManager;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
 import com.arcadedb.server.ArcadeDBServer;
+import com.arcadedb.server.http.handler.LeaderDial;
 import org.apache.ratis.server.protocol.TermIndex;
 
 import java.io.IOException;
@@ -97,6 +98,22 @@ public final class LeaderDatabaseQuery {
    */
   public static BootstrapState fetch(final String httpAddr, final String httpsAddr, final String clusterToken,
       final long timeoutMs, final ArcadeDBServer server) throws IOException, InterruptedException {
+    return send(httpAddr, httpsAddr, clusterToken, timeoutMs, server, "{}");
+  }
+
+  /**
+   * Asks a peer for its latest Raft snapshot {@link TermIndex} only (issue #8374), with {@code markerOnly} set so the
+   * peer skips fingerprinting every database. The returned {@link BootstrapState#databases()} is empty from a peer
+   * that honours the flag; a peer that predates it ignores the flag and answers in full, which is still correct.
+   */
+  public static BootstrapState fetchSnapshotMarker(final String httpAddr, final String httpsAddr,
+      final String clusterToken, final long timeoutMs, final ArcadeDBServer server) throws IOException, InterruptedException {
+    return send(httpAddr, httpsAddr, clusterToken, timeoutMs, server,
+        new JSONObject().put(PostBootstrapStateHandler.MARKER_ONLY, true).toString());
+  }
+
+  private static BootstrapState send(final String httpAddr, final String httpsAddr, final String clusterToken,
+      final long timeoutMs, final ArcadeDBServer server, final String body) throws IOException, InterruptedException {
 
     final boolean useSSL = server != null && server.getConfiguration().getValueAsBoolean(GlobalConfiguration.NETWORK_USE_SSL);
     final Endpoint endpoint = chooseEndpoint(httpAddr, httpsAddr, useSSL);
@@ -111,7 +128,7 @@ public final class LeaderDatabaseQuery {
         .uri(URI.create(endpoint.url()))
         .timeout(Duration.ofMillis(timeoutMs))
         .header("Content-Type", "application/json")
-        .POST(HttpRequest.BodyPublishers.ofString("{}"));
+        .POST(HttpRequest.BodyPublishers.ofString(body));
     if (clusterToken != null && !clusterToken.isBlank())
       builder.header("X-ArcadeDB-Cluster-Token", clusterToken);
     builder.header("X-ArcadeDB-Forwarded-User", RaftHAServer.FORWARDED_ROOT_USER);
@@ -126,10 +143,14 @@ public final class LeaderDatabaseQuery {
           .connectTimeout(Duration.ofSeconds(5))
           .sslContext(SnapshotInstaller.buildSSLContext(server))
           .build()) {
-        return parse(client.send(request, HttpResponse.BodyHandlers.ofString()), endpoint.url());
+        return parse(LeaderDial.sendBounded(client, request, HttpResponse.BodyHandlers.ofString(), timeoutMs),
+            endpoint.url());
       }
     }
-    return parse(HTTP.send(request, HttpResponse.BodyHandlers.ofString()), endpoint.url());
+    // Bounded over the whole exchange, body included (issue #8325): on JDK 21-25 the request timeout stops at the
+    // response headers, so a peer that stalled inside its body parked the caller unbounded. The request timeout stays:
+    // on JDK 26+ it covers the same span with the same value, and either one firing is the same HttpTimeoutException.
+    return parse(LeaderDial.sendBounded(HTTP, request, HttpResponse.BodyHandlers.ofString(), timeoutMs), endpoint.url());
   }
 
   /**
