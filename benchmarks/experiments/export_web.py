@@ -5671,15 +5671,23 @@ def _query_budget_notes(table_id):
 
     notes = []
     of = f" of {asked}" if asked else ""
-    lead = (f"{_count_word(total).capitalize()} query cells on this table stopped at "
+    # ONE CELL READS AS ONE (2026-09-28): the plural-only template would print
+    # "One query cells ... in those cells" the first time a table had a single
+    # censored query (found on `repin-prep`, where the graph reads' budget
+    # censors exactly one).
+    one = total == 1
+    lead = (f"{_count_word(total).capitalize()} query {'cell' if one else 'cells'} on this "
+            f"table stopped at "
             + (f"the {one_budget:g} s budget every engine here is given"
                if one_budget else "their per-query budget, the same for every engine here")
             # "over THOSE <counted>" and not "over the <counted> it reached":
             # `counted` is a noun phrase that already carries its own clause on
             # the document table ("iterations, the first of which is the cold
             # pass"), and anything appended to it lands inside that clause.
-            + f"; each one's p50 and p99 are over those {counted}, and every "
-              f"other query in those cells keeps its numbers.")
+            + (f"; its p50 and p99 are over those {counted}, and every other query in "
+               f"that cell keeps its numbers." if one else
+               f"; each one's p50 and p99 are over those {counted}, and every "
+               f"other query in those cells keeps its numbers."))
     notes.append(_gen(lead, _count_word(total).capitalize(),
                       f"{one_budget:g} s budget" if one_budget else "per-query budget"))
 
