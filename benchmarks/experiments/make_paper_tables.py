@@ -658,7 +658,8 @@ def load_canonical(apply_corpus=True):
               f"unenforced until 2026-09-19; BUGS F72): "
               + ", ".join(sorted(set(SEPT_UNSETTLED))))
     if UNSETTLED_DISK:
-        print(f"  dropped {len(UNSETTLED_DISK)} row(s) for an unsettled disk reading")
+        print(f"  blanked the disk reading of {len(UNSETTLED_DISK)} row(s): it had not settled; "
+              f"their other measurements stand")
     out = list(best.values())
     # ONE INSTRUMENT PER TABLE (DECISIONS #84). A row names the instrument it
     # was measured under (bench_common.INSTRUMENT; rows before 2026-10 carry
