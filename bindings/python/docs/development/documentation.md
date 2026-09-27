@@ -73,7 +73,7 @@ Documentation is versioned using [mike](https://github.com/jimporter/mike) and a
 
 3. **Users can view**:
     - Latest stable docs: <https://docs.humem.ai/arcadedb/>
-    - Specific version: <https://docs.humem.ai/arcadedb/X.Y.Z/>
+    - Specific version: `https://docs.humem.ai/arcadedb/X.Y.Z/` (replace `X.Y.Z` with the release)
     - Version selector in top-right corner
 
 ### Deployment Workflow
