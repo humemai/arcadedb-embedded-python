@@ -1,0 +1,178 @@
+/*
+ * HumemAI design tokens.
+ *
+ * One file: primitives (the oxblood ramp, tinted neutrals, type, space), then
+ * the semantic layer that pages read, for light and dark. Read the semantic
+ * names (--hm-text, --hm-brand, ...). The primitives exist so the semantic layer
+ * has something to point at, and so a new pairing can be checked before use.
+ *
+ * Every text and icon pairing used in the semantic layer is listed in
+ * scripts/check.py and must pass WCAG AA there: 4.5:1 for text, 3:1 for icons,
+ * borders of controls and focus rings. Reasons for each value live in
+ * docs/decisions.md.
+ */
+
+:root {
+  /* Oxblood, OKLCH hue 25 (400 sits at 22 so the light tint reads rose, not salmon).
+     700 is THE brand colour: #892122, 9.11:1 on white. */
+  --hm-oxblood-50: #FCF5F4;   /* oklch(0.975 0.008 25) */
+  --hm-oxblood-100: #FEEBE9;  /* oklch(0.955 0.020 25) */
+  --hm-oxblood-200: #FDD5D1;  /* oklch(0.905 0.045 25) */
+  --hm-oxblood-300: #F7B4AD;  /* oklch(0.830 0.080 25) */
+  --hm-oxblood-400: #E88E8B;  /* oklch(0.740 0.110 22)  brand on dark */
+  --hm-oxblood-500: #D6645E;  /* oklch(0.640 0.145 25) */
+  --hm-oxblood-600: #B63B39;  /* oklch(0.530 0.160 25)  focus ring on light */
+  --hm-oxblood-700: #892122;  /* oklch(0.420 0.140 25)  brand */
+  --hm-oxblood-800: #6A1819;  /* oklch(0.350 0.115 25) */
+  --hm-oxblood-900: #4A1212;  /* oklch(0.280 0.085 25) */
+  --hm-oxblood-950: #261210;  /* oklch(0.210 0.035 25)  tint on dark */
+
+  /* Neutrals lean toward the brand hue (OKLCH hue 25, chroma <= 0.012), so the
+     greys belong to the palette instead of being an unconsidered mid-grey. */
+  --hm-neutral-0: #FFFFFF;
+  --hm-neutral-50: #FBF8F8;   /* oklch(0.982 0.003 25) */
+  --hm-neutral-100: #F6F2F2;  /* oklch(0.965 0.004 25) */
+  --hm-neutral-200: #E8E3E2;  /* oklch(0.920 0.006 25) */
+  --hm-neutral-300: #D6CFCE;  /* oklch(0.860 0.008 25) */
+  --hm-neutral-400: #ABA2A1;  /* oklch(0.720 0.010 25) */
+  --hm-neutral-450: #928A89;  /* oklch(0.640 0.010 25) */
+  --hm-neutral-500: #7B7271;  /* oklch(0.560 0.012 25) */
+  --hm-neutral-600: #6A6160;  /* oklch(0.500 0.012 25) */
+  --hm-neutral-700: #4E4544;  /* oklch(0.400 0.012 25) */
+  --hm-neutral-800: #332C2B;  /* oklch(0.300 0.010 25) */
+  --hm-neutral-900: #1C1716;  /* oklch(0.210 0.008 25) */
+  --hm-neutral-950: #0F0B0B;  /* oklch(0.155 0.006 25) */
+
+  /* Danger is a burnt orange, not a red: a red error beside an oxblood brand
+     reads as more brand. Always pair it with words or an icon. */
+  --hm-danger-light: #BE4400; /* oklch(0.55 0.17 42), 5.23:1 on white */
+  --hm-danger-dark: #F59569;  /* oklch(0.76 0.13 45), 8.75:1 on --hm-neutral-950 */
+
+  /* Type. Newsreader for headlines, Schibsted Grotesk for everything else,
+     DM Mono for code. The wordmark is Schibsted Grotesk 800, outlined. */
+  --hm-font-display: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --hm-font-text: "Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --hm-font-mono: "DM Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --hm-weight-display: 500;
+  --hm-weight-regular: 400;
+  --hm-weight-medium: 500;
+  --hm-weight-semibold: 600;
+  --hm-weight-bold: 700;
+
+  /* One scale, ratio 1.25, from a 16px phone body. Desktop steps up once, at
+     1000px, to a 17px body (see the media block below). Nothing below 12px, and
+     12px is for uppercase labels only. */
+  --hm-text-xs: 0.75rem;     /* 12  labels */
+  --hm-text-sm: 0.875rem;    /* 14  captions, table cells */
+  --hm-text-base: 1rem;      /* 16  body */
+  --hm-text-lg: 1.25rem;     /* 20 */
+  --hm-text-xl: 1.5625rem;   /* 25 */
+  --hm-text-2xl: 1.9375rem;  /* 31 */
+  --hm-text-3xl: 2.4375rem;  /* 39 */
+  --hm-text-4xl: 3.0625rem;  /* 49 */
+  --hm-text-display: clamp(2.4375rem, 6vw, 4.75rem);
+
+  --hm-leading-tight: 1.08;  /* display headlines */
+  --hm-leading-snug: 1.25;   /* section headings */
+  --hm-leading-body: 1.65;   /* running text */
+  --hm-tracking-display: -0.015em;
+  --hm-tracking-label: 0.08em;
+  --hm-measure: 68ch;        /* prose column: 60-75 characters per line */
+
+  /* Space: a 4px grid. */
+  --hm-space-1: 0.25rem;
+  --hm-space-2: 0.5rem;
+  --hm-space-3: 0.75rem;
+  --hm-space-4: 1rem;
+  --hm-space-5: 1.25rem;
+  --hm-space-6: 1.5rem;
+  --hm-space-8: 2rem;
+  --hm-space-10: 2.5rem;
+  --hm-space-12: 3rem;
+  --hm-space-16: 4rem;
+  --hm-space-20: 5rem;
+  --hm-space-24: 6rem;
+
+  --hm-radius-sm: 0.375rem;
+  --hm-radius-md: 0.625rem;
+  --hm-radius-lg: 1rem;
+  --hm-radius-pill: 999px;
+
+  /* ── Semantic layer, light ── */
+  color-scheme: light;
+  --hm-bg: var(--hm-neutral-0);
+  --hm-surface: var(--hm-neutral-0);
+  --hm-surface-muted: var(--hm-neutral-50);
+  --hm-surface-sunken: var(--hm-neutral-100);
+  --hm-text: var(--hm-neutral-900);
+  --hm-text-muted: var(--hm-neutral-600);
+  --hm-text-subtle: var(--hm-neutral-500);  /* on --hm-bg and --hm-surface only */
+  --hm-border: var(--hm-neutral-200);
+  --hm-border-strong: var(--hm-neutral-300);
+  --hm-border-control: var(--hm-neutral-500); /* inputs: 3:1 against the page */
+  --hm-brand: var(--hm-oxblood-700);
+  --hm-brand-hover: var(--hm-oxblood-800);
+  --hm-on-brand: var(--hm-neutral-0);
+  --hm-link: var(--hm-oxblood-700);
+  --hm-link-hover: var(--hm-oxblood-800);
+  --hm-tint: var(--hm-oxblood-100);
+  --hm-tint-text: var(--hm-oxblood-700);
+  --hm-focus: var(--hm-oxblood-600);
+  --hm-danger: var(--hm-danger-light);
+}
+
+@media (min-width: 1000px) {
+  :root {
+    --hm-text-base: 1.0625rem; /* 17 */
+  }
+}
+
+/* Dark: the OS preference unless the page pins data-theme="light". Pin
+   data-theme="dark" to force it. Only the semantic layer changes. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --hm-bg: var(--hm-neutral-950);
+    --hm-surface: var(--hm-neutral-900);
+    --hm-surface-muted: var(--hm-neutral-900);
+    --hm-surface-sunken: var(--hm-neutral-950);
+    --hm-text: var(--hm-neutral-50);
+    --hm-text-muted: var(--hm-neutral-400);
+    --hm-text-subtle: var(--hm-neutral-450);
+    --hm-border: var(--hm-neutral-800);
+    --hm-border-strong: var(--hm-neutral-700);
+    --hm-border-control: var(--hm-neutral-450);
+    --hm-brand: var(--hm-oxblood-400);
+    --hm-brand-hover: var(--hm-oxblood-300);
+    --hm-on-brand: var(--hm-oxblood-950);
+    --hm-link: var(--hm-oxblood-400);
+    --hm-link-hover: var(--hm-oxblood-300);
+    --hm-tint: var(--hm-oxblood-950);
+    --hm-tint-text: var(--hm-oxblood-300);
+    --hm-focus: var(--hm-oxblood-400);
+    --hm-danger: var(--hm-danger-dark);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --hm-bg: var(--hm-neutral-950);
+  --hm-surface: var(--hm-neutral-900);
+  --hm-surface-muted: var(--hm-neutral-900);
+  --hm-surface-sunken: var(--hm-neutral-950);
+  --hm-text: var(--hm-neutral-50);
+  --hm-text-muted: var(--hm-neutral-400);
+  --hm-text-subtle: var(--hm-neutral-450);
+  --hm-border: var(--hm-neutral-800);
+  --hm-border-strong: var(--hm-neutral-700);
+  --hm-border-control: var(--hm-neutral-450);
+  --hm-brand: var(--hm-oxblood-400);
+  --hm-brand-hover: var(--hm-oxblood-300);
+  --hm-on-brand: var(--hm-oxblood-950);
+  --hm-link: var(--hm-oxblood-400);
+  --hm-link-hover: var(--hm-oxblood-300);
+  --hm-tint: var(--hm-oxblood-950);
+  --hm-tint-text: var(--hm-oxblood-300);
+  --hm-focus: var(--hm-oxblood-400);
+  --hm-danger: var(--hm-danger-dark);
+}
