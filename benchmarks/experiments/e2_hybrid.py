@@ -362,10 +362,17 @@ class ArcadeE2:
     def _rank_candidates(self, qvec, cands, k):
         if not cands:
             return []
+        # THE QUERY VECTOR AS A JAVA float[], as _vec_topk and hybrid_op already
+        # pass it (BUGS F145, 2026-09-27). A Python list crosses JPype one
+        # element at a time and reaches the function as a List<Double>; the
+        # array crosses once. Laptop, this lane's 50,000 products, 39
+        # candidates, measured with the October statement (ids in the text):
+        # 1.42 ms -> 1.00 ms p50; with the ids bound too, 0.80 ms. The same
+        # top ten on 300 of 300 queries (`.notes` repros/filtered-search).
         rows = self.db.query(
             "sql", f"SELECT pid, vector.l2Distance(embedding, :q) AS d FROM Product "
                    f"WHERE pid IN :ids ORDER BY d ASC LIMIT {int(k)}",
-            {"q": [float(x) for x in qvec], "ids": [int(p) for p in cands]}).to_list()
+            {"q": self._a.to_java_float_array(qvec), "ids": [int(p) for p in cands]}).to_list()
         return [int(r["pid"]) for r in rows]
 
     def total_views(self):
