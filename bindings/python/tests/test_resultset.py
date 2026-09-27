@@ -380,3 +380,67 @@ def test_result_to_json_with_arrays(temp_db_path):
 
         assert '"tags"' in json_str
         assert '["a","b","c"]' in json_str or '["a", "b", "c"]' in json_str
+
+
+def test_to_dict_one_crossing_matches_the_per_property_path(temp_db_path):
+    """Result.to_dict() reads a row in one bridge call (RowAccess); it must give
+    exactly what reading each property on its own gives, for every value type."""
+    from datetime import date, datetime
+    from decimal import Decimal
+
+    import arcadedb_embedded as arcadedb
+    from arcadedb_embedded.results import _bridge_class
+    from arcadedb_embedded.type_conversion import convert_java_to_python
+
+    assert _bridge_class("RowAccess") is not None, "the bridge jar must carry RowAccess"
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE Mixed")
+        db.command("sql", "CREATE PROPERTY Mixed.stamp DATETIME")
+        db.command("sql", "CREATE PROPERTY Mixed.on_day DATE")
+        db.command("sql", "CREATE PROPERTY Mixed.price DECIMAL")
+        with db.transaction():
+            doc = db.new_document("Mixed")
+            doc.set("i", 42).set("big", 2**40).set("f", 3.25).set("s", "text")
+            doc.set("b", True).set("nothing", None).set("tags", ["a", "b"])
+            doc.set("nested", {"k": 1, "inner": {"x": [1, 2]}})
+            doc.set("stamp", datetime(2026, 9, 27, 12, 30, 5))
+            doc.set("on_day", date(2026, 9, 27)).set("price", Decimal("12.50"))
+            doc.set("blob", b"\xff\x00")
+            doc.save()
+
+        for query in (
+            "SELECT FROM Mixed",
+            "SELECT i, s, nested, price FROM Mixed",
+            "SELECT count(*) AS n, max(f) AS top FROM Mixed",
+        ):
+            row = db.query("sql", query).first()
+            per_property = {
+                name: convert_java_to_python(row._java_result.getProperty(name))
+                for name in (str(n) for n in row._java_result.getPropertyNames())
+            }
+            one_crossing = row.to_dict()
+            assert one_crossing == per_property, query
+            assert list(one_crossing) == list(per_property), query  # same key order
+
+        # to_list() fetches rows in batches (RowAccess.nextRows): same dicts,
+        # same order, as reading each row and property on its own, including
+        # after rows were already taken from the same result set.
+        with db.transaction():
+            for i in range(1200):
+                db.command("sql", "INSERT INTO Mixed SET i = ?, s = ?", i, f"s{i}")
+        expected = []
+        rs = db.query("sql", "SELECT i, s, price FROM Mixed ORDER BY i")
+        for r in rs:
+            expected.append(
+                {
+                    str(n): convert_java_to_python(r._java_result.getProperty(str(n)))
+                    for n in r._java_result.getPropertyNames()
+                }
+            )
+        assert (
+            db.query("sql", "SELECT i, s, price FROM Mixed ORDER BY i").to_list()
+            == expected
+        )
+        rs = db.query("sql", "SELECT i, s, price FROM Mixed ORDER BY i")
+        assert rs.first() is not None
+        assert rs.to_list() == expected[1:]

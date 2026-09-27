@@ -118,12 +118,12 @@ arcadedb_embedded/
 ### Java Bridge Jar
 
 Alongside the engine JARs, the wheel ships `arcadedb-python-bridge.jar` —
-six small Java helpers (`RowBatcher`, `ColumnBatcher`, `DocumentBatcher`,
-`EdgeBatcher`, `VertexBatcher`, and `TimeSeriesBatcher`, sources in
+seven small Java helpers (`RowBatcher`, `RowAccess`, `ColumnBatcher`,
+`DocumentBatcher`, `EdgeBatcher`, `VertexBatcher`, and `TimeSeriesBatcher`, sources in
 `bindings/python/src/java/com/arcadedb/python/`)
 that move per-row/per-record loops to the Java side so bulk operations cost
 one JPype crossing per batch instead of several per row. It backs
-`to_json_list()`, `to_columns()`/`to_dataframe()`, `insert_many()`,
+`to_list()` and `Result.to_dict()`, `to_json_list()`, `to_columns()`/`to_dataframe()`, `insert_many()`,
 `GraphBatch.new_edges()`, the `create_vertices()` bulk path, and
 `export_to_csv()`; every caller falls back to pure JPype if the jar is
 absent. `AsyncExecutor.append_samples()` also uses it (`DocumentBatcher` for

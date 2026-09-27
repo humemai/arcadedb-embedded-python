@@ -119,21 +119,23 @@ class ResultSet:
         """
         Convert all results to list of dictionaries.
 
-        More efficient than iterating manually as it processes in bulk, but it
-        still builds one Python dict per row, and each VALUE crosses the JVM
-        boundary on its own -- which is what buys full Python-type fidelity and
-        what makes this the slowest way to materialize a large result.
+        More efficient than iterating manually: rows come over from the JVM in
+        batches (the bridge's ``RowAccess``), but each value is still converted
+        to its Python type one by one, which is what buys full Python-type
+        fidelity and what keeps this the slowest way to materialize a large
+        result.
 
         For large results, in increasing order of how much they change your
         code:
 
         - ``to_json_list()`` returns the SAME shape, a list of dicts, and is
-          measured ~10x faster on a 10,000-row scan (482 ms against 48 ms).
+          measured ~5.5x faster on a 10,000-row, nine-property scan (578 ms
+          against 103 ms, laptop, 2026-09-27).
           The trade-off is JSON-native values: temporal values arrive as ISO
           strings and DECIMALs as floats, so it is a drop-in only when the
           result carries neither.
         - ``to_columns()``, ``to_dataframe()`` or ``to_arrow()`` move the data
-          as columns and are faster still (~16x on the same scan).
+          as columns and are faster still (~12x on the same scan: 47 ms).
 
         See the performance guide.
 
@@ -149,6 +151,25 @@ class ResultSet:
             >>> print(users[0])
             {'name': 'Alice', 'age': 30, 'email': 'alice@example.com'}
         """
+        if convert_types:
+            # The whole result is consumed, so rows can come over in batches:
+            # one crossing per batch instead of hasNext/next and a Result
+            # wrapper per row. iter_dicts() stays row by row, because a batch
+            # taken ahead would consume rows a lazy caller may still want.
+            row_access = _bridge_class("RowAccess")
+            if row_access is not None:
+                out: List[Dict[str, Any]] = []
+                while True:
+                    batch = row_access.nextRows(self._java_result_set, 512)
+                    if len(batch) == 0:
+                        return out
+                    for pair in batch:
+                        out.append(
+                            {
+                                str(name): convert_java_to_python(value)
+                                for name, value in zip(pair[0], pair[1])
+                            }
+                        )
         return list(self.iter_dicts(convert_types=convert_types))
 
     def iter_dicts(self, convert_types: bool = True) -> Iterator[Dict[str, Any]]:
@@ -823,6 +844,22 @@ class Result:
             >>> print(user_dict)
             {'name': 'Alice', 'age': 30, 'email': 'alice@example.com'}
         """
+        if convert_types:
+            # One crossing for the whole row (names and values) instead of one
+            # per property: a JPype call costs microseconds of dispatch, so a
+            # small row was dominated by the number of calls. The values are
+            # the engine's own objects, converted exactly as below.
+            row_access = _bridge_class("RowAccess")
+            if row_access is not None:
+                pair = row_access.namesAndValues(self._java_result)
+                names = tuple(str(name) for name in pair[0])
+                if self._property_names_cache is None:
+                    self._property_names_cache = names
+                return {
+                    name: convert_java_to_python(value)
+                    for name, value in zip(names, pair[1])
+                }
+
         property_names = self._property_names_tuple()
         if not convert_types:
             return {
