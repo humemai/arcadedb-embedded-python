@@ -1,0 +1,71 @@
+/*
+ * HumemAI theme for MkDocs Material. Pair it with, in mkdocs.yml:
+ *
+ *   theme:
+ *     font: { text: Schibsted Grotesk, code: DM Mono }
+ *     logo: brand/logo/mark-white.svg
+ *     favicon: brand/export/favicon.svg
+ *     palette:
+ *       - scheme: default   primary: custom   accent: custom
+ *       - scheme: slate     primary: custom   accent: custom
+ *   extra_css: [brand/css/mkdocs.css]
+ *
+ * The header stays oxblood in both schemes: white on #892122 is 9.11:1. Links
+ * follow the site: oxblood on light, rose (#E88E8B) on dark.
+ */
+@import url("https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400..600&display=swap");
+
+:root,
+[data-md-color-scheme="default"] {
+  --md-default-fg-color: rgba(28, 23, 22, 0.87);
+  --md-default-fg-color--light: #6A6160;
+}
+
+/* The brand colours match ANY primary or accent value, not only "custom".
+   Material stores a visitor's palette in localStorage, colour names included,
+   and re-applies it on the next visit; someone who read the docs when they were
+   teal would otherwise get data-md-color-primary="teal", whose rules in
+   palette.css (same specificity, loaded earlier) this sheet has to beat. */
+:root,
+[data-md-color-primary],
+[data-md-color-accent] {
+  --md-primary-fg-color: #892122;
+  --md-primary-fg-color--light: #B63B39;
+  --md-primary-fg-color--dark: #6A1819;
+  --md-primary-bg-color: #FFFFFF;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.7);
+  --md-accent-fg-color: #B63B39;
+  --md-accent-fg-color--transparent: rgba(137, 33, 34, 0.1);
+  --md-accent-bg-color: #FFFFFF;
+  --md-accent-bg-color--light: rgba(255, 255, 255, 0.7);
+  --md-typeset-a-color: #892122;
+}
+
+[data-md-color-scheme="slate"] {
+  /* Material tints slate's greys with --md-hue (HSL). 2 is oxblood's hue, so
+     the dark greys lean the same way as the site's. */
+  --md-hue: 2;
+}
+
+[data-md-color-scheme="slate"][data-md-color-primary],
+[data-md-color-scheme="slate"][data-md-color-accent] {
+  --md-accent-fg-color: #F7B4AD;
+  --md-accent-fg-color--transparent: rgba(232, 142, 139, 0.12);
+  --md-typeset-a-color: #E88E8B;
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  font-family: "Newsreader", "Iowan Old Style", Georgia, serif;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.md-typeset h1 {
+  color: var(--md-default-fg-color);
+}
+
+.md-header__title {
+  font-weight: 700;
+}

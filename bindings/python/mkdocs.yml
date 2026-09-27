@@ -11,18 +11,26 @@ copyright: Copyright &copy; 2026 humemai
 theme:
   name: material
   language: en
+  # HumemAI design system (github.com/humemai/design-system), vendored in
+  # docs/brand: oxblood palette, Schibsted Grotesk + DM Mono (Newsreader
+  # headings come from brand/css/mkdocs.css), the white mark in the header.
+  font:
+    text: Schibsted Grotesk
+    code: DM Mono
+  logo: brand/logo/mark-white.svg
+  favicon: brand/export/favicon.svg
   palette:
     # Light mode
   - scheme: default
-    primary: blue
-    accent: indigo
+    primary: custom
+    accent: custom
     toggle:
       icon: material/brightness-7
       name: Switch to dark mode
     # Dark mode
   - scheme: slate
-    primary: blue
-    accent: indigo
+    primary: custom
+    accent: custom
     toggle:
       icon: material/brightness-4
       name: Switch to light mode
@@ -125,7 +133,13 @@ extra:
     provider: mike
   version_tag: !ENV [MIKE_VERSION, latest]
 
+# The vendored design system's bookkeeping stays out of the built site.
+exclude_docs: |
+  brand/VERSION.md
+  brand/verify.sh
+
 extra_css:
+- brand/css/mkdocs.css
 - stylesheets/extra.css
 
 extra_javascript:
