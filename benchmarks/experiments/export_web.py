@@ -2548,14 +2548,14 @@ def _durability_note(entries, rows, table_lane=None):
     # exception is the engine with strict rows and no relaxed row (BUGS F52).
     _strict_only = seen.get("strict", set()) - seen.get("relaxed", set())
     if _strict_only:
-        names = ", ".join(sorted(_strict_only))
+        names = _join_and(sorted(_strict_only))
         _one = len(_strict_only) == 1
         parts.append(f"The exception on this table is {names}, which "
                      f"{'has' if _one else 'have'} no setting to relax and "
                      f"{'waits' if _one else 'wait'} for the disk at every commit; "
                      f"{'its' if _one else 'their'} write and transaction cells are paying for that.")
     if seen.get("unverified"):
-        names = ", ".join(sorted(seen["unverified"]))
+        names = _join_and(sorted(seen["unverified"]))
         parts.append(f"{names} exposes no durability setting at all and what it does at "
                      f"commit could not be established, so it is in neither class and its "
                      f"row says so rather than claiming one.")
@@ -2997,7 +2997,7 @@ def _lc_vector_note(rows):
     rd = med("lc10m", "read_session_ms")
     tail = (f", and a session with one search in it at 10M is {rd / 1000:.1f} s" if rd else "")
     return _gen("Known at this engine build: a vector database's no-op session close grows with the index ("
-                + ", ".join(parts) + ")" + tail
+                + _join_and(parts) + ")" + tail
                 + ", because the first search after a write started a full asynchronous graph rebuild and close() waited on it. "
                 "Filed as #7183, fixed upstream in #7191 for 26.10.1; the October re-pin re-measures it.",
                 *parts, (f"{rd / 1000:.1f} s" if rd else None))
@@ -3462,12 +3462,12 @@ def _durability_table(all_rows):
             _R("durability", "read_control"),
             _R("durability", "size_column"),
             _R("durability", "cell_property"),
-            *([_gen(f"{', '.join(_no_knob)} {_verb(_no_knob)} no setting to relax, "
+            *([_gen(f"{_join_and(_no_knob)} {_verb(_no_knob)} no setting to relax, "
                     f"established by tracing the commits rather than assumed, so "
                     f"each prints one number, in the column for a commit that "
                     f"waits. Reading it against the other column would be reading a "
                     f"choice the engine does not offer.", *_no_knob)] if _no_knob else []),
-            *([_gen(f"{', '.join(_unverified)} {_verb(_unverified)} no durability "
+            *([_gen(f"{_join_and(_unverified)} {_verb(_unverified)} no durability "
                     f"setting to read and what {'they do' if len(_unverified) > 1 else 'it does'} "
                     f"at commit could not be established from the engine, so the one "
                     f"number printed is in neither class. It is placed in the "
@@ -4739,7 +4739,7 @@ def _ingest_split_note(table):
     if not any("index s" in (e.get("metrics") or {}) for e in ents):
         return None
     lacking = sorted({str(e["backend"]) for e in ents if "index s" not in (e.get("metrics") or {})})
-    mid = (f"{', '.join(lacking)} record one timer only, because the index is built while "
+    mid = (f"{_join_and(lacking)} record one timer only, because the index is built while "
            f"ingesting or the adapter times no boundary, so their ingest s and index s are blank. "
            if lacking else "Every engine on this table has that boundary. ")
     return _gen("ingest s and index s are two timers where the engine has the boundary: inserting "
@@ -5657,8 +5657,8 @@ def _query_budget_notes(table_id):
                          + (" iterations" if first else "") + f"{reached})")
             first = False
         notes.append(_gen(f"{label} at {scale_label(lane, scale)}: "
-                          + ", ".join(parts) + ".",
-                          label, scale_label(lane, scale), ", ".join(parts)))
+                          + _join_and(parts) + ".",
+                          label, scale_label(lane, scale), _join_and(parts)))
     return notes
 
 
@@ -5685,10 +5685,10 @@ def _mutation_note(rows):
     parts = []
     if ran:
         parts.append("The insert and delete into a built index, and the recall "
-                     "after each, run at " + ", ".join(scale_label("l3d", s) for s in sorted(ran))
+                     "after each, run at " + _join_and(scale_label("l3d", s) for s in sorted(ran))
                      + " (" + "; ".join(sorted(set(ran.values()))) + ").")
     if skipped:
-        parts.append("They do not run at " + ", ".join(scale_label("l3d", s) for s in sorted(skipped))
+        parts.append("They do not run at " + _join_and(scale_label("l3d", s) for s in sorted(skipped))
                      + ", where those four columns are blank because the pass was "
                        "not asked for rather than because an engine failed it ("
                      + "; ".join(sorted(set(w for w in skipped.values() if w))) + ").")
