@@ -59,6 +59,7 @@ as-is so that JPype performs the conversion automatically.
 - `date` is converted to a `LocalDate`. If the Java types are unavailable it is
   combined with `time.min` and converted as a `datetime`.
 - Collection elements, set members, and map keys/values are converted recursively.
+- A `list` or `tuple` whose elements are all `int`, `float`, `str`, `bool`, or `None` crosses into the JVM as one `Object[]` rather than one call per element, with the same element types (`Long`, `Double`, `String`, `Boolean`, null). For a numeric vector a NumPy array through `to_java_float_array()` is still faster: it is copied as one buffer and needs no boxing.
 
 **Example:**
 

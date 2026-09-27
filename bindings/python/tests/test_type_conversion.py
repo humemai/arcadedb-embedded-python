@@ -390,6 +390,62 @@ def test_bytes_keep_every_byte(temp_db_path):
             assert bytes(b & 0xFF for b in data) == payload, key
 
 
+def test_scalar_list_crosses_as_one_array_with_the_same_types(temp_db_path):
+    """A list of plain scalars converts in one JVM call, element types unchanged.
+
+    The per-element path boxes int as Long, float as Double, bool as Boolean;
+    the one-array path must give exactly those, raise the same OverflowError
+    past 64 bits, and leave anything else (here a nested list) to the loop.
+    """
+    import jpype
+    import pytest
+    from arcadedb_embedded.type_conversion import convert_python_to_java
+
+    with arcadedb.create_database(temp_db_path) as db:
+        values = [1, -(2**63), 2**63 - 1, 1.5, float("inf"), "x", "", True, None]
+        for seq in (values, tuple(values)):
+            got = convert_python_to_java(seq)
+            assert str(got.getClass().getName()) == "java.util.ArrayList"
+            classes = [
+                (
+                    None
+                    if got.get(i) is None
+                    else str(got.get(i).getClass().getSimpleName())
+                )
+                for i in range(got.size())
+            ]
+            assert classes == [
+                "Long",
+                "Long",
+                "Long",
+                "Double",
+                "Double",
+                "String",
+                "String",
+                "Boolean",
+                None,
+            ]
+            got.add(jpype.JObject(0))  # still a growable ArrayList
+        with pytest.raises(OverflowError):
+            convert_python_to_java([1, 2**63])
+
+        nested = convert_python_to_java([1, [2, 3], {"k": 4}])
+        assert str(nested.get(1).getClass().getName()) == "java.util.ArrayList"
+        assert str(nested.get(2).getClass().getName()) == "java.util.HashMap"
+
+        db.command("sql", "CREATE DOCUMENT TYPE Item")
+        db.command("sql", "CREATE PROPERTY Item.k LONG")
+        db.command("sql", "CREATE INDEX ON Item (k) UNIQUE")
+        with db.transaction():
+            for k in range(100):
+                db.command("sql", "INSERT INTO Item SET k = ?", k)
+        ids = list(range(0, 100, 7))
+        rows = db.query(
+            "sql", "SELECT k FROM Item WHERE k IN :ids ORDER BY k", {"ids": ids}
+        ).to_list()
+        assert [r["k"] for r in rows] == ids
+
+
 def test_array_conversion(temp_db_path):
     """Test Java list to Python list conversion."""
     with arcadedb.create_database(temp_db_path) as db:

@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py){ .md-button }
 
-There are 14 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), date/datetime, Decimal, collections (list, set, dict), nested structures, the `property_names` accessor, and the `Result.to_dict()` / `Result.to_json()` helpers.
+There are 13 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), date/datetime and offset datetimes, Decimal, bytes, collections (list, set, dict), nested structures, the one-crossing path for lists of scalars, the `property_names` accessor, and the `Result.to_dict()` / `Result.to_json()` helpers.
 
 ## Key Types
 
@@ -34,6 +34,12 @@ assert abs(record.get("float_val") - 3.14) < 0.01
 assert record.get("bool_val") is True
 assert record.get("null_val") is None
 ```
+
+---
+
+### test_basic_type_conversion
+
+Stores a string, an int, a long at `2**63 - 1`, a float, a double, a boolean, and a null through SQL `INSERT`, and asserts each reads back with its value and its Python type (`str`, `int`, `float`, `bool`, `None`).
 
 ---
 
@@ -82,6 +88,12 @@ record = db.query("sql", "SELECT FROM DateTest").first()
 assert isinstance(record.get("created_date"), (date, datetime))
 assert isinstance(record.get("created_datetime"), datetime)
 ```
+
+---
+
+### test_offset_datetime_conversion
+
+An `OffsetDateTime` converts directly to a timezone-aware UTC `datetime`, and stored as a property it reads back as the same instant in UTC wall-clock time (naive), through `query()` and through `to_columns()`. Storing one used to drop the property silently (engine #4922).
 
 ---
 
@@ -231,6 +243,18 @@ with db.transaction():
     doc.set("unique_items", convert_python_to_java({"x", "y", "z"}))
     doc.save()
 ```
+
+---
+
+### test_bytes_keep_every_byte
+
+Python `bytes` and `bytearray` are stored as a Java `byte[]`, through `Document.set()` and a bound SQL parameter, and every byte survives, including bytes that are not UTF-8. They used to reach Java as a `String`: `b"Hello"` read back as `"Hello"` and `b"\xff\x00\xfe\x80"` as `""`, with no error. A `byte[]` reads back as a list of signed ints, so the test compares `bytes(b & 0xFF for b in data)`.
+
+---
+
+### test_scalar_list_crosses_as_one_array_with_the_same_types
+
+`convert_python_to_java()` hands a list or tuple whose elements are all `int`, `float`, `str`, `bool`, or `None` to the JVM as one `Object[]` instead of one `add()` call per element (126 us against 28 us for 39 ids on a laptop). The test pins what that must not change: the result is a growable `ArrayList`, the elements are `Long`, `Double`, `String`, `Boolean`, and null exactly as before, an int past 64 bits raises the same `OverflowError`, a list holding a nested list or a dict still converts element by element, and a bound `IN :ids` list selects the right rows.
 
 ---
 
