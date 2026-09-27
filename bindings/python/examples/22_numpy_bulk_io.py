@@ -28,6 +28,7 @@ Requirements:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import time
 from pathlib import Path
@@ -56,12 +57,15 @@ def bulk_documents(db, n_rows: int) -> None:
         f"({inserted / dt:,.0f} rows/s)"
     )
 
-    db.command("sql", "CREATE DOCUMENT TYPE BulkOrderP")
+    # The async writers are pinned one per bucket, so the parallel mode needs a
+    # type with several buckets: on the default single bucket it is no faster.
+    buckets = max(2, min(8, os.cpu_count() or 2))
+    db.command("sql", f"CREATE DOCUMENT TYPE BulkOrderP BUCKETS {buckets}")
     t0 = time.perf_counter()
     inserted = db.insert_many("BulkOrderP", rows, parallel=True)
     dt = time.perf_counter() - t0
     print(
-        f"async parallel writers: {inserted:,} rows in {dt:.2f}s "
+        f"async parallel writers ({buckets} buckets): {inserted:,} rows in {dt:.2f}s "
         f"({inserted / dt:,.0f} rows/s)"
     )
 

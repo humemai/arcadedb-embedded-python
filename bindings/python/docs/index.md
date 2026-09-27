@@ -107,8 +107,8 @@ are doing.
     `db.query(...)`.
 - For file-driven imports or restore flows, use SQL `IMPORT DATABASE` or the narrow
     `db.import_documents(...)` wrapper when you specifically need document-file import.
-- For bulk document ingest from Python, prefer `db.insert_many(...)` (optionally with
-    `parallel=True`), which crosses the FFI boundary once per batch.
+- For bulk document ingest from Python, prefer `db.insert_many(...)`, which crosses
+    the FFI boundary once per batch; add `parallel=True` on a type created with several buckets (`CREATE DOCUMENT TYPE T BUCKETS n`); on the default single bucket it is no faster.
 - The async executor's SQL command path (`db.async_executor().command(...)`) is not a
     bulk-ingest path: above parallel level 1 it silently discarded records before
     26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic commit is now

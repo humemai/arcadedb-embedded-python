@@ -291,7 +291,8 @@ print(async_exec.is_transaction_use_wal())  # True
 The async executor schedules SQL/OpenCypher work and a small set of record-level graph
 and time-series operations. Record creation is available via
 [`create_record`](#create_record); updates and deletes go through `command(...)` with
-SQL. For bulk ingest, use `Database.insert_many(..., parallel=True)` for documents and
+SQL. For bulk ingest, use `Database.insert_many(..., parallel=True)` for documents (on a
+type with several buckets: the writers are pinned one per bucket) and
 `Database.graph_batch(...)` for graphs; `command(...)` is not a bulk-write path (#7615,
 see the warning at the top of this page).
 

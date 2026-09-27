@@ -46,8 +46,8 @@ default Python-side ingest path right now.
 
 - For focused ingest benchmarks, use Example 15 and 16 style comparisons across
     transactional SQL, the batch helpers, and SQL import rather than assuming one winner.
-- For bulk document ingest from Python, prefer `db.insert_many(...)` (optionally with
-    `parallel=True`), which batches rows across the FFI boundary; see Example 22.
+- For bulk document ingest from Python, prefer `db.insert_many(...)`, which batches
+    rows across the FFI boundary; see Example 22. Add `parallel=True` on a type created with several buckets (`CREATE DOCUMENT TYPE T BUCKETS n`); on the default single bucket it is no faster.
 - Treat `db.import_documents(...)` as a narrow convenience wrapper, not as the default
     ingest story for Python.
 - Do not use the async executor's SQL `command(...)` as an ingest path. Above one async

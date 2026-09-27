@@ -501,7 +501,11 @@ creation). Manages its own transactions unless one is already active.
   committed the caller's open transaction every `commit_every` rows
   (fixed 2026-09-27).
 - `parallel` (bool): Route rows through the async executor's parallel
-  bucket writers and wait for completion (out-of-order writes)
+  bucket writers and wait for completion (out-of-order writes). The writers
+  are pinned one per bucket, so this is faster only on a type created with
+  several buckets (`CREATE DOCUMENT TYPE T BUCKETS n`): on the default single
+  bucket it measured no faster than the synchronous mode, and 2.5x faster at
+  8 buckets on 4 cores (2026-09-27).
 
 **Returns:**
 

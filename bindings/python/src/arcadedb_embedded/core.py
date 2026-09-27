@@ -249,7 +249,11 @@ class Database:
             commit_every: Transaction batch size for the synchronous mode.
             parallel: If True, route rows through the async executor's
                 parallel bucket writers and wait for completion before
-                returning (higher throughput, out-of-order writes).
+                returning (out-of-order writes). The writers are pinned one
+                per bucket, so this is faster only on a type created with
+                several buckets (``CREATE DOCUMENT TYPE T BUCKETS n``): on
+                the default single bucket it measured no faster than the
+                synchronous mode, and 2.5x faster at 8 buckets on 4 cores.
 
         Returns:
             Number of documents inserted.
