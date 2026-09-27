@@ -20,6 +20,7 @@ Deliberately unchanged vs graph_common: OLTP/OLAP Cypher templates and all
 tunables, so synthetic-vs-LDBC runs differ ONLY in data.
 """
 import csv
+import datetime
 import os
 import sys
 from pathlib import Path
@@ -28,6 +29,22 @@ from graph_common import (OLAP_ITERATIONS, OLAP_QUERIES, OLTP_READS,
                           OLTP_WRITE, SCALE_OLTP_QUERIES as _SYN_QUERIES)
 
 _REF_YEAR = 2026  # age reference; fixed so re-runs are identical
+
+
+def _birth_year(raw):
+    """The year of an LDBC `birthday` field.
+
+    OUR CORPUS WRITES EPOCH MILLISECONDS (the LongDateFormatter serializer,
+    named in this module's docstring): `628646400000` is 1989-12-03. Until
+    2026-09-28 this read `raw[:4]` as the year, so "6286" made every age
+    max(0, 2026 - 6286) = 0 and the graph lane's `x.age > 30` matched nobody
+    (BUGS F146). An ISO date from the other serializers still reads as one.
+    """
+    try:
+        ms = int(raw)
+    except ValueError:
+        return int(raw[:4]) if raw[:4].isdigit() else 1980
+    return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).year
 
 # Person counts of the OFFICIAL datasets. Kept for the scale names and as a
 # progress hint; the streams read whatever the files actually contain.
@@ -154,7 +171,7 @@ def gen_persons(scale):
     for n, row in enumerate(rows):
         if PERSON_LIMIT and n >= PERSON_LIMIT:
             break
-        birth_year = int(row[i_bd][:4]) if row[i_bd][:4].isdigit() else 1980
+        birth_year = _birth_year(row[i_bd])
         yield (int(row[i_id]), f"{row[i_fn]} {row[i_ln]}",
                max(0, _REF_YEAR - birth_year), f"city_{row[i_place]}")
 

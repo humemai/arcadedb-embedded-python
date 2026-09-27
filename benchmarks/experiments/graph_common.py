@@ -41,6 +41,20 @@ OLAP_ITERATIONS = int(_os.environ.get("BENCH_GRAPH_OLAP_ITER") or 100)
 # a hundred.
 OLAP_BUDGET_S = float(_os.environ.get("BENCH_GRAPH_OLAP_BUDGET_S") or 300.0)
 
+# THE TRANSACTIONAL READS GET THE SAME KIND OF BUDGET (DECISIONS #120). One
+# per read, covering both of its passes over the start set; a read that spends
+# it stops, keeps its percentiles over the starts it answered, and records
+# `<read>_censored`, `<read>_budget_s` and `<read>_iters` as the analytics
+# queries do, so the other reads and the writes in the cell keep their numbers.
+# Until the re-pin one slow read timed the whole cell out: with the three-hop
+# filter keeping half (BUGS F146), SurrealDB embedded's 2.3.10 core dedups
+# quadratically and its SF1 cell hit the one-hour cap with nothing recorded.
+# 1,800 s is the documents lane's per-query budget (#100a); budget_lookup
+# clamps it to a read's share of the cell cap (540 s at SF1, the full 1,800 s
+# at SF10). The slowest engine that answers, MongoDB, spent about 220 s on the
+# three-hop read's two passes at SF1 on the laptop.
+OLTP_READ_BUDGET_S = float(_os.environ.get("BENCH_GRAPH_READ_BUDGET_S") or 1800.0)
+
 GRAPH_SEED = 20260708
 PICK_SEED = 777
 
@@ -89,6 +103,15 @@ def pick_query_ids(n_persons, n_queries, seed=PICK_SEED):
 # extension#75) pastes into its own SQL/PGQ texts and says so on its class.
 #   (WHERE form, not inline property maps — portable across ArcadeDB
 #   opencypher, Neo4j, and LadybugDB)
+# THE FAR-END FILTER OF `hop3f`, one number for every engine's spelling of the
+# query (Cypher here; SQL/PGQ, SurrealQL, AQL, and the MongoDB pipeline in
+# l2_graph.py read it too). It was 30 through October, when every LDBC age was
+# 0 (BUGS F146: the epoch-millisecond birthday was read as a date string), so
+# the filter matched nobody. Parsed correctly, LDBC ages span 36-46 at SF1 and
+# SF10, so 30 would match everybody; 41 keeps 49.7% (SF1) and 49.3% (SF10),
+# which is a filter that filters.
+HOP3F_MIN_AGE = 41
+
 OLTP_READS = {
     # ALIASED RETURN COLUMNS (2026-10). `RETURN p.name, p.age` gives the column
     # the driver's own spelling -- "p.name" through the Neo4j driver, a
@@ -104,9 +127,10 @@ OLTP_READS = {
              "WHERE p.id = $id RETURN count(DISTINCT fof) AS n"),
     # 2026-10 (DECISIONS #82): three hops with a property filter on the far
     # end, the interactive workload's characteristic shape, where the planner
-    # decides whether the filter or the expansion goes first.
+    # decides whether the filter or the expansion goes first. The threshold is
+    # HOP3F_MIN_AGE, shared by every engine's spelling (BUGS F146).
     "hop3f": ("MATCH (p:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person)-[:KNOWS]->(x:Person) "
-              "WHERE p.id = $id AND x.age > 30 RETURN count(DISTINCT x) AS n"),
+              "WHERE p.id = $id AND x.age > " + str(HOP3F_MIN_AGE) + " RETURN count(DISTINCT x) AS n"),
 }
 # write op: create a person and link them to an existing one (one txn).
 # $name is "w" + new_id, passed by the caller, so the text has no string

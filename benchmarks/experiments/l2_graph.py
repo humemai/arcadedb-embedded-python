@@ -23,9 +23,9 @@ import mongo_common
 
 import budget_lookup
 import graph_common
-from graph_common import (HOP3_VISITED, LSQB_QUERIES, NA_LSQB_NO_MESSAGE_HALF,
+from graph_common import (HOP3_VISITED, HOP3F_MIN_AGE, LSQB_QUERIES, NA_LSQB_NO_MESSAGE_HALF,
                           OLAP_BUDGET_S, OLAP_DIGEST, OLAP_ITERATIONS, OLAP_QUERIES,
-                          OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
+                          OLTP_READ_BUDGET_S, OLTP_READS, OLTP_WRITE, OLTP_DELETE, OLTP_UPDATE,
                           PERSON_STATE_DIGEST, READ_DIGEST, SCALE_OLTP_QUERIES,
                           SCALE_PERSONS, UPDATE_AGE, VISITED_DIGEST, VISITED_SAMPLE,
                           gen_edges, gen_persons, pick_query_ids)
@@ -1317,7 +1317,7 @@ class DuckpgqGraph(Base):
                  "-[k2:knows]->(fof:Person) COLUMNS (fof.id AS fof))"),
         "hop3f": ("SELECT count(DISTINCT x) AS n FROM GRAPH_TABLE (pg "
                   "MATCH (p:Person WHERE p.id = {id})-[k1:knows]->(m1:Person)"
-                  "-[k2:knows]->(m2:Person)-[k3:knows]->(x:Person WHERE x.age > 30) "
+                  "-[k2:knows]->(m2:Person)-[k3:knows]->(x:Person WHERE x.age > " + str(HOP3F_MIN_AGE) + ") "
                   "COLUMNS (x.id AS x))"),
     }
     VISITED = ("SELECT count(DISTINCT x) AS n FROM GRAPH_TABLE (pg "
@@ -1711,7 +1711,7 @@ class SurrealGraph(Base):
         "point": "SELECT name, age FROM ONLY $p",
         "hop1": "SELECT count(->knows->person) AS n, math::mean(->knows->person.age) AS a FROM ONLY $p",
         "hop2": "SELECT array::len(array::distinct(->knows->person->knows->person)) AS n FROM ONLY $p",
-        "hop3f": ("SELECT array::len(array::distinct(->knows->person->knows->person->knows->(person WHERE age > 30))) "
+        "hop3f": ("SELECT array::len(array::distinct(->knows->person->knows->person->knows->(person WHERE age > " + str(HOP3F_MIN_AGE) + "))) "
                   "AS n FROM ONLY $p"),
     }
 
@@ -2158,7 +2158,7 @@ class ArangoGraph(Base):
         # uniqueness matches Cypher's relationship isomorphism.
         "hop2": ("LET s = (FOR v IN 2..2 OUTBOUND CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
                  "RETURN LENGTH(s)"),
-        "hop3f": ("LET s = (FOR v IN 3..3 OUTBOUND CONCAT('person/', @k) knows FILTER v.age > 30 RETURN DISTINCT v._key) "
+        "hop3f": ("LET s = (FOR v IN 3..3 OUTBOUND CONCAT('person/', @k) knows FILTER v.age > " + str(HOP3F_MIN_AGE) + " RETURN DISTINCT v._key) "
                   "RETURN LENGTH(s)"),
     }
     VISITED = ("LET s = (FOR v IN 3..3 OUTBOUND CONCAT('person/', @k) knows RETURN DISTINCT v._key) "
@@ -2473,7 +2473,7 @@ class MongoGraph(Base):
                 {"$lookup": {"from": "person", "localField": "e3.dst",
                              "foreignField": "_id", "as": "x"}},
                 {"$unwind": "$x"},
-                {"$match": {"x.age": {"$gt": 30}}},
+                {"$match": {"x.age": {"$gt": HOP3F_MIN_AGE}}},
                 {"$group": {"_id": "$x._id"}},
                 {"$count": "n"}]))
         raise KeyError(op)
@@ -3014,6 +3014,16 @@ def main():
 
         collected = {}
 
+        # ONE BUDGET PER READ, SPANNING BOTH PASSES (DECISIONS #120). Same
+        # lookup as the analytics queries' (measured when the bench host has a
+        # number for this tier, otherwise the lane default clamped to the
+        # read's share of the cell cap), never per engine.
+        read_budget = {op: budget_lookup.budget_for(
+            "l2", args.scale, op, OLTP_READ_BUDGET_S, "BENCH_GRAPH_READ_BUDGET_S",
+            n_queries=len(OLTP_READS)) for op in OLTP_READS}
+        read_spent = {op: 0.0 for op in OLTP_READS}
+        read_cut = {}       # op -> (the pass it stopped in, starts it answered there)
+
         def _read_pass(prefix=""):
             """One full pass over the read set, identical on both calls.
 
@@ -3034,11 +3044,26 @@ def main():
             res = {}
             for op, tmpl in OLTP_READS.items():
                 lat = []
+                raw = []
                 answers = []
+                if op in read_cut:
+                    # Spent its budget in the first pass: nothing left to time.
+                    for q in (0.50, 0.95, 0.99):
+                        res[f"{prefix}{op}_p{int(q * 100)}_ms"] = None
+                    continue
+                answered = 0
                 for w, pid in enumerate(ids):
+                    if read_spent[op] > read_budget[op][0]:
+                        read_cut[op] = (prefix, answered)
+                        _beat.mark(f"oltp-{op}-censored", answered=answered,
+                                   budget_s=read_budget[op][0])
+                        break
                     t = time.perf_counter()
                     rows = ad.run_read(op, pid)
                     dt = (time.perf_counter() - t) * 1000
+                    read_spent[op] += dt / 1000.0
+                    answered += 1
+                    raw.append(dt)
                     if not prefix and w == 0:
                         # The cell's first query after the database opened
                         # (#89 as amended): the first id of the first read op
@@ -3052,11 +3077,21 @@ def main():
                         # ...and so is a sample whose connection dropped
                         # while it was being taken (DECISIONS #91).
                         surreal_common.keep(ad, lat, dt)
+                if not lat and raw:
+                    # CUT BEFORE THE WARM-UPS WERE OVER. A censored read with a
+                    # measurement is a result and one with none is a gap, so the
+                    # percentiles come from the starts it did answer and
+                    # `<read>_iters` says how few (as the analytics budget does).
+                    lat = list(raw)
                 lat.sort()
-                res[f"{prefix}{op}_p50_ms"] = round(pct(lat, 0.50), 3)
-                res[f"{prefix}{op}_p95_ms"] = round(pct(lat, 0.95), 3)
-                res[f"{prefix}{op}_p99_ms"] = round(pct(lat, 0.99), 3)
-                collected[op] = answers
+                for q in (0.50, 0.95, 0.99):
+                    res[f"{prefix}{op}_p{int(q * 100)}_ms"] = round(pct(lat, q), 3) if lat else None
+                if prefix == "":
+                    res[f"{op}_iters"] = len(lat)
+                # A pass that stopped early answered fewer starts than every
+                # other engine; its rows are not what the digest compares.
+                if read_cut.get(op, (None,))[0] != prefix:
+                    collected[op] = answers
             return res
 
         _beat.mark("reads-cold-start", n=len(ids), ops=len(OLTP_READS))
@@ -3077,7 +3112,20 @@ def main():
         # here rather than in the loop. The two passes ask the same questions,
         # so digesting the second is digesting both.
         for op in OLTP_READS:
-            bench_common.record_result(out, op, collected.get(op), **READ_DIGEST[op])
+            b_s, b_src = read_budget[op]
+            out[f"{op}_budget_s"] = b_s
+            out[f"{op}_budget_source"] = b_src
+            where, answered = read_cut.get(op, (None, None))
+            # The page prints the first pass, so that is the one "censored"
+            # describes; a stop in the second pass leaves the published
+            # numbers whole and is recorded as such.
+            out[f"{op}_censored"] = where == ""
+            out[f"warm_{op}_censored"] = where is not None
+            if op in collected:
+                bench_common.record_result(out, op, collected.get(op), **READ_DIGEST[op])
+            else:
+                bench_common.record_censored_answer(
+                    out, op, f"stopped at its {b_s:g} s budget after {answered} of {len(ids)} starts")
         # HOW LOCAL IS THE THREE-HOP READ? Untimed, over the first
         # VISITED_SAMPLE ids: the distinct persons at three hops before the
         # age filter, which is the set hop3f filters. The page can now say

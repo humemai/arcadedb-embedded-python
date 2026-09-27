@@ -247,6 +247,7 @@ def report(groups, seen_backends, out=print, list_groups=False):
     silent = []            # (key, backend) -- ran the cell, recorded no digest
     not_comparable = []    # (key, reason, backends) -- declared not like for like
     known_disagreements = []  # (key, backends, reasons) -- wrong, named, withheld
+    censored = []          # (key, backend, reason) -- cut short by a budget (#120)
 
     for key in sorted(groups, key=lambda k: tuple(str(x) for x in k)):
         lane, scale, workload, query = key
@@ -255,10 +256,14 @@ def report(groups, seen_backends, out=print, list_groups=False):
         # the thing #88 says must never be silent, so they are always printed.
         real = {}
         for be, digests in per_backend.items():
-            expressed = {d: v for d, v in digests.items() if not bench_common.is_unexpressible(d)}
+            expressed = {d: v for d, v in digests.items()
+                         if not bench_common.is_unexpressible(d)
+                         and not bench_common.is_censored_answer(d)}
             for d in digests:
                 if bench_common.is_unexpressible(d):
                     absences.append((key, be, d[len(bench_common.UNEXPRESSIBLE_PREFIX):]))
+                elif bench_common.is_censored_answer(d):
+                    censored.append((key, be, d[len(bench_common.CENSORED_ANSWER_PREFIX):]))
             if len(expressed) > 1:
                 # WHERE THE TWO ANSWERS CAME FROM. Since #90 a backend appears
                 # in a group twice, once per durability class, and a strict
@@ -395,6 +400,15 @@ def report(groups, seen_backends, out=print, list_groups=False):
             seen.add(tag)
             out(f"  {key[0]:8} {key[2]:10} {key[3]:24} {be:32} {reason}")
 
+    if censored:
+        # A DIFFERENT ABSENCE FROM E4 (DECISIONS #120): the engine can ask the
+        # question, and its budget stopped it partway through the start set, so
+        # the rows it has answer fewer starts than its neighbours' and are not
+        # compared. Printed on every run, like E4, so it is never silent.
+        out("\n=== E4b: answers cut short by a per-query budget, declared and not compared ===")
+        for key, be, reason in sorted(censored, key=lambda a: (str(a[1]), str(a[0]))):
+            out(f"  {key[0]:8} {str(key[1]):8} {key[3]:24} {be:32} {reason}")
+
     if known_disagreements:
         out("\n=== E8: KNOWN disagreements: one engine is wrong, and its cell is "
             "withheld from the page ===")
@@ -417,7 +431,8 @@ def report(groups, seen_backends, out=print, list_groups=False):
         singles = collections.Counter()
         for key in sorted(groups):
             real = [be for be, ds in groups[key].items()
-                    if any(not bench_common.is_unexpressible(d) for d in ds)]
+                    if any(not bench_common.is_unexpressible(d)
+                           and not bench_common.is_censored_answer(d) for d in ds)]
             if len(real) < 2:
                 singles[(key[0], key[1], key[2])] += 1
         for (lane, scale, workload), n in sorted(singles.items()):

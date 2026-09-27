@@ -2016,6 +2016,15 @@ def _equivalence_notes(rows):
                     per_table[tid].append(
                         f"{display_name(str(be))} cannot express {query}: "
                         f"{str(d)[len(bench_common.UNEXPRESSIBLE_PREFIX):]}")
+                elif bench_common.is_censored_answer(d):
+                    # NOT "cannot express" (DECISIONS #120): the engine asked,
+                    # and its budget stopped it before every start was answered.
+                    # Named by the column the reader sees, not the field stem.
+                    _labels = (_QUERY_BUDGET_TABLES.get(tid) or (None, None, {}))[2]
+                    per_table[tid].append(
+                        f"{display_name(str(be))}'s {_labels.get(query, query)} answer is not "
+                        f"compared, because it "
+                        f"{str(d)[len(bench_common.CENSORED_ANSWER_PREFIX):]}")
     out = {}
     for tid, items in per_table.items():
         uniq = sorted(set(items))
@@ -5696,6 +5705,14 @@ _QUERY_BUDGET_TABLES = {
         "q_groupby": "per-host hourly", "q_high": "high-usage",
         "q_orderlimit": "grouped, ordered, limited"}, ("l4_tsbs", "QITER"),
         "iterations, the first of which is the cold pass"),
+    # THE TRANSACTIONAL READS' BUDGET (DECISIONS #120). A read counts STARTS,
+    # not iterations: each start is one query from one seed person, the start
+    # set's size depends on the tier, and <read>_iters is how many of them the
+    # first pass timed before its budget ran out.
+    "l2": ("l2", "oltp", {
+        "point": "point", "hop1": "1-hop", "hop2": "2-hop", "hop3f": "3-hop filtered"},
+        ("graph_common", "SCALE_OLTP_QUERIES"),
+        "starts timed in the first pass", "starts"),
 }
 
 
@@ -5722,13 +5739,16 @@ def _query_budget_notes(table_id):
     spec = _QUERY_BUDGET_TABLES.get(table_id)
     if not spec:
         return []
-    lane, wl, labels, (mod, const), counted = spec
+    lane, wl, labels, (mod, const), counted = spec[:5]
+    unit = spec[5] if len(spec) > 5 else "iterations"
     # The asked count comes from the lane module the runner executes, like
     # _counts_note's, so the two sentences cannot disagree.
     try:
         import importlib
         asked = int(getattr(importlib.import_module(mod), const))
-    except Exception:  # noqa: BLE001 - the lane module is optional here
+    except Exception:  # noqa: BLE001 - the lane module is optional here, and a
+        # per-tier count (a dict) has no one number to print: the sentence
+        # then gives how far each read got, not "of N"
         asked = None
     # (label, scale, query) -> [(iters, elapsed_s, budget_s)] across reps
     hits = collections.defaultdict(list)
@@ -5804,7 +5824,7 @@ def _query_budget_notes(table_id):
             # "of 100 iterations" once, on the first query; the rest are bare
             # counts against the same denominator.
             parts.append(f"{col} ({span}{of if first else ''}"
-                         + (" iterations" if first else "") + f"{reached})")
+                         + (f" {unit}" if first else "") + f"{reached})")
             first = False
         notes.append(_gen(f"{label} at {scale_label(lane, scale)}: "
                           + _join_and(parts) + ".",

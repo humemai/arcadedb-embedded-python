@@ -154,6 +154,18 @@ def test_float_tolerance():
     check("the two sums really do differ in the raw bits", a != b, f"{a!r} {b!r}")
     eq("6 significant digits reconciles them",
        d([(a,)], columns=("rev",)), d([(b,)], columns=("rev",)))
+    # A SIX-DIGIT TIE MUST NOT SPLIT ON ITS LAST BIT (2026-09-28). 41.15625 is
+    # an exact double (a mean of 32 ages) with a 5 in the seventh digit; one
+    # engine sums and divides and lands on it, another keeps a running mean and
+    # lands an ulp away, and "%.6g" then rounds the two to 41.1562 and 41.1563.
+    # That split Neo4j from eight engines on the graph lane's hop1 the day real
+    # ages loaded (every average had been exactly 0 before, BUGS F146).
+    import math
+    tie = 41.15625
+    for label, other in (("an ulp above", math.nextafter(tie, math.inf)),
+                         ("an ulp below", math.nextafter(tie, -math.inf))):
+        eq(f"a six-digit tie and its neighbour {label} agree",
+           d([(7, tie)], columns=("n", "a")), d([(7, other)], columns=("n", "a")))
     print("floats: a difference big enough to matter still fails")
     ne("a 0.1% difference is a disagreement",
        d([(a,)], columns=("rev",)), d([(a * 1.001,)], columns=("rev",)))
@@ -220,6 +232,12 @@ def test_record_fields():
     check("digest carries the reason",
           out["res_triangles_digest"].startswith("unexpressible: "), out["res_triangles_digest"])
     check("is_unexpressible agrees", B.is_unexpressible(out["res_triangles_digest"]))
+    # A read cut short by its budget is declared, and is a different kind of
+    # absence from one the engine cannot express (DECISIONS #120).
+    B.record_censored_answer(out, "hop3f", "stopped at its 540 s budget after 37 of 495 starts")
+    check("a censored answer is declared", B.is_censored_answer(out["res_hop3f_digest"]))
+    check("a censored answer is not unexpressible", not B.is_unexpressible(out["res_hop3f_digest"]))
+    check("an unexpressible answer is not censored", not B.is_censored_answer(out["res_triangles_digest"]))
     eq("n is None, not 0", out["res_triangles_n"], None)
     check("a real digest is not mistaken for one",
           not B.is_unexpressible(B.result_digest([(1,)], columns=("a",))["digest"]))

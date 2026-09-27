@@ -846,7 +846,15 @@ def _fmt_number(v, float_digits):
         return "inf"
     if x == float("-inf"):
         return "-inf"
-    s = f"{x:.{float_digits}g}"
+    # ROUNDED TWICE, 12 SIGNIFICANT DIGITS THEN `float_digits` (2026-09-28).
+    # Rounded once, a value on a six-digit tie splits on its last bit:
+    # 41.15625 (a mean of 32 ages, exact in binary) printed "41.1562" while its
+    # neighbour an ulp above printed "41.1563", which split Neo4j's running
+    # mean from eight engines on the graph lane's hop1 once real ages loaded.
+    # The first rounding absorbs noise below the twelfth digit (summation
+    # order, a running mean); two numbers can only newly collide if they
+    # already agree to twelve digits, far past the six compared.
+    s = f"{float(f'{x:.12g}'):.{float_digits}g}"
     return "0" if s in ("-0", "-0.0") else s
 
 
@@ -1134,6 +1142,29 @@ def record_unexpressible(out, name, reason):
 
 def is_unexpressible(value):
     return isinstance(value, str) and value.startswith(UNEXPRESSIBLE_PREFIX)
+
+
+# AN ANSWER CUT SHORT BY A BUDGET IS DECLARED, NOT DIGESTED (DECISIONS #120).
+# A per-read budget stops a read partway through its start set, so the rows it
+# collected answer fewer starts than every other engine's and a digest of them
+# could only disagree. The engine CAN ask the question, so this is not
+# unexpressible, and the page must not say "cannot express"; it is a declared
+# absence of a different kind, and the gate lists it as one rather than as a
+# failure or as silence.
+CENSORED_ANSWER_PREFIX = "censored: "
+
+
+def record_censored_answer(out, name, reason):
+    """This engine's answer to this query was cut short, and the row says so."""
+    text = CENSORED_ANSWER_PREFIX + str(reason)
+    out[f"res_{name}_digest"] = text
+    out[f"res_{name}_sample"] = text
+    out[f"res_{name}_n"] = None
+    return text
+
+
+def is_censored_answer(value):
+    return isinstance(value, str) and value.startswith(CENSORED_ANSWER_PREFIX)
 
 
 # WHERE A MEASUREMENT DOES NOT APPLY, THE ROW SAYS SO (DECISIONS #89). "A

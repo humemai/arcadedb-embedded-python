@@ -819,8 +819,10 @@ WRITE_CELLS = {("l1tpc", "oltp"), ("l2", "oltp"), ("e2", "hybrid")}
 # queries scan knows, and `same_city_edges`'s only WHERE compares an edge's two
 # endpoints to each other rather than to a value); LSQB's nine are pure
 # structural counts over labels with no property predicate at all; and `hop3f`'s
-# `age > 30` filters a vertex set the traversal has already reached, which no
-# index can narrow. So there is no selective filter on this lane to get wrong.
+# `age > HOP3F_MIN_AGE` (graph_common; 41 from the re-pin, keeping about half;
+# 30 through October, when every loaded age was 0 and it kept no one, BUGS
+# F146) filters a vertex set the traversal has already reached, which no index
+# can narrow. So there is no selective filter on this lane to get wrong.
 #
 # The lane DOES build indexes, and they are matched by effect rather than by
 # rule -- which is why this note names them instead of stopping at "no
