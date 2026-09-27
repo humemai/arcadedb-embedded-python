@@ -923,8 +923,11 @@ def main() -> int:
         print(f"  (no frozen rows at {rows_path}; row-derived pins will read as STALE)")
     k_bad = _check_conditions(payload, rows)
     print(f"\n{k_bad} condition finding(s)")
+    print("\nno sentence names an arm the page does not print (OFF_PAGE_ARMS)")
+    o_bad = _check_off_page_names(payload)
+    print(f"  {o_bad} off-page name(s) in page sentences")
     return 1 if (bad or d_bad or p_bad or a_bad or l_bad or h_bad or c_bad
-                 or r_bad or m_bad or not u_ok or k_bad) else 0
+                 or r_bad or m_bad or not u_ok or k_bad or o_bad) else 0
 
 
 # --------------------------------------------------------------------------
@@ -1774,6 +1777,27 @@ def _check_conditions(payload, rows):
         for f in findings:
             print(f"    {f}")
         bad += len(findings)
+    return bad
+
+
+def _check_off_page_names(payload):
+    """No sentence on the page names an off-page arm. OFF_PAGE_ARMS are never
+    printed as rows, so a condition that names one describes something the
+    reader cannot find on the table: the documents index note listed
+    "PostgreSQL (tuned)" among the engines that build an index (2026-09-27).
+    Returns bad count."""
+    import export_web as EW
+    names = {EW.display_name(k): k for k in EW.OFF_PAGE_ARMS}
+    groups = [("GLOBAL", payload.get("conditions") or [])]
+    groups += [(t["id"], t.get("conditions") or []) for t in payload.get("tables", [])]
+    bad = 0
+    for tid, conds in groups:
+        for text in conds:
+            for name, key in names.items():
+                if name and name in str(text):
+                    print(f"    OFF-PAGE {tid}: names {name!r} [{key}], which the page does not "
+                          f"print: {str(text)[:100]!r}")
+                    bad += 1
     return bad
 
 

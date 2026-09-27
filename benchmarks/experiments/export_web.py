@@ -5410,7 +5410,11 @@ def _index_note(table_id):
         return []
     if not decided:
         return []
-    _gone = {display_name(bk) for bk in _withdrawn_now(table_id)}
+    # Off the table: a withdrawn arm, and an ablation arm the page never
+    # prints (OFF_PAGE_ARMS). Naming "PostgreSQL (tuned)" here put a name
+    # under the documents table that no row on it carries.
+    _gone = {display_name(bk) for bk in _withdrawn_now(table_id)} | {
+        display_name(bk) for bk in OFF_PAGE_ARMS}
     have = sorted({display_name(be) for be, d in decided.items()
                    if not d.startswith("NONE")} - _gone)
     none = sorted({display_name(be) for be, d in decided.items()
