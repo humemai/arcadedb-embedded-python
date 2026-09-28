@@ -338,6 +338,35 @@ class ArcadeTSServer(ArcadeTS):
         self.rq.close()
 
 
+def _mutable_samples(rows):
+    """Mutable (not yet compacted) samples in a TIMESERIES type, from the rows of
+    `SELECT FROM schema:types WHERE name = ...`: the sum of every shard's
+    `mutableSamples`. A type the engine reports no shards for counts as -1, so a
+    missing field can never read as 'compacted'."""
+    import json as _json
+    import re as _re
+    total, seen = 0, False
+    for r in rows or []:
+        for sh in (r.get("shards") or []):
+            # A MAP, OR ITS TEXT. Over HTTP each shard arrives as a JSON object; the
+            # embedded to_json_list() of the October wheel renders a nested result
+            # as a string (the laptop smoke's AttributeError, 2026-09-28). Both are
+            # read; anything else leaves the count at -1, never at 0.
+            if isinstance(sh, str):
+                try:
+                    sh = _json.loads(sh)
+                except ValueError:
+                    m = _re.search(r'"?mutableSamples"?\s*[:=]\s*(\d+)', sh)
+                    if not m:
+                        return -1
+                    sh = {"mutableSamples": int(m.group(1))}
+            if not isinstance(sh, dict) or "mutableSamples" not in sh:
+                return -1
+            seen = True
+            total += int(sh["mutableSamples"] or 0)
+    return total if seen else -1
+
+
 class ArcadeNativeTS(ArcadeTS):
     """ArcadeDB's native TIMESERIES type, promoted from l4_native_probe.py into the lane.
 
@@ -487,20 +516,36 @@ class ArcadeNativeTS(ArcadeTS):
         ArcadeDB and in the direction that flatters us.
         """
         import time
-        # DEFAULT 0, and the name is one the runner delivers.
+        # BY THE ENGINE'S OWN STATE, NOT A GUESSED SLEEP (DECISIONS #121). A
+        # TIMESERIES type holds new samples in a mutable tail until the
+        # maintenance scheduler (every 60 s, not configurable) compacts them, and
+        # a query on the tail can cost 100x the compacted one (ArcadeData/arcadedb
+        # #8574: 21 ms against 0.13 ms for the newest reading). So this waits until
+        # `schema:types` reports no mutable sample on any shard, the way QuestDB's
+        # arm waits for its WAL to apply, bounded by BENCH_TS_COMPACT_WAIT_S.
         #
-        # This defaulted to 5 and read TS_SETTLE_S, which is on no passthrough
-        # list, so it could be neither turned off nor turned on from a campaign:
-        # every published row gave THIS arm five seconds of extra sealing that
-        # questdb, duckdb and the document arm never got, while the page asserted
-        # in prose that no engine settled. An asymmetry that only one engine
-        # receives, and that the caller cannot control, is the same defect this
-        # class's own docstring says it exists not to re-create.
-        _s = float(os.environ.get("BENCH_TS_SETTLE_S")
-                   or os.environ.get("TS_SETTLE_S", "0"))
-        self._settled_s = _s
-        if _s > 0:
-            time.sleep(_s)
+        # This used to sleep BENCH_TS_SETTLE_S itself, and the driver then slept
+        # the same value again for every arm, so this arm alone waited twice
+        # (180 s at October's 90 s) while its served twin's settle was empty. The
+        # symmetric floor is the driver's; what is left here is the engine's own
+        # catch-up, and the row records how long it took and what was left.
+        t0 = time.perf_counter()
+        left = self.mutable_samples()
+        while left > 0 and time.perf_counter() - t0 < self.COMPACT_WAIT_S:
+            time.sleep(1)
+            left = self.mutable_samples()
+        self._compaction_wait_s = round(time.perf_counter() - t0, 3)
+        self._mutable_after_settle = left
+        self._settled_s = self._compaction_wait_s
+
+    # Bounded, so a scheduler that never runs cannot hang a cell; a row that hit
+    # the bound says so through a nonzero ts_mutable_at_query.
+    COMPACT_WAIT_S = float(os.environ.get("BENCH_TS_COMPACT_WAIT_S") or 300.0)
+
+    def mutable_samples(self):
+        """Samples still in the mutable tail, summed over every shard."""
+        return _mutable_samples(self.db.query(
+            "sql", "SELECT FROM schema:types WHERE name = 'Point'").to_json_list())
 
 
 class ArcadeNativeTSServer(ArcadeNativeTS):
@@ -607,8 +652,10 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
                                    f"WHERE ts >= {T0 * 1000} AND ts < {(T0 + 43200) * 1000} "
                                    f"GROUP BY h ORDER BY h DESC LIMIT {ORDERLIMIT_N}")
 
-    def settle(self):
-        self._settled_s = 0.0
+    # settle() is ArcadeNativeTS's: the same wait on the same engine state,
+    # read over HTTP (DECISIONS #121). It used to be empty here.
+    def mutable_samples(self):
+        return _mutable_samples(self._post("query", "SELECT FROM schema:types WHERE name = 'Point'"))
 
     def close(self):
         self.rq.close()
@@ -1395,6 +1442,16 @@ def main():
     out["settle_s_adapter"] = round(float(getattr(b, "_settled_s", 0.0) or 0.0), 3)
     if settle > 0:
         time.sleep(settle)
+
+    # WHAT THE FIRST TIMED QUERY SAW (DECISIONS #121): a TIMESERIES arm records
+    # how many samples were still uncompacted, and how long its own settle
+    # waited, so a row proves its state instead of inheriting it from a sleep.
+    if hasattr(b, "mutable_samples"):
+        try:
+            out["ts_mutable_at_query"] = int(b.mutable_samples())
+        except Exception as e:  # noqa: BLE001
+            out["ts_mutable_at_query_error"] = f"{type(e).__name__}: {e}"
+        out["ts_compaction_wait_s"] = getattr(b, "_compaction_wait_s", None)
 
     out["query_iters"] = QITER
     for qn in QUERIES:
