@@ -510,7 +510,13 @@ creation). Manages its own transactions unless one is already active.
   executor's parallel level (`async_executor().get_parallel_level()`, default
   cores - 1), decided when the type is created. Each writer commits every
   `arcadedb.asyncTxBatchSize` records (default 10,240); `commit_every` does
-  not apply to this mode.
+  not apply to this mode. Each bucket carries its own sub-index, so on a
+  multi-bucket type every index lookup, and every unique-key check on insert,
+  runs once per bucket; for a type you load or look up by a key, route records
+  by that key with the partitioned strategy (it needs a UNIQUE index on the
+  key): ``ALTER TYPE T BucketSelectionStrategy `partitioned('id')` ``. Laptop,
+  400,000 rows, 4 buckets, UNIQUE `id`: the parallel load 7.8 s against 3.4 s
+  partitioned, a keyed lookup 62 against 53 us (2026-09-28).
 
 **Returns:**
 
