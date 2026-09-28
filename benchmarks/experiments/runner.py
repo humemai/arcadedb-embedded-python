@@ -2335,6 +2335,10 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    "BENCH_DENSE_BUILD_CACHE", "BENCH_DENSE_BUILD_CACHE_PCT",
                    "BENCH_SKIP_CLOSE",
                    "BENCH_TPC_DATA", "BENCH_TPC_SF", "BENCH_GAV",
+                   # CAMPAIGN item 10: LineItem's buckets per async writer
+                   # (the re-pin sweeps 1 and 2) and an explicit count for
+                   # control runs; both recorded on the row as lineitem_buckets
+                   "BENCH_ARCADE_BUCKETS_PER_WRITER", "BENCH_ARCADE_LINEITEM_BUCKETS",
                    # The graph analytics message-half caps (ldbc_snb), for a
                    # laptop smoke of the full-network loader only. Default
                    # unset = the whole SF1 network; the campaign never sets

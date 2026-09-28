@@ -259,6 +259,17 @@ def arcade_jvm_args(base="", cls=None):
     return f"{base} {arg}".strip() if base else arg
 
 
+def arcade_async_sync(cls=None):
+    """The async executor's WAL flush at this class ("no" or "yes_full").
+
+    The executor's writers stamp their own flush on every transaction they
+    open and do not read txWalFlush, so a load through it must be told the
+    class separately (ArcadeData/arcadedb#8478): yes_full is the executor's
+    spelling of txWalFlush=2, no of txWalFlush=0.
+    """
+    return "yes_full" if (cls or DURABILITY_CLASS) == CLASS_STRICT else "no"
+
+
 # The served twin's txWalFlush is a JAVA_OPTS entry on its container, set by
 # runner.py for the strict class and recorded on the row as
 # durability_server_flags. The server exposes no read-back for it, so its

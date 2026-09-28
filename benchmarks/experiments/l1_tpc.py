@@ -996,7 +996,33 @@ class ArcadeTPC:
 
     def build(self, li, part):
         db = self.db
-        db.command("sql", "CREATE DOCUMENT TYPE LineItem")
+        # THE MAINTAINERS' BULK PATH FOR A LARGE TYPE (CAMPAIGN item 10, the
+        # ingest side; answered on ArcadeData/arcadedb#8478). LineItem loads
+        # through the async executor's createRecord (insert_many parallel=True)
+        # on a type with as many buckets as the executor has writers (default
+        # cores - 1), or a multiple k of that (BENCH_ARCADE_BUCKETS_PER_WRITER,
+        # 1 or 2 per the answer; the re-pin measures both on the bench host).
+        # One writer owns each bucket, so the default single bucket gave no
+        # gain (F141). Two settings follow from how the executor works:
+        #   - its writers stamp their own WAL flush on every transaction and
+        #     ignore txWalFlush (default NO), so the strict class sets YES_FULL
+        #     on the executor itself or its load would skip the fsyncs;
+        #   - waitCompletion(), which each insert_many call ends with, commits
+        #     every writer's open batch, so each call carries writers x the
+        #     writers' commit size: one commit per writer per call, the batch
+        #     the executor would have used anyway.
+        ex = db.async_executor()
+        self.async_writers = ex.get_parallel_level()
+        self.lineitem_buckets = self.async_writers * int(
+            os.environ.get("BENCH_ARCADE_BUCKETS_PER_WRITER") or 1)
+        # An explicit count overrides the rule, for the control runs only
+        # (the row records what was used).
+        if os.environ.get("BENCH_ARCADE_LINEITEM_BUCKETS"):
+            self.lineitem_buckets = int(os.environ["BENCH_ARCADE_LINEITEM_BUCKETS"])
+        ex.set_transaction_sync(bench_common.arcade_async_sync())
+        self.async_sync = ex.get_transaction_sync()
+        self.load_call_rows = self.async_writers * ex.get_commit_every()
+        db.command("sql", f"CREATE DOCUMENT TYPE LineItem BUCKETS {self.lineitem_buckets}")
         for c in LI_COLS:
             t = ("STRING" if c in ("l_returnflag", "l_linestatus", "l_shipdate", "l_shipmode")
                  else ("LONG" if c.endswith("key") else "DOUBLE"))
@@ -1044,10 +1070,18 @@ class ArcadeTPC:
                         "l_linestatus": str(t.l_linestatus),
                         "l_shipdate": str(t.l_shipdate),
                         "l_shipmode": str(t.l_shipmode)})
-            if len(buf) >= BATCH:
-                db.insert_many("LineItem", buf, commit_every=BATCH); buf = []
+            if len(buf) >= self.load_call_rows:
+                db.insert_many("LineItem", buf, parallel=True); buf = []
         if buf:
-            db.insert_many("LineItem", buf, commit_every=BATCH)
+            db.insert_many("LineItem", buf, parallel=True)
+        # STORED, not submitted: a record the async writers reject is reported
+        # only through an error callback, and wheels before 2026-09-28 passed
+        # none (insert_many returned the input count while dropping it). A
+        # type count is a per-bucket read, not a scan.
+        stored = int(db.query("sql", "SELECT count(*) AS n FROM LineItem").to_list()[0]["n"])
+        if stored != li.n_streamed:
+            raise SystemExit(f"LineItem stored {stored:,} of {li.n_streamed:,} streamed rows "
+                             f"through the async writers: the load lost records.")
         for start in range(0, len(part), BATCH):
             chunk = part.iloc[start:start + BATCH]
             db.insert_many("Part", [
@@ -1455,6 +1489,10 @@ def main():
     out["li_batches"] = li.n_batches
     if getattr(b, "load_batch", None):
         out["served_load_batch"] = b.load_batch
+    # item 10's embedded bulk path, as the executor reported it (not as asked)
+    for _k in ("lineitem_buckets", "async_writers", "async_sync", "load_call_rows"):
+        if getattr(b, _k, None) is not None:
+            out[_k] = getattr(b, _k)
     if li.n_streamed != len(li):
         raise SystemExit(
             f"streamed {li.n_streamed:,} line items against {len(li):,} in "
