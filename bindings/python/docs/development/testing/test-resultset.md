@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_resultset.py){ .md-button }
 
-There are 13 tests that exercise list/DataFrame conversion, chunking, counting, first/one helpers, iteration, repr, complex queries, empty handling, reusability, RID/vertex helpers, and JSON array serialization.
+There are 17 tests that exercise list/DataFrame conversion, chunking, counting, first/one helpers, iteration, repr, complex queries, empty handling, reusability, RID/vertex helpers, JSON array serialization, the one-crossing `to_dict`, and the release of the engine-side cursor.
 
 ## What the tests cover
 
@@ -66,6 +66,18 @@ For a `Person` vertex, `get_rid()` returns a string starting with `#`, and `get_
 ### to_json with arrays
 
 Inserts a `JsonArrayTest` row with `tags = ['a', 'b', 'c']` and asserts `to_json()` serializes the list property as a JSON array.
+
+### to_dict in one crossing
+
+`Result.to_dict()` reads a row in one bridge call (`RowAccess`); the test checks it gives exactly what reading each property on its own gives, for every value type (DATETIME, DATE, DECIMAL, and the rest of a mixed row).
+
+### The result set releases its engine cursor (`TestResultSetReleasesTheEngineCursor`)
+
+Since 26.10.1's parallel scan (ArcadeData/arcadedb#8524) a query whose `LIMIT` is satisfied keeps its scan's producer threads parked until its result set is closed or ten minutes pass, and a few such result sets stall the next query that needs those threads (ArcadeData/arcadedb#8594). Example 05 hung that way on its fifth RID-paged page.
+
+- **paging by iteration does not stall**: 300,000 documents in one bucket, walked with `SELECT @rid AS rid, k FROM Paged WHERE @rid > <last> LIMIT 5000`, each page iterated to its end; the walk runs in a daemon thread and must finish within 60 s with every row and 61 pages. It stalled on wheels before 2026-09-28.
+- **paging by to_list does not stall**: the same walk with `to_list()`.
+- **exhaustion, first and one close the Java result set**: `list(rs)`, `to_list()`, `first()`, and `one()` each leave the result set closed.
 
 ## Handy patterns from the tests
 

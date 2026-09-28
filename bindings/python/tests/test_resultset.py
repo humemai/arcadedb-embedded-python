@@ -444,3 +444,87 @@ def test_to_dict_one_crossing_matches_the_per_property_path(temp_db_path):
         rs = db.query("sql", "SELECT i, s, price FROM Mixed ORDER BY i")
         assert rs.first() is not None
         assert rs.to_list() == expected[1:]
+
+
+class TestResultSetReleasesTheEngineCursor:
+    """An exhausted, or no longer read, result set closes its Java result set.
+
+    Since the engine's parallel scan (ArcadeData/arcadedb#8524, 26.10.1) a
+    query whose LIMIT is satisfied keeps its scan's producer threads parked
+    until the result set is closed or ten minutes pass, and a few such result
+    sets stall the next query that needs the producer pool
+    (ArcadeData/arcadedb#8594). Example 05 hung that way on its fifth
+    `@rid > <last> LIMIT 5000` page: every page was read to its end, and none
+    was ever closed.
+    """
+
+    PAGE = 5_000
+    DOCS = 300_000
+
+    def _load(self, db):
+        db.command("sql", "CREATE DOCUMENT TYPE Paged")  # the default single bucket
+        db.insert_many(
+            "Paged",
+            [{"k": i, "pad": "x" * 40} for i in range(self.DOCS)],
+            commit_every=10_000,
+        )
+
+    def _walk(self, db, read_page):
+        """Every page of the type, in RID order, read with read_page."""
+        last, pages, rows = "#-1:-1", 0, 0
+        while True:
+            q = f"SELECT @rid AS rid, k FROM Paged WHERE @rid > {last} LIMIT {self.PAGE}"  # nosec B608 - test-owned
+            page = read_page(db.query("sql", q))
+            pages += 1
+            rows += len(page)
+            if len(page) < self.PAGE:
+                return pages, rows
+            last = str(page[-1]["rid"])
+
+    def _walk_within(self, db, read_page, seconds=60):
+        import threading
+
+        done = {}
+
+        def run():
+            done["out"] = self._walk(db, read_page)
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(seconds)
+        assert not t.is_alive(), (
+            f"RID-paged reads stalled for {seconds} s: result sets read to their "
+            "end were not closed (ArcadeData/arcadedb#8594)"
+        )
+        return done["out"]
+
+    def test_paging_by_iteration_does_not_stall(self, temp_db):
+        self._load(temp_db)
+        pages, rows = self._walk_within(
+            temp_db, lambda rs: [{"rid": r.get("rid"), "k": r.get("k")} for r in rs]
+        )
+        assert rows == self.DOCS and pages == self.DOCS // self.PAGE + 1
+
+    def test_paging_by_to_list_does_not_stall(self, temp_db):
+        self._load(temp_db)
+        pages, rows = self._walk_within(temp_db, lambda rs: rs.to_list())
+        assert rows == self.DOCS and pages == self.DOCS // self.PAGE + 1
+
+    def test_exhaustion_first_and_one_close_the_java_result_set(self, temp_db):
+        temp_db.command("sql", "CREATE DOCUMENT TYPE Few")
+        with temp_db.transaction():
+            for i in range(3):
+                temp_db.command("sql", "INSERT INTO Few SET k = ?", i)
+
+        rs = temp_db.query("sql", "SELECT FROM Few")
+        assert len(list(rs)) == 3
+        assert rs._closed
+
+        rs = temp_db.query("sql", "SELECT FROM Few")
+        assert len(rs.to_list()) == 3 and rs._closed
+
+        rs = temp_db.query("sql", "SELECT FROM Few ORDER BY k")
+        assert rs.first().get("k") == 0 and rs._closed
+
+        rs = temp_db.query("sql", "SELECT FROM Few WHERE k = 1")
+        assert rs.one().get("k") == 1 and rs._closed

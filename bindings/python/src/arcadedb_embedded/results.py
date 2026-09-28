@@ -102,17 +102,28 @@ def _unify_arrow_chunk_types(arrs: list, pa) -> list:
 
 
 class ResultSet:
-    """Iterator wrapper for ArcadeDB query results."""
+    """Iterator wrapper for ArcadeDB query results.
+
+    The Java result set is closed as soon as it is exhausted (by iteration or
+    any of the ``to_*`` methods), by ``first()``/``one()`` once they have their
+    row, and when this object is freed. Since the engine's parallel scan
+    (ArcadeData/arcadedb#8524, 26.10.1) an unclosed result set keeps its scan's
+    producer threads parked for up to ``arcadedb.parallelScanAbandonedTimeout``
+    (10 minutes), and a few of them stall the next query that needs the pool
+    (ArcadeData/arcadedb#8594).
+    """
 
     def __init__(self, java_result_set):
         self._java_result_set = java_result_set
+        self._closed = False
 
     def __iter__(self) -> Iterator["Result"]:
         return self
 
     def __next__(self) -> "Result":
-        if self._java_result_set.hasNext():
+        if not self._closed and self._java_result_set.hasNext():
             return Result(self._java_result_set.next())
+        self.close()
         raise StopIteration
 
     def to_list(self, convert_types: bool = True) -> List[Dict[str, Any]]:
@@ -162,6 +173,7 @@ class ResultSet:
                 while True:
                     batch = row_access.nextRows(self._java_result_set, 512)
                     if len(batch) == 0:
+                        self.close()
                         return out
                     for pair in batch:
                         out.append(
@@ -187,17 +199,35 @@ class ResultSet:
 
     def close(self) -> None:
         """
-        Close the underlying Java result set.
+        Close the underlying Java result set. Idempotent.
 
-        Optional: memory-benchmarked as GC-safe to omit (drained or abandoned
-        result sets are collected without measurable heap growth), but closing
-        deterministically matches the Java API's try-with-resources idiom and
-        releases any engine-side iteration state immediately.
+        Exhausting the result set closes it already; call this (or use the
+        result set as a context manager) when you stop reading early. An
+        unclosed result set is not only held memory: since 26.10.1's parallel
+        scan it can hold engine threads that other queries need
+        (ArcadeData/arcadedb#8594).
         """
+        if self._closed:
+            return
+        self._closed = True
         try:
             self._java_result_set.close()
         except Exception:  # nosec B110 - close() is best-effort hygiene
             pass
+
+    def __del__(self):
+        # A result set abandoned mid-iteration (a `break`) is freed right away
+        # under CPython's reference counting, so its engine-side cursor is
+        # released then rather than after the engine's abandonment timeout.
+        # Best effort: the JVM may already be gone at interpreter exit.
+        if not getattr(self, "_closed", True):
+            try:
+                import jpype
+
+                if jpype.isJVMStarted():
+                    self.close()
+            except Exception:  # nosec B110 - finalizer must never raise
+                pass
 
     def __enter__(self) -> "ResultSet":
         return self
@@ -262,6 +292,7 @@ class ResultSet:
                 str(row_batcher.nextJsonBatch(self._java_result_set, int(batch_size)))
             )
             if not batch:
+                self.close()
                 return
             yield batch
 
@@ -425,6 +456,7 @@ class ResultSet:
             )
             count = decode_batch(buf)
             if count == 0:
+                self.close()
                 break
             total += count
             if first_names is not None and not joined:
@@ -567,6 +599,7 @@ class ResultSet:
             )
             count = decode_batch(buf)
             if count == 0:
+                self.close()
                 break
             total += count
             if first_names is not None and not joined:
@@ -649,6 +682,9 @@ class ResultSet:
             return next(iter(self))
         except StopIteration:
             return None
+        finally:
+            # the rest is never read: release the cursor now
+            self.close()
 
     def one(self) -> "Result":
         """
@@ -667,15 +703,18 @@ class ResultSet:
         """
         iterator = iter(self)
         try:
-            result = next(iterator)
-        except StopIteration as exc:
-            raise ValueError("Query returned no results") from exc
+            try:
+                result = next(iterator)
+            except StopIteration as exc:
+                raise ValueError("Query returned no results") from exc
 
-        try:
-            next(iterator)
-            raise ValueError("Query returned multiple results")
-        except StopIteration:
-            return result
+            try:
+                next(iterator)
+                raise ValueError("Query returned multiple results")
+            except StopIteration:
+                return result
+        finally:
+            self.close()
 
 
 class Result:

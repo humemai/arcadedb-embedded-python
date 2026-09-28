@@ -304,12 +304,21 @@ print(user.get("name"))
 
 ### `close() -> None`
 
-Close the underlying Java result set.
+Close the underlying Java result set. Idempotent.
 
-Optional: memory-benchmarked as GC-safe to omit (drained or abandoned result sets are
-collected without measurable heap growth), but closing deterministically matches the
-Java API's try-with-resources idiom and releases any engine-side iteration state
-immediately.
+A result set is closed for you as soon as it is exhausted (by iteration or any of the
+`to_*` methods), by `first()` and `one()` once they have their row, and when the
+object is freed (CPython frees it as soon as nothing refers to it, e.g. after a `break`).
+Call `close()`, or use the result set as a context manager, when you stop reading early
+and keep the object around.
+
+Closing is not only memory hygiene: since 26.10.1's parallel scan
+(ArcadeData/arcadedb#8524) a query whose `LIMIT` is satisfied keeps its scan's producer
+threads parked until its result set is closed or
+`arcadedb.parallelScanAbandonedTimeout` (10 minutes) passes, and a few such result sets
+stall the next query that needs those threads (ArcadeData/arcadedb#8594). Wheels
+before 2026-09-28 closed nothing on exhaustion, so RID-paged reads
+(`WHERE @rid > <last> LIMIT n`) stalled on their fifth page on 8 cores.
 
 `ResultSet` is also a context manager (`__enter__`/`__exit__`), so `with` blocks close
 it automatically.
