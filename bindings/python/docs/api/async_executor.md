@@ -194,6 +194,13 @@ async_exec.set_transaction_sync(sync_mode: str) -> AsyncExecutor
 
 Set the WAL flush strategy for the durability vs. performance trade-off.
 
+The async writers stamp this setting on every transaction they open, whatever
+`arcadedb.txWalFlush` says for the database, and it defaults to `"no"`. So a bulk
+load through the executor (including `insert_many(..., parallel=True)`) that must
+be as durable as the rest of your writes sets it explicitly, e.g.
+`"yes_full"` to match `txWalFlush=2` (the maintainers' advice for a crash-safe
+load, ArcadeData/arcadedb#8478).
+
 **Parameters:**
 
 - `sync_mode` (str): One of:
@@ -292,7 +299,8 @@ The async executor schedules SQL/OpenCypher work and a small set of record-level
 and time-series operations. Record creation is available via
 [`create_record`](#create_record); updates and deletes go through `command(...)` with
 SQL. For bulk ingest, use `Database.insert_many(..., parallel=True)` for documents (on a
-type with several buckets: the writers are pinned one per bucket) and
+type with as many buckets as there are writers, or a multiple: each bucket is owned by
+one writer, ArcadeData/arcadedb#8478) and
 `Database.graph_batch(...)` for graphs; `command(...)` is not a bulk-write path (#7615,
 see the warning at the top of this page).
 

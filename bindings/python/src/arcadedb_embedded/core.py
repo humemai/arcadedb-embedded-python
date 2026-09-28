@@ -249,14 +249,27 @@ class Database:
             commit_every: Transaction batch size for the synchronous mode.
             parallel: If True, route rows through the async executor's
                 parallel bucket writers and wait for completion before
-                returning (out-of-order writes). The writers are pinned one
-                per bucket, so this is faster only on a type created with
-                several buckets (``CREATE DOCUMENT TYPE T BUCKETS n``): on
-                the default single bucket it measured no faster than the
-                synchronous mode, and 2.5x faster at 8 buckets on 4 cores.
+                returning (out-of-order writes). Each bucket is owned by one
+                writer, so this is faster only on a type with several
+                buckets. The maintainers' rule (ArcadeData/arcadedb#8478):
+                a bucket count equal to, or a multiple of, the executor's
+                parallel level (``async_executor().get_parallel_level()``,
+                default cores - 1), set when the type is created
+                (``CREATE DOCUMENT TYPE T BUCKETS n``). On the default single
+                bucket it measured no faster than the synchronous mode, and
+                2.5x faster at 8 buckets on 4 cores. Each writer commits
+                every ``arcadedb.asyncTxBatchSize`` records (default 10,240);
+                ``commit_every`` does not apply to this mode.
 
         Returns:
             Number of documents inserted.
+
+        Raises:
+            ArcadeDBError: If the load fails; in the parallel mode also when
+                the writers report any record they could not store (a
+                duplicate key, a failed batch commit), after the load
+                completes. Records other than the failed ones may have been
+                stored.
         """
         self._check_not_closed()
         import json as _json
@@ -288,16 +301,28 @@ class Database:
             return n
         try:
             batcher = _java_class("com.arcadedb.python.DocumentBatcher")
-            count = int(
-                batcher.insertManyJson(
-                    self._java_db, type_name, payload, int(commit_every), bool(parallel)
+            if not parallel:
+                return int(
+                    batcher.insertManyJson(
+                        self._java_db, type_name, payload, int(commit_every), False
+                    )
                 )
-            )
-            if parallel:
-                self._java_db.async_().waitCompletion()
-            return count
+            failures = batcher.insertManyJsonParallel(self._java_db, type_name, payload)
+            self._java_db.async_().waitCompletion()
+            n_failed = int(failures.getCount())
+            first_failure = failures.getFirstMessage()
         except Exception as e:
             raise ArcadeDBError(f"Failed to bulk-insert into '{type_name}': {e}") from e
+        # The writers report a rejected record only through its error callback
+        # (and the executor's global one, which by default just logs), so the
+        # count is read here rather than assumed (ArcadeData/arcadedb#8478).
+        if n_failed:
+            raise ArcadeDBError(
+                f"Failed to bulk-insert into '{type_name}': the parallel writers "
+                f"reported {n_failed} failed record(s) of {len(rows)}; the rest "
+                f"may have been stored (first failure: {first_failure})"
+            )
+        return len(rows)
 
     def close(self):
         """Close the database."""

@@ -501,15 +501,28 @@ creation). Manages its own transactions unless one is already active.
   committed the caller's open transaction every `commit_every` rows
   (fixed 2026-09-27).
 - `parallel` (bool): Route rows through the async executor's parallel
-  bucket writers and wait for completion (out-of-order writes). The writers
-  are pinned one per bucket, so this is faster only on a type created with
+  bucket writers and wait for completion (out-of-order writes). Each bucket
+  is owned by one writer, so this is faster only on a type created with
   several buckets (`CREATE DOCUMENT TYPE T BUCKETS n`): on the default single
   bucket it measured no faster than the synchronous mode, and 2.5x faster at
-  8 buckets on 4 cores (2026-09-27).
+  8 buckets on 4 cores (2026-09-27). The maintainers' rule
+  (ArcadeData/arcadedb#8478): a bucket count equal to, or a multiple of, the
+  executor's parallel level (`async_executor().get_parallel_level()`, default
+  cores - 1), decided when the type is created. Each writer commits every
+  `arcadedb.asyncTxBatchSize` records (default 10,240); `commit_every` does
+  not apply to this mode.
 
 **Returns:**
 
 - `int`: Number of documents inserted
+
+**Raises:**
+
+- `ArcadeDBError`: If the load fails; in the parallel mode also when the
+  writers report any record they could not store (a duplicate key, a failed
+  batch commit), once the load completes. Records other than the failed ones
+  may have been stored. Wheels before this change returned the input row count
+  and only logged the failure (2026-09-28).
 
 **Example:**
 

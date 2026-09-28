@@ -43,7 +43,7 @@ not something we currently encourage as the default Python import story.
     guidance.
 + For bulk document ingest from Python, `db.insert_many(...)` is the recommended
     default: it batches rows across the FFI boundary; see Example 22. Add
-    `parallel=True` on a type created with several buckets (`CREATE DOCUMENT TYPE T BUCKETS n`); on the default single bucket it is no faster.
+    `parallel=True` on a type created with several buckets (`CREATE DOCUMENT TYPE T BUCKETS n`); on the default single bucket it is no faster. The maintainers' rule (ArcadeData/arcadedb#8478): as many buckets as the async executor has writers (`async_executor().get_parallel_level()`, default cores - 1), or a multiple of that, decided when the type is created; create indexes after the load where you can; a record the writers reject raises `ArcadeDBError` once the load completes.
 + The async executor's SQL command path (`db.async_executor().command(...)`) is not a
     bulk-write path at any parallel level. Above parallel level 1 it silently discarded
     records before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed

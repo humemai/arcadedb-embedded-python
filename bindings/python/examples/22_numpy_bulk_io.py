@@ -28,7 +28,6 @@ Requirements:
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import time
 from pathlib import Path
@@ -57,9 +56,12 @@ def bulk_documents(db, n_rows: int) -> None:
         f"({inserted / dt:,.0f} rows/s)"
     )
 
-    # The async writers are pinned one per bucket, so the parallel mode needs a
+    # Each bucket is owned by one async writer, so the parallel mode needs a
     # type with several buckets: on the default single bucket it is no faster.
-    buckets = max(2, min(8, os.cpu_count() or 2))
+    # The maintainers' rule (ArcadeData/arcadedb#8478): as many buckets as the
+    # executor has writers (default cores - 1), or a multiple of that, set when
+    # the type is created. A rejected record raises after the load.
+    buckets = max(2, db.async_executor().get_parallel_level())
     db.command("sql", f"CREATE DOCUMENT TYPE BulkOrderP BUCKETS {buckets}")
     t0 = time.perf_counter()
     inserted = db.insert_many("BulkOrderP", rows, parallel=True)

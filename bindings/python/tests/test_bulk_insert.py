@@ -146,6 +146,39 @@ class TestInsertMany:
         assert _count(temp_db, "Tx") == 2
 
 
+class TestInsertManyParallelReportsFailures:
+    """A record the parallel writers fail to store must fail the call.
+
+    The maintainers' advice for an async bulk load (ArcadeData/arcadedb#8478)
+    is to register an error callback "so a failed record can't pass silently".
+    The parallel mode submitted every record with no callback and returned the
+    row count it was given, so a rejected record (here a duplicate key under a
+    unique index) was dropped while insert_many reported success.
+    """
+
+    def test_duplicate_key_raises_instead_of_dropping(self, temp_db):
+        import arcadedb_embedded as arcadedb
+
+        temp_db.command("sql", "CREATE DOCUMENT TYPE ParDup BUCKETS 4")
+        temp_db.command("sql", "CREATE PROPERTY ParDup.id INTEGER")
+        temp_db.command("sql", "CREATE INDEX ON ParDup (id) UNIQUE")
+        rows = [{"id": i % 500} for i in range(1_000)]  # every key twice
+
+        with pytest.raises(arcadedb.ArcadeDBError, match="failed"):
+            temp_db.insert_many("ParDup", rows, parallel=True)
+
+        assert _count(temp_db, "ParDup") <= 500
+
+    def test_clean_load_still_returns_the_count(self, temp_db):
+        temp_db.command("sql", "CREATE DOCUMENT TYPE ParOk BUCKETS 4")
+        temp_db.command("sql", "CREATE PROPERTY ParOk.id INTEGER")
+        temp_db.command("sql", "CREATE INDEX ON ParOk (id) UNIQUE")
+        rows = [{"id": i} for i in range(1_000)]
+
+        assert temp_db.insert_many("ParOk", rows, parallel=True) == 1_000
+        assert _count(temp_db, "ParOk") == 1_000
+
+
 class TestAsyncCreateRecord:
     def test_create_and_wait(self, temp_db):
         temp_db.command("sql", "CREATE DOCUMENT TYPE ARec")

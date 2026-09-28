@@ -8,8 +8,9 @@
  * string copy plus the engine's own write path.
  *
  * Two modes: transactional batches on the calling thread (commitEvery), or
- * the async executor's parallel bucket writers (parallel=true; the Python
- * insert_many wrapper waits for completion itself). The boxDoubles/boxLongs
+ * the async executor's parallel bucket writers (insertManyJsonParallel; the
+ * Python insert_many wrapper waits for completion itself, then reads the
+ * failures the writers reported). The boxDoubles/boxLongs
  * helpers below serve AsyncExecutor.append_samples' numpy fast path.
  *
  * JSON-representable property values only (str/int/float/bool/null and
@@ -20,8 +21,12 @@ package com.arcadedb.python;
 
 import com.arcadedb.database.Database;
 import com.arcadedb.database.MutableDocument;
+import com.arcadedb.database.async.ErrorCallback;
 import com.arcadedb.serializer.json.JSONArray;
 import com.arcadedb.serializer.json.JSONObject;
+
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class DocumentBatcher {
 
@@ -33,11 +38,7 @@ public final class DocumentBatcher {
     final JSONArray rows = new JSONArray(jsonRows);
     final int n = rows.length();
     if (parallel) {
-      for (int i = 0; i < n; i++) {
-        final MutableDocument doc = db.newDocument(typeName);
-        fill(doc, rows.getJSONObject(i));
-        db.async().createRecord(doc, null);
-      }
+      insertManyJsonParallel(db, typeName, rows);
       return n;
     }
     final boolean wasActive = db.isTransactionActive();
@@ -58,6 +59,48 @@ public final class DocumentBatcher {
     if (!wasActive)
       db.commit();
     return n;
+  }
+
+  /**
+   * The failures the async writers reported for one parallel load. A record the writers reject (a duplicate key, a
+   * failed batch commit that abandons every record buffered with it) reaches only the per-record error callback and the
+   * executor's global one, which by default just logs: without this the load returned its input row count while
+   * dropping records (ArcadeData/arcadedb#8478: register an error callback "so a failed record can't pass silently").
+   * Read it after waitCompletion().
+   */
+  public static final class AsyncFailures {
+    private final AtomicLong                 count = new AtomicLong();
+    private final AtomicReference<Throwable> first = new AtomicReference<>();
+
+    void record(final Throwable exception) {
+      count.incrementAndGet();
+      first.compareAndSet(null, exception);
+    }
+
+    public long getCount() {
+      return count.get();
+    }
+
+    public String getFirstMessage() {
+      final Throwable t = first.get();
+      return t == null ? null : t.toString();
+    }
+  }
+
+  public static AsyncFailures insertManyJsonParallel(final Database db, final String typeName, final String jsonRows) {
+    return insertManyJsonParallel(db, typeName, new JSONArray(jsonRows));
+  }
+
+  private static AsyncFailures insertManyJsonParallel(final Database db, final String typeName, final JSONArray rows) {
+    final AsyncFailures failures = new AsyncFailures();
+    final ErrorCallback onError = failures::record;
+    final int n = rows.length();
+    for (int i = 0; i < n; i++) {
+      final MutableDocument doc = db.newDocument(typeName);
+      fill(doc, rows.getJSONObject(i));
+      db.async().createRecord(doc, null, onError);
+    }
+    return failures;
   }
 
   /** Box primitive columns Java-side so numpy arrays can cross the FFI as

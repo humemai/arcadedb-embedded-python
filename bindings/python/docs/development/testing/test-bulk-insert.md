@@ -4,7 +4,7 @@
 
 Tests for Database.insert_many and AsyncExecutor.create_record.
 
-There are 17 test functions, which collect as 18 test cases because one is
+There are 21 test functions, which collect as 22 test cases because one is
 parametrized.
 
 ## Recommended Bulk Paths Land Every Row
@@ -67,37 +67,74 @@ See the source for the exact assertions.
 
 See the source for the exact assertions.
 
-### 10) create and wait
+## Parallel Mode Reports Failed Records
+
+`TestInsertManyParallelReportsFailures`: a record the parallel writers fail to store
+must fail the call. The maintainers' advice for an async bulk load
+(`ArcadeData/arcadedb#8478`) is an error callback "so a failed record can't pass
+silently"; the parallel mode submitted every record without one and returned the row
+count it was given, so a rejected record was dropped while `insert_many` reported
+success (the duplicate-key test fails on wheels before 2026-09-28).
+
+### 10) duplicate key raises instead of dropping
+
+A 4-bucket type with a UNIQUE index on `id`, and 1,000 rows carrying every key twice.
+Asserts `insert_many(..., parallel=True)` raises `ArcadeDBError` naming the failed
+records, and that no more than the 500 distinct keys were stored.
+
+### 11) clean load still returns the count
+
+The same schema with 1,000 distinct keys: the call returns 1,000 and 1,000 are stored.
+
+## Other Cases
+
+### 12) create and wait
 
 See the source for the exact assertions.
 
-### 11) callback
+### 13) callback
 
 See the source for the exact assertions.
 
-### 12) float array column to columns
+### 14) float array column to columns
 
 See the source for the exact assertions.
 
-### 13) numpy columns
+### 15) numpy columns
 
 See the source for the exact assertions.
 
-### 14) primitive batch matches object path
+### 16) primitive batch matches object path
 
 primitive=True must store exactly what the Object[] path stores.
 
-### 15) repeated tag values are stored distinctly
+### 17) repeated tag values are stored distinctly
 
 Memoised string conversion must not conflate or alias tag values.
 
-### 16) primitive batch accepts plain sequences
+### 18) primitive batch accepts plain sequences
 
 Lists, not just ndarrays: the batch path types each column itself.
 
-### 17) vector column to dataframe
+### 19) vector column to dataframe
 
 See the source for the exact assertions.
+
+## Inside A Caller's Transaction
+
+`TestInsertManyInsideACallersTransaction`: `insert_many` inside an open transaction
+belongs to that transaction, so `commit_every` is ignored and the caller's commit or
+rollback decides the whole batch. The Java fast path committed and reopened the
+caller's transaction every `commit_every` rows until 2026-09-26.
+
+### 20) rollback after insert many leaves nothing
+
+25 rows with `commit_every=10` inside `transaction()`, then an exception: asserts
+nothing was stored.
+
+### 21) commit after insert many keeps every row
+
+The same load committed: asserts the call returns 25 and 25 are stored.
 
 ## Running
 

@@ -199,6 +199,13 @@ class AsyncExecutor:
         """
         Set WAL flush strategy for durability vs. performance trade-off.
 
+        The async writers stamp this setting on every transaction they open,
+        whatever ``arcadedb.txWalFlush`` says for the database, and it
+        defaults to "no". A bulk load through the executor (including
+        ``insert_many(..., parallel=True)``) that must be as durable as the
+        rest of your writes sets it explicitly, e.g. "yes_full" to match
+        ``txWalFlush=2`` (ArcadeData/arcadedb#8478).
+
         Args:
             sync_mode: One of:
                 - "no" - No fsync (fastest, least durable)
