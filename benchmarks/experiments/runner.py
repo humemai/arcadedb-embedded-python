@@ -34,6 +34,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -2221,7 +2222,11 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
     # finally block reads it, and a server that fails to start returns
     # before the client is ever created. Leaving it unbound turns a
     # recorded server_not_ready row into a NameError that loses the cell.
-    server_cid, cli_cid, samplers = None, None, []
+    # `_therm0` for the same reason (BUGS F150): the finally block reads it
+    # since dea7115710 moved the thermal reading out of the two-container
+    # branch, and it is only taken once the client starts, so from then
+    # until this line every server_not_ready became an UnboundLocalError.
+    server_cid, cli_cid, samplers, _therm0 = None, None, [], {}
     try:
         if be["topology"] == "client_server":
             if SERVER_MEM_FRACTION:
@@ -2777,8 +2782,8 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
         # THE HOST THROTTLES FOR EVERY CELL, NOT ONLY TWO-CONTAINER ONES.
         # This sat inside `if len(samplers) == 2`, a branch about summing a
         # client's and a server's memory, which has nothing to do with the
-        # host's thermal state. `_therm0` is snapshotted for every cell at the
-        # top of run_cell, so an EMBEDDED cell took the reading and threw it
+        # host's thermal state. `_therm0` is snapshotted for every cell once
+        # its client starts, so an EMBEDDED cell took the reading and threw it
         # away: every client_server row in the campaign carries
         # host_throttled_ms and every embedded row carries none.
         #
@@ -3153,8 +3158,20 @@ def main():
                 job, rep = pending.pop(idx)
                 active_backends.add(job["backend"])
             t0 = time.time()
+            # AN EXCEPTION OUT OF run_cell MUST NOT END THE WORKER (BUGS F150).
+            # It used to propagate: the thread died, every cell still pending
+            # on it never ran, the main thread's join() returned, and with no
+            # error ROW written the runner exited 0, so a queue script read a
+            # truncated batch as success. Now the cell is counted as raised,
+            # the traceback printed, the batch goes on, and the exit is 1.
             try:
                 row = run_cell(job, rep, args.scale, shard, args.tier, net_name)
+            except Exception:
+                with cv:
+                    raised.append(f"{job['lane']}_{job['backend']}_r{rep}")
+                    print(f"  RAISED {raised[-1]} ({shard}):\n"
+                          + traceback.format_exc(), flush=True)
+                continue
             finally:
                 with cv:
                     active_backends.discard(job["backend"])
@@ -3172,6 +3189,7 @@ def main():
                 print(f"  [{done[0]}/{total}] {row['run_id']} "
                       f"{time.time()-t0:.1f}s ({shard}) -> {status}")
 
+    raised = []
     threads = [threading.Thread(target=worker, args=(s,)) for s in shards]
     for t in threads:
         t.start()
@@ -3190,7 +3208,12 @@ def main():
     # A queue script reads the exit code, so a lane that produced no usable
     # cells must not report success. "wrote 30 rows" was true and meaningless
     # when all thirty were OOM-killed shells.
+    if raised:
+        print(f"\n{len(raised)} cell-run(s) RAISED instead of returning a row "
+              f"(nothing recorded for them): {', '.join(raised[:10])}")
     failed = [r for r in rows if r.get("error")]
+    if raised and not failed:
+        sys.exit(1)
     if failed:
         print(f"\n{len(failed)} of {len(rows)} cell-runs FAILED:")
         for r in failed[:10]:

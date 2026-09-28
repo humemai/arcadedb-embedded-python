@@ -309,14 +309,20 @@ class ArcadeServer(ArcadeEmbedded):
     # INSERT statements with every weight written into the text. The weights
     # travel as the float32 values' exact doubles, so ingest still equals the
     # ground truth's weights. The size is swept on mini at the re-pin.
+    #
+    # THE ROWS ARE THE GENERATOR'S LISTS, AS THEY COME (BUGS F151). Both
+    # sources already yield Python lists: bigann_sparse `.tolist()`s the CSR's
+    # float32 slices (the exact float32 values as Python floats) and
+    # sparse_common draws Python floats, which the server rounds to float32
+    # exactly as the embedded arm's float[] does. A per-element pass through
+    # np.asarray(..., float32) and back changed no value (the rows compare
+    # equal) and cost 5.3 s of this arm's 20.7 s build at 100k on the laptop.
     load_batch = int(os.environ.get("BENCH_SERVED_LOAD_BATCH") or 2000)
 
     def build(self, n_docs):
-        import numpy as np
         rows = []
         for i, idx, vals in gen_docs(n_docs):
-            rows.append({"id": int(i), "tokens": [int(t) for t in idx],
-                         "weights": [float(v) for v in np.asarray(vals, dtype=np.float32)]})
+            rows.append({"id": i, "tokens": idx, "weights": vals})
             if len(rows) >= self.load_batch:
                 self._cmd("sql", "INSERT INTO Doc CONTENT :rows", {"rows": rows})
                 rows = []
