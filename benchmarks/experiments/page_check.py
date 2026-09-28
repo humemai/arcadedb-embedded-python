@@ -1000,7 +1000,10 @@ OPERATION_MANIFEST = {
             "after delete p50 ms", "insert into index ms/vector",
             "delete from index ms/vector", "recall@10 after insert",
             "recall@10 after delete", "ingest+index total s"],
-    "l3s": ["p50 ms", "recall@10", "ingest+index total s"],
+    # "cold p50 ms", as l3d: the October sparse table carries the multipass
+    # overlay's cold/warm pairs, and the bare "p50 ms" this said matched no
+    # column (found rehearsing qOF's landing, 2026-09-28).
+    "l3s": ["cold p50 ms", "recall@10", "ingest+index total s"],
     "l4": ["newest reading p50 ms", "12h aggregate p50 ms",
            "per-host hourly p50 ms", "high-usage p50 ms",
            "grouped, ordered, limited p50 ms", "cold first query ms",

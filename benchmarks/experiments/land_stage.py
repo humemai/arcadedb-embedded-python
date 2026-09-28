@@ -361,6 +361,25 @@ def main():
     # somebody scp'd it by hand once and it is untracked, which is exactly
     # the kind of step that works until the person who knew about it is not
     # the one doing the landing.
+    # THE SPARSE SECOND-PASS TABLE IS A DIRECTORY OF ARTIFACTS TOO, and this
+    # step did not pull it either (found rehearsing qOF's landing, 2026-09-28).
+    # export_web reads results/sparse_mp_<pin>/sp_<arm>_<tier>.json and treats
+    # an ABSENT directory as a lane not yet run, so a sparse landing without it
+    # would have published the sparse table and silently left its second-pass
+    # table off the page. Pulled whenever sparse is part of what lands.
+    if not _lanes or "l3s" in _lanes:
+        _sp = RESULTS / f"sparse_mp_{args.pin}"
+        _sp.mkdir(exist_ok=True)
+        sh(["scp", "-q", f"{HOST}:{REMOTE}/sparse_mp_{args.pin}/sp_*.json", str(_sp)],
+           check=False)
+        _files = sorted(_sp.glob("sp_*.json"))
+        if _files:
+            print(f"  sparse_mp_{args.pin}: {len(_files)} file(s)")
+        else:
+            # Same reason as e4 below: an empty directory would read as
+            # present and move the failure somewhere less obvious.
+            _sp.rmdir()
+
     _e4 = RESULTS / f"e4decomp_{args.pin}"
     _e4.mkdir(exist_ok=True)
     sh(["scp", "-q", f"{HOST}:{REMOTE}/e4decomp_{args.pin}/decomp3m_*.json", str(_e4)],
