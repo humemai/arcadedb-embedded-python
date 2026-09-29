@@ -343,6 +343,13 @@ object is freed (CPython frees it as soon as nothing refers to it, e.g. after a 
 Call `close()`, or use the result set as a context manager, when you stop reading early
 and keep the object around.
 
+A result set read to its end reads as empty afterwards. One closed before its end, by
+`first()`, `one()`, `close()`, or leaving its `with` block, raises `ArcadeDBError` if you
+read it again: the rows it had not returned are gone, so run the query again. (Until
+2026-09-29 such a read returned whatever the closed Java result set still handed out,
+which depended on the engine build.) To take one row and keep reading, use
+`next(iter(rs))` rather than `first()`.
+
 Closing is not only memory hygiene: since 26.10.1's parallel scan
 (ArcadeData/arcadedb#8524) a query whose `LIMIT` is satisfied keeps its scan's producer
 threads parked until its result set is closed or

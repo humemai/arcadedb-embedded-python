@@ -7,6 +7,7 @@ ResultSet and Result classes for wrapping query results.
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from ._logging import get_logger
+from .exceptions import ArcadeDBError
 from .graph import Document, Edge, Vertex
 from .type_conversion import convert_java_to_python
 
@@ -23,6 +24,10 @@ def _bridge_class(name):
         return _BRIDGE_CLASSES[name]
     import jpype
 
+    if not jpype.isJVMStarted():
+        # Asked too early: say so, but do not cache it, or every later call
+        # would take the slow path for the life of the process.
+        return None
     try:
         cls = jpype.JClass(f"com.arcadedb.python.{name}")
     except Exception:
@@ -111,19 +116,47 @@ class ResultSet:
     producer threads parked for up to ``arcadedb.parallelScanAbandonedTimeout``
     (10 minutes), and a few of them stall the next query that needs the pool
     (ArcadeData/arcadedb#8594).
+
+    A result set read to its end reads as empty afterwards. One closed before
+    its end (by ``first()``, ``one()``, ``close()``, or leaving its ``with``
+    block) raises ArcadeDBError when read again: the rows it had not returned
+    are gone, and returning nothing would hide that.
     """
 
     def __init__(self, java_result_set):
         self._java_result_set = java_result_set
         self._closed = False
+        self._exhausted = False
 
     def __iter__(self) -> Iterator["Result"]:
         return self
 
-    def __next__(self) -> "Result":
-        if not self._closed and self._java_result_set.hasNext():
-            return Result(self._java_result_set.next())
+    def _readable(self) -> bool:
+        """True while rows can still come; False once read to the end.
+
+        Raises ArcadeDBError for a result set closed before its end. What a
+        closed Java result set returns is the engine's business and has
+        changed between builds, so it is never asked.
+        """
+        if not self._closed:
+            return True
+        if self._exhausted:
+            return False
+        raise ArcadeDBError(
+            "This result set was closed before all its rows were read (by "
+            "first(), one(), close(), or leaving its with block), so the rows "
+            "it had not returned are gone. Run the query again to read them."
+        )
+
+    def _finish(self) -> None:
+        self._exhausted = True
         self.close()
+
+    def __next__(self) -> "Result":
+        if self._readable() and self._java_result_set.hasNext():
+            return Result(self._java_result_set.next())
+        if not self._closed:
+            self._finish()
         raise StopIteration
 
     def to_list(self, convert_types: bool = True) -> List[Dict[str, Any]]:
@@ -170,10 +203,12 @@ class ResultSet:
             row_access = _bridge_class("RowAccess")
             if row_access is not None:
                 out: List[Dict[str, Any]] = []
+                if not self._readable():
+                    return out
                 while True:
                     batch = row_access.nextRows(self._java_result_set, 512)
                     if len(batch) == 0:
-                        self.close()
+                        self._finish()
                         return out
                     for pair in batch:
                         out.append(
@@ -288,12 +323,14 @@ class ResultSet:
                 yield chunk
             return
 
+        if not self._readable():
+            return
         while True:
             batch = json.loads(
                 str(row_batcher.nextJsonBatch(self._java_result_set, int(batch_size)))
             )
             if not batch:
-                self.close()
+                self._finish()
                 return
             yield batch
 
@@ -445,6 +482,8 @@ class ResultSet:
 
         # Java derives the column set from the first row (empty spec) and
         # every batch reports it in its header
+        if not self._readable():
+            return {}
         joined = ""
         total = 0
         while True:
@@ -457,7 +496,7 @@ class ResultSet:
             )
             count = decode_batch(buf)
             if count == 0:
-                self.close()
+                self._finish()
                 break
             total += count
             if first_names is not None and not joined:
@@ -588,6 +627,8 @@ class ResultSet:
                 first_names = [c["name"] for c in header["cols"]]
             return count
 
+        if not self._readable():
+            return pa.table({})
         joined = ""
         total = 0
         while True:
@@ -600,7 +641,7 @@ class ResultSet:
             )
             count = decode_batch(buf)
             if count == 0:
-                self.close()
+                self._finish()
                 break
             total += count
             if first_names is not None and not joined:

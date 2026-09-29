@@ -392,8 +392,12 @@ def test_to_dict_one_crossing_matches_the_per_property_path(temp_db_path):
     from arcadedb_embedded.results import _bridge_class
     from arcadedb_embedded.type_conversion import convert_java_to_python
 
-    assert _bridge_class("RowAccess") is not None, "the bridge jar must carry RowAccess"
+    # Run alone, this is before the JVM starts: the answer must not be cached.
+    _bridge_class("RowAccess")
     with arcadedb.create_database(temp_db_path) as db:
+        assert (
+            _bridge_class("RowAccess") is not None
+        ), "the bridge jar must carry RowAccess"
         db.command("sql", "CREATE DOCUMENT TYPE Mixed")
         db.command("sql", "CREATE PROPERTY Mixed.stamp DATETIME")
         db.command("sql", "CREATE PROPERTY Mixed.on_day DATE")
@@ -442,7 +446,7 @@ def test_to_dict_one_crossing_matches_the_per_property_path(temp_db_path):
             == expected
         )
         rs = db.query("sql", "SELECT i, s, price FROM Mixed ORDER BY i")
-        assert rs.first() is not None
+        assert next(iter(rs)) is not None  # one row taken, the set left open
         assert rs.to_list() == expected[1:]
 
 
@@ -528,3 +532,38 @@ class TestResultSetReleasesTheEngineCursor:
 
         rs = temp_db.query("sql", "SELECT FROM Few WHERE k = 1")
         assert rs.one().get("k") == 1 and rs._closed
+
+    def test_a_set_closed_before_its_end_raises_when_read_again(self, temp_db):
+        # first() closes the set with rows unread. Reading it again used to
+        # return whatever the closed Java result set still handed out, which
+        # changed between engine builds (the rest of the rows, then nothing);
+        # now it says the rows are gone. A set read to its end stays empty.
+        temp_db.command("sql", "CREATE DOCUMENT TYPE Some")
+        with temp_db.transaction():
+            for i in range(5):
+                temp_db.command("sql", "INSERT INTO Some SET k = ?", i)
+        q = "SELECT k FROM Some ORDER BY k"
+
+        for read in (
+            list,
+            lambda r: r.to_list(),
+            lambda r: r.first(),
+            lambda r: r.count(),
+            lambda r: list(r.iter_json_batches()),
+            lambda r: r.to_columns(),
+        ):
+            rs = temp_db.query("sql", q)
+            assert rs.first().get("k") == 0
+            with pytest.raises(arcadedb.ArcadeDBError, match="closed before"):
+                read(rs)
+
+        rs = temp_db.query("sql", q)
+        with rs:
+            next(iter(rs))
+        with pytest.raises(arcadedb.ArcadeDBError, match="closed before"):
+            rs.to_list()
+
+        rs = temp_db.query("sql", q)
+        assert len(rs.to_list()) == 5
+        assert list(rs) == [] and rs.to_list() == [] and rs.first() is None
+        assert list(rs.iter_json_batches()) == []

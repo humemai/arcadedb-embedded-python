@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_resultset.py){ .md-button }
 
-There are 17 tests that exercise list/DataFrame conversion, chunking, counting, first/one helpers, iteration, repr, complex queries, empty handling, reusability, RID/vertex helpers, JSON array serialization, the one-crossing `to_dict`, and the release of the engine-side cursor.
+There are 18 tests that exercise list/DataFrame conversion, chunking, counting, first/one helpers, iteration, repr, complex queries, empty handling, reusability, RID/vertex helpers, JSON array serialization, the one-crossing `to_dict`, and the release of the engine-side cursor.
 
 ## What the tests cover
 
@@ -70,7 +70,7 @@ Inserts a `JsonArrayTest` row with `tags = ['a', 'b', 'c']` and asserts `to_json
 
 ### to_dict in one crossing
 
-`Result.to_dict()` reads a row in one bridge call (`RowAccess`); the test checks it gives exactly what reading each property on its own gives, with the same key order, for every value type (DATETIME, DATE, DECIMAL, and the rest of a mixed row). It then inserts 1,200 more rows and checks that `to_list()`, which fetches rows in batches (`RowAccess.nextRows`), returns the same dicts in the same order as reading each row on its own, including after `first()` has already taken a row from the same result set.
+`Result.to_dict()` reads a row in one bridge call (`RowAccess`); the test checks it gives exactly what reading each property on its own gives, with the same key order, for every value type (DATETIME, DATE, DECIMAL, and the rest of a mixed row). It then inserts 1,200 more rows and checks that `to_list()`, which fetches rows in batches (`RowAccess.nextRows`), returns the same dicts in the same order as reading each row on its own, including after `next(iter(rs))` has already taken a row from the same result set. It also calls the bridge lookup once before the JVM starts (when run alone), which must not be cached: until 2026-09-29 that cached `None` and the test failed when run on its own.
 
 ### The result set releases its engine cursor (`TestResultSetReleasesTheEngineCursor`)
 
@@ -79,6 +79,7 @@ Since 26.10.1's parallel scan (ArcadeData/arcadedb#8524) a query whose `LIMIT` i
 - **paging by iteration does not stall**: 300,000 documents in one bucket, walked with `SELECT @rid AS rid, k FROM Paged WHERE @rid > <last> LIMIT 5000`, each page iterated to its end; the walk runs in a daemon thread and must finish within 60 s with every row and 61 pages. It stalled on wheels before 2026-09-28.
 - **paging by to_list does not stall**: the same walk with `to_list()`.
 - **exhaustion, first and one close the Java result set**: `list(rs)`, `to_list()`, `first()`, and `one()` each leave the result set closed.
+- **a set closed before its end raises when read again**: after `first()`, each of `list()`, `to_list()`, `first()`, `count()`, `iter_json_batches()`, and `to_columns()` raises `ArcadeDBError` ("closed before"), and so does `to_list()` after a `with` block that took one row; a set read to its end reads as empty through every path. It failed on the previous wheel, where such reads quietly returned `[]` on the current engine and the remaining rows on older ones.
 
 ## Handy patterns from the tests
 
@@ -97,7 +98,7 @@ first_row = db.query("sql", "SELECT FROM FirstTest ORDER BY value").first()
 only_row = db.query("sql", "SELECT FROM OneTest WHERE value = 'unique'").one()
 ```
 
-Key behaviors: ResultSet is single-use for iteration, `count()` iterates the rows in Python and consumes them (use `SELECT count(*)` to count in the engine), `one()` validates cardinality, and empty results return `None` for `first()` and an empty list/chunks for conversions. Exhaustion, `first()`, `one()`, and `to_list()` close the result set; if you stop reading early, use `with db.query(...) as rs:` or call `rs.close()`.
+Key behaviors: ResultSet is single-use for iteration, `count()` iterates the rows in Python and consumes them (use `SELECT count(*)` to count in the engine), `one()` validates cardinality, and empty results return `None` for `first()` and an empty list/chunks for conversions. Exhaustion, `first()`, `one()`, and `to_list()` close the result set; if you stop reading early, use `with db.query(...) as rs:` or call `rs.close()`. Reading a set closed before its end raises `ArcadeDBError`.
 
 ## See Also
 
