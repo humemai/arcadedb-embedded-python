@@ -77,8 +77,11 @@ What must pass before a change is green, beyond the tests themselves:
   and to the "Install wheel and test dependencies" step of `test-python-bindings.yml`.
   The repo-root `pyproject.toml` carries the same packages for local runs.
 - **Timeouts**: the pytest step has a 30-minute limit, and `faulthandler_timeout = 600`
-  in the pytest configuration dumps every thread's stack when a single test runs
-  past 10 minutes.
+  in the pytest configuration dumps every Python thread's stack when a single test runs
+  past 10 minutes. A minute earlier, `tests/conftest.py` writes every Java thread's
+  name, state, and stack to the log, past pytest's output capture: a test hung inside
+  a Java call shows only that call in the Python dump
+  (`ARCADEDB_TEST_JAVA_DUMP_AFTER_S` moves the threshold; default 540 s).
 - **SHA-pinned actions and pre-commit** (`lint-workflows.yml`, above).
 
 Run the same checks locally before pushing (from the repository root):

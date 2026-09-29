@@ -196,3 +196,18 @@ def test_faulthandler_is_off_on_windows():
     if sys.platform != "win32":
         pytest.skip("the conftest hook disables it on Windows only")
     assert not faulthandler.is_enabled()
+
+
+def test_java_thread_dump_lists_the_jvm_threads(temp_db):
+    # The conftest timer calls this shortly before faulthandler_timeout, so a
+    # hang inside a Java call leaves the Java side's stacks in the CI log (#10).
+    import io
+
+    from tests.conftest import dump_java_threads
+
+    out = io.StringIO()
+    assert dump_java_threads("test", out) is True
+    text = out.getvalue()
+    assert text.startswith("=== Java threads: test ===")
+    assert '"Reference Handler"' in text
+    assert "state=" in text and "    at " in text
