@@ -1139,6 +1139,10 @@ NOT_PRINTED = [
      "pool (FAIRNESS F6, audited in FAIRNESS.md rather than printed as a "
      "column), memory limit, and query timeouts, which explain the cell "
      "rather than measure it"),
+    (r"^ladybug_(threads|buffer_pool_mib)$",
+     "the LadybugDB graph arm's thread pool (read back from the engine) and "
+     "buffer pool, fitted to the cpuset and to the cgroup memory limit (FAIRNESS "
+     "F6, BUGS F160; audited in FAIRNESS.md rather than printed as a column)"),
     (r"^duckpgq_threads$",
      "the DuckPGQ graph arm's DuckDB thread pool, sized from the cpuset via "
      "PRAGMA threads=sched_getaffinity (FAIRNESS F6, audited in FAIRNESS.md "
