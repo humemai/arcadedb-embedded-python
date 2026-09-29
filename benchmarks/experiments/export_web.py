@@ -4412,6 +4412,12 @@ OCT_PROSE = {
         "server_rows": ("Server rows have no JVM start, first open, or cold process: the server is already running when the probe connects, so those three columns describe the embedded process only. The session columns are measured for both.", []),
         # The SurrealDB embedded arm (2026-09-16, DECISIONS #95a): a fact about
         # the engine, not a number, so it carries no pin.
+        # BUGS F159, 2026-09-29: l5_lifecycle.cycle() reads LSMVectorIndex.getStats() for the vector situation after
+        # the action timer stops and before close(). The read is untimed, but at the October pin it raises the close
+        # it precedes (laptop, 1M vectors: 6.4 -> 15.3 ms before #8630; 3.0 -> 3.5 after), so the embedded
+        # dense-vector "open and close" cell is not a session that touched nothing. No number here: the split is
+        # measured on the laptop only. Retires with CAMPAIGN section 7 row 22 (the read moves to an untimed cycle).
+        "vector_stats": ("ArcadeDB's embedded dense-vector rows read the index's statistics just before close, to record whether a rebuild ran. The read is outside the timers, but on this engine build it raises the cost of the close that follows it, so that row's open and close figure is an upper bound for a session that touches nothing.", []),
         "surreal_rows": ("SurrealDB rows have no JVM start: the SurrealDB core is a compiled extension that the Python import loads, so there is no runtime to start apart from the import. Their first open is the first open with the SDK already imported, and their cold process is interpreter start, import, open, and close, the same span the ArcadeDB embedded rows time. SurrealDB's time-series row is a plain table of timestamped records, the footing its time-series rows elsewhere on this page run on, because the engine has no time-series type.", []),
     },
     "durability": {
@@ -4980,6 +4986,8 @@ def _oct_conditions(table):
             why = _R("l3s", key)
             tail.append(why)
             _declare_absence("l3s", engine, None, "unexpressible", why)
+    if tid == "lifecycle" and any(n == "Dense vectors (embedded)" for n in names):
+        tail.append(_R("lifecycle", "vector_stats"))
     if tid == "lifecycle" and any("SurrealDB" in n for n in names):
         tail.append(_R("lifecycle", "surreal_rows"))
     if tid == "l2olap":
