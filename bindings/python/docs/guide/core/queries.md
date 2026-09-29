@@ -138,11 +138,15 @@ Always bind values as parameters instead of pasting them into the query text,
 for two reasons. **Safety**: a pasted value can change the statement (SQL
 injection), and a quote in a name breaks it. **Speed**: ArcadeDB caches parsed
 statements and plans by their text, so every distinct value pasted in is a new
-text that is parsed again, and the stream of one-off texts evicts the cached
-statements that do repeat (ArcadeDB
-[#8286](https://github.com/ArcadeData/arcadedb/issues/8286)). Measured on an
-indexed point lookup, 20,000 records: Cypher 0.87 ms with the value pasted in
-against 0.09 ms with `$id` bound, SQL 0.48 ms against 0.09 ms. Identifiers
+text that is parsed again. Before 26.10.1 the stream of one-off texts also
+evicted the cached statements that do repeat (ArcadeDB
+[#8286](https://github.com/ArcadeData/arcadedb/issues/8286)); from 26.10.1 the
+SQL and Cypher caches protect statements that are hit repeatedly, but every
+pasted value still costs a parse. Measured on an indexed point lookup, 20,000
+records: Cypher 0.87 ms with the value pasted in against 0.09 ms with `$id`
+bound, SQL 0.48 ms against 0.09 ms. If an application cannot avoid pasting
+values, raising `arcadedb.sqlStatementCache` and
+`arcadedb.opencypher.statementCache` keeps more texts parsed. Identifiers
 (type, property, bucket names) cannot be bound and belong in the text.
 
 ```python
@@ -424,6 +428,27 @@ without the index when most of your ranges are wide.
 
 `HASH` does not imply uniqueness. A non-unique hash index still makes sense when many
 records share the same exact-match value, such as `customerId`, `status`, or `country`.
+
+**Ordered reads over an optional property.** `ORDER BY p LIMIT k` reads an `LSM_TREE`
+index on `p` in order, but nulls sort first in ascending order and an index created with
+the default null strategy holds no null keys, so an ascending read first scans the whole
+type for rows where `p` is null. From 26.10.1 that scan is skipped when `p` is declared
+`NOTNULL` or the `WHERE` clause excludes nulls on `p` (`p IS NOT NULL`, `p = ?`, `p < ?`, or
+`p > ?`; not `>=` or `<=`, which two nulls satisfy); otherwise, create the index with `NULL_STRATEGY INDEX`
+so the nulls are in it. Descending reads are not affected. At 1,000,000 rows the
+ascending top 10 measured about 290 ms with the scan and about 1 ms without it
+(ArcadeDB [#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
+
+```python
+db.command("sql", "CREATE PROPERTY Event.createdAt DATETIME (notnull true)")  # no nulls: no scan
+db.command("sql", "CREATE INDEX ON Task (dueAt) NOTUNIQUE NULL_STRATEGY INDEX")  # optional property
+```
+
+**Prefix matches.** From 26.10.1 a SQL `LIKE 'abc%'` and a Cypher `STARTS WITH 'abc'`
+read an ordered index on the property as a range and then check the condition, instead of
+scanning the type; case-insensitive indexes are not used for them, and Cypher
+`min(n.p)` / `max(n.p)` read one end of an index on that label and property alone when
+the index holds no nulls (ArcadeDB [#8666](https://github.com/ArcadeData/arcadedb/issues/8666)).
 
 ### ResultSet Methods
 
