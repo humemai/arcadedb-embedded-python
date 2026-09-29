@@ -906,15 +906,54 @@ class FalkorGraph(Base):
 
 
 # --------------------------------------------------------------- LadybugDB
+def _ladybug_fit(memory_max_text=None):
+    """(threads, buffer_pool_bytes) for a LadybugDB database opened in THIS cell (FAIRNESS F6, BUGS F160).
+
+    LadybugDB sizes both from the host when left at 0: `max_num_threads` from
+    `hardware_concurrency()` (20 on mini under a 12-CPU cpuset) and the buffer
+    pool as 0.8 of physical RAM (about 49 GB on mini against a 24 GB cell cap),
+    so a query that outgrows the cap is killed by the kernel instead of getting
+    the engine's own "buffer pool is full" error (LadybugDB/ladybug#1070).
+    Threads come from `sched_getaffinity`, the call that sees the mask. The
+    pool keeps the engine's own 0.8 ratio, applied to the cgroup's
+    `memory.max` instead of the host; with no cgroup limit it is left to the
+    engine (None). `memory_max_text` is for tests; normally the file is read.
+    """
+    threads = len(os.sched_getaffinity(0))
+    if memory_max_text is None:
+        try:
+            with open("/sys/fs/cgroup/memory.max") as fh:
+                memory_max_text = fh.read()
+        except OSError:
+            memory_max_text = ""
+    text = memory_max_text.strip()
+    pool = int(int(text) * 0.8) if text.isdigit() else None
+    return threads, pool
+
+
 class LadybugGraph(Base):
     QUERY_LANGUAGE = "Cypher, embedded"
     name = "ladybug_graph"
 
+    def _open_fitted(self, ladybug):
+        """Open /tmp/l2_ladybug with the thread pool and buffer pool fitted to the cell, and put what the ENGINE
+        reports on the row (the thread count is read back, not assumed; the pool size is not readable through
+        current_setting, so the value passed is recorded)."""
+        threads, pool = _ladybug_fit()
+        kw = {"max_num_threads": threads}
+        if pool:
+            kw["buffer_pool_size"] = pool
+        self.db = ladybug.Database("/tmp/l2_ladybug", **kw)
+        self.conn = ladybug.Connection(self.db)
+        _r = self.conn.execute('CALL current_setting("threads") RETURN *')
+        _got = _r.get_next()[0]
+        self.row_extra = {"ladybug_threads": int(_got),
+                          "ladybug_buffer_pool_mib": (pool >> 20) if pool else None}
+
     def connect(self):
         import ladybug
         self._mod = ladybug
-        self.db = ladybug.Database("/tmp/l2_ladybug")
-        self.conn = ladybug.Connection(self.db)
+        self._open_fitted(ladybug)
         self.version = f"ladybug:{getattr(ladybug, '__version__', '?')}"
         self.conn.execute(
             "CREATE NODE TABLE Person(id INT64, name STRING, age INT64, "
@@ -1053,8 +1092,7 @@ class LadybugGraph(Base):
         """
         import ladybug
         self._mod = ladybug
-        self.db = ladybug.Database("/tmp/l2_ladybug")
-        self.conn = ladybug.Connection(self.db)
+        self._open_fitted(ladybug)
 
     # MESSAGE-HALF loader + LSQB queries (DECISIONS #103b/#104). INFERRED, NOT
     # RUN: LadybugDB (Kùzu) has no type inheritance and no multi-label, so it

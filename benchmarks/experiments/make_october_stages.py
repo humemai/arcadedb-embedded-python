@@ -256,6 +256,15 @@ STAGES = [
      ['grep -q "durability_readback" e4_decomp.py'
       ' || { say "$ID ABORT: the durability stamp this re-run exists for is not in this tree"; exit 1; }'],
      {}, []),
+    # LADYBUGDB, FITTED (BUGS F160, DECISIONS #124). qOA and qOA3 ran it with LadybugDB's host-sized defaults: 20
+    # threads on a 12-CPU cpuset and a buffer pool of 0.8 x host RAM (~49 GB) against the 24 GB cell cap, while
+    # Memgraph, FalkorDB, and DuckPGQ were fitted (FAIRNESS F6). A laptop A/B on the lane's own adapter put its reads
+    # 12-28% slow and its writes 12% fast at 20 threads. Both classes (None), both sizes, LadybugDB alone; the
+    # canonical key plus the newest ts_utc supersedes the unfitted rows where they stand, as qOD2 and qOA4 did. It
+    # waits on qOM, the chain's hand-written last stage, and it is about 16 minutes of machine time.
+    ("qOA5", "LadybugDB graph interactive re-run, fitted to the cell (F160)", "l2", ["oltp"], ["sf1", "sf10"],
+     ['grep -q "def _ladybug_fit" l2_graph.py || { say "$ID ABORT: the LadybugDB fit (F160) is not in this tree"; exit 1; }'],
+     {}, [], ["ladybug_graph"], None, "qOM"),
 ]
 
 HEAD = '''#!/bin/bash
@@ -602,11 +611,15 @@ def emit(idx: int, spec) -> str:
     # the strict pass (a repair for a stage that already ran relaxed-only),
     # "relaxed" only the relaxed one.
     dur_mode = spec[9] if len(spec) > 9 else None
+    # spec[10]: the stage to wait for, when it is not the previous entry here. The chain ends with qOL and qOM,
+    # which were written by hand on mini and are not in this table, so a stage that must follow them names qOM
+    # itself; waiting on this table's last entry (qOK) would run it BESIDE qOL, which breaks F2.
+    after = spec[10] if len(spec) > 10 and spec[10] else (STAGES[idx - 1][0] if idx else None)
     backends = list(only) if only else list(runner.LANES[lane][1])
     caps = [(s, runner.TIMEOUT_BY_SCALE[s]) for s in scales]
-    wait = ("" if idx == 0 else
-            f'\nwhile ! grep -q "{STAGES[idx - 1][0]} ALL-DONE" "$S" 2>/dev/null; do sleep 300; done\n'
-            f'say "$ID: {STAGES[idx - 1][0]} finished, taking the machine"\n')
+    wait = ("" if after is None else
+            f'\nwhile ! grep -q "{after} ALL-DONE" "$S" 2>/dev/null; do sleep 300; done\n'
+            f'say "$ID: {after} finished, taking the machine"\n')
     body = HEAD.format(id=sid, n=idx + 1, total=len(STAGES), title=title, lane=lane,
                        nbe=len(backends), sha=SHA, wait=wait,
                        caps=caps, scales=list(scales), scale_list=" ".join(scales), guards="\n".join(guards) + ("\n" if guards else ""),
