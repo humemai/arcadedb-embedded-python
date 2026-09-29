@@ -94,7 +94,7 @@ with arcadedb.create_database(db_path) as db:
 
     # While ArcadeDB is schema-flexible, defining types is recommended
     # It provides better performance, validation, and indexing
-    # Schema operations are auto-transactional (no wrapper needed)
+    # Schema statements apply immediately (no transaction needed)
     db.command("sql", "CREATE DOCUMENT TYPE Task")
 
     # Define properties with various ArcadeDB data types

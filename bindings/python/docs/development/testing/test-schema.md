@@ -408,7 +408,7 @@ Tests `CREATE INDEX ON <type> (<prop> BY KEY)` and `(<prop> BY VALUE)` on a MAP 
 
 ```python
 with arcadedb.create_database("./test_db") as db:
-    # Schema operations are auto-transactional (no wrapper needed)
+    # Schema statements apply immediately (no transaction needed)
     db.schema.create_vertex_type("User")
     db.schema.create_edge_type("Follows")
 ```
@@ -464,7 +464,7 @@ with arcadedb.create_database("./test_db") as db:
 
 ## Key Takeaways
 
-1. **Schema ops are auto-transactional** - No wrapper needed for type/property/index creation
+1. **Schema statements apply immediately** - No transaction needed for one; batch many in one transaction so the schema is written once, and remember a rollback does not undo them (`tests/test_schema_batching.py`)
 2. **Check existence** - Use `exists_type()` / `exists_index()` before creating
 3. **Use `get_or_create_*`** - Idempotent type/property/index creation
 4. **Index frequently queried** - Properties used in WHERE clauses

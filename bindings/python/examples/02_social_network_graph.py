@@ -115,7 +115,7 @@ def create_schema(db):
     step_start = time.time()
 
     try:
-        # Schema operations are auto-transactional; no explicit transaction needed
+        # Schema statements apply immediately; no transaction needed
         db.command("sql", "CREATE VERTEX TYPE Person")
         print("  ✓ Created Person vertex type")
 

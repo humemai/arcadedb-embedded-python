@@ -905,7 +905,7 @@ specifically need that surface.
 ```python
 import numpy as np
 
-# Create schema (auto-transactional)
+# Create schema (applies immediately)
 db.command("sql", "CREATE VERTEX TYPE Document")
 db.command("sql", "CREATE PROPERTY Document.embedding ARRAY_OF_FLOATS")
 db.command("sql", "CREATE PROPERTY Document.id STRING")

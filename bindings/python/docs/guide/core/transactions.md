@@ -41,14 +41,30 @@ with arcadedb.create_database(temp_db_path) as db:
     assert count == 2
 ```
 
-## Schema is auto-transactional
+## Schema statements apply immediately
+
+A schema statement (create or drop a type, property, or index) needs no transaction, and it is
+not transactional: it takes effect at once, and a rollback does not undo it. To create many
+types, put the statements in one transaction or one `sqlscript`: the schema is then written to
+disk once, when the transaction ends, instead of once per statement, which on disk is the
+difference between a few milliseconds per type and a durable write per statement
+(ArcadeData/arcadedb#8635). A crash before such a transaction ends leaves the new files unnamed
+in the schema; the database still opens, and the same statements can be run again.
 
 ```python
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database(temp_db_path) as db:
-    # Schema changes do not need an explicit transaction
+    # One schema statement: no transaction needed
     db.command("sql", "CREATE DOCUMENT TYPE TestDoc")
+
+    # Many schema statements: one transaction, one schema write when it ends
+    with db.transaction():
+        for i in range(10):
+            db.command("sql", f"CREATE DOCUMENT TYPE Part{i}")
+            db.command("sql", f"CREATE PROPERTY Part{i}.id LONG")
+            db.command("sql", f"CREATE INDEX ON Part{i} (id) UNIQUE")
+    assert all(db.schema.exists_type(f"Part{i}") for i in range(10))
 
     # Data writes do
     with db.transaction():

@@ -20,7 +20,7 @@ def test_database_creation(temp_db_path):
 def test_database_operations(temp_db_path):
     """Test basic database operations."""
     with arcadedb.create_database(temp_db_path) as db:
-        # Create a document type (schema ops auto-transactional)
+        # Create a document type (schema statements apply immediately)
         db.command("sql", "CREATE DOCUMENT TYPE TestDoc")
 
         # Insert data
@@ -59,7 +59,7 @@ def test_rich_data_types(temp_db_path):
     - Aggregation queries and filtering
     """
     with arcadedb.create_database(temp_db_path) as db:
-        # Create document type with rich data types (schema ops auto-transactional)
+        # Create document type with rich data types (schema statements apply immediately)
         db.command("sql", "CREATE DOCUMENT TYPE Task")
 
         # Define properties with various ArcadeDB data types
@@ -790,7 +790,7 @@ def test_large_result_set_handling(temp_db_path):
 def test_property_type_conversions(temp_db_path):
     """Test that property types are correctly converted between Python/Java."""
     with arcadedb.create_database(temp_db_path) as db:
-        # Schema operations are auto-transactional
+        # Schema statements apply immediately (no transaction needed)
         db.command("sql", "CREATE DOCUMENT TYPE TypeTest")
 
         with db.transaction():

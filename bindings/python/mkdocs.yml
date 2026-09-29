@@ -227,6 +227,7 @@ nav:
     - API Tests:
       - AsyncExecutor: development/testing/test-async-executor.md
       - Schema: development/testing/test-schema.md
+      - Schema Batching: development/testing/test-schema-batching.md
       - Exporter: development/testing/test-exporter.md
       - GraphBatch: development/testing/test-graph-batch.md
       - JVM Args: development/testing/test-jvm-args.md

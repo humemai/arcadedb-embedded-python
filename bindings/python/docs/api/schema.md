@@ -23,7 +23,7 @@ import arcadedb_embedded as arcadedb
 
 # Use context manager to ensure clean close
 with arcadedb.create_database("./mydb") as db:
-    # Create types (Schema operations are auto-transactional)
+    # Create types (schema statements apply immediately)
     # Vertex type
     user_type = db.schema.create_vertex_type("User")
 
@@ -34,9 +34,13 @@ with arcadedb.create_database("./mydb") as db:
     log_type = db.schema.create_document_type("LogEntry")
 ```
 
-!!! note "Auto-Transactional"
-    Schema operations (create type, create property, create index) are **auto-transactional**.
-    Do **not** wrap them in `with db.transaction():` blocks.
+!!! note "Schema statements apply immediately"
+    Creating or dropping a type, property, or index needs no transaction, and it is not
+    transactional: it takes effect at once, and a rollback does not undo it. To create many
+    types, run the statements inside one `with db.transaction():` or send them as one
+    `sqlscript`. The schema is then written to disk once, when the transaction ends, instead of
+    once per statement (ArcadeData/arcadedb#8635). See
+    [Transactions](../guide/core/transactions.md#schema-statements-apply-immediately).
 
 ## Type Creation Methods
 
@@ -63,7 +67,7 @@ Create a new vertex type. Returns the underlying Java `VertexType` object.
 **Example:**
 
 ```python
-# Schema operations are auto-transactional
+# Schema statements apply immediately (no transaction needed)
 # Basic vertex type
 user_type = schema.create_vertex_type("User")
 
@@ -96,7 +100,7 @@ Create a new edge type. Returns the underlying Java `EdgeType` object.
 **Example:**
 
 ```python
-# Schema operations are auto-transactional
+# Schema statements apply immediately (no transaction needed)
 # Basic edge type
 follows_type = schema.create_edge_type("Follows")
 
@@ -129,7 +133,7 @@ Create a new document type. Returns the underlying Java `DocumentType` object.
 **Example:**
 
 ```python
-# Schema operations are auto-transactional
+# Schema statements apply immediately (no transaction needed)
 # Basic document type
 log_type = schema.create_document_type("LogEntry")
 
@@ -293,7 +297,7 @@ Either the enum member or its string name may be passed.
 **Example:**
 
 ```python
-# Schema operations are auto-transactional
+# Schema statements apply immediately (no transaction needed)
 schema.create_vertex_type("User")
 
 # String property
@@ -386,7 +390,7 @@ Create an index on a type.
 **Example:**
 
 ```python
-# Schema operations are auto-transactional
+# Schema statements apply immediately (no transaction needed)
 # Unique index on username
 schema.create_index("User", ["username"], unique=True)
 
@@ -678,7 +682,7 @@ Check if type exists.
 
 ```python
 if not schema.exists_type("User"):
-    schema.create_vertex_type("User")  # Schema ops are auto-transactional
+    schema.create_vertex_type("User")  # schema statements apply immediately
 ```
 
 ---
@@ -734,7 +738,7 @@ import arcadedb_embedded as arcadedb
 
 # Create database with context manager to ensure clean close
 with arcadedb.create_database("./social_network") as db:
-    # Create schema (auto-transactional)
+    # Create schema (applies immediately)
     # User vertex type
     db.schema.create_vertex_type("User")
     db.schema.create_property("User", "username", "STRING")
@@ -772,7 +776,7 @@ with arcadedb.create_database("./social_network") as db:
 ## Schema Evolution
 
 ```python
-# Add property to an existing type (auto-transactional)
+# Add property to an existing type (applies immediately)
 if not db.schema.get_type("User").existsProperty("phoneNumber"):
     db.schema.create_property("User", "phoneNumber", "STRING")
     print("✅ Added phoneNumber property")
@@ -784,17 +788,23 @@ db.schema.get_or_create_index("User", ["email"], unique=True)
 
 ## Best Practices
 
-### 1. Schema Ops Are Auto-Transactional
+### 1. Schema Statements Apply Immediately; Batch Many in One Transaction
 
 ```python
-# ✅ Correct
+# ✅ One or two statements: no transaction needed
 schema.create_vertex_type("User")
 schema.create_edge_type("Follows")
 
-# ❌ Unnecessary
+# ✅ Many statements: one transaction, so the schema is written to disk once, at the end
 with db.transaction():
-    schema.create_vertex_type("User")
+    for name in ("Author", "Book", "Review", "Shelf"):
+        db.command("sql", f"CREATE DOCUMENT TYPE {name}")
+        db.command("sql", f"CREATE PROPERTY {name}.id LONG")
+        db.command("sql", f"CREATE INDEX ON {name} (id) UNIQUE")
 ```
+
+A schema statement is not transactional: a rollback does not undo it, so a failed block can
+leave the types it already created behind.
 
 ### 2. Check Existence Before Creating
 
@@ -837,7 +847,7 @@ Property constraints are not exposed by the Python `Schema` wrapper. Apply them 
 DDL, or on the Java `Property` object returned by `create_property` (camelCase methods):
 
 ```python
-# ✅ Recommended: SQL DDL for constraints (schema ops are auto-transactional)
+# ✅ Recommended: SQL DDL for constraints (schema statements apply immediately)
 db.schema.create_vertex_type("User")
 db.command("sql", "CREATE PROPERTY User.username STRING (mandatory true, notnull true)")
 db.command("sql", "CREATE PROPERTY User.age INTEGER (min 0, max 150)")
@@ -859,7 +869,7 @@ def init_schema(db):
         print("Schema already initialized")
         return
 
-    # Schema operations are auto-transactional
+    # Schema statements apply immediately (no transaction needed)
     db.schema.create_vertex_type("User")
     db.schema.create_property("User", "username", "STRING")
     db.schema.create_property("User", "email", "STRING")
@@ -942,7 +952,7 @@ else:
 ### Index Creation Fails
 
 ```python
-# ✅ Good: Create index (auto-transactional)
+# ✅ Good: Create index (applies immediately)
 schema.create_index("User", ["username"], unique=True)
 ```
 
