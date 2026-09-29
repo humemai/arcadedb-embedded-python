@@ -39,7 +39,10 @@ The CI/CD workflows build and release across **4 platforms** for a total of **20
 
 Builds the wheel on the same 4 × 5 matrix and runs the example scripts
 (`0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py` by default). Example 21 is excluded in CI.
-Same path filter and triggers as the bindings workflow.
+Same path filter and triggers as the bindings workflow. A clean exit is not the whole
+check for example 10: its queries are run a second time on the pure-Python reference
+backend (`--db python_memory`), and `examples/scripts/compare_query_hashes.py` fails the
+job unless every query's row count and result hash agree (#12).
 
 ### `lint-workflows.yml`
 
