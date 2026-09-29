@@ -61,8 +61,14 @@ Measured times:
 
 - `Transactional` (`1 thread`): `575.078s`
 - `Async SQL` (`--async-parallel 1`): `701.080s`
-- `GraphBatch` (`--parallel 1`): `507.983s`
-- `GraphBatch` (`--parallel 4`): `359.672s`
+- `GraphBatch` (`--parallel 1`): `507.983s`, one-way edges
+- `GraphBatch` (`--parallel 4`): `359.672s`, one-way edges
+
+The two `GraphBatch` times were measured with `bidirectional=False` (each edge stored on its
+source vertex only), while the other three arms store both directions, so they understate a
+like-for-like load. The script now loads two-way edges: a one-way load into a two-way edge
+type makes any query the planner walks from the target end return 0 rows
+(ArcadeData/arcadedb#8625).
 - `IMPORT DATABASE` (`--parallel 1`): `453.481s`
 - `IMPORT DATABASE` (`--parallel 4`): `275.325s`
 

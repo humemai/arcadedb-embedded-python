@@ -193,8 +193,10 @@ The source creates unique `Id` indexes on all six vertex types before the query 
 - Neo4j runs execute the same OLAP query suite through a Dockerized server plus Python
   driver wrapper, with client/server resource accounting derived from `--server-fraction`
 - Traversal expectations should be interpreted as directed
-- The ArcadeDB `GraphBatch` load passes `bidirectional=False`, so each edge is stored
-  on its source vertex only; the engine default stores both directions
+- The ArcadeDB `GraphBatch` load stores both directions of every edge (`bidirectional=True`,
+  the engine default). Until 2026-09-29 it stored the source side only, and 5 of the 10
+  queries, the ones the planner walks from the target end, returned 0 rows with no error
+  (ArcadeData/arcadedb#8625)
 
 ## Supported Backends
 

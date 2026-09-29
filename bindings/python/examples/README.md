@@ -156,7 +156,7 @@ Stack Overflow property-graph OLTP benchmark with mixed CRUD operations:
 **Graph OLAP | OpenCypher Query Suite | Cross-DB Benchmarking**
 
 Fixed query-suite benchmark for Stack Overflow graph analytics:
-- ArcadeDB preloads through `db.graph_batch(...)` (with `bidirectional=False`)
+- ArcadeDB preloads through `db.graph_batch(...)` with two-way edges
 - ArcadeDB query execution is Cypher-only in this example path
 
 **Learn:** OLAP graph query benchmarking and directed-edge traversal assumptions
@@ -397,9 +397,10 @@ half-applied after an interruption
 - **Run from examples/ directory** - Always execute examples from `bindings/python/examples/` for correct file paths
 - **Start with Example 01** - Foundation for all ArcadeDB concepts
 - **Use directed graph assumptions** - Graph examples keep edge direction semantics.
-  Storage differs by script: examples 09, 10, 13, and 16 load through `graph_batch(...)`
-  with `bidirectional=False`, so their edges are stored on the source vertex only; the
-  engine default (and the other graph examples) store both directions
+  Every graph example stores both directions of each edge (the engine default). Load
+  one-way edges only into an edge type declared one-way (`CREATE EDGE TYPE ...
+  UNIDIRECTIONAL`): a one-way load into a two-way type makes any query the planner walks
+  from the target end return 0 rows with no error (ArcadeData/arcadedb#8625)
 - **Database files persist** - Examples preserve data for inspection
 - **Output is educational** - Check console output to understand operations
 - **Experiment freely** - Examples clean up and recreate on each run

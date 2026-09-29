@@ -906,7 +906,11 @@ class Database:
             expected_edge_count: Hint for auto-tuning batch size when not set.
             edge_list_initial_size: Initial edge-segment size in bytes.
             light_edges: Create property-less edges as light edges when True.
-            bidirectional: Connect incoming edges as well as outgoing edges.
+            bidirectional: Connect incoming edges as well as outgoing edges (the
+                default). Pass False only for an edge type declared UNIDIRECTIONAL: the
+                batch does not check, and one-way edges in a two-way type make any query
+                the planner walks from the target end return 0 rows
+                (ArcadeData/arcadedb#8625).
             commit_every: Commit cadence within a flush. `0` means one commit per flush.
             use_wal: Write-ahead log during the import. Off by default, so a crash mid-import can lose its
                 tail; pass True for a crash-safe import (ArcadeData/arcadedb#8287).

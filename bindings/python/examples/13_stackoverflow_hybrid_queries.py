@@ -665,7 +665,7 @@ def insert_vertices(db, vertex_type: str, rows: List[Dict[str, Any]]) -> None:
     with db.graph_batch(
         batch_size=max(1, len(rows)),
         expected_edge_count=0,
-        bidirectional=False,
+        bidirectional=True,
         commit_every=max(1, len(rows)),
         use_wal=False,
     ) as batch:
@@ -702,7 +702,10 @@ def insert_edges(
     with db.graph_batch(
         batch_size=max(1, len(rows)),
         expected_edge_count=max(1, len(rows)),
-        bidirectional=False,
+        # Two-way edges, as the schema declares them: a query the planner walks
+        # from the target end reads the incoming pointers, and a one-way load
+        # returned 0 rows there with no error (ArcadeData/arcadedb#8625).
+        bidirectional=True,
         commit_every=max(1, len(rows)),
         use_wal=False,
     ) as batch:

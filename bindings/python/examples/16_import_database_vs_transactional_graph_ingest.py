@@ -26,8 +26,13 @@ For:
 Measured ingest times:
 - Transactional (`single-threaded`, `1 thread`): 575.078s
 - Async SQL (`single-threaded`, `--async-parallel 1`): 701.080s
-- GraphBatch (`single-threaded`, `--parallel 1`): 507.983s
-- GraphBatch (`4 threads`, `--parallel 4`): 359.672s
+- GraphBatch (`single-threaded`, `--parallel 1`): 507.983s (one-way edges, see below)
+- GraphBatch (`4 threads`, `--parallel 4`): 359.672s (one-way edges, see below)
+
+The two GraphBatch times were measured with `bidirectional=False`, which stores each
+edge on its source vertex only, while the other three arms store both directions, so
+they understate a like-for-like load. The script now loads two-way edges
+(ArcadeData/arcadedb#8625).
 - IMPORT DATABASE (`single-threaded`, `--parallel 1`): 453.481s
 - IMPORT DATABASE (`4 threads`, `--parallel 4`): 275.325s
 
@@ -687,7 +692,9 @@ def run_graph_batch_graph_load(
         with db.graph_batch(
             batch_size=batch_size,
             expected_edge_count=edge_count,
-            bidirectional=False,
+            # Two-way edges, as the schema declares them and as the other three
+            # arms store them (ArcadeData/arcadedb#8625).
+            bidirectional=True,
             commit_every=batch_size,
             use_wal=False,
             parallel_flush=parallel > 1,

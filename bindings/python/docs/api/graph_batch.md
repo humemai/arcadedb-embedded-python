@@ -31,6 +31,11 @@ Create a configured batch helper tied to the current database.
   `batch_size`, the batch size is tuned to it (clamped to 100,000-5,000,000), and
   a single flush is the optimal shape
 - `light_edges`: create property-less light edges when appropriate
+- `bidirectional`: store each edge on both vertices (the default) or on its source only.
+  Pass `False` only for an edge type declared one-way (`CREATE EDGE TYPE ...
+  UNIDIRECTIONAL`). The batch does not check: one-way edges loaded into a two-way type
+  (the default `CREATE EDGE TYPE`) make any query the planner walks from the target end
+  return 0 rows with no error (ArcadeData/arcadedb#8625)
 - `commit_every`: commit cadence during batch work
 - `use_wal`: write-ahead log during the import. **Off by default**: a crash in
   the middle of the import can lose its tail, with nothing to replay. Pass

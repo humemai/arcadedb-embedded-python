@@ -90,8 +90,8 @@ with db.transaction():
     Graph relationships are directed from source to target. This example creates its
     edges with SQL `CREATE EDGE`, which uses ArcadeDB's default bidirectional edge
     storage: reverse traversal stays efficient without changing the semantic direction
-    of the relationship. Not every example does this: the `graph_batch(...)` loads in
-    examples 09, 10, 13, and 16 pass `bidirectional=False`.
+    of the relationship. The `graph_batch(...)` loads in examples 09, 10, 13, and 16 store
+    both directions too.
 
 ### Schema Definition
 
