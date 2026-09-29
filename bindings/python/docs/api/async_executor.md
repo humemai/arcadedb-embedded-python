@@ -462,7 +462,7 @@ the tail (2.6 million samples, 100 tags, 4 shards, 26.10.1, laptop).
 ### create_record
 
 ```python
-ex.create_record(document, callback=None)
+ex.create_record(document, callback=None, error_callback=None)
 ```
 
 Queue a document (built with `db.new_document`, not yet saved) for
@@ -474,16 +474,19 @@ once per batch instead of per document.
 **Parameters:**
 
 - `document` (Document): Unsaved document from `db.new_document`
-- `callback` (callable, optional): Invoked with the created record
+- `callback` (callable, optional): Invoked with the record once the writer has created
+  it in its transaction, before that batch commits, so a record the commit then rejects
+  has been through `callback` too; only `error_callback` tells the two apart
+- `error_callback` (callable, optional): Invoked with the exception when the writers
+  reject this record (a duplicate key under a UNIQUE index, or its batch abandoned at a
+  failed commit)
 
 !!! warning "A rejected record is not raised"
-    `create_record()` registers no per-record error callback. A record the writers
-    reject (a duplicate key, or a batch abandoned at a failed commit) is reported only to
-    the executor-wide [`on_error`](#on_error) handler, if one is registered (a failure of
-    the record itself is also logged); `create_record()` and `wait_completion()` return
-    normally. Register
-    `on_error` before the load, or use `db.insert_many(..., parallel=True)`, which raises
-    `ArcadeDBError` when the writers reject a record.
+    `create_record()` and `wait_completion()` return normally when the writers reject a
+    record. Pass `error_callback` to hear about it per record; without it the failure
+    reaches only the executor-wide [`on_error`](#on_error) handler, if one is registered
+    (and is logged). `db.insert_many(..., parallel=True)` raises `ArcadeDBError` instead.
+    (`error_callback` is new in 26.10.1; before it, `on_error` was the only way.)
 
 **Example:**
 

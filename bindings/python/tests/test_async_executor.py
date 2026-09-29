@@ -313,3 +313,29 @@ def test_async_executor_global_callbacks(temp_db):
 
     assert ok_calls["count"] >= 1
     assert err_calls["count"] >= 0
+
+
+def test_create_record_reports_a_rejected_record_to_its_error_callback(temp_db):
+    # A record the writers reject reached only the executor-wide on_error
+    # handler, so without one it was lost silently (#14).
+    db = temp_db
+    db.command("sql", "CREATE DOCUMENT TYPE Dup")
+    db.command("sql", "CREATE PROPERTY Dup.k LONG")
+    db.command("sql", "CREATE INDEX ON Dup (k) UNIQUE")
+
+    created, errors = [], []
+    ex = db.async_executor().set_parallel_level(1).set_commit_every(1)
+    for _ in range(3):
+        doc = db.new_document("Dup")
+        doc.set("k", 7)
+        ex.create_record(doc, callback=created.append, error_callback=errors.append)
+    ex.wait_completion()
+    ex.close()
+
+    assert db.count_type("Dup") == 1
+    # `callback` runs when the writer creates the record, before its batch
+    # commits, so it has fired for all three; only error_callback says which
+    # two the commit rejected.
+    assert len(created) == 3
+    assert len(errors) == 2
+    assert all("Duplicate" in str(e) or "duplicate" in str(e) for e in errors), errors

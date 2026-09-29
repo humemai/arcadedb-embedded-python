@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_async_executor.py){ .md-button }
 
-The file covers asynchronous SQL command/query execution and executor configuration. There are 12 tests.
+The file covers asynchronous SQL command/query execution and executor configuration. There are 13 tests.
 
 ## Overview
 
@@ -92,6 +92,10 @@ Sets `set_parallel_level(3)`, `set_commit_every(123)`, `set_back_pressure(40)`, 
 #### test_async_executor_parallel_level_has_no_upper_cap
 
 `set_parallel_level(17)` is accepted and read back, and `set_parallel_level(0)` raises `ValueError`. The package refused anything above 16 until 2026-09-29, although the engine has no cap and its own default is the number of cores minus 1 (19 on a 20-thread host).
+
+#### test_create_record_reports_a_rejected_record_to_its_error_callback
+
+Three `Dup` documents with the same key under a UNIQUE index, submitted with `create_record(..., callback=..., error_callback=...)` at parallel level 1 and one record per commit: one is stored, `error_callback` receives two duplicate-key exceptions, and `callback` has fired for all three, since it runs when the writer creates a record, before its batch commits. `error_callback` is new in 26.10.1 (#14); before it, a rejected record reached only the executor-wide `on_error`.
 
 #### test_async_executor_command_error_callback
 

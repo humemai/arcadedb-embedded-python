@@ -305,7 +305,12 @@ class AsyncExecutor:
 
     # Graph and time-series operations
 
-    def create_record(self, document, callback: Optional[Callable] = None):
+    def create_record(
+        self,
+        document,
+        callback: Optional[Callable] = None,
+        error_callback: Optional[Callable[[Exception], None]] = None,
+    ):
         """Queue a document for asynchronous creation.
 
         The engine's parallel bucket writers persist it off the calling
@@ -318,12 +323,25 @@ class AsyncExecutor:
         Args:
             document: A ``Document`` (or ``Vertex``/``Edge``) created by
                 ``Database.new_document``/``new_vertex`` (not yet saved).
-            callback: Optional callable invoked with the created record.
+            callback: Optional callable invoked with the record once the writer
+                has created it in its transaction, before that batch commits: a
+                record the commit then rejects has been through ``callback`` too.
+            error_callback: Optional callable invoked with the exception when the
+                writers reject this record (a duplicate key under a UNIQUE index, or
+                its batch abandoned at a failed commit). Without it, the failure
+                reaches only the executor-wide :meth:`on_error` handler, if any.
         """
         java_cb = (
             self._create_new_record_callback(callback) if callback is not None else None
         )
-        self._java_async.createRecord(document._java_document, java_cb)
+        if error_callback is None:
+            self._java_async.createRecord(document._java_document, java_cb)
+        else:
+            self._java_async.createRecord(
+                document._java_document,
+                java_cb,
+                self._create_error_callback(error_callback),
+            )
 
     def _create_new_record_callback(self, python_callback):
         from .graph import Document
