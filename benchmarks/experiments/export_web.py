@@ -6245,7 +6245,10 @@ def _finish_table(table: dict) -> dict:
     def _rank(c):
         if c == "recall@10":
             return 1
-        if c.startswith("ingest"):
+        # `index s` is the second half of the ingest split (FAIRNESS F14),
+        # printed after `ingest s`; ranked as a workload column it printed
+        # before the ingest rate, apart from its other half (#8).
+        if c.startswith("ingest") or c == "index s":
             return 2 if "/s" in c else 3
         if c == "peak memory GiB":
             return 4
@@ -6433,8 +6436,18 @@ def _restructure_tables(tables, rows):
                          "delete p50 ms", "OLTP ops/s"]
         OCT_OLAP_COLS = ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "top parts p50 ms",
                          "ship mode p50 ms", "by month p50 ms", "cold first query ms"]
-        SHARED_COLS = {"ingest documents/s", "ingest total s",
-                       "peak memory GiB", "disk GiB"}
+        # The ingest/index split rides with the total (FAIRNESS F14), as on
+        # every other October table; without it here the documents tables
+        # printed the total alone although their rows record both phases
+        # (humemai/arcadedb-embedded-python#8).
+        # In the order every other October table prints them, and named in
+        # "columns" up front: the notes that read a table's columns (the
+        # ingest/index split sentence among them) run before the columns an
+        # entry carries beyond that list are appended, so a column left to
+        # that append printed out of order and without its sentence.
+        SHARED_ORDER = ["ingest documents/s", "ingest total s", "ingest s", "index s",
+                        "peak memory GiB", "disk GiB"]
+        SHARED_COLS = set(SHARED_ORDER)
         if _oct:
             OLTP_KEEP = set(OCT_OLTP_COLS) | SHARED_COLS
             OLAP_KEEP = set(OCT_OLAP_COLS) | SHARED_COLS
@@ -6450,7 +6463,7 @@ def _restructure_tables(tables, rows):
                        "dataset": ("TPC-C new-order on the TPC-H tables (SF1, SF10)" if _oct else
                                    "TPC-C new-order on the TPC-H SF1 tables"),
                        "conditions": list(src["conditions"]),
-                       "columns": (OCT_OLTP_COLS if _oct else
+                       "columns": (OCT_OLTP_COLS + SHARED_ORDER if _oct else
                                    ["new-order p50 ms", "new-order p99 ms", "OLTP ops/s"]),
                        "entries": [clone(e, OLTP_KEEP) for e in src["entries"]], **base})
         # THE ARCADEDB ROWS ARE WITHDRAWN FROM THIS TABLE (2026-09-14, BUGS F42
@@ -6499,7 +6512,7 @@ def _restructure_tables(tables, rows):
                        "dataset": ("TPC-H Q1, Q6, top parts, ship mode, and by month (SF1, SF10)" if _oct else
                                    "TPC-H Q1 and Q6 at SF1"),
                        "conditions": list(src["conditions"]) + ([_withdrawal] if _withdrawn else []),
-                       "columns": (OCT_OLAP_COLS if _oct else
+                       "columns": (OCT_OLAP_COLS + SHARED_ORDER if _oct else
                                    ["Q1 p50 ms", "Q1 p99 ms", "Q6 p50 ms", "Q6 p99 ms"]),
                        "entries": _olap_entries, **base})
         for i in ("l1", "l1olap", "l1tpc"):
