@@ -8,6 +8,7 @@ Workflow covered:
 - create a TimeSeries type with multiple tags and numeric fields
 - generate deterministic telemetry for several sensors
 - bulk insert samples transactionally
+- seal the mutable tail with COMPACT TIMESERIES TYPE before reading (26.10.1)
 - run raw window queries with multiple tag filters
 - aggregate by hour with ts.timeBucket() at sensor and building scopes
 - derive alert-style views from SQL aggregates using Python post-processing
@@ -319,6 +320,16 @@ def main() -> int:
 
         print(f"Inserted {len(samples)} tagged samples")
         print(f"Time range: {epoch_ms_to_iso(start_ts)} -> {epoch_ms_to_iso(end_ts)}")
+
+        # New samples sit in each shard's mutable tail until a background pass
+        # seals them, every 60 s. Seal them now, before reading: the newest
+        # reading for a tag is several times faster on sealed data
+        # (26.10.1, ArcadeData/arcadedb#8574).
+        sealed = db.command("sql", "COMPACT TIMESERIES TYPE SensorReading").first()
+        print(
+            f"Compacted: {sealed.get('mutableSamplesBefore')} samples sealed, "
+            f"{sealed.get('mutableSamples')} left in the mutable tail"
+        )
         print()
 
         focus_sensor = SENSORS[1]
@@ -506,6 +517,11 @@ def server_mode_demo(samples: list[tuple], db_dir: str) -> None:
         started = time.perf_counter()
         call("/api/v1/ts/timeseries_http/write?precision=ms", raw=lines.encode())
         elapsed_ms = (time.perf_counter() - started) * 1000
+        # The same settle step over HTTP (26.10.1, ArcadeData/arcadedb#8574).
+        left = call(
+            "/api/v1/command/timeseries_http",
+            {"language": "sql", "command": "COMPACT TIMESERIES TYPE SensorReading"},
+        )["result"][0]["mutableSamples"]
         count = call(
             "/api/v1/query/timeseries_http",
             {"language": "sql", "command": "SELECT count(*) AS n FROM SensorReading"},
@@ -523,6 +539,7 @@ def server_mode_demo(samples: list[tuple], db_dir: str) -> None:
         print(
             f"  wrote {len(samples)} samples in line protocol in {elapsed_ms:.1f} ms, stored {count}"
         )
+        print(f"  compacted over HTTP: {left} samples left in the mutable tail")
         print(f"  latest sample per sensor over HTTP: {len(latest)} sensors")
     finally:
         server.stop()

@@ -119,3 +119,31 @@ def test_timeseries_sql_tag_filter_and_empty_range(temp_db_path):
             db.query("sql", "SELECT FROM TempData WHERE ts BETWEEN 9000 AND 10000")
         )
         assert empty_rows == []
+
+
+def test_compact_timeseries_type_seals_the_tail(temp_db_path):
+    # 26.10.1 (ArcadeData/arcadedb#8574): after a bulk load, COMPACT TIMESERIES
+    # TYPE seals what is still in the mutable tail and says how much is left,
+    # instead of waiting for the 60-second background pass.
+    import numpy as np
+
+    with arcadedb.create_database(temp_db_path) as db:
+        _create_timeseries_or_skip(db)
+        n = 5_000
+        ex = db.async_executor()
+        ex.append_samples(
+            "TempData",
+            1_700_000_000_000 + np.arange(n, dtype=np.int64) * 1_000,
+            [f"s{i % 10}" for i in range(n)],
+            np.arange(n, dtype=np.float64),
+        )
+        ex.wait_completion()
+
+        row = db.command("sql", "COMPACT TIMESERIES TYPE TempData").first()
+        assert row.get("typeName") == "TempData"
+        assert row.get("mutableSamples") == 0
+        # The background pass may already have sealed part of it.
+        assert 0 <= row.get("mutableSamplesBefore") <= n
+        assert (
+            db.query("sql", "SELECT count(*) AS n FROM TempData").first().get("n") == n
+        )

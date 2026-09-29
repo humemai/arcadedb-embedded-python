@@ -92,3 +92,71 @@ def test_dense_search_beam_argument(temp_db):
         if beam == 200:
             # The query IS vector 7; with a wide beam the exact match is in the top 10.
             assert 7 in [int(r["id"]) for r in rows], rows
+
+
+def _scores_against_exact(db, type_name, meta):
+    """Load one seeded corpus, compact (INT8 weights are written at segment
+    flush), query, and return (score, exact dot product) per hit."""
+    import numpy as np
+
+    db.command("sql", f"CREATE DOCUMENT TYPE {type_name}")
+    db.command("sql", f"CREATE PROPERTY {type_name}.id INTEGER")
+    db.command("sql", f"CREATE PROPERTY {type_name}.tokens ARRAY_OF_INTEGERS")
+    db.command("sql", f"CREATE PROPERTY {type_name}.weights ARRAY_OF_FLOATS")
+    db.command(
+        "sql",
+        f"CREATE INDEX ON {type_name} (tokens, weights) LSM_SPARSE_VECTOR "
+        f"METADATA {meta}",
+    )
+    rng = np.random.default_rng(1)
+    docs = {}
+    with db.transaction():
+        for i in range(300):
+            toks = np.sort(rng.choice(DIMS, 12, replace=False)).astype(np.int32)
+            wts = rng.uniform(0.01, 3.0, 12).round(4).astype(np.float32)
+            docs[i] = dict(zip(toks.tolist(), wts.tolist()))
+            db.command(
+                "sql",
+                f"INSERT INTO {type_name} SET id = ?, tokens = ?, weights = ?",
+                i,
+                jtypes.JArray(jtypes.JInt)(toks),
+                arcadedb.to_java_float_array(wts),
+            )
+    db.command("sql", f"COMPACT INDEX `{type_name}[tokens,weights]`")
+    query = {t: 1.0 for t in list(docs[7])[:6]}
+    rows = db.query(
+        "sql",
+        "SELECT id, score FROM (SELECT expand(`vector.sparseNeighbors`("
+        f"'{type_name}[tokens,weights]', ?, ?, ?)))",  # nosec B608 - test type name
+        jtypes.JArray(jtypes.JInt)(list(query)),
+        arcadedb.to_java_float_array(list(query.values())),
+        5,
+    ).to_list()
+    assert len(rows) == 5
+    return [
+        (
+            float(r["score"]),
+            sum(docs[int(r["id"])].get(t, 0.0) * w for t, w in query.items()),
+        )
+        for r in rows
+    ]
+
+
+def test_int8_scores_are_rescored_to_the_exact_dot_product(temp_db):
+    # From 26.10.1 (ArcadeData/arcadedb#8576) the INT8 postings only pick the
+    # candidates and the records' own weights score them, so the index returns
+    # the exact dot product; "rescoreOversample": 0 turns that off and the
+    # quantized score shows again. That second index is what proves the
+    # postings went through INT8 at all: before 26.10.1, compact() left a
+    # corpus this small in the in-memory table, unquantized, and every score
+    # was exact for that reason (on 26.9.1 this test fails at the metadata key).
+    def worst(pairs):
+        return max(abs(s - e) / e for s, e in pairs)
+
+    int8 = f'"dimensions": {DIMS}, "weightQuantization": "INT8"'
+    rescored = _scores_against_exact(temp_db, "SDocR", "{" + int8 + "}")
+    assert worst(rescored) < 1e-5
+    quantized = _scores_against_exact(
+        temp_db, "SDocQ", "{" + int8 + ', "rescoreOversample": 0}'
+    )
+    assert worst(quantized) > 1e-5

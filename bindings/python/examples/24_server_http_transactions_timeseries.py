@@ -175,6 +175,12 @@ def main() -> None:
         t0 = time.perf_counter()
         http.call("POST", f"/api/v1/ts/{DB}/write?precision=s", raw=lines.encode())
         t1 = time.perf_counter()
+        # Seal the samples still in the mutable tail before reading them, rather
+        # than waiting for the 60-second background pass (26.10.1,
+        # ArcadeData/arcadedb#8574): 0 means everything is sealed.
+        left = http.sql("command", "COMPACT TIMESERIES TYPE Reading")[0][
+            "mutableSamples"
+        ]
         n = http.sql("query", "SELECT count(*) AS n FROM Reading")[0]["n"]
         last = http.sql(
             "query",
@@ -183,6 +189,7 @@ def main() -> None:
         print(
             f"line protocol: 1,000 samples in {(t1 - t0) * 1000:.1f} ms, stored {n}, newest value {last['value']}"
         )
+        print(f"compacted: {left} samples left in the mutable tail")
     finally:
         server.stop()
         if not args.server_root:

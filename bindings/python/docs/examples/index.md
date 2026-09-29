@@ -86,7 +86,7 @@ Embedded-first server workflow covering `create_server(...)`, HTTP auth (Basic a
 The server HTTP features a second process needs next: one transaction across several requests through `arcadedb-session-id`, `close database` / `open database` server commands, and InfluxDB line-protocol writes to a TIMESERIES type read back with SQL.
 
 **[25 - Sparse Vectors, Weight Precision, And Compaction](25_sparse_quantization_and_compact.md)**
-Sparse retrieval on a synthetic SPLADE-style corpus built twice: INT8 versus FP32 posting weights in `LSM_SPARSE_VECTOR`, and `COMPACT INDEX` as the settle step after a bulk load, with size, compaction time, query latency, and top-10 agreement.
+Sparse retrieval on a synthetic SPLADE-style corpus built twice: INT8 (rescored, and not) versus FP32 posting weights in `LSM_SPARSE_VECTOR`, and `COMPACT INDEX` as the settle step after a bulk load, with size, compaction time, query latency, and top-10 agreement.
 
 **[26 - Cross-Model Transaction Atomicity](26_cross_model_transaction_atomicity.md)**
 Vector search, graph hop, and document update in one transaction, interrupted between the writes: rolled back cleanly inside a transaction, torn every time without one.

@@ -391,10 +391,20 @@ CREATE INDEX ON SparseDoc (tokens, weights) LSM_SPARSE_VECTOR
 METADATA {"dimensions": 30000, "weightQuantization": "FP32"}
 ```
 
-Both forms answer `vector.sparseNeighbors` the same way; the difference is on
-disk (about 20% larger at FP32 for a SPLADE-style corpus) and in recall@10
-(a few tenths of a point). Measure on your own data before choosing; the
-default is the right one for most retrieval workloads.
+Both forms answer `vector.sparseNeighbors` the same way. From 26.10.1 the INT8 index
+only picks the candidates: it fetches `k × rescoreOversample` of them and ranks them by
+the exact score computed from the records' own weights (`ArcadeData/arcadedb#8576`).
+`rescoreOversample` is an index metadata key, 2 by default for INT8 and FP16 and off for
+FP32; `0` turns it off. On 100,000 BigANN SPLADE documents that took INT8 recall@10 from
+0.9948 to 1.0000, the same as FP32, and made the top-10 lists identical whatever the
+commit size the index was loaded with, for about 16% more scorer time on Temurin 25
+(43% on Temurin 21, laptop, 4 cores). So the choice is now on disk (FP32 about 20% larger
+for a SPLADE-style corpus) and speed, not on the answers. Before 26.10.1, INT8 cost a few
+tenths of a point of recall@10 and its answers depended on how the data was committed.
+
+Leave the scorer's own settings at their defaults (posting block size 128,
+`arcadedb.sparseVectorScoringMaxPartitions=0`); upstream has no other setting to
+recommend (`ArcadeData/arcadedb#8553`).
 
 ### The settle step: compact before you time queries
 
@@ -411,7 +421,10 @@ The statement is synchronous and works embedded and over the server's HTTP
 API alike. In-process there is also the Java handle,
 `db.get_java_database().getSchema().getIndexByName(...).compact()`, which is
 what the SQL form calls. At one million documents the compaction took about
-two seconds and moved query p50 from 9.5 ms to 7.0 ms.
+two seconds and moved query p50 from 9.5 ms to 7.0 ms. From 26.10.1 it also flushes
+the in-memory postings, so afterwards the whole index is one segment
+(`ArcadeData/arcadedb#8576`); before, what was still in memory stayed there (422,190 of
+12.7 million postings in a 100,000-document load committed 500 at a time).
 
 ## Grouped Search
 

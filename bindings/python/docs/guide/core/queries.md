@@ -411,6 +411,17 @@ Examples:
 - `email = ?`, `userId = ?`, `movieId = ?`: usually `UNIQUE_HASH` or `NOTUNIQUE_HASH`
 - `createdAt BETWEEN ? AND ?`, `price > ?`, ordered scans: usually `UNIQUE` or `NOTUNIQUE`
 
+An index on a range column is not free when the range matches most of the rows. From
+26.10.1 a scan runs on several workers, while the index entries are read by one thread,
+so the engine gives up the index for the scan once a range matches more than
+`arcadedb.queryIndexMaxSelectivity` of the type: 0.6 on one thread, divided by (1 + W) / 2
+for W scan workers (24% on 4 workers, 6% on 18). `PROFILE` names the branch that ran
+(`served by full scan` or `served by physical order`). Even so, a range matching 96% of
+2,000,000 rows measured 1.2x to 1.3x slower with the index than without it on a 4-core
+laptop, and a one-year slice (14%) 1.5x to 1.6x faster (`ArcadeData/arcadedb#8333`).
+Index a range column for the selective ranges you actually run, and measure with and
+without the index when most of your ranges are wide.
+
 `HASH` does not imply uniqueness. A non-unique hash index still makes sense when many
 records share the same exact-match value, such as `customerId`, `status`, or `country`.
 

@@ -443,6 +443,20 @@ ex.append_samples("Sensor", ts, hosts, cpu_ndarray, mem_ndarray, primitive=True)
 ex.wait_completion()
 ```
 
+**After a bulk load, compact before latency-sensitive reads (26.10.1).** Appended
+samples sit in each shard's mutable tail until the background pass seals them, which
+runs every 60 seconds. `COMPACT TIMESERIES TYPE <name>` seals them now and returns
+`mutableSamples`, what is still unsealed (rows appended while it ran), so a load can
+settle on 0 instead of waiting (`ArcadeData/arcadedb#8574`):
+
+```python
+row = db.command("sql", "COMPACT TIMESERIES TYPE Sensor").first()
+assert row.get("mutableSamples") == 0
+```
+
+The newest reading for one tag measured about 0.16 ms sealed against 0.7 to 1.0 ms on
+the tail (2.6 million samples, 100 tags, 4 shards, 26.10.1, laptop).
+
 ---
 
 ### create_record

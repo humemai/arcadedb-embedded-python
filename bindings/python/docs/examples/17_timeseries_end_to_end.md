@@ -12,6 +12,9 @@ It covers:
 - creating a `TIMESERIES TYPE` with multiple tags and numeric fields
 - generating deterministic telemetry for six building sensors
 - inserting hundreds of samples transactionally
+- sealing the mutable tail with `COMPACT TIMESERIES TYPE` before reading, embedded and
+  over HTTP (26.10.1, `ArcadeData/arcadedb#8574`), instead of waiting for the 60-second
+  background pass
 - running raw window queries with multiple tag filters
 - grouping into hourly buckets with `ts.timeBucket()`
 - aggregating at sensor, building, and region levels

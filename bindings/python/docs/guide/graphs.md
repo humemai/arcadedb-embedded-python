@@ -34,6 +34,13 @@ Async SQL graph insert is not a bulk graph ingest path at all. Before 26.10.1,
 as a comparison arm, pinned to one worker and checked against what it submitted.
 `GraphBatch` flushes its edges through that same executor and is measured exact.
 
+**Edge direction must match the schema.** `CREATE EDGE TYPE` makes a two-way type by
+default, and `GraphBatch` stores both directions unless you pass `bidirectional=False`.
+Pass it only for a type declared one-way (`CREATE EDGE TYPE ... UNIDIRECTIONAL`): the
+batch does not check, and one-way edges in a two-way type make any query the planner
+walks from the target end return 0 rows with no error (`ArcadeData/arcadedb#8625`). Our
+own examples 09, 10, and 13 did exactly that until 2026-09-29.
+
 ## Overview
 
 ArcadeDB's graph model consists of:
@@ -277,7 +284,22 @@ result = db.query("opencypher", """
 """)
 ```
 
-### 4. Ensure Vertices Exist Before Creating Edges
+### 4. Leave Relationships You Do Not Read Unnamed
+
+From 26.10.1, a Cypher hop over an anonymous relationship takes the target vertex and the
+edge identity from the vertex's edge list without loading the edge record. Naming the
+relationship, giving it a property map, or filtering on it loads every edge it crosses
+(`ArcadeData/arcadedb#8537`).
+
+```python
+# ✅ Good - the relationship is not read, so it stays anonymous
+db.query("opencypher", "MATCH (p:Person {id: $id})-[:KNOWS]->()-[:KNOWS]->(f) RETURN count(DISTINCT f) AS n", {"id": 42})
+
+# ❌ Slower - `r` is bound, so each edge record is loaded
+db.query("opencypher", "MATCH (p:Person {id: $id})-[r:KNOWS]->()-[:KNOWS]->(f) RETURN count(DISTINCT f) AS n", {"id": 42})
+```
+
+### 5. Ensure Vertices Exist Before Creating Edges
 
 ```python
 with db.transaction():

@@ -4,7 +4,7 @@
 
 These tests cover SQL-first timeseries behavior from the Python bindings.
 
-There are 2 tests.
+There are 3 tests.
 
 ## Covered Behavior
 
@@ -15,6 +15,10 @@ Creates a `TIMESERIES TYPE`, inserts records, validates `BETWEEN` queries, and c
 ### 2) tag filtering and empty ranges
 
 Verifies tag-based filtering and the no-row case for non-overlapping time windows.
+
+### 3) COMPACT TIMESERIES TYPE seals the tail
+
+Appends 5,000 samples with `append_samples()`, runs `COMPACT TIMESERIES TYPE TempData`, and asserts the result names the type, reports `mutableSamples` 0, and a `mutableSamplesBefore` between 0 and 5,000 (the background pass may have sealed part of it first), and that all 5,000 samples still count. The statement is new in 26.10.1 (`ArcadeData/arcadedb#8574`); 26.9.1 rejects it as a syntax error.
 
 ## Runtime Guard
 

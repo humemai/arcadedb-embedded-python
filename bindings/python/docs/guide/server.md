@@ -400,6 +400,11 @@ In-process, the same type is fed with `db.async_executor().append_samples(...)`
 skips the parse and the socket; the HTTP path is what any client without the
 wheel gets.
 
+After a bulk write, `COMPACT TIMESERIES TYPE Reading` through `/api/v1/command` seals the
+samples still in the mutable tail and returns `mutableSamples` (0 once everything is
+sealed), rather than waiting for the 60-second background pass (26.10.1,
+`ArcadeData/arcadedb#8574`). See [`append_samples`](../api/async_executor.md#append_samples).
+
 ## Bulk Loading over the Server
 
 Which served path loads fastest depends on what the rows carry. Measured on a

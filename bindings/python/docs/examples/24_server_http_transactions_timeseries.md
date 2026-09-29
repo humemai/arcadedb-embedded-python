@@ -31,7 +31,8 @@ Options: `--server-root` to keep the server directory, `--password`,
 
 The row count is 0 before the commit and 2 after it; the rolled-back insert
 never appears; the database survives a close and reopen; 1,000 line-protocol
-samples land and the newest reads back with SQL.
+samples land, `COMPACT TIMESERIES TYPE Reading` seals them (0 left in the mutable
+tail; 26.10.1, `ArcadeData/arcadedb#8574`), and the newest reads back with SQL.
 
 ## Notes
 
