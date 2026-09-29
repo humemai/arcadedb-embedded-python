@@ -51,6 +51,10 @@ uv run pytest -v
 uv run pytest --cov=arcadedb_embedded --cov-report=html
 ```
 
+On Windows, run with `--capture=sys`: pytest's default fd capture can leave the JVM writing
+its log lines to a handle that no longer belongs to it, and the test then hangs in that
+write (issue #10).
+
 ### Run Specific Tests
 
 ```bash

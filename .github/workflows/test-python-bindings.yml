@@ -314,8 +314,19 @@ jobs:
           echo "🧪 Testing arcadedb-embedded (with bundled JRE)..."
 
           # Run pytest with JUnit XML output for structured results
+          # WINDOWS RUNS WITH --capture=sys (issue #10). pytest's default fd capture swaps
+          # fds 1 and 2 with dup2 around every test; on Windows that closes the OS handle
+          # the JVM cached for System.out/err at start-up, a later pipe or socket can be
+          # handed the same handle value, and the next Java log line then blocks forever
+          # in WriteFile once that pipe is full. The Java dump caught it on 2026-09-29:
+          # main thread in FileOutputStream.writeBytes under LSMVectorIndex.build's
+          # progress log. sys capture never touches the fds, so the JVM keeps writing to
+          # the runner's own pipes (its log lines appear in this job's log). No test uses
+          # capfd.
+          CAPTURE=""
+          if [ "$RUNNER_OS" = "Windows" ]; then CAPTURE="--capture=sys"; fi
           set +e  # Don't exit on test failures
-          pytest tests/ -v --tb=short --color=yes --junitxml=test-results.xml
+          pytest tests/ -v --tb=short --color=yes --junitxml=test-results.xml $CAPTURE
           PYTEST_EXIT_CODE=$?
           set -e
 

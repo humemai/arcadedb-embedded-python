@@ -85,6 +85,11 @@ What must pass before a change is green, beyond the tests themselves:
   name, state, and stack to the log, past pytest's output capture: a test hung inside
   a Java call shows only that call in the Python dump
   (`ARCADEDB_TEST_JAVA_DUMP_AFTER_S` moves the threshold; default 540 s).
+- **Windows runs with `--capture=sys`**: with pytest's default fd capture, a Java log line
+  could block forever on Windows, because swapping fds 1 and 2 around each test closes the
+  handle the JVM cached for its console output and Windows can hand that value to another
+  pipe (issue #10; the Java dump showed the main thread in `FileOutputStream.writeBytes`).
+  The Windows job passes `--capture=sys`, so Java's log lines appear in that job's log.
 - **SHA-pinned actions and pre-commit** (`lint-workflows.yml`, above).
 
 Run the same checks locally before pushing (from the repository root):
