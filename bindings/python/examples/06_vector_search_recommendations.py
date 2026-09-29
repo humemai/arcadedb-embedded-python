@@ -8,12 +8,12 @@ Compares traditional graph queries with vector similarity search.
 PERFORMANCE OPTIMIZATION
 -------------------------
 Graph-Based Collaborative Filtering Performance:
-• Full mode: Comprehensive but slow (24-39s per query on large dataset)
+• Full mode: Comprehensive but slow on the large dataset
   - Analyzes all users who rated the query movie highly
   - Processes 100K+ intermediate results from graph traversal fanout
   - Best for offline batch recommendations
 
-• Fast mode: Sampled with 150-300x speedup (0.1-0.2s per query)
+• Fast mode: Sampled, much faster
   - Limits intermediate results to 25K (approximately 50 users' worth)
   - Uses nested SELECT with LIMIT before GROUP BY aggregation
   - Still produces high-quality recommendations
@@ -573,7 +573,7 @@ def main():
             )
             print(f"   ⏱️  {graph_full_time:.3f}s")
 
-            # Method 2: Graph-based Fast (sampled, 150-300x faster)
+            # Method 2: Graph-based Fast (sampled, much faster)
             print("\n2. Graph-Based Fast (collaborative filtering - sampled):")
             graph_fast_time = graph_based_recommendations(
                 db, movie_title, limit=5, mode="fast"
@@ -599,12 +599,12 @@ def main():
     print("=" * 80)
     print("• Graph-based Full: Comprehensive collaborative filtering")
     print("  - Analyzes all users who rated the query movie")
-    print("  - Most thorough but slow (24-39s per query)")
+    print("  - Most thorough but slow")
     print("  - Best for offline batch recommendations")
     print()
     print("• Graph-based Fast: Sampled collaborative filtering")
     print("  - Limits to ~50 users worth of data (25K intermediate results)")
-    print("  - 150-300x faster (0.1-0.2s per query)")
+    print("  - Much faster (sampled)")
     print("  - Still produces high-quality recommendations")
     print("  - Best for real-time recommendations")
     print()

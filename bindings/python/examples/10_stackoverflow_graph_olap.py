@@ -208,7 +208,7 @@ def budget_allocation_report(args) -> dict:
 
 BENCHMARK_SCOPE_NOTE = (
     "Scope: OLAP query fairness on a common query suite. "
-    "Ingestion paths differ by engine (ArcadeDB uses Cypher inserts, Ladybug uses staged CSV + COPY), "
+    "Ingestion paths differ by engine (ArcadeDB loads through GraphBatch, Ladybug uses staged CSV + COPY), "
     "so load/index timings are not a same-path ingest comparison."
 )
 

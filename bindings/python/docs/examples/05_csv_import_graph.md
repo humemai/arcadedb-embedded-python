@@ -131,8 +131,8 @@ NULLs is what that example demonstrates.
 
 !!! note "Undated measurements"
 
-    These tables were recorded on an earlier engine version and have not been
-    re-measured. `--method java` now builds vertices with `db.graph_batch(...)`, and no
+    These tables were recorded on an earlier engine version, with the values pasted into
+    the SQL text (the example now binds them), and have not been re-measured. `--method java` now builds vertices with `db.graph_batch(...)`, and no
     GraphBatch timings for this example have been measured yet, so the tables have no
     row for that path. `java_noasync` is `--method java --no-async` (synchronous vertex
     transactions).

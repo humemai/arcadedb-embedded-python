@@ -1867,7 +1867,6 @@ def run_hybrid_queries(
         if row.get("question_id") is not None
     ]
     if seed_ids:
-        cypher_ids = "[" + ", ".join(str(v) for v in seed_ids) + "]"
         step2 = timed_step(
             "cypher_expand",
             lambda: run_cypher(
@@ -1875,12 +1874,13 @@ def run_hybrid_queries(
                 f"""
                 MATCH (u:User)-[:ASKED]->(q:Question)
                 OPTIONAL MATCH (q)-[:HAS_ANSWER]->(a:Answer)
-                WHERE q.Id IN {cypher_ids}
+                WHERE q.Id IN $ids
                   RETURN q.Id AS question_id, q.Title AS title,
                       u.Id AS asker_id, count(a) AS answer_count
                 ORDER BY answer_count DESC, question_id ASC
                 LIMIT {top_k}
                 """,
+                {"ids": seed_ids},
             ),
         )
         steps.append(step2)
@@ -1940,17 +1940,17 @@ def run_hybrid_queries(
         if row.get("question_id") is not None
     ]
     if qids:
-        cypher_ids = "[" + ", ".join(str(v) for v in qids) + "]"
         step2 = timed_step(
             "cypher_expand_users",
             lambda: run_cypher(
                 db,
                 f"""
                 MATCH (q:Question)-[:HAS_ANSWER]->(a:Answer)<-[:ANSWERED]-(u:User)
-                WHERE q.Id IN {cypher_ids}
+                WHERE q.Id IN $ids
                 RETURN DISTINCT u.Id AS user_id
                 LIMIT 200
                 """,
+                {"ids": qids},
             ),
         )
         steps.append(step2)
