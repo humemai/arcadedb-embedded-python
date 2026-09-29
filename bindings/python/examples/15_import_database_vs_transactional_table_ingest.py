@@ -13,14 +13,12 @@ Goal: provide a more realistic ingest-speed comparison than a single tiny table.
 This benchmark includes importer-based paths because they are possible. The
 repository recommendation for Python-managed document preload is `db.insert_many(...)`,
 which is not one of the arms here: it crosses the FFI boundary once per batch and loops
-Java-side. In practice, both `IMPORT DATABASE` and `db.import_documents(...)` have shown
-reliability issues on larger real workloads, including memory pressure and possible OoM
-failures.
+Java-side.
 
-The async SQL arm is pinned to one worker and is not a recommendation. Above parallel
-level 1 the async executor silently discarded a share of the commands submitted to it
-before 26.10.1 (ArcadeData/arcadedb#7615, fixed in #7625), so `--async-parallel`
-accepts only 1.
+The async SQL arm is pinned to one worker and is not a recommendation. The pin was
+for wheels before 26.10.1, where the async executor silently discarded a share of the
+commands submitted to it above parallel level 1 (ArcadeData/arcadedb#7615, fixed in
+#7625). `--async-parallel` still defaults to, and accepts only, 1.
 
 Observed benchmark result (2026-03-19, before `db.import_documents(...)` was added):
 For:
@@ -35,12 +33,10 @@ Measured ingest times:
 - Transactional INSERT: 189.921s
 - Async SQL INSERT: 146.670s
 - IMPORT DATABASE (`parallel=1`): 58.281s
-- IMPORT DATABASE (`parallel=4`): 48.580s
 
-In this synthetic shape, increasing SQL import parallelism from 1 to 4 did not improve
-throughput materially. IMPORT DATABASE was faster than both Async SQL and Transactional
-INSERT, but that does not make the importer-based paths the default recommendation for
-the rest of the examples.
+IMPORT DATABASE was faster than both Async SQL and Transactional INSERT, but that does
+not make the importer-based paths the default recommendation for the rest of the
+examples.
 
 Known limitation:
 On some ArcadeDB import code paths, `IMPORT DATABASE` with CSV documents may not apply
@@ -405,12 +401,11 @@ def run_async_sql_load(
     """Comparison arm: async SQL INSERT through the async executor.
 
     This arm exists to measure the async executor, so it keeps using it. It is
-    pinned to one worker: above parallel level 1 the executor silently discarded
-    a share of the commands submitted to it before 26.10.1
-    (ArcadeData/arcadedb#7615, fixed in #7625), and a
-    benchmark that reports the time for work it did not do is worse than no
-    number. The submitted-versus-stored check below is what makes that pin
-    falsifiable rather than a comment.
+    pinned to one worker. The pin was for wheels before 26.10.1: above parallel
+    level 1 the executor silently discarded a share of the commands submitted
+    to it (ArcadeData/arcadedb#7615, fixed in #7625), and a benchmark that
+    reports the time for work it did not do is worse than no number. The
+    submitted-versus-stored check below catches such a loss on any wheel.
     """
     if async_parallel != 1:
         raise ValueError(
@@ -782,7 +777,10 @@ def main() -> None:
         "--async-parallel",
         type=int,
         default=1,
-        help="Async SQL workers; only 1 is accepted (ArcadeData/arcadedb#7615)",
+        help=(
+            "Async SQL workers; only 1 is accepted (a pin for wheels before "
+            "26.10.1, ArcadeData/arcadedb#7615)"
+        ),
     )
     parser.add_argument(
         "--parallel",

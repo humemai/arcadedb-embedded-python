@@ -86,12 +86,12 @@ for ((run = 1; run <= RUNS; run++)); do
 
         db_engine="$db"
         case "$db" in
-            arcadedb_sql | arcadedb_cypher | neo4j | ladybug | ladybugdb | duckdb | sqlite | graphqlite | python_memory)
+            arcadedb_cypher | neo4j | ladybug | ladybugdb | duckdb | sqlite | graphqlite | python_memory)
                 db_engine="$db"
                 ;;
             *)
                 echo "Unsupported DB alias in DBS_RAW: $db" >&2
-                echo "Supported values: arcadedb_sql, arcadedb_cypher, neo4j, ladybug, ladybugdb, duckdb, sqlite, graphqlite, python_memory" >&2
+                echo "Supported values: arcadedb_cypher, neo4j, ladybug, ladybugdb, duckdb, sqlite, graphqlite, python_memory" >&2
                 exit 1
                 ;;
         esac
@@ -162,7 +162,7 @@ for ((run = 1; run <= RUNS; run++)); do
                 matrix_rename_result_artifacts "$target_dir" "$internal_run_label" "$run_label"
                 matrix_rewrite_json_run_label "$target_dir" "$internal_run_label" "$run_label"
                 wheel_artifacts_for_dir="false"
-                if [[ "$db_engine" == "arcadedb_sql" || "$db_engine" == "arcadedb_cypher" ]]; then
+                if [[ "$db_engine" == "arcadedb_cypher" ]]; then
                     wheel_artifacts_for_dir="true"
                 fi
                 matrix_write_wheel_metadata "$target_dir" "$collected_at" "$wheel_artifacts_for_dir"

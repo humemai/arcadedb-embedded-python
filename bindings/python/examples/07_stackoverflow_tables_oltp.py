@@ -1159,7 +1159,8 @@ def run_oltp_arcadedb(
                     _ = list(
                         db.query(
                             "sql",
-                            f"SELECT {projection} FROM {table_name} WHERE Id = {target_id}",
+                            f"SELECT {projection} FROM {table_name} WHERE Id = ?",
+                            target_id,
                         )
                     )
             elif op == "update":
@@ -1173,7 +1174,8 @@ def run_oltp_arcadedb(
                     db.run_in_transaction(
                         lambda: db.command(
                             "sql",
-                            f"UPDATE {table_name} SET {update_col} = coalesce({update_col}, 0) + 1 WHERE Id = {target_id}",
+                            f"UPDATE {table_name} SET {update_col} = coalesce({update_col}, 0) + 1 WHERE Id = ?",
+                            target_id,
                         ),
                         retries=100,
                     )
@@ -1200,7 +1202,8 @@ def run_oltp_arcadedb(
                     db.run_in_transaction(
                         lambda: db.command(
                             "sql",
-                            f"DELETE FROM {table_name} WHERE Id = {target_id}",
+                            f"DELETE FROM {table_name} WHERE Id = ?",
+                            target_id,
                         ),
                         retries=100,
                     )

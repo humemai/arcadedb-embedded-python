@@ -45,6 +45,7 @@ import argparse
 import os
 import shutil
 import time
+import zlib
 
 import arcadedb_embedded as arcadedb
 import jpype.types as jtypes
@@ -125,11 +126,13 @@ with arcadedb.create_database(db_path) as db:
         Create a deterministic mock embedding based on category and document seeds.
         Documents in the same category will be closer together.
         """
-        # Use deterministic random state
-        rng = np.random.RandomState(hash(category_seed + doc_seed) % 2**32)
+        # Deterministic random state. zlib.crc32 gives the same seed in every
+        # process; Python's hash() of a str is randomized per process
+        # (PYTHONHASHSEED), which made the embeddings differ from run to run.
+        rng = np.random.RandomState(zlib.crc32((category_seed + doc_seed).encode()))
 
         # Base vector for the category (random direction)
-        cat_rng = np.random.RandomState(hash(category_seed) % 2**32)
+        cat_rng = np.random.RandomState(zlib.crc32(category_seed.encode()))
         category_vector = cat_rng.randn(EMBEDDING_DIM)
         category_vector /= np.linalg.norm(category_vector)
 

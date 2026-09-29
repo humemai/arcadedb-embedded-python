@@ -232,11 +232,6 @@ RETURN DISTINCT connected.name as name, connected.city as city
 ORDER BY name
 ```
 
-!!! note "Gremlin is not bundled"
-    The script also contains a Gremlin section, but the wheel excludes the
-    `arcadedb-gremlin` module, so the script prints that Gremlin is not bundled and
-    skips it.
-
 ## NULL Value Handling in Graphs
 
 Graph vertices can have optional properties with NULL values:

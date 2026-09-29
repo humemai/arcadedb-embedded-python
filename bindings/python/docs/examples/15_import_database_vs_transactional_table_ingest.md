@@ -21,8 +21,6 @@ Example 15 is the table-ingest comparison harness for embedded Python.
 
 - This example exists because ingest winners are workload-dependent
 - Both `IMPORT DATABASE` and `db.import_documents(...)` are possible ingestion paths
-- Both importer-based paths have shown practical issues on larger real workloads,
-  including memory pressure and possible OoM failure modes
 - The recommended path for Python-managed bulk table/document ingest is
   `db.insert_many(...)`, which crosses the Python/Java boundary once per batch and
   loops Java-side. It is not one of the four arms here
@@ -35,9 +33,9 @@ Example 15 is the table-ingest comparison harness for embedded Python.
     Before 26.10.1, `async_executor().command(...)` could silently drop records above
     parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see
     [Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation).
-    `run_async_sql_load(...)` therefore raises `ValueError` for any `--async-parallel`
-    other than 1, and counts stored rows against submitted rows per table so a short
-    load fails instead of being reported as a fast one.
+    The pin dates from those wheels: `run_async_sql_load(...)` raises `ValueError` for
+    any `--async-parallel` other than 1, and counts stored rows against submitted rows
+    per table so a short load fails instead of being reported as a fast one.
 
 ## Snapshot (2026-03-19, three of the four arms)
 

@@ -214,10 +214,13 @@ SELECT Id FROM Badge WHERE Id = :id LIMIT 1
 
 #### ArcadeDB Cypher Mode Reads
 
+In Cypher mode every id and timestamp is a bound parameter (`$target_id`, `$user_id`,
+and so on), named after the Python variable that supplies it.
+
 1. CYP-R1: user outbound activity
 
 ```cypher
-MATCH (u:User {Id: %d})-[:ASKED|ANSWERED]->(p)
+MATCH (u:User {Id: $target_id})-[:ASKED|ANSWERED]->(p)
 RETURN p.Id
 LIMIT 1
 ```
@@ -225,7 +228,7 @@ LIMIT 1
 1. CYP-R2: question tags
 
 ```cypher
-MATCH (q:Question {Id: %d})-[:TAGGED_WITH]->(t:Tag)
+MATCH (q:Question {Id: $target_id})-[:TAGGED_WITH]->(t:Tag)
 RETURN t.Id
 LIMIT 1
 ```
@@ -233,7 +236,7 @@ LIMIT 1
 1. CYP-R3: answer comments
 
 ```cypher
-MATCH (a:Answer {Id: %d})<-[:COMMENTED_ON_ANSWER]-(c:Comment)
+MATCH (a:Answer {Id: $target_id})<-[:COMMENTED_ON_ANSWER]-(c:Comment)
 RETURN c.Id
 LIMIT 1
 ```
@@ -241,7 +244,7 @@ LIMIT 1
 1. CYP-R4: questions for a tag
 
 ```cypher
-MATCH (q:Question)-[:TAGGED_WITH]->(t:Tag {Id: %d})
+MATCH (q:Question)-[:TAGGED_WITH]->(t:Tag {Id: $target_id})
 RETURN q.Id
 LIMIT 1
 ```
@@ -249,7 +252,7 @@ LIMIT 1
 1. CYP-R5: comment target
 
 ```cypher
-MATCH (c:Comment {Id: %d})-[r:COMMENTED_ON|COMMENTED_ON_ANSWER]->(p)
+MATCH (c:Comment {Id: $target_id})-[r:COMMENTED_ON|COMMENTED_ON_ANSWER]->(p)
 RETURN p.Id
 LIMIT 1
 ```
@@ -257,7 +260,7 @@ LIMIT 1
 1. CYP-R6: badge owner
 
 ```cypher
-MATCH (u:User)-[:EARNED]->(b:Badge {Id: %d})
+MATCH (u:User)-[:EARNED]->(b:Badge {Id: $target_id})
 RETURN u.Id
 LIMIT 1
 ```
@@ -311,77 +314,77 @@ The SQL OLTP path does not update edges.
 1. CYP-U1: question score
 
 ```cypher
-MATCH (q:Question {Id: %d})
+MATCH (q:Question {Id: $target_id})
 SET q.Score = coalesce(q.Score, 0) + 1
 ```
 
 1. CYP-U2: answer score
 
 ```cypher
-MATCH (a:Answer {Id: %d})
+MATCH (a:Answer {Id: $target_id})
 SET a.Score = coalesce(a.Score, 0) + 1
 ```
 
 1. CYP-U3: comment score
 
 ```cypher
-MATCH (c:Comment {Id: %d})
+MATCH (c:Comment {Id: $target_id})
 SET c.Score = coalesce(c.Score, 0) + 1
 ```
 
 1. CYP-U4: tag count
 
 ```cypher
-MATCH (t:Tag {Id: %d})
+MATCH (t:Tag {Id: $target_id})
 SET t.Count = coalesce(t.Count, 0) + 1
 ```
 
 1. CYP-U5: user reputation
 
 ```cypher
-MATCH (u:User {Id: %d})
+MATCH (u:User {Id: $target_id})
 SET u.Reputation = coalesce(u.Reputation, 0) + 1
 ```
 
 1. CYP-U6: `ASKED` edge
 
 ```cypher
-MATCH (u:User {Id: %d})-[r:ASKED]->(q:Question {Id: %d})
+MATCH (u:User {Id: $user_id})-[r:ASKED]->(q:Question {Id: $question_id})
 SET r.CreationDate = coalesce(r.CreationDate, 0) + 1
 ```
 
 1. CYP-U7: `ANSWERED` edge
 
 ```cypher
-MATCH (u:User {Id: %d})-[r:ANSWERED]->(a:Answer {Id: %d})
+MATCH (u:User {Id: $user_id})-[r:ANSWERED]->(a:Answer {Id: $answer_id})
 SET r.CreationDate = coalesce(r.CreationDate, 0) + 1
 ```
 
 1. CYP-U8: `COMMENTED_ON` edge
 
 ```cypher
-MATCH (c:Comment {Id: %d})-[r:COMMENTED_ON]->(q:Question {Id: %d})
+MATCH (c:Comment {Id: $comment_id})-[r:COMMENTED_ON]->(q:Question {Id: $question_id})
 SET r.Score = coalesce(r.Score, 0) + 1
 ```
 
 1. CYP-U9: `COMMENTED_ON_ANSWER` edge
 
 ```cypher
-MATCH (c:Comment {Id: %d})-[r:COMMENTED_ON_ANSWER]->(a:Answer {Id: %d})
+MATCH (c:Comment {Id: $comment_id})-[r:COMMENTED_ON_ANSWER]->(a:Answer {Id: $answer_id})
 SET r.Score = coalesce(r.Score, 0) + 1
 ```
 
 1. CYP-U10: `EARNED` edge
 
 ```cypher
-MATCH (u:User {Id: %d})-[r:EARNED]->(b:Badge {Id: %d})
+MATCH (u:User {Id: $user_id})-[r:EARNED]->(b:Badge {Id: $badge_id})
 SET r.Class = coalesce(r.Class, 0) + 1
 ```
 
 1. CYP-U11: `LINKED_TO` edge
 
 ```cypher
-MATCH (q1:Question {Id: %d})-[r:LINKED_TO]->(q2:Question {Id: %d})
+MATCH (q1:Question {Id: $post_id})-[r:LINKED_TO]->(q2:Question {Id: $related_id})
 SET r.LinkTypeId = coalesce(r.LinkTypeId, 0) + 1
 ```
 
@@ -478,63 +481,63 @@ CREATE EDGE EARNED FROM (SELECT FROM User WHERE Id = :uid LIMIT 1) TO (SELECT FR
 1. CYP-I1: synthetic user and question with `ASKED`
 
 ```cypher
-CREATE (u:User {Id: %d, DisplayName: 'Synthetic', Reputation: 0, CreationDate: %d})
-CREATE (q:Question {Id: %d, Title: 'Synthetic', Body: 'Synthetic body', Score: 0, CreationDate: %d})
-CREATE (u)-[:ASKED {CreationDate: %d}]->(q)
+CREATE (u:User {Id: $new_user_id, DisplayName: 'Synthetic', Reputation: 0, CreationDate: $now_ms})
+CREATE (q:Question {Id: $new_question_id, Title: 'Synthetic', Body: 'Synthetic body', Score: 0, CreationDate: $now_ms})
+CREATE (u)-[:ASKED {CreationDate: $now_ms}]->(q)
 ```
 
 1. CYP-I2: synthetic answer with `ANSWERED` and `HAS_ANSWER`
 
 ```cypher
-MATCH (u:User {Id: %d}), (q:Question {Id: %d})
-CREATE (a:Answer {Id: %d, Body: 'Synthetic answer', Score: 0, CreationDate: %d, CommentCount: 0})
-CREATE (u)-[:ANSWERED {CreationDate: %d}]->(a)
+MATCH (u:User {Id: $user_id}), (q:Question {Id: $question_id})
+CREATE (a:Answer {Id: $new_answer_id, Body: 'Synthetic answer', Score: 0, CreationDate: $now_ms, CommentCount: 0})
+CREATE (u)-[:ANSWERED {CreationDate: $now_ms}]->(a)
 CREATE (q)-[:HAS_ANSWER]->(a)
 ```
 
 1. CYP-I3: synthetic comment on question
 
 ```cypher
-MATCH (q:Question {Id: %d})
-CREATE (c:Comment {Id: %d, Text: 'Synthetic comment', Score: 0, CreationDate: %d})
-CREATE (c)-[:COMMENTED_ON {CreationDate: %d, Score: 0}]->(q)
+MATCH (q:Question {Id: $target_id})
+CREATE (c:Comment {Id: $new_comment_id, Text: 'Synthetic comment', Score: 0, CreationDate: $now_ms})
+CREATE (c)-[:COMMENTED_ON {CreationDate: $now_ms, Score: 0}]->(q)
 ```
 
 1. CYP-I4: synthetic comment on answer
 
 ```cypher
-MATCH (a:Answer {Id: %d})
-CREATE (c:Comment {Id: %d, Text: 'Synthetic comment', Score: 0, CreationDate: %d})
-CREATE (c)-[:COMMENTED_ON_ANSWER {CreationDate: %d, Score: 0}]->(a)
+MATCH (a:Answer {Id: $target_id})
+CREATE (c:Comment {Id: $new_comment_id, Text: 'Synthetic comment', Score: 0, CreationDate: $now_ms})
+CREATE (c)-[:COMMENTED_ON_ANSWER {CreationDate: $now_ms, Score: 0}]->(a)
 ```
 
 1. CYP-I5: `TAGGED_WITH` edge
 
 ```cypher
-MATCH (q:Question {Id: %d}), (t:Tag {Id: %d})
+MATCH (q:Question {Id: $question_id}), (t:Tag {Id: $tag_id})
 CREATE (q)-[:TAGGED_WITH]->(t)
 ```
 
 1. CYP-I6: `LINKED_TO` edge
 
 ```cypher
-MATCH (q1:Question {Id: %d}), (q2:Question {Id: %d})
-CREATE (q1)-[:LINKED_TO {LinkTypeId: 1, CreationDate: %d}]->(q2)
+MATCH (q1:Question {Id: $question_id}), (q2:Question {Id: $second_question_id})
+CREATE (q1)-[:LINKED_TO {LinkTypeId: 1, CreationDate: $now_ms}]->(q2)
 ```
 
 1. CYP-I7: `ACCEPTED_ANSWER` edge
 
 ```cypher
-MATCH (q:Question {Id: %d}), (a:Answer {Id: %d})
+MATCH (q:Question {Id: $question_id}), (a:Answer {Id: $answer_id})
 CREATE (q)-[:ACCEPTED_ANSWER]->(a)
 ```
 
 1. CYP-I8: synthetic badge with `EARNED`
 
 ```cypher
-MATCH (u:User {Id: %d})
-CREATE (b:Badge {Id: %d, Name: 'SyntheticBadge', Date: %d, Class: 1})
-CREATE (u)-[:EARNED {Date: %d, Class: 1}]->(b)
+MATCH (u:User {Id: $user_id})
+CREATE (b:Badge {Id: $new_badge_id, Name: 'SyntheticBadge', Date: $now_ms, Class: 1})
+CREATE (u)-[:EARNED {Date: $now_ms, Class: 1}]->(b)
 ```
 
 ### Deletes
@@ -584,70 +587,70 @@ The SQL OLTP path does not delete edges.
 1. CYP-D1: node delete template used for `Question`, `Answer`, `Comment`, `Badge`, `User`, and `Tag`
 
 ```cypher
-MATCH (n:%s {Id: %d})
+MATCH (n:<Label> {Id: $target_id})
 DETACH DELETE n
 ```
 
 1. CYP-D2: `ASKED`
 
 ```cypher
-MATCH (u:User {Id: %d})-[r:ASKED]->(q:Question {Id: %d})
+MATCH (u:User {Id: $user_id})-[r:ASKED]->(q:Question {Id: $question_id})
 DELETE r
 ```
 
 1. CYP-D3: `ANSWERED`
 
 ```cypher
-MATCH (u:User {Id: %d})-[r:ANSWERED]->(a:Answer {Id: %d})
+MATCH (u:User {Id: $user_id})-[r:ANSWERED]->(a:Answer {Id: $answer_id})
 DELETE r
 ```
 
 1. CYP-D4: `HAS_ANSWER`
 
 ```cypher
-MATCH (q:Question {Id: %d})-[r:HAS_ANSWER]->(a:Answer {Id: %d})
+MATCH (q:Question {Id: $question_id})-[r:HAS_ANSWER]->(a:Answer {Id: $answer_id})
 DELETE r
 ```
 
 1. CYP-D5: `ACCEPTED_ANSWER`
 
 ```cypher
-MATCH (q:Question {Id: %d})-[r:ACCEPTED_ANSWER]->(a:Answer {Id: %d})
+MATCH (q:Question {Id: $question_id})-[r:ACCEPTED_ANSWER]->(a:Answer {Id: $answer_id})
 DELETE r
 ```
 
 1. CYP-D6: `TAGGED_WITH`
 
 ```cypher
-MATCH (q:Question {Id: %d})-[r:TAGGED_WITH]->(t:Tag {Id: %d})
+MATCH (q:Question {Id: $question_id})-[r:TAGGED_WITH]->(t:Tag {Id: $tag_id})
 DELETE r
 ```
 
 1. CYP-D7: `COMMENTED_ON`
 
 ```cypher
-MATCH (c:Comment {Id: %d})-[r:COMMENTED_ON]->(q:Question {Id: %d})
+MATCH (c:Comment {Id: $comment_id})-[r:COMMENTED_ON]->(q:Question {Id: $question_id})
 DELETE r
 ```
 
 1. CYP-D8: `COMMENTED_ON_ANSWER`
 
 ```cypher
-MATCH (c:Comment {Id: %d})-[r:COMMENTED_ON_ANSWER]->(a:Answer {Id: %d})
+MATCH (c:Comment {Id: $comment_id})-[r:COMMENTED_ON_ANSWER]->(a:Answer {Id: $answer_id})
 DELETE r
 ```
 
 1. CYP-D9: `EARNED`
 
 ```cypher
-MATCH (u:User {Id: %d})-[r:EARNED]->(b:Badge {Id: %d})
+MATCH (u:User {Id: $user_id})-[r:EARNED]->(b:Badge {Id: $badge_id})
 DELETE r
 ```
 
 1. CYP-D10: `LINKED_TO`
 
 ```cypher
-MATCH (q1:Question {Id: %d})-[r:LINKED_TO]->(q2:Question {Id: %d})
+MATCH (q1:Question {Id: $question_id})-[r:LINKED_TO]->(q2:Question {Id: $related_id})
 DELETE r
 ```
 

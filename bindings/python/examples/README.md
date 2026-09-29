@@ -54,8 +54,8 @@ Complete social network modeling with graph database:
 
 Semantic similarity search with AI/ML:
 - Creating vector-ready schema (`ARRAY_OF_FLOATS`) for embeddings
-- Generating mock embeddings clustered by category (seeded with Python's `hash()`, so
-  they differ between runs unless `PYTHONHASHSEED` is set)
+- Generating mock embeddings clustered by category (seeded with `zlib.crc32`, so every
+  run builds the same embeddings)
 - Building a JVector (HNSW) index for nearest-neighbor search
 - Running top-k similarity queries and inspecting distance scores
 - Measuring insertion, indexing, and query phases

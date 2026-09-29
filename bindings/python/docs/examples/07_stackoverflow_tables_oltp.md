@@ -118,18 +118,19 @@ Insert rows are synthetic. The source uses `build_synthetic_row()`:
 
 ### ArcadeDB SQL
 
-The ArcadeDB path issues SQL directly.
+The ArcadeDB path issues SQL directly, with values bound as `?` parameters; only the
+table and column names are part of the statement text.
 
 #### ArcadeDB Read
 
 ```sql
-SELECT {projection} FROM {table_name} WHERE Id = {target_id}
+SELECT {projection} FROM {table_name} WHERE Id = ?
 ```
 
 #### ArcadeDB Update
 
 ```sql
-UPDATE {table_name} SET {update_col} = coalesce({update_col}, 0) + 1 WHERE Id = {target_id}
+UPDATE {table_name} SET {update_col} = coalesce({update_col}, 0) + 1 WHERE Id = ?
 ```
 
 #### ArcadeDB Insert
@@ -145,7 +146,7 @@ measured phase. The preload phase does not run it: it passes rows to
 #### ArcadeDB Delete
 
 ```sql
-DELETE FROM {table_name} WHERE Id = {target_id}
+DELETE FROM {table_name} WHERE Id = ?
 ```
 
 ### SQLite

@@ -53,7 +53,9 @@ def build(db, n: int) -> None:
             emb = [round(rnd.random(), 5) for _ in range(DIM)]
             db.command(
                 "sql",
-                f"CREATE VERTEX Product SET pid = {i}, views = 0, embedding = {emb}",
+                "CREATE VERTEX Product SET pid = ?, views = 0, embedding = ?",
+                i,
+                arcadedb.to_java_float_array(emb),
             )
     with db.transaction():
         for i in range(n):
@@ -61,8 +63,9 @@ def build(db, n: int) -> None:
                 j = (i + f * 7919) % n
                 db.command(
                     "sql",
-                    f"CREATE EDGE RELATED FROM (SELECT FROM Product WHERE pid = {i}) "
-                    f"TO (SELECT FROM Product WHERE pid = {j})",
+                    "CREATE EDGE RELATED FROM (SELECT FROM Product WHERE pid = :src) "
+                    "TO (SELECT FROM Product WHERE pid = :dst)",
+                    {"src": i, "dst": j},
                 )
     db.command(
         "sql",
@@ -80,7 +83,7 @@ def touched_products(db, qvec: list[float]) -> list[int]:
     ).to_list()
     pids = [int(r["pid"]) for r in rows]
     rel = db.query(
-        "sql", f"SELECT expand(out('RELATED')) FROM Product WHERE pid = {pids[0]}"
+        "sql", "SELECT expand(out('RELATED')) FROM Product WHERE pid = ?", pids[0]
     ).to_list()
     return sorted(set(pids[:3] + [int(r["pid"]) for r in rel[:3]]))
 
@@ -93,9 +96,7 @@ def hybrid_op(
     pids = touched_products(db, qvec)
 
     def one_write(p):
-        db.command(
-            "sql", f"UPDATE Product SET views = views + 1 WHERE pid = {p}"
-        )  # nosec B608 - integer pid
+        db.command("sql", "UPDATE Product SET views = views + 1 WHERE pid = ?", p)
 
     if transactional:
         with db.transaction():  # rolls back on the exception

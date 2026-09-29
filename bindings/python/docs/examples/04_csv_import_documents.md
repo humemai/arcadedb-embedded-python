@@ -105,7 +105,8 @@ python 04_csv_import_documents.py --help
 
 - `--dataset {movielens-small,movielens-large}` - Dataset size (default: movielens-large)
 - `--parallel PARALLEL` - `parallel` option for the `IMPORT DATABASE` round trip; it applies
-  only with `--export` and does not affect the CSV ingest (unset by default)
+  only with `--export` and does not affect the CSV ingest (unset by default). The engine's
+  JSONL importer does not read `parallel` or `commitEvery`, so neither changes the round trip
 - `--batch-size BATCH_SIZE` - Records per commit batch (default: 5000)
 - `--export` - Export database to JSONL after import
 - `--db-name DB_NAME` - Custom database name (default: movielens_{size}_db)
@@ -525,7 +526,7 @@ The database is preserved for inspection after the example completes.
 2. ✅ **Bulk INSERT ingest** in batched transactions, with read-your-writes disabled for
    the load and re-enabled afterward
 3. ✅ **NULL value handling** works across types - empty CSV cells become SQL NULL
-4. ✅ **Batch processing** (`--batch-size` / `commitEvery`) improves import performance
+4. ✅ **Batch processing** (`--batch-size`, the CSV ingest's transaction size) improves import performance
 5. ✅ **Create indexes AFTER import** - avoids per-insert index maintenance
 6. ✅ **Indexes** provide large speedups for lookups and counts. For exact-match
    lookups, prefer `UNIQUE_HASH` / `NOTUNIQUE_HASH`; for ranges and ordered scans,

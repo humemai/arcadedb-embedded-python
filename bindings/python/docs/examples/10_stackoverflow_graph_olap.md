@@ -186,9 +186,8 @@ The source creates unique `Id` indexes on all six vertex types before the query 
 - ArcadeDB graph preload now uses `GraphBatch` for the initial node and edge load,
   driven by the configured `--threads` value
 - `GraphBatch` is the repository's recommended bulk graph ingest path from Python
-- ArcadeDB query execution is Cypher-only in this example path: use `--db arcadedb_cypher`.
-  `arcadedb_sql` is still listed as a backend, but the query phase raises
-  "ArcadeDB SQL mode is disabled for Example 10"
+- ArcadeDB query execution is Cypher-only in this example: the ArcadeDB backend is
+  `--db arcadedb_cypher`
 - ArcadeDB GAV usage is opt-in through `--use-gav`; when enabled, the benchmark waits
   for the analytical view to reach `READY` before measuring the query suite
 - Neo4j runs execute the same OLAP query suite through a Dockerized server plus Python
@@ -199,7 +198,6 @@ The source creates unique `Id` indexes on all six vertex types before the query 
 
 ## Supported Backends
 
-- `arcadedb_sql`
 - `arcadedb_cypher`
 - `neo4j`
 - `ladybug` / `ladybugdb`

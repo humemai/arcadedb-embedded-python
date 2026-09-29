@@ -457,11 +457,15 @@ class EdgeCreator:
                     user_rid = user_cache.get(record.get("userId"))
                     movie_rid = movie_cache.get(record.get("movieId"))
                     if user_rid and movie_rid:
+                        # RIDs and values are bound as ? parameters, so every
+                        # edge runs the same statement text
                         self.db.command(
                             "sql",
-                            f"CREATE EDGE RATED FROM {user_rid} TO {movie_rid} "
-                            f"SET rating = {record.get('rating')}, "
-                            f"timestamp = {record.get('timestamp')}",
+                            "CREATE EDGE RATED FROM ? TO ? SET rating = ?, timestamp = ?",
+                            user_rid,
+                            movie_rid,
+                            record.get("rating"),
+                            record.get("timestamp"),
                         )
 
             last_rid = chunk[-1].get("rid")

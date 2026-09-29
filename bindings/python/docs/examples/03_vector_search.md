@@ -37,15 +37,16 @@ The example generates 10,000 mock documents with 384-dimensional embeddings:
 ```python
 # Mock embedding generation (in production, use real models)
 def create_mock_embedding(category_seed, doc_seed):
-    rng = np.random.RandomState(hash(category_seed + doc_seed) % 2**32)
+    rng = np.random.RandomState(zlib.crc32((category_seed + doc_seed).encode()))
     category_vector = ...
     embedding = (category_vector + noise) / np.linalg.norm(...)
     return embedding.astype(np.float32)
 ```
 
 Documents in the same category have embeddings that are closer together. The seeds go
-through Python's `hash()`, which is randomized per process for strings, so the
-embeddings differ between runs unless `PYTHONHASHSEED` is set.
+through `zlib.crc32`, so every run builds the same embeddings. Python's `hash()` would
+not: it is randomized per process for strings. The query categories are still sampled
+at random on each run.
 
 ### 3. Inserting Data
 

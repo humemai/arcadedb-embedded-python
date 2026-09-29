@@ -166,17 +166,11 @@ from typing import Any
 import arcadedb_embedded as arcadedb
 import numpy as np
 
-
-def escape_sql_string(value: str) -> str:
-    """Properly escape a string for SQL queries.
-
-    Must escape backslashes first, then single quotes.
-    Otherwise a value like '\' becomes '\'' which escapes the quote.
-    """
-    if value is None:
-        return ""
-    # First escape backslashes, then escape single quotes
-    return value.replace("\\", "\\\\").replace("'", "\\'")
+# Edge statements with every value bound as a ? parameter: the two endpoint
+# RIDs, then the edge properties. One statement text for every edge also lets
+# ArcadeDB's statement cache reuse the parse instead of parsing each row anew.
+RATED_EDGE_SQL = "CREATE EDGE RATED FROM ? TO ? SET rating = ?, timestamp = ?"
+TAGGED_EDGE_SQL = "CREATE EDGE TAGGED FROM ? TO ? SET tag = ?, timestamp = ?"
 
 
 @dataclass
@@ -454,8 +448,9 @@ class VertexCreator:
                     if len(batch_user_ids) >= self.batch_size:
                         with self.db.transaction():
                             for uid in batch_user_ids:
-                                sql = f"INSERT INTO User SET userId = {uid}"
-                                self.db.command("sql", sql)
+                                self.db.command(
+                                    "sql", "INSERT INTO User SET userId = ?", uid
+                                )
                         user_count += len(batch_user_ids)
                         batch_count += 1
                         batch_user_ids = []
@@ -467,8 +462,9 @@ class VertexCreator:
                 if batch_user_ids:
                     with self.db.transaction():
                         for uid in batch_user_ids:
-                            sql = f"INSERT INTO User SET userId = {uid}"
-                            self.db.command("sql", sql)
+                            self.db.command(
+                                "sql", "INSERT INTO User SET userId = ?", uid
+                            )
                     user_count += len(batch_user_ids)
                     batch_count += 1
 
@@ -656,28 +652,25 @@ class VertexCreator:
                                 else ""
                             )
 
-                            # Escape SQL strings
-                            title = escape_sql_string(title or "")
-                            genres = escape_sql_string(genres or "")
-
+                            # Values are bound as ? parameters, never pasted
+                            # into the SQL text, so titles need no escaping
                             sql = (
-                                f"INSERT INTO Movie SET "
-                                f"movieId = {movie_id}, "
-                                f"title = '{title}', "
-                                f"genres = '{genres}'"
+                                "INSERT INTO Movie SET "
+                                "movieId = ?, title = ?, genres = ?"
                             )
+                            values = [movie_id, title or "", genres or ""]
 
                             # Merge Link data
                             link_data = links_data.get(movie_id)
                             if link_data:
                                 if link_data["imdbId"] is not None:
-                                    imdb_id = str(link_data["imdbId"])
-                                    imdb_id = escape_sql_string(imdb_id)
-                                    sql += f", imdbId = '{imdb_id}'"
+                                    sql += ", imdbId = ?"
+                                    values.append(str(link_data["imdbId"]))
                                 if link_data["tmdbId"] is not None:
-                                    sql += f", tmdbId = {link_data['tmdbId']}"
+                                    sql += ", tmdbId = ?"
+                                    values.append(link_data["tmdbId"])
 
-                            self.db.command("sql", sql)
+                            self.db.command("sql", sql, *values)
 
                     movie_count += len(chunk)
                     batch_count += 1
@@ -806,24 +799,28 @@ class EdgeCreator:
                             if user_vertex and movie_vertex:
                                 user_rid = str(user_vertex.get_identity())
                                 movie_rid = str(movie_vertex.get_identity())
-                                sql = (
-                                    f"CREATE EDGE RATED "
-                                    f"FROM {user_rid} TO {movie_rid} "
-                                    f"SET rating = {rating}, timestamp = {timestamp}"
+                                self.db.command(
+                                    "sql",
+                                    RATED_EDGE_SQL,
+                                    user_rid,
+                                    movie_rid,
+                                    rating,
+                                    timestamp,
                                 )
-                                self.db.command("sql", sql)
                                 edge_count += 1
                         else:
                             # SQL CREATE EDGE
                             user_rid = user_cache.get(user_id)
                             movie_rid = movie_cache.get(movie_id)
                             if user_rid and movie_rid:
-                                sql = (
-                                    f"CREATE EDGE RATED "
-                                    f"FROM {user_rid} TO {movie_rid} "
-                                    f"SET rating = {rating}, timestamp = {timestamp}"
+                                self.db.command(
+                                    "sql",
+                                    RATED_EDGE_SQL,
+                                    user_rid,
+                                    movie_rid,
+                                    rating,
+                                    timestamp,
                                 )
-                                self.db.command("sql", sql)
                                 edge_count += 1
 
                 batch_count += 1
@@ -898,28 +895,28 @@ class EdgeCreator:
                             if user_vertex and movie_vertex:
                                 user_rid = str(user_vertex.get_identity())
                                 movie_rid = str(movie_vertex.get_identity())
-                                tag_escaped = escape_sql_string(tag)
-                                sql = (
-                                    f"CREATE EDGE TAGGED "
-                                    f"FROM {user_rid} TO {movie_rid} "
-                                    f"SET tag = '{tag_escaped}', "
-                                    f"timestamp = {timestamp}"
+                                self.db.command(
+                                    "sql",
+                                    TAGGED_EDGE_SQL,
+                                    user_rid,
+                                    movie_rid,
+                                    tag,
+                                    timestamp,
                                 )
-                                self.db.command("sql", sql)
                                 edge_count += 1
                         else:
                             # SQL CREATE EDGE
                             user_rid = user_cache.get(user_id)
                             movie_rid = movie_cache.get(movie_id)
                             if user_rid and movie_rid:
-                                tag_escaped = escape_sql_string(tag)
-                                sql = (
-                                    f"CREATE EDGE TAGGED "
-                                    f"FROM {user_rid} TO {movie_rid} "
-                                    f"SET tag = '{tag_escaped}', "
-                                    f"timestamp = {timestamp}"
+                                self.db.command(
+                                    "sql",
+                                    TAGGED_EDGE_SQL,
+                                    user_rid,
+                                    movie_rid,
+                                    tag,
+                                    timestamp,
                                 )
-                                self.db.command("sql", sql)
                                 edge_count += 1
 
                 batch_count += 1

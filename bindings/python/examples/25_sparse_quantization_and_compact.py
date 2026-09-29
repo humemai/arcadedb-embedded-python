@@ -66,8 +66,14 @@ def build(path: str, docs, quant: str | None):
     )
     with db.transaction():
         for i, (toks, wts) in enumerate(docs):
+            # Bound, not pasted: the arrays cross as int[] and float[], which is
+            # what the ARRAY_OF_INTEGERS and ARRAY_OF_FLOATS properties store.
             db.command(
-                "sql", f"INSERT INTO Doc SET id = {i}, tokens = {toks}, weights = {wts}"
+                "sql",
+                "INSERT INTO Doc SET id = ?, tokens = ?, weights = ?",
+                i,
+                arcadedb.to_java_int_array(toks),
+                arcadedb.to_java_float_array(wts),
             )
     return db
 
