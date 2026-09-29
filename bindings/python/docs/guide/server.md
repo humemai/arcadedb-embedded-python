@@ -8,7 +8,10 @@ Server mode is bundled by default. It was briefly removed in 26.7.2 to slim
 the wheel and restored after that broke downstream users, so the trade is
 worth stating precisely rather than leaving you to guess.
 
-**Disk.** The server stack is 12 JARs, measured against the 26.8.1 line:
+**Disk.** The figures in this section were measured on the 26.8.1 line; the
+current package sizes are in
+[Package Overview](../getting-started/distributions.md#whats-inside). The
+server stack is 12 JARs:
 
 | JAR | MB (uncompressed) | contains |
 |---|---|---|
@@ -27,7 +30,7 @@ worth stating precisely rather than leaving you to guess.
 | **total** | **7.65** | |
 
 **The wheel grows by more than that sum, and it is worth knowing why.** Measured
-on one machine, same commit, same platform, server excluded then included. The
+on 26.8.1 on one machine, same commit, same platform, server excluded then included. The
 jars and JRE columns are sizes *as stored in the wheel* (deflated), which is why
 they add up to the wheel column:
 
@@ -37,7 +40,7 @@ they add up to the wheel column:
 | with server | **67.08 MiB** | 27.87 MiB | 39.10 MiB |
 | delta | **+8.02 MiB (+13.6%)** | +7.17 MiB | +0.80 MiB |
 
-Unpacked on disk the whole package is 94.45 MiB (31.28 MiB of jars across 63
+Unpacked on disk the 26.8.1 package was 94.45 MiB (31.28 MiB of jars across 63
 files, 62.92 MiB of JRE).
 
 The extra ~0.8 MiB beyond the JARs is the **bundled JRE**, not the JARs. The
@@ -61,7 +64,7 @@ The JARs sit on the classpath and the JVM loads classes lazily, so nothing is
 initialised, no threads start, and no heap is allocated for them. What you do
 pay is a slightly longer classpath for the JVM to open at startup.
 
-Measured by installing one wheel twice and deleting only the 12 server JARs
+Measured on 26.8.1 by installing one wheel twice and deleting only the 12 server JARs
 from one copy, so the engine and every other variable is identical. 16 fresh
 processes per arm, interleaved, median [min-max] on one developer machine:
 
@@ -167,7 +170,7 @@ Any other key is forwarded to ArcadeDB as `arcadedb.<key with _ replaced by
 
 There is no `binary_port`. It was listed here and in the docstring until
 2026-08-01 and was silently discarded: ArcadeDB has no such setting. Its ports
-are `httpIncomingPort`, `httpsIncomingPort` and the per-protocol ones below.
+are `httpIncomingPort`, `httpsIncomingPort`, and the per-protocol ones below.
 2424 is OrientDB's legacy binary port and never applied to this engine.
 
 ## Wire Protocols
@@ -279,7 +282,7 @@ ArcadeDB's announcement and was not measured here.
 Mongo wire, gRPC, and Raft replication are excluded from the wheel to keep it
 installable: the shaded gRPC jar alone is 38 MB against 39 MB for the entire
 engine payload, and the Raft jar is 80 MB. **This server is single-node by
-construction** — it cannot replicate or fail over. Use the Docker distribution
+construction**: it cannot replicate or fail over. Use the Docker distribution
 for HA, gRPC, or Mongo-protocol access.
 
 ## Server Info Endpoint
@@ -323,7 +326,7 @@ requests.post(
 )
 ```
 
-## Transactions, Database Commands and Time-Series Writes over HTTP
+## Transactions, Database Commands, and Time-Series Writes over HTTP
 
 Three server features the bindings do not wrap, because they are the server's
 HTTP API rather than the embedded API. They matter as soon as a second process
@@ -361,7 +364,7 @@ that dies mid-operation leaves nothing half-written.
 ### Database commands
 
 `POST /api/v1/server` takes server-level commands as JSON: `create database`,
-`drop database`, `open database` and `close database`. Closing a database
+`drop database`, `open database`, and `close database`. Closing a database
 releases its files and page cache on the server; opening it again reads them
 back, which is the served equivalent of closing and reopening an embedded
 database.
@@ -425,7 +428,7 @@ Upstream's recommendation, from the same issue:
   [Graphs](graphs.md)).
 - **Batch size:** 2,000 rows is reasonable; 5,000 to 10,000 can amortize a
   little more for small rows, 2,000 to 5,000 for vector rows. The curve is flat,
-  so try 2k, 5k and 10k on your hardware and keep the best.
+  so try 2k, 5k, and 10k on your hardware and keep the best.
 - **Durability:** all four paths commit through ordinary transactions with the
   WAL on. Only the `GraphBatch`-based loaders (`/api/v1/batch` and gRPC
   `GraphBatchLoad`, official server only) skip it unless you pass `wal=true`.
@@ -456,10 +459,10 @@ ArcadeDB's embedded mode uses file-based locking, which prevents multiple proces
 import arcadedb_embedded as arcadedb
 
 # Process 1
-db1 = arcadedb.create_database("./mydb")  # Gets file lock
+db1 = arcadedb.open_database("./mydb")  # Gets file lock
 
 # Process 2 (different Python process)
-db2 = arcadedb.create_database("./mydb")  # ❌ ERROR: Lock conflict!
+db2 = arcadedb.open_database("./mydb")  # ❌ ERROR: Lock conflict!
 ```
 
 #### ✅ Server mode - Multiple processes/apps can access
@@ -497,7 +500,7 @@ with arcadedb.create_server("./databases", root_password="my_secure_password") a
 | Multi-process on one machine | Server | One shared endpoint avoids file locks |
 | Web app / API clients | Server | Network access for many clients |
 | Distributed workers / pipelines | Server | Parallel workers connect concurrently |
-| Production deployment | Server | Central auth, HTTP, remote access |
+| Long-lived production server | Official server distribution | Outlives any one Python process; see [When to use the Docker distribution instead](#when-to-use-the-docker-distribution-instead) |
 
 ### Multi-Threaded Access
 

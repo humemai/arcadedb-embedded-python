@@ -8,8 +8,8 @@ bindings.
 
 For bulk graph ingest from Python, the repository recommendation is `GraphBatch`.
 Example 16 and the Stack Overflow graph examples use it as the preferred path for
-loading vertices and edges. Prefer its bulk methods — `create_vertices()` and
-`new_edges()` — over per-record calls: they cost one JVM crossing per batch and
+loading vertices and edges. Prefer its bulk methods, `create_vertices()` and
+`new_edges()`, over per-record calls: they cost one JVM crossing per batch and
 run at or near Java speed (see the [Performance guide](performance.md)).
 
 **Settings, as ArcadeDB's maintainers recommend them**
@@ -27,14 +27,12 @@ same options as query parameters (`wal=true`, `expectedEdgeCount=...`). A
 `sqlscript` of `CREATE VERTEX`/`CREATE EDGE` statements parses and plans every
 statement and measured 6 to 7 times slower for the same graph.
 
-Async SQL graph insert is not a bulk graph ingest path at all. Before 26.10.1, above
-parallel level 1 the async executor silently discarded a share of the commands submitted
-to it, with no error on the per-command callback, nothing logged, and a normal return
-from `wait_completion()` (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic
-commit is now retried and otherwise reported through the error callback). Example 16
-keeps it as a comparison
-arm, pinned to one worker and checked against what it submitted. `GraphBatch` flushes
-its edges through that same executor and is measured exact.
+Async SQL graph insert is not a bulk graph ingest path at all. Before 26.10.1,
+`async_executor().command(...)` could silently drop records above parallel level 1
+(`ArcadeData/arcadedb#7615`, fixed in #7625); see
+[Bulk Ingest Recommendation](import.md#bulk-ingest-recommendation). Example 16 keeps it
+as a comparison arm, pinned to one worker and checked against what it submitted.
+`GraphBatch` flushes its edges through that same executor and is measured exact.
 
 ## Overview
 
@@ -93,9 +91,6 @@ with db.transaction():
 
     print("✅ Created vertex")
 ```
-
-!!! tip "When to Use Each Approach"
-    - **SQL/OpenCypher (default)**: Consistent across embedded and server modes
 
 ## Creating Edges
 
@@ -296,14 +291,11 @@ with db.transaction():
 
 ## Deleting Records
 
-Deleting vertices, edges, and documents requires understanding cascade behavior and the
-different deletion approaches available.
+Deleting vertices, edges, and documents requires understanding cascade behavior.
 
-### Deletion Approaches
+### SQL DELETE
 
-#### 1. SQL DELETE (Recommended for reliability)
-
-Use SQL `DELETE` for reliable deletion in all scenarios:
+Use SQL `DELETE` for deletion in all scenarios:
 
 ```python
 with db.transaction():
@@ -323,10 +315,6 @@ with db.transaction():
 - ✅ Supports complex WHERE clauses
 - ✅ Batch delete multiple records
 - ✅ Best for query results
-
-#### 2. Prefer SQL DELETE for all deletion paths
-
-Use `DELETE FROM ...` for consistency in docs and production code.
 
 ### Cascade Behavior
 
@@ -395,7 +383,7 @@ print(f"Edges: {len(edges)}")        # Output: 0
 | Delete in loop | SQL DELETE with WHERE clause | Faster than per-record calls |
 | Interactive/programmatic delete | SQL DELETE | Same behavior across modes |
 
-**Summary: Use SQL DELETE by default**, except for immediate interactive deletion where you need to delete an object you just fetched.
+**Summary: use SQL DELETE.**
 
 ## OpenCypher Queries
 

@@ -19,13 +19,13 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 | Area | Status | Notes |
 | --- | --- | --- |
 | Core Database | ✅ Supported | `DatabaseFactory`, `Database`, transactions, lookups, async helpers |
-| Query Execution | ✅ Supported | SQL, OpenCypher, GraphQL passthrough |
+| Query Execution | ✅ Supported | SQL and OpenCypher |
 | Schema & Indexes | ✅ Supported | Types, properties, LSM_TREE/HASH/FULL_TEXT/LSM_VECTOR/GEOSPATIAL indexes |
 | Graph API | ✅ Supported | SQL/OpenCypher graph workflows plus `Document`/`Vertex`/`Edge` wrapper compatibility |
 | Vector Search | ✅ Supported | JVector indexes + NumPy conversion helpers |
 | Async Execution | ✅ Supported | `AsyncExecutor` plus record-level and SQL/Cypher async flows |
 | Data Import | ✅ Supported | SQL import workflows plus a narrow `db.import_documents(...)` wrapper for document files |
-| Data Export | ✅ Supported | JSONL/GraphML/GraphSON + CSV for query results |
+| Data Export | ✅ Supported | JSONL + CSV for query results |
 | Server Mode | ✅ Supported | Embedded server lifecycle + Studio access |
 | Advanced/Low-level | ❌ Not exposed | WAL internals, binary protocol, HA/replication, plugins |
 
@@ -41,9 +41,15 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 
 - ✅ `query(language, query, *args)` and `command(language, command, *args)`
 - ✅ Transactions: `begin()`, `commit()`, `rollback()`, `transaction()`
+- ✅ Transaction helpers: `run_in_transaction()` (retries on concurrent-modification
+  conflicts), `is_transaction_active()`
 - ✅ Records: `new_document()`, `new_vertex()`, `lookup_by_rid()`, `lookup_by_key()`
+- ✅ Bulk ingest: `insert_many()` (documents), `graph_batch()` (vertices and edges)
+- ✅ Import: `import_documents()` for document-shaped files
+- ✅ Vector indexes: `create_vector_index()`
 - ✅ Utilities: `count_type()`, `drop()`, `get_name()`, `get_database_path()`, `is_open()`, `close()`
-- ✅ Configuration: `set_auto_transaction()`, `set_read_your_writes()`
+- ✅ Configuration: `set_auto_transaction()`, `set_read_your_writes()`,
+  `is_read_your_writes()`, `set_wal_flush()`
 - ✅ Async execution: `async_executor()`
 - ✅ Export helpers: `export_database()` and `export_to_csv()`
 
@@ -51,12 +57,13 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 
 #### 2. Query Execution
 
-All query languages supported by the underlying ArcadeDB engine can be used via
-`db.query()` and `db.command()`:
+SQL and OpenCypher run through `db.query()` and `db.command()`:
 
 - ✅ SQL
 - ✅ OpenCypher
-- ✅ GraphQL
+
+The GraphQL module ships in the wheel, but no test exercises it from Python. Gremlin and
+the MongoDB query language are not bundled (`scripts/jar_exclusions.txt`).
 
 **ResultSet & Results:**
 
@@ -141,7 +148,7 @@ Full Pythonic Schema API available via `db.schema`:
 
 **Not exposed:**
 
-- ❌ Plugin management, HA/replication, advanced user/security management —
+- ❌ Plugin management, HA/replication, advanced user/security management:
   run the official [ArcadeDB server](https://docs.arcadedb.com/#Server) for those
 
 #### 6. Data Import
@@ -152,7 +159,9 @@ Full Pythonic Schema API available via `db.schema`:
 - ✅ SQL `IMPORT DATABASE` for CSV graph vertices and edges with ID resolution
 - ✅ SQL `IMPORT DATABASE` for XML
 - ✅ SQL `IMPORT DATABASE` for ArcadeDB JSONL exports
-- ✅ SQL `IMPORT DATABASE` for RDF, Neo4j, Word2Vec, and timeseries scenarios covered by tests
+- ✅ SQL `IMPORT DATABASE` for RDF, Neo4j, and Word2Vec scenarios covered by tests
+- ❌ SQL `IMPORT DATABASE` into a TIMESERIES type (a TIMESERIES type owns no document
+  buckets; use `append_samples()` or the `/api/v1/ts/{db}/write` endpoint)
 - ✅ `db.import_documents(...)` wrapper for document-shaped file imports via the Java importer
 - ✅ Batch processing and automatic type inference where supported by the Java importer
 
@@ -161,17 +170,16 @@ Support exists, but the current repository guidance is:
 
 - bulk table/document ingest: `db.insert_many(...)`
 - bulk graph ingest: `GraphBatch`
-- importer-based paths: available, but not the recommended default because they have
-    shown reliability issues, including OoM failures, in larger tests
+- importer-based paths: available, but not the recommended default for bulk loads
 
 #### 7. Data Export
 
 - ✅ JSONL export - Full database backup format
-- ✅ GraphML export - Graph visualization format
-- ✅ GraphSON export - TinkerPop-compatible graph JSON
 - ✅ CSV export of query results via `export_to_csv()`
 - ✅ Type filtering via `include_types` / `exclude_types`
-- ✅ Compression when exporting JSONL/GraphML/GraphSON (Java exporter)
+- ✅ Compression when exporting JSONL (Java exporter)
+- ❌ GraphML and GraphSON export: they come from the `arcadedb-gremlin` module, which the
+  wheel excludes, so they raise `ArcadeDBError`
 
 #### 8. Vector Search
 
@@ -225,7 +233,7 @@ index = index_builder.withUnique(true).create()
 | Vector similarity search | ✅ Excellent | JVector + NumPy integration |
 | Development with Studio UI | ✅ Excellent | Server mode included |
 | Data migration (CSV/XML/JSONL import) | ✅ Good | SQL import workflows exercised by tests |
-| Async bulk ingestion | ❌ Not recommended | `AsyncExecutor.command()` silently dropped records above parallel level 1 before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625); use `insert_many()` or `GraphBatch` |
+| Async bulk ingestion | ❌ Not recommended | Before 26.10.1, `async_executor().command(...)` could silently drop records above parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see [Bulk Ingest Recommendation](guide/import.md#bulk-ingest-recommendation). Use `insert_many()` or `GraphBatch` |
 | Multi-master replication | ❌ Not supported | Java server only |
 | Custom query language | ❌ Not supported | Use built-in languages |
 
@@ -240,27 +248,4 @@ These bindings cover the **primary workflows** most Python developers need:
 They intentionally **do not expose** low-level JVM internals, clustering, and plugin
 management. For those scenarios, use the Java APIs directly.
 
----
-
-## 🚧 Future Work
-
-- Expanded performance benchmarks and scale testing
-- Continued alignment with upstream Java releases
-
----
-
-## 📝 License
-
-Apache License 2.0
-
----
-
-## 🙏 Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `python3 -m pytest tests/ -v`
-5. Submit a pull request
+For development workflow and tests, see [Contributing](development/contributing.md).

@@ -6,12 +6,10 @@ the test harness.
 > **Embedded note:** For bulk table/document ingest in embedded mode, the repository
 > recommendation is `db.insert_many(...)`, which batches rows across the FFI boundary.
 > Use explicit chunked transactions when you need tight manual control, but do not
-> treat them as the default bulk-ingest recommendation here. The async executor's SQL
-> command path (`db.async_executor().command(...)`) is not a bulk-ingest path: before
-> 26.10.1, above parallel level 1 it silently discarded records, with no error on the
-> per-command callback and a normal return from `wait_completion()`. See
-> `ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic commit is now retried
-> and otherwise reported through the error callback.
+> treat them as the default bulk-ingest recommendation here. Before 26.10.1,
+> `async_executor().command(...)` could silently drop records above parallel level 1
+> (`ArcadeData/arcadedb#7615`, fixed in #7625); see
+> [Bulk Ingest Recommendation](../import.md#bulk-ingest-recommendation).
 
 ## Basic commit and rollback
 
@@ -203,3 +201,13 @@ per chunk of writes, not one per row (`insert_many`, or the chunked pattern abov
 **Bulk imports are the exception:** `db.graph_batch()` and the server's `/api/v1/batch` turn the WAL off by default
 for speed. Pass `use_wal=True` (served: `wal=true`) unless you would rather delete the database and re-run the import
 after a crash; see [GraphBatch](../../api/graph_batch.md).
+
+**The async writers ignore `txWalFlush`.** `insert_many(..., parallel=True)`, and anything else that goes through
+`db.async_executor()`, commits with the executor's own flush setting, which defaults to no flush whatever
+`arcadedb.txWalFlush` or `set_wal_flush()` says (`ArcadeData/arcadedb#8478`). For a durable parallel load, set it on
+the executor before the load:
+
+```python
+db.async_executor().set_transaction_sync("yes_nometadata")   # or "yes_full", to match txWalFlush=2
+db.insert_many("Order", rows, parallel=True)
+```

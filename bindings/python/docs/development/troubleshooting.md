@@ -110,18 +110,19 @@ db = arcadedb.create_database("./mydb")
 
 ### Script Hangs at Exit
 
-**Symptom:** The Python process finishes its work but never exits (or, on
-older versions, printed `Windows fatal exception: access violation` during
+**Symptom (older wheels):** The Python process finished its work but never
+exited (or printed `Windows fatal exception: access violation` during
 shutdown).
 
-**Cause:** A `Database` was left open. The engine runs non-daemon
+**Cause:** A `Database` was left open. Older engines ran non-daemon
 background threads (asynchronous WAL flushing, index maintenance) until
-`close()` is called, and the JVM cannot terminate while they are alive.
+`close()` was called, and the JVM could not terminate while they were alive.
 
-**Solution:** Since 26.8.1 the bindings close any database still
-open when the interpreter exits, so this resolves itself. Explicit
-`db.close()` (or a `with` block) is still the recommended pattern: it
-flushes deterministically and releases the lock for other processes.
+**Current behavior:** Fixed on both sides. The engine's background threads are
+daemon threads and it installs its own JVM shutdown hook (#5418), and since
+26.8.1 the bindings also close any database still open when the interpreter
+exits. Explicit `db.close()` (or a `with` block) is still the recommended pattern:
+it flushes deterministically and releases the lock for other processes.
 
 ---
 
@@ -183,21 +184,24 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g")
 | `-Xms<size>` | Initial heap size (recommended: same as `-Xmx`) | `-Xms8g` |
 | `-XX:MaxDirectMemorySize=<size>` | Limit off-heap direct buffers | `-XX:MaxDirectMemorySize=8g` |
 | `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>` | Override for the vectors cached during the graph build (default `0`, automatic; leave it) | `-Darcadedb.vectorIndex.graphBuildCacheSize=2000000` (only to bound a build on a small heap) |
-| `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>` | FLOOR for the rebuild threshold (default: 100). The effective threshold is `max(floor, min(graphSize x rebuildGraphRatio, maxPendingMutations))`, so on a 1M-vector index at the defaults it is **50,000**, not 100 — raising this alone changes nothing above ~500 vectors | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=200` |
+| `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>` | FLOOR for the rebuild threshold (default: 100). The effective threshold is `max(floor, min(graphSize x rebuildGraphRatio, maxPendingMutations))`, so on a 1M-vector index at the defaults it is **50,000**, not 100, so raising this alone changes nothing above ~500 vectors | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=200` |
 
 **Vector Index Memory Tuning:**
 
-For applications using vector indexes, control memory usage:
+The vector graph-build and search caches live on the JVM heap and size themselves
+automatically, each within a share of the heap (25% by default). Size the heap for the
+live vector set, and lower the shares if the caches crowd out other work (see
+[Out of Memory Errors](#out-of-memory-errors)):
 
 ```python
-# Conservative: bounded caches for large vector datasets
 from arcadedb_embedded.jvm import start_jvm
 
 start_jvm(
     heap_size="8g",
     jvm_args=(
-        "-Xms8g -XX:MaxDirectMemorySize=8g "
-        "-Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
+        "-Xms8g "
+        "-Darcadedb.vectorIndex.graphBuildCacheMaxHeapPercent=20 "
+        "-Darcadedb.vectorIndex.searchCacheMaxHeapPercent=20"
     ),
 )
 ```
@@ -207,8 +211,10 @@ start_jvm(
 - `locationCacheSize`: **removed** (ArcadeDB issues #5559, #5568). It was never
   a cache: a vector location is the only mapping from a vector id to its record,
   so a bound on it did not spill to disk, it dropped vectors from searches and
-  from `countEntries()`. The engine now rejects both the JVM property and the
-  per-index metadata key. Size the heap for the live vector set instead.
+  from `countEntries()`. The per-index metadata key is now rejected (and the
+  bindings raise `ValueError` for `location_cache_size`); the JVM property
+  `arcadedb.vectorIndex.locationCacheSize` is ignored, with a warning for a positive
+  value. Size the heap for the live vector set instead.
 
 - `graphBuildCacheSize`: vectors held in RAM while the graph is built. **Leave
     it at the default.** The default (`0`) is automatic: the engine sizes the
@@ -230,7 +236,8 @@ Off-Heap Components:
 - Metaspace (class definitions)
 - Page cache
 - Thread stacks
-- Vector index caches (if bounded)
+
+(The vector index caches are on the heap: they count toward -Xmx.)
 
 Rule of thumb: Plan for 1.5-2× your heap size in actual RAM
 ```
@@ -246,23 +253,12 @@ start_jvm(heap_size="2g", jvm_args="-Xms2g")
 # Medium datasets (1M-10M records, 100K-1M vectors)
 start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
 
-# Large datasets (10M+ records, 1M+ vectors) with bounded caches
-start_jvm(
-    heap_size="16g",
-    jvm_args=(
-        "-Xms16g -XX:MaxDirectMemorySize=16g "
-        "-Darcadedb.vectorIndex.mutationsBeforeRebuild=200"
-    ),
-)
+# Large datasets (10M+ records, 1M+ vectors)
+start_jvm(heap_size="16g", jvm_args="-Xms16g -XX:MaxDirectMemorySize=16g")
 
-# High-dimensional vectors (e.g., 1536-dim embeddings)
-start_jvm(
-    heap_size="8g",
-    jvm_args=(
-        "-Xms8g -XX:MaxDirectMemorySize=8g "
-        "-Darcadedb.vectorIndex.mutationsBeforeRebuild=150"
-    ),
-)
+# High-dimensional vectors (e.g., 1536-dim embeddings): each cached vector
+# costs about dimensions x 4 + 64 bytes, so give the heap room for the corpus
+start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
 ```
 
 !!! warning "Configuration Timing"
@@ -359,28 +355,31 @@ start_jvm(
     ```
 ---
 
-### Transaction Already Active
+### Nested Transactions Commit Independently
 
-**Symptom:**
+**Symptom:** Records written in an inner `db.transaction()` survive even though the
+outer transaction rolled back.
 
 ```python
 with db.transaction():
     with db.transaction():  # Nested!
         pass
-# ArcadeDBError: Transaction already active
 ```
 
-**Cause:** Nested transactions not supported.
+**Cause:** `begin()` inside an active transaction starts a new, independent nested
+transaction on the same thread; it raises no error. The inner block commits or rolls
+back on its own, so it is not a savepoint of the outer one (see
+[Nested Transactions](../api/transactions.md#nested-transactions)).
 
 **Solution:**
 
-Don't nest transactions:
+Don't nest transactions unless you want the inner block to commit on its own:
 
 ```python
-# Bad
+# Bad: another_operation() commits on its own, even if the outer block rolls back
 with db.transaction():
     some_operation()
-    with db.transaction():  # ✗ Error
+    with db.transaction():
         another_operation()
 
 # Good
@@ -437,20 +436,13 @@ db.query("sql", "SELECT FROM User WHERE name = 'Alice'")
 
 **Problem**: SQL function not recognized
 
+SQL function names are case-insensitive (`SYSDATE()` and `sysdate()` are the same
+function), so case is not the cause. Check the spelling, and that the function exists
+in the bundled engine.
+
 **Solutions**:
 
-1. **Check Function Name Case**:
-    ```python
-    # Wrong
-    with db.transaction():
-        db.command("sql", "INSERT INTO Product SET created = SYSDATE()")
-
-    # Correct
-    with db.transaction():
-        db.command("sql", "INSERT INTO Product SET created = sysdate()")
-    ```
-
-2. **Use Built-in Functions**:
+1. **Use Built-in Functions**:
     ```python
     # Date/time
     with db.transaction():
@@ -628,14 +620,20 @@ for row in result:
     # Only one row in memory
 ```
 
-2. **Close ResultSets:**
+2. **Close ResultSets you stop reading early:**
 ```python
-result = db.query("sql", "SELECT FROM User")
-for row in result:
-    if some_condition(row):
-        break
-# ResultSet automatically closed when iterator exhausted
+with db.query("sql", "SELECT FROM User") as result:
+    for row in result:
+        if some_condition(row):
+            break
+# Closed by the with block
 ```
+
+Exhausting a result set, or reading it with `first()`, `one()`, or `to_list()`, closes
+it for you. After a `break` it is not exhausted: without the `with` block (or an
+explicit `result.close()`), it stays open while `result` is still referenced, and
+since 26.10.1's parallel scan an open result set can hold engine threads that later
+queries need.
 
 3. **Force garbage collection:**
 ```python
@@ -667,7 +665,7 @@ for i in range(0, 1000000, batch_size):
 
 **Symptom:**
 ```python
-server = arcadedb.create_server("./databases")
+server = arcadedb.create_server("./databases", root_password="change-me")
 server.start()
 # ArcadeDBError: Unable to start server
 ```
@@ -684,9 +682,13 @@ Use different port:
 ```python
 server = arcadedb.create_server(
     root_path="./databases",
-    http_port=8080  # Different port
+    root_password="change-me",
+    config={"http_port": 8080},  # Different port
 )
 ```
+
+Always pass a `root_password` (8 or more characters): on the first start without one,
+the server stops and asks for a root password on standard input.
 
 2. **Check permissions:**
 ```bash
@@ -701,7 +703,7 @@ chmod -R 755 ./databases
 import logging
 logging.basicConfig(level=logging.DEBUG)
 
-server = arcadedb.create_server("./databases")
+server = arcadedb.create_server("./databases", root_password="change-me")
 server.start()
 # Check log output
 ```
@@ -719,7 +721,7 @@ Server running but can't connect via HTTP.
 ```python
 if server.is_started():
     print("Server is running")
-    print(f"URL: http://localhost:{server.http_port}")
+    print(f"URL: http://localhost:{server.get_http_port()}")
 ```
 
 2. **Check firewall:**
@@ -733,7 +735,11 @@ sudo ufw allow 2480
 
 3. **Test with curl:**
 ```bash
-curl http://localhost:2480/api/v1/server
+# No credentials needed
+curl http://localhost:2480/api/v1/ready
+
+# Most other endpoints need them
+curl -u root:change-me http://localhost:2480/api/v1/server
 ```
 
 ## Vector Search Issues
@@ -834,8 +840,12 @@ db.command(
 ```
 
 2. **Tune vector parameters:**
+
+The defaults are `maxConnections` 32 and `beamWidth` 100. Raising `beamWidth` can
+improve recall at the cost of build time:
+
 ```python
-# Better recall, slower
+# Better recall, slower build
 db.command(
     "sql",
     '''
@@ -844,7 +854,6 @@ db.command(
     METADATA {
         "dimensions": 384,
         "similarity": "COSINE",
-        "maxConnections": 32,
         "beamWidth": 200
     }
     ''',
@@ -888,14 +897,14 @@ import arcadedb_embedded as arcadedb
 ```
 
 **Java logging:**
-```python
-import jpype
 
-# Enable Java logging before importing arcadedb
-jpype.startJVM(
-    classpath=[...],
-    "-Djava.util.logging.config.file=logging.properties"
-)
+Pass the option before the first database or server is created (the bindings start
+the JVM themselves):
+
+```python
+from arcadedb_embedded.jvm import start_jvm
+
+start_jvm(jvm_args="-Djava.util.logging.config.file=logging.properties")
 ```
 
 logging.properties:
@@ -904,7 +913,7 @@ logging.properties:
 .level=INFO
 handlers=java.util.logging.ConsoleHandler
 java.util.logging.ConsoleHandler.level=ALL
-com.arcadedata.level=DEBUG
+com.arcadedb.level=FINE
 ```
 
 ---
@@ -913,7 +922,7 @@ com.arcadedata.level=DEBUG
 
 ```python
 # Get Java class name
-java_obj = vertex._java_vertex
+java_obj = vertex._java_document  # the wrapped Java record (Vertex subclasses Document)
 print(java_obj.getClass().getName())
 
 # List methods

@@ -2,8 +2,10 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/17_timeseries_end_to_end.py){ .md-button }
 
-This example demonstrates the current Python-bindings posture for time series:
-use plain ArcadeDB SQL from Python rather than a dedicated Python object API.
+This example drives time series through plain ArcadeDB SQL from Python: DDL, writes,
+and queries all go through `db.command()` and `db.query()`. For bulk writes the bindings
+also have a columnar append, `db.async_executor().append_samples(...)`, which Example 22
+demonstrates.
 
 It covers:
 
@@ -28,7 +30,7 @@ It covers:
     migration.** A type created by an earlier build keeps the inline layout;
     only a newly created type gets the encoding. Existing databases keep
     working, but they do not get the smaller stride, and a benchmark pointed at
-    a database created before dev23 measures the old layout and shows no
+    a database created before 26.8.1 measures the old layout and shows no
     change. Recreate the type against a fresh database to see the difference.
 
     TAGs are for low-cardinality values by definition;
@@ -73,5 +75,7 @@ and the socket. Example 24 covers transactions and database commands over HTTP.
 ## Why SQL-First?
 
 The bindings already expose a stable generic interface through `db.command()` and
-`db.query()`. For time series, that keeps Python maintenance low while avoiding a
-premature public object API around upstream-owned semantics.
+`db.query()`, so this example keeps the type definition, the writes, and the queries in
+SQL, where the time-series semantics are defined upstream. The one time-series-specific
+Python call is `append_samples(...)`, a columnar bulk-write path; there is no Python
+object model for time-series types.

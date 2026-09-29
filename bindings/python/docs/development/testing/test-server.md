@@ -68,21 +68,23 @@ assert not server.is_started()
 **Test:** `test_server_database_operations`
 
 ```python
-with arcadedb.create_server(root_path="./databases") as server:
+from arcadedb_embedded import ArcadeDBServer
+
+with ArcadeDBServer(root_path="./databases", root_password="mypassword") as server:
     # Server auto-starts in the context manager
 
     # Create database through server
     db = server.create_database("testdb")
+    assert db.is_open()
 
     db.command("sql", "CREATE DOCUMENT TYPE Person")
     with db.transaction():
-        person = db.new_document("Person")
-        person.set("name", "Alice").save()
+        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
 
-    # Query
-    result = db.query("sql", "SELECT FROM Person")
-    for person in result:
-        print(person.get("name"))
+    records = list(db.query("sql", "SELECT FROM Person"))
+    assert len(records) == 1
+    assert records[0].get("name") == "Alice"
+    db.close()
 ```
 
 ### 3. Custom Configuration
@@ -90,7 +92,9 @@ with arcadedb.create_server(root_path="./databases") as server:
 **Test:** `test_server_custom_config`
 
 ```python
-server = arcadedb.create_server(
+from arcadedb_embedded import ArcadeDBServer
+
+server = ArcadeDBServer(
     root_path="./databases",
     root_password="secure_password",
     config={
@@ -102,6 +106,7 @@ server = arcadedb.create_server(
 server.start()
 
 assert server.get_http_port() == 8080
+server.stop()
 ```
 
 ### 4. Context Manager
@@ -133,11 +138,11 @@ assert server.get_studio_url().startswith("http://localhost:")
 ## Running These Tests
 
 ```bash
-# Run all server tests
-pytest tests/test_server.py -v
+# Run all server tests (from the repository root)
+uv run pytest bindings/python/tests/test_server.py -v
 
 # Run specific test
-pytest tests/test_server.py::test_server_creation -v
+uv run pytest bindings/python/tests/test_server.py::test_server_creation -v
 ```
 
 

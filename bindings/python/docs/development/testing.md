@@ -28,7 +28,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
     ---
 
-    HTTP API, Studio, configuration
+    Server lifecycle, configuration, and Studio URL
 
 -   :material-lock: **[Concurrency Tests](testing/test-concurrency.md)**
 
@@ -114,7 +114,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
 ### Installation
 
-Nothing to install — test dependencies come from the repo-root uv project and
+Nothing to install: test dependencies come from the repo-root uv project and
 are synced automatically by `uv run`.
 
 ### Running Tests
@@ -123,9 +123,9 @@ are synced automatically by `uv run`.
 # Run all tests
 uv run pytest
 
-# Run specific category
-uv run pytest tests/test_core.py -v
-uv run pytest tests/test_concurrency.py -v
+# Run specific category (paths are relative to the repository root)
+uv run pytest bindings/python/tests/test_core.py -v
+uv run pytest bindings/python/tests/test_concurrency.py -v
 
 # Run with coverage
 uv run pytest --cov=arcadedb_embedded --cov-report=html
@@ -136,10 +136,10 @@ uv run pytest --cov=arcadedb_embedded --cov-report=html
 | Category | What's Tested |
 |----------|---------------|
 | **Core Operations** | CRUD, transactions, queries, graph operations, vector search |
-| **Server Mode** | HTTP API, Studio UI, configuration, multiple databases |
+| **Server Mode** | Server lifecycle and configuration, HTTP API, bundled wire protocols, packaging |
 | **Concurrency** | File locking, thread safety, multi-process limitations |
 | **Server Patterns** | Embedded+HTTP combinations, lock management |
-| **Data Import** | SQL import workflows, type inference, batch commits |
+| **Data Import** | SQL `IMPORT DATABASE` across formats, the `import_documents()` wrapper, `on_row_error` |
 | **Query Languages** | SQL, OpenCypher |
 | **Advanced Features** | Unicode support, schema introspection, geospatial SQL, timeseries SQL, graph algorithms, materialized views, HASH indexes |
 
@@ -167,9 +167,9 @@ See [Server Patterns](testing/test-server-patterns.md) for detailed comparison.
 ### Performance Insight
 
 !!! tip "No HTTP Overhead"
-    Embedded access through server is **just as fast** as standalone embedded mode!
-
-    It's a direct JVM call, not HTTP. Same Python process = zero network overhead.
+    Embedded access through a server is a direct JVM call, not HTTP: the Python
+    process that started the server pays no network overhead. The server-patterns
+    comparison prints both timings but does not assert that they are equal.
 
 ## Common Testing Workflows
 
@@ -177,17 +177,17 @@ See [Server Patterns](testing/test-server-patterns.md) for detailed comparison.
 
 ```bash
 # Run tests matching keyword
-pytest -k "transaction" -v
-pytest -k "import" -v
+uv run pytest -k "transaction" -v
+uv run pytest -k "import" -v
 
 # Stop on first failure
-pytest -x
+uv run pytest -x
 
 # Drop into debugger on failure
-pytest --pdb
+uv run pytest --pdb
 
 # Show skipped test reasons
-pytest -v -rs
+uv run pytest -v -rs
 ```
 
 ## Test Organization

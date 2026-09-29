@@ -2,12 +2,12 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py){ .md-button }
 
-There are 13 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), date/datetime and offset datetimes, Decimal, bytes, collections (list, set, dict), nested structures, the one-crossing path for lists of scalars, the `property_names` accessor, and the `Result.to_dict()` / `Result.to_json()` helpers.
+There are 16 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), date/datetime and offset datetimes, Decimal, bytes, collections (list, set, dict), nested structures, the one-crossing path for lists of scalars, the `property_names` accessor, the `Result.to_dict()` / `Result.to_json()` helpers, and Java `int[]` / `long[]` arrays.
 
 ## Key Types
 
-- Primitives: `int` ↔ Integer/Long, `float` ↔ Double, `str` ↔ String, `bool` ↔ Boolean, `None` ↔ null
-- Date/Time: `datetime`, `date`, `time`
+- Primitives: `int` ↔ Long, `float` ↔ Double, `str` ↔ String, `bool` ↔ Boolean, `None` ↔ null
+- Date/Time: `datetime`, `date`
 - Numeric: `Decimal` for precision
 - Collections: `list`, `set`, `dict`
 - Binary: `bytes`
@@ -283,6 +283,16 @@ assert record.get("numbers")[0] == 1
 assert "Alice" in record.get("names")
 ```
 
+---
+
+### TestPrimitiveArrayFormats
+
+Regression tests for issue #4: the `int[]` and `long[]` buffer formats (`=i` / `=q`) crashed `memoryview.tolist()` and left a broken entry in the converter cache.
+
+- **test_int_array**: `convert_java_to_python()` turns a Java `int[]` into `[1, 2, 3]`, and a second `int[]` (the cached converter) into `[4, 5]`.
+- **test_long_array**: a Java `long[]` holding `2**40` and `-2**40` converts to the same two Python ints.
+- **test_cache_not_poisoned_by_failure**: when a converter raises during `_register()`, its type is not left in `_CONVERTER_CACHE`.
+
 ## Test Patterns
 
 ### Store and Retrieve
@@ -354,13 +364,13 @@ assert result.get("null_val") is None
 |-------------|-----------|-------|
 | `None` | `null` | Null values |
 | `bool` | `Boolean` | True/False |
-| `int` | `Integer` / `Long` | Size-dependent |
+| `int` | `Long` | Past 64 bits raises `OverflowError` |
 | `float` | `Double` | 64-bit float |
 | `str` | `String` | Unicode support |
-| `bytes` | `byte[]` | Binary data |
-| `datetime` | `LocalDateTime` | No timezone |
+| `bytes` / `bytearray` | `byte[]` | Reads back as a list of signed ints |
+| `datetime` | `java.util.Date` | Built from `datetime.timestamp()`, so a naive value is read as local time |
 | `date` | `LocalDate` | Date only |
-| `time` | `LocalTime` | Time only |
+| `time` | (none) | Not converted: `convert_python_to_java()` returns it unchanged |
 | `Decimal` | `BigDecimal` | High precision |
 | `list` | `ArrayList` | Ordered |
 | `tuple` | `ArrayList` | Becomes list |

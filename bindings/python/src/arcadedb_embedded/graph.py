@@ -97,9 +97,10 @@ class Document:
         return self
 
     def delete(self):
-        """Delete the document.
+        """Delete the record. Like every write, it needs an active transaction.
 
-        Works reliably on records from lookup_by_rid(), less reliably on query results.
+        A query row is a ``Result``, not a record: reach the record with
+        ``result.get_element()`` (or ``db.lookup_by_rid()``) and delete that.
         """
         self._java_document.delete()
 

@@ -7,9 +7,9 @@ The Schema provides type management, index creation, and property definitions fo
 The `Schema` class enables:
 
 - **Type Management**: Create document, vertex, and edge types
-- **Property Definitions**: Define typed properties with constraints
+- **Property Definitions**: Define typed properties (constraints go through SQL DDL, see
+  below)
 - **Index Creation**: Create indexes for query optimization
-- **Type Hierarchies**: Extend existing types
 - **Schema Inspection**: Query existing schema definitions
 
 !!! note "DSL-first recommendation"
@@ -428,14 +428,9 @@ schema.create_index("Article", ["content"], index_type="FULL_TEXT")
     (which exposes `max_connections`, `beam_width`, `dimensions`, etc.), or SQL
     `CREATE INDEX ... LSM_VECTOR METADATA {...}`.
 
-- **max_connections**: Per-layer graph degree (default: 32; typical 16-64). Vamana degree, not doubled at the base layer like hnswlib M (use 2*M to match an hnswlib config). Maps to
-  JVector `maxConnections`.
-- **beam_width**: Beam width for build/search (default: 100; typical 64-200). Maps to
-  JVector `beamWidth`.
-- **dimensions**: Vector size (must match your embeddings).
-- **ef_search**: Query-time exact-search beam width override via SQL
-  `vectorNeighbors(..., k, ef_search)`. Leave unset to use ArcadeDB's default/adaptive
-  behavior.
+The parameters, their defaults, and tuning guidance are documented once, under
+[`create_vector_index`](database.md#create_vector_index) and in the
+[Vector API](vector.md).
 
 ---
 
@@ -647,7 +642,8 @@ Get a type by name.
 
 - `Optional[Type]`: Java `DocumentType`/`VertexType`/`EdgeType` object, or `None` if not
   found. Methods on this object are the underlying Java methods exposed by JPype
-  (camelCase, e.g. `getName()`, `countType(True)`).
+  (camelCase, e.g. `getName()`, `getProperties()`). To count a type's records, use
+  `db.count_type("User")`.
 
 **Example:**
 
@@ -777,7 +773,7 @@ with arcadedb.create_database("./social_network") as db:
 
 ```python
 # Add property to an existing type (auto-transactional)
-if db.schema.get_type("User").getProperty("phoneNumber") is None:
+if not db.schema.get_type("User").existsProperty("phoneNumber"):
     db.schema.create_property("User", "phoneNumber", "STRING")
     print("✅ Added phoneNumber property")
 
@@ -819,19 +815,21 @@ schema.create_index("Event", ["timestamp"])
 schema.create_index("Event", ["userId", "timestamp"])
 ```
 
-### 4. Use Appropriate Bucket Counts
+### 4. Choose Bucket Counts for Parallel Loads
 
 ```python
-# ✅ Good: Scale buckets with data size
-if expected_records < 100000:
-    buckets = 1  # Default
-elif expected_records < 1000000:
-    buckets = 10
-else:
-    buckets = 20
-
-schema.create_vertex_type("BigData", buckets=buckets)
+# ✅ Good: one bucket per async writer (or a multiple), decided when the type is created
+buckets = db.async_executor().get_parallel_level()  # default: cores - 1
+schema.create_document_type("Event", buckets=buckets)
 ```
+
+- One bucket (the default) is right unless the type is loaded with
+  `db.insert_many(..., parallel=True)`. A parallel load needs as many buckets as the async
+  executor has writers, or a multiple of that (ArcadeData/arcadedb#8478).
+- Each bucket has its own sub-index, so on a multi-bucket type an index lookup touches
+  every bucket's sub-index. On a type with a key, route records by it:
+  ``ALTER TYPE Event BucketSelectionStrategy `partitioned('id')` ``. See the
+  [Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation).
 
 ### 5. Set Property Constraints
 
@@ -953,5 +951,5 @@ schema.create_index("User", ["username"], unique=True)
 - **[Database API](database.md)** - Database operations
 - **[Transactions API](transactions.md)** - Transaction management
 - **[Vector Search Guide](../guide/vectors.md)** - HNSW (JVector) indexes
-- **[Example 03: Vector Search](../examples/03_vector_search.md)** - Real-world schema usage
-- **[Example 02: Social Network](../examples/02_social_network_graph.md)** - Graph schema patterns
+- **[Example 03: Vector Search](../examples/03_vector_search.md)** - A schema defined with SQL DDL, plus `get_vector_index`
+- **[Example 02: Social Network](../examples/02_social_network_graph.md)** - A graph schema defined with SQL DDL

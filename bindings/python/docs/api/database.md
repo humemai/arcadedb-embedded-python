@@ -146,6 +146,7 @@ Execute a query and return results. Queries are read-only and don't require a tr
 - `language` (str): Query language - `"sql"`, `"opencypher"`, `"graphql"`
 - `command` (str): Query string
 - `*args`: Optional positional parameters, or one mapping for named parameters
+  A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... ?", [0.9, 0.1, 0.0])` binds `?` to `0.9`. To bind one list as one parameter (a query vector, say), pass a NumPy array or `to_java_float_array(...)`, use a named parameter, or wrap it: `[[0.9, 0.1, 0.0]]`.
 
 **Returns:**
 
@@ -197,13 +198,16 @@ result = db.query("opencypher", """
 db.command(language: str, command: str, *args) -> Optional[ResultSet]
 ```
 
-Execute a command (write operation). Commands modify data and **require a transaction**.
+Execute a command (write operation). Data writes (`INSERT`, `UPDATE`, `DELETE`, `CREATE
+VERTEX`, `CREATE EDGE`) **require a transaction**; schema commands (DDL) run without
+one.
 
 **Parameters:**
 
 - `language` (str): Command language (usually `"sql"` or `"opencypher"`)
 - `command` (str): Command string
 - `*args`: Optional positional parameters, or one mapping for named parameters
+  A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... ?", [0.9, 0.1, 0.0])` binds `?` to `0.9`. To bind one list as one parameter (a query vector, say), pass a NumPy array or `to_java_float_array(...)`, use a named parameter, or wrap it: `[[0.9, 0.1, 0.0]]`.
 
 **Returns:**
 
@@ -211,7 +215,7 @@ Execute a command (write operation). Commands modify data and **require a transa
 
 **Raises:**
 
-- `ArcadeDBError`: If command fails, database is closed, or no transaction is active
+- `ArcadeDBError`: If command fails, database is closed, or a data write runs with no active transaction
 
 **Example:**
 
@@ -713,15 +717,13 @@ Enable or disable automatic transaction management.
 db.async_executor() -> AsyncExecutor
 ```
 
-**Experimental:** Not advised for production use yet. Prefer standard transactions and
-synchronous workflows.
-
 The executor runs individual statements, queries, and record operations off the calling
-thread. It is not a bulk-ingest path: its SQL `command(...)` submissions lost records
-above one worker before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625). Use
-[`insert_many`](#insert_many) or
-[`graph_batch`](#graph_batch) for bulk loads, and see the
-[AsyncExecutor API](async_executor.md) for the measured detail.
+thread. It is not the bulk-write path: use [`insert_many`](#insert_many) (whose
+`parallel=True` mode runs on this executor's writers) or [`graph_batch`](#graph_batch)
+for bulk loads. Before 26.10.1, `async_executor().command(...)` could silently drop
+records above parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see
+[Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation) and the
+[AsyncExecutor API](async_executor.md).
 
 ---
 
@@ -791,8 +793,8 @@ db.import_documents("./movies.csv", document_type="Movie", file_type="csv")
 ```
 
 For bulk ingest from Python, prefer [`insert_many`](#insert_many) for documents and
-[`graph_batch`](#graph_batch) for graphs: the async SQL command path silently lost
-records above one async worker before 26.10.1 (#7615, fixed in #7625).
+[`graph_batch`](#graph_batch) for graphs (see
+[Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation)).
 
 ---
 
@@ -836,6 +838,7 @@ db.create_vector_index(
     beam_width: int = 100,
     quantization: str = "INT8",
     encoding: str | None = None,
+    location_cache_size: int | None = None,  # removed: any value raises ValueError
     graph_build_cache_size: int | None = None,
     mutations_before_rebuild: int | None = None,
     store_vectors_in_graph: bool = False,
@@ -918,16 +921,16 @@ with db.transaction():
         vertex.set("embedding", arcadedb.to_java_float_array(embedding))
         vertex.save()
 
-# Preferred query path: SQL search
-query_vector = np.random.rand(384)
-qvec_literal = "[" + ", ".join(str(float(x)) for x in query_vector.tolist()) + "]"
+# Preferred query path: SQL search, with the query vector bound as a parameter
+query_vector = np.random.rand(384).astype(np.float32)
 rows = db.query(
     "sql",
     (
         "SELECT id, distance, (1 - distance) AS score "
-        "FROM (SELECT expand(vectorNeighbors('Document[embedding]', "
-        f"{qvec_literal}, 5))) ORDER BY distance"
+        "FROM (SELECT expand(vectorNeighbors('Document[embedding]', ?, 5))) "
+        "ORDER BY distance"
     ),
+    arcadedb.to_java_float_array(query_vector),
 ).to_list()
 ```
 

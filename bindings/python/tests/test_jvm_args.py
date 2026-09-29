@@ -169,3 +169,30 @@ def test_common_pool_parallelism_must_be_positive():
             assert False, "Expected ArcadeDBError for common_pool_parallelism=0"
         except Exception as exc:
             assert "common_pool_parallelism must be >= 1" in str(exc)
+
+
+def test_conftest_binds_each_pytest_hook_once():
+    # A second `def pytest_configure` in conftest.py silently replaced the
+    # first, so the Windows faulthandler hook below never ran for two months.
+    import ast
+    from collections import Counter
+    from pathlib import Path
+
+    tree = ast.parse((Path(__file__).parent / "conftest.py").read_text())
+    names = Counter(
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("pytest_")
+    )
+    assert [n for n, c in names.items() if c > 1] == []
+
+
+def test_faulthandler_is_off_on_windows():
+    import faulthandler
+    import sys
+
+    import pytest
+
+    if sys.platform != "win32":
+        pytest.skip("the conftest hook disables it on Windows only")
+    assert not faulthandler.is_enabled()

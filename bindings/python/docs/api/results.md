@@ -115,9 +115,10 @@ Bulk-materialize all rows via batched Java-side JSON serialization.
 
 The fast path for large result sets: rows are serialized to JSON in batches on the Java
 side (one JPype crossing per batch instead of several per row) and parsed with the C
-json module — measured ~6x faster than `to_list()` on wide 100k-row scans.
+json module. Measured ~5.5x faster than `to_list()` on a 10,000-row, nine-property scan
+(578 ms against 103 ms, laptop, 2026-09-27).
 
-**Trade-off:** values carry JSON-native types. Numbers, strings, booleans, lists and
+**Trade-off:** values carry JSON-native types. Numbers, strings, booleans, lists, and
 nested maps convert as expected, but temporal values arrive as ISO strings (not
 `datetime`) and DECIMALs as floats. Use `to_list()` when full Python-type fidelity
 matters more than speed.
@@ -212,6 +213,36 @@ unavailable (callers fall back to row-based paths).
 cols = db.query("sql", "SELECT cid, embedding FROM Chunk").to_columns()
 emb = cols["embedding"]        # float32, shape (n, dim)
 sims = emb @ query_vector      # immediately usable
+```
+
+---
+
+### `to_arrow(batch_size: int = 25_000)`
+
+Bulk-materialize all rows as a `pyarrow.Table`. Requires numpy and pyarrow.
+
+It reads the same columnar buffer as `to_columns()`, so the Java side does no extra
+work. Two things differ. Nulls keep their column type, because Arrow carries a validity
+bitmap: a nullable int64 column stays int64 (where `to_columns()` promotes it to float64
+with NaN, losing precision above 2**53), and a nullable boolean column stays boolean.
+Strings are cheaper, because the buffer already holds Arrow's string layout (int32
+offsets and a UTF-8 blob), so a column is wrapped instead of decoded one `str` at a
+time.
+
+**Parameters:**
+
+- `batch_size` (int): Rows per Java crossing (default: `25_000`)
+
+**Returns:**
+
+- `pyarrow.Table`, or `None` when pyarrow, numpy, or the bridge jar is unavailable
+  (fall back to `to_columns()`)
+
+**Example:**
+
+```python
+table = db.query("sql", "SELECT id, name, score FROM Doc").to_arrow()
+print(table.schema)
 ```
 
 ---
@@ -316,9 +347,10 @@ Closing is not only memory hygiene: since 26.10.1's parallel scan
 (ArcadeData/arcadedb#8524) a query whose `LIMIT` is satisfied keeps its scan's producer
 threads parked until its result set is closed or
 `arcadedb.parallelScanAbandonedTimeout` (10 minutes) passes, and a few such result sets
-stall the next query that needs those threads (ArcadeData/arcadedb#8594). Wheels
-before 2026-09-28 closed nothing on exhaustion, so RID-paged reads
-(`WHERE @rid > <last> LIMIT n`) stalled on their fifth page on 8 cores.
+stall the next query that needs those threads (ArcadeData/arcadedb#8594). 26.10.1
+development wheels built before 2026-09-28 closed nothing on exhaustion, so RID-paged
+reads (`WHERE @rid > <last> LIMIT n`) stalled on their fifth page on 8 cores. The
+26.9.1 release does not have that parallel scan and is not affected.
 
 `ResultSet` is also a context manager (`__enter__`/`__exit__`), so `with` blocks close
 it automatically.
@@ -537,10 +569,10 @@ for person in people:
 - Passing data to other libraries
 - Debugging/inspection
 
-**Performance note:** `to_dict()` eagerly converts the current row to Python data.
-That is convenient for small projections and interop, but repeated `to_dict()` calls
-across a large result set will allocate Python objects for every returned property.
-For large scans, prefer iterating and reading only the fields you need with `get()`.
+**Performance note:** `to_dict()` converts the whole row in one call into Java, which
+is cheaper than one `get()` per property when you need several fields. For large result
+sets, the bulk methods are faster than any per-row access: `to_json_list()`,
+`to_columns()`, `to_dataframe()`, or `to_arrow()`.
 
 ---
 
@@ -599,14 +631,12 @@ user_map = {
 ### Pandas Integration
 
 ```python
-import pandas as pd
 import arcadedb_embedded as arcadedb
 
 db = arcadedb.open_database("./mydb")
 
-# Query and convert to DataFrame
-result_set = db.query("sql", "SELECT name, age, city FROM Person")
-df = pd.DataFrame([result.to_dict() for result in result_set])
+# Query and convert to DataFrame (columnar path; requires pandas)
+df = db.query("sql", "SELECT name, age, city FROM Person").to_dataframe()
 
 print(df.head())
 #      name  age    city
@@ -628,22 +658,12 @@ result_set = db.query("sql", "SELECT name, email FROM LargeTable")
 for result in result_set:
     process_row(result.get("name"), result.get("email"))
 
-# Or process in batches when you do need dict materialization
-result_set = db.query("sql", "SELECT FROM LargeTable")
+# Or process in batches of dicts
+for batch in db.query("sql", "SELECT FROM LargeTable").iter_chunks(size=1000):
+    process_batch(batch)
 
-batch = []
-batch_size = 1000
-
-for result in result_set:
-    batch.append(result.to_dict())
-
-    if len(batch) >= batch_size:
-        # Process batch
-        process_batch(batch)
-        batch = []
-
-# Process remaining
-if batch:
+# Faster, with JSON-native values (temporals as ISO strings, DECIMALs as floats)
+for batch in db.query("sql", "SELECT FROM LargeTable").iter_json_batches():
     process_batch(batch)
 ```
 
@@ -675,9 +695,10 @@ for result in result_set:
 result_set = db.query("sql", "SELECT FROM Person")
 
 for result in result_set:
-    # Get ArcadeDB metadata
-    rid = result.get("@rid")      # Record ID (e.g., "#1:0")
-    rec_type = result.get("@type") # Type name (e.g., "Person")
+    # Get ArcadeDB metadata (a SELECT without a projection has no "@rid" column,
+    # so get("@rid") would return None)
+    rid = result.get_rid()                            # Record ID (e.g., "#1:0")
+    rec_type = result.get_element().get_type_name()   # Type name (e.g., "Person")
 
     # Get user properties
     name = result.get("name")
@@ -809,14 +830,14 @@ db = arcadedb.open_database("./users_db")
 
 def search_users(name_pattern):
     """Search users by name pattern."""
-    query = f"""
+    query = """
         SELECT name, email, created_at
         FROM User
-        WHERE name LIKE '%{name_pattern}%'
+        WHERE name LIKE ?
         ORDER BY name
     """
 
-    result_set = db.query("sql", query)
+    result_set = db.query("sql", query, f"%{name_pattern}%")
     users = []
 
     for result in result_set:
@@ -866,10 +887,9 @@ for result in result_set:
 
     print(f"{person_name}'s extended network:")
 
-    # friends_of_friends is a Java collection, convert to Python
+    # get() has already converted the Java collection to a Python list
     if friends_of_friends:
-        fof_list = list(friends_of_friends)
-        for friend in fof_list:
+        for friend in friends_of_friends:
             print(f"  - {friend}")
 
 db.close()
@@ -1003,31 +1023,10 @@ for result in result_set:
 
 ## Type Handling
 
-ArcadeDB returns Java types that are automatically converted:
-
-| Java Type | Python Type | Notes |
-|-----------|-------------|-------|
-| `java.lang.String` | `str` | Direct conversion |
-| `java.lang.Integer`, `Long` | `int` | Numeric conversion |
-| `java.lang.Float`, `Double` | `float` | Numeric conversion |
-| `java.lang.Boolean` | `bool` | **Explicitly converted** |
-| `java.util.ArrayList` | `list` | Iterable conversion |
-| `java.util.HashMap` | `dict` | Key-value conversion |
-| `null` | `None` | Direct mapping |
-
-**Boolean Conversion:**
-
-The `Result` class explicitly converts Java `Boolean` to Python `bool`:
-
-```python
-# This is handled automatically
-result_set = db.query("sql", "SELECT active FROM User")
-
-for result in result_set:
-    active = result.get("active")  # Python bool
-    if active:  # Works as expected
-        print("User is active")
-```
+`get()`, `to_dict()`, and `to_list()` convert Java values to Python types
+automatically (`Boolean` to `bool`, `BigDecimal` to `Decimal`, dates to `date` and
+`datetime`, collections to `list`, `set`, and `dict`). See
+[Type Conversion](type_conversion.md) for the full table.
 
 ---
 

@@ -27,7 +27,7 @@ Perfect introduction to ArcadeDB basics:
 - CRUD operations with ArcadeDB SQL
 - NULL value handling (INSERT, UPDATE, queries with IS NULL)
 - Transactions and data validation
-- Built-in functions (`date()`, `sysdate()`)
+- DATE and DATETIME values written as string literals and read back as Python `date`/`datetime`
 - Arrays/lists with type safety
 
 **Learn:** Document storage, SQL dialect, schema design, NULL handling, data type diversity
@@ -54,10 +54,10 @@ Complete social network modeling with graph database:
 
 Semantic similarity search with AI/ML:
 - Creating vector-ready schema (`ARRAY_OF_FLOATS`) for embeddings
-- Generating deterministic mock embeddings for repeatable experiments
+- Generating mock embeddings clustered by category (seeded with Python's `hash()`, so
+  they differ between runs unless `PYTHONHASHSEED` is set)
 - Building a JVector (HNSW) index for nearest-neighbor search
 - Running top-k similarity queries and inspecting distance scores
-- Comparing "most similar" vs "least similar" result sets
 - Measuring insertion, indexing, and query phases
 
 **Learn:** Vector data modeling, index creation strategy, and practical semantic search behavior
@@ -65,11 +65,12 @@ Semantic similarity search with AI/ML:
 ---
 
 ### 📄 [04_csv_import_documents.py](./04_csv_import_documents.py)
-**CSV Import | Schema Definition | Batch Processing | Type Inference**
+**CSV Import | Schema Definition | Batch Processing | Explicit Schema Mapping**
 
 High-performance CSV import for document data:
-- Importing MovieLens dataset (movies.csv)
-- Automatic schema creation with type inference
+- Importing the MovieLens dataset (movies, ratings, links, and tags)
+- Explicit schema mapping (integer-like columns to LONG, decimals to DOUBLE, text to
+  STRING) and batched parameterized `INSERT`
 - Handling NULL values and data cleaning
 - Batch processing for optimal performance
 - Index creation strategies
@@ -95,16 +96,17 @@ Complex graph construction from CSV data:
 ---
 
 ### 🎬 [06_vector_search_recommendations.py](./06_vector_search_recommendations.py)
-**Hybrid Search | Recommendation Engine | Vector + Graph | Real-world Use Case**
+**Recommendation Engine | Vector Search vs Graph Traversal | Real-world Use Case**
 
 Building a movie recommendation engine:
-- Generating embeddings for movies (Title + Genres)
-- Combining vector similarity with graph relationships
-- "More like this" functionality
-- Hybrid queries (Vector Search + SQL Filtering)
-- Personalized recommendations based on user history
+- Generating embeddings for movies (Title + Genres) with two sentence-transformers models
+- "More like this" recommendations for a given movie
+- Graph-based collaborative filtering (movies rated highly by users who liked the query
+  movie), in a full and a sampled fast mode
+- Vector-similarity recommendations, compared side by side with the graph results
 
-**Learn:** Recommendation systems, hybrid search, vector+graph integration
+**Learn:** Recommendation systems, and how graph collaborative filtering and vector
+similarity differ on the same data
 
 ---
 
@@ -125,7 +127,9 @@ Table-oriented Stack Overflow OLTP benchmark:
 
 Table-oriented Stack Overflow OLAP benchmark:
 - Loads all Stack Overflow XML tables and runs a fixed OLAP query suite
-- All work happens inside a Docker container when launched on the host
+- Re-launches itself in a Docker container when `docker` is available (and, for
+  ArcadeDB, a wheel is present in `bindings/python/dist`); otherwise it runs natively,
+  and no container enforces `--mem-limit`
 - Reports load/index timing and repeated query runs
 
 **Learn:** Analytical query benchmarking over table-shaped data
@@ -152,7 +156,7 @@ Stack Overflow property-graph OLTP benchmark with mixed CRUD operations:
 **Graph OLAP | OpenCypher Query Suite | Cross-DB Benchmarking**
 
 Fixed query-suite benchmark for Stack Overflow graph analytics:
-- ArcadeDB remains on synchronous preload ingest for cross-database fairness
+- ArcadeDB preloads through `db.graph_batch(...)` (with `bidirectional=False`)
 - ArcadeDB query execution is Cypher-only in this example path
 
 **Learn:** OLAP graph query benchmarking and directed-edge traversal assumptions
@@ -219,9 +223,8 @@ Synthetic multi-table ingest comparison harness:
   be trusted
 - Current outcome is workload-dependent; SQL import can win on some table-heavy shapes
 - The async SQL arm is a comparison arm, not a recommendation, and `--async-parallel`
-  accepts only 1: above parallel level 1 the async executor silently discarded records
-  before 26.10.1 (ArcadeData/arcadedb#7615, fixed in #7625). For bulk document ingest
-  use `db.insert_many(...)`
+  accepts only 1 (see [Bulk Ingest Recommendation](../docs/guide/import.md#bulk-ingest-recommendation)
+  for why). For bulk document ingest use `db.insert_many(...)`
 
 **Learn:** Table-ingest tradeoffs for embedded Python workloads
 
@@ -236,10 +239,9 @@ Synthetic graph ingest comparison harness:
 - Includes parity checks on final vertex and edge counts
 - On the recorded 5M/5M run, async SQL was the slowest arm at 701s against 359s for
   GraphBatch and 275s for SQL import, both at four threads
-- The async SQL arm is pinned to `--async-parallel 1`: above parallel level 1 the async
-  executor silently discarded records before 26.10.1 (#7615, fixed in #7625). GraphBatch
-  is the recommended bulk graph
-  ingest path
+- The async SQL arm is pinned to `--async-parallel 1` (see
+  [Bulk Ingest Recommendation](../docs/guide/import.md#bulk-ingest-recommendation)).
+  GraphBatch is the recommended bulk graph ingest path
 
 **Learn:** Graph-ingest tradeoffs for embedded Python workloads
 
@@ -324,6 +326,8 @@ Batched Python/Java boundary crossings for bulk workloads:
 
 **Learn:** Why one crossing per batch (not per value) makes bulk ingest and export fast
 
+---
+
 ### 🌐 [23_server_mode_http_access.py](./23_server_mode_http_access.py)
 **Server Mode | HTTP API | Bearer Auth | Mixed Access Pattern**
 
@@ -340,12 +344,62 @@ instead
 
 ---
 
+### 🔁 [24_server_http_transactions_timeseries.py](./24_server_http_transactions_timeseries.py)
+**Server HTTP API | Multi-Request Transactions | Database Commands | Line Protocol**
+
+Three server features that belong to the HTTP API, shown against the server that
+`create_server()` starts in this process:
+- one transaction spanning several requests through the `arcadedb-session-id` header
+  returned by `/api/v1/begin/{db}`, ended by `/commit` or `/rollback`
+- server-level database commands (`close database`, `open database`) sent to `/api/v1/server`
+- writes to a TIMESERIES type through `/api/v1/ts/{db}/write` in InfluxDB line protocol,
+  read back with SQL
+- flags: `--server-root` (default: a temp dir), `--password`, and `--http-port` (default 2482)
+
+**Learn:** What a second process needs from the server's HTTP API, with standard-library
+HTTP only
+
+---
+
+### 🧮 [25_sparse_quantization_and_compact.py](./25_sparse_quantization_and_compact.py)
+**Sparse Vectors | LSM_SPARSE_VECTOR | Weight Precision | COMPACT INDEX**
+
+Two decisions a sparse-retrieval workload should make on purpose:
+- weight precision: `LSM_SPARSE_VECTOR` quantizes posting weights to INT8 by default;
+  `"weightQuantization": "FP32"` keeps them exact
+- the settle step: `COMPACT INDEX` merges the LSM segments a bulk load leaves behind
+- builds the same synthetic corpus twice (once per precision), compacts both, and
+  reports index size, top-10 agreement, and query time before and after compaction
+- flags: `--docs` (default 20,000), `--queries` (default 50), and `--db-dir`
+
+**Learn:** How weight precision and compaction change sparse index size and query time
+
+---
+
+### ⚛️ [26_cross_model_transaction_atomicity.py](./26_cross_model_transaction_atomicity.py)
+**Cross-Model Transaction | Vector + Graph + Document | Failure Injection**
+
+One operation that touches three models in one transaction:
+- a vector search finds the nearest products, a graph hop expands to related products,
+  and a document update bumps a counter on all of them
+- injects a failure between the writes N times, inside a transaction (rolled back, never
+  torn) and without one (each write committed on its own, torn every time)
+- builds a small synthetic catalogue; no data download
+- flags: `--products` (default 2,000), `--trials` (default 20), and `--db-path`
+
+**Learn:** Why one transaction across vector, graph, and document writes leaves nothing
+half-applied after an interruption
+
+---
+
 ## 💡 Tips
 
 - **Run from examples/ directory** - Always execute examples from `bindings/python/examples/` for correct file paths
 - **Start with Example 01** - Foundation for all ArcadeDB concepts
-- **Use directed graph assumptions** - Graph examples keep edge direction
-  semantics while relying on default bidirectional edge storage unless a script says otherwise
+- **Use directed graph assumptions** - Graph examples keep edge direction semantics.
+  Storage differs by script: examples 09, 10, 13, and 16 load through `graph_batch(...)`
+  with `bidirectional=False`, so their edges are stored on the source vertex only; the
+  engine default (and the other graph examples) store both directions
 - **Database files persist** - Examples preserve data for inspection
 - **Output is educational** - Check console output to understand operations
 - **Experiment freely** - Examples clean up and recreate on each run
@@ -358,4 +412,4 @@ instead
 
 ---
 
-*Examples are designed to be self-contained and educational. Each includes detailed comments and step-by-step explanations.*
+*Examples are designed to be educational, and each includes detailed comments and step-by-step explanations. Most run on their own; 05 reads Example 04's database, 06 reads Example 05's, and 12 reuses Example 11's.*

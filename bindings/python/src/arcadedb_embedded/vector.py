@@ -177,7 +177,9 @@ class VectorIndex:
     Distance Calculation:
         The metric used depends on the `distance_function` parameter during index creation:
 
-        1. **EUCLIDEAN** (Default):
+        ``create_vector_index`` defaults to COSINE.
+
+        1. **EUCLIDEAN**:
            - Returns **Squared Euclidean Distance** (Lower is better).
            - Formula: $d^2$ where $d$ is the Euclidean distance.
            - Range: [0.0, +inf)

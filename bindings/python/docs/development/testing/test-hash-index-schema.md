@@ -4,6 +4,8 @@
 
 These tests cover HASH index creation and discovery through the Python schema API, plus indexed `IN` parameter expansion.
 
+There are 3 tests.
+
 ## Covered Behavior
 
 ### 1) create, discover, and query

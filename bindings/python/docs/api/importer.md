@@ -1,16 +1,11 @@
 # Import Workflow Reference
 
-This page documents the currently available import surface in the Python bindings.
+This page documents the import surface of the Python bindings: SQL `IMPORT DATABASE`
+plus the narrow `db.import_documents(...)` wrapper for document-shaped file imports.
 
-The old broad Python importer DSL is still gone. The current import surface is limited
-to SQL `IMPORT DATABASE` plus the narrow `db.import_documents(...)` wrapper for
-document-shaped file imports.
-
-That path exists and is covered by tests, but it is not currently something this
-repository encourages people to rely on heavily from Python. In practice, behavior has
-been inconsistent enough that the preferred guidance for large Python-side ingest is
-`db.insert_many(...)` for documents and `db.graph_batch(...)` for graphs, with a plain
-batched transaction as the fallback. This may improve in the future.
+Both are covered by tests, but they are not the recommended path for large Python-side
+ingest. For that, use `db.insert_many(...)` for documents and `db.graph_batch(...)` for
+graphs; see the [Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation).
 
 ## Available Entry Points
 
@@ -35,30 +30,25 @@ Formats exercised by the bindings include:
 - Neo4j
 - Word2Vec
 - RDF
-- timeseries targets
 - ArcadeDB JSONL exports for full restore flows
+
+A TIMESERIES type is not an import target: it owns no document buckets, so
+`IMPORT DATABASE ... documentType = '<timeseries type>'` raises `ArcadeDBError`. Load
+time series with `db.async_executor().append_samples(...)` instead.
 
 ## Current Recommendation
 
-The bindings expose both SQL `IMPORT DATABASE` and `db.import_documents(...)`, but the
-current guidance in this repository is not to encourage the importer-based paths as the
-default Python-side ingest path right now.
+The ingest guidance (`insert_many`, its parallel mode and bucket rule, `GraphBatch`, and
+why the async executor's `command(...)` is not an ingest path) lives in one place: the
+[Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation). For this
+page's two entry points:
 
-- For focused ingest benchmarks, use Example 15 and 16 style comparisons across
-    transactional SQL, the batch helpers, and SQL import rather than assuming one winner.
-- For bulk document ingest from Python, prefer `db.insert_many(...)`, which batches
-    rows across the FFI boundary; see Example 22. Add `parallel=True` on a type created with as many buckets as the async executor has writers, or a multiple (`CREATE DOCUMENT TYPE T BUCKETS n`, ArcadeData/arcadedb#8478); on the default single bucket it is no faster.
 - Treat `db.import_documents(...)` as a narrow convenience wrapper, not as the default
     ingest story for Python.
-- Do not use the async executor's SQL `command(...)` as an ingest path. Above one async
-    worker it silently discarded records before 26.10.1, with nothing raised or logged
-    (`ArcadeData/arcadedb#7615`, fixed in #7625).
-- For bulk graph ingest, prefer `GraphBatch` (`db.graph_batch(...)`) rather than
-    importer-based graph loading or async SQL.
 - Use SQL `IMPORT DATABASE` mainly when you specifically need one of the supported file
     import formats or a full ArcadeDB export/restore path.
-- Treat this guidance as current, not permanent. The recommendation can change if the
-    Python-side behavior improves.
+- To compare the paths on your own data, use Example 15 and 16 style comparisons across
+    transactional SQL, the batch helpers, and SQL import rather than assuming one winner.
 
 ## Common Patterns
 
@@ -179,13 +169,6 @@ typo would silently run the import in `abort` mode instead.
 1. Run `IMPORT DATABASE` with a file URL and the relevant options.
 1. Validate imported counts and representative records.
 1. Recreate or add heavy secondary indexes after large bulk loads if throughput matters.
-
-## Compatibility Note
-
-If you see old references to a broad Python `Importer`, `import_csv()`, or `import_xml()`
-surface in older fork history or stale docs, treat them as obsolete. The current Python
-surface is intentionally small: SQL `IMPORT DATABASE` plus `db.import_documents(...)`,
-and both importer-based paths should still be treated cautiously from Python.
 
 ## See Also
 

@@ -42,12 +42,22 @@ python 11_vector_index_build.py \
   --mem-limit 4g
 ```
 
+When `docker` is on `PATH`, the script re-runs itself in a container (`--docker-image`,
+default `python:3.12-slim`) with the repository mounted. For `arcadedb_sql` the container
+installs the wheel from `bindings/python/dist`; if no wheel is there, the script runs
+natively. It also runs natively on Windows, under GitHub Actions, and when it is already
+inside a container.
+
 ## Shared Build Parameters
 
 The example normalizes build settings around two knobs:
 
-- `max_connections`: HNSW `m`-style connectivity
-- `beam_width`: HNSW `ef_construction`-style build breadth
+- `max_connections`: ArcadeDB's per-layer graph degree (default 32). The
+  hnswlib-derived backends (FAISS, LanceDB, pgvector, Qdrant, and Milvus) allocate
+  2*M links at the base layer, so they receive `max_connections // 2` as M
+  (`hnsw_m_from_max_connections()`), and every backend builds the same base-layer
+  density.
+- `beam_width`: HNSW `ef_construction`-style build breadth, passed unchanged.
 
 The exact backend call differs, but these two values are threaded through the build in
 every engine that supports them.
@@ -103,7 +113,7 @@ FAISS uses `IndexHNSWFlat` wrapped in `IndexIDMap2`.
 ```python
 index_hnsw = faiss.IndexHNSWFlat(
     int(dim),
-    int(max_connections),
+    hnsw_m_from_max_connections(max_connections),
     faiss.METRIC_INNER_PRODUCT,
 )
 index_hnsw.hnsw.efConstruction = int(beam_width)
@@ -149,7 +159,7 @@ table.create_index(
     index_type=index_type,
     metric="cosine",
     vector_column_name="vector",
-    m=int(max_connections),
+    m=hnsw_m_from_max_connections(max_connections),
     ef_construction=int(beam_width),
     **extra_kwargs,
 )
@@ -179,6 +189,9 @@ INSERT INTO vectordata(id, vector) VALUES (%s, %s::vector)
 CREATE INDEX vectordata_vector_hnsw ON vectordata USING hnsw (vector vector_cosine_ops) WITH (m = {m_val}, ef_construction = {ef_val})
 ```
 
+Here `m_val` is `hnsw_m_from_max_connections(max_connections)` and `ef_val` is
+`beam_width`.
+
 The build finishes with:
 
 ```sql
@@ -199,7 +212,7 @@ client.recreate_collection(
     distance=models.Distance.COSINE,
     ),
     hnsw_config=models.HnswConfigDiff(
-    m=int(max_connections),
+    m=hnsw_m_from_max_connections(max_connections),
     ef_construct=int(beam_width),
     ),
 )
@@ -245,7 +258,7 @@ index_params = {
     "index_type": "HNSW",
     "metric_type": "COSINE",
     "params": {
-    "M": int(max_connections),
+    "M": hnsw_m_from_max_connections(max_connections),
     "efConstruction": int(beam_width),
     },
 }

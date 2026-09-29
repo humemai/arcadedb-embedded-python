@@ -9,7 +9,7 @@ Thank you for your interest in contributing to ArcadeDB Python bindings! This gu
 git clone https://github.com/humemai/arcadedb-embedded-python.git
 cd arcadedb-embedded-python/bindings/python
 
-# Build the package (requires Docker) — also refreshes the uv env at the repo root
+# Build the package (requires Docker); this also refreshes the uv env at the repo root
 ./scripts/build.sh
 
 # Run tests
@@ -23,16 +23,24 @@ uv run pytest
 **Required:**
 
 - Python 3.10–3.14 (dev baseline 3.12)
-- Java 25+ (JDK or JRE)
-- Docker (for building distributions)
+- [uv](https://docs.astral.sh/uv/) (runs the dev environment)
+- Docker (for building the Linux wheels)
 - Git
 
-**Optional:**
+**Only for native macOS and Windows builds:**
+
+- A JDK 25 or later with `jlink` (`scripts/build-native.sh` checks for it)
+
+The wheel bundles its own JRE, so running the tests or using the package needs no
+Java installation, and the Linux build runs inside Docker.
+
+**Installed by the repo-root uv project** (no separate install):
 
 - pytest (testing)
-- black (code formatting)
+- black and isort (code formatting)
 - mypy (type checking)
-- mkdocs (documentation)
+- bandit (security lint)
+- mkdocs and its plugins (documentation)
 
 ### Setup
 
@@ -57,7 +65,7 @@ environment at the repo root:
 
 The dev environment is a uv project at the repo root (`pyproject.toml`); it
 installs the built wheel from `dist/` plus all test/dev dependencies. There is
-no virtualenv to activate — run everything through `uv run`, from anywhere in
+no virtualenv to activate: run everything through `uv run`, from anywhere in
 the repo:
 
 ```bash
@@ -149,16 +157,15 @@ arcadedb-embedded-python/bindings/python/
 ├── examples/                      # Example scripts
 │   ├── 01_simple_document_store.py
 │   ├── 02_social_network_graph.py
-│   ├── 03_vector_search.py
-│   ├── 04_csv_import_documents.py
-│   ├── 05_csv_import_graph.py
-│   ├── 06_vector_search_recommendations.py
+│   ├── ...                        # 26 numbered examples in all
+│   ├── 26_cross_model_transaction_atomicity.py
 │   ├── download_data.py           # Data download helper
 │   ├── data/                      # Example datasets
 │   └── scripts/                   # Example helper scripts
 ├── pyproject.toml                 # Package configuration
 ├── setup.py                       # Setup configuration
 ├── scripts/                       # Build and maintenance helpers
+│   ├── arrow_transport_probe.py   # to_arrow() measurement script
 │   ├── build.sh                   # Main build entrypoint
 │   ├── build-native.sh            # Native build script
 │   ├── build_and_install_locally.sh # Local build + install helper
@@ -167,6 +174,7 @@ arcadedb-embedded-python/bindings/python/
 │   ├── fix_markdown.py            # Docs formatter
 │   ├── jar_exclusions.txt         # JAR optimization list
 │   ├── list_image_jars_by_size.sh # Image JAR inspection helper
+│   ├── profile-python/            # Result-consumption profiler
 │   ├── setup_jars.py              # JAR staging script
 │   ├── verify_wheel_platform_tag.py # Wheel platform tag verifier
 │   ├── write_version.py           # Version writing
@@ -188,7 +196,8 @@ arcadedb-embedded-python/bindings/python/
 **What the build does:**
 
 1. Extracts ArcadeDB version from parent `pom.xml`
-2. Downloads appropriate JAR files with custom filtering
+2. Copies the JAR files from the `arcadedata/arcadedb:<version>` image (or from a
+   directory you pass as the third argument, `JAR_LIB_DIR`) and filters them
 3. Creates a bundled platform-specific JRE and stages optimized JARs (see `scripts/jar_exclusions.txt`)
 4. Runs tests in isolated Docker environment
 5. Creates wheel file in `dist/`
@@ -203,7 +212,10 @@ arcadedb-embedded-python/bindings/python/
 ./scripts/build.sh darwin/arm64 3.12
 ./scripts/build.sh windows/amd64 3.12
 
-# No install step needed — build.sh refreshes the repo-root uv env automatically
+# No install step needed: build.sh refreshes the repo-root uv env automatically
+
+# Embed engine JARs you built yourself instead of the image's (third argument)
+./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-*/lib
 ```
 
 ### Development Install
@@ -223,10 +235,10 @@ uv run pytest
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # With coverage
-pytest --cov=arcadedb_embedded --cov-report=html
+uv run pytest --cov=arcadedb_embedded --cov-report=html
 
 # View coverage report
 open htmlcov/index.html
@@ -235,30 +247,32 @@ open htmlcov/index.html
 ### Specific Test Files
 
 ```bash
+# Paths are relative to the repository root
+
 # Core functionality
-pytest tests/test_core.py
+uv run pytest bindings/python/tests/test_core.py
 
 # Server mode
-pytest tests/test_server.py
+uv run pytest bindings/python/tests/test_server.py
 
 # Import database coverage
-pytest tests/test_import_database.py
+uv run pytest bindings/python/tests/test_import_database.py
 
 # Documentation examples coverage
-pytest tests/test_docs_examples.py
+uv run pytest bindings/python/tests/test_docs_examples.py
 
 # OpenCypher tests
-pytest tests/test_cypher.py -k cypher
+uv run pytest bindings/python/tests/test_cypher.py
 ```
 
 ### Test Markers
 
 ```bash
 # Skip the tests marked server (other server-starting tests still run)
-pytest -m "not server"
+uv run pytest -m "not server"
 
 # Only OpenCypher tests (a keyword match, not a marker)
-pytest -k cypher
+uv run pytest -k cypher
 ```
 
 The markers in use are `server`, `server_wire`, and `graph_export`; `integration` is registered
@@ -356,15 +370,20 @@ def create_user(db,name,email):
 ### Formatting Tools
 
 ```bash
+# From bindings/python
+
 # Format with black
-black src/ tests/
+uv run black src/ tests/
 
 # Sort imports (pre-commit runs isort with the black profile)
-isort --profile black src/ tests/
+uv run isort --profile black src/ tests/
 
 # Type checking
-mypy src/
+uv run mypy src/
 ```
+
+CI also runs Bandit, a dependency-floor audit, and the pre-commit hooks; see
+[CI Gates](ci-setup.md#ci-gates) for what they check and how to run them locally.
 
 ### Type Hints
 
@@ -465,16 +484,14 @@ class Database:
 
 ### Building Documentation
 
+See [Documentation Development](documentation.md). In short, from the repository root:
+
 ```bash
-# Docs tooling lives in the `docs` dependency group of the repo-root uv project
-
 # Serve locally (hot reload)
-uv run --group docs mkdocs serve
+uv run mkdocs serve -f bindings/python/mkdocs.yml
 
-# Build static site
-mkdocs build
-
-# Output: site/
+# Build with strict checks (fails on warnings and broken links)
+uv run mkdocs build --strict -f bindings/python/mkdocs.yml
 ```
 
 ### Writing Documentation
@@ -522,14 +539,14 @@ Keep API reference in sync with code:
 ```python
 # src/arcadedb_embedded/core.py
 class Database:
-    def query(self, language: str, command: str, params: Optional[dict] = None) -> ResultSet:
+    def query(self, language: str, command: str, *args) -> ResultSet:
         """
         Execute a query and return results.
 
         Args:
-            language: Query language (sql, opencypher, mongo, graphql, etc.)
+            language: Query language (sql, opencypher, graphql)
             command: Query command string
-            params: Optional query parameters
+            *args: Positional parameters, or one dict of named parameters
 
         Returns:
             ResultSet: Iterable query results
@@ -550,16 +567,16 @@ Corresponding documentation in `docs/api/database.md`:
 ### query
 
 ```python
-db.query(language: str, command: str, params: Optional[dict] = None) -> ResultSet
+db.query(language: str, command: str, *args) -> ResultSet
 ```
 
 Execute a query and return results.
 
 **Parameters:**
 
-- `language` (str): Query language (sql, opencypher, mongodb, graphql)
+- `language` (str): Query language (sql, opencypher, graphql)
 - `command` (str): Query command string
-- `params` (Optional[dict]): Query parameters for parameterized queries
+- `*args`: Positional parameters for `?` placeholders, or one dict of named parameters
 
 **Returns:**
 
@@ -594,8 +611,9 @@ result = db.query("sql",
 git clone https://github.com/YOUR_USERNAME/arcadedb-embedded-python.git
 cd arcadedb-embedded-python/bindings/python
 
-# Add upstream
-git remote add upstream https://github.com/humemai/arcadedb-embedded-python.git
+# Track this repository. Do not call the remote "upstream": this repository's own
+# scripts (sync-upstream.sh) use that name for ArcadeData/arcadedb.
+git remote add humemai https://github.com/humemai/arcadedb-embedded-python.git
 ```
 
 ### 2. Create Branch
@@ -603,7 +621,7 @@ git remote add upstream https://github.com/humemai/arcadedb-embedded-python.git
 ```bash
 # Update main
 git checkout main
-git pull upstream main
+git pull humemai main
 
 # Create feature branch
 git checkout -b feature/my-new-feature
@@ -629,17 +647,17 @@ vim docs/api/database.md
 
 ```bash
 # Run tests
-pytest
+uv run pytest
 
-# Format code
-black src/ tests/
-isort src/ tests/
+# Format code (from bindings/python)
+uv run black src/ tests/
+uv run isort --profile black src/ tests/
 
 # Type check
-mypy src/
+uv run mypy src/
 
-# Build documentation
-mkdocs build
+# Build documentation (from the repository root)
+uv run mkdocs build --strict -f bindings/python/mkdocs.yml
 ```
 
 ### 5. Commit Changes
@@ -708,54 +726,10 @@ Closes #456
 
 ## Release Process
 
-### Version Numbering
-
-We follow ArcadeDB core version:
-
-- Version extracted from parent `pom.xml`
-- Format: `MAJOR.MINOR.PATCH`
-- Example: `24.11.1`
-
-### Creating a Release
-
-1. **Update Version**
-
-```bash
-# Version automatically extracted during build
-python scripts/extract_version.py
-```
-
-2. **Build Package**
-
-```bash
-# Build the package
-./scripts/build.sh
-
-# Verify wheels
-ls -lh dist/
-```
-
-3. **Test Installation**
-
-```bash
-# Test the wheel in a throwaway env (doesn't touch the dev env)
-uv run --isolated --no-project --with dist/arcadedb_embedded-*.whl \
-    python -c "import arcadedb_embedded; print('✅ Package OK')"
-```
-
-4. **Publish to PyPI**
-
-```bash
-# Upload to Test PyPI first (twine runs via uvx, no install needed)
-uvx twine upload --repository testpypi dist/*
-
-# Test install from Test PyPI in a throwaway env
-uv run --isolated --no-project --index https://test.pypi.org/simple/ \
-    --with arcadedb-embedded python -c "import arcadedb_embedded"
-
-# Upload to production PyPI
-uvx twine upload dist/*
-```
+Releases are cut by pushing a version tag; the release workflow builds, tests, and
+publishes all 20 wheels through PyPI trusted publishing. Do not upload wheels by hand.
+The full procedure, including how the version reaches `pom.xml` and the checks to run
+on the tag before pushing it, is in [Release Workflow](release.md).
 
 ## Common Tasks
 
@@ -780,7 +754,7 @@ uvx twine upload dist/*
 
 1. Create/update Markdown files in `docs/`
 2. Add to `mkdocs.yml` navigation
-3. Test locally: `mkdocs serve`
+3. Test locally: `uv run mkdocs serve -f bindings/python/mkdocs.yml` (from the repository root)
 4. Submit PR
 
 ### Updating Dependencies
@@ -790,7 +764,7 @@ uvx twine upload dist/*
 uv lock --upgrade && uv sync
 
 # Runtime deps of the package itself (e.g. jpype1) are declared in
-# bindings/python/pyproject.toml [project.dependencies] — edit by hand
+# bindings/python/pyproject.toml [project.dependencies]; edit by hand
 
 # Update in pyproject.toml
 [project]
@@ -803,13 +777,16 @@ dependencies = [
 
 ### JVM Errors
 
-```bash
-# Check Java version
-java -version  # Must be 25+
+The package always starts its bundled JRE (`jvm.py` loads the JVM library from the
+wheel's `jre/` directory), so the system `java` and `JAVA_HOME` play no part at
+runtime. If the JVM fails to start:
 
-# Set JAVA_HOME
-export JAVA_HOME=/path/to/jdk-25
-```
+- Rebuild or reinstall the wheel, in case the bundled JRE is incomplete
+- Check the options passed to `start_jvm()`, `jvm_kwargs`, or `ARCADEDB_JVM_ARGS`
+- Remember that JVM options are fixed once the JVM is running; start a new process
+  to change them
+
+A JDK 25 or later is only needed to build native macOS and Windows wheels.
 
 ### Build Errors
 
@@ -828,14 +805,14 @@ rm -rf src/arcadedb_embedded/jre/
 ### Test Failures
 
 ```bash
-# Run specific test with verbose output
-pytest tests/test_core.py::test_database_creation -vv
+# Run specific test with verbose output (from the repository root)
+uv run pytest bindings/python/tests/test_core.py::test_database_creation -vv
 
 # Run with debugging
-pytest --pdb tests/test_core.py
+uv run pytest --pdb bindings/python/tests/test_core.py
 
 # Check test coverage
-pytest --cov=arcadedb_embedded --cov-report=term-missing
+uv run pytest --cov=arcadedb_embedded --cov-report=term-missing
 ```
 
 ### Docker Issues

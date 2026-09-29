@@ -22,9 +22,8 @@ Example 13 runs five phases:
 - Phase 1 uses `db.insert_many(...)` in batches for the document-table preload, and
   raises if a batch writes fewer rows than it was given
 - `db.insert_many(...)` is the repository's recommended bulk document ingest path from
-  Python. Phase 1 used async SQL insert until 2026-09-15; the async executor's SQL
-  command path discarded records above parallel level 1 before 26.10.1
-  (`ArcadeData/arcadedb#7615`, fixed in #7625), so it is no longer used for bulk writes here
+  Python. Phase 1 does not use the async SQL path; see
+  [Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation)
 - Phase 2 uses `GraphBatch` for the initial graph node and edge load
 - `GraphBatch` is the repository's recommended bulk graph ingest path from Python
 - Graph edge creation uses RID-based directed endpoints
@@ -61,7 +60,7 @@ python 13_stackoverflow_hybrid_queries.py \
 
 ## Time-Series Layer
 
-The script now adds a compact derived TimeSeries type after the main hybrid phases:
+The script adds a compact derived TimeSeries type after the main hybrid phases:
 
 - `ActivitySeries`
 - timestamp: daily bucket timestamp

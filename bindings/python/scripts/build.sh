@@ -9,7 +9,7 @@
 #        docker run --rm -v "$PWD":/src -w /src maven:3.9-amazoncorretto-25 \
 #          sh -c "git config --global --add safe.directory /src && ./mvnw -DskipTests -pl package -am package"
 #   2) Point the build at your JAR directory:
-#        cd bindings/python && ./scripts/build.sh linux/amd64 3.12 package/target/arcadedb-*/lib
+#        cd bindings/python && ./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-*/lib
 
 set -euo pipefail
 

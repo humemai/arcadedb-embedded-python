@@ -132,21 +132,27 @@ class AsyncExecutor:
         """
         Set number of parallel worker threads.
 
+        Each worker owns a share of a type's buckets, so a type loaded in
+        parallel wants as many buckets as there are workers, or a multiple
+        (ArcadeData/arcadedb#8478).
+
         Args:
-            level: Number of threads (1-16). Higher = more parallelism
-                   but more memory/CPU usage. Default is CPU cores.
+            level: Number of threads, at least 1. The engine's default
+                   (``arcadedb.asyncWorkerThreads``) is the number of cores
+                   minus 1, and half the cores minus 1 under the
+                   ``high-performance`` profile.
 
         Returns:
             self for method chaining
 
         Raises:
-            ValueError: If level < 1 or level > 16
+            ValueError: If level < 1
 
         Example:
             >>> async_exec.set_parallel_level(8)  # Use 8 worker threads
         """
-        if level < 1 or level > 16:
-            raise ValueError("parallel_level must be between 1 and 16")
+        if level < 1:
+            raise ValueError("parallel_level must be at least 1")
         self._java_async.setParallelLevel(level)
         return self
 
@@ -278,7 +284,8 @@ class AsyncExecutor:
         until queue drains. Prevents unbounded memory growth.
 
         Args:
-            percentage: Threshold (0-100). Default is 50%.
+            percentage: Threshold (0-100). The engine's default
+                       (``arcadedb.asyncBackPressure``) is 0, no back-pressure.
                        Higher = more buffering, more memory.
                        Lower = less buffering, more blocking.
 
@@ -858,10 +865,14 @@ class AsyncExecutor:
 
     def on_error(self, callback: Callable[[Exception], None]) -> "AsyncExecutor":
         """
-        Set global error callback for all operations.
+        Set the executor-wide error callback.
 
-        This callback is called for every failed operation if no
-        per-operation error callback was provided.
+        It receives the failure of a record operation (``create_record``, for
+        example), including one that also has a per-record callback, and a
+        batch-level failure such as a failed batch commit. It does not receive
+        a ``command()`` or ``query()`` statement's own failure: that goes only
+        to the statement's ``error_callback``, and is not raised anywhere when
+        there is none.
 
         Before 26.10.1 it was also the only place the ArcadeData/arcadedb#7615
         record loss became visible: when the executor rolled back a batch, the

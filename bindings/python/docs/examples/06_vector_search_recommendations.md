@@ -13,7 +13,8 @@ indexing for fast semantic similarity search. You'll learn:
 - **HNSW (JVector) vector indexing** - Fast approximate nearest neighbor search (cosine similarity)
 - **Graph vs Vector** - Compare collaborative filtering with semantic similarity
 - **Multi-model comparison** - Two embedding models with different semantic characteristics
-- **Performance optimization** - Graph query sampling for 150-300× speedup
+- **Performance optimization** - Graph query sampling, which makes collaborative
+  filtering fast enough for real-time use on the large dataset
 
 ## What You'll Learn
 
@@ -23,7 +24,6 @@ indexing for fast semantic similarity search. You'll learn:
 - Vector-based semantic similarity search
 - Performance comparison: 4 recommendation methods
 - Handling vector metadata persistence and property versioning
-- Known limitations: JSONL export/import for vectors, NOTUNIQUE index bugs
 
 ## Prerequisites
 
@@ -47,8 +47,8 @@ python 05_csv_import_graph.py --dataset movielens-small --import-jsonl ./exports
 
 **Two dataset sizes available:**
 
-- **movielens-small**: 9,742 movies, ~100K ratings - Quick testing (9 min total)
-- **movielens-large**: 86,537 movies, ~33M ratings - Production testing (51 min total)
+- **movielens-small**: 9,742 movies, ~100K ratings - Quick testing
+- **movielens-large**: 86,537 movies, ~33M ratings - Production testing
 
 ## Usage
 
@@ -103,21 +103,13 @@ exists).
 
 - **Dimensions:** 384
 - **Best for:** General-purpose semantic similarity
-- **Performance (small):** 72 movies/sec encoding, 135.6s total
-- **Performance (large):** 167 movies/sec encoding, 517.1s total
-- **Index creation (small):** 59.6s for 9,742 movies
-- **Index creation (large):** 1,050.8s for 86,537 movies
 
 ### Model 2: paraphrase-MiniLM-L6-v2
 
 - **Dimensions:** 384
 - **Best for:** Paraphrase detection and semantic similarity
-- **Performance (small):** ~800 movies/sec encoding, ~90s total
-- **Performance (large):** 943 movies/sec encoding, 91.7s total
-- **Index creation (small):** 58.2s for 9,742 movies
-- **Index creation (large):** 1,123.9s for 86,537 movies
 
-**Encoding speedup:** Model 2 is ~5-10× faster due to model optimizations
+The script times encoding and index creation for each model and prints the results.
 
 ## Recommendation Methods
 
@@ -129,11 +121,7 @@ exists).
 - Analyzes ALL movies those users also rated highly
 - Aggregates ratings and recommends top movies
 
-**Performance:**
-
-- **Small dataset:** 0.119-0.307s per query
-- **Large dataset:** 37.6-62.2s per query
-- **Best for:** Offline batch recommendations
+**Best for:** Offline batch recommendations
 
 **Pros:**
 
@@ -153,11 +141,7 @@ exists).
 - Samples ~50 users' worth of ratings
 - Uses nested SELECT with LIMIT before GROUP BY aggregation
 
-**Performance:**
-
-- **Small dataset:** 0.149-0.243s per query
-- **Large dataset:** 0.206-0.242s per query
-- **Speedup:** 150-300× faster than full mode
+**Best for:** Real-time recommendations on large datasets, where full mode is slow
 
 **Pros:**
 
@@ -178,14 +162,9 @@ exists).
 - Uses HNSW (JVector) index for fast approximate nearest neighbor search
 - Finds movies with similar semantic meaning
 
-**Performance:**
-
-- **Small dataset:** 0.012-0.145s per query
-- **Large dataset:** 0.024-0.041s per query
-
 **Pros:**
 
-- Very fast (~0.02-0.04s)
+- Fast: one index lookup per query
 - No cold start problem (works for new movies)
 - Finds semantically similar content
 
@@ -201,17 +180,10 @@ exists).
 - Same as Vector method 1, but with different embedding model
 - Optimized for paraphrase detection
 
-**Performance:**
-
-- **Small dataset:** 0.009-0.023s per query
-- **Large dataset:** 0.016-0.038s per query
-- **Fastest method:** Often 2-3× faster than other models
-
 **Pros:**
 
-- Extremely fast (0.01-0.03s)
+- Fast: one index lookup per query
 - Different semantic characteristics than Model 1
-- Best for real-time search
 
 **Cons:**
 
@@ -219,6 +191,9 @@ exists).
 - Embedding quality depends on model training
 
 ## Example Results
+
+Sample output from an earlier run (the recommendations depend on the dataset and the
+models; the script also prints each query's time):
 
 ### Query: "Toy Story (1995)"
 
@@ -229,25 +204,21 @@ exists).
    Results (full mode):
    1. Five Easy Pieces (1970) (Rating: 4.9, Votes: 5)
    2. Thin Red Line, The (1998) (Rating: 4.8, Votes: 5)
-   ⏱️  0.307s
 
 2. Graph-Based Fast (collaborative filtering - sampled):
    Results (fast mode):
    1. Five Easy Pieces (1970) (Rating: 4.9, Votes: 5)
    2. Thin Red Line, The (1998) (Rating: 4.8, Votes: 5)
-   ⏱️  0.169s
 
 3. Vector (all-MiniLM-L6-v2):
    Results:
    1. Ice Guardians (2016) (Score: 0.8635)
    2. Ordinary Decent Criminal (2000) (Score: 0.7923)
-   ⏱️  0.145s
 
 4. Vector (paraphrase-MiniLM-L6-v2):
    Results:
    1. Ice Guardians (2016) (Score: 0.9694)
    2. Death and the Maiden (1994) (Score: 0.9113)
-   ⏱️  0.009s
 ```
 
 #### Large Dataset
@@ -257,69 +228,22 @@ exists).
    Results (full mode):
    1. O Pátio das Cantigas (1942) (Rating: 5.0, Votes: 11)
    2. Farmer & Chase (1997) (Rating: 5.0, Votes: 7)
-   ⏱️  43.694s
 
 2. Graph-Based Fast (collaborative filtering - sampled):
    Results (fast mode):
    1. Local Hero (1983) (Rating: 5.0, Votes: 5)
    2. Little Shop of Horrors (1986) (Rating: 5.0, Votes: 5)
-   ⏱️  0.242s
 
 3. Vector (all-MiniLM-L6-v2):
    Results:
    1. Arranged (2007) (Score: 0.8635)
    2. Banyo (2005) (Score: 0.8612)
-   ⏱️  0.041s
 
 4. Vector (paraphrase-MiniLM-L6-v2):
    Results:
    1. Arranged (2007) (Score: 0.9694)
    2. Banyo (2005) (Score: 0.9281)
-   ⏱️  0.029s
 ```
-
-## Performance Summary
-
-### Small Dataset (9,742 movies)
-
-| Phase | Time | Notes |
-|-------|------|-------|
-| Setup (copy database) | ~1s | Fresh working copy |
-| Model 1 encoding | 135.6s | 72 movies/sec |
-| Model 1 indexing | 59.6s | JVector index creation |
-| Model 2 encoding | ~90s | 5× faster encoding |
-| Model 2 indexing | 58.2s | JVector index creation |
-| **Total** | **~548s (9.1 min)** | End-to-end |
-
-**Query Performance:**
-
-- Graph Full: 0.119-0.307s
-- Graph Fast: 0.149-0.243s (1.3-1.8× speedup)
-- Vector Model 1: 0.012-0.145s
-- Vector Model 2: 0.009-0.023s (fastest)
-
-### Large Dataset (86,537 movies)
-
-| Phase | Time | Notes |
-|-------|------|-------|
-| Setup (copy database) | ~5s | 119 MB database |
-| Model 1 encoding | 517.1s | 167 movies/sec |
-| Model 1 indexing | 1,050.8s | JVector index creation |
-| Model 2 encoding | 91.7s | 943 movies/sec |
-| Model 2 indexing | 1,123.9s | JVector index creation |
-| **Total** | **~3,075s (51.3 min)** | End-to-end |
-
-**Query Performance:**
-
-- Graph Full: 37.6-62.2s (comprehensive but slow)
-- Graph Fast: 0.206-0.242s (150-300× speedup!)
-- Vector Model 1: 0.024-0.041s
-- Vector Model 2: 0.016-0.038s (fastest, 1,500-2,000× vs full graph)
-
-**Memory usage:**
-
-- Small: ~7.2 GB RSS
-- Large: ~11.2 GB RSS
 
 ## JVector Index Configuration
 
@@ -365,11 +289,6 @@ The script outputs:
 5. **Recommendation comparison** - 4 methods × 5 query movies
 6. **Summary** - Method characteristics and use cases
 7. **Overall timing** - Total execution time
-
-**Total execution time:**
-
-- Small dataset: ~548s (9.1 min)
-- Large dataset: ~3,075s (51.3 min)
 
 ## See Also
 

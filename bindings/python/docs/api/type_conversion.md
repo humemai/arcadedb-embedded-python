@@ -37,8 +37,9 @@ java_value = convert_python_to_java(python_value)
 Convert Python value to Java object for ArcadeDB.
 
 This function only converts the types listed below explicitly. All other Python
-values (`bool`, `int`, `float`, `str`, `bytes`, and any Java objects) are returned
-as-is so that JPype performs the conversion automatically.
+values (`bool`, `int`, `float`, `str`, and any Java objects) are returned as-is so
+that JPype performs the conversion automatically (a Python `int` reaches Java as a
+`Long`).
 
 **Supported Conversions:**
 
@@ -52,10 +53,12 @@ as-is so that JPype performs the conversion automatically.
 | `tuple` | `ArrayList` |
 | `datetime` | `java.util.Date` |
 | `date` | `LocalDate` |
+| `bytes`, `bytearray` | `byte[]` |
 
 **Notes:**
 
-- `datetime` is converted to a `java.util.Date` built from its epoch milliseconds.
+- `datetime` is converted to a `java.util.Date` built from its epoch milliseconds, so
+  sub-millisecond precision is dropped.
 - `date` is converted to a `LocalDate`. If the Java types are unavailable it is
   combined with `time.min` and converted as a `datetime`.
 - Collection elements, set members, and map keys/values are converted recursively.
@@ -118,14 +121,15 @@ Convert Java object to Python value.
 | `java.util.Date` | `datetime` |
 | `LocalDate` | `date` |
 | `LocalDateTime` | `datetime` |
-| `Instant`, `ZonedDateTime` | `datetime` (UTC) |
+| `Instant`, `ZonedDateTime`, `OffsetDateTime` | `datetime` (UTC) |
 | `Map` | `dict` |
 | `Set` | `set` |
 | `List`, `Collection` | `list` |
 
 **Notes:**
 
-- `Instant` and `ZonedDateTime` are returned as timezone-aware `datetime` objects in UTC.
+- `Instant`, `ZonedDateTime`, and `OffsetDateTime` are returned as timezone-aware
+  `datetime` objects in UTC.
 - Other indexable Java objects (such as primitive arrays) are converted element-by-element to a `list`.
 - Unrecognized Java objects (for example `Vertex`, `Edge`, `Document`) are returned unchanged.
 
@@ -156,15 +160,13 @@ java_property = element.get("username")  # Uses wrapper method
 ```python
 from arcadedb_embedded.type_conversion import convert_python_to_java
 
-# Small integers → Integer
-java_int = convert_python_to_java(42)          # Java Integer
-
-# Large integers → Long
-java_long = convert_python_to_java(2**40)     # Java Long
+# A Python int is returned unchanged; JPype passes it to Java as a Long
+value = convert_python_to_java(42)            # 42 (Python int)
+value = convert_python_to_java(2**40)         # 1099511627776 (Python int)
 
 # Reading integers with SQL parameter binding
 with db.transaction():
-    db.command("sql", "INSERT INTO User SET age = ?", 30)  # Python int → Java Integer
+    db.command("sql", "INSERT INTO User SET age = ?", 30)  # Python int → Java Long
 
 age = db.query("sql", "SELECT age FROM User LIMIT 1").first().get("age")
 ```
@@ -423,7 +425,7 @@ Name: Laptop (str)
 In Stock: True (bool)
 Price: 999.99 (float)
 Tax: 50.00 (Decimal)
-Created At: 2024-01-15 10:30:45.123456 (datetime)
+Created At: 2024-01-15 10:30:45.123000 (datetime)
 Tags: ['electronics', 'laptop'] (list)
 ```
 

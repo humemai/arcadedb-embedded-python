@@ -1,9 +1,8 @@
 # Query Languages Guide
 
-ArcadeDB Python bindings support two approaches:
-
-1. **SQL/OpenCypher (Recommended)**: Use DSL for schema, CRUD, and graph operations
-2. **Language Choice**: Use SQL for relational-style operations and OpenCypher for graph traversals
+The bindings run SQL and OpenCypher through `db.query()` and `db.command()`. Use them
+for schema, CRUD, and graph operations: SQL for relational-style work and OpenCypher
+for graph traversals.
 
 ## Best Practice: Use DSL for CRUD
 
@@ -104,25 +103,24 @@ last_rid = "#-1:-1"  # Start from beginning
 batch_size = 1000
 
 while True:
-    # Query with @rid > last_rid for efficient pagination
-    query = f"""
-        SELECT *, @rid as rid FROM User
-        WHERE @rid > {last_rid}
-        LIMIT {batch_size}
-    """
-    chunk = list(db.query("sql", query))
+    # Bind the cursor and the page size; @rid > ? keeps each page a range scan
+    chunk = db.query(
+        "sql",
+        "SELECT @rid AS rid, name FROM User WHERE @rid > ? LIMIT ?",
+        last_rid,
+        batch_size,
+    ).to_list()
 
     if not chunk:
         break  # No more records
 
     # Process batch
     for user in chunk:
-        user_id = user.get("Id")
-        name = user.get("DisplayName")
+        name = user["name"]
         # Process user...
 
     # Update cursor to last record's @rid
-    last_rid = chunk[-1].get("rid")
+    last_rid = str(chunk[-1]["rid"])
 
 # Alternative: OFFSET-based pagination (slower, not recommended for large datasets)
 page = 0
@@ -453,8 +451,9 @@ bulk APIs when you're taking everything from a large result.**
     records (`get_element()`), or may stop early. Ideal for small/medium results;
     on very large results it pays a per-row boundary cost.
 - Use `to_columns()` / `to_dataframe()` to bulk-load large results into
-    numpy/pandas — the fastest path (~14x over `to_list` on 100k-row scans),
-    with typed columns including real `datetime64`.
+    numpy/pandas. This is the fastest path (~12x over `to_list()` on a
+    10,000-row, nine-property scan, laptop, 2026-09-27), with typed columns
+    including real `datetime64`.
 - Use `to_json_list()` (or `iter_json_batches()` when it may not fit in memory)
     to bulk-load large results as plain dicts. JSON-native types: temporals
     arrive as ISO strings.
@@ -462,13 +461,25 @@ bulk APIs when you're taking everything from a large result.**
     `Decimal`) as row dicts and the result is not huge.
 - Use wrapper `to_dict()` only when you truly want the full document in Python.
 
+A result set closes itself when it is exhausted (by iteration or any `to_*`
+method) and when `first()` or `one()` returns. If you stop reading early and keep
+the result set around, use it as a context manager or call `close()`: an unclosed
+result set can hold engine threads that other queries need
+(ArcadeData/arcadedb#8594; see [`close()`](../../api/results.md#close-none)).
+
 ```python
-# Lowest-overhead path for large scans
+# Selective or small results: iterate
 result = db.query("sql", "SELECT name, score FROM Item WHERE score > ?", 100)
 for row in result:
         handle(row.get("name"), row.get("score"))
 
-# Fastest bulk materialization (~6x faster than to_list on wide scans):
+# Stopping early: the with block closes the result set
+with db.query("sql", "SELECT name, score FROM Item WHERE score > ?", 100) as result:
+    for row in result:
+        if row.get("score") > 1000:
+            break
+
+# Bulk materialization as dicts (~5.5x faster than to_list on a wide scan):
 # rows are JSON-serialized in batches on the Java side. Values carry
 # JSON-native types (temporals arrive as ISO strings, not datetime).
 rows = db.query("sql", "SELECT FROM Item").to_json_list()

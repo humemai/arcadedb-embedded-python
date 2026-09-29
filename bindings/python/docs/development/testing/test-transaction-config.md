@@ -12,9 +12,9 @@ There are 10 tests covering WAL flush modes and their database-wide scope, read-
 
 ### test_set_wal_flush_modes
 
-Tests all valid WAL flush modes.
+Calls `set_wal_flush()` with each valid mode. The test has no assertion: it passes when none of the calls raises, and it does not read the mode back.
 
-**What it tests:**
+**What it calls:**
 
 - `set_wal_flush("no")` (default / maximum performance)
 - `set_wal_flush("yes_nometadata")`
@@ -71,9 +71,9 @@ with pytest.raises(ValueError, match="Invalid WAL flush mode"):
 
 ### test_set_read_your_writes
 
-Tests read-your-writes configuration.
+Toggles read-your-writes. The test has no assertion: it passes when none of the calls raises, and it does not read the setting back.
 
-**What it tests:**
+**What it calls:**
 
 - Enabling read-your-writes (`True`, the default)
 - Disabling it (`False`, for better concurrency)
@@ -90,9 +90,9 @@ temp_db.set_read_your_writes(True)
 
 ### test_set_auto_transaction
 
-Tests auto-transaction configuration.
+Toggles auto-transaction. The test has no assertion: it passes when none of the calls raises, and it does not read the setting back.
 
-**What it tests:**
+**What it calls:**
 
 - Enabling auto-transaction (`True`, the default)
 - Disabling it (`False`, for manual control)
@@ -139,8 +139,7 @@ Tests manual transaction control with auto-transaction disabled.
 
 **What it tests:**
 
-- `set_auto_transaction(False)` requires explicit `db.transaction()` contexts
-- Writes inside the context are persisted (count == 2)
+- With `set_auto_transaction(False)`, writes inside an explicit `db.transaction()` context are persisted (count == 2); the test does not try a write outside a transaction
 - Auto-transaction is re-enabled in a `finally` block
 
 **Pattern:**

@@ -153,15 +153,16 @@ The invariant it enforces: **every page table and figure is generated from froze
 listed in the page manifest, pinned by a gate, and carries a source link to a tracked
 artifact.**
 
-Six gates run, and they answer different questions. Five read the rows; `version_pin_check` reads none, asking instead whether the files that state a version pin still agree with each other. `equivalence_check` is the newest of them: it arrived with the 2026-10 instrument, which is also the instrument whose lanes stamp the answer digests it compares. **The rows behind the CURRENT page carry no digest field**, so the gate has nothing to compare there and the answers behind the published cells were never compared across engines. That is worth knowing when you read one of today's latencies: with no answer check behind a number, a fast number and a wrong answer look alike. It is the 2026-10 rows that this gate holds to each other.
+Six gates run, and they answer different questions. Five read the rows; `version_pin_check`, the newest, reads none, asking instead whether the files that state a version pin still agree with each other. `equivalence_check` runs first: it arrived with the 2026-10 instrument, which is also the instrument whose lanes stamp the answer digests it compares. **Rows from before the 2026-10 instrument carry no digest field**, so wherever the page still prints them the gate has nothing to compare, and the answers behind those cells were never compared across engines. That is worth knowing when you read one of those latencies: with no answer check behind a number, a fast number and a wrong answer look alike. It is the 2026-10 rows that this gate holds to each other.
 
 | Gate | Asks |
 |---|---|
+| `equivalence_check` | Did the engines of a table give the same answers? This is F11 of the [fairness invariants](protocol.md#the-fairness-invariants). |
 | `provenance_check` | Does every published cell trace back to a run, under conditions that were recorded rather than asserted? |
-| `fairness_check` | Were the rows in one table given the same thing? F1 to F12. |
+| `fairness_check` | Were the rows in one table given the same thing? The [fairness invariants](protocol.md#the-fairness-invariants) that a row can show. |
 | `page_check` | Does every cell and every typed number on the page still agree with the generated tables? |
-| `equivalence_check` | Did the engines of a table give the same answers? |
 | `version_consistency_check` | Does each engine wear ONE version across the page? It also refuses an ArcadeDB release number on a comparator's row, which the dense table published for months. |
+| `version_pin_check` | Does every file that states a version pin (the runner's backend table, the image build script, the Dockerfiles, and `COMPARATORS.md`) name the same artifact? |
 
 Some specifics that matter if you ever compare the page against the data yourself:
 

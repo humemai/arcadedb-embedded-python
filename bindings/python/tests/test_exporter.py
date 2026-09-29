@@ -355,6 +355,22 @@ class TestDatabaseExport:
             else:
                 raise
 
+    @pytest.mark.skipif(
+        has_graph_export_support(), reason="arcadedb-gremlin is on the classpath"
+    )
+    @pytest.mark.parametrize("fmt", ["graphml", "graphson"])
+    def test_graph_formats_without_gremlin_raise_and_name_jsonl(
+        self, sample_db, temp_db_path, fmt
+    ):
+        """The wheel excludes arcadedb-gremlin, which provides both exporters:
+        the error must say so and name the format that works, not fall through
+        to a generic "export failed"."""
+        with pytest.raises(arcadedb.ArcadeDBError) as err:
+            sample_db.export_database(f"no_gremlin.{fmt}.tgz", format=fmt)
+        msg = str(err.value)
+        assert "requires additional modules" in msg
+        assert "jsonl" in msg
+
     def test_export_verbose_levels(self, sample_db, temp_db_path):
         """Test different verbosity levels."""
         export_path = "test_export_verbose.jsonl.tgz"

@@ -90,7 +90,7 @@ Buffer an edge for creation during flush/close.
 
 ### `new_edges(source_rids, edge_type, destination_rids, properties=None)`
 
-Buffer many edges with one JPype crossing per call — the bulk counterpart of
+Buffer many edges with one JPype crossing per call: the bulk counterpart of
 `new_edge`, which pays one boundary crossing per edge. RIDs may be strings
 (`"#1:0"`) or objects with a string representation; `properties` is an optional
 same-length sequence of per-edge property dicts (JSON-representable values take

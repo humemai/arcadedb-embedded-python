@@ -461,7 +461,8 @@ class TestLSMVectorIndex:
         assert abs(res_embedding[0] - 1.0) < 0.001
 
     def test_lsm_vector_search_approximate_fallback(self, test_db):
-        """Approximate search should gracefully fall back when PQ is unavailable."""
+        """Approximate search on an index built without PRODUCT quantization raises
+        ArcadeDBError rather than silently answering some other way."""
         test_db.command("sql", "CREATE VERTEX TYPE Doc")
         test_db.command("sql", "CREATE PROPERTY Doc.embedding ARRAY_OF_FLOATS")
 

@@ -84,7 +84,7 @@ access methods**:
     )
     ```
 
-Both APIs can be used **simultaneously** on the same server instance — see
+Both APIs can be used **simultaneously** on the same server instance; see
 [Access Methods](api-access-methods.md) and [Server Mode](guide/server.md).
 
 !!! info "When to run the official server distribution instead"
@@ -94,7 +94,7 @@ Both APIs can be used **simultaneously** on the same server instance — see
 
 ## Additional Features
 
-- **Multiple Query Languages**: SQL, OpenCypher
+- **Multiple Query Languages**: SQL and OpenCypher
 - **ACID Transactions**: Full transactional guarantees
 - **Type Safety**: Strong Python type handling and clear errors
 
@@ -109,10 +109,10 @@ are doing.
     `db.import_documents(...)` wrapper when you specifically need document-file import.
 - For bulk document ingest from Python, prefer `db.insert_many(...)`, which crosses
     the FFI boundary once per batch; add `parallel=True` on a type created with as many buckets as the async executor has writers, or a multiple (`CREATE DOCUMENT TYPE T BUCKETS n`, ArcadeData/arcadedb#8478); on the default single bucket it is no faster.
-- The async executor's SQL command path (`db.async_executor().command(...)`) is not a
-    bulk-ingest path: above parallel level 1 it silently discarded records before
-    26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic commit is now
-    retried and otherwise reported through the error callback).
+- The async executor's SQL command path is not a bulk-ingest path. Before 26.10.1,
+    `async_executor().command(...)` could silently drop records above parallel level 1
+    (`ArcadeData/arcadedb#7615`, fixed in #7625); see
+    [Bulk Ingest Recommendation](guide/import.md#bulk-ingest-recommendation).
 - For bulk graph ingest from Python, prefer `GraphBatch`.
 
 ## Features
@@ -123,14 +123,14 @@ are doing.
     - 🚀 **Embedded Mode** - Direct database access in Python process
     - 🌐 **Server Mode** - Optional in-process HTTP server with Studio UI
     - 📦 **Self-contained** - All JARs and JRE bundled
-    - 🔄 **Multi-model** - Graph, Document, Key/Value, Vector
-    - 🔍 **Multiple languages** - SQL, OpenCypher
+    - 🔄 **Multi-model** - Graph, Document, Key/Value, Vector, Time Series
+    - 🔍 **Multiple languages** - SQL and OpenCypher
 
 !!! success "Advanced Features"
     - ⚡ **High performance** - Direct JVM integration via JPype
     - 🔒 **ACID transactions** - Full transaction support
     - 🎯 **Vector storage** - HNSW (JVector) indexing for embeddings
-    - 📥 **Data import** - CSV and ArcadeDB JSONL
+    - 📥 **Data import** - CSV, XML, and ArcadeDB JSONL
     - 🔎 **Full-text search** - Lucene integration
 
 </div>
@@ -158,18 +158,18 @@ with arcadedb.create_database("./mydb") as db:
 
 ## Package Coverage
 
-These bindings provide **comprehensive coverage** of ArcadeDB's Java API, focusing on
-features most relevant to Python developers:
+These bindings cover the parts of ArcadeDB's Java API most relevant to Python
+developers:
 
-| Module | Coverage | Description |
-|--------|----------|-------------|
-| Core Operations | ✅ 100% | Database, queries, transactions |
-| Schema Management | ✅ 100% | Types, properties, indexes |
-| Server Mode | ✅ 90% | HTTP server, Studio UI, database management |
-| Vector Search | ✅ 100% | HNSW (JVector) indexing, similarity search |
-| Data Import | ✅ 100% | CSV, XML, and ArcadeDB JSONL |
-| Data Export | ✅ 100% | JSONL, GraphML, GraphSON; CSV for query results |
-| Graph API | ✅ 85% | Full support via SQL and OpenCypher |
+| Module | Status | Description |
+|--------|--------|-------------|
+| Core Operations | ✅ Supported | Database, queries, transactions |
+| Schema Management | ✅ Supported | Types, properties, indexes |
+| Server Mode | ✅ Supported | HTTP server, Studio UI, database management |
+| Vector Search | ✅ Supported | HNSW (JVector) indexing, similarity search |
+| Data Import | ✅ Supported | CSV, XML, and ArcadeDB JSONL |
+| Data Export | ✅ Supported | JSONL; CSV for query results |
+| Graph API | ✅ Supported | SQL and OpenCypher, plus record wrappers |
 
 See [Java API Coverage](java-api-coverage.md) for detailed comparison.
 
@@ -224,7 +224,7 @@ import arcadedb_embedded as arcadedb
 
 ## Requirements
 
-- **Python**: 3.10–3.14 (packaged; primary testing on 3.12)
+- **Python**: 3.10 to 3.14 (CI runs all five on every supported platform)
 - **OS**: Linux (x86_64, ARM64), macOS (Apple Silicon), or Windows (x86_64)
 
 !!! note "Self-Contained"

@@ -41,6 +41,14 @@ every table. The DuckDB path skips manual secondary indexes for this benchmark.
 
 ## Run
 
+!!! note "The script re-launches itself in Docker"
+    When `docker` is on `PATH`, the script re-runs itself in a container
+    (`--docker-image`, default `python:3.12-slim`) and applies the `--mem-limit`
+    budget to the container; for ArcadeDB it installs the wheel from
+    `bindings/python/dist` and runs natively if none is there. On Windows, under GitHub
+    Actions, or without `docker` it runs natively, and no container enforces
+    `--mem-limit`.
+
 From `bindings/python/examples`:
 
 ```bash
@@ -246,11 +254,11 @@ COPY "{table_name}" FROM '{csv_path}' (AUTO_DETECT TRUE, HEADER TRUE)
 COPY "{table_name}" ("col1", "col2", ...) FROM STDIN WITH (FORMAT CSV, HEADER TRUE)
 ```
 
-Each backend now preloads through the bulk path its driver provides: `insert_many` for
+Each backend preloads through the bulk path its driver provides: `insert_many` for
 ArcadeDB, batched inserts for SQLite, and `COPY` for DuckDB and PostgreSQL. The ArcadeDB
-preload submitted one async `INSERT INTO ... SET ...` per row until 2026-09-15. That was
-changed because the async executor's SQL command path discarded records above parallel
-level 1 before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625).
+preload does not use `async_executor().command(...)`: before 26.10.1 it could silently
+drop records above parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see
+[Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation).
 
 Those load-path differences matter for ingest timing, but they do not change the
 OLTP CRUD statements listed above.

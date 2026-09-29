@@ -25,9 +25,9 @@ Two benchmark suites live in the repository, and they answer different questions
 | [`benchmarks/experiments/`](https://github.com/humemai/arcadedb-embedded-python/tree/main/benchmarks/experiments) | Engine against engine. How does ArcadeDB compare with specialist and embedded databases on the same corpus, the same machine, and the same operation? | These pages |
 | [`benchmarks/python-bindings/`](https://github.com/humemai/arcadedb-embedded-python/tree/main/benchmarks/python-bindings) | Binding against binding. What does reaching the same engine through Python cost against calling it from Java? | [Performance: Python Bindings vs Java](../guide/performance.md) |
 
-These pages describe the instrument the NEXT campaign runs, settled before its first cell
-so that nothing changes under the rows (a mid-campaign change splits them). The published
-page still shows the campaign before it, so where a corpus size or an engine list here is
+These pages describe the instrument the current campaign runs, settled before its first
+cell so that nothing changes under the rows (a mid-campaign change splits them). The
+published page can lag the instrument, so where a corpus size or an engine list here is
 ahead of what the page prints, that is the gap between an instrument and the rows it has
 produced so far, and the page's own notes say which sizes it carries.
 
@@ -44,14 +44,14 @@ against the same corpus. Each lane feeds one or two tables on the project page.
 
 | Lane | Workload | Corpus | Table |
 |---|---|---|---|
-| Document OLTP | TPC-C new-order and payment, plus one record inserted, read by key, updated, and deleted | TPC-H at scale factor 1 | [Documents](https://humem.ai/projects/arcadedb#documents) |
-| Document OLAP | TPC-H Q1 and Q6, top parts by revenue, count by ship mode, and revenue by month | TPC-H at scale factor 10 | [Documents](https://humem.ai/projects/arcadedb#documents) |
+| Document OLTP | TPC-C new-order and payment, plus one record inserted, read by key, updated, and deleted | TPC-H at scale factors 1 and 10 | [Documents](https://humem.ai/projects/arcadedb#documents) |
+| Document OLAP | TPC-H Q1 and Q6, top parts by revenue, count by ship mode, and revenue by month | TPC-H at scale factors 1 and 10 | [Documents](https://humem.ai/projects/arcadedb#documents) |
 | Graph OLTP | Point lookup, one hop, two hops, three hops with a property filter, insert, update, and delete | LDBC-SNB persons and friendships at SF1 and SF10 | [Graph](https://humem.ai/projects/arcadedb#graph) |
 | Graph OLAP | Fourteen queries: average friend age, friendships within a city, most friends, degree distribution, and triangle count, plus LSQB's nine pattern-matching counts (below), with and without ArcadeDB's Graph Analytical View | LDBC-SNB, the full social network at SF1 | [Graph](https://humem.ai/projects/arcadedb#graph) |
 | Dense vectors | Nearest-neighbour search at k=10, plus an insert into a built index and a delete from one | SIFT1M and DEEP-10M | [Vectors](https://humem.ai/projects/arcadedb#vectors) |
 | Sparse vectors | Learned-sparse retrieval at k=10 | Big-ANN 2023 sparse track at three sizes | [Vectors](https://humem.ai/projects/arcadedb#vectors) |
-| Time series | Newest reading (asked unbounded, and again bounded to the past hour, which is kept on the row), a twelve-hour aggregate, a per-host hourly double group-by, a high-usage filter, and a group-by with ordering and a limit | TSBS cpu-only at 1,000 hosts | [Time series](https://humem.ai/projects/arcadedb#timeseries) |
-| Cross-model | One transaction that writes a document, a graph edge, and a vector together; the same transaction interrupted; a retrieval path; and a graph-filtered vector search | Generated product set, 500 thousand products | [Cross-model](https://humem.ai/projects/arcadedb#crossmodel) |
+| Time series | Newest reading (asked unbounded, and again bounded to the past hour, which is kept on the row), a twelve-hour aggregate, a per-host hourly double group-by, a high-usage filter, and a group-by with ordering and a limit | TSBS cpu-only at 100 and 1,000 hosts | [Time series](https://humem.ai/projects/arcadedb#timeseries) |
+| Cross-model | One transaction that writes a document, a graph edge, and a vector together; the same transaction interrupted; a retrieval path; and a graph-filtered vector search | Generated product set, 50 thousand and 500 thousand products | [Cross-model](https://humem.ai/projects/arcadedb#crossmodel) |
 | Session lifecycle | Open, one query, one write, and close, across what a database contains | Each model at four sizes | [Python](https://humem.ai/projects/arcadedb#embedded) |
 | Deployment split | The same work in-process, over in-process HTTP, and against a separate container | Result sizes from one document to a hundred thousand | [Python](https://humem.ai/projects/arcadedb#embedded) |
 | Python materialization | The same result taken through each Python materialization API, against the Java baseline | One scan and one vector search | [Python](https://humem.ai/projects/arcadedb#embedded) |
@@ -86,7 +86,7 @@ No lane that reaches a table runs on a generated corpus where a published one ex
 lane reads real data from a mount, and a lane that cannot find its corpus is refused rather
 than allowed to fall back to a synthetic generator.
 
-- **TPC-H** at scale factor 1 for the transactional lane and scale factor 10 for the
+- **TPC-H** at scale factors 1 and 10 for both document lanes, the transactional and the
   analytical one, generated with DuckDB's `dbgen` and staged as Parquet. The document lanes
   read the line-item tables as documents. The transactional operations are TPC-C inspired
   rather than an audited TPC-C run, and the page says so.
@@ -98,11 +98,12 @@ than allowed to fall back to a synthetic generator.
   with the exact ground truth each ships so recall is measured rather than assumed.
 - **Big-ANN 2023 sparse track**: a SPLADE encoding of MS MARCO passages at three sizes,
   with the challenge's own top-k ground truth.
-- **TSBS**, the Time Series Benchmark Suite's cpu-only data set at 1,000 hosts, generated
-  from a recipe in the repository so the corpus can be rebuilt rather than merely copied.
-- A generated set of 500 thousand products for the cross-model lane, where each product
-  carries a document, an edge, and an embedding, because no published benchmark writes all
-  three in one transaction.
+- **TSBS**, the Time Series Benchmark Suite's cpu-only data set at 100 and 1,000 hosts,
+  generated from a recipe in the repository so the corpus can be rebuilt rather than merely
+  copied.
+- Generated sets of 50 thousand and 500 thousand products for the cross-model lane, where
+  each product carries a document, an edge, and an embedding, because no published
+  benchmark writes all three in one transaction.
 
 ## The Engines
 

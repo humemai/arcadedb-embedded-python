@@ -1,6 +1,6 @@
 # Examples Overview
 
-Hands-on examples demonstrating ArcadeDB Python bindings in real-world scenarios. Each example is self-contained, well-documented, and ready to run.
+Hands-on examples demonstrating ArcadeDB Python bindings in real-world scenarios. Each example is documented and ready to run; most run on their own, while 05 reads Example 04's database, 06 reads Example 05's, and 12 reuses Example 11's.
 
 !!! note "DSL-first examples"
     Current examples and docs use SQL/OpenCypher as the default approach for schema, CRUD, and graph operations.
@@ -13,7 +13,7 @@ Hands-on examples demonstrating ArcadeDB Python bindings in real-world scenarios
 Download and prepare datasets used by the examples (MovieLens, Stack Exchange, MSMARCO, TPC-H, and LDBC SNB).
 
 **[01 - Simple Document Store](01_simple_document_store.md)**
-Foundation example covering document types, CRUD operations, comprehensive data types (DATE, DATETIME, DECIMAL, FLOAT, INTEGER, STRING, BOOLEAN, LIST OF STRING), and NULL value handling (INSERT NULL, UPDATE to NULL, IS NULL queries).
+Foundation example covering document types, CRUD operations, comprehensive data types (DATE, DATETIME, DECIMAL, FLOAT, INTEGER, STRING, BOOLEAN, and LIST), and NULL value handling (INSERT NULL, UPDATE to NULL, IS NULL queries).
 
 **[02 - Social Network Graph](02_social_network_graph.md)**
 Complete graph modeling with vertices, edges, NULL handling, and dual query languages (SQL MATCH vs Cypher). Demonstrates 8 people with optional fields, 24 bidirectional edges, graph traversal, and comprehensive queries.
@@ -23,7 +23,7 @@ Semantic similarity search with HNSW (JVector) indexing. Demonstrates vector sto
 creation, and nearest neighbor search.
 
 **[04 - CSV Import - Documents](04_csv_import_documents.md)**
-Production CSV import with automatic type inference by Java, NULL handling, and index optimization. Imports MovieLens dataset (36M+ records) with comprehensive performance analysis and result validation with actual data samples.
+Production CSV import with explicit schema mapping, batched parameterized `INSERT`, NULL handling, and index optimization. Imports MovieLens dataset (36M+ records) with comprehensive performance analysis and result validation with actual data samples.
 
 **[05 - CSV Import - Graph](05_csv_import_graph.md)**
 Production graph creation from MovieLens dataset. Performance analysis of SQL pipelines, `GraphBatch` versus synchronous vertex transactions, and index effects. Includes benchmark configurations, validation queries, and export/import roundtrip testing.
@@ -82,10 +82,10 @@ Batched Python/Java boundary crossings for bulk workloads: `Database.insert_many
 **[23 - Server Mode And HTTP Access](23_server_mode_http_access.md)**
 Embedded-first server workflow covering `create_server(...)`, HTTP auth (Basic and bearer token), server-managed database creation, and mixed embedded plus HTTP access to the same data.
 
-**[24 - Transactions, Database Commands and Time-Series Writes over HTTP](24_server_http_transactions_timeseries.md)**
+**[24 - Transactions, Database Commands, and Time-Series Writes over HTTP](24_server_http_transactions_timeseries.md)**
 The server HTTP features a second process needs next: one transaction across several requests through `arcadedb-session-id`, `close database` / `open database` server commands, and InfluxDB line-protocol writes to a TIMESERIES type read back with SQL.
 
-**[25 - Sparse Vectors, Weight Precision And Compaction](25_sparse_quantization_and_compact.md)**
+**[25 - Sparse Vectors, Weight Precision, And Compaction](25_sparse_quantization_and_compact.md)**
 Sparse retrieval on a synthetic SPLADE-style corpus built twice: INT8 versus FP32 posting weights in `LSM_SPARSE_VECTOR`, and `COMPACT INDEX` as the settle step after a bulk load, with size, compaction time, query latency, and top-10 agreement.
 
 **[26 - Cross-Model Transaction Atomicity](26_cross_model_transaction_atomicity.md)**

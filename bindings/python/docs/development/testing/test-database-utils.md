@@ -55,8 +55,8 @@ Tests `Database.drop()`.
 **What it tests:**
 
 - Creating and populating a type, then verifying the count
-- `db.drop()` removes the database
-- The database reports `is_open()` as `False` after the drop
+- Calling `db.drop()`
+- The database reports `is_open()` as `False` after the drop (the test does not check that the files are gone)
 
 **Pattern:**
 ```python

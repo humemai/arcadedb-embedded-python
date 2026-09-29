@@ -44,7 +44,10 @@ with arcadedb.create_database("./vector_demo") as db:
 
     rows = db.query(
         "sql",
-        "SELECT vectorNeighbors('Doc[embedding]', [0.9, 0.1, 0.0], 2) as res",
+        "SELECT vectorNeighbors('Doc[embedding]', ?, 2) as res",
+        # bind the query vector; a bare Python list as the only argument would be
+        # read as the parameter array and bind ? to 0.9
+        to_java_float_array([0.9, 0.1, 0.0]),
     ).to_list()
     for hit in rows[0].get("res", []):
         record = hit.get("record")
@@ -79,7 +82,7 @@ Preferred split:
 ## Distance Functions (scoring behavior)
 
 - `cosine` (default): returns cosine distance in [0,2]; lower is better.
-- `euclidean`: returns squared Euclidean distance $d^2$; lower is better.
+- `euclidean`: returns squared Euclidean distance (d²); lower is better.
 - `inner_product`: returns negative dot product; lower is better.
 
 Important:
@@ -95,12 +98,6 @@ Important:
 - `beam_width` (ef/efConstruction): higher → better recall, slower search/build (default: 100).
 - `ef_search` (runtime, exact search only): higher → better recall, slower search.
     - Leave it unset to use the Java engine's default/adaptive behavior.
-
-Suggested presets from tests/examples (k=10):
-
-- Min: `max_connections=12`, `beam_width=64`, `ef_search=32`.
-- Normal (default/adaptive): `max_connections=32`, `beam_width=100`, `ef_search=None`.
-- Max: `max_connections=32`, `beam_width=200`, `ef_search=200`.
 
 ### The search beam in SQL
 
@@ -191,7 +188,8 @@ with arcadedb.create_database("./vector_demo") as db:
 
     hits = db.query(
         "sql",
-        f"SELECT vectorNeighbors('Doc[embedding]', {list(map(float, vec))}, 1) as res",
+        "SELECT vectorNeighbors('Doc[embedding]', ?, 1) as res",
+        to_java_float_array(vec),
     ).to_list()
 ```
 
@@ -205,20 +203,24 @@ Notes:
 
 ## Preferred Search Surface: SQL / Cypher
 
-For new code, prefer query APIs for search.
+For new code, prefer query APIs for search. Bind the query vector as a parameter
+(`to_java_float_array(query_vec)`) rather than pasting it into the SQL text: a pasted
+vector makes every query a new statement to parse (see
+[Parameters](core/queries.md#parameters)).
 
 ### SQL filtered vector search with score shaping
 
 ```python
-qvec_literal = "[" + ", ".join(str(float(x)) for x in query_vec) + "]"
+from arcadedb_embedded import to_java_float_array
 
 rows = db.query(
     "sql",
     (
     "SELECT title, category, distance, (1 - distance) AS score "
-    "FROM (SELECT expand(vectorNeighbors('Article[embedding]', "
-    f"{qvec_literal}, 50))) WHERE category = ? ORDER BY distance LIMIT 5"
+    "FROM (SELECT expand(vectorNeighbors('Article[embedding]', ?, 50))) "
+    "WHERE category = ? ORDER BY distance LIMIT 5"
     ),
+    to_java_float_array(query_vec),
     "category_42",
 ).to_list()
 ```
@@ -230,9 +232,10 @@ rows = db.query(
     "sql",
     (
     "SELECT title, distance, (1 - distance) AS score "
-    "FROM (SELECT expand(vectorNeighbors('Movie[embedding]', "
-    f"{qvec_literal}, 20))) WHERE title <> ? ORDER BY distance LIMIT 10"
+    "FROM (SELECT expand(vectorNeighbors('Movie[embedding]', ?, 20))) "
+    "WHERE title <> ? ORDER BY distance LIMIT 10"
     ),
+    to_java_float_array(query_vec),
     movie_title,
 ).to_list()
 ```
@@ -275,7 +278,8 @@ rows = db.query(
   it remains the spelling `IMPORT DATABASE ... WITH distanceFunction = cosine`
   uses on that separate surface)
 - Search via SQL:
-    - `SELECT vectorNeighbors('Doc[embedding]', [0.1,0.2], 5) AS res`
+    - `SELECT vectorNeighbors('Doc[embedding]', ?, 5) AS res`, with the query vector
+      bound (`to_java_float_array(vec)`)
 - Math/distance helpers: `vectorCosineSimilarity`, `vectorL2Distance`,
   `vectorDotProduct`, `vectorNormalize`, `vectorAdd`, `vectorSum`, etc.
 - Every `vector.xxx` function is also reachable as a camelCase alias (`vector.l2Norm`
@@ -293,7 +297,7 @@ rows = db.query(
   where `mode` is the default ratio, `L0` (count of significant elements), or `GMEAN`.
 - Score shaping: `vector.scoreTransform(score, mode)` with modes such as `LN`/`LOG`
   and `TANH`, and `vector.multiScore(scores, fusion)` (e.g. `MAX`) to fuse score lists.
-- Conversions: `.asString(format)` renders a vector as text — formats are `COMPACT`
+- Conversions: `.asString(format)` renders a vector as text. Formats are `COMPACT`
   (default), `PRETTY`, `PYTHON`, `JULIA`, `MATLAB`, `MATLAB_COLUMN`, and `NUMPY`,
   where `NUMPY` emits a bare comma-separated list ready for
   `np.array(s.split(','), dtype=np.float32)`. `.asVector()` is the inverse and parses
@@ -411,7 +415,7 @@ two seconds and moved query p50 from 9.5 ms to 7.0 ms.
 
 ## Grouped Search
 
-Recent engine builds support `groupBy` / `groupSize` options on `vector.neighbors`.
+`vector.neighbors` accepts `groupBy` / `groupSize` options.
 This is useful when you want diversity across a field such as source file, tenant, or
 document family.
 

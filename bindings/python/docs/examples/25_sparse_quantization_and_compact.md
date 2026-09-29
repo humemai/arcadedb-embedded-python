@@ -1,4 +1,4 @@
-# 25 - Sparse Vectors, Weight Precision And Compaction
+# 25 - Sparse Vectors, Weight Precision, And Compaction
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/25_sparse_quantization_and_compact.py)
 
@@ -13,9 +13,13 @@ same synthetic SPLADE-style corpus built twice:
 
 ## Run
 
+From `bindings/python/examples`:
+
 ```bash
-uv run python examples/25_sparse_quantization_and_compact.py --docs 20000
+python 25_sparse_quantization_and_compact.py --docs 20000
 ```
+
+The databases are created under `./my_test_databases/sparse_precision` (`--db-dir`).
 
 ## What you should see
 

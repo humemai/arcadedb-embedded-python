@@ -56,13 +56,19 @@ with arcadedb.create_server("./databases", root_password="password123") as serve
 ```
 
 Server mode adds ~8MB to the wheel and costs nothing at runtime until you call
-`create_server()` — see [Server Mode](../guide/server.md) for the measured
+`create_server()`; see [Server Mode](../guide/server.md) for the measured
 breakdown, and [Access Methods](../api-access-methods.md) for all three paths.
 
 For a server that outlives your Python process, or for HA/TLS, run the official
 [ArcadeDB server](https://docs.arcadedb.com/#Server) instead.
 
 ## Your First Database
+
+Each step below is a standalone script that builds `./quickstart` from scratch.
+`create_database` raises if the path already holds a database, so run each step
+in an empty directory, or delete `./quickstart` before the next one. To reuse
+the database instead, open it with `arcadedb.open_database("./quickstart")`
+(see [Working with Existing Database](#working-with-existing-database)).
 
 ### 1. Create a Database
 

@@ -9,11 +9,17 @@ import tempfile
 import pytest
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_configure(config):
     # HotSpot routinely raises access violations it handles itself
     # (safepoints, implicit null checks). On Windows, pytest's faulthandler
     # prints a fatal-looking Python stack for each one even though nothing
-    # crashed. Disable it there; real crashes still fail the run.
+    # crashed. Disable it there; real crashes still fail the run, and
+    # faulthandler_timeout's hang dump does not depend on it.
+    # trylast: pytest's own faulthandler plugin enables it in its
+    # pytest_configure, and a conftest hook otherwise runs before that.
+    # This hook was dead from 2026-07-25 to 2026-09-29: a second
+    # pytest_configure further down replaced it (test_jvm_args pins it now).
     import sys
 
     if sys.platform == "win32":
@@ -153,29 +159,15 @@ def temp_dir_factory():
 def has_graph_export_support():
     """Check if GraphML/GraphSON export support is available."""
     try:
-        # Detect graph export-related modules in bundled JARs
+        # GraphML and GraphSON exporters live in the engine's optional
+        # arcadedb-gremlin module, which the wheel excludes.
         from arcadedb_embedded.jvm import get_jar_path
 
         jar_dir = get_jar_path()
         jar_files = os.listdir(jar_dir) if os.path.exists(jar_dir) else []
-        return any(
-            "graphson" in jar.lower() or "graphml" in jar.lower() for jar in jar_files
-        )
+        return any("arcadedb-gremlin" in jar.lower() for jar in jar_files)
     except Exception:
         return False
-
-
-# Pytest markers for conditional test execution
-def pytest_configure(config):
-    """Register custom markers."""
-    config.addinivalue_line(
-        "markers",
-        "graph_export: tests that require GraphML/GraphSON support",
-    )
-    config.addinivalue_line(
-        "markers",
-        "server: tests that require server support (available in base package)",
-    )
 
 
 def pytest_unconfigure(config):

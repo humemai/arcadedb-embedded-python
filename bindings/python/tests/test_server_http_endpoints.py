@@ -36,7 +36,7 @@ def http_server(tmp_path):
         time.sleep(0.5)
     server.create_database("httpx")
     try:
-        yield s, base
+        yield s, base, server
     finally:
         s.close()
         try:
@@ -59,7 +59,7 @@ def _cmd(s, base, db, sql, headers=None, kind="command", language="sql"):
 
 
 def test_transaction_spans_requests_and_rolls_back(http_server):
-    s, base = http_server
+    s, base, _ = http_server
     _cmd(s, base, "httpx", "CREATE DOCUMENT TYPE T")
     r = s.post(f"{base}/api/v1/begin/httpx", timeout=30)
     assert r.status_code in (200, 204), r.text
@@ -94,7 +94,7 @@ def test_transaction_spans_requests_and_rolls_back(http_server):
 
 
 def test_close_and_open_database_commands(http_server):
-    s, base = http_server
+    s, base, _ = http_server
     _cmd(s, base, "httpx", "CREATE DOCUMENT TYPE U")
     _cmd(s, base, "httpx", "INSERT INTO U SET n = 1")
     r = s.post(
@@ -111,7 +111,7 @@ def test_close_and_open_database_commands(http_server):
 
 
 def test_timeseries_line_protocol_write(http_server):
-    s, base = http_server
+    s, base, _ = http_server
     _cmd(
         s,
         base,
@@ -144,7 +144,7 @@ def test_timeseries_line_protocol_write(http_server):
 def test_embedded_and_http_projections_agree(http_server):
     """The decomposition in example 23 rests on both paths answering the same
     rows; the wire format may cost time, never content."""
-    s, base = http_server
+    s, base, server = http_server
     _cmd(s, base, "httpx", "CREATE DOCUMENT TYPE R")
     _cmd(s, base, "httpx", "CREATE PROPERTY R.id LONG")
     _cmd(s, base, "httpx", "CREATE PROPERTY R.amount DOUBLE")
@@ -160,3 +160,12 @@ def test_embedded_and_http_projections_agree(http_server):
         s, base, "httpx", "SELECT id, amount FROM R ORDER BY id LIMIT 100", kind="query"
     )
     assert len(via_http) == 100 and via_http[0]["id"] == 0 and via_http[-1]["id"] == 99
+    # The same statement through the embedded handle of the served database.
+    embedded = (
+        server.get_database("httpx")
+        .query("sql", "SELECT id, amount FROM R ORDER BY id LIMIT 100")
+        .to_list()
+    )
+    assert [(r["id"], r["amount"]) for r in embedded] == [
+        (r["id"], r["amount"]) for r in via_http
+    ]

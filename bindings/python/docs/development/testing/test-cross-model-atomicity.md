@@ -4,7 +4,7 @@
 
 The project page's cross-model story, at test size: search, hop and update in one transaction survive an interruption between the writes with nothing torn; the same writes without a transaction are torn every time.
 
-There are 1 tests.
+There is 1 test.
 
 ## Test Cases
 

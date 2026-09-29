@@ -1,365 +1,67 @@
 # Vector Search Examples
 
-This page covers examples for implementing AI-powered semantic search using vector embeddings in ArcadeDB.
+This page points to the examples that use vector search in ArcadeDB from Python. The
+[Vector Search Guide](../guide/vectors.md) holds the index options, the SQL functions,
+and the code patterns, and the [Vector API](../api/vector.md) documents the helpers
+such as `arcadedb.to_java_float_array(...)`.
 
-## Vector Search Examples
+## Which Example Covers What
 
-### Basic Vector Search
+**[Example 03 - Vector Search](03_vector_search.md)**
 
-**[Example 03 - Vector Search: Product Discovery](03_vector_search.md)**
-
-Learn the fundamentals of vector search:
-
-- Creating vector indexes with SQL
-- Generating embeddings
-- Performing similarity searches
-- Understanding JVector parameters
-
-### Movie Recommendations
+- semantic search over 10,000 mock `Article` documents grouped by category
+- an `ARRAY_OF_FLOATS` property, an `LSM_VECTOR` (JVector) index created in SQL, and
+  top-k queries with `vectorNeighbors(...)` and bound parameters
+- INT8-encoded dense vectors and a sparse-vector index, plus a first-pass versus
+  second-pass timing of the same queries
 
 **[Example 06 - Vector Search: Movie Recommendations](06_vector_search_recommendations.md)**
 
-Build a recommendation system:
+- real embeddings of MovieLens titles and genres from two sentence-transformers models
+- "more like this" recommendations by vector similarity, compared side by side with
+  graph-based collaborative filtering on the rating data
 
-- Movie embeddings from titles/genres
-- Semantic similarity search
-- Personalized recommendations
-- Real-world MovieLens data
+**[Example 11 - Vector Index Build](11_vector_index_build.md)** and
+**[Example 12 - Vector Search Benchmark](12_vector_search.md)**
 
-## Quick Start: Vector Search
+- build-only and search-only benchmarks across ArcadeDB and other vector backends, on
+  MSMARCO and Stack Overflow embeddings; Example 12 reuses Example 11's databases
 
-### Create Vector Index
+**[Example 13 - Stack Overflow Hybrid Queries](13_stackoverflow_hybrid_queries.md)**
 
-```python
-import arcadedb_embedded as arcadedb
+- one workflow that combines documents, graph edges, and embeddings in hybrid queries
 
-with arcadedb.create_database("./vector_demo") as db:
-    # Create vertex type with vector property (schema ops are auto-transactional)
-    db.command("sql", "CREATE VERTEX TYPE Product")
-    db.command("sql", "CREATE PROPERTY Product.name STRING")
-    db.command("sql", "CREATE PROPERTY Product.description STRING")
-    db.command("sql", "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS")
+**[Example 25 - Sparse Vectors, Weight Precision, and Compaction](25_sparse_quantization_and_compact.md)**
 
-    # Preferred: create the vector index in SQL
-    db.command(
-        "sql",
-        """
-        CREATE INDEX ON Product (embedding)
-        LSM_VECTOR
-        METADATA {
-            "dimensions": 384,
-            "similarity": "COSINE"
-        }
-        """,
-    )
+- `LSM_SPARSE_VECTOR` with INT8 versus FP32 posting weights, and `COMPACT INDEX` after a
+  bulk load
 
-    # SQL builds the graph immediately by default.
-    # Add "buildGraphNow": false only if you intentionally want lazy preparation.
-```
+**[Example 26 - Cross-Model Transaction Atomicity](26_cross_model_transaction_atomicity.md)**
 
-### Insert Vectors
+- a vector search, a graph hop, and a document update in one transaction
 
-```python
-import numpy as np
-import arcadedb_embedded as arcadedb
+## Binding the Query Vector
 
-with arcadedb.open_database("./vector_demo") as db:
-    # Generate or load embeddings (example with random vectors)
-    def get_embedding(text: str) -> list:
-        # In production, use OpenAI, Sentence Transformers, etc.
-        return np.random.rand(384).tolist()
-
-    # Insert products with embeddings
-    products = [
-        ("Laptop", "High-performance computing device"),
-        ("Mouse", "Wireless ergonomic mouse"),
-        ("Keyboard", "Mechanical keyboard with RGB")
-    ]
-
-    with db.transaction():
-        for name, description in products:
-            embedding = get_embedding(f"{name}: {description}")
-            db.command(
-                "sql",
-                "INSERT INTO Product SET name = ?, description = ?, embedding = ?",
-                name,
-                description,
-                arcadedb.to_java_float_array(embedding),
-            )
-```
-
-### Search Similar Items
+Pass the query vector as a bound parameter rather than pasting it into the SQL text:
 
 ```python
 import arcadedb_embedded as arcadedb
 
 with arcadedb.open_database("./vector_demo") as db:
-    # Query for similar products (reads don't require a transaction)
-    def get_embedding(text: str) -> list:
-        # In production, use real embedding service
-        import numpy as np
-        return np.random.rand(384).tolist()
-
-    search_text = "computer accessories"
-    query_embedding = get_embedding(search_text)
-
-    results = db.query(
-        "sql",
-        """
-        SELECT name, description,
-                vectorL2Distance(embedding, ?) as distance
-        FROM Product
-        ORDER BY distance ASC
-        LIMIT 5
-        """,
-        query_embedding,
-    )
-
-    for record in results:
-        print(f"{record.get('name')}: {record.get('distance'):.4f}")
-```
-
-#### SQL nearest-neighbor (preferred for query-first code):
-
-```python
-import arcadedb_embedded as arcadedb
-import numpy as np
-
-with arcadedb.open_database("./vector_demo") as db:
-    query_embedding = np.random.rand(384).tolist()
-    qvec_literal = "[" + ", ".join(str(float(x)) for x in query_embedding) + "]"
+    query_embedding = [0.1] * 384  # from your embedding model
     rows = db.query(
         "sql",
-        f"SELECT vectorNeighbors('Product[embedding]', {qvec_literal}, 5) as res",
+        "SELECT vectorNeighbors('Product[embedding]', ?, 5) as res",
+        arcadedb.to_java_float_array(query_embedding),
     ).to_list()
-    for hit in rows[0].get("res", []):
-        record = hit.get("record")
-        distance = hit.get("distance")
-        if record is not None:
-            print(f"{record.get('name')}: {distance:.4f}")
 ```
 
-#### SQL filtered search with score shaping:
-
-```python
-rows = db.query(
-    "sql",
-    (
-        "SELECT name, description, distance, (1 - distance) AS score "
-        "FROM (SELECT expand(vectorNeighbors('Product[embedding]', "
-        f"{qvec_literal}, 20))) WHERE name <> ? ORDER BY distance LIMIT 5"
-    ),
-    "Laptop",
-).to_list()
-```
-
-## Vector Functions
-
-ArcadeDB provides several vector functions:
-
-### Distance Metrics
-
-```python
-import arcadedb_embedded as arcadedb
-
-with arcadedb.open_database("./vector_demo") as db:
-    query_vector = [0.5] * 384  # Example embedding
-
-    # Raw cosine similarity (-1 to 1, higher = more similar)
-    results = db.query(
-        "sql",
-        """
-        SELECT vectorCosineSimilarity(embedding, ?) as score
-        FROM Product
-        """,
-        query_vector,
-    )
-
-    # Euclidean distance (L2)
-    results = db.query(
-        "sql",
-        """
-        SELECT vectorL2Distance(embedding, ?) as score
-        FROM Product
-        """,
-        query_vector,
-    )
-
-    # Dot product
-    results = db.query(
-        "sql",
-        """
-        SELECT vectorDotProduct(embedding, ?) as score
-        FROM Product
-        """,
-        query_vector,
-    )
-
-    # Manhattan / L1 distance (sum of absolute differences).
-    # vectorManhattanDistance and vectorL1Distance are aliases.
-    results = db.query(
-        "sql",
-        """
-        SELECT vectorManhattanDistance(embedding, ?) as score
-        FROM Product
-        """,
-        query_vector,
-    )
-```
-
-### Nearest Neighbors
-
-```python
-import arcadedb_embedded as arcadedb
-
-with arcadedb.open_database("./vector_demo") as db:
-    query_vector = [0.5] * 384  # Example embedding
-
-    # Find k-nearest neighbors (read-only, no transaction needed)
-    results = db.query(
-        "sql",
-        """
-        SELECT name,
-                vectorL2Distance(embedding, ?) as distance
-        FROM Product
-        ORDER BY distance ASC
-        LIMIT 10
-        """,
-        query_vector,
-    )
-```
-
-## JVector Index Configuration
-
-Tune vector index performance with JVector parameters:
-
-```python
-import arcadedb_embedded as arcadedb
-
-with arcadedb.create_database("./vector_demo") as db:
-    # Create vertex type
-    db.command("sql", "CREATE VERTEX TYPE Product")
-    db.command("sql", "CREATE PROPERTY Product.embedding ARRAY_OF_FLOATS")
-
-    # Preferred: configure the index directly in SQL metadata
-    db.command(
-        "sql",
-        """
-        CREATE INDEX ON Product (embedding)
-        LSM_VECTOR
-        METADATA {
-            "dimensions": 384,
-            "similarity": "COSINE",
-            "maxConnections": 32,
-            "beamWidth": 100
-        }
-        """
-    )
-```
-
-**Index Configuration Parameters:**
-
-- **max_connections**: 8-32 (higher = better accuracy, more memory/slower build)
-- **beam_width**: 64-200 (higher = better search accuracy, slower queries)
-    - 64: Fast search, lower accuracy
-    - 100: Balanced (default)
-    - 200: High accuracy, slower search
-- **buildGraphNow**: `true` by default in SQL metadata. Set it to `false` only when you
-  intentionally want lazy graph preparation.
-- **ef_search**: Exact-search beam width override (optional)
-    - Leave unset to use ArcadeDB's default/adaptive behavior
-    - Smaller values are faster with lower recall
-    - Larger values are slower with better recall
-
-## Embedding Providers
-
-### OpenAI Embeddings
-
-```python
-from openai import OpenAI
-
-client = OpenAI(api_key="your-key")
-
-def get_embedding(text: str) -> list:
-    response = client.embeddings.create(
-        model="text-embedding-3-small",  # 1536 dimensions
-        input=text
-    )
-    return response.data[0].embedding
-```
-
-### Sentence Transformers
-
-```python
-from sentence_transformers import SentenceTransformer
-
-model = SentenceTransformer('all-MiniLM-L6-v2')  # 384 dimensions
-
-def get_embedding(text: str) -> list:
-    return model.encode(text).tolist()
-```
-
-### Hugging Face
-
-```python
-from transformers import AutoTokenizer, AutoModel
-import torch
-
-tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
-model = AutoModel.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
-
-def get_embedding(text: str) -> list:
-    inputs = tokenizer(text, return_tensors='pt', padding=True, truncation=True)
-    with torch.no_grad():
-        outputs = model(**inputs)
-    embeddings = outputs.last_hidden_state.mean(dim=1)
-    return embeddings[0].tolist()
-```
-
-## Performance Optimization
-
-### Batch Embeddings
-
-Generate embeddings in batches for better performance:
-
-```python
-import arcadedb_embedded as arcadedb
-
-with arcadedb.open_database("./vector_demo") as db:
-    # Batch embedding generation
-    from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-
-    texts = ["product 1", "product 2", "product 3"]
-    embeddings = model.encode(texts, batch_size=32)
-
-    # Batch insert with transaction
-    with db.transaction():
-        for text, embedding in zip(texts, embeddings):
-            db.command(
-                "sql",
-                "INSERT INTO Product SET description = ?, embedding = ?",
-                text,
-                arcadedb.to_java_float_array(embedding),
-            )
-```
-
-## Complete Examples
-
-See full implementations:
-
-- **[Example 03: Product Vector Search](03_vector_search.md)** - Complete vector search implementation
-- **[Example 06: Movie Recommendations](06_vector_search_recommendations.md)** - Recommendation system
-
-## Additional Resources
-
-- **[Vector API Documentation](../api/vector.md)** - Complete API reference
-- **[Vector Search Guide](../guide/vectors.md)** - In-depth vector search strategies
-- **[HNSW Paper](https://arxiv.org/abs/1603.09320)** - Understanding the algorithm
+The [Vector Search Guide](../guide/vectors.md) covers index creation, filtered search,
+and the tuning parameters.
 
 ## Source Code
 
-View the complete vector search example source code:
+View the vector search example source code:
 
 - [`examples/03_vector_search.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/03_vector_search.py)
 - [`examples/06_vector_search_recommendations.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/06_vector_search_recommendations.py)

@@ -23,12 +23,16 @@ Python wrapper for document imports.
 + Neo4j imports
 + Word2Vec imports for vector workflows
 + RDF imports
-+ Timeseries imports
 + Full ArcadeDB JSONL restore
 
 All of these are exercised through `db.command("sql", "IMPORT DATABASE ...")` in
 the current test suite, but test coverage should not be read as a recommendation to make
 this your default Python ingest path.
+
+A TIMESERIES type cannot be an `IMPORT DATABASE` target: it owns no document buckets,
+so the import fails (the test suite asserts this). Feed it with
+`db.async_executor().append_samples(...)` or the server's `/api/v1/ts/{db}/write`
+endpoint instead.
 
 `db.import_documents(...)` is also covered by dedicated API tests, but it should be read
 the same way: supported, not currently encouraged as the default Python ingest path.
@@ -54,13 +58,13 @@ not something we currently encourage as the default Python import story.
     runs. No error reached the per-command callback,
     nothing was logged, and `wait_completion()` returned normally. Only the executor-wide
     `on_error` handler saw anything, one `ConcurrentModificationException` per
-    rolled-back batch. Filed upstream as `ArcadeData/arcadedb#7615`. `create_record`,
-    `append_samples`, `db.insert_many(...)`, and `db.graph_batch(...)` are unaffected.
-+ `db.import_documents(...)` exists for document-shaped file import convenience, but in
-    current Python testing it has also shown reliability problems under heavier loads.
+    rolled-back batch. `create_record`, `append_samples`, `db.insert_many(...)`, and
+    `db.graph_batch(...)` are unaffected.
++ `db.import_documents(...)` exists for document-shaped file import convenience; like
+    `IMPORT DATABASE`, it is not the recommended default for bulk loads from Python.
 + Reserve `IMPORT DATABASE` for supported import formats, restore flows, and cases where
     you explicitly need that importer behavior from Python.
-+ For bulk graph ingest, use `GraphBatch` instead — its bulk `create_vertices()` and
++ For bulk graph ingest, use `GraphBatch` instead: its bulk `create_vertices()` and
     `new_edges()` methods run at or near Java speed; see Example 16 and the graph
     examples.
 
@@ -156,8 +160,7 @@ with arcadedb.create_database("./restored") as db:
 
 ### CSV
 
-Use CSV imports for flat tabular data, graph vertex/edge feeds, and time-series style
-ingestion.
+Use CSV imports for flat tabular data and graph vertex/edge feeds.
 
 Best fit:
 

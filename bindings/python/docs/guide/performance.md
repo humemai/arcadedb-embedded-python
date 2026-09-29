@@ -10,7 +10,7 @@ a fast bulk API for each of those cases.
 All numbers come from a controlled benchmark: the Java baseline runs on the
 **exact same JARs and bundled JRE that ship inside the wheel**, with the exact
 JVM flags the bindings inject, against identical on-disk databases and query
-vectors — only the caller differs. Result parity is asserted across languages
+vectors; only the caller differs. Result parity is asserted across languages
 (both sides must return the same rows/neighbors before a timing is accepted).
 Headline numbers were re-measured across 5 independent processes and verified
 on two machines. Full evidence, raw data, and reproduction steps:
@@ -33,7 +33,7 @@ Ratios are Python time / Java-native time (lower is better; 1.0× = parity).
 | INSERT / UPDATE / DELETE (per command, in tx) | **1.2–1.9×** | fixed per-command crossing on a ~5–30µs op |
 | Async command submission | **1.04×** | |
 
-The engine itself was never slower from Python — a raw JPype call into the
+The engine itself was never slower from Python: a raw JPype call into the
 engine costs the same as a Java call. All overhead lives in Python-side result
 materialization and per-operation crossings, which is what the bulk APIs
 eliminate.
@@ -43,12 +43,14 @@ eliminate.
 Rule of thumb: **iterate when you're selective or the result is small; use the
 bulk APIs when you're taking everything from a large result.**
 
-- `first()` — one row.
-- Direct iteration + `get()` — reading some columns, live records, or early
-  exit; ideal for small/medium results.
-- `to_columns()` / `to_dataframe()` — fastest bulk path into numpy/pandas,
+- `first()`: one row.
+- Direct iteration + `get()`: reading some columns, live records, or early
+  exit; ideal for small/medium results. If you exit early and keep the result
+  set around, close it (`with db.query(...) as rs:`); see
+  [`close()`](../api/results.md#close-none).
+- `to_columns()` / `to_dataframe()`: fastest bulk path into numpy/pandas,
   fully typed including `datetime64`.
-- `to_arrow()` — the same columnar buffer as `to_columns()`, read into a
+- `to_arrow()`: the same columnar buffer as `to_columns()`, read into a
   `pyarrow.Table` instead of numpy. Requires the `arrow` extra
   (`pip install "arcadedb-embedded[arrow]"`); returns `None` if pyarrow is
   absent, so callers can fall back. Two reasons to prefer it, only one of
@@ -77,9 +79,9 @@ bulk APIs when you're taking everything from a large result.**
   fine. The speedup is not Arrow being faster in general, it is the string
   decode and the null promotion not happening. Pick it for what your columns
   are, not by default.
-- `to_json_list()` / `iter_json_batches()` — bulk plain dicts (temporals as
+- `to_json_list()` / `iter_json_batches()`: bulk plain dicts (temporals as
   ISO strings).
-- `to_list()` — full Python-type fidelity (`datetime`, `Decimal`) when the
+- `to_list()`: full Python-type fidelity (`datetime`, `Decimal`) when the
   result is not huge.
 
 See the [Performance and Materialization](core/queries.md#performance-and-materialization)
@@ -93,7 +95,7 @@ Measured limits that remain by design, and the recommended pattern for each:
 |---|---|---|
 | Per-row materialization of huge results (`to_list`, per-row `.get()`) | 15–21× Java (measured before 26.10.1, where `to_list()` fetches rows in batches and is ~1.5x faster: 873 to 578 ms on a 10,000-row, nine-property scan) | Use `to_columns()`/`to_dataframe()` (~1.6×) or `to_json_list()` (~2.6×) for bulk consumption |
 | Threading plateaus around 4 threads (~45k qps vs Java's 107k at 8 threads) | GIL bounds Python's per-op share | Keep write concurrency at ~4 threads with `run_in_transaction(retries=)`, or use multiprocessing for more parallelism |
-| Async per-operation Python callbacks | ~104µs vs 5.5µs per completion | Not a bulk-write path: `async_executor().command(...)` silently dropped records above parallel level 1 before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625). Use `insert_many()` or `graph_batch()` for volume |
+| Async per-operation Python callbacks | ~104µs vs 5.5µs per completion | Not a bulk-write path. Before 26.10.1, `async_executor().command(...)` could silently drop records above parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see [Bulk Ingest Recommendation](import.md#bulk-ingest-recommendation). Use `insert_many()` or `graph_batch()` for volume |
 | Values pasted into the query text (`f"... WHERE id = {x}"`) | Indexed point lookup, 20k records: Cypher 0.87 ms vs 0.09 ms bound, SQL 0.48 ms vs 0.09 ms | Bind them: `?`/`:name` in SQL, `$name` in Cypher. Every distinct text is parsed again and churns the statement cache ([queries guide](core/queries.md#parameters)) |
 | Record mutation (`modify().set().save()`) | 16.5µs vs 3.4µs per record | Absolute cost is small; use SQL `UPDATE` or bulk ingest paths for volume |
 | List-typed columns convert per element | 14.6ms for a 10k-element LIST via `.get()` | Prefer typed array properties (e.g. `ARRAY_OF_FLOATS`) or `to_json_list()` |
@@ -102,15 +104,15 @@ Measured limits that remain by design, and the recommended pattern for each:
 
 | Question | Answer |
 |---|---|
-| Leaks under sustained load? | No — a 45-minute soak over 2.65M mixed operations shows post-GC heap flat from minute 1 to 45 |
+| Leaks under sustained load? | No: a 45-minute soak over 2.65M mixed operations shows post-GC heap flat from minute 1 to 45 |
 | Baseline footprint | ~121MB RSS after JVM start |
-| "`-Xmx4g` means it uses 4GB"? | No — `-Xmx` is a ceiling, not a reservation; the heap grows only as needed |
+| "`-Xmx4g` means it uses 4GB"? | No: `-Xmx` is a ceiling, not a reservation; the heap grows only as needed |
 | Bulk APIs (`to_json_list`, `to_columns`) | Transient peak scales with `batch_size` and is fully reclaimed; under a small heap they degrade gracefully (slower, no OOM) |
 
 ## Full report
 
-The complete evidence — before/after tables, layer-by-layer attribution,
+The complete evidence (before/after tables, layer-by-layer attribution,
 memory soak data, the completeness-verification sweep, and reproduction
-scripts — lives in
+scripts) lives in
 [`benchmarks/python-bindings/jpype_overhead/REPORT.md`](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/python-bindings/jpype_overhead/REPORT.md).
 Numbers were verified on two machines; expect ±30% drift on a loaded desktop.

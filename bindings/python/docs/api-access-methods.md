@@ -31,7 +31,7 @@ Direct JVM method calls via JPype for embedded/local runtime access.
 - **Transport**: Direct JVM method calls (no network)
 - **Performance**: Fastest (no serialization/network overhead)
 - **Use Cases**: Single-process applications, high-performance scenarios
-- **Setup**: Nothing beyond `pip install arcadedb-embedded` — no server, no Java installation
+- **Setup**: Nothing beyond `pip install arcadedb-embedded`: no server, no Java installation
 
 ### Example
 
@@ -177,7 +177,7 @@ finally:
     second **0.7 s**, every one after that **under 10 ms**. Undertow and the
     REST handlers class-load lazily and the root password is verified with a
     deliberately expensive KDF, and both land on request one. If you poll for
-    readiness after `start()`, give the first attempt a generous timeout — a
+    readiness after `start()`, give the first attempt a generous timeout; a
     tight one just turns warmup into a failure.
 
 ### Token-based authentication (optional)
@@ -258,7 +258,7 @@ then writes over HTTP and reads back embedded.
 Embedded access is faster than HTTP for the obvious reason: no socket, no JSON
 encode/decode, no auth check per call. How much faster depends entirely on your
 payload shape and result size, so this guide deliberately does not print a
-ratio — measure your own workload.
+ratio. Measure your own workload.
 
 What is worth knowing structurally:
 
@@ -305,7 +305,7 @@ In-process server mode ties the server's lifetime to your Python process. When
 that is wrong for you, run the standalone server instead:
 
 ```bash
-docker run -d --name arcadedb -p 2480:2480 -p 2424:2424 \
+docker run -d --name arcadedb -p 2480:2480 \
   -e JAVA_OPTS="-Darcadedb.server.rootPassword=playwithdata" \
   arcadedata/arcadedb:latest
 ```
@@ -315,7 +315,7 @@ TLS termination, or the wire protocols the wheel does not bundle (Mongo, gRPC,
 Gremlin). Postgres, Redis, and Bolt are bundled; see
 [Server Mode](guide/server.md#wire-protocols).
 To move data across, use [`export_database`](api/database.md) / SQL
-`IMPORT DATABASE` — the on-disk format and export archives are compatible.
+`IMPORT DATABASE`; the on-disk format and export archives are compatible.
 
 ## Common Misconceptions
 

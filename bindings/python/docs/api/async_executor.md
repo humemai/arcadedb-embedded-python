@@ -17,7 +17,7 @@
     per-command callback reported no error, and `wait_completion()` returned normally.
     Only the executor-wide `on_error` handler saw anything, one
     `ConcurrentModificationException` per rolled-back batch. At parallel level 1 no
-    records were lost. Filed upstream as `ArcadeData/arcadedb#7615`.
+    records were lost.
 
     Treat `command()` as a way to run individual statements asynchronously, not as a
     bulk-write path, at any parallel level. For bulk graph loading use
@@ -63,7 +63,7 @@ db = arcadedb.create_database("./mydb")
 async_exec = db.async_executor()
 
 # Configure (all methods return self for chaining)
-async_exec.set_parallel_level(1)       # 1 worker thread; above 1 command() loses records
+async_exec.set_parallel_level(1)       # 1 worker thread
 async_exec.set_commit_every(5000)      # Auto-commit every 5K ops
 async_exec.set_back_pressure(75)       # Queue back-pressure at 75%
 
@@ -94,11 +94,15 @@ All configuration methods return `self` for method chaining.
 async_exec.set_parallel_level(level: int) -> AsyncExecutor
 ```
 
-Set number of parallel worker threads (1-16).
+Set the number of parallel worker threads, at least 1 (no upper cap; before 2026-09-29 the package refused anything above 16). The engine's default, `arcadedb.asyncWorkerThreads`, is the number of cores minus 1 (half the cores minus 1 under the `high-performance` profile). Each worker owns a share of a type's buckets, so a type loaded in parallel wants as many buckets as there are workers, or a multiple.
 
 **Parameters:**
 
 - `level` (int): Number of worker threads
+
+**Raises:**
+
+- `ValueError`: If `level` is below 1
 
 **Returns:**
 
@@ -106,19 +110,19 @@ Set number of parallel worker threads (1-16).
 
 **Guidelines:**
 
-- **Default**: Number of CPU cores
+- **Default**: `arcadedb.asyncWorkerThreads`, the number of available cores minus 1
+  (at least 1)
 - Raises `ValueError` if `level` is not between 1 and 16
-- Any level above 1 is what triggered the record loss described in the warning at the top
-  of this page (#7615, fixed in #7625) for work submitted through `command()`. Keep the
-  level at 1 when
-  the executor runs SQL commands that write.
+- Before 26.10.1, any level above 1 lost records submitted through `command()` (the
+  warning at the top of this page; #7615, fixed in #7625). On an engine older than
+  26.10.1, keep the level at 1 when the executor runs SQL commands that write.
 - `create_record`, `append_samples`, `Database.insert_many`, and `Database.graph_batch`
-  are unaffected and can run above level 1.
+  were not affected by that loss and can run above level 1.
 
 **Example:**
 
 ```python
-# Single worker: required for correctness of command() writes
+# Single worker
 async_exec = db.async_executor().set_parallel_level(1)
 ```
 
@@ -143,8 +147,8 @@ Set auto-commit batch size. Commits transaction every N operations.
 
 **Guidelines:**
 
-- Set a non-zero value whenever the executor writes, so queued operations are grouped
-  into transactions instead of committing one at a time.
+- The default is 10,240 operations per commit (`arcadedb.asyncTxBatchSize`), so queued
+  writes are already grouped into transactions without calling this.
 - A larger value lowers commit overhead and raises the amount of work a single
   rollback discards; a smaller value does the opposite.
 - This is a commit cadence for queued async work. It does not make `command()` usable as
@@ -325,7 +329,10 @@ Execute an async command (INSERT/UPDATE/DELETE/DDL). The callback is optional.
 - `command_text` (str): Command string
 - `callback` (Optional[Callable]): Optional callback invoked with each result row
 - `args` (Optional[Sequence]): Positional parameters (use `?` placeholders)
-- `error_callback` (Optional[Callable]): Optional per-operation error callback
+- `error_callback` (Optional[Callable]): Optional per-operation error callback. A
+  statement's own failure goes only here: it never reaches the executor-wide
+  [`on_error`](#on_error). Without an `error_callback` the failure is not raised
+  anywhere, and `wait_completion()` returns normally
 - `**params`: Named parameters (use `:name` placeholders)
 
 !!! note "args vs. params"
@@ -420,8 +427,8 @@ sample (ArcadeDB issue #5474, where the boxed path allocated a dead `Double`
 per value only to unbox it again). Each column still crosses the FFI exactly
 once: the per-row loop runs Java-side, because filling the batch from Python
 would cost one JNI call per value and lose far more than the boxing costs.
-Measured 1.38x faster on a 300k-sample, three-field ingest. It needs an engine
-that ships the batch API, so the default stays on the `Object[]` path.
+Measured 1.38x faster on a 300k-sample, three-field ingest. The default
+(`primitive=False`) stays on the `Object[]` path.
 
 **Example:**
 
@@ -454,6 +461,15 @@ once per batch instead of per document.
 
 - `document` (Document): Unsaved document from `db.new_document`
 - `callback` (callable, optional): Invoked with the created record
+
+!!! warning "A rejected record is not raised"
+    `create_record()` registers no per-record error callback. A record the writers
+    reject (a duplicate key, or a batch abandoned at a failed commit) is reported only to
+    the executor-wide [`on_error`](#on_error) handler, if one is registered (a failure of
+    the record itself is also logged); `create_record()` and `wait_completion()` return
+    normally. Register
+    `on_error` before the load, or use `db.insert_many(..., parallel=True)`, which raises
+    `ArcadeDBError` when the writers reject a record.
 
 **Example:**
 
@@ -609,8 +625,15 @@ async_exec.command(
 async_exec.on_error(callback: Callable[[Exception], None]) -> AsyncExecutor
 ```
 
-Set a global error callback for all operations. Called for every failed operation if no
-per-operation error callback was provided.
+Set a global error callback. It receives:
+
+- the failure of a record operation (`create_record`, for example), including one that
+  also has a per-record callback;
+- a batch-level failure, such as a failed batch commit, whether or not per-operation
+  callbacks exist.
+
+It does not receive a `command()` or `query()` statement's own failure: that goes only to
+the statement's `error_callback`, and is not raised anywhere when there is none.
 
 **Parameters:**
 
@@ -810,15 +833,17 @@ db.close()
 
 ## Best Practices
 
-### 0. Set a Commit Cadence
+### 0. Know the Commit Cadence
 
 ```python
 async_exec = db.async_executor()
-async_exec.set_commit_every(500)  # Ensures async writes are persisted transactionally
+print(async_exec.get_commit_every())  # 10240 unless arcadedb.asyncTxBatchSize says otherwise
 ```
 
-- Configure `set_commit_every()` for every async workload so writes are grouped into transactions.
-- Tune the batch size to balance commit overhead and memory.
+- Queued writes are committed in batches of `get_commit_every()` operations (default
+  10,240). Values below 1 raise `ValueError`.
+- Change it with `set_commit_every()` only to trade commit overhead against the work a
+  single rollback discards.
 
 ### 1. Always Close the Executor
 
@@ -843,10 +868,10 @@ async_exec.close()
 async_exec.close()  # Operations may be lost!
 ```
 
-### 3. Keep `command()` Submissions on One Worker
+### 3. Before 26.10.1, Keep `command()` Writes on One Worker
 
 ```python
-# ✅ Good: async SQL writes on a single worker (#7615)
+# ✅ Good on an engine older than 26.10.1: async SQL writes on a single worker (#7615)
 async_exec.set_parallel_level(1)
 async_exec.command("sql", "DELETE FROM LogEntry WHERE timestamp < :cutoff",
                    cutoff=cutoff_date)
@@ -889,10 +914,10 @@ async_exec.set_commit_every(20000)
 async_exec.set_transaction_use_wal(False)
 ```
 
-Raising `set_parallel_level` is not the fix here: above 1 it lost records submitted
-through `command()` before 26.10.1 (#7615, fixed in #7625). If the slow workload is a
-bulk load, move it to
-`db.insert_many(...)` or `db.graph_batch(...)`.
+Raising `set_parallel_level` is not the fix for a `command()` workload: `command()` is
+not a bulk-write path, and above level 1 it lost records before 26.10.1 (#7615, fixed in
+#7625). If the slow workload is a bulk load, move it to `db.insert_many(...)` or
+`db.graph_batch(...)`.
 
 ### Operations Not Completing
 
@@ -909,5 +934,5 @@ if async_exec.is_pending():
 
 - **[Transactions API](transactions.md)** - Transaction management
 - **[Database API](database.md)** - Database operations
-- **[Example 05: CSV Import](../examples/05_csv_import_graph.md)** - Real-world usage
+- **[Example 22: numpy Bulk I/O](../examples/22_numpy_bulk_io.md)** - `append_samples` and a parallel `insert_many` in practice
 - **[Testing Overview](../development/testing/overview.md)** - Testing patterns

@@ -1,4 +1,4 @@
-# 24 - Transactions, Database Commands and Time-Series Writes over HTTP
+# 24 - Transactions, Database Commands, and Time-Series Writes over HTTP
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/24_server_http_transactions_timeseries.py)
 
@@ -18,8 +18,10 @@ because they are the server's own HTTP API:
 
 ## Run
 
+From `bindings/python/examples`:
+
 ```bash
-uv run python examples/24_server_http_transactions_timeseries.py
+python 24_server_http_transactions_timeseries.py
 ```
 
 Options: `--server-root` to keep the server directory, `--password`,

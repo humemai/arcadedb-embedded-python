@@ -17,11 +17,6 @@ on:
       - 'bindings/python/**'
       - '.github/workflows/test-python-bindings.yml'
 
-  # Run after release workflow completes
-  workflow_run:
-    workflows: ["Release"]
-    types: [completed]
-
   # Allow being called by other workflows (e.g., release workflow)
   workflow_call:
     inputs:

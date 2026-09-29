@@ -55,8 +55,8 @@ python download_data.py movielens-small # movielens small dataset
 
 **Two dataset sizes available:**
 
-- **movielens-large**: ~86,000 movies, ~33M ratings (~265 MB) - Realistic performance testing
-- **movielens-small**: ~9,700 movies, ~100,000 ratings (~1 MB) - Quick testing
+- **movielens-large**: ~86,000 movies, ~33M ratings (~265 MB download) - Realistic performance testing
+- **movielens-small**: ~9,700 movies, ~100,000 ratings (~1 MB download) - Quick testing
 
 Empty cells in the CSV files are imported as SQL NULL. After each file is loaded the
 example counts NULLs in the columns that can be empty:
@@ -77,8 +77,8 @@ Each dataset has 4 CSV files imported into 4 document types:
 | `links.csv` | movieId, imdbId, tmdbId | `Link` |
 | `tags.csv` | userId, movieId, tag, timestamp | `Tag` |
 
-**movielens-large**: ~86K movies, ~33M ratings (~265 MB).
-**movielens-small**: ~9K movies, ~100K ratings (~1 MB).
+**movielens-large**: ~86K movies, ~33M ratings (~265 MB download).
+**movielens-small**: ~9K movies, ~100K ratings (~1 MB download).
 
 For quick testing, use: `python download_data.py movielens-small`
 
@@ -91,8 +91,8 @@ python 04_csv_import_documents.py
 # Use small dataset for quick testing
 python 04_csv_import_documents.py --dataset movielens-small
 
-# Configure parallel threads and batch size
-python 04_csv_import_documents.py --parallel 8 --batch-size 10000
+# Configure the batch size
+python 04_csv_import_documents.py --batch-size 10000
 
 # Export database for reproducibility
 python 04_csv_import_documents.py --export
@@ -104,14 +104,14 @@ python 04_csv_import_documents.py --help
 **Key options:**
 
 - `--dataset {movielens-small,movielens-large}` - Dataset size (default: movielens-large)
-- `--parallel PARALLEL` - Number of parallel import threads (default: auto-detect)
+- `--parallel PARALLEL` - `parallel` option for the `IMPORT DATABASE` round trip; it applies
+  only with `--export` and does not affect the CSV ingest (unset by default)
 - `--batch-size BATCH_SIZE` - Records per commit batch (default: 5000)
 - `--export` - Export database to JSONL after import
 - `--db-name DB_NAME` - Custom database name (default: movielens_{size}_db)
 
 **Recommendations:**
 
-- Parallel threads: 4-8 for best performance (auto-detected by default)
 - Batch size: 5000-50000 (larger = faster imports, more memory)
 - Export: Use `--export` to create reproducible benchmark databases
 
@@ -178,19 +178,9 @@ Read-your-writes is restored after the ratings import (`db.set_read_your_writes(
 
 The ingest itself runs in batched transactions inside
 `import_csv_documents_via_sql(...)`, described in the next section. WAL stays on
-throughout, and nothing here goes through the async executor.
-
-!!! note "Removed on 2026-09-15: a WAL-off async executor configuration"
-
-    Until 2026-09-15 these lines also called `db.async_executor()` and set
-    `set_commit_every(args.batch_size)` and `set_transaction_use_wal(False)` on it.
-    Those settings apply only to work submitted to the executor, and this ingest never
-    submitted any, so they changed nothing: the load always ran in batched
-    transactions with WAL enabled. They were deleted rather than made real, because
-    the executor's SQL command path silently discarded records above parallel level 1
-    before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625). For bulk document
-    loading use `db.insert_many(...)`
-    or a plain batched transaction, as this example does.
+throughout, and nothing here goes through the async executor. For bulk document
+loading from Python, `db.insert_many(...)` is the recommended path; see
+[Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation).
 
 ### Import CSV files with bulk INSERT
 
@@ -358,7 +348,7 @@ LSMTreeIndex
 
 | Type | Storage Size | Comparison Speed | Best For |
 |------|--------------|------------------|----------|
-| BYTE | 1 byte | ⚡ Very fast | Flags, small counts (0-255) |
+| BYTE | 1 byte | ⚡ Very fast | Flags, small counts (-128 to 127) |
 | SHORT | 2 bytes | ⚡ Very fast | Medium numbers (-32K to 32K) |
 | INTEGER | 4 bytes | ⚡ Very fast | IDs, standard numbers (up to 2B) |
 | LONG | 8 bytes | ⚡ Very fast | Large IDs, timestamps |
@@ -376,7 +366,8 @@ LSMTreeIndex
 
 - Smaller types = more keys per page = better cache performance
 - Fixed-size types = faster comparison = better query speed
-- Choose INTEGER for most IDs (handles 2 billion values, compact, fast)
+- INTEGER is the compact choice for IDs that fit in 32 bits; this example maps every
+  integer-like column to LONG so that no value can overflow
 
 ## Analysis Queries
 

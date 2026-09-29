@@ -6,6 +6,8 @@ A folder named `java/` or `com/` must not change what a query returns.
 
 Until 2026-09-23 the type converter resolved Java classes through JPype's `java` import hook, which resolves the top-level name through `sys.path` like any Python import. A `java/` directory on the path shadowed it, every typed conversion was skipped, and a Java String came back as a list of characters, with no error.
 
+There is 1 test, which collects as 2 cases because it is parametrized.
+
 ## Test Cases
 
 ### 1) a java or com folder on the path does not break conversion

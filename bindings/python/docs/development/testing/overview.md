@@ -6,7 +6,7 @@ The ArcadeDB Python bindings have a comprehensive test suite covering all major 
 
 !!! success "Test Results"
     - **Current package**: the full suite passes cleanly
-    - Test counts evolve over time; run `pytest -v -rs` for the latest totals
+    - Test counts evolve over time; run `uv run pytest -v -rs` for the latest totals
     - Environment-specific skips may vary depending on optional components
 
 ## What's Tested
@@ -18,14 +18,14 @@ The test suite covers:
 - ✅ **Concurrency patterns** - File locking, thread safety, multi-process
 - ✅ **Graph operations** - Vertices, edges, traversals
 - ✅ **Query languages** - SQL, OpenCypher
-- ✅ **Vector search** - HNSW (JVector) based Vector indexes, similarity search
-- ✅ **Data import** - CSV with batch commits and type inference
+- ✅ **Vector search** - JVector-based `LSM_VECTOR` indexes, similarity search
+- ✅ **Data import** - SQL `IMPORT DATABASE` across CSV, XML, Neo4j, Word2Vec, and RDF, plus the `import_documents()` wrapper
 - ✅ **Graph ingest helper** - `GraphBatch` buffering and flush behavior
 - ✅ **Geospatial SQL** - `geo.within`, `geo.intersects`, null/boundary semantics
 - ✅ **Time series SQL** - `CREATE TIMESERIES TYPE`, range queries, bucketing
 - ✅ **Materialized views** - create, refresh, alter, drop lifecycle
 - ✅ **Graph algorithms** - `shortestPath`, `dijkstra`, `astar`
-- ✅ **HASH schema indexes** - create, discover, idempotent drop behavior
+- ✅ **HASH schema indexes** - create, discover, idempotent `get_or_create_index`, and force drop
 - ✅ **Unicode support** - International characters, emoji
 - ✅ **Schema introspection** - Querying database metadata
 - ✅ **Type conversions** - Python/Java type mapping
@@ -35,7 +35,7 @@ The test suite covers:
 
 ### Install Test Dependencies
 
-Nothing to install — test dependencies come from the repo-root uv project and
+Nothing to install: test dependencies come from the repo-root uv project and
 are synced automatically by `uv run`.
 
 ### Run All Tests
@@ -48,37 +48,37 @@ uv run pytest
 uv run pytest -v
 
 # With coverage report
-pytest --cov=arcadedb_embedded --cov-report=html
+uv run pytest --cov=arcadedb_embedded --cov-report=html
 ```
 
 ### Run Specific Tests
 
 ```bash
-# Run a specific test file
-pytest tests/test_core.py
+# Run a specific test file (paths are relative to the repository root)
+uv run pytest bindings/python/tests/test_core.py
 
 # Run a specific test function
-pytest tests/test_core.py::test_database_creation
+uv run pytest bindings/python/tests/test_core.py::test_database_creation
 
 # Run tests matching a keyword
-pytest -k "transaction"
-pytest -k "server"
-pytest -k "concurrency"
+uv run pytest -k "transaction"
+uv run pytest -k "server"
+uv run pytest -k "concurrency"
 
 # Run with output (see print statements)
-pytest -v -s
+uv run pytest -v -s
 ```
 
 ## Test Files Overview
 
-Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs`.
+Test counts evolve over time. For the latest per-file counts, run `uv run pytest -v -rs`.
 
 | Test File | Description |
 | --------- | ----------- |
 | [`test_async_executor.py`](test-async-executor.md) | Async command/query execution, callback behavior, and exact command-path counts at parallel levels 1 and 4 |
 | [`test_bulk_insert.py`](test-bulk-insert.md) | Recommended bulk paths land every row, plus `Database.insert_many`, `AsyncExecutor.create_record`, vector columns, and numpy `append_samples` bulk ingest |
 | [`test_core.py`](test-core.md) | Core database operations, CRUD, transactions, queries |
-| [`test_database_utils.py`](test-database-utils.md) | Database utility helpers and initialization behavior |
+| [`test_database_utils.py`](test-database-utils.md) | `count_type`, `is_transaction_active`, and `drop`, plus error handling on a closed database |
 | [`test_docs_examples.py`](test-docs-examples.md) | Executes representative Python snippets from the documentation site |
 | [`test_exporter.py`](test-exporter.md) | Database export formats and CSV result export helpers |
 | [`test_graph_api.py`](test-graph-api.md) | Graph wrapper behavior for vertices, edges, and traversal helpers |
@@ -87,7 +87,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_numpy_support.py`](test-numpy-support.md) | NumPy integration and array conversion behavior |
 | [`test_resultset.py`](test-resultset.md) | Result and ResultSet iteration, accessors, and export helpers |
 | [`test_schema.py`](test-schema.md) | Schema, property, and index management behavior |
-| [`test_server.py`](test-server.md) | Server mode, HTTP API, configuration |
+| [`test_server.py`](test-server.md) | Server lifecycle, configuration, and databases through the Java API (no HTTP calls) |
 | [`test_concurrency.py`](test-concurrency.md) | File locking, thread safety, multi-process behavior |
 | [`test_server_patterns.py`](test-server-patterns.md) | Best practices for embedded + server mode |
 | [`test_import_database.py`](test-importer.md) | SQL `IMPORT DATABASE` scenarios and format coverage |
@@ -101,7 +101,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_graph_algorithms_sql.py`](test-graph-algorithms-sql.md) | SQL graph algorithm runtime coverage |
 | [`test_hash_index_schema.py`](test-hash-index-schema.md) | HASH index schema API behavior |
 | [`test_jvm_args.py`](test-jvm-args.md) | JVM args handling |
-| [`test_transaction_config.py`](test-transaction-config.md) | Transaction configuration and rollback semantics |
+| [`test_transaction_config.py`](test-transaction-config.md) | WAL flush, read-your-writes, and auto-transaction settings |
 | [`test_type_conversion.py`](test-type-conversion.md) | Python/Java type conversion coverage |
 | [`test_vector.py`](test-vector.md) | Vector API and nearest-neighbor search behavior |
 | [`test_vector_params_verification.py`](test-vector-params-verification.md) | Vector param validation |
@@ -114,7 +114,7 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 | [`test_jvm_payload.py`](test-jvm-payload.md) | A Python list must never be what crosses into the JVM |
 | [`test_resultset_arrow.py`](test-resultset-arrow.md) | Tests for ResultSet.to_arrow(). |
 | [`test_runtime_cache.py`](test-runtime-cache.md) | The dev-mode runtime cache must follow the wheel it was extracted from |
-| [`test_server_http_endpoints.py`](test-server-http-endpoints.md) | The three server HTTP features the bindings document but do not wrap: multi-request transactions, server database commands, and line-protocol time-series writes |
+| [`test_server_http_endpoints.py`](test-server-http-endpoints.md) | The three server HTTP features the bindings document but do not wrap (multi-request transactions, server database commands, and line-protocol time-series writes), plus a projection read over HTTP |
 | [`test_server_packaging.py`](test-server-packaging.md) | The server stack is actually IN the wheel, and the API is reachable. |
 | [`test_server_wire_protocols.py`](test-server-wire-protocols.md) | The wire protocols the wheel bundles are actually reachable. |
 | [`test_sparse_quantization_compact.py`](test-sparse-quantization-compact.md) | Sparse index weight precision and the settle step, plus the dense search beam argument |
@@ -128,23 +128,23 @@ Test counts evolve over time. For the latest per-file counts, run `pytest -v -rs
 
 ```bash
 # Run only failed tests from last run
-pytest --lf
+uv run pytest --lf
 ```
 
 ### Debugging Tests
 
 ```bash
 # Stop on first failure
-pytest -x
+uv run pytest -x
 
 # Drop into debugger on failure
-pytest --pdb
+uv run pytest --pdb
 
 # Show local variables on failure
-pytest -l
+uv run pytest -l
 
 # Verbose with full output
-pytest -vv -s
+uv run pytest -vv -s
 ```
 
 ## Test Markers
@@ -163,13 +163,13 @@ suite uses:
 
 ```bash
 # Run only the tests marked server
-pytest -m server
+uv run pytest -m server
 
 # Run only OpenCypher tests (a keyword match, not a marker)
-pytest -k cypher
+uv run pytest -k cypher
 
 # Run all except the tests marked server
-pytest -m "not server"
+uv run pytest -m "not server"
 ```
 
 `-m "not server"` skips only the tests marked `server`. Other tests that start a server still
@@ -177,9 +177,9 @@ run: `test_server_patterns.py`, `test_server_http_endpoints.py`, and `test_serve
 (marked `server_wire`, not `server`). To leave out every server-starting test:
 
 ```bash
-pytest -m "not server and not server_wire" \
-  --ignore=tests/test_server_patterns.py \
-  --ignore=tests/test_server_http_endpoints.py
+uv run pytest -m "not server and not server_wire" \
+  --ignore=bindings/python/tests/test_server_patterns.py \
+  --ignore=bindings/python/tests/test_server_http_endpoints.py
 ```
 
 ## Expected Output

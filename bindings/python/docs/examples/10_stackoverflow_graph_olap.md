@@ -186,12 +186,16 @@ The source creates unique `Id` indexes on all six vertex types before the query 
 - ArcadeDB graph preload now uses `GraphBatch` for the initial node and edge load,
   driven by the configured `--threads` value
 - `GraphBatch` is the repository's recommended bulk graph ingest path from Python
-- ArcadeDB query execution is cypher-only in this example path
+- ArcadeDB query execution is Cypher-only in this example path: use `--db arcadedb_cypher`.
+  `arcadedb_sql` is still listed as a backend, but the query phase raises
+  "ArcadeDB SQL mode is disabled for Example 10"
 - ArcadeDB GAV usage is opt-in through `--use-gav`; when enabled, the benchmark waits
   for the analytical view to reach `READY` before measuring the query suite
 - Neo4j runs execute the same OLAP query suite through a Dockerized server plus Python
   driver wrapper, with client/server resource accounting derived from `--server-fraction`
 - Traversal expectations should be interpreted as directed
+- The ArcadeDB `GraphBatch` load passes `bidirectional=False`, so each edge is stored
+  on its source vertex only; the engine default stores both directions
 
 ## Supported Backends
 
@@ -205,6 +209,14 @@ The source creates unique `Id` indexes on all six vertex types before the query 
 - `python_memory`
 
 ## Run
+
+!!! note "The script re-launches itself in Docker"
+    When `docker` is on `PATH`, the script re-runs itself in a container
+    (`--docker-image`, default `python:3.12-slim`) and applies the `--mem-limit`
+    budget to the container; for ArcadeDB it installs the wheel from
+    `bindings/python/dist` and runs natively if none is there. On Windows, under GitHub
+    Actions, or without `docker` it runs natively, and no container enforces
+    `--mem-limit`.
 
 From `bindings/python/examples`:
 

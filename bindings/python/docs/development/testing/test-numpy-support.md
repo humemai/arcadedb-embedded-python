@@ -45,18 +45,26 @@ Tests automatic conversion of NumPy arrays in `db.query()`.
 
 **What it tests:**
 
-- Passing a `np.float32` array as a bound `?` parameter in a `WHERE` clause
-- That the call succeeds without raising
+- Inserting a `np.float32` array as the single bound `?` parameter, then asserting the stored vector is close to `[0.1, 0.2, 0.3]` (`np.allclose`)
+- Passing the same array as a bound `?` parameter in a `WHERE` clause; this part asserts only that the call does not raise, not what it returns
 
 **Pattern:**
 
 ```python
 with db.transaction():
-    db.command("sql", "INSERT INTO VectorData SET vector = ?", [0.1, 0.2, 0.3])
+    db.command(
+        "sql",
+        "INSERT INTO VectorData SET vector = ?",
+        np.array([0.1, 0.2, 0.3], dtype=np.float32),
+    )
 
 vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
 db.query("sql", "SELECT FROM VectorData WHERE vector = ?", vec)
 ```
+
+The insert binds a NumPy array on purpose: a bare Python list as the only argument
+is the positional-parameter array itself, so `[0.1, 0.2, 0.3]` would bind
+`vector = 0.1`.
 
 ---
 
@@ -107,7 +115,7 @@ vertex.save()
     | `embedding.tolist()` | 17.44 s | 1,147 vertices/s |
     | `to_java_float_array(embedding)` | **0.95 s** | **21,090 vertices/s** |
 
-    That is **18.4x**, and it is pure conversion overhead -- both store
+    That is **18.4x**, and it is pure conversion overhead: both store
     identical values. Passing the raw NumPy array to `set()` does not work
     (`TypeError`); `set()` needs the Java array, which is what
     `to_java_float_array` returns and what it accepts NumPy for directly.
@@ -130,7 +138,7 @@ import numpy as np
 # Generate query vector
 query = np.random.rand(384).astype(np.float32)
 
-# Pass the NumPy array straight through -- db.query() converts it
+# Pass the NumPy array straight through; db.query() converts it
 results = db.query(
     "sql",
     "SELECT vid FROM (SELECT expand(vectorNeighbors(?, ?, ?, ?))) ORDER BY distance",
@@ -141,8 +149,9 @@ results = db.query(
 !!! note "`.tolist()` is not the conversion step here either"
 
     `db.query()` and `db.command()` accept a NumPy array as a bound parameter
-    directly -- that is exactly what `test_numpy_array_conversion_in_command`
-    and `test_numpy_array_conversion_in_query` above assert. A Python list is
+    directly: `test_numpy_array_conversion_in_command` and
+    `test_numpy_array_conversion_in_query` above bind one and read the stored
+    vector back. A Python list is
     not a drop-in for it, and it raises no error either. When the list is the
     only argument, it is the positional-parameter array itself, one element
     per `?` (`test_single_list_arg_is_positional_param_array` in
@@ -201,16 +210,17 @@ vertex.save()
 ### OpenAI Embeddings
 
 ```python
-import openai
 import numpy as np
+from openai import OpenAI
 
-# Get embedding from OpenAI
-response = openai.Embedding.create(
+# Get embedding from OpenAI (openai>=1.0 client)
+client = OpenAI()
+response = client.embeddings.create(
     input="Hello world",
-    model="text-embedding-ada-002"
+    model="text-embedding-3-small"
 )
 
-embedding = np.array(response['data'][0]['embedding'], dtype=np.float32)
+embedding = np.array(response.data[0].embedding, dtype=np.float32)
 
 # Store
 vertex.set("embedding", to_java_float_array(embedding))
@@ -244,14 +254,14 @@ for i, vec in enumerate(dense_vectors):
    accepts NumPy directly: 18.4x on the measurement above, and the gap widens
    with the dimension
 4. **Numpy for math** - Use NumPy for vector operations
-5. **HNSW (JVector) for search** - Enable similarity search
+5. **`LSM_VECTOR` (JVector) for search** - Enable similarity search
 
 ## Key Takeaways
 
 1. **Convert with `to_java_float_array()`** - before storing, never `.tolist()`
 2. **Convert back** - Use `np.array()` after retrieving
 3. **Prefer float32** - Best for embeddings
-4. **Use HNSW (JVector)** - Enable fast similarity search
+4. **Use `LSM_VECTOR` (JVector)** - Enable fast similarity search
 5. **Works with ML libs** - Direct integration
 
 ## See Also

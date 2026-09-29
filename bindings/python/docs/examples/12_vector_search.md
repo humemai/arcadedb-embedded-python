@@ -11,7 +11,7 @@ Example 12 is the search-only vector benchmark.
 
 - It reuses the backend output produced by Example 11.
 - It loads query ids and full top-k ground truth from the benchmark dataset.
-- It sweeps explicit `ef_search` values across the exact-search backends.
+- It sweeps explicit `ef_search` values across the backends that expose one.
 - It reports recall and latency for each backend.
 
 ## Supported Backends
@@ -44,6 +44,12 @@ python 12_vector_search.py \
   --mem-limit 4g
 ```
 
+When `docker` is on `PATH`, the script re-runs itself in a container (`--docker-image`,
+with a per-backend default) with the repository mounted. For `arcadedb_sql` the container
+installs the wheel from `bindings/python/dist`; if no wheel is there, the script runs
+natively. It also runs natively on Windows, under GitHub Actions, and when it is already
+inside a container.
+
 ## Shared Evaluation Logic
 
 The example reads the evaluation set with two helpers.
@@ -62,25 +68,30 @@ ground_truth[qid] = [int(entry["doc_id"]) for entry in obj.get("topk", [])]
 
 ### ef_search Sweep
 
-The benchmark now sweeps explicit `ef_search` values instead of normalizing an
-intermediate factor.
+The benchmark sweeps the explicit `ef_search` values given by `--ef-search-values`.
 
-## Exact Search Operations By Backend
+## Search Operations By Backend
 
 ### ArcadeDB
 
-The ArcadeDB benchmark path is intentionally SQL-only. For each query it issues:
+The ArcadeDB benchmark path is intentionally SQL-only. For each query it issues one
+statement with every value bound as a parameter (the index name, the query vector, `k`,
+and `ef_search`) and reads the row with `.first()`:
 
-```sql
-SELECT vectorNeighbors('{index_name}', [q1, q2, ...], {k}, {ef_search}) as res
+```python
+row = db.query(
+    "sql",
+    "SELECT vectorNeighbors(?, ?, ?, ?) as res",
+    index_name,
+    queries[q_idx],
+    int(k),
+    int(ef_search),
+).first()
 ```
 
-where `[q1, q2, ...]` is the literal query vector.
-
-ArcadeDB exact search now exposes `ef_search` directly through SQL, so the benchmark can
-compare the same SQL surface that normal application code should prefer.
-
-The CLI exposes this sweep as `--ef-search-values`.
+`vectorNeighbors` is an approximate HNSW search, and its fourth argument is `ef_search`,
+which `--ef-search-values` sweeps. This is the same SQL surface that application code
+should use.
 
 ### FAISS
 
@@ -227,6 +238,5 @@ Some backends also report normalized runtime knobs such as:
 
 ## Notes
 
-- Example 12 now sweeps explicit `ef_search` values for the backends that expose them.
 - Client-server backends report combined client and server RSS.
 - The `bruteforce` backend exists to provide an exact-search reference path inside the benchmark harness.

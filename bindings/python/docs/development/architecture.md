@@ -37,7 +37,7 @@ arcadedb_embedded/
 
 **`__init__.py`**
 
-- Central export surface (Database, AsyncExecutor, GraphBatch, Schema, Exporter, VectorIndex, converters, import helpers)
+- Central export surface (Database, AsyncExecutor, GraphBatch, Schema, VectorIndex, the `export_database` / `export_to_csv` functions, converters, import helpers)
 - Version metadata
 
 **`_logging.py`**
@@ -50,7 +50,7 @@ arcadedb_embedded/
 - Prefers programmatic configuration (`start_jvm(...)`, `jvm_kwargs`)
 - Supports explicit heap and common-pool thread limits via `heap_size` and `common_pool_parallelism`
 - Supports `ARCADEDB_JVM_ARGS` / `ARCADEDB_JVM_ERROR_FILE` as fallback
-- Refuses to start twice in a process
+- Starts once per process: a later `start_jvm()` with no settings, or the same ones, joins the running JVM; different settings raise `ArcadeDBError`
 
 **`core.py`**
 
@@ -117,18 +117,14 @@ arcadedb_embedded/
 
 ### Java Bridge Jar
 
-Alongside the engine JARs, the wheel ships `arcadedb-python-bridge.jar` —
+Alongside the engine JARs, the wheel ships `arcadedb-python-bridge.jar`:
 seven small Java helpers (`RowBatcher`, `RowAccess`, `ColumnBatcher`,
 `DocumentBatcher`, `EdgeBatcher`, `VertexBatcher`, and `TimeSeriesBatcher`, sources in
 `bindings/python/src/java/com/arcadedb/python/`)
 that move per-row/per-record loops to the Java side so bulk operations cost
-one JPype crossing per batch instead of several per row. It backs
-`to_list()` and `Result.to_dict()`, `to_json_list()`, `to_columns()`/`to_dataframe()`, `insert_many()`,
-`GraphBatch.new_edges()`, the `create_vertices()` bulk path, and
-`export_to_csv()`; every caller falls back to pure JPype if the jar is
-absent. `AsyncExecutor.append_samples()` also uses it (`DocumentBatcher` for
-numpy columns, `TimeSeriesBatcher` for `primitive=True`) and has no fallback. See [Java Bridge](bridge.md) for
-details.
+one JPype crossing per batch instead of several per row. See
+[Java Bridge](bridge.md) for which Python APIs use it and which of them have no
+pure-JPype fallback.
 
 ## JPype Integration
 
@@ -236,13 +232,13 @@ numpy_array = to_python_array(java_array)
 
 | Python Type | Java Type | Notes |
 |-------------|-----------|-------|
-| `str` | `String` | Manual with `JString()` |
-| `int` | `Integer`/`Long` | Automatic |
-| `float` | `Float`/`Double` | Automatic |
+| `str` | `String` | Automatic |
+| `int` | `Long` | Automatic |
+| `float` | `Double` | Automatic |
 | `bool` | `Boolean` | Automatic |
 | `None` | `null` | Automatic |
-| `list` | `ArrayList` | Manual conversion |
-| `dict` | `HashMap` | Manual conversion |
+| `list` | `ArrayList` | Converted by `convert_python_to_java()` (used by `set()` and bound parameters) |
+| `dict` | `HashMap` | Converted by `convert_python_to_java()` |
 | `np.ndarray` | `float[]` | via `to_java_float_array()` |
 | `np.ndarray` (integer dtype) | `int[]` | via `to_java_int_array()` |
 
@@ -267,11 +263,10 @@ try:
 finally:
     db.close()
 
-# Better: Context manager
-db = arcadedb.open_database("./mydb")
-with db.transaction():
-    # Work with database
-db.close()
+# Better: Context manager (closes the database on exit)
+with arcadedb.open_database("./mydb") as db:
+    with db.transaction():
+        ...  # Work with database
 
 # Long-running processes: Periodic GC
 import gc
@@ -335,13 +330,16 @@ Result (results.py)
 
 **Database:**
 
-- `Database` instances are **NOT thread-safe**
-- Each thread needs its own `Database` instance
-- Transactions are thread-local
+- One `Database` instance can be shared by the threads of a process; open it once and
+  pass it around rather than opening it again per thread
+- Transactions are per thread: each thread's `db.transaction()` is its own
+- Two threads that update the same record can conflict: the losing commit raises
+  `ArcadeDBError` with `ConcurrentModificationException` in the message, and the usual
+  answer is to retry that transaction
 
-**Async executor:**
-
-- `AsyncExecutor` is thread-safe; it runs callbacks on Java worker threads
+`tests/test_concurrency.py` covers this: `test_thread_safety` runs four threads against
+one shared `Database`, and `test_oltp_mixed_workload_threads` mixes reads with retried
+updates. See [Concurrency Tests](testing/test-concurrency.md).
 
 **Example:**
 
@@ -349,72 +347,40 @@ Result (results.py)
 import threading
 import arcadedb_embedded as arcadedb
 
-def worker(db_path, worker_id):
-    """Worker thread with own database instance."""
-    db = arcadedb.open_database(db_path)
+db = arcadedb.open_database("./mydb")  # one instance, shared (has a Worker vertex type)
 
-    try:
-        with db.transaction():
-            vertex = db.new_vertex("Worker")
-            vertex.set("id", worker_id)
-            vertex.save()
-    finally:
-        db.close()
+def worker(worker_id):
+    """Worker thread using the shared database."""
+    with db.transaction():
+        vertex = db.new_vertex("Worker")
+        vertex.set("id", worker_id)
+        vertex.save()
 
-# Spawn workers
-threads = []
-for i in range(5):
-    t = threading.Thread(target=worker, args=("./mydb", i))
+threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+for t in threads:
     t.start()
-    threads.append(t)
-
 for t in threads:
     t.join()
+
+db.close()
 ```
 
 **Server Mode:**
 
-- `ArcadeDBServer` is thread-safe
-- HTTP requests handled by internal thread pool
-- Each request gets isolated transaction
+- The server shares the same in-process JVM and database instances
+- HTTP requests are handled by the server's own thread pool
 
 ---
 
 ### Multiprocessing
 
-**Safe:**
-
-- Separate processes with separate JVMs
-- No shared state
-- Ideal for parallel imports
-
-**Example:**
-
-```python
-import multiprocessing as mp
-import arcadedb_embedded as arcadedb
-
-def process_chunk(db_path, chunk):
-    """Process chunk in separate process."""
-    # Each process has own JVM
-    db = arcadedb.open_database(db_path)
-
-    with db.transaction():
-        for record in chunk:
-            vertex = db.new_vertex("Data")
-            vertex.set("data", record)
-            vertex.save()
-
-    db.close()
-
-# Split work across processes
-if __name__ == "__main__":
-    chunks = split_data_into_chunks()
-
-    with mp.Pool(processes=4) as pool:
-        pool.starmap(process_chunk,
-                        [("./mydb", chunk) for chunk in chunks])
-```
+Only one process can open a database directory at a time: the engine holds an OS lock on
+`database.lck` while the database is open, and a second process gets
+`ArcadeDBError: ... is locked by another process` (asserted by
+`test_concurrency.py::test_concurrent_access_limitation`). Separate processes can work
+on separate databases. To share one database across processes, open it in one process
+that runs a server, and have the others use its HTTP API (see
+[Server Patterns](testing/test-server-patterns.md)).
 
 ## Performance Considerations
 
@@ -491,7 +457,7 @@ for row in result:
 
 When you do need the whole result materialized, prefer the bulk APIs
 (`to_columns()`/`to_dataframe()` or `to_json_list()`) over `list(result)` /
-`to_list()` — see the [Performance guide](../guide/performance.md).
+`to_list()`; see the [Performance guide](../guide/performance.md).
 
 ---
 
@@ -521,18 +487,15 @@ stats.print_stats(20)
 
 **Java Side:**
 
-```python
-# Enable JVM profiling
-import jpype
+The bindings start the JVM themselves (`jvm.py`), so pass JVM options through
+`start_jvm()` (or `jvm_kwargs`, or the `ARCADEDB_JVM_ARGS` environment variable)
+before the first database or server is created:
 
-# Before starting JVM (in package __init__.py):
-jpype.startJVM(
-    classpath=[jar_path],
-    convertStrings=False,
-    # JVM profiling options:
-    "-XX:+PrintGCDetails",
-    "-Xloggc:gc.log"
-)
+```python
+from arcadedb_embedded.jvm import start_jvm
+
+# GC logging with JDK unified logging
+start_jvm(jvm_args="-Xlog:gc*:file=gc.log")
 ```
 
 ## Single Package Distribution
@@ -542,7 +505,8 @@ The Python binding is distributed as a **single, self-contained package** (`arca
 **Features:**
 
 - **Bundled JRE**: Includes a minimal Java 25 Runtime Environment (JRE) bundled directly in the wheel.
-- **Full Feature Set**: Includes all ArcadeDB engines (SQL, OpenCypher, GraphQL).
+- **Query engines**: SQL, OpenCypher, and GraphQL ship in the wheel. The Gremlin and
+  MongoDB modules are excluded (`scripts/jar_exclusions.txt`).
 - **Zero Configuration**: No external Java installation required.
 
 ```python
@@ -550,9 +514,8 @@ The Python binding is distributed as a **single, self-contained package** (`arca
 import arcadedb_embedded as arcadedb
 
 db = arcadedb.create_database("./mydb")
-db.query("sql", "SELECT FROM User")              # ✓
-db.query("opencypher", "MATCH (n) RETURN n")     # ✓
-db.query("graphql", "{users{name}}")             # ✓
+db.query("sql", "SELECT FROM User")
+db.query("opencypher", "MATCH (n) RETURN n")
 ```
 
 ## Extension Points
@@ -560,7 +523,7 @@ db.query("graphql", "{users{name}}")             # ✓
 ### Custom Vertex/Edge Classes
 
 ```python
-from arcadedb_embedded import Database
+import jpype
 
 class CustomVertex:
     """Custom vertex wrapper with helper methods."""
@@ -569,14 +532,9 @@ class CustomVertex:
         self._java_vertex = java_vertex
 
     def get_friends(self):
-        """Get all friends (out edges of type 'Knows')."""
-        edges = self._java_vertex.getEdges(
-            jpype.JClass('com.arcadedata.engine.api.graph.Vertex$DIRECTION').OUT,
-            "Knows"
-        )
-        return [edge.getVertex() for edge in edges]
-
-# Usage with wrapped database
+        """Get the vertices reached by outgoing 'Knows' edges."""
+        direction = jpype.JClass("com.arcadedb.graph.Vertex$DIRECTION")
+        return list(self._java_vertex.getVertices(direction.OUT, "Knows"))
 ```
 
 ### Custom Loaders
@@ -609,76 +567,9 @@ xml_loader.load_xml("data.xml", "Data")
 
 ## Testing
 
-### Unit Tests
-
-```python
-import unittest
-import arcadedb_embedded as arcadedb
-import tempfile
-import shutil
-
-class TestDatabase(unittest.TestCase):
-    def setUp(self):
-        """Create temp database for each test."""
-        self.db_path = tempfile.mkdtemp()
-        self.db = arcadedb.create_database(self.db_path)
-
-    def tearDown(self):
-        """Clean up."""
-        self.db.close()
-        shutil.rmtree(self.db_path)
-
-    def test_create_vertex(self):
-        """Test vertex creation."""
-        with self.db.transaction():
-            vertex = self.db.new_vertex("User")
-            vertex.set("name", "Alice")
-            vertex.save()
-
-        result = self.db.query("sql", "SELECT count(*) as count FROM User")
-        count = result.first().get("count")
-        self.assertEqual(count, 1)
-```
-
-### Integration Tests
-
-```python
-import pytest
-import arcadedb_embedded as arcadedb
-
-@pytest.fixture(scope="module")
-def database():
-    """Shared database for integration tests."""
-    db = arcadedb.create_database("./test_db")
-    yield db
-    db.close()
-
-def test_graph_traversal(database):
-    """Test complex graph operations."""
-    # Setup
-    with database.transaction():
-        alice = database.new_vertex("User")
-        alice.set("name", "Alice")
-        alice.save()
-
-        bob = database.new_vertex("User")
-        bob.set("name", "Bob")
-        bob.save()
-
-        edge = alice.new_edge("Knows", bob)
-        edge.save()
-
-    # Test
-    result = database.query("sql", """
-        SELECT expand(out('Knows'))
-        FROM User
-        WHERE name = 'Alice'
-    """)
-
-    friends = list(result)
-    assert len(friends) == 1
-    assert friends[0].get("name") == "Bob"
-```
+The test suite, its fixtures, and the patterns it uses are documented under
+[Testing](testing.md), with one page per test file and a
+[Best Practices](testing/best-practices.md) summary.
 
 ## Build System
 
@@ -717,7 +608,8 @@ stages produced into the package:
   from `/build/jre`
 - `main()` runs the two copies and exits non-zero if either fails
 
-The JARs themselves come from the `arcadedata/arcadedb` image, and
+The JARs themselves come from the `arcadedata/arcadedb` image, unless
+`build.sh` is given a local JAR directory (its third argument, `JAR_LIB_DIR`), and
 `jar_exclusions.txt` is applied before this script runs. Native builds
 (`scripts/build-native.sh`) do the same staging themselves and do not call it.
 See [Build Architecture](build-architecture.md).

@@ -12,7 +12,11 @@ bindings/python/
 │   ├── guide/
 │   ├── api/
 │   ├── examples/
-│   └── development/
+│   ├── benchmarks/
+│   ├── development/
+│   ├── brand/         # Logo and brand assets
+│   ├── stylesheets/   # extra.css
+│   └── javascripts/
 ├── mkdocs.yml         # MkDocs configuration
 └── site/              # Built documentation (gitignored)
 ```
@@ -24,8 +28,8 @@ bindings/python/
 Run a local development server with live reload:
 
 ```bash
-# Normalize Markdown formatting for proper MkDocs rendering
-python scripts/fix_markdown.py
+# Normalize Markdown formatting for proper MkDocs rendering (from bindings/python)
+uv run python scripts/fix_markdown.py
 ```
 
 ```bash
@@ -59,16 +63,17 @@ uv run mkdocs --version
 
 ## Versioned Documentation
 
-Documentation is versioned using [mike](https://github.com/jimporter/mike) and automatically deployed when you create release tags.
+Documentation is versioned using [mike](https://github.com/jimporter/mike) and automatically deployed when you push a version tag.
 
 ### How It Works
 
-1. **Create a GitHub Release** with tag like `X.Y.Z`
-2. **GitHub Actions** automatically:
+1. **Push a version tag** (`X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN`) as described in
+   [Release Workflow](release.md)
+2. **GitHub Actions** (`deploy-python-docs.yml`) automatically:
     - Builds documentation with MkDocs
     - Deploys version `X.Y.Z` under `arcadedb/` on the `main` branch of
       [humemai/humemai-docs](https://github.com/humemai/humemai-docs), which serves docs.humem.ai
-    - Sets it as the `latest` version
+    - Sets it as the `latest` version (every tag push does, dev tags included)
     - Updates version selector
 
 3. **Users can view**:
@@ -78,25 +83,13 @@ Documentation is versioned using [mike](https://github.com/jimporter/mike) and a
 
 ### Deployment Workflow
 
-**Automatic deployment** (recommended):
+**Automatic deployment** (recommended): follow [Release Workflow](release.md). The
+annotated tag it pushes triggers both the PyPI release and the docs deploy. Do not let
+`gh release create` create the tag for you: it makes a lightweight tag at whatever the
+target branch points to, which skips the checks in the release procedure.
 
-```bash
-# 1. Make documentation changes on main branch
-# 2. Build and test wheels
-./scripts/build.sh
-pytest
-
-# 3. Commit and push changes
-git add .
-git commit -m "Release version X.Y.Z"
-git push origin main
-
-# 4. Create GitHub Release (creates tag automatically)
-gh release create X.Y.Z \
-  --title "Python Bindings vX.Y.Z" \
-  --notes "Release notes"
-
-# ✅ Docs automatically deploy to:
+```text
+# Docs deploy to:
 # https://docs.humem.ai/arcadedb/X.Y.Z/ (versioned)
 # https://docs.humem.ai/arcadedb/ (redirects to latest)
 ```
@@ -167,7 +160,7 @@ Documentation versions **match PyPI package versions**:
 | Release Tag | Docs Version | PyPI Packages |
 |-------------|--------------|---------------|
 | `X.Y.Z` | `X.Y.Z` | `arcadedb-embedded==X.Y.Z` |
-| Example: `25.9.1` | `25.9.1` | `arcadedb-embedded==25.9.1` |
+| Example: `26.9.1` | `26.9.1` | `arcadedb-embedded==26.9.1` |
 
 This ensures users always see documentation matching their installed package version.
 
@@ -318,25 +311,31 @@ uv run mkdocs build --strict -f bindings/python/mkdocs.yml
 
 The Material theme is mobile-responsive by default. Test by:
 
-1. Run `mkdocs serve`
+1. Run `uv run mkdocs serve -f bindings/python/mkdocs.yml` (from the repository root)
 2. Open in browser
 3. Use browser DevTools responsive mode (F12 → Toggle device toolbar)
 4. Test navigation, search, code blocks on mobile sizes
 
 ### Test Search
 
-1. Run `mkdocs serve`
+1. Run `uv run mkdocs serve -f bindings/python/mkdocs.yml` (from the repository root)
 2. Click search icon (or press `/`)
 3. Search for key terms
 4. Verify results are relevant
 
 ## Continuous Integration
 
-Documentation is automatically validated on every push via GitHub Actions:
+No workflow builds the documentation on a push or a pull request.
+`deploy-python-docs.yml` runs only on a version tag or a manual dispatch, and it runs
+`mike deploy`, not a strict build. Run the strict build locally before you push a docs
+change; it fails on warnings and on broken internal links:
 
-- **Build check**: Ensures documentation builds without errors
-- **Version deployment**: Deploys on tagged releases
-- **Link validation**: Checks for broken links (TODO)
+```bash
+uv run mkdocs build --strict -f bindings/python/mkdocs.yml
+```
+
+`tests/test_docs_examples.py`, part of the test suite, executes a selection of the
+Python snippets in these pages (see [Documentation Example Tests](testing/test-docs-examples.md)).
 
 ## Troubleshooting
 

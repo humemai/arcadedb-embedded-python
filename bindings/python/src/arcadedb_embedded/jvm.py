@@ -276,8 +276,10 @@ def start_jvm(
     -------------------------------------------
     heap_size (optional)
         Max heap size (e.g. "8g", "4096m"). Defaults to "4g".
-        Sets -Xmx and overrides any existing -Xmx from jvm_args or env.
-        To honor ARCADEDB_JVM_ARGS -Xmx, pass heap_size=None.
+        A value other than "4g" replaces every -Xmx from jvm_args or the
+        environment. With "4g" or None, an -Xmx given there is kept (the
+        largest wins if there are several), and -Xmx4g is added only when
+        none is given.
 
     disable_xml_limits (optional)
         If True, relaxes JDK XML entity limits to support large XML
@@ -286,7 +288,7 @@ def start_jvm(
     jvm_args (optional)
         Additional JVM flags to pass through (e.g. "-XX:MaxDirectMemorySize=8g",
         "-Dfoo=bar"). Can be a space-separated string or an iterable of strings.
-        Note: -Xmx is managed by heap_size when provided.
+        Note: see heap_size for how an -Xmx here combines with it.
 
     common_pool_parallelism (optional)
         Sets `-Djava.util.concurrent.ForkJoinPool.common.parallelism=<count>`.
@@ -296,12 +298,13 @@ def start_jvm(
         Example:
             start_jvm(heap_size="8g", common_pool_parallelism=8)
 
-    JVM Configuration (environment fallback):
-    -----------------------------------------
+    JVM Configuration (environment):
+    --------------------------------
     ARCADEDB_JVM_ARGS (optional)
         JVM arguments for memory and JVM-wide options (space-separated).
-        Used as a fallback when no explicit args are provided to start_jvm().
-        If not specified, defaults to: "-Xmx4g -Djava.awt.headless=true".
+        Always read, and merged before jvm_args (so jvm_args come later on
+        the command line); the package's own defaults are added only where
+        neither sets them.
 
         Common options to set here (JVM-wide only):
             -Xmx<size> / -Xms<size>   Heap sizing (must be set before JVM start)

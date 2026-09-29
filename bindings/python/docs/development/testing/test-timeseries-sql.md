@@ -4,6 +4,8 @@
 
 These tests cover SQL-first timeseries behavior from the Python bindings.
 
+There are 2 tests.
+
 ## Covered Behavior
 
 ### 1) insert, range query, and bucket aggregation

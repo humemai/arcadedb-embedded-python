@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_exporter.py){ .md-button }
 
-There are 5 test classes with 17 tests covering JSONL (with type/edge filters), GraphML/GraphSON (skipped if GraphSON support is unavailable), CSV, round-trip (export→import), bulk insert (chunked transactions), and all data types.
+There are 5 test classes with 18 tests (19 cases) covering JSONL (with type/edge filters), GraphML/GraphSON (skipped if GraphSON support is unavailable), CSV, round-trip (export→import), bulk insert (chunked transactions), and all data types.
 
 ## Test Classes & Cases
 
@@ -20,7 +20,9 @@ Fixture `sample_db` creates 20 users, 15 movies, 10 actors, 50 Rated edges, 30 A
 
 - **export_invalid_format**: Passes `format="invalid_format"`; asserts raises `ArcadeDBError` with "invalid" or "format".
 
-- **export_graphml/export_graphson**: Both attempt export; if GraphSON support is missing, skip with `pytest.skip(...)`.
+- **export_graphml/export_graphson**: Both attempt export; if GraphSON support is missing, skip with `pytest.skip(...)`. The wheel excludes the `arcadedb-gremlin` jar that provides these formats (`scripts/jar_exclusions.txt`), and the `skipif` guard looks for an `arcadedb-gremlin` jar, so on a packaged build both tests are skipped.
+
+- **graph_formats_without_gremlin_raise_and_name_jsonl** (parametrized over `graphml` and `graphson`, runs only when `arcadedb-gremlin` is absent, which is the packaged wheel): asserts `export_database` raises `ArcadeDBError` saying the format "requires additional modules" and naming `jsonl`. Before 2026-09-29 the engine's message fell through to a generic "Database export failed".
 
 - **export_verbose_levels**: Tests `verbose` parameter (0, 1, 2); asserts `"totalRecords"` in stats for each.
 
@@ -48,7 +50,7 @@ Fixture `sample_db` creates 20 users, 15 movies, 10 actors, 50 Rated edges, 30 A
 
 ### TestAllDataTypes
 
-- **export_all_data_types**: Creates a `DataTypeTest` document type exercising STRING, BOOLEAN, INTEGER, LONG, FLOAT, DOUBLE, DATE, DATETIME, DECIMAL, LIST, EMBEDDED, and LINK properties, then exports to JSONL and asserts `totalRecords == 4` (3 docs + 1 vertex).
+- **export_all_data_types**: Creates a `DataTypeTest` document type exercising STRING, BOOLEAN, INTEGER, LONG, FLOAT, DOUBLE, DATE, DATETIME, DECIMAL, LIST, EMBEDDED, and LINK properties, then exports to JSONL and asserts `totalRecords == 4` (3 docs + 1 vertex). It then imports the file into a new database with `IMPORT DATABASE` and asserts the 3 `DataTypeTest` records come back with their string, boolean, integer, long, float, double, list, and embedded values, including the null and edge-case records (the DATE, DATETIME, DECIMAL, and LINK values are not read back).
 
 ## Quick Patterns
 
@@ -75,6 +77,6 @@ db.command("sql", "IMPORT DATABASE file:///path/to/export.jsonl.tgz")
 
 - Export paths use `exports/` subdirectory relative to cwd
 - Stats keys: `totalRecords`, `vertices`, `edges`, `documents`, `elapsedInSecs`, some include `"_rev"` metadata
-- GraphML/GraphSON skip gracefully if GraphSON support is unavailable; others raise on bad format
+- GraphML/GraphSON skip when GraphSON support is unavailable, which is the case for the packaged wheel; others raise on bad format
 - CSV export supports custom fieldnames and header row
 - Round-trip: file path must use `file://` URL format and forward slashes (cross-platform compat)

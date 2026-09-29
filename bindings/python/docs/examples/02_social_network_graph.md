@@ -57,7 +57,10 @@ Represent entities in your domain:
 with db.transaction():
     db.command(
         "sql",
-        "INSERT INTO Person SET name = 'Alice Johnson', age = 28, city = 'New York'",
+        "INSERT INTO Person SET name = ?, age = ?, city = ?",
+        "Alice Johnson",
+        28,
+        "New York",
     )
 ```
 
@@ -72,17 +75,23 @@ with db.transaction():
         "sql",
         """
         CREATE EDGE FRIEND_OF
-        FROM (SELECT FROM Person WHERE name = 'Alice Johnson')
-        TO (SELECT FROM Person WHERE name = 'Bob Smith')
-        SET since = '2020-05-15', closeness = 'close'
+        FROM (SELECT FROM Person WHERE name = ?)
+        TO (SELECT FROM Person WHERE name = ?)
+        SET since = ?, closeness = ?
         """,
+        "Alice Johnson",
+        "Bob Smith",
+        "2020-05-15",
+        "close",
     )
 ```
 
 !!! note "Directed-edge storage note"
-    Graph relationships are still directed from source to target, but the examples now
-    rely on ArcadeDB's default bidirectional edge storage. That keeps reverse traversal
-    efficient without changing the semantic direction of the relationship.
+    Graph relationships are directed from source to target. This example creates its
+    edges with SQL `CREATE EDGE`, which uses ArcadeDB's default bidirectional edge
+    storage: reverse traversal stays efficient without changing the semantic direction
+    of the relationship. Not every example does this: the `graph_batch(...)` loads in
+    examples 09, 10, 13, and 16 pass `bidirectional=False`.
 
 ### Schema Definition
 
@@ -114,7 +123,7 @@ with arcadedb.create_database("./social_network_db") as db:
 
 ## Query Examples
 
-The example demonstrates 6 queries in each of three languages:
+The example demonstrates 6 queries in each of two languages, SQL MATCH and OpenCypher:
 
 ### SQL MATCH Queries
 
@@ -223,9 +232,10 @@ RETURN DISTINCT connected.name as name, connected.city as city
 ORDER BY name
 ```
 
-### Gremlin Queries
-
-The example also runs the same six traversals using Gremlin (e.g. `g.V().hasLabel('Person').has('name', 'Alice Johnson').out('FRIEND_OF')...`), demonstrating projections with `project()`/`by()`, aggregations with `count()`, and variable-length paths with `repeat().times(3).emit()`.
+!!! note "Gremlin is not bundled"
+    The script also contains a Gremlin section, but the wheel excludes the
+    `arcadedb-gremlin` module, so the script prints that Gremlin is not bundled and
+    skips it.
 
 ## NULL Value Handling in Graphs
 
@@ -358,13 +368,19 @@ with db.transaction():
 ### Edge Creation Best Practice
 
 ```python
-# Use property-based lookups instead of RIDs
-db.command("sql", """
+# Use property-based lookups instead of RIDs, with the values bound
+db.command(
+    "sql",
+    """
     CREATE EDGE FRIEND_OF
-    FROM (SELECT FROM Person WHERE name = 'Alice')
-    TO (SELECT FROM Person WHERE name = 'Bob')
-    SET since = date('2020-05-15')
-""")
+    FROM (SELECT FROM Person WHERE name = ?)
+    TO (SELECT FROM Person WHERE name = ?)
+    SET since = ?
+    """,
+    "Alice",
+    "Bob",
+    "2020-05-15",
+)
 ```
 
 ## Related Examples

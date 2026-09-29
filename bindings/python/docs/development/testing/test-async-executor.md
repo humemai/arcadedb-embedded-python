@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_async_executor.py){ .md-button }
 
-The file covers asynchronous SQL command/query execution and executor configuration.
+The file covers asynchronous SQL command/query execution and executor configuration. There are 12 tests.
 
 ## Overview
 
@@ -32,8 +32,12 @@ AsyncExecutor tests cover:
     per rolled-back batch. At parallel level 1 nothing was lost. Filed upstream as
     `ArcadeData/arcadedb#7615`.
 
-    Every write test in this file therefore runs at parallel level 1, apart from the one
-    test whose subject is the loss itself. For bulk writes use `Database.insert_many`
+    The count tests below therefore assert an exact stored count at parallel level 1,
+    and one of them at level 4, the level that lost records. The lifecycle and callback
+    tests (`test_database_close_closes_owned_async_executor`,
+    `test_async_executor_command_error_callback`, and
+    `test_async_executor_global_callbacks`) write at the default level (available
+    cores minus 1) and do not count rows. For bulk writes use `Database.insert_many`
     or `Database.graph_batch`, both covered in
     [Bulk Insert Tests](test-bulk-insert.md).
 
@@ -73,7 +77,7 @@ Calls `close()` twice and asserts `is_closed()` is `True` with no error.
 
 #### test_async_executor_pending_and_processing_flags
 
-Uses `set_parallel_level(1).set_commit_every(100)`, asserts `is_pending()` is initially `False`, queues 1000 commands, observes `is_processing()` during the in-flight phase, then after `wait_completion()` asserts `is_pending()` is `False`. The parallel level is pinned to 1 so the queue-state assertions are not mixed with discarded submissions.
+Asserts `is_pending()` and `is_processing()` are `False` on a fresh executor, then submits one `INSERT` whose result callback holds the command until the test releases it: while it is held, both must be `True`. After release and `wait_completion()` both are `False` and the row is stored. Until 2026-09-29 this test polled with `waitCompletion(0)`, which the engine treats as an unbounded wait, and never asserted what it polled for.
 
 #### test_async_executor_is_pending_true_while_queued
 
@@ -84,6 +88,10 @@ Queues work and asserts `is_pending()` answers `True` while it is still queued, 
 Sets `set_parallel_level(3)`, `set_commit_every(123)`, `set_back_pressure(40)`, `set_transaction_use_wal(False)`, `set_transaction_sync("yes_nometadata")`, then asserts the corresponding getters (`get_parallel_level()`, `get_commit_every()`, `get_back_pressure()`, `is_transaction_use_wal()`, `get_transaction_sync()`, `get_thread_count()`).
 
 ### Callback Tests
+
+#### test_async_executor_parallel_level_has_no_upper_cap
+
+`set_parallel_level(17)` is accepted and read back, and `set_parallel_level(0)` raises `ValueError`. The package refused anything above 16 until 2026-09-29, although the engine has no cap and its own default is the number of cores minus 1 (19 on a 20-thread host).
 
 #### test_async_executor_command_error_callback
 
@@ -119,7 +127,7 @@ Two things carry the test: the parallel level is 1, and the assertion is an equa
 ## Key Takeaways
 
 1. Call `wait_completion()` before `close()` to flush worker threads.
-2. Keep `set_parallel_level()` at 1 whenever the executor runs SQL commands that write; above 1 the submissions were partly discarded before 26.10.1 (#7615, fixed in #7625). Levels above 1 are safe for `create_record`, `append_samples`, `Database.insert_many`, and `Database.graph_batch`.
+2. On wheels before 26.10.1, keep `set_parallel_level()` at 1 whenever the executor runs SQL commands that write: above 1 the submissions were partly discarded (#7615, fixed in #7625). From 26.10.1, `test_async_executor_bulk_command_is_exact_at_parallel_four` asserts an exact count at level 4. Levels above 1 were already safe for `create_record`, `append_samples`, `Database.insert_many`, and `Database.graph_batch`.
 3. Assert an exact count against what was submitted. A `count > 0` assertion passes on a load that lost three quarters of its rows.
 4. Use per-operation `error_callback` or global `on_ok()` / `on_error()` handlers to observe outcomes. Before 26.10.1 the per-command callback reported no error when records were discarded; only the executor-wide `on_error` handler did (#7625 reports a failed batch through the command's error callback as well).
 5. `is_pending()` / `is_processing()` track queue state; `is_pending()` is `False` after completion. Both are non-blocking polls of the engine's `isProcessing()`: `waitCompletion(0)` is not a poll, the engine reads a zero timeout as "wait forever" (#7107).

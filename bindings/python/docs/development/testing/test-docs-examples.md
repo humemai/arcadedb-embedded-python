@@ -6,9 +6,7 @@ This test file validates representative Python snippets from the MkDocs document
 
 ## Overview
 
-The suite is organized into grouped scenarios rather than one pytest case per code fence.
-
-It currently covers:
+The suite is organized into grouped scenarios rather than one pytest case per code fence. There are 7 tests, one per scenario:
 
 - Installation and distribution snippets
 - Index and quickstart examples
@@ -45,11 +43,11 @@ This is intentionally broader than a smoke test, but it does not try to execute 
 ## Running These Tests
 
 ```bash
-# Run the docs example suite
-pytest tests/test_docs_examples.py -v
+# Run the docs example suite (from the repository root)
+uv run pytest bindings/python/tests/test_docs_examples.py -v
 
-# Verbose output
-pytest tests/test_docs_examples.py -v -s
+# Show printed output
+uv run pytest bindings/python/tests/test_docs_examples.py -v -s
 ```
 
 ## What To Update When Docs Change
@@ -58,7 +56,7 @@ If you add or substantially rewrite runnable Python examples in the documentatio
 
 1. Update the relevant Markdown page.
 2. Extend `tests/test_docs_examples.py` if the new example should be executable coverage.
-3. Re-run `pytest tests/test_docs_examples.py -v`.
+3. Re-run `uv run pytest bindings/python/tests/test_docs_examples.py -v`.
 
 ## Related Documentation
 

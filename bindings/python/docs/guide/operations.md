@@ -31,15 +31,16 @@ your_project/
 │   ├── arcadedb.log.0.lck       # Log lock file
 │   ├── hs_err_pid12345.log      # JVM crash dump
 │   └── hs_err_pid67890.log      # Another crash dump
-├── my_databases/                # Your databases root
-│   ├── production_db/           # Embedded database
-│   │   ├── configuration.json   # Database config
-│   │   ├── schema.json          # Schema definition
-│   │   ├── statistics.json      # Performance stats
-│   │   ├── dictionary.*.dict    # String compression
-│   │   ├── MyType_*.bucket      # Data files
-│   │   ├── txlog_*.wal          # Transaction logs
-│   │   └── database.lck         # Database lock
+├── my_databases/                # Server root (root_path)
+│   ├── databases/               # One directory per database
+│   │   └── production_db/       # Same layout as an embedded database
+│   │       ├── configuration.json   # Database config
+│   │       ├── schema.json          # Schema definition
+│   │       ├── statistics.json      # Performance stats
+│   │       ├── dictionary.*.dict    # String compression
+│   │       ├── MyType_*.bucket      # Data files
+│   │       ├── txlog_*.wal          # Transaction logs
+│   │       └── database.lck         # Database lock
 │   ├── backups/                 # Backup directory
 │   ├── config/                  # Server configuration
 │   │   ├── server-users.jsonl   # User accounts
@@ -65,10 +66,10 @@ ArcadeDB has **three distinct types of logs** stored in **two different location
 
 **Content**: Application-level events, database operations, performance info
 ```
-2025-10-22 10:23:21.560 INFO  [ArcadeDBServer] ArcadeDB Server v25.10.1 starting up...
-2025-10-22 10:23:21.563 INFO  [ArcadeDBServer] Running on Linux - OpenJDK 64-Bit Server VM 21.0.4
-2025-10-22 10:23:21.628 INFO  [ArcadeDBServer] Server root path: /path/to/databases
-2025-10-22 10:23:21.928 INFO  [HttpServer] HTTP Server started (port=2480)
+<date> <time> INFO  [ArcadeDBServer] ArcadeDB Server v<version> is starting up...
+<date> <time> INFO  [ArcadeDBServer] Running on Linux <kernel> - OpenJDK 64-Bit Server VM <java version>
+<date> <time> INFO  [ArcadeDBServer] Server root path: /path/to/databases
+<date> <time> INFO  [HttpServer] HTTP Server started (port=2480)
 ```
 
 ### 2. JVM Crash Dumps
@@ -120,33 +121,34 @@ start_jvm(jvm_args="-Djava.util.logging.config.file=/path/to/arcadedb-log.proper
 
 ### Core Database Files
 
-**configuration.json** - Database settings
+**configuration.json** - Database-level configuration overrides (empty unless you set some)
 
 ```json
-{
-  "configuration": {
-    "timezone": "UTC",
-    "dateFormat": "yyyy-MM-dd"
-  }
-}
+{"configuration": {}}
 ```
 
-**schema.json** - Schema definition with types, properties, indexes
+**schema.json** - Schema definition with types, properties, and indexes, plus the
+database settings (time zone and date formats). Abridged:
 
 ```json
 {
-  "schemaVersion": 19,
-  "dbmsVersion": "25.10.1-SNAPSHOT",
+  "schemaVersion": 44,
+  "dbmsVersion": "<version that last wrote the schema>",
+  "settings": {
+    "zoneId": "UTC",
+    "dateFormat": "yyyy-MM-dd",
+    "dateTimeFormat": "yyyy-MM-dd HH:mm:ss"
+  },
   "types": {
     "User": {
       "type": "d",
       "parents": [],
       "buckets": ["User_0"],
       "properties": {
-        "email": {"type": "STRING", "mandatory": true}
+        "email": {"type": "STRING"}
       },
       "indexes": {
-        "User.email": {"type": "LSM_TREE", "unique": true}
+        "User_0_<id>": {"type": "LSM_TREE", "bucket": "User_0", "properties": ["email"], "unique": true}
       }
     }
   }
@@ -172,7 +174,7 @@ start_jvm(jvm_args="-Djava.util.logging.config.file=/path/to/arcadedb-log.proper
 
 - `Type`: Document/Vertex/Edge type name
 - `N`: Bucket number
-- `M`: Sub-bucket
+- `M`: File ID
 - `P`: Page size
 - `Q`: Version
 
@@ -195,8 +197,7 @@ Example: `User_0.1.65536.v0.bucket`
 
 **database.lck** - Database lock file
 
-- Prevents concurrent access
-- Contains process information
+- Prevents concurrent access (an OS file lock is held on it)
 - Removed on clean shutdown
 
 ## Server Files (Server Mode Only)
@@ -235,8 +236,7 @@ Example: `User_0.1.65536.v0.bucket`
 **backups/** - Database backup storage
 
 - Created by backup operations
-- Timestamped directories
-- Full database copies
+- One `<db>-backup-<timestamp>.zip` file per full backup
 
 **databases/** - Individual database directories
 

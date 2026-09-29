@@ -1082,12 +1082,12 @@ class Database:
         """
         Export database to file.
 
-        Supports JSONL (recommended for backup/restore), GraphML (graph visualization),
-        and GraphSON (TinkerPop compatibility) formats.
+        Writes JSONL, which ``IMPORT DATABASE file://...`` reads back. GraphML and GraphSON need the engine's optional arcadedb-gremlin
+        module, which this package does not bundle, so they raise ArcadeDBError.
 
         Args:
             file_path: Output file path
-            format: Export format - "jsonl", "graphml", or "graphson"
+            format: "jsonl" ("graphml" and "graphson" raise, see above)
             overwrite: Overwrite existing file if True
             include_types: List of types to export (None = all)
             exclude_types: List of types to exclude (None = none)
@@ -1100,9 +1100,6 @@ class Database:
             >>> # Export entire database to JSONL
             >>> stats = db.export_database("backup.jsonl.tgz", overwrite=True)
             >>> print(f"Exported {stats['totalRecords']} records")
-
-            >>> # Export to GraphML for visualization
-            >>> db.export_database("graph.graphml.tgz", format="graphml")
 
             >>> # Export specific types only
             >>> db.export_database(

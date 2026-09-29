@@ -4,6 +4,8 @@
 
 These tests cover SQL vector functions for math, aggregations, distance metrics, normalization, quantization, native INT8 encoding, sparse vectors, `LSM_VECTOR` index creation and search, and vector conversions, plus regression tests for the Python conversion fast paths.
 
+There are 35 tests.
+
 ## Overview
 
 Tests validate:
@@ -125,4 +127,3 @@ rows = db.query(
 - **Indexes**: `LSM_VECTOR`, `LSM_SPARSE_VECTOR`
 - **Search**: `vectorNeighbors()`, `vector.neighbors()`, `vector.sparseNeighbors()`
 - **Conversion**: `asString()`, `asVector()`, `asSparse()`, `vector.sparseToDense()`, `vector.quantizeBinary()` / `vector.dequantizeBinary()`
-```

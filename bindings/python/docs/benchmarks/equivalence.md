@@ -27,7 +27,9 @@ The rule from that date:
 The digest is computed **outside the timed section**, from the object the timed call
 returned, so checking the answer costs the measurement nothing. The gate is
 `equivalence_check.py`, and it runs on every publish beside the provenance, fairness, and
-page checks.
+page checks. It holds the rows of the 2026-10 instrument, the first whose lanes record
+digests. Rows from earlier campaigns carry none, so the gate reports them as skipped, by
+count, rather than comparing them.
 
 Two consequences followed immediately. The campaign that was starting did not start until
 the digests and the gate existed and every lane recorded them. And the same digests were
@@ -262,8 +264,10 @@ probably yield findings too.
 
 ## What It Means for a Reader
 
-- A published latency is a latency for **the answer the other engines gave**. If the engines
-  of a table disagreed at any size, the table did not publish.
+- From the 2026-10 instrument on, a published latency is a latency for **the answer the other
+  engines gave**. If the engines of a table disagreed at any size, the table did not publish.
+  Rows from earlier campaigns carry no digest, so their answers were never compared; see
+  [Reading the Output](results.md#how-the-page-is-generated-and-gated).
 - A dash on the page is either a declared unexpressible operation, with its reason in the
   table's condition, or a censored cell with its budget stated. Neither is a gap nobody
   noticed.
@@ -272,6 +276,6 @@ probably yield findings too.
 - A missing ArcadeDB row is declared in a condition naming ArcadeDB and the reason.
 
 The full rules are
-[`FAIRNESS.md` F12](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/FAIRNESS.md)
+[`FAIRNESS.md` F11](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/FAIRNESS.md)
 and section 2 of
 [`PROTOCOL.md`](https://github.com/humemai/arcadedb-embedded-python/blob/main/benchmarks/experiments/PROTOCOL.md).

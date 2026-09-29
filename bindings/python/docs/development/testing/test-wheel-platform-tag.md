@@ -34,7 +34,7 @@ Sanity check: the verifier module imports without errors and exposes its API.
 
 ### 7) dunder version matches distribution metadata
 
-__version__ must equal the installed distribution version.
+`__version__` must equal the installed distribution version.
 
 ## Running
 

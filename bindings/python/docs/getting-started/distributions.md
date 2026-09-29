@@ -5,8 +5,8 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 ## The Package
 
 | Package | Wheel Size | Installed Size | Java Required | Studio UI | Query Languages |
-|---------|-----------|------------------------------|---------------|----------------|
-| **arcadedb-embedded** | ~69 MiB | ~96 MiB | ❌ No | ✅ | SQL, OpenCypher |
+|---------|-----------|----------------|---------------|-----------|-----------------|
+| **arcadedb-embedded** | ~69 MiB | ~96 MiB | ❌ No | ✅ | SQL and OpenCypher |
 
 **Installation:**
 
@@ -14,7 +14,7 @@ ArcadeDB Python provides a **self-contained embedded** package that runs the dat
 pip install arcadedb-embedded
 ```
 
-**Requirements:** Python 3.10–3.14 (packaged; primary testing on 3.12) - No Java installation needed!
+**Requirements:** Python 3.10 to 3.14 (CI runs all five on every supported platform). No Java installation needed!
 
 ## What's Inside
 
@@ -46,7 +46,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 
 - ✅ **No Java Installation Required**: Platform-specific JRE bundled (~63 MiB uncompressed)
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
-- ✅ **Query Languages**: SQL, OpenCypher (all included)
+- ✅ **Query Languages**: SQL and OpenCypher (Gremlin and the MongoDB query language are not bundled)
 - ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 - ✅ **Server Mode**: Optional in-process HTTP server
@@ -60,7 +60,7 @@ Pre-built **platform-specific** wheels are available for **4 platforms**. Sizes 
 - The bundled server is in-process, so its lifetime is your Python process's.
   It bundles the Postgres, Redis, and Bolt wire protocols (opt-in). For a
   standalone server, HA/replication, TLS, or the Mongo wire protocol, run the
-  official [ArcadeDB server](https://docs.arcadedb.com/#Server) — see
+  official [ArcadeDB server](https://docs.arcadedb.com/#Server); see
   [Access Methods](../api-access-methods.md).
 
 ## Use Cases

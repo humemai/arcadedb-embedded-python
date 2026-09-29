@@ -79,8 +79,9 @@ success (the duplicate-key test fails on wheels before 2026-09-28).
 ### 10) duplicate key raises instead of dropping
 
 A 4-bucket type with a UNIQUE index on `id`, and 1,000 rows carrying every key twice.
-Asserts `insert_many(..., parallel=True)` raises `ArcadeDBError` naming the failed
-records, and that no more than the 500 distinct keys were stored.
+Asserts `insert_many(..., parallel=True)` raises `ArcadeDBError` whose message contains
+"failed" (it reports how many records failed and the first failure), and that no more
+than the 500 distinct keys were stored.
 
 ### 11) clean load still returns the count
 

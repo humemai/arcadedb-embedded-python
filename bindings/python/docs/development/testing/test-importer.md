@@ -1,11 +1,12 @@
 # Data Import Tests
 
-[View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_import_database.py){ .md-button }
+[View `test_import_database.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_import_database.py){ .md-button }
+[View `test_importer_api.py`]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_importer_api.py){ .md-button }
 
 The import-focused test coverage is split across:
 
-- `test_import_database.py` for SQL `IMPORT DATABASE` behavior and format coverage
-- `test_importer_api.py` for the narrow `db.import_documents(...)` wrapper
+- `test_import_database.py` for SQL `IMPORT DATABASE` behavior and format coverage (10 tests)
+- `test_importer_api.py` for the narrow `db.import_documents(...)` wrapper (8 tests, which collect as 10 cases because the `on_row_error` test is parametrized over three modes)
 
 ## Quick Start
 
@@ -32,19 +33,30 @@ with arcadedb.create_database("./mydb") as db:
 
 ### Covered Scenarios
 
-```python
-The file covers:
+`test_import_database.py`:
 
-- CSV document imports
-- CSV graph vertex/edge imports
-- XML imports
-- Neo4j imports
-- Word2Vec vector imports
-- RDF imports
-- Timeseries target imports
-- SQL `IMPORT DATABASE` usage where full-database restore semantics matter
-- `on_row_error` skip-vs-abort, and rejection of unknown modes
-```
+- **test_import_database_csv_documents**: `IMPORT DATABASE file://...csv` stores 3 `Document` records.
+- **test_import_database_csv_documents_with_quoted_parallel_setting**: the same CSV through ``IMPORT DATABASE WITH documents = ..., documentsFileType = 'csv', documentType = 'Document', `parallel` = 1`` (a quoted `parallel` setting) stores 3 records.
+- **test_import_database_csv_graph_vertices_and_edges**: the vertex and edge CSV fixtures import at least 6 vertices and 3 edges (skips if the fixtures are missing).
+- **test_import_database_csv_graph_vertices_and_edges_with_quoted_parallel**: the same with a quoted `parallel` setting.
+- **test_import_database_xml_vertices**: an XML file imported with `entityType = 'VERTEX'` stores 2 `v_user` vertices (skips on the Windows runtime, where the engine-side XML path fails).
+- **test_import_database_neo4j_fixture**: a Neo4j export imports and leaves at least one type in the schema.
+- **test_import_database_word2vec_vectors**: a Word2Vec file imports at least 10 `Word` records.
+- **test_import_database_rdf_fixture**: an RDF fixture imports at least one document.
+- **test_import_database_into_timeseries_type**: `IMPORT DATABASE ... WITH documentType = 'Telemetry'` into a TIMESERIES type raises an `ArcadeDBError` mentioning "importing database", and the type still has 0 rows. The importer cannot place a document in a TIMESERIES type, so this pins the failure rather than an import path.
+- **test_import_database_with_missing_file_fails**: a missing file raises `ArcadeDBError`.
+
+The Neo4j, Word2Vec, and RDF tests skip when their fixture is missing or the runtime lacks that importer.
+
+`test_importer_api.py`:
+
+- **test_import_documents_imports_csv_from_path**: `db.import_documents(path, document_type="Person")` returns `result == "OK"`, `operation == "import documents"`, the source as a `file://` URI, and a statistics dict; 3 `Person` rows are stored and Alice's `city` is `"New York"`.
+- **test_import_documents_accepts_explicit_importer_settings**: explicit `file_type`, `commit_every`, `parallel`, `wal`, and `extra_settings` still return `"OK"` and 3 rows.
+- **test_import_documents_applies_and_restores_runtime_settings**: after an import with its own settings, the database's read-your-writes and the async executor's parallel level, commit interval, and WAL flag are back to their earlier values.
+- **test_set_commit_every_rejects_below_one**: `async_executor().set_commit_every(0)` and `(-5)` raise `ValueError`.
+- **test_import_documents_missing_file_raises_arcadedb_error**: a missing file raises `ArcadeDBError`.
+- **test_import_documents_restores_runtime_settings_after_failure**: the same runtime settings are restored when the import fails.
+- **test_import_documents_on_row_error** and **test_import_documents_rejects_unknown_on_row_error**: see below.
 
 ### `on_row_error`
 
@@ -52,8 +64,11 @@ Two tests. The first imports a three-row CSV whose middle row repeats a
 `UNIQUE`-indexed key, across three arms: the default, an explicit `"abort"`,
 and `"skip"`. Measured behaviour is `abort` leaving 0 rows and raising, against
 `skip` leaving `['A-1', 'B-2']` and not raising, with the engine logging
-`Error on importing document at line 2, skipping it`. The default and `"abort"`
-are asserted to match, so a change to the engine default cannot pass silently.
+`Error on importing document at line 2, skipping it`. The test asserts that the
+default and `"abort"` both raise and do not leave the full good set, and that
+`"skip"` does not raise and leaves exactly `['A-1', 'B-2']`; because the default
+and `"abort"` carry the same assertions, a change to the engine default cannot pass
+silently.
 
 The second checks that an unknown mode raises `ValueError`. That validation is
 Python-side on purpose: the engine tests `"skip".equalsIgnoreCase(value)`, so
@@ -74,14 +89,14 @@ These tests are intentionally conservative in their guidance:
 ## Running These Tests
 
 ```bash
-# Run the import database test file
-pytest tests/test_import_database.py -v
+# Run the import database test file (from the repository root)
+uv run pytest bindings/python/tests/test_import_database.py -v
 
 # Run the import_documents API tests
-pytest tests/test_importer_api.py -v
+uv run pytest bindings/python/tests/test_importer_api.py -v
 
 # Run with output
-pytest tests/test_import_database.py -v -s
+uv run pytest bindings/python/tests/test_import_database.py -v -s
 ```
 
 ## Notes

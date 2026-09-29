@@ -95,8 +95,6 @@ markdown_extensions:
     toc_depth: 3
 
   # Python Markdown Extensions
-- pymdownx.arithmatex:
-    generic: true
 - pymdownx.betterem:
     smart_enable: all
 - pymdownx.caret
@@ -142,10 +140,6 @@ extra_css:
 - brand/css/mkdocs.css
 - stylesheets/extra.css
 
-extra_javascript:
-- javascripts/mathjax.js
-- https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
-
 nav:
 - Home: index.md
 - Getting Started:
@@ -154,7 +148,7 @@ nav:
   - Distributions: getting-started/distributions.md
 - Examples:
   - Overview: examples/index.md
-  - Quick Start: examples/basic.md
+  - Basic Examples: examples/basic.md
   - Dataset Downloader: examples/download_data.md
   - 01 - Simple Document Store: examples/01_simple_document_store.md
   - 02 - Social Network Graph: examples/02_social_network_graph.md
@@ -179,8 +173,8 @@ nav:
   - 21 - Graph Analytical View SQL Workflow: examples/21_graph_analytical_view_sql.md
   - 22 - numpy Bulk I/O Workflow: examples/22_numpy_bulk_io.md
   - 23 - Server Mode And HTTP Access: examples/23_server_mode_http_access.md
-  - 24 - Transactions, Database Commands And Time-Series Writes Over HTTP: examples/24_server_http_transactions_timeseries.md
-  - 25 - Sparse Vectors, Weight Precision And Compaction: examples/25_sparse_quantization_and_compact.md
+  - 24 - Transactions, Database Commands, And Time-Series Writes Over HTTP: examples/24_server_http_transactions_timeseries.md
+  - 25 - Sparse Vectors, Weight Precision, And Compaction: examples/25_sparse_quantization_and_compact.md
   - 26 - Cross-Model Transaction Atomicity: examples/26_cross_model_transaction_atomicity.md
   - Data Import Patterns: examples/import.md
   - Vector Search Patterns: examples/vectors.md
@@ -262,7 +256,7 @@ nav:
       - Bulk Insert: development/testing/test-bulk-insert.md
       - Cross-Model Atomicity: development/testing/test-cross-model-atomicity.md
       - Example 11 Degree-Matching: development/testing/test-example11-degree-matching.md
-      - Graph API: development/testing/test-graph.md
+      - GraphBatch Bulk Paths: development/testing/test-graph.md
       - JAR Provenance: development/testing/test-jar-provenance.md
       - Java Package Shadowing: development/testing/test-java-package-shadowing.md
       - JVM: development/testing/test-jvm.md

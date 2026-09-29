@@ -6,23 +6,23 @@ This document describes the build architecture for creating platform-specific Py
 
 **Goal:** Distribute a single `arcadedb-embedded` package that works on 4 platforms with **zero Java installation required**.
 
-**Achievement:** 4 platform-specific wheels (currently about ~62MB compressed and ~87MB installed on Linux x86_64, with slight platform/version variation) with bundled platform-specific JRE, built and tested on GitHub Actions using native runners.
+**Achievement:** 4 platform-specific wheels with a bundled platform-specific JRE, built and tested on GitHub Actions using native runners. The 26.10.1.dev0 linux/amd64 wheel measured on 2026-09-29 is about 69 MB compressed and 96 MB installed; other platforms and versions vary slightly.
 
 ## Supported Platforms
 
-| Platform | Wheel Size | JRE Size | Runner | Build Method | Notes |
-|----------|-----------|----------|---------|--------------|-------|
-| **linux/amd64** | ~62M | ~63M | `ubuntu-24.04` | Docker native | Most common Linux platform |
-| **linux/arm64** | ~60-65M | ~63M | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
-| **darwin/arm64** | ~60-65M | ~63M | `macos-15` | Native build | Apple Silicon Macs (2020+) |
-| **windows/amd64** | ~60-65M | ~63M | `windows-2025` | Native build | Windows x86_64 |
+| Platform | Runner | Build Method | Notes |
+|----------|---------|--------------|-------|
+| **linux/amd64** | `ubuntu-24.04` | Docker native | Most common Linux platform |
+| **linux/arm64** | `ubuntu-24.04-arm` | Docker native | ARM64 servers, Raspberry Pi |
+| **darwin/arm64** | `macos-15` | Native build | Apple Silicon Macs (2020+) |
+| **windows/amd64** | `windows-2025` | Native build | Windows x86_64 |
 
 **All supported platforms:**
 
 - ✅ Full bindings suite passes on every platform build
-- ✅ ~31M JARs (current Linux x86_64 package info, identical contents across platforms; includes server/Studio)
+- ✅ About 33 MB of JARs (measured on the linux/amd64 wheel; the same JAR set on every platform; includes server/Studio)
 - ✅ All native runners (no QEMU emulation)
-- ✅ Reproducible builds (pinned runner versions)
+- ✅ Pinned runner versions (the Docker build still pulls the moving `X.Y.Z-SNAPSHOT` image tag, so two builds of the same commit can differ)
 
 ## Architecture
 
@@ -101,12 +101,14 @@ See `bindings/python/setup.py` for the complete implementation.
 
 ## Build Pipeline
 
-### Two-Job Strategy
+### Jobs
+
+`test-python-bindings.yml` runs five jobs. Two build the wheels:
 
 ```yaml
 jobs:
   download-jars:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     # Copies the ArcadeDB JARs out of the upstream image, uploads artifact
 
   test:
@@ -114,8 +116,12 @@ jobs:
     strategy:
       matrix:
         platform: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     # Builds platform-specific wheel, runs tests
 ```
+
+The other three are `bandit` (security scan), `dependency-floors` (audit of the declared
+dependency floors), and `test-summary`. See [CI/CD Setup](ci-setup.md#ci-gates).
 
 ### Job 1: download-jars (Ubuntu)
 
@@ -147,7 +153,7 @@ The JARs are filtered later, by the build that packages them (see
 1. Download the JAR artifact
 2. Run `scripts/build-native.sh`:
     - Removes the JARs listed in `jar_exclusions.txt`
-    - Uses system Java (GitHub runner provides Java 25)
+    - Uses the Corretto 25 JDK that the workflow installs with `actions/setup-java`
     - Runs `jlink` natively → platform-specific JRE
     - Builds wheel with `python -m build`
 3. Run tests on native platform
@@ -157,7 +163,7 @@ The JARs are filtered later, by the build that packages them (see
 1. Download the JAR artifact
 2. Run `scripts/build-native.sh`:
     - Removes the JARs listed in `jar_exclusions.txt`
-    - Uses system Java (GitHub runner provides Java 25)
+    - Uses the Corretto 25 JDK that the workflow installs with `actions/setup-java`
     - Runs `jlink` natively → platform-specific JRE
     - Builds wheel with `python -m build`
 3. Run tests on native platform
@@ -228,6 +234,8 @@ FROM arcadedata/arcadedb:${ARCADEDB_TAG} AS java-builder
 # Stage 2: jre-builder (filters JARs, creates JRE)
 FROM amazoncorretto:25 AS jre-builder
 COPY --from=java-builder /home/arcadedb/lib /build/upstream-jars/
+COPY bindings/python/local-jars/lib/ /build/local-jars/
+# Uses /build/local-jars instead of the image's JARs when USE_LOCAL_JARS=1
 # Reads jar_exclusions.txt
 # Filters out excluded JARs before packaging
 # Runs jlink → creates /build/jre (platform-specific!)
@@ -300,14 +308,14 @@ As of late 2024, GitHub Actions provides **free native ARM64 runners** for publi
 ### Build Process
 
 ```bash
-docker build \
-  --platform linux/arm64 \
-  --build-arg TARGETARCH=arm64 \
-  -t arcadedb-python-builder:arm64 \
-  .
+cd bindings/python
+./scripts/build.sh linux/arm64
 ```
 
-Since the runner itself is ARM64, Docker builds run natively without emulation.
+`build.sh` runs `docker build --platform linux/arm64` with `-f scripts/Dockerfile.build`,
+the repository root as the build context, and the required `ARCADEDB_TAG`,
+`PYTHON_VERSION`, and `TARGET_PLATFORM` build arguments. Since the runner itself is
+ARM64, Docker builds run natively without emulation.
 
 ## File Structure
 
@@ -337,12 +345,15 @@ bindings/python/
     - Uploads artifact for native builds
 
 2. **test job matrix**
-    - Builds 4 platforms
+    - Builds 4 platforms × 5 Python versions
         - Platform-specific steps (native runners, artifact download, tests)
 
 3. **Test parsing**
     - JUnit XML generation and parsing
     - Cross-platform compatible
+
+4. **bandit, dependency-floors, and test-summary jobs**
+    - See [CI/CD Setup](ci-setup.md#ci-gates)
 
 ## Common Issues & Solutions
 
@@ -384,12 +395,13 @@ bindings/python/
 
 ## Size Breakdown (current ballpark)
 
-Sizes are ballpark values and vary by platform and version:
+Measured on the 26.10.1.dev0 linux/amd64 wheel on 2026-09-29; other platforms and
+versions vary slightly:
 
-- Wheel: ~62M (compressed)
-- JRE: ~63M (uncompressed)
-- JARs: ~24M (uncompressed)
-- Installed package: ~87M
+- Wheel: about 69 MB (compressed)
+- JRE: about 63 MB (uncompressed)
+- JARs: about 33 MB (uncompressed)
+- Installed package: about 96 MB
 
 ## Development
 
@@ -402,7 +414,17 @@ cd bindings/python
 
 # Or pick the target platform and Python version
 ./scripts/build.sh linux/amd64 3.12
+
+# Or embed JARs you built yourself (third argument, JAR_LIB_DIR)
+./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-*/lib
 ```
+
+Without `JAR_LIB_DIR`, the Linux build copies its JARs from the
+`arcadedata/arcadedb:<tag>` image, so engine changes in your local checkout are **not**
+in the wheel. To test a local or freshly synced engine change, build the engine JARs
+first (the `build.sh` header shows a Docker `mvnw` command that needs no host Java)
+and pass their directory as the third argument. `build.sh` stages them into
+`local-jars/lib` and the Docker build uses them instead of the image's.
 
 `build.sh` reads the ArcadeDB tag from `pom.xml` and passes it on. If you call the lower-level
 scripts directly, `build-native.sh` needs `PLATFORM PACKAGE_NAME PACKAGE_DESCRIPTION ARCADEDB_TAG`
@@ -420,7 +442,7 @@ uv run pytest
 
 ## References
 
-- **jlink documentation:** [Oracle jlink man page](https://docs.oracle.com/en/java/javase/21/docs/specs/man/jlink.html)
+- **jlink documentation:** [Oracle jlink man page](https://docs.oracle.com/en/java/javase/25/docs/specs/man/jlink.html)
 - **GitHub Actions runners:** [GitHub-hosted runners](https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners)
 - **GitHub ARM64 runners:** [Supported runners and hardware resources](https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources)
 - **pytest JUnit XML:** [pytest JUnit XML output](https://docs.pytest.org/en/stable/how-to/output.html#creating-junitxml-format-files)

@@ -1,139 +1,62 @@
 # Data Import Examples
 
-This page covers the current import examples for the Python bindings.
+This page points to the examples that load data into ArcadeDB from Python. The
+[Data Import Guide](../guide/import.md) holds the recommendations, the import formats,
+and the code patterns; the examples below show them at scale.
 
-Before running any example, download the datasets using **[Dataset Downloader](download_data.md)**.
+Before running the MovieLens and Stack Overflow examples, download their datasets with
+the **[Dataset Downloader](download_data.md)**.
 
-## CSV Import Examples
-
-### Import Tabular Data as Documents
+## Which Example Covers What
 
 **[Example 04 - CSV Import: Documents](04_csv_import_documents.md)**
 
-Learn how to:
+- parses the MovieLens CSV files in Python and loads them into document types with
+  batched, parameterized `INSERT` statements
+- defines the schema explicitly (integer-like columns to LONG, decimals to DOUBLE,
+  text to STRING) and imports empty cells as NULL
+- benchmarks queries before and after indexes
+- with `--export`, exports the database to JSONL and re-imports it with
+  `IMPORT DATABASE` as a round trip
 
-- create a target document type with SQL
-- import CSV data through `IMPORT DATABASE`
-- validate NULL handling and inferred types
-- benchmark query performance before and after indexes
+**[Example 05 - CSV Import: Graph](05_csv_import_graph.md)**
 
-### Import Graph Data
+- reads Example 04's document database (or an Example 04 JSONL export) and builds a
+  graph from it: users and movies as vertices, ratings and tags as edges
+- builds vertices with SQL, `db.graph_batch(...)`, or synchronous transactions, and
+  edges with SQL `CREATE EDGE`
+- creates the indexes before the edges (unless `--no-index`), and validates the graph
+  with queries
 
-**[Example 05 - CSV Import: Graph Database](05_csv_import_graph.md)**
+**[Example 15 - Table Ingest Comparison](15_import_database_vs_transactional_table_ingest.md)**
+and **[Example 16 - Graph Ingest Comparison](16_import_database_vs_transactional_graph_ingest.md)**
 
-Learn how to:
+- compare transactional SQL, the async SQL path, SQL `IMPORT DATABASE`, and
+  `db.import_documents(...)` (tables) or `GraphBatch` (graphs) on the same generated data,
+  with count checks before any timing is trusted
 
-- import vertices from CSV
-- import edges from CSV using matching IDs
-- create graph schema up front
-- bulk-load graph data with SQL import commands
+**[Example 22 - numpy Bulk I/O](22_numpy_bulk_io.md)**
 
-## SQL Import Workflow
+- bulk document ingest with `db.insert_many(...)`, transactional and with
+  `parallel=True` on a type created with one bucket per async writer
+- time-series ingest from numpy arrays with `AsyncExecutor.append_samples(...)`
 
-The current bindings expose SQL `IMPORT DATABASE` plus a narrow
-`db.import_documents(...)` helper for document-file loads.
+## The Short Version
 
-For very large Python-side bulk ingest workloads in this repository, do not treat
-importer-based paths as the default choice.
-
-- For bulk table/document ingest, prefer `db.insert_many(...)`, which crosses the
-    Python/Java boundary once per batch and returns the number of rows written.
-- For bulk graph ingest, prefer `GraphBatch`.
-- Do not use the async executor's SQL command path
-    (`db.async_executor().command(...)`) for bulk writes at any parallel level. Before
-    26.10.1, above parallel level 1 it silently discarded records: no error reached the
-    per-command callback, nothing was logged, and `wait_completion()` returned normally.
-    Filed upstream as `ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic
-    commit is now retried and otherwise reported through the error callback.
-    `create_record`, `append_samples`,
-    `db.insert_many(...)`, and `db.graph_batch(...)` are unaffected.
-
-More broadly, this repository does not currently encourage `IMPORT DATABASE` as the main
-Python-side ingest recommendation. It remains available for the supported file-driven
-workflows and may become a stronger recommendation later if behavior improves.
-
-### Basic CSV Import
-
-```python
-from pathlib import Path
-
-import arcadedb_embedded as arcadedb
-
-
-def file_url(path: str) -> str:
-    return Path(path).resolve().as_uri()
-
-
-with arcadedb.create_database("./import_demo") as db:
-    db.command("sql", "CREATE DOCUMENT TYPE MyType")
-    db.command(
-        "sql",
-        f"IMPORT DATABASE {file_url('./data.csv')} WITH documentType = 'MyType', commitEvery = 5000",
-    )
-```
-
-### Import with Predefined Schema
-
-```python
-with arcadedb.create_database("./import_demo") as db:
-    db.command("sql", "CREATE DOCUMENT TYPE Product")
-    db.command("sql", "CREATE PROPERTY Product.id INTEGER")
-    db.command("sql", "CREATE PROPERTY Product.name STRING")
-    db.command("sql", "CREATE PROPERTY Product.price DOUBLE")
-
-    db.command(
-        "sql",
-        f"IMPORT DATABASE {file_url('./products.csv')} WITH documentType = 'Product', commitEvery = 5000",
-    )
-```
-
-### Import Graph Vertices and Edges
-
-```python
-with arcadedb.create_database("./graph_import_demo") as db:
-    db.command("sql", "CREATE VERTEX TYPE User")
-    db.command("sql", "CREATE EDGE TYPE Follows")
-
-    db.command(
-        "sql",
-        (
-            "IMPORT DATABASE WITH "
-            f"vertices = '{file_url('./users.csv')}', "
-            "vertexType = 'User', "
-            "typeIdProperty = 'userId', "
-            "typeIdType = 'Long', "
-            "typeIdUnique = true"
-        ),
-    )
-
-    db.command(
-        "sql",
-        (
-            "IMPORT DATABASE WITH "
-            f"edges = '{file_url('./follows.csv')}', "
-            "edgeType = 'Follows', "
-            "typeIdProperty = 'userId', "
-            "typeIdType = 'Long', "
-            "edgeFromField = 'follower_id', "
-            "edgeToField = 'following_id'"
-        ),
-    )
-```
-
-## Performance Tips
-
-1. Pre-create critical schema and unique indexes.
-2. Use a larger `commitEvery` value when you intentionally choose the SQL import path.
-3. Drop expensive secondary indexes before a one-shot import and recreate them afterward.
-4. Validate source files before starting long-running jobs.
-5. For bulk table/document ingest, prefer `db.insert_many(...)` instead of importer-based paths.
-6. For bulk graph ingest, prefer `GraphBatch` instead of importer-based graph loading.
+- For bulk document ingest, use `db.insert_many(...)`. With `parallel=True` it raises
+  `ArcadeDBError` if the async writers reject any record.
+- For bulk graph ingest, use `db.graph_batch(...)`.
+- Keep SQL `IMPORT DATABASE` for its supported file formats and for restoring exports.
+- Do not use `db.async_executor().command(...)` for bulk writes. Before 26.10.1 it could
+  silently drop records above parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in
+  #7625); see [Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation).
 
 ## Additional Resources
 
+- **[Data Import Guide](../guide/import.md)** - Recommendations, formats, and code patterns
 - **[Import Workflow Reference](../api/importer.md)** - Supported SQL import surface
-- **[Import Guide](../guide/import.md)** - Import strategies and patterns
-- **[Performance Guide](../guide/operations.md)** - JVM and bulk-load tuning
+- **[Database API: insert_many](../api/database.md#insert_many)** - Bulk document ingest
+- **[GraphBatch API](../api/graph_batch.md)** - Bulk graph ingest
 
 ## Source Code
 

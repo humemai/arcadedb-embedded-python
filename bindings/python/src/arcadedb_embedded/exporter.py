@@ -33,7 +33,9 @@ def export_database(
     Args:
         db: Database instance
         file_path: Output file path (will auto-add exports/ prefix if not absolute)
-        export_format: Export format - "jsonl", "graphml", or "graphson"
+        export_format: "jsonl". "graphml" and "graphson" need the engine's
+            optional arcadedb-gremlin module, which this package does not
+            bundle, so they raise ArcadeDBError here
         overwrite: Overwrite existing file if True
         include_types: List of types to export (None = all)
         exclude_types: List of types to exclude (None = none)
@@ -48,18 +50,14 @@ def export_database(
         - elapsedInSecs: Export duration
 
     Raises:
-        ArcadeDBError: If export fails or format is invalid
+        ArcadeDBError: If export fails, the format is invalid, or the format
+            needs a module this package does not bundle
 
     Example:
         >>> # Export entire database to JSONL (recommended for backup)
         >>> stats = db.export_database("backup.jsonl.tgz", overwrite=True)
         >>> print(
         ...     f"Exported {stats['totalRecords']} records in {stats['elapsedInSecs']}s"
-        ... )
-
-        >>> # Export to GraphML for visualization tools (Gephi, Cytoscape)
-        >>> db.export_database(
-        ...     "graph.graphml.tgz", export_format="graphml", overwrite=True
         ... )
 
         >>> # Export specific types only
@@ -140,10 +138,16 @@ def export_database(
     except Exception as e:
         # Check for specific error messages
         error_msg = str(e)
-        if "Format not supported" in error_msg or "not found" in error_msg:
+        if (
+            "arcadedb-gremlin" in error_msg
+            or "Format not supported" in error_msg
+            or "not found" in error_msg
+        ):
             raise ArcadeDBError(
-                f"Export format '{export_format}' requires additional modules. "
-                f"GraphML and GraphSON support is unavailable. Error: {error_msg}"
+                f"Export format '{export_format}' requires additional modules: "
+                f"GraphML and GraphSON come from the engine's optional "
+                f"arcadedb-gremlin module, which this package does not bundle. "
+                f"Use export_format='jsonl'. Error: {error_msg}"
             ) from e
         elif (
             "already exists" in error_msg

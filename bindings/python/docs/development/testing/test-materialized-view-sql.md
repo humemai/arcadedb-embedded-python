@@ -4,6 +4,8 @@
 
 These tests cover the SQL lifecycle for materialized views.
 
+There are 3 tests.
+
 ## Covered Behavior
 
 ### 1) end-to-end lifecycle
@@ -16,4 +18,4 @@ Alters a view to `REFRESH MANUAL`, verifies the metadata change, and confirms th
 
 ### 3) idempotent drop
 
-Checks that `DROP MATERIALIZED VIEW IF EXISTS` is safely repeatable.
+Runs `DROP MATERIALIZED VIEW IF EXISTS` twice on a view that does not exist; the test has no assertion and passes when neither call raises.

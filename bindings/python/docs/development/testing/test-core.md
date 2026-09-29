@@ -23,7 +23,7 @@ Tests validate:
 - Large result sets (1000+ records)
 - Type conversions (Python ↔ Java)
 - RID lookup via `lookup_by_rid()`
-- `run_in_transaction()` commit, retry, and rollback on any exception
+- `run_in_transaction()` commit and rollback on any exception, including `BaseException`
 - Bulk materialization (`to_json_list()`, `to_columns()`, `to_dataframe()`)
 
 ## Test Cases
@@ -40,7 +40,7 @@ Tests validate:
 - **test_transactions**: Tests successful commit and automatic rollback on exception
 - **test_run_in_transaction_commits_and_returns**: `run_in_transaction()` runs `fn` transactionally and hands back its return value
 - **test_run_in_transaction_rolls_back_on_non_arcadedb_error**: A plain `KeyError` from `fn` still rolls back and leaves no open transaction (#7108); it used to escape through the `except ArcadeDBError` handler
-- **test_run_in_transaction_rolls_back_on_base_exception**: `SystemExit` and `KeyboardInterrupt` are `BaseException`, so `except Exception` let them skip the rollback; they now roll back too
+- **test_run_in_transaction_rolls_back_on_base_exception**: `SystemExit` is a `BaseException`, so `except Exception` let it skip the rollback; the test raises `SystemExit` from `fn` and asserts no transaction is left open and nothing was stored
 - **test_result_methods**: Tests `Result` methods: `has_property()`, `get()`, `get_property_names()`, `to_dict()`, `to_json()`
 - **test_property_type_conversions**: Tests Python ↔ Java type mapping (str, int, long, float, double, bool, None, date)
 - **test_single_list_arg_is_positional_param_array**: A single list argument binds one element per `?` placeholder, the idiom example 04's CSV ingest uses

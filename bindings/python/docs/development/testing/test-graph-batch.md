@@ -4,6 +4,8 @@
 
 These tests cover the engine-backed `GraphBatch` helper used for bulk graph ingest.
 
+There are 6 tests.
+
 ## Covered Behavior
 
 ### 1) create vertices and edges
@@ -27,8 +29,9 @@ Exercises `parallel_flush=True` and verifies final vertex and edge counts plus g
 Exercises `commit_retries`, `commit_retry_delay_ms`, `chunk_cache_capacity` and
 `max_deferred_incoming_edges` on a five-vertex chain. The bounds are set
 deliberately tiny (a 2-entry chunk cache, a 1-edge deferred cap) so the bounded
-paths are the ones taken; since both are pure accelerators, the assertion is
-that the answer is identical either way.
+paths are the ones taken. Both are pure accelerators, so the test asserts the
+correct answer (5 vertices, 4 edges, and vertex 4 as the only incoming neighbour
+of vertex 5); it does not run a second, unbounded load to compare against.
 
 ### 6) invalid knob values are rejected
 

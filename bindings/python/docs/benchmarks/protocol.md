@@ -135,7 +135,7 @@ time-series, and document analytics tables each query gets the same time budget 
 engine, and derived rather than chosen: it comes from the bench host's own measured rows,
 three times what the median engine took for that query at that corpus size. The median
 rather than the slowest, because the slowest is what a budget exists to bound. It varies by
-table, by corpus size and by query, because a whole-graph aggregation grows with the data
+table, by corpus size, and by query, because a whole-graph aggregation grows with the data
 while an indexed lookup does not, and never by engine, because the engine is what the table
 compares. Where a corpus size has not been measured yet the budget falls back to the lane's
 older flat value and the row records which of the two applied, so a projection cannot be
@@ -155,7 +155,7 @@ one is a story.
 **A whole cell has a time cap, and exceeding it is a published outcome.** The cap belongs to
 the corpus size and is identical for every engine at that size. Its value comes from the
 fastest engine's measured cell and the median engine's projected one at that size, never
-from the slowest -- the same reasoning as the per-query budget, since the slowest engine is
+from the slowest, by the same reasoning as the per-query budget, since the slowest engine is
 exactly what the cap exists to bound. An engine that cannot finish
 inside it is censored with the cap named, which is a true statement about that engine at
 that size rather than a gap, and the remaining repetitions are skipped, because repeating a
@@ -167,12 +167,14 @@ five iterations at that rate the query stops there with the reason recorded on t
 because a median over fewer than five is not a median and the cell would otherwise spend
 hours confirming what the first pass showed. The other queries in the cell are unaffected.
 
-**Every table reports the same measurement set**: cold and warm latency at the median and
-the ninety-ninth percentile, throughput where the operation has a natural rate, recall where
-the index is approximate, peak memory, on-disk size after the workload, and, on the vector
-tables, ingest and index build as separate timers wherever the engine has that boundary. A
-table that omits one of these carries a stated reason, which a gate enforces the way it
-enforces every other page invariant.
+**Every table reports the same measurement set**: a warm median per query, a ninety-ninth
+percentile for the table's headline query, one cold column per table (the first query the
+cell ran after the database opened), throughput where the operation has a natural rate,
+recall where the index is approximate, peak memory, on-disk size after the workload, and,
+on the vector tables, ingest and index build as separate timers wherever the engine has that
+boundary. The rows keep a cold time and a warm median and ninety-ninth percentile for every
+query, so a row carries more than the page prints. A table that omits one of these carries a
+stated reason, which a gate enforces the way it enforces every other page invariant.
 
 There is deliberately **no per-table aggregate**. An arithmetic mean across queries whose
 times span orders of magnitude is the slowest query in disguise, a median across them moves
@@ -267,8 +269,11 @@ against its own artifact proves nothing.
 | **F8** | The CPU set must equalise **use**, not only the resource. Measured: no embedded engine parallelises a single nearest-neighbour query, so the comparison is of engines and not of thread counts. |
 | **F9** | A kept row needs a control. When a campaign re-measures one engine and carries the others forward, one untouched comparator is re-run and its old-against-new delta is recorded beside the table it licenses. |
 | **F10** | Same durability class per table, and one instrument. Rows measured under two instruments never share a table. |
-| **F11** | Close cost is an invariant, not a column: close should be proportional to what was written and not to what is stored, and a clean close that exceeds the stated budget fails the gate. |
-| **F12** | Equivalent queries must return equivalent answers. This one has its own page: [Answer Checking](equivalence.md). |
+| **F10b** | Both durability classes on every timed write. Each timed write operation runs once at each setting (see [Durability](#durability)); bulk ingest and every read path run at one setting. |
+| **F11** | Equivalent queries must return equivalent answers. This one has its own page: [Answer Checking](equivalence.md). |
+| **F12** | Every table reports the same measurement set, or says why not, and no table carries an aggregate across its queries (see [Repetitions, and What a Cell Prints](#repetitions-and-what-a-cell-prints)). |
+| **F13** | Close cost is an invariant, not a column: close should be proportional to what was written and not to what is stored, and a clean close that exceeds the stated budget fails the gate. |
+| **F14** | Equivalent queries get equivalent index support, chosen by measurement rather than by reasoning: each engine's index decision on a selective-filter lane is declared and names its evidence. The declaration is checked against the rows (F14b), and where one engine on a lane times ingest and index build separately, every engine does (F14c). |
 
 ## Engine Identity and Pins
 

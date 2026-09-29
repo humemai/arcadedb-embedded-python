@@ -15,6 +15,8 @@ It reports timings for:
 - reopen
 - reopen query phase
 - reopen close
+- server mode: `close database` and `open database` on a running bundled server, timed
+  over HTTP (three rounds, averaged)
 
 ## Run
 
@@ -39,11 +41,21 @@ python3 14_lifecycle_timing.py \
 
 ## Notes
 
-- The benchmark uses a random database path under `/tmp` by default.
-- The path is removed at the end (cleanup is always on).
+- The benchmark uses a random database path under the system temp directory by default;
+  `--db-path` sets it instead.
+- The path is removed at the end (cleanup is always on). The server step uses the same
+  path with a `_server` suffix and removes it too.
 - The script is intended for benchmarking in `examples`, not deterministic CI assertions.
 
 ## Expected Output (Desktop Baseline)
+
+After the per-run lines, the server step prints its two averages (values vary):
+
+```text
+Server mode, the same database closed and reopened on a running server:
+  close database: <seconds>s avg over 3
+  open database:  <seconds>s avg over 3
+```
 
 On a normal desktop CPU, this is a representative summary shape you can expect:
 

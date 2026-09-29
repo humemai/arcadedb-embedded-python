@@ -4,7 +4,7 @@
 
 This example shows the intended Python posture for Graph Analytical Views: keep the
 binding surface thin and drive the entire lifecycle with SQL, even for a much larger
-synthetic transport graph. The default run now starts at six-figure scale.
+synthetic transport graph.
 
 It covers:
 

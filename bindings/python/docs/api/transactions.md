@@ -9,7 +9,10 @@ ArcadeDB transactions provide:
 - **Atomicity**: All changes commit together or none commit
 - **Consistency**: Schema validation and constraint enforcement
 - **Isolation**: Read committed isolation level
-- **Durability**: Changes persisted to disk on commit
+- **Durability**: A committed transaction survives a process crash. With the default
+  WAL flush mode (`'no'`) it does not survive a power cut; call
+  `db.set_wal_flush('yes_nometadata')` (or `'yes_full'`) for that (see
+  [set_wal_flush](database.md#set_wal_flush))
 
 **Key Concepts:**
 
@@ -122,6 +125,25 @@ except Exception as e:
 ```
 
 **Recommendation:** Use `db.transaction()` context manager instead for automatic handling.
+
+---
+
+### `Database.run_in_transaction(fn, retries=12, backoff_s=0.005)`
+
+Run a zero-argument callable inside a transaction and return its result. Any exception
+rolls the transaction back. On `ConcurrentModificationException` or
+`NeedRetryException` the callable is run again, up to `retries` times, sleeping
+`backoff_s * attempt` between attempts. A `with db.transaction():` block cannot be
+re-entered, so use this for contended writes from several threads.
+
+**Example:**
+
+```python
+def add_view():
+    db.command("sql", "UPDATE Counter SET value = value + 1 WHERE name = ?", "page_views")
+
+db.run_in_transaction(add_view)
+```
 
 ---
 
@@ -320,10 +342,10 @@ try:
     db.command("sql", "INSERT INTO Step1 SET status = ?", "processing")
 
     # Operation 2 (may fail)
-    result = db.command("sql", "UPDATE Step1 SET status = 'complete'")
+    result = db.command("sql", "UPDATE Step1 SET status = ?", "complete")
 
-    # Check condition
-    if not result:
+    # Check condition: UPDATE returns one row with the number of records it changed
+    if result.first().get("count") == 0:
         raise Exception("Update failed")
 
     # Success - commit
@@ -512,12 +534,14 @@ t2.join()
 ### Durability Example
 
 ```python
-# Changes survive process crash
+# Flush the WAL at every commit so a commit also survives a power cut
+db.set_wal_flush("yes_nometadata")
+
 with db.transaction():
     db.command("sql", "INSERT INTO Critical SET data = ?", "important")
 
-# After commit, data is on disk
-# Even if process crashes here, data is safe
+# After commit, the data survives a process crash (with the default mode "no",
+# it would not survive a power cut)
 
 db.close()
 
@@ -600,7 +624,7 @@ with db.transaction():
     new_value = current_value + 1
 
     # Write
-    rid = counter.get("@rid")
+    rid = counter.get_rid()
     db.command("sql", f"UPDATE {rid} SET value = ?", new_value)  # the RID names the record; the value is bound
 ```
 
@@ -631,30 +655,20 @@ with db.transaction():
 ### Optimistic Locking
 
 ```python
-def update_with_retry(db, rid, new_value, max_retries=3):
+def update_with_retry(db, rid, new_value):
     """Update with optimistic locking and retry."""
-    for attempt in range(max_retries):
-        try:
-            with db.transaction():
-                # Read current version
-                result = db.query("sql", f"SELECT FROM {rid}")
-                record = result.first()
-                if record is None:
-                    raise ValueError("Record not found")
 
-                # Update (ArcadeDB handles version checking)
-                db.command("sql", f"UPDATE {rid} SET value = ?", new_value)
+    def update():
+        # Read current version
+        record = db.query("sql", f"SELECT FROM {rid}").first()
+        if record is None:
+            raise ValueError("Record not found")
 
-                return True
+        # Update (ArcadeDB checks the record version at commit)
+        db.command("sql", f"UPDATE {rid} SET value = ?", new_value)
 
-        except Exception as e:
-            if "concurrent" in str(e).lower() and attempt < max_retries - 1:
-                # Retry on concurrent modification
-                time.sleep(0.1 * (attempt + 1))
-                continue
-            raise
-
-    return False
+    # Rolls back and re-runs update() on a concurrent-modification conflict
+    db.run_in_transaction(update, retries=3)
 ```
 
 ---
@@ -674,6 +688,6 @@ def update_with_retry(db, rid, new_value, max_retries=3):
 ## See Also
 
 - [Database API](database.md) - Database operations
-- [Getting Started](../index.md) - Basic transaction examples
+- [Quick Start](../getting-started/quickstart.md) - Basic transaction examples
 - [Graph Operations Guide](../guide/graphs.md) - Transactions with graphs
 - [Import Workflow Reference](importer.md) - Bulk import with transactions

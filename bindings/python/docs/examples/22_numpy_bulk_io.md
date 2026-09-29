@@ -11,7 +11,12 @@ It covers:
 
 - bulk document ingest with `Database.insert_many()` (rows serialized as one
   JSON batch, looped Java-side), in both transactional-batch and async
-  parallel-writer modes
+  parallel-writer modes. Each bucket is owned by one async writer, so the
+  parallel mode runs on a type created with as many buckets as the executor's
+  parallel level (`async_executor().get_parallel_level()`, default cores - 1;
+  ArcadeData/arcadedb#8478). `commit_every` does not apply to that mode, and
+  it raises `ArcadeDBError` after the load if the writers rejected any record.
+  See [`insert_many`](../api/database.md#insert_many)
 - time-series ingest straight from numpy arrays via
   `AsyncExecutor.append_samples()` - timestamps and numeric field columns
   cross the boundary as one buffer copy per column
@@ -26,10 +31,14 @@ It covers:
   `bool` instead of degrading to a Python list. That section needs pyarrow
   (`pip install 'arcadedb-embedded[arrow]'`) and skips itself without it.
 
-Run it:
+## Run
+
+From `bindings/python/examples`:
 
 ```bash
-uv run python examples/22_numpy_bulk_io.py
+python 22_numpy_bulk_io.py
 # reduced scale:
-uv run python examples/22_numpy_bulk_io.py --rows 50000 --points 100000 --vectors 5000
+python 22_numpy_bulk_io.py --rows 50000 --points 100000 --vectors 5000
 ```
+
+The database is created under `./my_test_databases/numpy_bulk_io` (`--db-path`).

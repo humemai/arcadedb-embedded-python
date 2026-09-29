@@ -15,7 +15,7 @@ with arcadedb.create_database("./mydb") as db:
 
 ```python
 # Also good for servers
-with arcadedb.create_server("./databases") as server:
+with arcadedb.create_server("./databases", root_password="change-me") as server:
     # The context manager starts the server; do not call start() again
     # "mydb" will be created at ./databases/databases/mydb
     db = server.create_database("mydb")
@@ -73,7 +73,7 @@ threads = [Thread(target=worker) for _ in range(10)]
 
 ```python
 # Good: Server mode for multiple processes
-server = arcadedb.create_server(root_path="./databases")
+server = arcadedb.create_server(root_path="./databases", root_password="change-me")
 server.start()
 
 # Python process: embedded access
@@ -91,7 +91,7 @@ db = server.get_database("mydb")
 db1 = arcadedb.create_database("./mydb")  # Locks
 
 # process2.py (simultaneously)
-db2 = arcadedb.open_database("./mydb")    # ❌ LockException!
+db2 = arcadedb.open_database("./mydb")    # ❌ ArcadeDBError: ... is locked by another process
 ```
 
 ## Server Patterns
@@ -100,7 +100,7 @@ db2 = arcadedb.open_database("./mydb")    # ❌ LockException!
 
 ```python
 # Recommended: Start server first
-server = arcadedb.create_server("./databases")
+server = arcadedb.create_server("./databases", root_password="change-me")
 server.start()
 # "mydb" will be created at ./databases/databases/mydb
 db = server.create_database("mydb")
@@ -266,12 +266,12 @@ for i in range(1000):
 
 ```python
 # Fast: No HTTP overhead, direct JVM call
-server = arcadedb.create_server("./databases")
+server = arcadedb.create_server("./databases", root_password="change-me")
 server.start()
 # "mydb" will be created at ./databases/databases/mydb
 db = server.create_database("mydb")
 
-# This is as fast as standalone embedded!
+# A direct JVM call, like standalone embedded access (not HTTP)
 result = db.query("sql", "SELECT FROM Data")
 ```
 

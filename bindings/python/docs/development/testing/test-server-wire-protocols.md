@@ -4,6 +4,8 @@
 
 The wire protocols the wheel bundles are actually reachable.
 
+There are 5 tests. Every test carries the `server_wire` marker (a module-level `pytestmark`). Tests 2, 3, and 5 call `pytest.importorskip` for their client (`psycopg`; `pyarrow` and `adbc_driver_postgresql`; `neo4j`), so without those packages they skip rather than fail; test 4 only probes the Redis port. The repo-root uv project installs all of them.
+
 ## Test Cases
 
 ### 1) plugins are opt in
@@ -24,7 +26,7 @@ arcadedb.redis.port is honoured, like the Postgres and Bolt ports.
 
 ### 5) bolt wire answers a cypher query
 
-See the source for the exact assertions.
+Connects with the `neo4j` driver over Bolt and asserts that `MATCH (i:Item) RETURN i.name AS name` returns a row named `alpha`.
 
 ## Running
 

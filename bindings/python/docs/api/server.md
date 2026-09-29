@@ -10,7 +10,6 @@ The server provides:
 - **Studio Web UI**: Visual database exploration and query editor
 - **Multi-database Management**: Create and access multiple databases
 - **Remote Access**: Access from other applications via HTTP
-- **GraphQL/OpenCypher Support**: Extended query languages
 
 **When to Use Server Mode:**
 
@@ -18,7 +17,7 @@ The server provides:
 - Web applications needing HTTP API
 - Visual data exploration via Studio
 - Remote database access
-- GraphQL or OpenCypher queries
+- Clients written in other languages that speak HTTP
 
 **When to Use Embedded Mode:**
 
@@ -47,7 +46,7 @@ Create an ArcadeDB server instance.
 - `config` (Optional[Dict[str, Any]]): Configuration dictionary (default: `None`)
     - `http_port` (int): HTTP API port (default: 2480)
     - `host` (str): Host to bind to (default: "localhost"). Pass "0.0.0.0" explicitly to expose the server on all IPv4 interfaces, or "::" for all IPv6 interfaces.
-    - `mode` (str): Server mode - "development" or "production" (default: "development")
+    - `mode` (str): Server mode: "development", "test", or "production" (default: "development"). See [Mode Comparison](#mode-comparison)
     - Additional ArcadeDB configuration keys (see Advanced Configuration)
 
 **Returns:**
@@ -90,13 +89,22 @@ server = arcadedb.create_server(
 ArcadeDBServer(
     root_path: str = "./databases",
     root_password: Optional[str] = None,
-    config: Optional[Dict[str, Any]] = None
+    config: Optional[Dict[str, Any]] = None,
+    jvm_kwargs: Optional[dict] = None,
 )
 ```
 
-**Prefer using `create_server()` function instead.**
+**Prefer using `create_server()` function instead**, unless you need `jvm_kwargs`.
 
-**Parameters:** Same as `create_server()`
+**Parameters:**
+
+- `root_path`, `root_password`, `config`: As for `create_server()`, with one
+  difference: the constructor uses `root_path` as given, while `create_server()` first
+  makes it absolute.
+- `jvm_kwargs` (Optional[dict]): Keyword arguments for `start_jvm()`, for example
+  `{"heap_size": "8g"}`. `create_server()` has no such parameter, so this is the way to
+  pass JVM options when the server is the first thing to start the JVM. Once the JVM is
+  running, options that differ from the ones it started with raise `ArcadeDBError`.
 
 ---
 
@@ -313,7 +321,7 @@ with arcadedb.create_server(root_password="password123") as server:
 config = {
     "http_port": 2480,           # HTTP API port
     "host": "localhost",         # Bind address (default loopback; "0.0.0.0" = all IPv4 interfaces)
-    "mode": "development",       # "development" or "production"
+    "mode": "development",       # "development", "test", or "production"
 }
 
 server = arcadedb.create_server(config=config)
@@ -321,12 +329,19 @@ server = arcadedb.create_server(config=config)
 
 ### Mode Comparison
 
-| Setting | Development | Production |
-|---------|-------------|------------|
-| CORS | Enabled | Disabled |
-| Debug Logging | Verbose | Minimal |
-| Error Details | Full stack traces | Generic messages |
-| Performance Checks | Enabled | Disabled |
+| Behaviour | `"development"` | `"test"` | `"production"` |
+|-----------|-----------------|----------|----------------|
+| Studio web UI | Served | Served | Not served, unless `"studio_enabled": True` (`arcadedb.studio.enabled`) |
+| `detail` (cause chain) in HTTP error bodies | Included | Included | Omitted |
+| Log level for user-triggered request errors | INFO | FINE | FINE |
+| Log level for internal faults | SEVERE | WARNING | WARNING |
+| WAL flush default (`arcadedb.txWalFlush`) | Unchanged | Unchanged | Set to 1 at start unless set explicitly |
+| OpenCypher `LOAD CSV` from `file:` URLs (`arcadedb.opencypher.loadCsv.allowFileUrls`) | Unchanged | Unchanged | Disabled at start unless set explicitly |
+
+The two production defaults are set on the process-wide configuration, so a database
+the same Python process opens afterwards inherits them too. Production mode also logs a
+checklist of settings at startup. A server in production mode serves no Studio page, so
+`get_studio_url()` points at nothing there unless Studio is re-enabled.
 
 **Recommendation:** Use `"development"` for local dev, `"production"` for deployment.
 
@@ -443,28 +458,24 @@ from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-# Create server (singleton)
+# Create and start the server once, at import time
+# (production mode: no Studio page is served)
 server = arcadedb.create_server(
     root_path="./app_databases",
     root_password="secure_password",
     config={"http_port": 2480, "mode": "production"}
 )
+server.start()
 
-@app.before_first_request
-def startup():
-    """Start ArcadeDB server on first request."""
-    server.start()
-
-    # Create database if needed
-    try:
-        db = server.get_database("app_db")
-    except:
-        db = server.create_database("app_db")
+# create_database() returns the existing database when there is one
+db = server.create_database("app_db")
+try:
+    if not db.schema.exists_type("User"):
         db.command("sql", "CREATE DOCUMENT TYPE User")
         db.command("sql", "CREATE PROPERTY User.email STRING")
         db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
-    finally:
-        db.close()
+finally:
+    db.close()
 
 @app.route("/users")
 def get_users():
@@ -477,11 +488,6 @@ def get_users():
         return jsonify(users)
     finally:
         db.close()
-
-@app.route("/studio")
-def studio_link():
-    """Provide link to Studio for admins."""
-    return jsonify({"studio_url": server.get_studio_url()})
 
 if __name__ == "__main__":
     try:

@@ -241,8 +241,9 @@ class ResultSet:
 
         The fast path for large result sets: rows are serialized to JSON in
         batches on the Java side (one JPype crossing per batch instead of
-        several per row) and parsed with the C json module — measured ~6x
-        faster than ``to_list()`` on wide 100k-row scans.
+        several per row) and parsed with the C json module. Measured ~5.5x
+        faster than ``to_list()`` on a 10,000-row, nine-property scan (578 ms
+        against 103 ms, laptop, 2026-09-27).
 
         Trade-off: values carry JSON-native types. Numbers, strings, booleans,
         lists and nested maps convert as expected, but temporal values arrive

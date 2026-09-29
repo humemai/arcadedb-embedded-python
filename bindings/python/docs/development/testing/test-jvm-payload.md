@@ -6,6 +6,8 @@ A Python list must never be what crosses into the JVM.
 
 JPype copies a NumPy array across in one crossing and marshals a list element by element, so the cost scales with the length of every vector. The bulk paths decline a list silently, so a `.tolist()` on the way into the JVM runs, returns the right answer, and is slower. The analysis lives in `benchmarks/experiments/jvm_payload_check.py`; these tests run it from the suite so it rides CI without a workflow of its own.
 
+There are 2 tests.
+
 ## Test Cases
 
 ### 1) the check has not gone blind

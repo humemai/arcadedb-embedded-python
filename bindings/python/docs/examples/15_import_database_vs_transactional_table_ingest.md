@@ -32,23 +32,17 @@ Example 15 is the table-ingest comparison harness for embedded Python.
 
 !!! warning "Why the async arm accepts only `--async-parallel 1`"
 
-    The async executor's SQL command path, `db.async_executor().command(...)`, silently
-    discarded records once the parallel level was above 1, before 26.10.1
-    (`ArcadeData/arcadedb#7615`, fixed in #7625: a failed periodic commit is now retried
-    and otherwise reported through the error callback). Observed on arcadedb-engine
-    26.9.1 and 26.6.1, measured 2026-09-15. How much was lost varied by run and by
-    workload shape: 9,742 single-record `INSERT` commands submitted at parallel level 4
-    stored 2,436, 5,742, and 7,742 rows across runs. No error reached the per-command
-    callback, nothing was
-    logged, and `wait_completion()` returned normally. Only the executor-wide `on_error`
-    handler saw anything, one `ConcurrentModificationException` per rolled-back batch.
-    At parallel level 1 nothing was lost. Filed upstream as `ArcadeData/arcadedb#7615`.
-
+    Before 26.10.1, `async_executor().command(...)` could silently drop records above
+    parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see
+    [Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation).
     `run_async_sql_load(...)` therefore raises `ValueError` for any `--async-parallel`
     other than 1, and counts stored rows against submitted rows per table so a short
     load fails instead of being reported as a fast one.
 
-## Recent Benchmark Snapshot
+## Snapshot (2026-03-19, three of the four arms)
+
+This run predates `db.import_documents(...)`, so it has no time for that arm, and it has
+not been re-run on a later engine.
 
 For this shape:
 
@@ -64,15 +58,13 @@ Measured times:
 - `Transactional INSERT`: `189.921s`
 - `Async SQL INSERT`: `146.670s`
 - `IMPORT DATABASE` with `--parallel 1`: `58.281s`
-- `IMPORT DATABASE` with `--parallel 4`: `59.868s`
 
 The run parameters recorded above do not name an `--async-parallel` value. The flag
 defaulted to 1 at the time, and 1 is the only level the arm now accepts, so the
 `Async SQL INSERT` figure is most likely a one-worker time. Treat it as unverified
 rather than as a like-for-like comparison until the arm is re-run.
 
-For this synthetic workload, `IMPORT DATABASE` remained the fastest option, but
-increasing import parallelism from 1 to 4 did not provide a meaningful speedup.
+For this synthetic workload, `IMPORT DATABASE` was the fastest of the three arms timed.
 
 That benchmark result should not be treated as the repository-wide recommendation, and
 neither should the async time. For the real document-preload examples the path to use is

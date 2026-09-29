@@ -2,13 +2,13 @@
 
 ## Overview
 
-The CI/CD workflows now support building and releasing across **4 platforms** for a total of **20 wheel packages** per release (4 platforms × 5 Python versions), all under the single `arcadedb-embedded` package.
+The CI/CD workflows build and release across **4 platforms** for a total of **20 wheel packages** per release (4 platforms × 5 Python versions), all under the single `arcadedb-embedded` package.
 
 ## Build Matrix
 
 ### Single-Package Strategy
 
-- **arcadedb-embedded**: All platforms (~62MB compressed and ~87MB installed on current Linux x86_64 builds; varies slightly by platform and version) - JRE bundled, no external Java needed
+- **arcadedb-embedded**: All platforms, JRE bundled, no external Java needed. The 26.10.1.dev0 linux/amd64 wheel measured on 2026-09-29 is about 69 MB compressed and 96 MB installed; other platforms and versions vary slightly.
 
 ### Platforms (All Native Runners)
 
@@ -21,7 +21,7 @@ The CI/CD workflows now support building and releasing across **4 platforms** fo
 
 **20 wheels per release**: 1 package × 4 platforms × 5 Python versions = 20 wheels
 
-## Workflow Changes
+## Workflows
 
 ### `test-python-bindings.yml`
 
@@ -31,22 +31,72 @@ The CI/CD workflows now support building and releasing across **4 platforms** fo
     - ubuntu-24.04-arm (Linux ARM64)
     - macos-15 (macOS Apple Silicon)
     - windows-2025 (Windows x86_64)
-- **Jobs**: 20 total (4 platforms × 5 Python versions)
+- **Jobs**: `bandit`, `dependency-floors`, `download-jars`, `test` (20 matrix jobs: 4 platforms × 5 Python versions), and `test-summary`
 - **Artifacts**: `wheel-{platform}-py{version}` (20 artifacts)
+- **Triggers**: pushes to `main` and pull requests that touch `bindings/python/**` or the workflow itself, manual dispatch, and `workflow_call` from the release workflow
+
+### `test-python-examples.yml`
+
+Builds the wheel on the same 4 × 5 matrix and runs the example scripts
+(`0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py` by default). Example 21 is excluded in CI.
+Same path filter and triggers as the bindings workflow.
+
+### `lint-workflows.yml`
+
+Runs on every push to `main` and every pull request:
+
+- `sha-pinned-actions`: every action reference must be pinned to a full commit SHA
+- `pre-commit`: the repository's pre-commit hooks (black, isort with the black profile, and the rest) on the files under `bindings/python`
 
 ### `release-python-packages.yml`
 
-- **Artifacts**: `wheel-{platform}-py{version}` (20 artifacts)
-- **Publish Job**:
-    - `publish`: Collects all 20 wheels and publishes to `arcadedb-embedded`
+- **Trigger**: a pushed tag matching `[0-9]+.[0-9]+.[0-9]+*` (`X.Y.Z`, `X.Y.Z.devN`, `X.Y.Z.postN`)
+- **validate-version**: the tag's base version must equal the `pom.xml` base version, or the release stops
+- **test** and **test-examples**: call the two test workflows above with the tag version
+- **publish**: needs all three, collects all 20 wheels, checks the count and the versions, and publishes to `arcadedb-embedded` on PyPI through the `pypi` environment (trusted publishing)
 
-## GitHub Repository Setup Required
+### `deploy-python-docs.yml`
 
-### 1. Create PyPI Trusted Publisher Environment
+Deploys the docs with mike on a version tag or a manual dispatch. See
+[Documentation](documentation.md#versioned-documentation).
 
-You need to create one environment in GitHub repository settings:
+## CI Gates
 
-#### Environment: `pypi`
+What must pass before a change is green, beyond the tests themselves:
+
+- **Bandit** (`bandit` job): `src` and `tests` must be clean at low severity and low
+  confidence; `examples` at medium severity and high confidence. A deliberate SQL
+  string needs `# nosec B608` on the f-string line itself.
+- **Dependency floors** (`dependency-floors` job): the dependencies declared in
+  `bindings/python/pyproject.toml` (with the `test`, `vector`, `examples`, `arrow`,
+  and `pandas` extras) are resolved to their lowest allowed versions for every
+  Python version in the classifiers, and `pip-audit` checks the result.
+- **No skips for missing imports** (`test` job): a test that skips because
+  `pytest.importorskip` could not import a module fails the job. A new test
+  dependency must be added both to the `test` extra in `bindings/python/pyproject.toml`
+  and to the "Install wheel and test dependencies" step of `test-python-bindings.yml`.
+  The repo-root `pyproject.toml` carries the same packages for local runs.
+- **Timeouts**: the pytest step has a 30-minute limit, and `faulthandler_timeout = 600`
+  in the pytest configuration dumps every thread's stack when a single test runs
+  past 10 minutes.
+- **SHA-pinned actions and pre-commit** (`lint-workflows.yml`, above).
+
+Run the same checks locally before pushing (from the repository root):
+
+```bash
+uv run bandit -c bindings/python/pyproject.toml -r bindings/python/src bindings/python/tests \
+  --severity-level low --confidence-level low
+uv run pytest -rs
+uvx pre-commit run --files $(git ls-files 'bindings/python/**')
+```
+
+## PyPI Trusted Publisher Setup
+
+The release workflow publishes through PyPI trusted publishing, which needs one
+GitHub environment and one PyPI publisher entry. Both already exist for this
+repository; this is how they are configured if they ever need to be recreated.
+
+### Environment: `pypi`
 
 - **PyPI Package**: `arcadedb-embedded`
 - **Trusted Publisher**:
@@ -54,38 +104,13 @@ You need to create one environment in GitHub repository settings:
     - Workflow: `release-python-packages.yml`
     - Environment: `pypi`
 
-### 2. Steps to Create Environment
+### Steps
 
 1. **Go to Repository Settings** → **Environments** → **New environment**
 2. **Create `pypi`** environment
 3. **Configure PyPI Trusted Publisher**:
     - Go to https://pypi.org/manage/account/publishing/
     - Add publisher for `arcadedb-embedded` (environment: `pypi`)
-
-### 3. First Release Steps
-
-1. **Register package on PyPI** (if not already registered):
-    ```bash
-    # Build a wheel locally first
-    cd bindings/python
-    ./scripts/build.sh
-
-    # Upload manually to register the package (twine runs via uvx)
-    uvx twine upload dist/arcadedb_embedded-*.whl
-    ```
-
-2. **Set up trusted publisher** on PyPI (see step 2 above)
-
-3. **Push a test tag**:
-    ```bash
-    git tag 25.10.1.dev0
-    git push origin 25.10.1.dev0
-    ```
-
-4. **Monitor the workflow**:
-    - Go to Actions tab
-    - Watch `Build and Release Python Packages to PyPI`
-    - Check that 20 wheels are built and publish job succeeds
 
 ## Validation
 
@@ -95,18 +120,18 @@ After a successful release, you should see:
 
 - **20 wheel files** on PyPI for `arcadedb-embedded` (4 platforms × 5 Python versions)
 
-### Test Results (CI run #96)
+### Package Contents
 
-All 4 platforms passing the bindings suite and example workflows:
+Measured on the 26.10.1.dev0 linux/amd64 wheel on 2026-09-29:
 
-| Platforms | Wheel Size | JRE Size | Tests |
-|-----------|-----------|----------|-------|
-| linux/amd64, linux/arm64, darwin/arm64, windows/amd64 | ~62M | ~63M | full suite ✅ |
+| Wheel | JRE | JARs | Installed |
+|-------|-----|------|-----------|
+| about 69 MB | about 63 MB | about 33 MB | about 96 MB |
 
 **All platforms include:**
 
-- ~31M JARs (current Linux x86_64 package info, same contents across platforms; includes server/Studio, excludes gRPC)
-- Platform-specific JRE (~63M uncompressed, similar across platforms)
+- The same JAR set (includes server/Studio; the exclusions are in `scripts/jar_exclusions.txt`)
+- A platform-specific JRE
 - Native runners (no QEMU emulation anywhere)
 
 ## Cross-Platform Building
@@ -119,19 +144,6 @@ All platforms use native GitHub runners:
 - **linux/arm64**: ubuntu-24.04-arm (Docker build, native ARM64)
 - **darwin/arm64**: macos-15 (native build)
 - **windows/amd64**: windows-2025 (native build)
-
-### Build Time Expectations
-
-- **All platforms**: ~5-10 minutes per build (all native, no QEMU overhead)
-- **Total release time**: ~15-25 minutes (parallel builds)
-
-### Performance Improvements
-
-Previously used QEMU for linux/arm64:
-
-- QEMU: ~15-20 minutes per build
-- Native ARM64: ~5-7 minutes per build
-- **3-4x performance improvement** by switching to native runners
 
 ## Testing Locally
 
@@ -176,16 +188,16 @@ cd bindings/python
 
 ### "Value 'pypi' is not valid"
 
-- This error appears in the workflow file but is expected
-- The environment doesn't exist yet in GitHub settings
-- Create it as described in section 1 above
+- This error appears in the workflow file when the `pypi` environment does not exist
+- Create it as described in [PyPI Trusted Publisher Setup](#pypi-trusted-publisher-setup)
 
 ### Platform-specific JVM detection issues
 
-All platforms now use platform-specific JVM library paths:
+The bindings load the bundled JRE's JVM library from a platform-specific path:
 
 - macOS: `lib/server/libjvm.dylib`
 - Linux: `lib/server/libjvm.so`
+- Windows: `bin/server/jvm.dll`
 
 ### Wheel count mismatch
 
@@ -195,18 +207,9 @@ All platforms now use platform-specific JVM library paths:
 
 ### Runner availability
 
-All platforms use pinned runner versions for reproducibility:
+All platforms use pinned runner versions:
 
 - ubuntu-24.04 (guaranteed available)
 - ubuntu-24.04-arm (GitHub-hosted ARM64)
 - macos-15 (Apple Silicon, pinned version)
 - windows-2025 (Windows x86_64, pinned version)
-
-## Next Steps
-
-1. **Create GitHub environment** (`pypi`)
-2. **Set up PyPI trusted publisher** for `arcadedb-embedded`
-3. **Test with a dev tag**: `git tag 25.10.1.dev0 && git push origin 25.10.1.dev0`
-4. **Verify 20 wheels are published** to PyPI (4 platforms × 5 Python versions)
-5. **Test installation** on the supported platforms
-6. **Verify no Java required** on end-user systems (JRE bundled)

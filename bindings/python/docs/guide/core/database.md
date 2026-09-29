@@ -60,7 +60,7 @@ import arcadedb_embedded as arcadedb
 
 # Create new database
 with arcadedb.create_database("./mydb") as db:
-    print(f"Database created at: {db.get_name()}")
+    print(f"Database created at: {db.get_database_path()}")
 ```
 
 **What happens during creation:**
@@ -159,7 +159,6 @@ else:
 
 - **Explicit control**: Clear separation of creation/opening logic
 - **Reusability**: One factory for multiple operations
-- **Configuration**: Set options before creating/opening
 
 ## Context Managers
 
@@ -255,12 +254,6 @@ with arcadedb.open_database("./database1") as db1, \
     # Use both databases
     result1 = db1.query("sql", "SELECT FROM User")
     result2 = db2.query("sql", "SELECT FROM Product")
-
-# Or with context managers
-with arcadedb.open_database("./database1") as db1, \
-        arcadedb.open_database("./database2") as db2:
-    # Use both databases
-    pass
 ```
 
 ### Database Locking

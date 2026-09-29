@@ -2,7 +2,7 @@
 
 Native Python bindings for ArcadeDB - the multi-model database that supports Graph, Document, Key/Value, Search Engine, Time Series, and Vector models.
 
-**Status**: ✅ Production Ready | **Tests**: 471 test functions | **Platforms**: 4 Supported
+**Status**: ✅ Production Ready | **Platforms**: 4 Supported
 
 ---
 
@@ -22,7 +22,7 @@ uv add arcadedb-embedded   # or: pip install arcadedb-embedded
 
 **Requirements:**
 
-- **Python 3.10–3.14** (packaged/tested on CPython 3.12) - No Java installation required!
+- **Python 3.10 to 3.14** (CI runs all five on every supported platform). No Java installation required!
 - **Supported Platforms**: Prebuilt wheels for **4 platforms**
   - Linux: x86_64, ARM64
   - macOS: Apple Silicon (ARM64)
@@ -59,10 +59,10 @@ with arcadedb.create_database("./mydb") as db:
 - ☕ **No Java Installation Required**: Bundled JRE (~63 MiB uncompressed)
 - 🌍 **4 Platforms Supported**: Linux (x86_64, ARM64), macOS (ARM64), Windows (x86_64)
 - 🚀 **Embedded Mode**: Direct database access in Python process (no network)
-- 🌐 **Server Mode**: Optional in-process HTTP server with the Studio web UI — costs ~8MB of wheel and nothing at runtime until you call `create_server()`
+- 🌐 **Server Mode**: Optional in-process HTTP server with the Studio web UI: it costs ~8MB of wheel and nothing at runtime until you call `create_server()`
 - 📦 **Self-contained**: All dependencies bundled (~69 MiB current Linux wheel)
 - 🔄 **Multi-model**: Graph, Document, Key/Value, Vector, Time Series
-- 🔍 **Multiple query languages**: SQL, OpenCypher
+- 🔍 **Multiple query languages**: SQL and OpenCypher
 - ⚡ **High performance**: Direct JVM integration via JPype
 - 🔒 **ACID transactions**: Full transaction support
 - 🎯 **Vector storage**: Store and query vector embeddings with HNSW (JVector) indexing
@@ -98,10 +98,8 @@ Import: `import arcadedb_embedded as arcadedb`
 
 ## 🧪 Testing
 
-**Status**: 471 test functions (counted 2026-09-27)
-
-Tests run against the built wheel via the uv project at the repo root — no
-virtualenv activation needed, and `uv run` works from anywhere in the repo:
+Tests run against the built wheel via the uv project at the repo root. No
+virtualenv activation is needed, and `uv run` works from anywhere in the repo:
 
 ```bash
 # Run all tests
@@ -150,7 +148,7 @@ arcadedb_embedded/
 ├── async_executor.py    # Asynchronous command/query + record execution
 ├── core.py              # Database and DatabaseFactory
 ├── exceptions.py        # ArcadeDBError exception
-├── exporter.py          # Data export (JSONL, GraphML, GraphSON, CSV)
+├── exporter.py          # Data export (JSONL, CSV)
 ├── graph.py             # Graph wrappers
 ├── graph_batch.py       # GraphBatch high-throughput graph ingest wrapper
 ├── importer.py          # Data import (CSV, XML, ArcadeDB JSONL)

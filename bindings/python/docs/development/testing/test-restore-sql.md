@@ -4,13 +4,15 @@
 
 These tests cover the `RESTORE` statement family, which puts a deleted record back at its original RID.
 
-Every assertion asks the same question two ways: `SELECT count(*)` against a full scan. A wrong count comes back with an ordinary success and no warning, so nothing but comparing the two can tell it apart from a correct one.
+The count assertions ask the same question two ways: `SELECT count(*)` against a full scan. A wrong count comes back with an ordinary success and no warning, so nothing but comparing the two can tell it apart from a correct one. Tests 2 and 5 also check the record itself: its RID and properties, and its index entry.
+
+There are 5 tests.
 
 ## Covered Behavior
 
 ### 1) `RESTORE DOCUMENT` restores the record count
 
-Inserts three documents, deletes one, restores it, and checks that `count(*)` agrees with a full scan at every step. Then reopens the database and checks again — the reopen is half the test, because the bug this pins survived close and reopen, which is what proved it was the stored count rather than a stale in-memory statistic.
+Inserts three documents, deletes one, restores it, and checks that `count(*)` agrees with a full scan at every step. Then reopens the database and checks again. The reopen is half the test, because the bug this pins survived close and reopen, which is what proved it was the stored count rather than a stale in-memory statistic.
 
 ### 2) the restored record is intact
 

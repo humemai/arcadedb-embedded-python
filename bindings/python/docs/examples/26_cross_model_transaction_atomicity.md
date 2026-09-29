@@ -11,16 +11,21 @@ two ways:
 - **inside a transaction**: the exception rolls everything back, torn 0 of 20
 - **without one**: each write commits on its own, torn 20 of 20
 
-This is the small version of the project page's cross-model table, where the
-same interruption is applied to ArcadeDB, SurrealDB and a composed Qdrant plus
-Neo4j stack, and the composed stack is left torn every time because no
-transaction spans its two engines.
+This is the small version of the project page's
+[cross-model table](https://humem.ai/projects/arcadedb#crossmodel), which applies
+the same interruption to every engine in that lane (see the
+[benchmark overview](../benchmarks/index.md)). The composed Qdrant plus Neo4j
+stack there is left torn every time, because no transaction spans its two engines.
 
 ## Run
 
+From `bindings/python/examples`:
+
 ```bash
-uv run python examples/26_cross_model_transaction_atomicity.py --products 2000 --trials 20
+python 26_cross_model_transaction_atomicity.py --products 2000 --trials 20
 ```
+
+The database is created under `./my_test_databases/cross_model_atomicity` (`--db-path`).
 
 ## Notes
 

@@ -24,7 +24,7 @@ crossing per edge. Measured, that made 100k-row scans 15–21× slower than
 Java-native iteration and bulk edge ingest 24× slower.
 
 The bridge inverts the shape: the loop runs Java-side, and Python pays **one
-crossing per batch**, receiving a bulk payload it can decode at C speed — the
+crossing per batch**, receiving a bulk payload it can decode at C speed: the
 `json` module for `RowBatcher`/`EdgeBatcher`/`VertexBatcher`, and
 `numpy.frombuffer` for `ColumnBatcher`. See the
 [performance page](../guide/performance.md) for the resulting numbers.
@@ -35,7 +35,7 @@ crossing per batch**, receiving a bulk payload it can decode at C speed — the
 |---|---|
 | `ResultSet.to_json_list()` / `iter_json_batches()` | `RowBatcher` |
 | `ResultSet.to_list()` (rows in batches), `Result.to_dict()` (one row) | `RowAccess` |
-| `ResultSet.to_columns()` / fast `to_dataframe()` | `ColumnBatcher` |
+| `ResultSet.to_columns()` / fast `to_dataframe()` / `to_arrow()` | `ColumnBatcher` |
 | `Database.insert_many()` | `DocumentBatcher` |
 | `AsyncExecutor.append_samples()` (numpy numeric-column boxing) | `DocumentBatcher` |
 | `AsyncExecutor.append_samples(..., primitive=True)` | `TimeSeriesBatcher` |
@@ -53,7 +53,7 @@ JARs and jar it up as `arcadedb-python-bridge.jar`:
 
 The jar lands in `arcadedb_embedded/jars/` inside the wheel, next to the
 engine JARs, so it is on the classpath automatically when `jvm.py` starts the
-JVM. There is no separate release artifact or version — it is rebuilt from
+JVM. There is no separate release artifact or version: it is rebuilt from
 source on every wheel build.
 
 ## Design constraints
@@ -62,11 +62,14 @@ source on every wheel build.
   `ResultSet`, `Result`, `GraphBatch`, `RID`, and the engine's JSON
   serializer. No engine code is modified, so upstream syncs never conflict
   with it.
-- **Every caller has a fallback.** Each Python API that rides the bridge
-  falls back to a pure-JPype implementation if the jar (or a required method)
-  is absent — a source checkout without the jar still works, just slower.
-  The exception is `AsyncExecutor.append_samples()`: its numpy-column path and
-  its `primitive=True` path load the bridge classes directly and need the jar.
+- **Most callers have a fallback.** Most Python APIs that ride the bridge
+  fall back to a pure-JPype implementation if the jar (or a required method)
+  is absent, so they still work, just slower. `to_columns()` and `to_arrow()`
+  return `None` instead, as they do without NumPy or pyarrow. Two need the jar:
+  `AsyncExecutor.append_samples()`, whose numpy-column path and `primitive=True`
+  path load the bridge classes directly, and `Database.insert_many()`, which loads
+  `DocumentBatcher` for any JSON-serializable rows and raises `ArcadeDBError` if it
+  is missing (its per-row path runs only for rows `json.dumps` rejects).
 - `RowBatcher` serializes rows property-by-property rather than via
   `Result.toJSON()` to work around upstream
   [#4967](https://github.com/ArcadeData/arcadedb/issues/4967) (primitive

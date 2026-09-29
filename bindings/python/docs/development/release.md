@@ -6,19 +6,46 @@ Complete workflow for releasing ArcadeDB Python bindings to PyPI with versioned 
 
 - Push access to the repository
 - PyPI environment configured in GitHub (`pypi`)
-- Trusted publisher setup on PyPI (automatic authentication)
+- Trusted publisher setup on PyPI (automatic authentication; see [CI/CD Setup](ci-setup.md#pypi-trusted-publisher-setup))
 
-## Release Checklist
+## Where the Version Comes From
 
-### 1. Prepare Release
+This fork does not set its own version. The wheel version is derived from the root
+`pom.xml`, and `pom.xml` belongs to upstream ArcadeDB: it arrives with each
+`./sync-upstream.sh` run. Never edit it here; a local change would conflict with the
+next sync.
 
-On `main` (or a `release/X.Y.Z` branch if you want main to keep moving):
+- Between releases, upstream's `main` reads `X.Y.Z-SNAPSHOT`, and the wheel builds as `X.Y.Z.dev0`.
+- Upstream cuts a release with a commit titled "Set release version to X.Y.Z", which
+  sets `pom.xml` to `X.Y.Z`. A stable bindings release is built from a sync that stops
+  at that commit.
 
-- [ ] Version is already set in `pom.xml` (e.g., `X.Y.Z-SNAPSHOT`)
-- [ ] Run full test suite
-- [ ] Prepare release notes for the GitHub release
-- [ ] Update documentation if needed
-- [ ] Commit all changes
+!!! warning "Upstream uses the same version numbers"
+    ArcadeDB's release tags carry the same numbers as ours (`26.9.1` is both their
+    engine release and our wheel release). Always fetch `upstream` with `--no-tags`
+    (`sync-upstream.sh` does). If their tag is ever fetched, `git tag -a X.Y.Z` fails
+    with "already exists", but `git push origin X.Y.Z` still succeeds and publishes
+    upstream's commit. Check what a tag points to before pushing it (step 4 below).
+
+## Release Checklist (stable `X.Y.Z`)
+
+### 1. Sync to Upstream's Release Commit
+
+```bash
+# Find upstream's release commit without fetching its tags
+git fetch upstream --no-tags
+git log upstream/main --oneline --grep "Set release version to X.Y.Z"
+
+# Merge upstream up to that commit
+./sync-upstream.sh --until <commit>
+```
+
+If the merge stops on conflicts, resolve them as described in
+[Syncing Upstream](sync-upstream.md#when-the-merge-stops-on-conflicts), including the
+fork-owned restore and the `.github` prune the script skips in that case. Afterwards
+`pom.xml` reads `X.Y.Z`.
+
+### 2. Build and Test
 
 ```bash
 cd bindings/python
@@ -30,39 +57,58 @@ cd bindings/python
 uv run pytest
 ```
 
-### 2. Tag and Release (CLI)
+- [ ] Full test suite passes
+- [ ] Release notes prepared (for example in `notes.md`)
+- [ ] Documentation updated if needed
 
-Tags are the source of truth. Pushing `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN` triggers PyPI + docs.
-If `main` keeps moving, create all `X.Y.Z.devN`, `X.Y.Z`, and `X.Y.Z.postN` tags from `release/X.Y.Z`.
+### 3. Push and Let CI Pass
 
 ```bash
-git add .
-git commit -m "Release Python bindings X.Y.Z"
 git push origin main
-
-git tag -a X.Y.Z -m "Python release X.Y.Z"
-git push origin X.Y.Z
-
-gh release create X.Y.Z \
-  --target main \
-  --title "Python release X.Y.Z" \
-  --notes "Release X.Y.Z"
 ```
 
-### 3. Monitor GitHub Actions
+Wait for "Test Python Bindings" and "Test Python Examples" to finish, and check that
+the examples actually ran rather than skipped.
 
-- Check the Actions tab for `release-python-packages` and `deploy-python-docs`.
-- Docs deploy uses the tag version; dev tags become `latest` unless you run the docs workflow with `set_latest=false`.
+### 4. Tag, Check, and Release
 
-### 4. Post-Release
+Tags are the source of truth. Pushing `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN` triggers
+PyPI + docs.
 
 ```bash
-# Bump version in pom.xml for next development cycle
-vim pom.xml
+git tag -a X.Y.Z -F notes.md
 
-git add pom.xml
-git commit -m "Bump version to next development version"
-git push origin main
+# The tag must point at the commit you just tested
+test "$(git rev-parse 'X.Y.Z^{}')" = "$(git rev-parse HEAD)" && echo "tag OK"
+
+git push origin X.Y.Z
+
+# The remote tag must peel to the same commit
+git ls-remote origin 'refs/tags/X.Y.Z^{}'
+
+gh release create X.Y.Z --verify-tag \
+  --title "Python release X.Y.Z" \
+  --notes-file notes.md
+```
+
+`--verify-tag` stops `gh` from creating a tag of its own if the pushed one is missing.
+
+### 5. Monitor GitHub Actions
+
+- Check the Actions tab for "Build and Release Python Packages to PyPI" (`release-python-packages.yml`) and "Deploy MkDocs to GitHub Pages" (`deploy-python-docs.yml`).
+- The release workflow first checks that the tag's base version equals the `pom.xml`
+  base version, then runs both test workflows, then publishes the 20 wheels.
+- Every tag push deploys its docs as `latest`, dev tags included. To publish docs
+  without moving `latest`, run the docs workflow by hand (`workflow_dispatch`) with
+  `set_latest=false`.
+
+### 6. After the Release
+
+Return `main` to upstream's development line with a normal sync. It brings the next
+`-SNAPSHOT` version; there is no version bump to make here.
+
+```bash
+./sync-upstream.sh
 ```
 
 **Announce Release:**
@@ -71,15 +117,21 @@ git push origin main
 - Notify users/community
 - Update any integration guides
 
+## Development Releases (`X.Y.Z.devN`)
+
+A dev tag is released from `main` while `pom.xml` reads `X.Y.Z-SNAPSHOT`: the release
+workflow compares only the base version (`X.Y.Z`). Tag and check it exactly as in
+step 4. A dev tag publishes to the real PyPI index and becomes the `latest` docs.
+
 ## Python Versioning Strategy
 
 ### Overview
 
-The Python bindings use an **automated versioning system** that extracts versions from ArcadeDB's `pom.xml` and converts them to PEP 440 compliant Python versions. This ensures version consistency across the entire project while supporting both development and release workflows.
+The Python bindings use an **automated versioning system** that extracts versions from ArcadeDB's `pom.xml` and converts them to PEP 440 compliant Python versions. In CI the release workflow passes the tag itself as the build version, so a wheel built from tag `X.Y.Z.devN` or `X.Y.Z.postN` carries that exact version.
 
 ### Key Principles
 
-1. **Single Source of Truth**: Version is only defined in `pom.xml` - everything else extracts it automatically
+1. **Single Source of Truth**: The base version is only defined in `pom.xml` (upstream's), and everything else extracts it automatically
 2. **PEP 440 Compliance**: All Python versions follow Python packaging standards
 3. **Development/Release Distinction**: Different handling for `-SNAPSHOT` vs release versions
 4. **Automated Conversion**: No manual version editing required in Python files
@@ -88,10 +140,10 @@ The Python bindings use an **automated versioning system** that extracts version
 
 | Maven Version (pom.xml) | Python Version | Use Case |
 |-------------------------|----------------|----------|
-| `25.10.1-SNAPSHOT` | `25.10.1.dev0` | Development builds |
-| `25.9.1` | `25.9.1` | Release builds |
-| `25.9.1` (with `--python-patch=1`) | `25.9.1.post1` | Python-specific patches |
-| `25.9.1` (with `--python-patch=2`) | `25.9.1.post2` | Additional Python patches |
+| `26.10.1-SNAPSHOT` | `26.10.1.dev0` | Development builds |
+| `26.9.1` | `26.9.1` | Release builds |
+| `26.9.1` (with `--python-patch=1`) | `26.9.1.post1` | Python-specific patches |
+| `26.9.1` (with `--python-patch=2`) | `26.9.1.post2` | Additional Python patches |
 
 ### Development Mode vs Release Mode
 
@@ -100,14 +152,14 @@ The Python bindings use an **automated versioning system** that extracts version
 - Triggered by: `-SNAPSHOT` suffix in `pom.xml`
 - Conversion: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0`
 - Purpose: Pre-release development builds
-- Example: `25.10.1-SNAPSHOT` → `25.10.1.dev0`
+- Example: `26.10.1-SNAPSHOT` → `26.10.1.dev0`
 
 **Release Mode** (clean versions):
 
 - Triggered by: No `-SNAPSHOT` suffix in `pom.xml`
 - Conversion: `X.Y.Z` → `X.Y.Z` (or `X.Y.Z.postN` for Python patches)
 - Purpose: Official releases to PyPI
-- Example: `25.9.1` → `25.9.1` or `25.9.1.post1`
+- Example: `26.9.1` → `26.9.1` or `26.9.1.post1`
 
 ### Python-Specific Patches
 
@@ -117,7 +169,7 @@ For Python-only bug fixes that don't require a new ArcadeDB version:
 # Compute the version with a Python patch number
 python scripts/extract_version.py --python-patch=1
 
-# Results in version: 25.9.1.post1 (if base ArcadeDB version is 25.9.1)
+# Results in version: 26.9.1.post1 (if base ArcadeDB version is 26.9.1)
 ```
 
 ### Implementation Details
@@ -142,56 +194,49 @@ Python bindings follow the ArcadeDB main project version from `pom.xml`:
 
 **How version is determined:**
 
-1. Set in `pom.xml` root: `<version>X.Y.Z-SNAPSHOT</version>` or `<version>X.Y.Z</version>`
+1. Upstream sets it in the root `pom.xml`: `<version>X.Y.Z-SNAPSHOT</version>` or `<version>X.Y.Z</version>`
 2. `scripts/extract_version.py` converts based on mode:
     - Development: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0`
     - Release: `X.Y.Z` → `X.Y.Z` (or `X.Y.Z.postN` with --python-patch)
-3. Create annotated tag: `git tag -a X.Y.Z -m "Python release X.Y.Z"`
+3. Create annotated tag: `git tag -a X.Y.Z -F notes.md`
 4. GitHub Release tag: `X.Y.Z`
 5. Workflows use the tag version directly: `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN`
 6. Used everywhere: PyPI (`X.Y.Z[.devN|.postN]`), docs (`/X.Y.Z/`)
 
-**When to bump:**
+**Note**: The base version is only in ONE place (`pom.xml`), and upstream owns it.
 
-- **MAJOR**: Breaking API changes
-- **MINOR**: New features, non-breaking
-- **PATCH**: Bug fixes only
-- **Python Patch**: Python-only fixes using `.postN` suffix
+## Hotfix Release (`X.Y.Z.postN`)
 
-**Note**: Version is only in ONE place (`pom.xml`) - everything else extracts it automatically!
-
-## Hotfix Release
-
-For urgent bug fixes on a released version:
+A Python-only fix to a released version ships as `X.Y.Z.postN`. Do not make an
+`X.Y.Z+1` of your own: that number is upstream's next release, and the tags would
+collide.
 
 ```bash
-# 1. Create hotfix branch from tag
-git checkout -b hotfix/X.Y.Z+1 X.Y.Z
+# 1. Branch from the release tag (pom.xml there reads X.Y.Z)
+git checkout -b release/X.Y.Z X.Y.Z
 
-# 2. Make fixes, update version in pom.xml
-vim pom.xml  # Change to X.Y.Z+1-SNAPSHOT
-
-# 3. Test thoroughly
+# 2. Make the fix, then build and test
 cd bindings/python
-./scripts/build.sh && pytest
+./scripts/build.sh && uv run pytest
+cd ../..
 
-# 4. Commit and create hotfix release
+# 3. Commit and push the branch
 git commit -am "Hotfix: description"
-git push origin hotfix/X.Y.Z+1
+git push origin release/X.Y.Z
 
-# 5. Create annotated tag
-git tag -a X.Y.Z+1 -m "Python hotfix release X.Y.Z+1"
-git push origin X.Y.Z+1
+# 4. Tag, check, and push (as in step 4 above)
+git tag -a X.Y.Z.post1 -m "Python hotfix release X.Y.Z.post1"
+test "$(git rev-parse 'X.Y.Z.post1^{}')" = "$(git rev-parse HEAD)" && echo "tag OK"
+git push origin X.Y.Z.post1
 
-# 6. Create GitHub Release
-gh release create X.Y.Z+1 \
-  --target hotfix/X.Y.Z+1 \
-   --title "Python hotfix release X.Y.Z+1" \
+# 5. Create GitHub Release
+gh release create X.Y.Z.post1 --verify-tag \
+  --title "Python hotfix release X.Y.Z.post1" \
   --notes "Hotfix for critical bug in X.Y.Z"
 
-# 7. Merge back to main
+# 6. Bring the fix back to main
 git checkout main
-git merge hotfix/X.Y.Z+1
+git cherry-pick <fix commit>
 git push origin main
 ```
 
@@ -201,10 +246,9 @@ If you need to roll back a broken release:
 
 **PyPI** (cannot delete, but can yank):
 
-```bash
-# Yank the release (makes it unavailable for new installs)
-uvx twine yank arcadedb-embedded 25.9.1
-```
+Yank the release in the PyPI web interface: open the project's **Manage** page, pick
+the release, and choose **Options → Yank**. A yanked release stays downloadable for
+pinned installs but is skipped by new unpinned installs. `twine` has no yank command.
 
 **Documentation** (can delete version):
 
@@ -221,13 +265,13 @@ cd humemai-docs
 uv run --project .. --group docs mike delete \
   --deploy-prefix arcadedb --branch main --push \
   --config-file ../bindings/python/mkdocs.yml \
-  25.9.1
+  X.Y.Z
 
 # Point the latest alias (the default version) at the previous release
 uv run --project .. --group docs mike alias --update-aliases \
   --deploy-prefix arcadedb --branch main --push \
   --config-file ../bindings/python/mkdocs.yml \
-  25.9.0 latest
+  PREVIOUS_VERSION latest
 ```
 
 **GitHub Release:**
@@ -249,9 +293,15 @@ uv run --project .. --group docs mike alias --update-aliases \
 
 **Authentication error:**
 
-- Check GitHub environment secrets
-- Verify trusted publisher configuration
-- Check PyPI API tokens
+- Publishing uses PyPI trusted publishing, not API tokens
+- Check that the `pypi` environment exists in the repository settings
+- Verify the trusted publisher entry on PyPI (repository, `release-python-packages.yml`, environment `pypi`)
+
+### Version check fails
+
+- The release workflow stops if the tag's base version differs from the `pom.xml`
+  base version (for example tag `26.9.1.dev0` while `pom.xml` reads `26.10.1-SNAPSHOT`)
+- Check which commit the tag points to, and which `pom.xml` version that commit has
 
 ### Documentation deployment fails
 
@@ -269,7 +319,7 @@ uv run --project .. --group docs mike alias --update-aliases \
 
 **Broken links:**
 
-- Run `mkdocs build --strict` locally first
+- Run `uv run mkdocs build --strict -f bindings/python/mkdocs.yml` locally first
 - Check all internal links use correct paths
 - Verify external URLs are accessible
 
@@ -279,18 +329,19 @@ uv run --project .. --group docs mike alias --update-aliases \
 
 - Check Docker daemon is running
 - Verify scripts/Dockerfile.build syntax
-- Check Maven dependencies are available
+- Check that the `arcadedata/arcadedb:<version>` image exists for the `pom.xml` version: the Linux build copies its JARs from it
 
 **Test failures:**
 
-- Run specific test: `pytest tests/test_core.py::test_name -v`
+- Run specific test: `uv run pytest bindings/python/tests/test_core.py::test_name -v` (from the repository root)
 - Check logs in `bindings/python/log/`
-- Verify Java JDK 25+ is available
+- The tests use the wheel's bundled JRE, so no system Java is involved
 
 ## See Also
 
 - [Documentation Development](documentation.md) - Working with MkDocs
 - [Testing Guide](testing.md) - Running test suite
 - [Contributing Guide](contributing.md) - Development workflow
+- [Syncing Upstream](sync-upstream.md) - How upstream changes arrive
 - [GitHub Actions Docs](https://docs.github.com/en/actions)
 - [PyPI Publishing Guide](https://packaging.python.org/en/latest/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/)

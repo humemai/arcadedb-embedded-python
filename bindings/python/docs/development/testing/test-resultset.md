@@ -12,6 +12,7 @@ There are 17 tests that exercise list/DataFrame conversion, chunking, counting, 
 - `count()`, `first()`, and `one()` behaviors on simple datasets
 - Iteration patterns over ten `IterTest` docs, including desc ordering for `first()`
 - `__repr__` content, complex aggregation/filtering, empty handling, single-use ResultSet, and RID/vertex helpers
+- JSON array serialization in `to_json()`, the one-crossing `to_dict()`, and closing the engine-side cursor when a result set is exhausted or read with `first()`, `one()`, or `to_list()`
 
 ## Test-by-test
 
@@ -61,7 +62,7 @@ Iterating a `ResultSet` consumes it: first iteration returns two `ReuseTest` row
 
 ### get_rid and get_vertex
 
-For a `Person` vertex, `get_rid()` returns a string starting with `#`, and `get_vertex()` returns the Python `Vertex` wrapper (or `None` when the row is not a vertex) with `get('name') == 'Alice'`.
+For a `Person` vertex, `get_rid()` returns a string starting with `#`, and `get_vertex()` returns a non-`None` vertex with `get('name') == 'Alice'`. (It returns the Python `Vertex` wrapper, or `None` when the row is not a vertex; the test does not cover the `None` case.)
 
 ### to_json with arrays
 
@@ -69,7 +70,7 @@ Inserts a `JsonArrayTest` row with `tags = ['a', 'b', 'c']` and asserts `to_json
 
 ### to_dict in one crossing
 
-`Result.to_dict()` reads a row in one bridge call (`RowAccess`); the test checks it gives exactly what reading each property on its own gives, for every value type (DATETIME, DATE, DECIMAL, and the rest of a mixed row).
+`Result.to_dict()` reads a row in one bridge call (`RowAccess`); the test checks it gives exactly what reading each property on its own gives, with the same key order, for every value type (DATETIME, DATE, DECIMAL, and the rest of a mixed row). It then inserts 1,200 more rows and checks that `to_list()`, which fetches rows in batches (`RowAccess.nextRows`), returns the same dicts in the same order as reading each row on its own, including after `first()` has already taken a row from the same result set.
 
 ### The result set releases its engine cursor (`TestResultSetReleasesTheEngineCursor`)
 
@@ -96,10 +97,7 @@ first_row = db.query("sql", "SELECT FROM FirstTest ORDER BY value").first()
 only_row = db.query("sql", "SELECT FROM OneTest WHERE value = 'unique'").one()
 ```
 
-Key behaviors: ResultSet is single-use for iteration, `count()` iterates the rows in Python and consumes them (use `SELECT count(*)` to count in the engine), `one()` validates cardinality, and empty results return `None` for `first()` and an empty list/chunks for conversions.
-3. **Chunk large results** - Use `iter_chunks()` for memory efficiency
-4. **Convert to DataFrame** - For data analysis
-5. **Check for empty** - Use `first()` to check if results exist
+Key behaviors: ResultSet is single-use for iteration, `count()` iterates the rows in Python and consumes them (use `SELECT count(*)` to count in the engine), `one()` validates cardinality, and empty results return `None` for `first()` and an empty list/chunks for conversions. Exhaustion, `first()`, `one()`, and `to_list()` close the result set; if you stop reading early, use `with db.query(...) as rs:` or call `rs.close()`.
 
 ## See Also
 

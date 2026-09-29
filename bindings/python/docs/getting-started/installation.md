@@ -10,7 +10,7 @@ pip install arcadedb-embedded
 
 **Requirements:**
 
-- **Python 3.10–3.14** (packaged; primary testing on 3.12) - No Java installation required!
+- **Python 3.10 to 3.14** (CI runs all five on every supported platform). No Java installation required!
 - **Supported Platforms**: Prebuilt wheels for **4 platforms**
     - Linux: x86_64, ARM64
     - macOS: Apple Silicon (ARM64)
@@ -29,7 +29,7 @@ installed, with some variation by platform, version, and filesystem allocation:
 
 - ✅ **No Java Installation Required**: Bundled platform-specific JRE
 - ✅ **Core Database**: All models (Graph, Document, Key/Value, Vector, Time Series)
-- ✅ **Query Languages**: SQL, OpenCypher
+- ✅ **Query Languages**: SQL and OpenCypher
 - ✅ **Vector Search**: Graph-based indexing for embeddings
 - ✅ **Data Import**: CSV, XML, and ArcadeDB JSONL import
 - ✅ **Server Mode**: Optional in-process HTTP server
@@ -135,10 +135,13 @@ JVM arguments use two flag types:
     - `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>`: build-cache override (default automatic; leave unset)
     - `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>`: FLOOR for the rebuild threshold, which scales with the index (see the vector index guide); the effective value is `max(floor, min(graphSize x 0.2, 50000))` at the defaults
 
-**Automatically injected flags** (always set, override only if needed):
+**Automatically injected flags** (always set unless you pass your own value):
 
 | Flag | Purpose |
 |------|---------|
+| `-Xmx4g` | Default heap ceiling (`heap_size="4g"`); an `-Xmx` in `jvm_args` or `ARCADEDB_JVM_ARGS` wins unless you pass a different `heap_size` |
+| `-XX:ErrorFile=./log/hs_err_pid%p.log` | JVM crash log location (`ARCADEDB_JVM_ERROR_FILE` overrides it) |
+| `-Djdk.xml.maxGeneralEntitySizeLimit=0`, `-Djdk.xml.entityExpansionLimit=0`, `-Djdk.xml.totalEntitySizeLimit=0` | Lift the JDK's XML entity limits for large XML imports; this applies to the whole process. Pass `start_jvm(disable_xml_limits=False)` to keep the JDK limits |
 | `--add-modules=jdk.incubator.vector` | Enable JVector SIMD acceleration |
 | `--enable-native-access=ALL-UNNAMED` | Required for off-heap / Panama access |
 | `-Dfile.encoding=UTF8` | Force UTF-8 regardless of OS locale |
@@ -152,8 +155,8 @@ JVM arguments use two flag types:
 !!! warning "One JVM configuration per process"
     JVM options are locked after the JVM starts. Set `start_jvm(...)` or pass `jvm_kwargs` **before** the first database is created. To change JVM settings, start a new Python process.
 
-!!! tip "Environment fallback (optional)"
-    If you must configure JVM flags externally (CI, shell scripts), `ARCADEDB_JVM_ARGS` is still supported, but in-code configuration is preferred.
+!!! tip "Environment variable (optional)"
+    If you must configure JVM flags externally (CI, shell scripts), set `ARCADEDB_JVM_ARGS`. It is always read, and `jvm_args` passed in code are appended after it. In-code configuration is preferred.
 
 For detailed configuration and memory tuning, see [Troubleshooting - Memory Configuration](../development/troubleshooting.md#memory-configuration).
 

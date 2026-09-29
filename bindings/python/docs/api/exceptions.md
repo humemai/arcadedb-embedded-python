@@ -26,7 +26,11 @@ Most errors from ArcadeDB operations raise `ArcadeDBError` (there are no subclas
 ```python
 class ArcadeDBError(Exception):
     """Base exception for ArcadeDB errors."""
-    pass
+
+    def __str__(self):
+        # The message, followed by "(caused by <Java class>: <message>)" naming
+        # the Java root cause when that message is not already in the text
+        ...
 ```
 
 **Inheritance:** `Exception` → `ArcadeDBError`
@@ -134,19 +138,19 @@ except ArcadeDBError as e:
 
 ### Property Not Found
 
+Reading a property that does not exist is not an error: `get()` returns `None`.
+
 ```python
-try:
-    result = db.query("sql", "SELECT FROM Person LIMIT 1")
-    person = result.first()
+person = db.query("sql", "SELECT FROM Person LIMIT 1").first()
 
-    # Property might not exist
-    phone = person.get("phone_number")  # Typo or missing
-
-except ArcadeDBError as e:
-    print(f"Property error: {e}")
+# A missing property (or a typo in its name) returns None; nothing is raised
+phone = person.get("phone_number")
+if phone is None:
+    print("phone_number is not set")
 ```
 
-**Solution:** Use `has_property()` before accessing, or handle exceptions.
+**Solution:** Use `has_property()` when you need to tell a missing property from one
+stored as `null`.
 
 ---
 
@@ -222,42 +226,31 @@ except ArcadeDBError as e:
 
 ### Transaction Error Handling
 
+`db.run_in_transaction(fn, retries=12, backoff_s=0.005)` runs `fn` in a transaction,
+rolls back on any error, and retries on `ConcurrentModificationException` and
+`NeedRetryException` with a linear backoff. Any other error, or a conflict after the
+last retry, is raised.
+
 ```python
 from arcadedb_embedded import ArcadeDBError
 
 def safe_insert(db, record_data):
     """Insert with automatic retry on concurrent modification."""
-    max_retries = 3
+    assignments = ", ".join(f"{key} = ?" for key in record_data)
 
-    for attempt in range(max_retries):
-        try:
-            with db.transaction():
-                assignments = ", ".join(f"{key} = ?" for key in record_data)
-                db.command(
-                    "sql",
-                    f"INSERT INTO Record SET {assignments}",
-                    *record_data.values(),
-                )
+    def write():
+        db.command(
+            "sql",
+            f"INSERT INTO Record SET {assignments}",
+            *record_data.values(),
+        )
 
-            return True  # Success
-
-        except ArcadeDBError as e:
-            if "concurrent" in str(e).lower() and attempt < max_retries - 1:
-                # Retry on concurrent modification
-                import time
-                time.sleep(0.1 * (attempt + 1))
-                continue
-            else:
-                # Other error or max retries exceeded
-                raise
-
-    return False
+    db.run_in_transaction(write)
 
 # Usage
 try:
-    success = safe_insert(db, {"name": "Alice", "age": 30})
-    if success:
-        print("Insert successful")
+    safe_insert(db, {"name": "Alice", "age": 30})
+    print("Insert successful")
 except ArcadeDBError as e:
     print(f"Insert failed: {e}")
 ```
@@ -485,29 +478,12 @@ except ArcadeDBError as e:
 ### Validate Before Operations
 
 ```python
-from arcadedb_embedded import ArcadeDBError
-
 def validate_schema(db, type_name, properties):
-    """Validate schema before operations."""
-    try:
-        # Check if type exists
-        schema_info = db.command("sql", "SELECT FROM schema:types WHERE name = ?", type_name)
-
-        if not schema_info:
-            raise ValueError(f"Type {type_name} does not exist")
-
-        # Check if properties exist
-        for prop in properties:
-            result = db.command("sql",
-                f"SELECT FROM schema:properties WHERE type = '{type_name}' AND name = '{prop}'")
-            if not result:
-                raise ValueError(f"Property {type_name}.{prop} does not exist")
-
-        return True
-
-    except ArcadeDBError as e:
-        print(f"Schema validation error: {e}")
+    """Return True if the type and every listed property exist."""
+    if not db.schema.exists_type(type_name):
         return False
+    doc_type = db.schema.get_type(type_name)
+    return all(doc_type.existsProperty(prop) for prop in properties)
 
 # Usage
 if validate_schema(db, "Person", ["name", "email"]):
@@ -542,7 +518,6 @@ if validate_schema(db, "Person", ["name", "email"]):
 
 ### Transaction Errors
 
-- Transaction already active
 - No active transaction
 - Concurrent modification
 - Commit failure
@@ -552,7 +527,7 @@ if validate_schema(db, "Person", ["name", "email"]):
 
 - Use context managers (`with db.transaction()`)
 - Keep transactions short
-- Implement retry logic for concurrent modifications
+- Use `db.run_in_transaction(fn)` to retry on concurrent modifications
 
 ---
 

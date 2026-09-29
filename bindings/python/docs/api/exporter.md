@@ -2,7 +2,7 @@
 
 The exporter module provides two complementary utilities:
 
-- `export_database` for full database exports (JSONL/GraphML/GraphSON)
+- `export_database` for full database exports (JSONL)
 - `export_to_csv` for exporting query results or in-memory data to CSV
 
 !!! tip "Context Managers"
@@ -29,14 +29,17 @@ export_database(
 ) -> Dict[str, Any]
 ```
 
-Export the full database using ArcadeDB's Java exporter. Supported formats are
-`jsonl`, `graphml`, and `graphson`.
+Export the full database using ArcadeDB's Java exporter. The wheel exports `jsonl`.
+`graphml` and `graphson` are accepted names, but their exporters come from the
+optional `arcadedb-gremlin` module, which the wheel does not bundle, so they raise
+`ArcadeDBError` (see the note below).
 
 **Parameters:**
 
 - `db`: Database instance
 - `file_path`: Output file path (non-absolute paths are stored under exports/)
-- `export_format`: Export format (`"jsonl"`, `"graphml"`, `"graphson"`)
+- `export_format`: Export format. `"jsonl"` is the one the wheel supports; `"graphml"`
+  and `"graphson"` raise `ArcadeDBError` without `arcadedb-gremlin`
 - `overwrite`: Overwrite output if it already exists
 - `include_types`: Export only specific types
 - `exclude_types`: Exclude specific types
@@ -78,15 +81,14 @@ export_database(
     overwrite=True,
 )
 
-# GraphML export (requires GraphML module in the packaged jars)
-export_database(db, "graph.graphml.tgz", export_format="graphml", overwrite=True)
-
 db.close()
 ```
 
 !!! note "GraphML and GraphSON"
-    GraphML/GraphSON formats require the corresponding Java modules to be present
-    in the packaged jars. If missing, `export_database` raises a clear error.
+    The GraphML and GraphSON exporters are provided by the optional `arcadedb-gremlin`
+    module, which the wheel excludes to keep its size down (`scripts/jar_exclusions.txt`).
+    With the wheel as shipped, `export_format="graphml"` or `"graphson"` raises
+    `ArcadeDBError` naming that module. Use `jsonl`.
 
 ## export_to_csv
 

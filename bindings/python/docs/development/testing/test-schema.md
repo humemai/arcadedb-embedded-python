@@ -2,6 +2,8 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_schema.py){ .md-button }
 
+There are 55 tests.
+
 ## Overview
 
 Schema tests cover:
@@ -467,8 +469,8 @@ with arcadedb.create_database("./test_db") as db:
 3. **Use `get_or_create_*`** - Idempotent type/property/index creation
 4. **Index frequently queried** - Properties used in WHERE clauses
 5. **Use `PropertyType` / `IndexType` enums** - Match property and index types to your data
-6. **Vector indexes via the Schema API** - Use `create_vector_index()`, then
-   `list_vector_indexes()` and `get_vector_index()` to retrieve them
+6. **Vector indexes** - Create them with `db.create_vector_index()` (a `Database`
+   method), then retrieve them with `schema.list_vector_indexes()` and `schema.get_vector_index()`
 
 ## See Also
 

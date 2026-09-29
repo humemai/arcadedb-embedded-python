@@ -4,11 +4,13 @@
 
 These tests cover the SQL graph-algorithm functions exposed through the packaged runtime.
 
+There are 5 tests.
+
 ## Covered Behavior
 
 ### 1) `shortestPath(...)`
 
-Validates the returned path shape for an unweighted minimum-hop query.
+Asserts the result is a list and, when it is not empty, that it starts at `A` and ends at `D`. The hop count is not asserted, and an empty path passes.
 
 ### 2) `dijkstra(...)`
 

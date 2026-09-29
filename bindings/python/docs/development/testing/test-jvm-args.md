@@ -4,6 +4,8 @@
 
 Covers JVM argument construction for the embedded runtime.
 
+There are 11 tests.
+
 ## What's Covered
 
 - Defaults when no explicit JVM args are provided.
@@ -19,9 +21,11 @@ Covers JVM argument construction for the embedded runtime.
 - Respecting the user's explicit choice and avoiding duplicate flags when they already provide them.
 - `ARCADEDB_JVM_ERROR_FILE` handling via `-XX:ErrorFile=...`.
 - `common_pool_parallelism`: injecting `-Djava.util.concurrent.ForkJoinPool.common.parallelism=<n>`, overriding any env-provided value, and rejecting values below 1.
+- `conftest.py` defines each `pytest_*` hook once (counted from its AST). A second `pytest_configure` had silently replaced the Windows faulthandler hook from 2026-07-25 to 2026-09-29.
+- On Windows, faulthandler is off while the tests run (skipped elsewhere).
 
 ## Run
 
 ```bash
-pytest tests/test_jvm_args.py -v
+uv run pytest bindings/python/tests/test_jvm_args.py -v
 ```

@@ -23,6 +23,14 @@ Example 08 is the table OLAP benchmark.
 
 ## Run
 
+!!! note "The script re-launches itself in Docker"
+    When `docker` is on `PATH`, the script re-runs itself in a container
+    (`--docker-image`, default `python:3.12-slim`) and applies the `--mem-limit`
+    budget to the container; for ArcadeDB it installs the wheel from
+    `bindings/python/dist` and runs natively if none is there. On Windows, under GitHub
+    Actions, or without `docker` it runs natively, and no container enforces
+    `--mem-limit`.
+
 From `bindings/python/examples`:
 
 ```bash
@@ -189,11 +197,11 @@ The benchmark measures query execution, but the setup path still matters for con
   (a unique `Id` index per table plus secondary indexes on selected columns). The DuckDB
   path skips manual secondary indexes for this benchmark.
 
-The ArcadeDB load submitted one async SQL `INSERT` per row until 2026-09-15. That was
-changed because the async executor's SQL command path discarded records above parallel
-level 1 before 26.10.1 (`ArcadeData/arcadedb#7615`, fixed in #7625). Any ArcadeDB load
-time you recorded from an
-earlier run of this script came from the async path, not from `insert_many`.
+Before 26.10.1, `async_executor().command(...)` could silently drop records above
+parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see
+[Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation). This
+script's ArcadeDB load used that path until 2026-09-15, so an ArcadeDB load time recorded
+from an earlier run is not an `insert_many` time.
 
 ## Result Notes
 

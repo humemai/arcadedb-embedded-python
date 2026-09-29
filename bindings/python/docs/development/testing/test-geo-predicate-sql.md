@@ -4,6 +4,8 @@
 
 These tests cover the SQL geospatial predicate helpers used from Python.
 
+There are 2 tests.
+
 ## Covered Behavior
 
 ### 1) `geo.within` and `geo.intersects`
@@ -12,7 +14,7 @@ Checks boolean semantics for inside/outside points, overlapping/disjoint polygon
 
 ### 2) boundary and repeatability
 
-Re-runs representative queries to verify stable results and acceptable boundary-point semantics.
+Asserts that `geo.within` returns `true` for a point inside a polygon on two consecutive calls. For a point on the polygon's boundary it asserts only that the result is a boolean (`true` or `false`), not which one.
 
 ## Runtime Guard
 

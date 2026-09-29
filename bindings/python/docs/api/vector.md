@@ -28,12 +28,12 @@ most of its timing behaviour.
 A vector written *after* the graph has been built does **not** patch the graph.
 It is queued into an in-memory **delta buffer**, and the graph is left alone.
 The graph changes only when a rebuild runs, and a rebuild always re-indexes the
-whole graph from scratch — there is no incremental patch.
+whole graph from scratch: there is no incremental patch.
 
 **Your write is searchable immediately.** Every query scores the graph's results
 *and* scans the delta buffer exhaustively, merges the two, drops duplicates, and
 filters anything deleted. Because the buffer is scanned by brute force rather
-than traversed approximately, a vector sitting in it is found **exactly** — if
+than traversed approximately, a vector sitting in it is found **exactly**, if
 anything more reliably than one already in the graph.
 
 What you pay for that is a linear per-query cost proportional to the buffer's
@@ -59,8 +59,8 @@ At the defaults (`100`, `0.2`, `50_000`):
 | 100,000 vectors | 20,000 mutations |
 | 1,000,000 vectors and above | 50,000 mutations (the ceiling binds) |
 
-A fixed threshold would make bulk loading quadratic — rebuilding a 200,000-node
-graph every 100 inserts — which is why it scales. The practical consequences:
+A fixed threshold would make bulk loading quadratic (rebuilding a 200,000-node
+graph every 100 inserts), which is why it scales. The practical consequences:
 
 - **Raising `mutationsBeforeRebuild` alone changes nothing** on any index above
   roughly 500 vectors, because it is only the floor. Use `rebuildGraphRatio` to
@@ -158,6 +158,59 @@ print(type(py_list))  # <class 'list'>
 
 ---
 
+### `to_java_int_array(vector)`
+
+Convert a Python array-like object to a Java `int[]`.
+
+The natural use is the token-index side of a sparse vector, whose weights go
+through [`to_java_float_array`](#to_java_float_arrayvector).
+
+```python
+import numpy as np
+from arcadedb_embedded import to_java_int_array, to_java_float_array
+
+tokens = np.array([7, 91, 4096], dtype=np.int32)
+weights = np.array([0.5, 0.25, 0.125], dtype=np.float32)
+
+db.command(
+    "sql",
+    "INSERT INTO SparseDoc SET tokens = ?, weights = ?",
+    to_java_int_array(tokens),
+    to_java_float_array(weights),
+)
+```
+
+**Prefer a NumPy array over a Python list.** JPype copies an array across the
+JVM boundary in one crossing through the buffer protocol; a list is marshalled
+element by element. Measured at 150 non-zeros: **2.6 us** from an array against
+**6.7 us** from a list, and the gap widens with length. The dtype does not
+matter (`int64`, NumPy's default, converts as fast as `int32`), so there is
+no reason to cast before calling.
+
+**Parameters:**
+
+- `vector`: Array-like object of integers. Accepts a Python list, a tuple or
+  any iterable, and a NumPy array of any integer dtype.
+
+**Returns:** a Java `int[]`.
+
+---
+
+### `to_java_byte_array(vector)`
+
+Convert a Python byte-like or integer array-like object to a Java `byte[]`.
+
+Use this when inserting native INT8 vectors into a `BINARY` property for indexes
+created with `encoding="INT8"`.
+
+```python
+from arcadedb_embedded import to_java_byte_array
+
+payload = to_java_byte_array([127, 0, -12, 5])
+```
+
+---
+
 ## VectorIndex Class
 
 Wrapper for ArcadeDB's vector index, providing similarity search capabilities.
@@ -212,6 +265,7 @@ db.create_vector_index(
     beam_width: int = 100,
     quantization: str = "INT8",
     encoding: str | None = None,
+    location_cache_size: int | None = None,  # removed: any value raises ValueError
     graph_build_cache_size: int | None = None,
     mutations_before_rebuild: int | None = None,
     store_vectors_in_graph: bool = False,
@@ -233,9 +287,9 @@ db.create_vector_index(
     `find_nearest_by_key()`. Defaults to the engine default (`"id"`) when omitted.
 - `distance_function` (str): Distance metric (default: `"cosine"`)
     - `"cosine"`: Cosine distance (1 - cosine similarity)
-    - `"euclidean"`: Euclidean distance (L2 norm)
+    - `"euclidean"`: Squared Euclidean distance
     - `"inner_product"`: Negative inner product
-- `max_connections` (int): Per-layer graph degree (default: 32; Vamana degree, NOT doubled at the base layer like hnswlib M — use 2*M to match an hnswlib config)
+- `max_connections` (int): Per-layer graph degree (default: 32; Vamana degree, NOT doubled at the base layer like hnswlib M, so use 2*M to match an hnswlib config)
     - Maps to `maxConnections` in JVector
     - Higher = better recall, more memory
         - Typical range: 8-64
@@ -299,59 +353,6 @@ Treat this as a helper/manual API. For normal application queries, prefer SQL
 `vectorNeighbors` so search composes naturally with filtering, projection, and record
 exclusion.
 
----
-
-### `to_java_int_array(vector)`
-
-Convert a Python array-like object to a Java `int[]`.
-
-The natural use is the token-index side of a sparse vector, whose weights go
-through [`to_java_float_array`](#to_java_float_arrayvector).
-
-```python
-import numpy as np
-from arcadedb_embedded import to_java_int_array, to_java_float_array
-
-tokens = np.array([7, 91, 4096], dtype=np.int32)
-weights = np.array([0.5, 0.25, 0.125], dtype=np.float32)
-
-db.command(
-    "sql",
-    "INSERT INTO SparseDoc SET tokens = ?, weights = ?",
-    to_java_int_array(tokens),
-    to_java_float_array(weights),
-)
-```
-
-**Prefer a NumPy array over a Python list.** JPype copies an array across the
-JVM boundary in one crossing through the buffer protocol; a list is marshalled
-element by element. Measured at 150 non-zeros: **2.6 us** from an array against
-**6.7 us** from a list, and the gap widens with length. The dtype does not
-matter -- `int64`, NumPy's default, converts as fast as `int32` -- so there is
-no reason to cast before calling.
-
-**Parameters:**
-
-- `vector`: Array-like object of integers. Accepts a Python list, a tuple or
-  any iterable, and a NumPy array of any integer dtype.
-
-**Returns:** a Java `int[]`.
-
----
-
-### `to_java_byte_array(vector)`
-
-Convert a Python byte-like or integer array-like object to a Java `byte[]`.
-
-Use this when inserting native INT8 vectors into a `BINARY` property for indexes
-created with `encoding="INT8"`.
-
-```python
-from arcadedb_embedded import to_java_byte_array
-
-payload = to_java_byte_array([127, 0, -12, 5])
-```
-
 **Note:** With default settings (`build_graph_now=True` in `create_vector_index`), graph
 preparation runs during index creation. In the preferred SQL path, this eager behavior is
 also the default. If you explicitly disable eager preparation, the first call to
@@ -403,14 +404,16 @@ for record, distance in neighbors:
 Preferred for richer query behavior:
 
 ```python
-qvec_literal = "[" + ", ".join(str(float(x)) for x in query_vector.tolist()) + "]"
+from arcadedb_embedded import to_java_float_array
+
 rows = db.query(
     "sql",
     (
         "SELECT id, distance, (1 - distance) AS score "
-        "FROM (SELECT expand(vectorNeighbors('Document[embedding]', "
-        f"{qvec_literal}, 10))) WHERE id <> ? ORDER BY distance LIMIT 5"
+        "FROM (SELECT expand(vectorNeighbors('Document[embedding]', ?, 10))) "
+        "WHERE id <> ? ORDER BY distance LIMIT 5"
     ),
+    to_java_float_array(query_vector),
     "doc-42",
 ).to_list()
 ```

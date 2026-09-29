@@ -51,11 +51,11 @@ either public or reproducible from a script in the repository.
 
 | Corpus | Where it comes from |
 |---|---|
-| TPC-H at scale factors 1 and 10 | Generated with DuckDB's `dbgen` and staged as Parquet under `$BENCH_DATA/tpch`. The transactional lane reads SF1 and the analytical lane SF10, whose line-item table is streamed in row-group batches so the client never holds it whole |
+| TPC-H at scale factors 1 and 10 | Generated with DuckDB's `dbgen` and staged as Parquet under `$BENCH_DATA/tpch`. Both document lanes read SF1 and SF10, and the line-item table is streamed in row-group batches so the client never holds it whole |
 | LDBC-SNB Interactive v1, SF1 and SF10 | The LDBC council's pre-generated tarballs, extracted under `$BENCH_DATA/ldbc`. The interactive lane reads the persons-and-`KNOWS` projection at both sizes; the analytics lane reads the full network at SF1, message half included |
 | SIFT1M and DEEP-10M | The ann-benchmarks HDF5 distributions, `sift-128-euclidean.hdf5` and `deep-image-96-angular.hdf5`, downloaded once from `http://ann-benchmarks.com/` into `data/dense/` and `data/deep10m/` and converted to `.npy` on the host by `gen_dense_npy.py sift` and `gen_dense_npy.py deep`, so the containers need only numpy. The arrays are dumped as shipped; DEEP's unit-normalization happens in the lane at load time, not here |
 | Big-ANN 2023 sparse track | The challenge's CSR files and its own top-k ground truth, staged under `$BENCH_DATA/bigann` |
-| TSBS cpu-only | `gen_tsbs_corpus.sh`, which records the host count, window, and interval so the corpus can be rebuilt rather than merely copied |
+| TSBS cpu-only, 100 and 1,000 hosts | `gen_tsbs_corpus.sh`, which records the host count, window, and interval so the corpus can be rebuilt rather than merely copied |
 
 `campaign_env.sh` holds the switch and the mount path for each of them, and
 `campaign_env_check` asserts that every corpus is actually present. Setting a path is not
@@ -144,7 +144,7 @@ Then the gates, which you can run by hand after touching results or tables:
 
 ```bash
 BENCH_ENGINE_COMMIT=<pin> python3 provenance_check.py    # does a cell trace to a run
-BENCH_ENGINE_COMMIT=<pin> python3 fairness_check.py      # F1 to F12
+BENCH_ENGINE_COMMIT=<pin> python3 fairness_check.py      # the fairness invariants a row can show
 BENCH_ENGINE_COMMIT=<pin> python3 page_check.py          # page cells against generated tables
 BENCH_ENGINE_COMMIT=<pin> python3 equivalence_check.py   # do the engines of a table agree
 ```

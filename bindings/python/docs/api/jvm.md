@@ -9,10 +9,11 @@ database or server is created.
 
 ## Overview
 
-The `arcadedb_embedded.jvm` module provides three public entry points:
+The `arcadedb_embedded.jvm` module provides these public entry points:
 
 - `start_jvm(...)` to configure and start the bundled JVM explicitly
 - `shutdown_jvm()` to shut down a JVM started in the current process
+- `jar_fingerprint()` to identify the engine JARs this install carries
 - runtime location helpers for jars and the bundled JRE library
 
 ## start_jvm
@@ -29,10 +30,13 @@ start_jvm(
 
 **Parameters:**
 
-- `heap_size` (`Optional[str]`): Maximum JVM heap, for example `"4g"` or `"4096m"`
-- `disable_xml_limits` (`bool`): If `True`, relaxes JDK XML entity limits for large XML imports
-- `jvm_args` (`Optional[Iterable[str] | str]`): Additional JVM flags as a string or iterable
-- `common_pool_parallelism` (`Optional[int]`): Explicit cap for `ForkJoinPool.common.parallelism`
+- `heap_size` (`Optional[str]`, default `"4g"`): Maximum JVM heap, for example `"8g"` or `"4096m"`
+- `disable_xml_limits` (`bool`, default `True`): Relaxes the JDK XML entity limits
+  (`-Djdk.xml.maxGeneralEntitySizeLimit=0`, `-Djdk.xml.entityExpansionLimit=0`, and
+  `-Djdk.xml.totalEntitySizeLimit=0`) for the whole process, for large XML imports.
+  Pass `False` to keep the JDK defaults.
+- `jvm_args` (`Optional[Iterable[str] | str]`, default `None`): Additional JVM flags as a string or iterable
+- `common_pool_parallelism` (`Optional[int]`, default `None`): Explicit cap for `ForkJoinPool.common.parallelism`; a value below 1 raises `ArcadeDBError`
 
 **Raises:**
 
@@ -42,7 +46,9 @@ start_jvm(
 
 - The bundled JRE is always used; no external Java installation is required
 - The module injects required defaults such as `jdk.incubator.vector`, UTF-8 file encoding, and required `--add-opens` flags if they are not already provided
-- `ARCADEDB_JVM_ARGS` remains supported as an environment fallback, but in-code configuration is preferred
+- `ARCADEDB_JVM_ARGS` is always read: its flags come first and `jvm_args` are appended after them. In-code configuration is preferred
+- Heap: a `heap_size` other than `"4g"` replaces every `-Xmx` from `jvm_args` or the environment. With the default `"4g"` (or `None`), an `-Xmx` given there is kept (the largest wins if there are several), and `-Xmx4g` is added only when none is given
+- JVM crash logs go to `./log/hs_err_pid%p.log` unless `ARCADEDB_JVM_ERROR_FILE` names another path
 
 ## shutdown_jvm
 
@@ -58,6 +64,28 @@ Shuts down the JVM if it is running in the current process.
     Most application code does not need to call this directly. Normal database and
     server usage should focus on proper object cleanup; use this helper mainly in
     test harnesses or short-lived tooling.
+
+## jar_fingerprint
+
+```python
+import arcadedb_embedded as arcadedb
+
+fp = arcadedb.jar_fingerprint()
+print(fp["count"], fp["engine_sha256"][:12])
+```
+
+Hashes the JAR files actually on disk, so a results row can record which engine
+produced it. `__version__` is the package version and can disagree with the JARs (for
+example, a wheel built from a locally patched Java tree).
+
+**Parameters:**
+
+- `per_jar` (`bool`, default `False`): Also return the name, size, and SHA-256 of every JAR
+
+**Returns:** a dict with `count`, `bytes`, `sha256` (every JAR: "is this the same
+build?"), `engine_sha256` (every JAR except the bindings' own compiled bridge JAR: "is
+this the same ArcadeDB?"), `engine_count`, and `jar_dir`, plus `jars` when `per_jar` is
+set.
 
 ## get_jar_path
 

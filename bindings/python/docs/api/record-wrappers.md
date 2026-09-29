@@ -47,7 +47,7 @@ with arcadedb.create_database("./mydb") as db:
 
 ### Properties and Methods
 
-#### `set(key, value) -> Document`
+#### `set(name, value) -> Document`
 
 Set a property on the document. Returns self for chaining.
 
@@ -60,7 +60,7 @@ doc.set("active", True)
 doc.set("name", "Bob").set("age", 25).save()
 ```
 
-#### `get(key, convert_types: bool = True) -> Any`
+#### `get(name, convert_types: bool = True) -> Any`
 
 Get a property value. With `convert_types=True` (default) Java types are converted to
 Python types; pass `False` to get the raw Java-backed value (equivalent to `get_raw`).
@@ -92,7 +92,7 @@ print(f"Properties: {props}")
 # Output: Properties: ['name', 'age', 'active']
 ```
 
-#### `has_property(key) -> bool`
+#### `has_property(name) -> bool`
 
 Check if a property exists.
 
@@ -116,8 +116,9 @@ doc.save()  # Persists changes
 
 Delete the document from the database.
 
-**⚠️ Important Limitation:** Only works on objects from `lookup_by_rid()` or newly
-created objects, not on query results. Use SQL DELETE for query results.
+**⚠️ Important Limitation:** Call it on a wrapper from `lookup_by_rid()` or on a newly
+created object. Iterating a query yields `Result` rows, which have no `delete()`; use SQL
+DELETE for query results.
 
 ```python
 # ✅ Works on fresh lookup
@@ -134,8 +135,8 @@ with db.transaction():
 
 # ❌ Doesn't work on query results
 results = db.query("sql", "SELECT FROM Note WHERE title = 'Test'")
-for doc in results:
-    doc.delete()  # No-op!
+for row in results:
+    row.delete()  # AttributeError: a query row is a Result, not a Document
 
 # ✅ Use SQL DELETE instead
 with db.transaction():
@@ -201,12 +202,13 @@ print(java_doc.getTypeName())
 
 #### `modify() -> Document`
 
-Get a mutable version of the document. Useful for immutable query results.
+Get a mutable version of the document. Records loaded from the database (by
+`lookup_by_rid()` or through a query row's `get_element()`) are immutable until you call
+it.
 
 ```python
-# Query results are iterators and often immutable
-results = db.query("sql", "SELECT FROM Note LIMIT 1")
-immutable_doc = next(iter(results))
+# A query row is a Result; get_element() returns the (immutable) record wrapper
+immutable_doc = db.query("sql", "SELECT FROM Note LIMIT 1").first().get_element()
 
 # Get mutable version for modification
 with db.transaction():
@@ -250,9 +252,10 @@ with db.transaction():
 
 ### Graph Methods
 
-#### `new_edge(edge_type, target_vertex, **properties) -> Edge`
+#### `new_edge(label, target, **kwargs) -> Edge`
 
-Create an edge from this vertex to another vertex.
+Create an edge from this vertex to another vertex. Keyword arguments become edge
+properties.
 
 ```python
 with db.transaction():
@@ -328,7 +331,7 @@ edge.get_property_names()  # ['since', 'strength']
 
 #### `get_in() -> Vertex`
 
-Get the incoming (destination/head) vertex of the edge — wraps `getInVertex()`.
+Get the incoming (destination/head) vertex of the edge. Wraps `getInVertex()`.
 
 ```python
 destination = edge.get_in()
@@ -337,7 +340,7 @@ print(f"Destination: {destination.get('name')}")
 
 #### `get_out() -> Vertex`
 
-Get the outgoing (source/tail) vertex of the edge — wraps `getOutVertex()`.
+Get the outgoing (source/tail) vertex of the edge. Wraps `getOutVertex()`.
 
 ```python
 source = edge.get_out()
@@ -380,10 +383,10 @@ with db.transaction():
 ### 3. Prefer SQL DELETE unless you already have a looked-up wrapper
 
 ```python
-# ❌ Don't delete query results directly
+# ❌ Query rows have no delete()
 results = db.query("sql", "SELECT FROM Note")
-for doc in results:
-    doc.delete()  # No-op
+for row in results:
+    row.delete()  # AttributeError
 
 # ✅ Wrapper delete on an explicitly looked-up record
 with db.transaction():

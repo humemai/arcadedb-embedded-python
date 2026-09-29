@@ -2,6 +2,7 @@
 
 import shutil
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -159,34 +160,32 @@ def test_async_executor_pending_and_processing_flags(temp_db):
     db = temp_db
     db.command("sql", "CREATE DOCUMENT TYPE Msg")
 
-    # parallel level 1: above it the submissions were partly discarded before
-    # 26.10.1 (ArcadeData/arcadedb#7615), noise this flag test does not need.
     async_exec = db.async_executor().set_parallel_level(1).set_commit_every(100)
     assert not async_exec.is_pending()
+    assert not async_exec.is_processing()
 
-    for i in range(1000):
-        async_exec.command("sql", "INSERT INTO Msg SET id = :id", id=i)
+    # A result callback that holds its command until released gives a window
+    # in which the executor has work in flight, whatever the machine's speed.
+    # (This test once polled with waitCompletion(0), which the engine treats
+    # as an unbounded wait, and never asserted what it polled for.)
+    entered, release = threading.Event(), threading.Event()
 
-    saw_processing = False
-    deadline = time.time() + 1.0
-    while time.time() < deadline:
-        if async_exec.is_processing():
-            saw_processing = True
-            break
+    def hold(_result):
+        entered.set()
+        release.wait(30)
 
-        try:
-            if async_exec._java_async.waitCompletion(0):
-                break
-        except Exception:  # noqa: BLE001
-            # A poll inside a 1 s loop: a throw here means the executor has not
-            # started yet, and the wait_completion() below is the real check.
-            time.sleep(0.01)
-            continue
-
-        time.sleep(0.01)
+    async_exec.command("sql", "INSERT INTO Msg SET id = 0", callback=hold)
+    try:
+        assert entered.wait(30), "the async command never ran"
+        assert async_exec.is_processing()
+        assert async_exec.is_pending()
+    finally:
+        release.set()
 
     async_exec.wait_completion()
-    assert async_exec.is_pending() is False
+    assert not async_exec.is_pending()
+    assert not async_exec.is_processing()
+    assert db.count_type("Msg") == 1
 
     async_exec.close()
 
@@ -256,6 +255,18 @@ def test_async_executor_getters_and_sync_modes(temp_db):
     assert async_exec.get_transaction_sync() == "yes_nometadata"
     assert async_exec.get_thread_count() >= 1
 
+    async_exec.close()
+
+
+def test_async_executor_parallel_level_has_no_upper_cap(temp_db):
+    # The engine's own default is cores - 1, 19 on a 20-thread host, and the
+    # bucket rule (ArcadeData/arcadedb#8478) wants that many writers; the
+    # package once refused anything above 16.
+    async_exec = temp_db.async_executor()
+    async_exec.set_parallel_level(17)
+    assert async_exec.get_parallel_level() == 17
+    with pytest.raises(ValueError):
+        async_exec.set_parallel_level(0)
     async_exec.close()
 
 

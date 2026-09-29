@@ -4,7 +4,7 @@
 
 Sparse index weight precision and the settle step, plus the dense search beam argument: three engine features the vector guide documents and the benchmark harness depends on (guide/vectors.md, 2026-09-07).
 
-There are 2 tests.
+There are 2 tests, which collect as 3 cases: the first is parametrized over `quant` (no `weightQuantization`, and `"FP32"`).
 
 ## Test Cases
 
