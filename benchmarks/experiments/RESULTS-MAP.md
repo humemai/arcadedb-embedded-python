@@ -18,6 +18,8 @@ A `runs_*_<pin>.jsonl` is the only copy of its data until it is merged. Archivin
 3. `export_web.py`: into `web_benchmarks.json`
 4. only then archive the campaign files, and only after confirming their rows are in `runs.jsonl` by `engine_commit`
 
+`land_stage.py` performs steps 1 to 3 in one run for a landing (PUBLISHING.md); archive only after it reports LANDED.
+
 A campaign file reports "no reader" when you grep the publishing scripts. That is what step 1 not having run yet looks like, not a dead file.
 
 `runs_paper.csv` is regenerated from `runs.jsonl` by the freeze step, and the canonical store keys on `(lane, scale, n_docs, workload, backend, gav, rep, durability_class)` with the latest `ts_utc` winning, so a re-measured row supersedes the old one on merge. **Do not hand-edit the frozen CSV**; re-freeze after the campaign.
@@ -28,11 +30,11 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 |---|---|---|
 | `runs.jsonl` | the merged canonical row store. Append-only. | `make_paper_tables`, `export_web`, everything downstream |
 | `runs_page_<pin>.jsonl` | current campaign, page lanes | `merge_campaign` into `runs.jsonl` |
-| `runs_l4_<pin>.jsonl` | current campaign, time-series lane | as above |
-| `runs_lifecycle_<pin>.jsonl` | current campaign, lifecycle lane | as above |
+| `runs_l4_<pin>.jsonl`, `runs_lifecycle_<pin>.jsonl` | the September campaign's per-lane files (October writes every stage to `runs_page_<pin>.jsonl`) | as above |
 | `runs_paper.csv` | the frozen rows every table is generated from | `make_paper_tables`, `export_web`, `page_check` |
 | `web_benchmarks.json` | the page payload | the site, `page_check` |
 | `raw/` | one server and client log per cell, written by the runner. Untracked. | nothing on the page; read by hand when a cell needs explaining |
+
 **What is tracked under `results/` is an allowlist** (repo-root `.gitignore`, end of file): everything under `results/` is ignored, and the artifacts that ARE tracked are named there one by one. Three earlier generations of exact-path rules each got outrun by the next artifact someone added, and on 2026-09-19 the bench host carried four untracked strays that no rule matched. An untracked stray there is not harmless, for two reasons, and it is worth being exact about which. Every queue script begins `git pull -q --ff-only || abort` and has no clean-tree check, so a MODIFIED TRACKED file aborts the chain and idles the machine, which is what happened once before. An untracked file does not abort a pull by existing; it aborts one the moment a commit adds that same path, because git refuses to overwrite an untracked working-tree file. An IGNORED file at that path does not refuse. That is the failure the allowlist closes, alongside the one the rules above it were written for: `git add -A` sweeping raw results into a commit. A new tracked artifact therefore needs `git add -f` and a line in that allowlist.
 
 **The tracked artifacts, and what made each one.** The allowlist says WHICH files are tracked; this says why, and what would have to be re-run to rebuild them. A one-shot probe's script looks unreferenced to any "who calls this?" sweep -- nothing imports it, it ran once -- so the link is written down here rather than inferred. Do not delete a producer because nothing calls it.
@@ -43,7 +45,8 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `web_benchmarks.json` | `export_web.py` | `page_check`, `version_consistency_check`, `refresh_web_page` |
 | `runs_paper_oct.csv` | `make_paper_tables.py` under `BENCH_INSTRUMENT=2026-10` (the October freeze, DECISIONS #84) | the gates and the exporter under the same switch, `land_stage.py --preview` |
 | `web_benchmarks_next.json` | `export_web.py` under `BENCH_INSTRUMENT=2026-10` | the preview route (`/projects/arcadedb/next`), `page_check --preview`, `version_consistency_check --preview`, `refresh_web_page --preview` |
-| `generated/tables/*`, `generated/*.md`, `withheld_recall.json` | `make_paper_tables.py` | `page_check`, the exporter's withheld-cell notes |
+| `generated/tables/*`, `withheld_recall.json` | `make_paper_tables.py` | `page_check`, `provenance_check`, the exporter's withheld-cell notes |
+| `generated/preview-tables.md` | `refresh_web_page.py --preview` | a reader of the preview's inventory |
 | `generated_oct/**` | `make_paper_tables.py` under `BENCH_INSTRUMENT=2026-10` | the same readers, under the same switch |
 | `generated/memo_bottlenecks.html` | `memo_bottlenecks.py` | the maintainers' memo, not the page |
 | `sparse_cliff.jsonl` | `sparse_cliff_probe.py`, one shot | `make_paper_figures.py`, figure f3 |

@@ -5,10 +5,6 @@ One row per engine. The digest is the amd64 manifest digest (`docker manifest in
 Which arms are on the October page, with their rows and columns, is PAGE-SPEC.md section 2; the September queue chain is CAMPAIGN.md section 6. This file says only what each engine is pinned to and why it runs the way it does.
 
 
-ArcadeDB's document analytics rows were withdrawn from the page on 2026-09-14 (BUGS F42 and F43), so the `docs_olap` comparisons on the live page are between comparators only until October re-measures them. The engine defect behind half of it, a bare decimal literal compared at single precision, was filed upstream as #7609 on 2026-09-15 and is the reason this repository's ArcadeDB SQL never compares a numeric column against a bare decimal literal and uses `BETWEEN` or a bound parameter instead. The other half was ours: `Q1_ARCADE` computed four of the five aggregates every comparator computed, so the cell timed a smaller question than the row beside it (BUGS F43).
-
-Two more filings came out of the same answer checking on 2026-09-15. #7610 is the served engine printing a time bucket as a date, which collapses every bucket inside one calendar day, so the served native time-series grouping is withheld from the page and named as a known disagreement. #7611 is an indexed lower bound skipping part of a run of equal entries, which is why the revenue query disagreed only at the size where the loss landed on a qualifying row (BUGS F44 and F46).
-
 ## In the harness
 
 | Engine | Pin | Version | Lanes | Deployment | Ingest path |
@@ -69,6 +65,9 @@ differ).
 | QuestDB | 9.1.1 | 10.0.1 | `sha256:931af4156771…` |
 | LadybugDB | `ladybug==0.19.1` | `ladybug==0.20.4` | client package |
 | LanceDB | `lancedb==0.37.1` | `lancedb==0.39.0` | client package |
+| Qdrant client | `qdrant-client==1.19.0` | `1.19.1` | client package |
+| Elasticsearch client | `elasticsearch==9.5.0` | `9.5.1` | client package |
+| Neo4j driver (Neo4j AND Memgraph arms) | `neo4j==6.2.0` | `6.3.1` | client package |
 
 **One of those moves is not a labelling change: AGE 1.8.0 builds edges far faster than 1.7.0, and the gap widens with the graph.** Measured on one host with one script, holding a 5,000-edge batch fixed and varying only the vertex count and the image:
 
@@ -80,9 +79,6 @@ differ).
 | 500,000 | **11.14 s** | **0.18 s** | **62x** |
 
 1.8.0 is flat in the vertex count, which is what edge creation linear in edges should look like. 1.7.0 holds roughly steady to 160k and then jumps 7.2x in one step, which has the shape of a planner flip rather than a gradual cost -- so the ratio is not a constant and must not be quoted as one. At `EDGES_PER = 3` the 500k-product cross-model corpus is 1.5M edges, so the same build is 58 minutes on the old pin and under a minute on the new one. October's pg_age build numbers will therefore be dramatically better than September's for a reason that is real and upstream, not an instrument change -- and a pg_age cell that ran the stale image was censored at the 2 h cap for exactly this reason (BUGS F90, F76). Vertex count and edge accumulation were both ruled out first; neither affects the batch.
-| Qdrant client | `qdrant-client==1.19.0` | `1.19.1` | client package |
-| Elasticsearch client | `elasticsearch==9.5.0` | `9.5.1` | client package |
-| Neo4j driver (Neo4j AND Memgraph arms) | `neo4j==6.2.0` | `6.3.1` | client package |
 
 **Unmoved, and why.** Each of these was checked against the registry or the project's release feed
 on the same day and is already at its latest stable release, unless a reason is given.
@@ -201,7 +197,7 @@ on the same day and is already at its latest stable release, unless a reason is 
 Things an engine does that are not wrong and are not a performance property, but that change what comes back and therefore what the #88 answer check sees. Each was found by a disagreement, and each is written down here so the next lane does not have to find it again.
 
 - **ArangoDB returns an integral `SUM` as an integer.** AQL's `SUM` over a column whose values VelocyPack stored as integers returns an integer, where every SQL engine, MongoDB's `$sum` and SurrealQL's `math::sum` return a double. Found 2026-09-14 on TPC-H Q1 at SF1: `sum_qty` came back `37734107` against every other engine's `37734107.0`, the same number, and the canonical form printed the first exactly and the second as `3.77341e+07`. Seven engines to one, on an answer nobody got wrong. It is invisible below a million, which is why SF0.01 passed. The fix is in the lane's column declaration — a summed measure is declared `num` — not in the engine and not in the hash.
-- **The ArcadeDB SQL parser narrows a decimal literal that needs more than single precision.** `INSERT INTO T SET v=0.33333333` into a `DOUBLE` property stores 0.33333334; a bound parameter with the same value stores the double exactly. TPC-H money is unaffected (two decimals below 131072 round-trip through float32 and the served arm's corpus is bit-identical to the embedded arm's, measured at SF1), but any lane that loads through SQL text with more than about seven significant digits is exposed. BUGS F43 recorded the comparison half of this; the insert half is the same parser.
+- **The ArcadeDB SQL parser narrows a decimal literal that needs more than single precision.** `INSERT INTO T SET v=0.33333333` into a `DOUBLE` property stores 0.33333334; a bound parameter with the same value stores the double exactly. TPC-H money is unaffected (two decimals below 131072 round-trip through float32 and the served arm's corpus is bit-identical to the embedded arm's, measured at SF1), but any lane that loads through SQL text with more than about seven significant digits is exposed. BUGS F42 recorded the comparison half of this; the insert half is the same parser.
 - **The ArcadeDB HTTP API truncates a result at 20,000 rows** unless the request says otherwise, and `/command` takes no `limit` field. Lanes that send scans over HTTP carry an explicit `LIMIT` in the SQL instead.
 - **A two-sided indexed range on a STRING column loses rows at its `>=` lower bound.** Found 2026-09-14 at TPC-H SF0.1, where both ArcadeDB arms returned a Q6 revenue of 11,801,684.4174 against every other engine's 11,803,420.2534. The deficit is 1,735.836, which is exactly one line item of the qualifying set (shipdate 1994-01-01, quantity 17, extendedprice 28930.6, discount 0.06). Isolated through the lane's own adapter, with a `NOTUNIQUE` index on `l_shipdate`:
 
@@ -211,7 +207,7 @@ Things an engine does that are not wrong and are not a performance property, but
   | `l_shipdate > '1993-12-31' AND l_shipdate < '1995-01-01'` | 92,040 | 909,455 |
   | `l_shipdate.substring(0, 4) = '1994'` (no index can serve it) | 92,040 | 909,455 |
 
-  Deterministic: ten repeats inside one build and two independent builds all returned 92,037. The two rewrites, which denote the same set, both return the truth, so it is the `>=` bound on the index scan and not the data. It is NOT registered as a known disagreement: at SF1 the extra Q6 predicates happen to exclude every lost row and the answer is right to 1e-14, so registering it would suppress a gate that is correctly failing at the size where the loss lands on a qualifying row. `arcadedb_literal_precision_probe.py` is the sibling finding on the insert path; this one wants a Java repro against the engine's index range scan before it goes upstream.
+  Deterministic: ten repeats inside one build and two independent builds all returned 92,037. The two rewrites, which denote the same set, both return the truth, so it is the `>=` bound on the index scan and not the data. It is NOT registered as a known disagreement: at SF1 the extra Q6 predicates happen to exclude every lost row and the answer is right to 1e-14, so registering it would suppress a gate that is correctly failing at the size where the loss lands on a qualifying row. `arcadedb_literal_precision_probe.py` is the sibling finding on the insert path; this one was filed upstream as #7611 (BUGS F46) and is fixed in the October pin.
 
 
 ## Retired pins
@@ -232,7 +228,6 @@ Servers: PostgreSQL, pgvector, PG+AGE, TimescaleDB, MongoDB, MongoDB + MongoDB S
 ## Not added, and why
 
 - OrientDB: ArcadeDB is its successor, so it is the ancestor and not a live comparison (DECISIONS #68, #103).
-- Kuzu: LadybugDB, its continuation, is already the embedded graph comparator (DECISIONS #103).
 - HugeGraph, Dgraph, and TigerGraph: a sixth dialect for a comparator few readers care about, a different model, and not freely self-hostable, respectively (DECISIONS #103).
 - LDBC Graphalytics: not run. It is an algorithm suite that needs each engine's own analytics library, which most of the comparators lack; upstream already publishes it against the graph specialists and the page links there for that question (DECISIONS #103, #104). LSQB's nine queries are run instead, on the analytics table.
 - Cloud-only engines (Atlas-only features, Cosmos DB): cannot run in the envelope.
@@ -243,14 +238,10 @@ DuckDB with DuckPGQ was on this list until 2026-09-17, stopped by the community 
 
 ## Smoke before queueing
 
-Every new adapter runs once on the laptop through the runner, against its pinned image, at a micro or sweep scale with one rep, before its queue script is written. The smoke proves the image, the adapter, the recorded schema, and the version string; nothing it produces is a page number, and every published row is re-measured on mini. The TPC adapters have no laptop corpus and are exercised by their queue script's first cell instead.
+Every new adapter runs once on the laptop through the runner, against its pinned image, at a micro or sweep scale with one rep, before its queue script is written. The smoke proves the image, the adapter, the recorded schema, and the version string; nothing it produces is a page number, and every published row is re-measured on mini.
 
 Laptop fixtures live in `~/bench-data`: `dense` is a 20k cut of SIFT1M, `dense1m` the full million with ground truth (`BENCH_DENSE_DATA=/data/dense1m` selects it). Mini holds its own copies.
 
-**What durability costs, measured on the laptop skeleton.** Placeholders from a busy development machine, labelled as such: nothing here reaches the page, and the campaign's own rows replace them (DECISIONS #90).
-
-Document insert, strict against relaxed: SQLite 69x (0.021 ms to 1.45 ms), ArcadeDB embedded 33.7x (0.217 to 7.31), PostgreSQL 16.3x (0.155 to 2.53), SurrealDB embedded 12.3x (0.584 to 7.18), MongoDB 4.1x (0.686 to 2.81), ArangoDB 4.0x (2.18 to 8.70), and ArcadeDB served 3.7x (2.47 to 9.19). Graph insert: SurrealDB embedded 10.5x, ArangoDB 3.6x, ArcadeDB embedded 3.5x, and ArcadeDB served 2.1x. Cross-model transaction: ArangoDB 1.4x, ArcadeDB served 1.2x, PostgreSQL with pgvector and AGE 1.2x, and ArcadeDB embedded 1.2x.
-
-The pattern is the finding rather than any one number: the strict document inserts span 1.45 to 9.19 ms where the relaxed ones span 0.021 to 2.47, so waiting for the disk costs every engine about the same and the multiple is largest exactly where the relaxed path is fastest. PROTOCOL.md section 3 carries what follows from it for the write rows the page prints.
+What the laptop skeleton showed, before the bench host measured it (the durability table prints the measured version): the strict document inserts span 1.45 to 9.19 ms where the relaxed ones span 0.021 to 2.47, so waiting for the disk costs every engine about the same and the multiple is largest exactly where the relaxed path is fastest. PROTOCOL.md section 3 carries what follows from it for the write rows the page prints.
 
 Smoke findings that changed an adapter are recorded in `.notes/bench/BUGS.md`, not here.

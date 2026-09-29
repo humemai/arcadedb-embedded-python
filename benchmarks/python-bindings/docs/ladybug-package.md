@@ -1,7 +1,8 @@
 # LadybugDB package + versions (updated 2026-08-28)
 
-The experiments use the OFFICIAL LadybugDB package **`ladybug`** (0.18.1, from
-LadybugDB/ladybug-python). Earlier they pinned `real_ladybug` (0.15.3), which is
+This suite (the SciPy paper's) uses the OFFICIAL LadybugDB package **`ladybug`**
+(0.18.1, from LadybugDB/ladybug-python); the live harness under `experiments/`
+pins its own version (COMPARATORS.md). Earlier they pinned `real_ladybug` (0.15.3), which is
 published from a different repo (lbugdb/lbug) and is frozen; we switched after
 LadybugDB shipped 0.18.1.
 

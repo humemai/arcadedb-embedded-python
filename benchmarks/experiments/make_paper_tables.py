@@ -7,7 +7,7 @@ Canonical-row rule (see .notes/bench/DECISIONS.md #44): latest row per
 Cells are median [min-max] over N=5 reps. Raw rows are never edited;
 rerun this script after the October freeze re-measure.
 
-Outputs: ../latex/tables/t{2,3,4,5}_*.tex + tables_summary.md (prose crib).
+Outputs: ../latex/tables/t{2,3,4,5}_*.tex.
 """
 import collections
 import json
@@ -1419,19 +1419,6 @@ def dense_ts_table(rows):
     write("t5_dense_ts.tex", "\n".join(lines) + "\n")
 
 
-def e2_summary(rows):
-    e2 = [r for r in rows if r["lane"] == "e2"]
-    out = ["# E2 + prose numbers crib (not a table; quoted in text)\n"]
-    for be in ("arcadedb_e2", "surrealdb_e2", "composed_qdrant_neo4j"):
-        h = [r for r in e2 if r["backend"] == be and r["workload"] == "hybrid"]
-        a = [r for r in e2 if r["backend"] == be and r["workload"] == "atomicity"]
-        torn = [r.get("torn_state") for r in a]
-        out.append(f"- {NAMES[be]}: hybrid p50 {mmm(h, 'hybrid_p50_ms')} ms, "
-                   f"p99 {mmm(h, 'hybrid_p99_ms')} ms; torn state "
-                   f"{sum(bool(t) for t in torn)}/{len(torn)} trials")
-    write("tables_summary.md", "\n".join(out) + "\n")
-
-
 def run_gates():
     """Run the audit scripts and record their verdict beside the tables.
 
@@ -1596,7 +1583,6 @@ def main(freeze=True):
     graph_table(rows)
     sparse_table(rows)
     dense_ts_table(rows)
-    e2_summary(rows)
     return 0
 
 

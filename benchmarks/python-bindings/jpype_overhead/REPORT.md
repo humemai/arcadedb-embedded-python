@@ -240,6 +240,8 @@ cd benchmarks/python-bindings/jpype_overhead
 ```
 
 Databases and datasets are regenerable and gitignored; `results/all_results.csv`
-holds every measured line. This harness doubles as the post-upstream-sync
+holds every measured line on the laptop, and `results/mini_results.csv` and
+`results/mini_results_8d6af9475.csv` are the bench-host runs the live page's
+Python-cost table cites. This harness doubles as the post-upstream-sync
 regression check: run it after large engine syncs and compare against the tables
 above.

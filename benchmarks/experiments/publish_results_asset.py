@@ -69,8 +69,9 @@ def main() -> int:
         "rows_in_frozen_csv": sum(1 for _ in open(frozen)) - 1,
         "files": {p.name: {"bytes": p.stat().st_size, "sha256": _sha256(p)}
                   for p in (payload, frozen)},
-        "gates": (RESULTS / "generated" / "GATE_STATUS.txt").read_text().strip()
-                 if (RESULTS / "generated" / "GATE_STATUS.txt").exists() else None,
+        # make_paper_tables writes the gate status beside the .tex tables it gates
+        "gates": (RESULTS / "generated" / "tables" / "GATE_STATUS.txt").read_text().strip()
+                 if (RESULTS / "generated" / "tables" / "GATE_STATUS.txt").exists() else None,
         "how_to_check": (
             "Every table on https://humem.ai/projects/arcadedb is generated from "
             "web_benchmarks.json, which is aggregated from runs_paper.csv, one row per "

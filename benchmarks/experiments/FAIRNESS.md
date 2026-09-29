@@ -10,7 +10,7 @@ The failure mode this contract exists to close is **a correct number measured un
 
 **F1. Same cpuset.** Every container in a published cell gets the full `0-11` (the 12 P-threads on 6 physical P-cores). Client and server topologies share that cpuset deliberately, so CPU competition stays inside the deployment under test rather than being hidden by giving the server its own cores.
 
-**F2. Serial only.** Published cells run one at a time. `runner.py` forces `workers=1` on the paper tier and errors otherwise; queue scripts enforce it again with `guard()`. The parallel sweep tier (disjoint cpuset shards, shuffled order) exists for exploration and must never reach a table. A published row from a sweep is detectable after the fact as a partial cpuset such as `0-5`, and `load_canonical` drops it.
+**F2. Serial only.** Published cells run one at a time. `runner.py` forces `workers=1` on the paper tier and errors otherwise; queue scripts pass `--tier paper --workers 1` explicitly. The parallel sweep tier (disjoint cpuset shards, shuffled order) exists for exploration and must never reach a table. A published row from a sweep is detectable after the fact as a partial cpuset such as `0-5`, and `load_canonical` drops it.
 
 **F3. Same memory envelope per (lane, scale).** Every backend at a tier gets the same `--memory`/`--memory-swap` cap and, for JVM engines, the same heap.
 
@@ -20,7 +20,7 @@ A served backend gets the **full tier cap** and the client its own `BENCH_CLIENT
 
 **"Same heap" means the heap the engine RAN, not the heap the cell asked for.** A row stamps `heap` from the request, so a hardcoded server heap is invisible in the artifact; Elasticsearch ran 4g at three tiers while its comparators scaled 4g, 8g, 16g, stamped `heap=16g` throughout. `observe_server()` closes it by reading the container's real `-Xmx` back out of `docker inspect` into `server_heap` and failing any cell where the two disagree. Rows without that witness are dropped from published tables by `load_canonical`, so a tier shows a gap rather than an unfair number.
 
-The check is honest about its own limit: it reads the container's ENV, which is what we passed in, not the JVM's live heap. It proves the plumbing, not the obedience. The stronger form is to ask the engine (Elasticsearch reports `jvm.mem.heap_max_in_bytes` from `/_nodes/jvm`) and is still owed.
+The check is honest about its own limit: it reads the container's ENV, which is what we passed in, not the JVM's live heap. It proves the plumbing, not the obedience. The stronger form is to ask the engine (Elasticsearch reports `jvm.mem.heap_max_in_bytes` from `/_nodes/jvm`); it is owed, and CAMPAIGN.md section 7, item 20 carries it.
 
 **A resource raised for one engine obliges a re-measure of every engine at that tier.** This is the sharpest rule here, and the one that has been broken: the dense envelope went 28g/16g to 36g/24g for a legitimate reason and only ArcadeDB was re-measured, which turned a fix into a 29% memory advantage.
 
@@ -52,7 +52,7 @@ Fitting the pool is resource fitting, the first of the four sanctioned override 
 | Memgraph 3.13.1 (2026-09-17) | `SHOW CONFIG` under `--cpuset-cpus 0-11` on a 16-CPU laptop: `bolt_num_workers` 16 and `storage_snapshot_thread_count` 16, both documented as "the number of processing units available on the machine"; 51 tasks in `/proc/1/task` at idle. Its memory limit is host-sized the same way (`memory_limit` 0 reported as 30.35 GiB inside an 8g container) | **host**; fitted: runner passes `--bolt-num-workers={ncpu}`, `--storage-snapshot-thread-count={ncpu}` and `--memory-limit` at 90% of the cap, and the adapter reads all three back onto the row (`memgraph_bolt_workers`, `memgraph_snapshot_threads`, `memgraph_memory_limit_mib`; 12, 12, 7372 on the laptop smoke at an 8g cap) |
 | FalkorDB 4.20.6 (2026-09-17) | startup log under the same cpuset: "Thread pool created, using 16 threads" and "Maximum number of OpenMP threads set to 12"; `GRAPH.CONFIG GET THREAD_COUNT` 16, `OMP_THREAD_COUNT` 12. The query pool reads the host's logical cores, the GraphBLAS pool reads the affinity mask | **host** for the query pool, cpuset for OpenMP; fitted: runner passes `THREAD_COUNT {ncpu}` in `FALKORDB_ARGS`, the log then reads "using 12 threads" and the adapter records `falkordb_thread_count` and `falkordb_omp_threads` from `GRAPH.CONFIG GET` (12 and 12 on the laptop smoke) |
 
-Not yet audited: every comparator added since (MongoDB, TimescaleDB, pgvector, PG+AGE, SurrealDB, SQLite, and ArangoDB).
+The comparators added since this audit (MongoDB, TimescaleDB, QuestDB, pgvector, PG+AGE, SurrealDB, SQLite, and ArangoDB) are not yet audited; CAMPAIGN.md section 7, item 20 carries it.
 
 Two ways to get this audit wrong, both nearly recorded. Total OS thread count is not pool sizing: a JVM server runs dozens of threads irrespective of cpuset, so the question for a JVM is `availableProcessors()` and the named pool settings. And running `nproc` inside a container answers about the container, not about the engine: ask the engine's own metrics.
 
@@ -179,11 +179,7 @@ write becomes durable, not what it wrote, so the #88 digests of one engine must
 match across its two classes; `equivalence_check` E2 fails a backend that gives
 two answers across its own repetitions and classes.
 
-Laptop, micro, one repetition, both classes, the ratio of strict to relaxed on
-new-order p50: SQLite 48.4x, PostgreSQL 9.8x, SurrealDB embedded 9.0x, ArcadeDB
-embedded 4.6x, MongoDB 1.8x, ArangoDB 1.7x, DuckDB 1.00x (no knob, as
-predicted). On the single-record insert the spread is wider still: SQLite 98x,
-ArcadeDB 33.6x, PostgreSQL 28.5x.
+What each engine pays for the strict class is measured on the bench host and printed by the durability table; laptop ratios were a smoke and are not repeated here.
 
 **F11. Equivalent queries must return equivalent answers.** A benchmark that
 never checks the answer measures how fast an engine can be wrong, and until
@@ -307,13 +303,13 @@ Two consequences:
 - **Vendor settle steps** that have no equivalent elsewhere (Elasticsearch forcemerge, Milvus flush+load, Qdrant green-wait, ArcadeDB `COMPACT INDEX`). Each engine gets *its own*; none goes unmatched by the others having theirs. The one settle step this harness defines rather than a vendor is the SurrealDB server's HNSW wait on the dense and cross-model lanes, a latency probe recorded as `settle_s` (BUGS F134, DECISIONS #117), and PROTOCOL.md section 7 lists it as such.
 - **Operating points deliberately not matched**, such as the dense fp32 arms with the build cache pinned to the corpus against INT8 at the engine default (DECISIONS #56), stated in the l3d condition.
 - **Quality and precision differences** (int8 against fp32 postings, ES pruning). Report recall next to latency, always.
-- **Intra-query parallelism at each engine's default.** ArcadeDB's SQL scans a type's buckets in parallel (`arcadedb.queryParallelScan`, on by default) only when the type has at least two buckets, and `arcadedb.typeDefaultBuckets` is 1. Every ArcadeDB type in this benchmark is created with the default, so its full scans run on one thread, as SQLite's and MongoDB's do, while DuckDB uses the whole cpuset. Not tuned: it is a knob that moves only ArcadeDB, so the default stands until a campaign decides otherwise (HANDOFF, 2026-09-23). The per-record cost that makes that one thread slow is engine code, filed as ArcadeData/arcadedb#8260.
+- **Intra-query parallelism at each engine's default.** ArcadeDB's SQL scans a type's buckets in parallel (`arcadedb.queryParallelScan`, on by default) only when the type has at least two buckets, and `arcadedb.typeDefaultBuckets` is 1. Every ArcadeDB type in this benchmark is created with the default, so its full scans run on one thread, as SQLite's and MongoDB's do, while DuckDB uses the whole cpuset (true at the October pin; 26.10.1 splits one bucket into page ranges for a parallel scan, PR #8524, CAMPAIGN.md section 7, item 10). Not tuned: it is a knob that moves only ArcadeDB, so the default stands until a campaign decides otherwise (HANDOFF, 2026-09-23). The per-record cost that makes that one thread slow is engine code, filed as ArcadeData/arcadedb#8260.
 
 Anything else that differs is a defect, not an override.
 
 ## Bespoke drivers investigate, lane scripts publish
 
-Both fairness violations ever found in a published table were rows a bespoke driver produced rather than the lane script: a driver is written to answer a narrow question and carries whatever protocol its author needed at the time, and is then promoted to a cell. Every clean lane puts each backend through one script, so warmup and settle are decided once and apply to everyone. L3d is the last lane that still publishes an overlay-driver row (`dense_multipass_driver.py`, run through the runner). If a driver's output must become a cell, diff its protocol against the lane's first.
+Both fairness violations ever found in a published table were rows a bespoke driver produced rather than the lane script: a driver is written to answer a narrow question and carries whatever protocol its author needed at the time, and is then promoted to a cell. Every clean lane puts each backend through one script, so warmup and settle are decided once and apply to everyone. L3d and L3s's warm columns are the two places that still publish overlay-driver rows (`dense_multipass_driver.py` and `sparse_multipass_driver.py`, run through the runner). If a driver's output must become a cell, diff its protocol against the lane's first.
 
 ## A CPU percentage is a fact about a container, not about an engine
 
@@ -337,4 +333,4 @@ Prefer the loud failure. The same script that wrote those 94 quiet rows also cra
 
 ## Still open
 
-Whether any engine's disk IO scheduling differs under the same cap.
+Whether any engine's disk IO scheduling differs under the same cap (CAMPAIGN.md section 7, item 20).
