@@ -4,7 +4,7 @@
 
 Covers JVM argument construction for the embedded runtime.
 
-There are 11 tests.
+There are 12 tests.
 
 ## What's Covered
 
@@ -23,6 +23,7 @@ There are 11 tests.
 - `common_pool_parallelism`: injecting `-Djava.util.concurrent.ForkJoinPool.common.parallelism=<n>`, overriding any env-provided value, and rejecting values below 1.
 - `conftest.py` defines each `pytest_*` hook once (counted from its AST). A second `pytest_configure` had silently replaced the Windows faulthandler hook from 2026-07-25 to 2026-09-29.
 - On Windows, faulthandler is off while the tests run (skipped elsewhere).
+- `conftest.dump_java_threads()` lists the JVM's threads with their states and stacks; the conftest timer calls it for a test still running after 540 s, so a hang inside a Java call leaves the Java side in the CI log (humemai/arcadedb-embedded-python#10).
 
 ## Run
 

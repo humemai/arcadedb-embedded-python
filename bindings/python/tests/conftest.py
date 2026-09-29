@@ -4,7 +4,9 @@ Shared pytest fixtures and configuration for ArcadeDB tests.
 
 import os
 import shutil
+import sys
 import tempfile
+import threading
 
 import pytest
 
@@ -27,6 +29,65 @@ def pytest_configure(config):
 
         if faulthandler.is_enabled():
             faulthandler.disable()
+
+
+# A test still running this long gets every Java thread's stack on stderr,
+# shortly before faulthandler_timeout (600 s in pyproject.toml) dumps the
+# Python threads. The Python dump alone shows a test waiting inside a Java
+# call and nothing about why, which is all a Windows vector-search hang left
+# behind twice (humemai/arcadedb-embedded-python#10).
+JAVA_DUMP_AFTER_S = float(os.environ.get("ARCADEDB_TEST_JAVA_DUMP_AFTER_S", "540"))
+
+
+def dump_java_threads(reason, out=None):
+    """Write every Java thread's name, state, and stack to `out` (stderr).
+
+    Returns False when the JVM is not running, so there is nothing to dump.
+    """
+    import jpype
+
+    out = out or sys.stderr
+    if not jpype.isJVMStarted():
+        return False
+    traces = jpype.JClass("java.lang.Thread").getAllStackTraces()
+    lines = [f"=== Java threads: {reason} ==="]
+    for thread in traces.keySet():
+        lines.append(
+            f'"{thread.getName()}" daemon={thread.isDaemon()} state={thread.getState()}'
+        )
+        lines.extend(f"    at {frame}" for frame in traces.get(thread))
+    out.write("\n".join(lines) + "\n")
+    out.flush()
+    return True
+
+
+def _dump_java_threads_for(nodeid, capman):
+    # Captured output of a test that never finishes is lost when the job is
+    # killed, so the dump goes past pytest's capture, as a debugger's would.
+    try:
+        if capman is not None:
+            with capman.global_and_fixture_disabled():
+                dump_java_threads(
+                    f"{nodeid} still running after {JAVA_DUMP_AFTER_S:.0f} s"
+                )
+        else:
+            dump_java_threads(f"{nodeid} still running after {JAVA_DUMP_AFTER_S:.0f} s")
+    except Exception as exc:  # the dump is evidence; it must not fail the run
+        sys.stderr.write(f"Java thread dump failed: {exc!r}\n")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    capman = item.config.pluginmanager.getplugin("capturemanager")
+    timer = threading.Timer(
+        JAVA_DUMP_AFTER_S, _dump_java_threads_for, args=(item.nodeid, capman)
+    )
+    timer.daemon = True
+    timer.start()
+    try:
+        return (yield)
+    finally:
+        timer.cancel()
 
 
 # Shared test password used by server-mode tests. ArcadeDB requires >= 8 chars.
