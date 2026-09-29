@@ -556,6 +556,23 @@ jobs:
                 exit_code=$?
               fi
             fi
+            # ANSWERS, NOT ONLY A CLEAN EXIT (#12). Example 10 once returned 0 rows for
+            # 5 of its 10 queries on every platform and passed. After a clean run, the
+            # same arguments on the pure-Python reference backend must give the same
+            # row count and hash for every query.
+            if [ $exit_code -eq 0 ] && [ "$example" = "10_stackoverflow_graph_olap.py" ]; then
+              ref_args="${example_args/--db arcadedb_cypher/--db python_memory}"
+              ref_args="${ref_args/--run-label ci10/--run-label ci10ref}"
+              ref_log="${example%.py}-reference.log"
+              if ! $TIMEOUT_CMD $timeout_duration python "$example" $ref_args > "$ref_log" 2>&1; then
+                echo "❌ reference run (python_memory) of $example failed; last 20 lines:"
+                tail -n 20 "$ref_log"
+                exit_code=1
+              elif ! python scripts/compare_query_hashes.py "$log_file" "$ref_log"; then
+                echo "❌ $example: answers differ from the python_memory reference (above)"
+                exit_code=1
+              fi
+            fi
             if [ $exit_code -eq 0 ]; then
               echo "✅ PASSED: $example_name" | tee -a $results_file
               passed=$((passed + 1))
