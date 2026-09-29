@@ -67,7 +67,7 @@ def test_server_database_operations(temp_server_root):
         assert db.is_open()
 
         # Use database
-        # Schema operations are auto-transactional
+        # Schema statements apply immediately (no transaction needed)
         db.command("sql", "CREATE DOCUMENT TYPE Person")
 
         with db.transaction():

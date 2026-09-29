@@ -54,7 +54,7 @@ with arcadedb.open_database("./mydb") as db:
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./products_db") as db:
-    # Create document type (schema ops are auto-transactional)
+    # Create document type (schema statements apply immediately)
     db.command("sql", "CREATE DOCUMENT TYPE Product")
     db.command("sql", "CREATE PROPERTY Product.name STRING")
     db.command("sql", "CREATE PROPERTY Product.price DOUBLE")
@@ -82,7 +82,7 @@ with arcadedb.create_database("./products_db") as db:
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./graph_db") as db:
-    # Create graph schema (schema ops are auto-transactional)
+    # Create graph schema (schema statements apply immediately)
     db.command("sql", "CREATE VERTEX TYPE Person")
     db.command("sql", "CREATE EDGE TYPE Knows")
     db.command("sql", "CREATE PROPERTY Person.name STRING")

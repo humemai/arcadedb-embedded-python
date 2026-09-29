@@ -647,7 +647,7 @@ class TestAllDataTypes:
         db = arcadedb.create_database(temp_db_path)
 
         try:
-            # Create comprehensive type with all data types (auto-transactional)
+            # Create comprehensive type with all data types (applies immediately)
             db.command("sql", "CREATE DOCUMENT TYPE DataTypeTest")
 
             # Basic types

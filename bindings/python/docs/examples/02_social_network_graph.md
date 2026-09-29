@@ -101,7 +101,7 @@ Define types and properties upfront for consistency:
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./social_network_db") as db:
-    # Create vertex type with properties (schema ops are auto-transactional)
+    # Create vertex type with properties (schema statements apply immediately)
     db.command("sql", "CREATE VERTEX TYPE Person")
     db.command("sql", "CREATE PROPERTY Person.name STRING")
     db.command("sql", "CREATE PROPERTY Person.age INTEGER")

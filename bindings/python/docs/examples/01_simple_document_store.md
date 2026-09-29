@@ -27,7 +27,7 @@ import uuid
 import arcadedb_embedded as arcadedb
 
 with arcadedb.create_database("./task_db") as db:
-    # Schema operations are auto-transactional (no wrapper needed)
+    # Schema statements apply immediately (no transaction needed)
     db.command("sql", "CREATE DOCUMENT TYPE Task")
     db.command("sql", "CREATE PROPERTY Task.title STRING")
     db.command("sql", "CREATE PROPERTY Task.priority STRING")

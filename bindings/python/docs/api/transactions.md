@@ -23,15 +23,15 @@ ArcadeDB transactions provide:
 
 ## Transaction Scope
 
-It is important to distinguish between operations that require explicit transactions and those that are auto-transactional:
+It is important to distinguish between operations that require explicit transactions and those that do not:
 
 | Operation Type | Examples | Transaction Requirement |
 | :--- | :--- | :--- |
-| **Schema Operations** | `create_vertex_type()`, `create_property()`, `create_index()`, `db.command("sql", "DROP INDEX...")` | **Auto-transactional** (Do NOT wrap in `with db.transaction():`) |
+| **Schema Operations** | `create_vertex_type()`, `create_property()`, `create_index()`, `db.command("sql", "DROP INDEX...")` | **Apply immediately; not transactional** (a rollback does not undo them). Not needed for one statement; for many, one `with db.transaction():` or one `sqlscript` writes the schema once |
 | **Data Write** | `db.command("sql", "INSERT...")`, `db.command("sql", "UPDATE...")`, `db.command("sql", "DELETE...")`, `db.command("opencypher", "CREATE ...")` | **Required** (Wrap in `with db.transaction():`) |
 | **Bulk Operations** | `db.command("sql", "IMPORT DATABASE...")`, `db.import_documents(...)`, `db.graph_batch(...)` | **Auto-transactional / auto-managed** (Built-in transaction management) |
 | **Data Read** | `db.query()`, `db.command("sql", "SELECT...")`, `db.lookup_by_rid()` | **Optional** (Can run outside transaction for better performance) |
-| **Vector Operations** | `CREATE INDEX ... LSM_VECTOR` | **Auto-transactional** (Do NOT wrap) |
+| **Vector Operations** | `CREATE INDEX ... LSM_VECTOR` | **Applies immediately** (Do NOT wrap) |
 
 ### Key Distinction: `db.query()` vs `db.command()`
 
@@ -40,8 +40,8 @@ It is important to distinguish between operations that require explicit transact
     as `SELECT`, it returns a `ResultSet` and can run outside a transaction. For write
     statements such as `INSERT`, `UPDATE`, and `DELETE`, wrap it in
     `with db.transaction():`. DDL such as `CREATE TYPE`, `CREATE PROPERTY`, `CREATE INDEX`,
-    `DROP`, plus bulk commands such as `IMPORT DATABASE` and `MOVE`, remain
-    auto-transactional.
+    `DROP` apply immediately and are not transactional (a rollback does not undo them), and
+    bulk commands such as `IMPORT DATABASE` and `MOVE` manage their own transactions.
 - **`db.import_documents()`**: Runs the Java importer through the narrow document-import
     wrapper. It manages its own importer/async lifecycle, so you should not wrap it in
     `with db.transaction():`.

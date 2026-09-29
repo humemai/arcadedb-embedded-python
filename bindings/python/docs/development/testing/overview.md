@@ -87,6 +87,7 @@ Test counts evolve over time. For the latest per-file counts, run `uv run pytest
 | [`test_numpy_support.py`](test-numpy-support.md) | NumPy integration and array conversion behavior |
 | [`test_resultset.py`](test-resultset.md) | Result and ResultSet iteration, accessors, and export helpers |
 | [`test_schema.py`](test-schema.md) | Schema, property, and index management behavior |
+| [`test_schema_batching.py`](test-schema-batching.md) | Schema statements apply immediately, a rollback does not undo them, and many batch in one transaction |
 | [`test_server.py`](test-server.md) | Server lifecycle, configuration, and databases through the Java API (no HTTP calls) |
 | [`test_concurrency.py`](test-concurrency.md) | File locking, thread safety, multi-process behavior |
 | [`test_server_patterns.py`](test-server-patterns.md) | Best practices for embedded + server mode |

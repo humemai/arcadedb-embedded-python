@@ -40,7 +40,7 @@ import arcadedb_embedded as arcadedb
 
 # Direct database access - NO server needed
 with arcadedb.create_database("./mydb") as db:
-    # Create schema (auto-transactional)
+    # Create schema (applies immediately)
     db.command("sql", "CREATE DOCUMENT TYPE Person")
     db.command("sql", "CREATE PROPERTY Person.name STRING")
     db.command("sql", "CREATE PROPERTY Person.age INTEGER")
@@ -72,7 +72,7 @@ try:
     # "mydb" will be created at ./server_data/databases/mydb
     db = server.create_database("mydb")
 
-    # Schema operations are auto-transactional
+    # Schema statements apply immediately (no transaction needed)
     db.command("sql", "CREATE DOCUMENT TYPE Person")
     db.command("sql", "CREATE PROPERTY Person.name STRING")
     db.command("sql", "CREATE PROPERTY Person.age INTEGER")
@@ -222,7 +222,7 @@ try:
     # Create database using Java API (fastest)
     db = server.create_database("hybriddb")
 
-    # Schema operations are auto-transactional
+    # Schema statements apply immediately (no transaction needed)
     db.command("sql", "CREATE DOCUMENT TYPE Person")
     db.command("sql", "CREATE PROPERTY Person.name STRING")
     db.command("sql", "CREATE PROPERTY Person.age INTEGER")
