@@ -441,15 +441,17 @@ Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. D
 SQL reads are not affected. At 1,000,000 rows the ascending top 10 measured about 290 ms
 with the scan and about 1 ms without it (ArcadeDB [#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
 
-openCypher sorts nulls last in ascending order and first in descending order. Over a
-whole label it reads the index in order only for an ascending `ORDER BY n.p LIMIT k` with
-no `WHERE` and an index with the default null strategy. A descending read, a
-`WHERE n.p IS NOT NULL`, or an index created with `NULL_STRATEGY INDEX` scans the label:
-about 0.8 to 1.1 s against 0.5 to 1.7 ms at 1,000,000 vertices on a 26.10.1 snapshot,
-in either direction for the `NULL_STRATEGY INDEX` index (ArcadeDB
-[#8724](https://github.com/ArcadeData/arcadedb/issues/8724)). A range predicate on `p`,
-such as `WHERE n.p >= 0` for a `p` that is never negative, is read from the index in either
-direction, so for Cypher keep the default null strategy and give a descending top k a range.
+openCypher sorts nulls last in ascending order and first in descending order. From 26.10.1
+it reads the index in order over a whole label, in either direction, for
+`ORDER BY n.p LIMIT k` when `p` is declared both `MANDATORY` and `NOTNULL`, when the `WHERE`
+is `n.p IS NOT NULL`, or when the index was created with `NULL_STRATEGY INDEX`. With the
+default null strategy and neither declaration it does so only ascending: a descending read
+must return the null keys first, that index holds none, and it scans the label. At
+1,000,000 vertices on a 26.10.1 snapshot the index-ordered reads measured 0.4 to 1.6 ms
+(about 10 ms descending on a `NULL_STRATEGY INDEX` index, which reads its null keys first),
+against 0.8 to 1.1 s for the scan (ArcadeDB [#8724](https://github.com/ArcadeData/arcadedb/issues/8724)).
+Declare `MANDATORY` and `NOTNULL` before loading data: both languages trust the declaration,
+and `ALTER PROPERTY` does not check records written before it.
 
 ```python
 db.command("sql", "CREATE PROPERTY Event.createdAt DATETIME (mandatory true, notnull true)")  # every record has a key: no scan
@@ -461,6 +463,21 @@ read an ordered index on the property as a range and then check the condition, i
 scanning the type; case-insensitive indexes are not used for them, and Cypher
 `min(n.p)` / `max(n.p)` read one end of an index on that label and property alone when
 the index holds no nulls (ArcadeDB [#8666](https://github.com/ArcadeData/arcadedb/issues/8666)).
+
+**Disjunctions.** From 26.10.1 a Cypher `WHERE` that is an `OR` of equalities or `IN` lists on
+indexed properties reads the indexes, as SQL does: `n.x = $a OR n.x = $b` becomes the seek
+`n.x IN [$a, $b]` does, and an `OR` across properties a union of index seeks. One disjunct on
+a property with no index makes it a scan of the label. At 1,000,000 vertices on a 26.10.1
+snapshot the `OR` forms measured 0.5 to 0.9 ms against 340 to 430 ms before
+(ArcadeDB [#8723](https://github.com/ArcadeData/arcadedb/issues/8723)).
+
+**Scans run in parallel only outside a transaction.** A filtered scan of a type runs on
+several cores in SQL and, from 26.10.1, in Cypher too
+(ArcadeDB [#8725](https://github.com/ArcadeData/arcadedb/issues/8725)), but only when no
+transaction is open: inside `db.begin()` or `with db.transaction():` it runs on one thread,
+because the workers would not see the transaction's own changes. At 1,000,000 records on 12
+cores the same filtered count measured 43 to 57 ms with no transaction open and 255 to 291 ms
+inside one, in both languages. Run analytical reads outside an explicit transaction.
 
 ### ResultSet Methods
 
