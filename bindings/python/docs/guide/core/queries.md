@@ -570,6 +570,30 @@ result = db.query(
 )
 ```
 
+### Writing nodes
+
+Write in batches, as the SQL section does: one `UNWIND $rows` statement per transaction of a
+few thousand rows, with the values bound as a parameter.
+
+```python
+rows = [{"id": i, "name": f"n{i}"} for i in range(start, start + 5_000)]
+with db.transaction():
+    db.command("opencypher",
+               "UNWIND $rows AS r MERGE (p:Person {id: r.id}) SET p.name = r.name",
+               {"rows": rows})
+```
+
+Give a new node its properties in the statement that creates it, as plain property
+assignments. From 26.10.1, `CREATE (n ...) SET n.p = ...`, `MERGE ... SET n.p = ...`, and
+`MERGE ... ON CREATE SET n.p = ...` apply the assignments before the node's first write. A
+`SET` that assigns a map (`SET n += r`), sets a label, or reads the new node still writes it
+a second time, and that second write, which grows the record inside its page, costs about as
+much as creating it. At 200,000 new vertices, 1,000 per transaction, on a 26.10.1 snapshot:
+`CREATE ... SET n.name = r.name` about 95,000 vertices per second against about 50,000 for
+`SET n += {name: r.name}`, and `MERGE ... SET n.name = r.name` about 60,000 against about
+39,000 (ArcadeDB [#8735](https://github.com/ArcadeData/arcadedb/issues/8735)). A record made
+through the Python API follows the same rule: set every property before its first `save()`.
+
 ### Graph Traversals
 
 ```python
