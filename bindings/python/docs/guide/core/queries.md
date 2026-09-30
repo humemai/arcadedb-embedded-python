@@ -429,19 +429,31 @@ without the index when most of your ranges are wide.
 `HASH` does not imply uniqueness. A non-unique hash index still makes sense when many
 records share the same exact-match value, such as `customerId`, `status`, or `country`.
 
-**Ordered reads over an optional property.** `ORDER BY p LIMIT k` reads an `LSM_TREE`
-index on `p` in order, but nulls sort first in ascending order and an index created with
-the default null strategy holds no null keys, so an ascending read first scans the whole
-type for rows where `p` is null. From 26.10.1 that scan is skipped when `p` is declared
-`NOTNULL` or the `WHERE` clause excludes nulls on `p` (`p IS NOT NULL`, `p = ?`, `p < ?`, or
-`p > ?`; not `>=` or `<=`, which two nulls satisfy); otherwise, create the index with `NULL_STRATEGY INDEX`
-so the nulls are in it. Descending reads are not affected. At 1,000,000 rows the
-ascending top 10 measured about 290 ms with the scan and about 1 ms without it
-(ArcadeDB [#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
+**Ordered reads over an optional property.** A SQL `ORDER BY p LIMIT k` reads an `LSM_TREE`
+index on `p` in order, but nulls sort first in ascending order, and an index created with
+the default null strategy holds no key for a record whose `p` is null or absent, so an
+ascending read first scans the whole type for those records. From 26.10.1 that scan is
+skipped when the `WHERE` clause excludes nulls on `p` (`p IS NOT NULL`, `p = ?`, `p < ?`, or
+`p > ?`; not `>=` or `<=`, which two nulls satisfy), or when `p` is declared both
+`MANDATORY` and `NOTNULL`. `NOTNULL` alone is not enough: it rejects an explicit null but
+not a record that leaves `p` out (ArcadeDB [#8701](https://github.com/ArcadeData/arcadedb/issues/8701)).
+Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. Descending
+SQL reads are not affected. At 1,000,000 rows the ascending top 10 measured about 290 ms
+with the scan and about 1 ms without it (ArcadeDB [#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
+
+openCypher sorts nulls last in ascending order and first in descending order. Over a
+whole label it reads the index in order only for an ascending `ORDER BY n.p LIMIT k` with
+no `WHERE` and an index with the default null strategy. A descending read, a
+`WHERE n.p IS NOT NULL`, or an index created with `NULL_STRATEGY INDEX` scans the label:
+about 0.8 to 1.1 s against 0.5 to 1.7 ms at 1,000,000 vertices on a 26.10.1 snapshot,
+in either direction for the `NULL_STRATEGY INDEX` index (ArcadeDB
+[#8724](https://github.com/ArcadeData/arcadedb/issues/8724)). A range predicate on `p`,
+such as `WHERE n.p >= 0` for a `p` that is never negative, is read from the index in either
+direction, so for Cypher keep the default null strategy and give a descending top k a range.
 
 ```python
-db.command("sql", "CREATE PROPERTY Event.createdAt DATETIME (notnull true)")  # no nulls: no scan
-db.command("sql", "CREATE INDEX ON Task (dueAt) NOTUNIQUE NULL_STRATEGY INDEX")  # optional property
+db.command("sql", "CREATE PROPERTY Event.createdAt DATETIME (mandatory true, notnull true)")  # every record has a key: no scan
+db.command("sql", "CREATE INDEX ON Task (dueAt) NOTUNIQUE NULL_STRATEGY INDEX")  # optional property, SQL reads
 ```
 
 **Prefix matches.** From 26.10.1 a SQL `LIKE 'abc%'` and a Cypher `STARTS WITH 'abc'`
