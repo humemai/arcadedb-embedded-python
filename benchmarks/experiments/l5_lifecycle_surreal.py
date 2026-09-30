@@ -112,9 +112,30 @@ def _open():
     return db
 
 
-def _insert(db, table, docs):
-    for i in range(0, len(docs), INGEST_BATCH):
-        db.insert(table, docs[i:i + INGEST_BATCH])
+def _batched(rows):
+    """Yield lists of INGEST_BATCH rows from an iterable, the last one shorter.
+
+    The build streams its input (BUGS F161): until 2026-09-30 every situation
+    built all n rows as one Python list before the first insert, while the
+    ArcadeDB arm (L.build) streams row by row. The list was part of this arm's
+    peak memory at every size (a third of doc's at 1M, three fifths of
+    vector's) and at 10M the vector situation's list alone, 64 floats per row
+    as Python objects, filled the 28g envelope before the engine saw a row.
+    Same rows, same order, same batch boundaries as the slices it replaces.
+    """
+    buf = []
+    for r in rows:
+        buf.append(r)
+        if len(buf) == INGEST_BATCH:
+            yield buf
+            buf = []
+    if buf:
+        yield buf
+
+
+def _insert(db, table, rows):
+    for batch in _batched(rows):
+        db.insert(table, batch)
 
 
 def _rid(table, i):
@@ -125,8 +146,8 @@ def _rid(table, i):
 def _vector_docs(n):
     import random
     rnd = random.Random(17)              # L._vectors' seed and draw order
-    return [{"id": _rid("V", i), "vid": i,
-             "emb": [round(rnd.random(), 6) for _ in range(DIM)]} for i in range(n)]
+    return ({"id": _rid("V", i), "vid": i,
+             "emb": [round(rnd.random(), 6) for _ in range(DIM)]} for i in range(n))
 
 
 def build(situation, n):
@@ -147,24 +168,24 @@ def build(situation, n):
         pass
     elif situation == "doc":
         q("DEFINE TABLE D SCHEMALESS")
-        _insert(db, "D", [{"id": _rid("D", i), "did": i} for i in range(n)])
+        _insert(db, "D", ({"id": _rid("D", i), "did": i} for i in range(n)))
     elif situation == "doc_idx10":
         q("DEFINE TABLE D SCHEMALESS")
         # Index BEFORE the load, as the TPC arm does (2026-09-13): on SurrealKV a
         # DEFINE INDEX over loaded rows is one transaction record.
         for i in range(10):
             q(f"DEFINE INDEX D_p{i} ON D FIELDS p{i}")
-        _insert(db, "D", [dict({"id": _rid("D", i)}, **{f"p{k}": i for k in range(10)})
-                          for i in range(n)])
+        _insert(db, "D", (dict({"id": _rid("D", i)}, **{f"p{k}": i for k in range(10)})
+                          for i in range(n)))
     elif situation == "graph":
         q("DEFINE TABLE P SCHEMALESS; DEFINE TABLE E TYPE RELATION IN P OUT P SCHEMALESS")
-        _insert(db, "P", [{"id": _rid("P", i), "pid": i} for i in range(n)])
+        _insert(db, "P", ({"id": _rid("P", i), "pid": i} for i in range(n)))
         # insert_relation, not RELATE statements (l2_graph.SurrealGraph): the
         # same fan-out and targets as L.build's CREATE EDGE loop.
-        edges = [{"in": _rid("P", i), "out": _rid("P", (i + f * 7919) % n)}
-                 for i in range(n) for f in range(1, FANOUT + 1)]
-        for i in range(0, len(edges), INGEST_BATCH):
-            db.insert_relation("E", edges[i:i + INGEST_BATCH])
+        edges = ({"in": _rid("P", i), "out": _rid("P", (i + f * 7919) % n)}
+                 for i in range(n) for f in range(1, FANOUT + 1))
+        for batch in _batched(edges):
+            db.insert_relation("E", batch)
     elif situation == "vector":
         # Index BEFORE the load, as the dense arm does; the matched HNSW
         # operating point, COSINE like the ArcadeDB situation's LSM_VECTOR.
@@ -173,8 +194,8 @@ def build(situation, n):
         _insert(db, "V", _vector_docs(n))
     elif situation == "ts":
         q("DEFINE TABLE T SCHEMALESS")
-        _insert(db, "T", [{"ts": 1_700_000_000_000 + i * 1000, "sensor": "s0", "value": 1.0}
-                          for i in range(n)])
+        _insert(db, "T", ({"ts": 1_700_000_000_000 + i * 1000, "sensor": "s0", "value": 1.0}
+                          for i in range(n)))
     elif situation in UNEXPRESSIBLE_PROBES:
         stmt, why = UNEXPRESSIBLE_PROBES[situation]
         try:
