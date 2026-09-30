@@ -112,6 +112,12 @@ doc.set("name", "Updated Name")
 doc.save()  # Persists changes
 ```
 
+Set every property of a new record before its first `save()`. A record saved and then
+changed in the same transaction is written a second time, and the second write grows it
+inside its page: at 200,000 new vertices, 1,000 per transaction, saving each vertex once
+measured 110,000 to 120,000 per second and saving it, setting one more property, and saving again
+about 52,000 (ArcadeDB [#8735](https://github.com/ArcadeData/arcadedb/issues/8735)).
+
 #### `delete() -> None`
 
 Delete the document from the database.
