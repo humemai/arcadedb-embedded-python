@@ -256,7 +256,7 @@ STAGES = [
      ['grep -q "durability_readback" e4_decomp.py'
       ' || { say "$ID ABORT: the durability stamp this re-run exists for is not in this tree"; exit 1; }'],
      {}, []),
-    # LADYBUGDB, FITTED (BUGS F160, DECISIONS #124). qOA and qOA3 ran it with LadybugDB's host-sized defaults: 20
+    # LADYBUGDB, FITTED (BUGS F160, DECISIONS #125). qOA and qOA3 ran it with LadybugDB's host-sized defaults: 20
     # threads on a 12-CPU cpuset and a buffer pool of 0.8 x host RAM (~49 GB) against the 24 GB cell cap, while
     # Memgraph, FalkorDB, and DuckPGQ were fitted (FAIRNESS F6). A laptop A/B on the lane's own adapter put its reads
     # 12-28% slow and its writes 12% fast at 20 threads. Both classes (None), both sizes, LadybugDB alone; the
@@ -265,6 +265,18 @@ STAGES = [
     ("qOA5", "LadybugDB graph interactive re-run, fitted to the cell (F160)", "l2", ["oltp"], ["sf1", "sf10"],
      ['grep -q "def _ladybug_fit" l2_graph.py || { say "$ID ABORT: the LadybugDB fit (F160) is not in this tree"; exit 1; }'],
      {}, [], ["ladybug_graph"], None, "qOM"),
+    # BUGS F161, DECISIONS #126 (2026-09-30): the SurrealDB lifecycle arm built each situation's whole input as one
+    # Python list before its first insert, while the ArcadeDB arm streams. The list sat in SurrealDB's peak memory at
+    # every size, and at 10M the vector situation's list alone filled the 28g envelope, so qOG's vector lc10m row is
+    # our failure and not the engine's. The build now streams in the same batches. This re-runs every SurrealDB
+    # lifecycle cell, all eight situations at all four sizes, so the table holds one instrument (#84), with qOG's
+    # settings; the newest ts_utc under the canonical key supersedes qOG's rows, as qOA5 does for LadybugDB. About
+    # 72 h, 48 of them the 10M vector cell's own cap (the user's choice: run it as scripted, #122).
+    ("qOA6", "SurrealDB lifecycle re-run, the input streamed (F161)", "lifecycle",
+     ["empty", "doc", "doc_idx10", "graph", "graph_gav", "vector", "sparse", "ts"],
+     ["lc10k", "lc100k", "lc1m", "lc10m"],
+     ['grep -q "def _batched" l5_lifecycle_surreal.py || { say "$ID ABORT: the streamed build (F161) is not in this tree"; exit 1; }'],
+     {}, ["BENCH_LC_ITERS=5", "BENCH_LC_WARMUP=2"], ["surrealdb_lifecycle"], None, "qOA5"),
 ]
 
 HEAD = '''#!/bin/bash
