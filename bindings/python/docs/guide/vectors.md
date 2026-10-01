@@ -97,19 +97,36 @@ Important:
 - `max_connections` (Vamana per-layer degree; use 2*M to match an hnswlib M): higher → better recall, more memory/slower build (default: 32).
 - `beam_width` (ef/efConstruction): higher → better recall, slower search/build (default: 100).
 - `ef_search` (runtime, exact search only): higher → better recall, slower search.
-    - Leave it unset to use the Java engine's default/adaptive behavior.
+    - Unset, the engine picks the beam: 100 below 10,000 vectors, and `max(2k, 20)` from
+      there up. On 20,000 random 32-dimension vectors that default found 80% of the true
+      top 10, where a beam of 100 found 99.7%. Set it for the recall you need.
 
 ### The search beam in SQL
 
 `vectorNeighbors(index, vector, k)` takes an optional fourth argument, the search
 beam (`efSearch`): how many candidates the graph walk keeps before returning
 `k`. Higher finds more of the true neighbours and costs time; the engine's
-default is adaptive. Pass it explicitly when you compare recall across
-settings or engines, so the number you quote is the number that ran:
+default is adaptive and small on larger graphs (see above). Pass it explicitly
+when you compare recall across settings or engines, so the number you quote is
+the number that ran:
 
 ```sql
 SELECT expand(vectorNeighbors('Doc[embedding]', :q, 10, 100))
 ```
+
+### Searches while the graph rebuilds
+
+Deletes and updates collect as pending changes, and once they reach a fifth of
+the graph (`arcadedb.vectorIndex.rebuildGraphRatio`, 0.2), and sometimes
+earlier, the engine rebuilds the graph in the background. Searches keep running
+meanwhile, but until ArcadeDB
+[#8862](https://github.com/ArcadeData/arcadedb/issues/8862) is fixed they
+return noticeably worse neighbours for as long as the rebuild runs: on 20,000
+vectors, recall@10 at a beam of 100 fell from 0.99 to between 0.14 and 0.31 for
+the four seconds of the rebuild, and came back when it finished. A rebuild takes
+about as long as building the index, so on a large index run bulk deletes and
+updates at a quiet time; the engine logs `Built graph for index` when the new
+graph is in place.
 
 ### Build-time cache: use the default
 
