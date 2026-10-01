@@ -118,15 +118,16 @@ SELECT expand(vectorNeighbors('Doc[embedding]', :q, 10, 100))
 
 Deletes and updates collect as pending changes, and once they reach a fifth of
 the graph (`arcadedb.vectorIndex.rebuildGraphRatio`, 0.2), and sometimes
-earlier, the engine rebuilds the graph in the background. Searches keep running
-meanwhile, but until ArcadeDB
-[#8862](https://github.com/ArcadeData/arcadedb/issues/8862) is fixed they
+earlier, the engine rebuilds the graph in the background while searches keep
+running. On 26.9.1 and earlier, ArcadeDB
+[#8862](https://github.com/ArcadeData/arcadedb/issues/8862) makes those searches
 return noticeably worse neighbours for as long as the rebuild runs: on 20,000
 vectors, recall@10 at a beam of 100 fell from 0.99 to between 0.14 and 0.31 for
-the four seconds of the rebuild, and came back when it finished. A rebuild takes
-about as long as building the index, so on a large index run bulk deletes and
-updates at a quiet time; the engine logs `Built graph for index` when the new
-graph is in place.
+the four seconds of the rebuild. **Fixed in 26.10.1** (PR #8864, verified on its
+merge): the same run keeps recall@10 between 0.985 and 1.000 through the
+rebuild. On an older release, run bulk deletes and updates at a quiet time; a
+rebuild takes about as long as building the index, and the engine logs
+`Built graph for index` when the new graph is in place.
 
 ### Build-time cache: use the default
 

@@ -156,6 +156,23 @@ with arcadedb.create_database("./restored") as db:
     )
 ```
 
+On 26.9.1 and earlier, ArcadeDB
+[#8871](https://github.com/ArcadeData/arcadedb/issues/8871) makes this restore lossy: an
+export that holds an infinite `FLOAT` or `DOUBLE` does not import at all (the import stops
+with `NumberFormatException: For input string: "NegInfinity"`), a `DECIMAL` comes back
+rounded to the 17 digits of a double, and NaN or an infinity inside a list is exported as
+0. **Fixed in 26.10.1** (PR #8878, verified on its merge) for declared `FLOAT`, `DOUBLE`, and
+`DECIMAL` properties and for `LIST OF FLOAT`, `LIST OF DOUBLE`, and `LIST OF DECIMAL`. NaN
+and the infinities still come back as the strings `"NaN"`, `"PosInfinity"`, and
+`"NegInfinity"` from a property with no declared type, and are not restored inside `MAP`
+properties, embedded documents, or nested lists.
+
+When the copy has to be exact, take a backup instead: in the same test, `BACKUP DATABASE` and
+its restore returned all 2,769 records of edge-case values unchanged on both versions, with
+every index answer equal, and copying the closed database directory
+([Database Backup Pattern](core/database.md#database-backup-pattern)) copies the files
+themselves.
+
 ## Choosing the Right Import Mode
 
 ### CSV
