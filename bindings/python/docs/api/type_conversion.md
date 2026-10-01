@@ -19,7 +19,10 @@ ArcadeDB Python bindings wrap a Java database engine. When you:
 
 - Set properties on records → Python values converted to Java
 - Read properties from records → Java values converted to Python
-- Pass query parameters → Python values converted to Java
+- Pass query parameters → Python values converted to Java (positional parameters
+  convert `Decimal`, `date`, and `datetime` as below from 26.10.1; before, a `Decimal`
+  reached the engine as a `Double` and kept only about 16 significant digits, and a `date` or
+  `datetime` was refused with "No matching overloads")
 - Receive query results → Java values converted to Python
 
 The type_conversion module handles this automatically.
@@ -51,14 +54,20 @@ that JPype performs the conversion automatically (a Python `int` reaches Java as
 | `dict` | `HashMap` |
 | `list` | `ArrayList` |
 | `tuple` | `ArrayList` |
-| `datetime` | `java.util.Date` |
+| `datetime` | `java.time.LocalDateTime` (its instant, in UTC) |
 | `date` | `LocalDate` |
 | `bytes`, `bytearray` | `byte[]` |
 
 **Notes:**
 
-- `datetime` is converted to a `java.util.Date` built from its epoch milliseconds, so
-  sub-millisecond precision is dropped.
+- `datetime` is converted to the `LocalDateTime` of its instant in UTC, with its
+  microseconds, the form the engine stores `DATETIME` in. Before 26.10.1 it was a
+  `java.util.Date`, which kept milliseconds, so `DATETIME_MICROS` and `DATETIME_NANOS`
+  lost the rest and a lookup by the same value found nothing.
+- A naive `datetime` is read as local time, as `datetime.timestamp()` reads it, and
+  values come back as naive UTC wall clocks. On a machine whose time zone is not UTC a
+  naive value therefore does not read back equal to itself (12:34 written in UTC+9
+  reads back as 03:34). Pass timezone-aware datetimes to round-trip exactly.
 - `date` is converted to a `LocalDate`. If the Java types are unavailable it is
   combined with `time.min` and converted as a `datetime`.
 - Collection elements, set members, and map keys/values are converted recursively.

@@ -503,8 +503,21 @@ def convert_python_to_java(value: Any) -> Any:
     if isinstance(value, datetime):
         if java_python_types is None:
             return value
-        timestamp_ms = int(value.timestamp() * 1000)
-        return java_python_types.java_date(timestamp_ms)
+        # The same instant as before (a naive value is local time, as
+        # datetime.timestamp() reads it), handed over as the UTC wall clock the
+        # engine stores DATETIME in. The java.util.Date this used to build kept
+        # milliseconds, so DATETIME_MICROS and DATETIME_NANOS lost the rest and
+        # a lookup by the same value never matched (#58).
+        utc = value.astimezone(timezone.utc)
+        return _get_java_time_types().local_datetime.of(
+            utc.year,
+            utc.month,
+            utc.day,
+            utc.hour,
+            utc.minute,
+            utc.second,
+            utc.microsecond * 1000,
+        )
 
     if isinstance(value, date):
         if java_python_types is not None:
