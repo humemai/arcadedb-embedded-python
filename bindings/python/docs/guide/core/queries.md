@@ -1,5 +1,11 @@
 # Query Languages Guide
 
+!!! warning "Known engine issues"
+    Three open ArcadeDB bugs can return a wrong answer or change the wrong rows without an
+    error: a unique composite index read by its first property, a SQL `UPDATE` that moves an
+    indexed key, and index range reads inside a transaction that has written. See
+    [Known Engine Issues](../known-issues.md) for the versions and the workarounds.
+
 The bindings run SQL and OpenCypher through `db.query()` and `db.command()`. Use them
 for schema, CRUD, and graph operations: SQL for relational-style work and OpenCypher
 for graph traversals.
