@@ -479,6 +479,23 @@ because the workers would not see the transaction's own changes. At 1,000,000 re
 cores the same filtered count measured 43 to 57 ms with no transaction open and 255 to 291 ms
 inside one, in both languages. Run analytical reads outside an explicit transaction.
 
+**Whole-type aggregates: SQL uses every core, Cypher one.** In 26.10.1 a SQL aggregate over
+a type scan (`count`, `sum`, `max`, `GROUP BY`) is computed in the parallel workers. An
+openCypher aggregate over a label is computed on one thread: a label scan with no `WHERE`
+is read sequentially, and with a `WHERE` the scan is parallel but the aggregation is not.
+At 2,000,000 vertices on 12 cores, with no transaction open, `sum` over a property measured
+127 to 130 ms in SQL and 680 to 752 ms in Cypher, and a group-by with a count and a sum 226
+to 239 ms against 973 to 1,146 ms, with one bucket or eight
+(ArcadeDB [#8797](https://github.com/ArcadeData/arcadedb/issues/8797)). Until that changes,
+write whole-type aggregates in SQL.
+
+```python
+# Runs in the parallel workers (26.10.1); the same MATCH ... RETURN runs on one thread
+by_city = db.query(
+    "sql", "SELECT city, count(*) AS n, avg(age) AS a FROM Person GROUP BY city"
+).to_list()
+```
+
 ### ResultSet Methods
 
 Use `first()` or direct iteration when you want the lowest-overhead path.
