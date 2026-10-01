@@ -446,13 +446,12 @@ not a record that leaves `p` out (ArcadeDB [#8701](https://github.com/ArcadeData
 Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. Descending
 SQL reads are not affected. At 1,000,000 rows the ascending top 10 measured about 290 ms
 with the scan and about 1 ms without it (ArcadeDB [#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
-In 26.10.1 SQL reads the index in order only when the query projects `p` under its own name,
-or projects the whole record: `SELECT title, createdAt FROM Event ORDER BY createdAt DESC LIMIT 10`
-does, while `SELECT title FROM Event ORDER BY createdAt DESC LIMIT 10` and
-`SELECT createdAt AS t FROM Event ORDER BY t DESC LIMIT 10` scan the type and sort it. At
-1,000,000 records those measured 642 to 806 ms against 0.4 to 0.9 ms through the index
-(ArcadeDB [#8811](https://github.com/ArcadeData/arcadedb/issues/8811)). openCypher reads the
-index in order whether the sort property is returned, aliased, or left out.
+SQL reads the index in order whether the query projects `p` under its own name, under an
+alias, or not at all: `SELECT title FROM Event ORDER BY createdAt DESC LIMIT 10` reads ten
+index entries. Before ArcadeDB [#8811](https://github.com/ArcadeData/arcadedb/issues/8811),
+fixed in 26.10.1, the aliased and unprojected forms scanned the type and sorted it (642 to
+806 ms at 1,000,000 records, against 0.45 to 0.93 ms with the fix). openCypher reads the index
+in order in every form.
 For the first or last value past a bound, write the ordered read too:
 `SELECT ts FROM Event WHERE ts > ? ORDER BY ts LIMIT 1` reads one index entry, while
 `SELECT min(ts) FROM Event WHERE ts > ?` reads every record in the range, in both languages
@@ -498,34 +497,38 @@ because the workers would not see the transaction's own changes. At 1,000,000 re
 cores the same filtered count measured 43 to 57 ms with no transaction open and 255 to 291 ms
 inside one, in both languages. Run analytical reads outside an explicit transaction.
 
-**Whole-type aggregates: SQL uses every core, Cypher one.** In 26.10.1 a SQL aggregate over
-a type scan (`count`, `sum`, `max`, `GROUP BY`) is computed in the parallel workers. An
-openCypher aggregate over a label is computed on one thread: a label scan with no `WHERE`
-is read sequentially, and with a `WHERE` the scan is parallel but the aggregation is not.
-At 2,000,000 vertices on 12 cores, with no transaction open, `sum` over a property measured
-127 to 130 ms in SQL and 680 to 752 ms in Cypher, and a group-by with a count and a sum 226
-to 239 ms against 973 to 1,146 ms, with one bucket or eight
-(ArcadeDB [#8797](https://github.com/ArcadeData/arcadedb/issues/8797)). Until that changes,
-write whole-type aggregates in SQL.
+**Whole-type aggregates.** In 26.10.1 a SQL aggregate over a type scan is computed in the
+parallel workers, and so are openCypher `count`, `sum`, `avg`, `min`, and `max` over a label,
+with or without grouping or a `WHERE` (ArcadeDB
+[#8797](https://github.com/ArcadeData/arcadedb/issues/8797)). At 2,000,000 vertices on 12
+cores, with no transaction open, `sum` over a property measured 128 ms in SQL and 84 ms in
+openCypher, and a group-by with a count and a sum 221 ms against 141 ms. openCypher `DISTINCT`
+aggregates such as `count(DISTINCT n.p)`, `collect()`, and aggregates over a function call
+still run on one thread (`count(DISTINCT n.grp)` measured 827 ms); the SQL form of the same
+question runs in the workers.
 
 ```python
-# Runs in the parallel workers (26.10.1); the same MATCH ... RETURN runs on one thread
+# openCypher aggregates over a label run in the parallel workers (26.10.1)
 by_city = db.query(
-    "sql", "SELECT city, count(*) AS n, avg(age) AS a FROM Person GROUP BY city"
+    "opencypher", "MATCH (p:Person) RETURN p.city AS city, count(*) AS n, avg(p.age) AS a"
 ).to_list()
+
+# A DISTINCT aggregate does not; count the distinct values in SQL instead
+n_cities = db.query(
+    "sql", "SELECT count(*) AS n FROM (SELECT DISTINCT city FROM Person)"
+).to_list()[0]["n"]
 ```
 
-**Distinct values: `GROUP BY`, not `SELECT DISTINCT`.** In 26.10.1 a SQL `SELECT DISTINCT`
-over a type scan projects and removes duplicates on one thread, while a `GROUP BY` over the
-same columns does both in the parallel workers and returns the same rows. At 2,000,000
-records on 12 cores the distinct values of one property measured 1,185 to 1,481 ms with
-`SELECT DISTINCT` and 92 to 111 ms with `GROUP BY`, and 695 to 859 ms against 98 to 103 ms
-with a `WHERE` (ArcadeDB [#8799](https://github.com/ArcadeData/arcadedb/issues/8799)).
-Add `ORDER BY` if the order of the rows matters, in either form.
+**Distinct values.** In 26.10.1 a plain `SELECT DISTINCT p FROM Type` over at least 10,000
+records runs like the `GROUP BY` over the same property, in the parallel workers, and returns
+the same rows in the same order: at 2,000,000 records 94 ms, against 1,185 ms before ArcadeDB
+[#8799](https://github.com/ArcadeData/arcadedb/issues/8799). It is not rewritten when it has a
+`LIMIT`, an `ORDER BY`, a computed expression, or `*`, or inside a transaction; there,
+`SELECT p FROM Type GROUP BY p` returns the same rows from the workers.
 
 ```python
-# The same rows as SELECT DISTINCT city FROM Person, computed in the parallel workers
-cities = [r.get("city") for r in db.query("sql", "SELECT city FROM Person GROUP BY city")]
+# Sorted distinct values: the ORDER BY keeps SELECT DISTINCT off the parallel path, GROUP BY is on it
+cities = [r.get("city") for r in db.query("sql", "SELECT city FROM Person GROUP BY city ORDER BY city")]
 ```
 
 ### ResultSet Methods
