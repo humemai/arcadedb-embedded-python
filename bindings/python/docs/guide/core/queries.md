@@ -432,8 +432,12 @@ laptop, and a one-year slice (14%) 1.5x to 1.6x faster (`ArcadeData/arcadedb#833
 Index a range column for the selective ranges you actually run, and measure with and
 without the index when most of your ranges are wide.
 
-`HASH` does not imply uniqueness. A non-unique hash index still makes sense when many
-records share the same exact-match value, such as `customerId`, `status`, or `country`.
+`HASH` does not imply uniqueness: a non-unique hash index serves exact-match lookups on a
+value that a few records share. Until a release carries the fix for ArcadeDB
+[#8829](https://github.com/ArcadeData/arcadedb/issues/8829), avoid `NOTUNIQUE_HASH` where a
+value can hold a few dozen records or more, such as a `status`, a `country`, or a customer
+with many orders: deleting some of those records can fail at commit. Index such a property
+with `NOTUNIQUE` instead (see [Known Engine Issues](../known-issues.md)).
 
 **Ordered reads over an optional property.** A SQL `ORDER BY p LIMIT k` reads an `LSM_TREE`
 index on `p` in order, but nulls sort first in ascending order, and an index created with
