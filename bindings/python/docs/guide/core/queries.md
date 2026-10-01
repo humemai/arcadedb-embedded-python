@@ -440,6 +440,13 @@ not a record that leaves `p` out (ArcadeDB [#8701](https://github.com/ArcadeData
 Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. Descending
 SQL reads are not affected. At 1,000,000 rows the ascending top 10 measured about 290 ms
 with the scan and about 1 ms without it (ArcadeDB [#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
+In 26.10.1 SQL reads the index in order only when the query projects `p` under its own name,
+or projects the whole record: `SELECT title, createdAt FROM Event ORDER BY createdAt DESC LIMIT 10`
+does, while `SELECT title FROM Event ORDER BY createdAt DESC LIMIT 10` and
+`SELECT createdAt AS t FROM Event ORDER BY t DESC LIMIT 10` scan the type and sort it. At
+1,000,000 records those measured 642 to 806 ms against 0.4 to 0.9 ms through the index
+(ArcadeDB [#8811](https://github.com/ArcadeData/arcadedb/issues/8811)). openCypher reads the
+index in order whether the sort property is returned, aliased, or left out.
 
 openCypher sorts nulls last in ascending order and first in descending order. From 26.10.1
 it reads the index in order over a whole label, in either direction, for
