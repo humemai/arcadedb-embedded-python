@@ -79,7 +79,7 @@ for person in result:
     print(person.get("name"))
 
 # Query with WHERE
-result = db.query("sql", "SELECT FROM Task WHERE priority = 'high' AND completed = false")
+result = db.query("sql", "SELECT FROM Task WHERE priority = ? AND completed = ?", "high", False)
 tasks = result.to_list()
 for task in tasks:
     title = task["title"]
@@ -215,8 +215,8 @@ with db.transaction():
 with db.transaction():
     db.command("sql", """
         UPDATE Task SET completed = true, cost = 127.50
-        WHERE title = 'Buy groceries'
-    """)
+        WHERE title = ?
+    """, "Buy groceries")
 ```
 
 #### Update with JSON array content
@@ -472,7 +472,7 @@ snapshot the `OR` forms measured 0.5 to 0.9 ms against 340 to 430 ms before
 (ArcadeDB [#8723](https://github.com/ArcadeData/arcadedb/issues/8723)).
 
 **Scans run in parallel only outside a transaction.** A filtered scan of a type runs on
-several cores in SQL and, from 26.10.1, in Cypher too
+several cores, from 26.10.1 in both SQL and Cypher
 (ArcadeDB [#8725](https://github.com/ArcadeData/arcadedb/issues/8725)), but only when no
 transaction is open: inside `db.begin()` or `with db.transaction():` it runs on one thread,
 because the workers would not see the transaction's own changes. At 1,000,000 records on 12
@@ -498,7 +498,7 @@ assert len(people_list) == 2
 assert people_list[1]["name"] == "Bob"
 
 # first() to check if results exist
-result = db.query("sql", "SELECT FROM Person WHERE name = 'Unknown'")
+result = db.query("sql", "SELECT FROM Person WHERE name = ?", "Unknown")
 first_mutual = result.first()
 if first_mutual:
     print(f"Found: {first_mutual.get('name')}")

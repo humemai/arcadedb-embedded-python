@@ -269,7 +269,7 @@ Situations that pass (documents, all four index types, geo, sparse, time series)
 
 The Graph Analytical View is no longer rebuilt on every open (#6583 via #6588, #6632 via #6633: +0.77 ms at open against +1,027 ms before, at 10M vertices / 40M edges), and an invalidating commit no longer stalls the next query (#6641 via #6642: 3.0 ms against 5,613 ms). The page must not say the view's speedup is paid with a per-session scan; it is not. What the view still costs per session is in section 4b.
 
-The 0.40 ms per index on close (independent of index content, gone on tmpfs, so I/O; 30 indexes is not an unusual schema) is an upstream candidate for CAMPAIGN.md section 8's routine, recorded in `.notes` issues-trail as not yet filed.
+The 0.40 ms per index on close (independent of index content, gone on tmpfs, so I/O; 30 indexes is not an unusual schema) was filed upstream as ArcadeData/arcadedb#8626 and fixed by #8630 and #8631 in 26.10.1 (laptop, 100 indexed types: a clean close 100 ms -> 3 ms); October's rows keep the pin's cost.
 
 Cold open is measurable: `pagecache.evict()` drops a database's files with `posix_fadvise(DONTNEED)` and verifies with `mincore` that they left. No root, and it evicts only the named files, so the rest of the host stays warm and the number means "this database is cold" rather than "the machine is cold".
 

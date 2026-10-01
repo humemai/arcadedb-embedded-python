@@ -113,7 +113,7 @@ with arcadedb.open_database("./mydb") as db:
 **What happens during close:**
 
 1. Active transactions rolled back
-2. Buffers flushed to disk
+2. Pages written since open are flushed (a database only read since open closes without an fsync per file, from 26.10.1)
 3. Files closed
 4. Resources released
 5. Database removed from active instances
@@ -289,14 +289,16 @@ def init_database(path: str):
     # Create if doesn't exist
     if not arcadedb.database_exists(path):
         with arcadedb.create_database(path) as db:
-            db.command("sql", "CREATE VERTEX TYPE User")
-            db.command("sql", "CREATE PROPERTY User.email STRING")
-            db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
+            # Several schema statements: one transaction writes the schema once
+            with db.transaction():
+                db.command("sql", "CREATE VERTEX TYPE User")
+                db.command("sql", "CREATE PROPERTY User.email STRING")
+                db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
 
-            db.command("sql", "CREATE VERTEX TYPE Post")
-            db.command("sql", "CREATE PROPERTY Post.title STRING")
+                db.command("sql", "CREATE VERTEX TYPE Post")
+                db.command("sql", "CREATE PROPERTY Post.title STRING")
 
-            db.command("sql", "CREATE EDGE TYPE Authored")
+                db.command("sql", "CREATE EDGE TYPE Authored")
 
             print(f"Database initialized at {path}")
 

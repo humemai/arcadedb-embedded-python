@@ -268,10 +268,8 @@ with db.transaction():
     alice = db.new_vertex("Person").set("name", "Alice").save()
     bob = db.new_vertex("Person").set("name", "Bob").save()
 
-    # Create edge
-    edge = alice.new_edge("Knows", bob)
-    edge.set("since", 2020)
-    edge.save()
+    # Create edge: new_edge saves it, so pass its properties here
+    edge = alice.new_edge("Knows", bob, since=2020)
 ```
 
 #### `get_out_edges(*labels) -> List[Edge]`
@@ -292,7 +290,7 @@ assert all(e.get_in().get("name") in {"Bob", "Carol"} for e in knows)
 
 #### `get_in_edges(*labels) -> List[Edge]`
 
-Get incoming edges to this vertex, optionally filtered by label.
+Get incoming edges to this vertex, optionally filtered by label. On an edge type declared `UNIDIRECTIONAL` this returns nothing: only the outgoing side is stored, so use a Cypher pattern or SQL `MATCH`, which see the incoming side.
 
 ```python
 incoming = alice.get_in_edges()
@@ -324,10 +322,9 @@ The `Edge` class represents a connection between vertices with optional properti
 Edges have the same property methods as documents:
 
 ```python
-edge = alice.new_edge("Knows", bob)
-edge.set("since", 2020)
-edge.set("strength", 0.9)
-edge.save()
+# new_edge saves the edge when it creates it: pass its properties as keyword
+# arguments, because setting them afterwards and saving again writes it a second time
+edge = alice.new_edge("Knows", bob, since=2020, strength=0.9)
 
 print(edge.get("since"))  # Output: 2020
 edge.get_property_names()  # ['since', 'strength']

@@ -194,7 +194,7 @@ print(df.describe())
 
 Bulk-materialize all rows as columns: a dict of column name to numpy array
 (`int64`/`float64`/`bool`/`datetime64[ms]`) or Python list (strings and
-JSON-typed values). The fastest bulk path (~1.2x Java-native scans,
+JSON-typed values). The fastest bulk path (~1.6x Java-native scans,
 measured); `to_dataframe()` uses it internally.
 
 Fixed-dimension vector properties (e.g. `ARRAY_OF_FLOATS` embedding
