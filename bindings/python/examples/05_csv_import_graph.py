@@ -51,8 +51,8 @@ ALL queries use LIMIT-based pagination to avoid loading entire result sets:
 - Tags: Paginated with @rid > {last_rid} LIMIT {batch_size}
 
 Exception: User vertices group the ratings by user, `SELECT userId FROM Rating GROUP BY userId`
-(difficult to paginate efficiently; GROUP BY rather than SELECT DISTINCT, which runs on one
-thread in 26.10.1, ArcadeData/arcadedb#8799)
+(difficult to paginate efficiently; GROUP BY rather than SELECT DISTINCT, because the
+ORDER BY keeps a DISTINCT off the parallel path, ArcadeData/arcadedb#8799)
 
 Dataset Sources:
 ----------------
@@ -338,8 +338,8 @@ class VertexCreator:
         """Create User vertices.
 
         Note: reads the user ids with GROUP BY, which runs in the parallel scan
-        workers; SELECT DISTINCT runs on one thread in 26.10.1
-        (ArcadeData/arcadedb#8799). An earlier direct DISTINCT/ORDER BY form
+        workers; a SELECT DISTINCT with this ORDER BY would not (ArcadeData/arcadedb#8799).
+        An earlier direct DISTINCT/ORDER BY form
         resolved against the wrong database while the target graph DB was open
         beside the source document DB; the GROUP BY form was checked with both
         open, in all three creation modes, on 2026-10-01.
