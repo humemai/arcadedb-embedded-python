@@ -496,6 +496,19 @@ by_city = db.query(
 ).to_list()
 ```
 
+**Distinct values: `GROUP BY`, not `SELECT DISTINCT`.** In 26.10.1 a SQL `SELECT DISTINCT`
+over a type scan projects and removes duplicates on one thread, while a `GROUP BY` over the
+same columns does both in the parallel workers and returns the same rows. At 2,000,000
+records on 12 cores the distinct values of one property measured 1,185 to 1,481 ms with
+`SELECT DISTINCT` and 92 to 111 ms with `GROUP BY`, and 695 to 859 ms against 98 to 103 ms
+with a `WHERE` (ArcadeDB [#8799](https://github.com/ArcadeData/arcadedb/issues/8799)).
+Add `ORDER BY` if the order of the rows matters, in either form.
+
+```python
+# The same rows as SELECT DISTINCT city FROM Person, computed in the parallel workers
+cities = [r.get("city") for r in db.query("sql", "SELECT city FROM Person GROUP BY city")]
+```
+
 ### ResultSet Methods
 
 Use `first()` or direct iteration when you want the lowest-overhead path.
