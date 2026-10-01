@@ -196,6 +196,7 @@ nav:
   - Graph Operations: guide/graphs.md
   - Server Mode: guide/server.md
   - Performance: guide/performance.md
+  - Known Engine Issues: guide/known-issues.md
 - API Reference:
   - Database: api/database.md
   - GraphBatch: api/graph_batch.md
