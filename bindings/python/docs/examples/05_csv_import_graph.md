@@ -395,10 +395,7 @@ class VertexCreator:
     def _create_users(self, total_users: int):
         """Create User vertices from distinct Rating.userId values."""
         with arcadedb.open_database(str(source_db_path)) as source_db:
-            query = (
-                "SELECT userId FROM (SELECT DISTINCT userId FROM Rating) "
-                "ORDER BY userId"
-            )
+            query = "SELECT userId FROM Rating GROUP BY userId ORDER BY userId"
             batch_user_ids = []
             for record in source_db.query("sql", query):
                 batch_user_ids.append(record.get("userId"))
