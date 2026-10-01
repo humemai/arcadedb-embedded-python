@@ -457,10 +457,13 @@ SQL reads the index in order whether the query projects `p` under its own name, 
 alias, or not at all: `SELECT title FROM Event ORDER BY createdAt DESC LIMIT 10` reads ten
 index entries. Before ArcadeDB [#8811](https://github.com/ArcadeData/arcadedb/issues/8811),
 fixed in 26.10.1, the aliased and unprojected forms scanned the type and sorted it (642 to
-806 ms at 1,000,000 records, against 0.45 to 0.93 ms with the fix). openCypher reads the index
-in order in every form.
-For the first or last value past a bound, write the ordered read too:
-`SELECT ts FROM Event WHERE ts > ? ORDER BY ts LIMIT 1` reads one index entry, while
+806 ms at 1,000,000 records, against 0.45 to 0.93 ms with the fix). With a range on `p` in
+the `WHERE`, keep `p` under its own name or return the whole record: an aliased or unprojected
+`p` there still reads the whole range and sorts it (about 250 ms against 0.4 to 1.2 ms when half
+of 1,000,000 records match; ArcadeDB [#8836](https://github.com/ArcadeData/arcadedb/issues/8836)).
+openCypher reads the index in order in every form.
+For the first or last value past a bound, write the ordered read too, with the property under
+its own name: `SELECT ts FROM Event WHERE ts > ? ORDER BY ts LIMIT 1` reads one index entry, while
 `SELECT min(ts) FROM Event WHERE ts > ?` reads every record in the range, in both languages
 (at 1,000,000 records 0.2 to 0.5 ms against 136 to 145 ms in SQL and about 800 ms in openCypher;
 ArcadeDB [#8812](https://github.com/ArcadeData/arcadedb/issues/8812)). Over a whole type,
