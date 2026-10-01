@@ -74,7 +74,7 @@ or, inside the transaction, use equality and `IN` lookups.
 ## Deleting records with a `NOTUNIQUE_HASH` index can fail at commit
 
 ArcadeDB [#8829](https://github.com/ArcadeData/arcadedb/issues/8829); measured on 26.9.1 and
-a 26.10.1 snapshot.
+a 26.10.1 snapshot. **Fixed in 26.10.1** (PR #8831, verified on its merge).
 
 When a key of a `NOTUNIQUE_HASH` index holds a few dozen records or more, a transaction that
 deletes some of them can fail at commit with `ArrayIndexOutOfBoundsException` or
@@ -90,7 +90,8 @@ indexes remain a good fit for keys that hold one or a few records each, such as 
 
 ArcadeDB [#8833](https://github.com/ArcadeData/arcadedb/issues/8833); measured on 26.8.1,
 26.9.1, and a 26.10.1 snapshot. An index with the default null strategy (`SKIP`) is not
-affected.
+affected. **Fixed in 26.10.1** (PR #8839, verified on its merge), also for a composite index
+whose range follows equalities (`k = ? AND p < ?`).
 
 On an index created with `NULL_STRATEGY INDEX`, a SQL range that has an upper bound and no
 lower bound (`p < ?`, `p <= ?`) also returns every record whose `p` is null or absent. Over
@@ -111,7 +112,8 @@ first = db.query(
 ## An openCypher range under a subtype's label can return vertices of other types
 
 ArcadeDB [#8834](https://github.com/ArcadeData/arcadedb/issues/8834); measured on 26.9.1 and
-a 26.10.1 snapshot. 26.8.1 is not affected.
+a 26.10.1 snapshot. 26.8.1 is not affected. **Fixed in 26.10.1** (PR #8839, verified on its
+merge).
 
 When an index is declared on a parent type, an openCypher range on the indexed property under
 a subtype's label can also return vertices of the parent type and of sibling subtypes. With
@@ -130,7 +132,8 @@ rows = db.query(
 ## An openCypher range on a property with only a hash index fails
 
 ArcadeDB [#8835](https://github.com/ArcadeData/arcadedb/issues/8835); measured on 26.8.1,
-26.9.1, and a 26.10.1 snapshot.
+26.9.1, and a 26.10.1 snapshot. **Fixed in 26.10.1** (PR #8839, verified on its merge): the
+range falls back to the label scan, and equality still uses the hash index.
 
 When the only index on a property is `UNIQUE_HASH` or `NOTUNIQUE_HASH`, an openCypher range
 on it (`<`, `<=`, `>`, `>=`) raises `Index '...' does not support ordered iterations`.
