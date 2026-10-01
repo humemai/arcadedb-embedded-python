@@ -410,7 +410,7 @@ work, pass `"buildGraphNow": false` inside `METADATA`.
 
 Rules of thumb:
 
-- Use `UNIQUE_HASH` or `NOTUNIQUE_HASH` for exact-match lookups only.
+- Use `UNIQUE_HASH` or `NOTUNIQUE_HASH` for exact-match lookups only: SQL answers a range on a property whose only index is a hash index by scanning, and openCypher refuses it (ArcadeDB [#8835](https://github.com/ArcadeData/arcadedb/issues/8835)).
 - Use `UNIQUE` or `NOTUNIQUE` for `LSM_TREE` indexes when you need ranges, ordering, or a safe general-purpose default.
 - Use `FULL_TEXT` for tokenized text search, not normal equality lookups.
 - Use `LSM_VECTOR` for embeddings and nearest-neighbor search.
@@ -447,7 +447,10 @@ skipped when the `WHERE` clause excludes nulls on `p` (`p IS NOT NULL`, `p = ?`,
 `p > ?`; not `>=` or `<=`, which two nulls satisfy), or when `p` is declared both
 `MANDATORY` and `NOTNULL`. `NOTNULL` alone is not enough: it rejects an explicit null but
 not a record that leaves `p` out (ArcadeDB [#8701](https://github.com/ArcadeData/arcadedb/issues/8701)).
-Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. Descending
+Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. On such an
+index, a SQL range with only an upper bound (`p < ?`, `p <= ?`) also returns the records
+without a value until ArcadeDB [#8833](https://github.com/ArcadeData/arcadedb/issues/8833) is
+fixed: add `AND p IS NOT NULL` to it (see [Known Engine Issues](../known-issues.md)). Descending
 SQL reads are not affected. At 1,000,000 rows the ascending top 10 measured about 290 ms
 with the scan and about 1 ms without it (ArcadeDB [#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
 SQL reads the index in order whether the query projects `p` under its own name, under an
