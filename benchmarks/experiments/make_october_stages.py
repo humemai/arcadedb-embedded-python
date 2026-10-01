@@ -504,9 +504,28 @@ say "$ID START: {title}, {nbe} engines, REPS=$REPS, pin $PIN, instrument 2026-10
 
 run_overlay() {{  # <label> <scale> <cap> <be> <wl> <driver> <outdir> <rf> <reps> <env>
   local label=$1 scale=$2 cap=$3 be=$4 wl=$5 drv=$6 outdir=$7 orf=$8 oreps=$9 oenv=${{10}}
+  # ONE RECORDED FAILURE PER ARM (BUGS F162, DECISIONS #127). Every rep in one invocation re-ran a build that cannot
+  # finish inside the cap once per rep: October's qOH spent 5 x 7,200 s on SurrealDB embedded at small after its lane
+  # cell had already timed out, where September's stage ran rep 1 alone and skipped the rest. Rep 1 first, as
+  # run_cell does; the rest only when it left a clean row. One rep (the sparse driver repeats inside itself) runs as is.
+  if [ "$oreps" -lt 2 ]; then
+    env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \
+      --workloads "$wl" --tier paper --workers 1 --timeout "$cap" \
+      --reps "$oreps" --driver "$drv" --driver-out-dir "$outdir" \
+      --results-file "$orf" >> "$S" 2>&1 \
+      || say "$ID: $label OVERLAY failed (the table reads this, not the lane row)"
+    return 0
+  fi
+  if ! env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \
+      --workloads "$wl" --tier paper --workers 1 --timeout "$cap" \
+      --only-reps 1 --reps "$oreps" --driver "$drv" --driver-out-dir "$outdir" \
+      --results-file "$orf" >> "$S" 2>&1; then
+    say "$ID: $label OVERLAY rep 1 left no clean row, reps 2-$oreps skipped (one recorded failure per arm)"
+    return 0
+  fi
   env $oenv python3 runner.py --lanes {lane} --scale "$scale" --backends "$be" \
     --workloads "$wl" --tier paper --workers 1 --timeout "$cap" \
-    --reps "$oreps" --driver "$drv" --driver-out-dir "$outdir" \
+    --only-reps "$(seq -s, 2 "$oreps")" --reps "$oreps" --driver "$drv" --driver-out-dir "$outdir" \
     --results-file "$orf" >> "$S" 2>&1 \
     || say "$ID: $label OVERLAY failed (the table reads this, not the lane row)"
 }}
