@@ -418,6 +418,8 @@ def test_datetime_and_date_parameters(temp_db_path):
                     "at", value
                 ).save()
 
+        # On a UTC machine the two are the same instant, so a lookup finds both.
+        instants = {"naive": naive.timestamp(), "aware": aware.timestamp()}
         for label, value in (("naive", naive), ("aware", aware)):
             utc_wall_clock = value.astimezone(timezone.utc).replace(tzinfo=None)
             for how in ("param", "set"):
@@ -425,7 +427,12 @@ def test_datetime_and_date_parameters(temp_db_path):
                 got = db.query("sql", "SELECT at FROM Event WHERE k = ?", key).first()
                 assert got.get("at") == utc_wall_clock, key
             found = db.query("sql", "SELECT k FROM Event WHERE at = ?", value).to_list()
-            assert sorted(r["k"] for r in found) == [f"{label} param", f"{label} set"]
+            assert sorted(r["k"] for r in found) == sorted(
+                f"{other} {how}"
+                for other, instant in instants.items()
+                if instant == value.timestamp()
+                for how in ("param", "set")
+            )
 
         found = db.query(
             "sql", "SELECT k FROM Event WHERE on_day = ?", on_day
