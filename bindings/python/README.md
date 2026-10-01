@@ -42,7 +42,7 @@ with arcadedb.create_database("./mydb") as db:
 
     # Insert data (requires transaction)
     with db.transaction():
-        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)
 
     # Query data
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
@@ -84,7 +84,7 @@ The `arcadedb-embedded` package is platform-specific and self-contained:
 The compressed wheel size is measured from `dist/*.whl`, and the installed package size
 is measured from the extracted `site-packages/arcadedb_embedded/` directory.
 
-Of that, the optional **server stack is 12 JARs, 7.65MB uncompressed** (measured on 26.8.1), and it adds
+Of that, the optional **server stack is 12 JARs, 8.29MB uncompressed** (the 26.10.1.dev0 wheel; 7.65MB on 26.8.1), and on 26.8.1 it added
 ~8MB to the wheel (the extra ~0.8MB beyond the JARs is JRE modules that only the
 server needs). [Server Mode](https://docs.humem.ai/arcadedb/latest/guide/server/)
 breaks the cost down and explains what you pay at runtime (nothing, until you start

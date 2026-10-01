@@ -428,7 +428,7 @@ rows = db.query(
 
 - Vertex must have the vector property populated
 - Vector dimensionality must match index dimensions
-- Call within a transaction for consistency
+- A search is a read: it needs no transaction, and runs better outside one
 
 ---
 

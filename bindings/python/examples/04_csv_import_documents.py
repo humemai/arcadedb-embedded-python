@@ -1750,7 +1750,8 @@ genre_searches = ["Action", "Comedy", "Drama", "Sci-Fi", "Horror"]
 print("   🔍 Testing text search on genres:")
 for genre in genre_searches:
     step_start = time.time()
-    # Query using LIKE - ArcadeDB should optimize this with the FULL_TEXT index
+    # A substring LIKE ('%x%') scans the type: no index serves it (only a prefix
+    # LIKE 'x%' reads an ordered index); the FULL_TEXT index answers SEARCH_FIELDS
     result = list(
         db.query(
             "sql",

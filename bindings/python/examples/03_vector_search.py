@@ -14,10 +14,9 @@ Key Concepts:
 - Sparse-vector indexing for token/weight retrieval workloads
 - Index population strategies and performance characteristics
 
-Implementation Status:
-- Current: Uses datastax/jvector (better performance)
+Implementation: LSM_VECTOR indexes are built on datastax/jvector.
 
-Potential Use Cases (when stable):
+Use Cases:
 - Semantic document search (find similar articles, papers)
 - RAG (Retrieval-Augmented Generation) for LLMs
 - Recommendation systems (find similar products, content)
@@ -33,7 +32,6 @@ Note: This example uses mock embeddings for demonstration. In production:
 - Store higher-dimensional vectors (384, 768, 1536 dimensions)
 - Index vectors incrementally as you insert documents
 - Consider metadata filtering strategies (see documentation)
-- Test thoroughly as vector features may have known issues
 
 About Vector Search:
 Vector embeddings represent text/images as points in high-dimensional space.

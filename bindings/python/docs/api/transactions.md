@@ -30,8 +30,8 @@ It is important to distinguish between operations that require explicit transact
 | **Schema Operations** | `create_vertex_type()`, `create_property()`, `create_index()`, `db.command("sql", "DROP INDEX...")` | **Apply immediately; not transactional** (a rollback does not undo them). Not needed for one statement; for many, one `with db.transaction():` or one `sqlscript` writes the schema once |
 | **Data Write** | `db.command("sql", "INSERT...")`, `db.command("sql", "UPDATE...")`, `db.command("sql", "DELETE...")`, `db.command("opencypher", "CREATE ...")` | **Required** (Wrap in `with db.transaction():`) |
 | **Bulk Operations** | `db.command("sql", "IMPORT DATABASE...")`, `db.import_documents(...)`, `db.graph_batch(...)` | **Auto-transactional / auto-managed** (Built-in transaction management) |
-| **Data Read** | `db.query()`, `db.command("sql", "SELECT...")`, `db.lookup_by_rid()` | **Optional** (Can run outside transaction for better performance) |
-| **Vector Operations** | `CREATE INDEX ... LSM_VECTOR` | **Applies immediately** (Do NOT wrap) |
+| **Data Read** | `db.query()`, `db.command("sql", "SELECT...")`, `db.lookup_by_rid()` | **Optional**, and better outside one: a filtered scan runs in parallel only outside a transaction ([Queries](../guide/core/queries.md)) |
+| **Vector Operations** | `CREATE INDEX ... LSM_VECTOR` | **Applies immediately; not transactional**, like the schema operations above (one index needs no transaction) |
 
 ### Key Distinction: `db.query()` vs `db.command()`
 
@@ -280,7 +280,7 @@ with db.transaction():
 
 ```python
 with db.transaction():
-    account_rec = db.query("sql", "SELECT FROM Account WHERE name = 'Alice'").first()
+    account_rec = db.query("sql", "SELECT FROM Account WHERE name = ?", "Alice").first()
 
     if not account_rec:
         raise ValueError("Account not found")
@@ -616,7 +616,7 @@ except Exception as e:
 ```python
 with db.transaction():
     # Read
-    result = db.query("sql", "SELECT FROM Counter WHERE name = 'page_views'")
+    result = db.query("sql", "SELECT FROM Counter WHERE name = ?", "page_views")
     counter = result.first()
 
     # Modify
@@ -635,7 +635,7 @@ with db.transaction():
 ```python
 with db.transaction():
     # Check if exists
-    result = db.query("sql", "SELECT FROM User WHERE email = 'alice@example.com'")
+    result = db.query("sql", "SELECT FROM User WHERE email = ?", "alice@example.com")
 
     if result.first() is not None:
         print("User already exists")

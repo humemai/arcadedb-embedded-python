@@ -58,7 +58,7 @@ The single rule, from which most of the rest follows:
 
 **The revenue total and the revenue by month carry a row count in the answer.** It is compared exactly and is not a page column (DECISIONS #94): at the campaign's largest tier a single lost row moves either sum by less than the digest's rounding, detected 10.8 and 36.5 per cent of the time, and F46 is an engine that loses exactly one row to an index bound.
 
-**A withheld cell is not a missing measurement.** A disagreement that has been reproduced and filed upstream prints as KNOWN and its cell is withheld (`equivalence_check.KNOWN_DISAGREEMENTS`, `export_web.WITHHELD_CELLS`); today that is the served native time-series group-by, upstream #7610, and the entry goes at the re-pin that carries the fix.
+**A withheld cell is not a missing measurement.** A disagreement that has been reproduced and filed upstream prints as KNOWN and its cell is withheld (`equivalence_check.KNOWN_DISAGREEMENTS`, `export_web.WITHHELD_CELLS`); nothing is withheld today; the last entry (the served native time-series group-by, upstream #7610) was released on 2026-09-18.
 
 **Every row since 2026-09-14 says how hot the machine was.** `host_temp_c_start` and `_end`, `host_throttle_count_start` and `_end`, and `host_throttled_ms` (BUGS.md F45). mini throttles under sustained load while the busy cores hold 4.3 GHz, the power mode is unchanged by decision, and rows from different stages are compared with those fields read rather than assumed equal.
 

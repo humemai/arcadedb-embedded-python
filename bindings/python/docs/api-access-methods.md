@@ -47,7 +47,7 @@ with arcadedb.create_database("./mydb") as db:
 
     # Insert data (requires transaction)
     with db.transaction():
-        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)
 
     # Query data (SQL is fine for reads)
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
@@ -79,7 +79,7 @@ try:
 
     # Data operations require explicit transactions
     with db.transaction():
-        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)
 
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
     for record in result:
@@ -141,7 +141,8 @@ try:
         auth=auth,
         json={
             "language": "sql",
-            "command": "INSERT INTO Person SET name = 'Alice', age = 30"
+            "command": "INSERT INTO Person SET name = :name, age = :age",
+            "params": {"name": "Alice", "age": 30},
         }
     )
     if not response.ok:
@@ -229,7 +230,7 @@ try:
 
     # Data operations require explicit transactions
     with db.transaction():
-        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)
 
     # Query same data using HTTP API (remote access)
     auth = HTTPBasicAuth("root", "password123")

@@ -8,26 +8,26 @@ Server mode is bundled by default. It was briefly removed in 26.7.2 to slim
 the wheel and restored after that broke downstream users, so the trade is
 worth stating precisely rather than leaving you to guess.
 
-**Disk.** The figures in this section were measured on the 26.8.1 line; the
-current package sizes are in
-[Package Overview](../getting-started/distributions.md#whats-inside). The
-server stack is 12 JARs:
+**Disk.** The JAR table was re-measured on the 26.10.1.dev0 wheel (2026-10-01); the wheel and
+runtime figures after it were measured on the 26.8.1 line, and the current package sizes are
+in [Package Overview](../getting-started/distributions.md#whats-inside). The server stack is
+12 JARs:
 
 | JAR | MB (uncompressed) | contains |
 |---|---|---|
-| `arcadedb-studio` | 2.60 | web UI assets, **no** `.class` files |
-| `undertow-core` | 2.21 | HTTP server, 1,507 classes |
-| `micrometer-core` | 0.87 | metrics, required at server startup |
-| `arcadedb-server` | 0.66 | the server itself, 255 classes |
-| `xnio-api` | 0.56 | undertow's IO layer |
-| `wildfly-common` | 0.27 | |
+| `arcadedb-studio` | 2.82 | web UI assets, **no** `.class` files |
+| `undertow-core` | 2.33 | HTTP server, 1,510 classes |
+| `micrometer-core` | 0.92 | metrics, required at server startup |
+| `arcadedb-server` | 0.87 | the server itself, 307 classes |
+| `xnio-api` | 0.59 | undertow's IO layer |
+| `wildfly-common` | 0.28 | |
 | `jboss-threads` | 0.13 | |
 | `xnio-nio` | 0.11 | |
 | `micrometer-observation` | 0.08 | |
 | `jboss-logging` | 0.06 | |
 | `micrometer-commons` | 0.05 | |
 | `wildfly-client-config` | 0.05 | |
-| **total** | **7.65** | |
+| **total** | **8.29** | |
 
 **The wheel grows by more than that sum, and it is worth knowing why.** Measured
 on 26.8.1 on one machine, same commit, same platform, server excluded then included. The
@@ -320,7 +320,7 @@ token = requests.post(f"{base_url}/api/v1/login", auth=auth).json()["token"]
 # Use Bearer token in subsequent requests
 headers = {"Authorization": f"Bearer {token}"}
 requests.post(
-    f"{base_url}/api/v1/command/mydb",
+    f"{base_url}/api/v1/query/mydb",
     headers=headers,
     json={"language": "sql", "command": "SELECT FROM Person"},
 )

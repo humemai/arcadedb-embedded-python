@@ -803,14 +803,14 @@ class Database:
         Enable or disable automatic transaction management.
 
         When enabled, ArcadeDB automatically begins a transaction for operations
-        that require one. When disabled, you must manually call begin_transaction().
+        that require one. When disabled, you must call begin() yourself (or use ``with db.transaction():``).
 
         Args:
             enabled: True to enable auto-transaction, False to disable
 
         Example:
             >>> db.set_auto_transaction(False)  # Manual transaction control
-            >>> db.begin_transaction()
+            >>> db.begin()
             >>> # ... do work ...
             >>> db.commit()
             >>> db.set_auto_transaction(True)  # Restore default

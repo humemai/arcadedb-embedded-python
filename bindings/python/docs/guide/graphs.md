@@ -227,10 +227,10 @@ def create_social_network():
         # 3. Query the graph with OpenCypher
         print("Finding Alice's friends:")
         result = db.query("opencypher", """
-            MATCH (p:Person {name: 'Alice'})-[:Knows]->(friend:Person)
+            MATCH (p:Person {name: $name})-[:Knows]->(friend:Person)
             RETURN friend.name as name, friend.age as age
             ORDER BY name
-        """)
+        """, {"name": "Alice"})
 
         for record in result:
             name = record.get('name')
@@ -239,11 +239,11 @@ def create_social_network():
 
         print("\nFinding friends of friends:")
         result = db.query("opencypher", """
-            MATCH (p:Person {name: 'Alice'})-[:Knows]->(:Person)-[:Knows]->(fof:Person)
-            WHERE fof.name <> 'Alice'
+            MATCH (p:Person {name: $name})-[:Knows]->(:Person)-[:Knows]->(fof:Person)
+            WHERE fof.name <> $name
             RETURN DISTINCT fof.name as name
             ORDER BY name
-        """)
+        """, {"name": "Alice"})
 
         for record in result:
             print(f"  - {record.get('name')}")
@@ -278,10 +278,10 @@ OpenCypher provides expressive graph patterns and path queries.
 
 ```python
 result = db.query("opencypher", """
-    MATCH (p:Person {name: 'Alice'})-[:Knows]->(friend:Person)
+    MATCH (p:Person {name: $name})-[:Knows]->(friend:Person)
     RETURN friend.name as name
     ORDER BY name
-""")
+""", {"name": "Alice"})
 ```
 
 ### 4. Leave Relationships You Do Not Read Unnamed
@@ -445,7 +445,7 @@ with arcadedb.create_database("./graph_db") as db:
 | Feature | OpenCypher | SQL |
 |---------|-----------|-----|
 | **Style** | Declarative graph patterns | Declarative |
-| **Graph Traversal** | ✅ Excellent | ⚠️ Limited |
+| **Graph Traversal** | ✅ Patterns and paths | ✅ `MATCH` patterns |
 | **Readability** | High | High |
 | **Standards Body** | openCypher | ANSI SQL |
 | **Best For** | Graph patterns and paths | Relational queries |
@@ -460,7 +460,7 @@ results = db.query("opencypher", "MATCH (n) RETURN n")
 results = db.query("opencypher", "MATCH (p:Person) RETURN p")
 
 # Find vertices by property
-results = db.query("opencypher", "MATCH (p:Person {name: 'Alice'}) RETURN p")
+results = db.query("opencypher", "MATCH (p:Person {name: $name}) RETURN p", {"name": "Alice"})
 
 # Traverse outgoing edges
 results = db.query("opencypher", """

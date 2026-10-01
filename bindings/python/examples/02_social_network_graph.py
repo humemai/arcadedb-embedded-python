@@ -26,16 +26,8 @@ ArcadeDB Query Languages:
 ⚡ Performance Findings (This Example):
 - SQL MATCH and OpenCypher performance varies by dataset and runtime configuration
 
-Note: OpenCypher support may vary by ArcadeDB version and can have limitations
-depending on the underlying engine.
-
-⚠️ OpenCypher Limitations in ArcadeDB:
-- Support may vary by engine and version
-- Performance can differ from SQL MATCH depending on workload
-
 Requirements:
 - Python embedded ArcadeDB (arcadedb_embedded package)
-- OpenCypher support requires the OpenCypher engine in your ArcadeDB build
 
 Usage:
 - Run this example from the examples/ directory:

@@ -77,7 +77,7 @@ access methods**:
     from requests.auth import HTTPBasicAuth
 
     requests.post(
-        "http://localhost:2480/api/v1/command/mydb",
+        "http://localhost:2480/api/v1/query/mydb",
         json={"language": "sql", "command": "SELECT FROM Person"},
         auth=HTTPBasicAuth("root", "password"),
         timeout=30,
@@ -146,7 +146,7 @@ with arcadedb.create_database("./mydb") as db:
     db.command("sql", "CREATE PROPERTY Person.age INTEGER")
 
     with db.transaction():
-        db.command("sql", "INSERT INTO Person SET name = 'Alice', age = 30")
+        db.command("sql", "INSERT INTO Person SET name = ?, age = ?", "Alice", 30)
 
     result = db.query("sql", "SELECT FROM Person WHERE age > 25")
     for record in result:

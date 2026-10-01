@@ -121,7 +121,7 @@ result = db.query("opencypher", """
 with db.transaction():
     alice = db.new_vertex("Person").set("name", "Alice").save()
     bob = db.new_vertex("Person").set("name", "Bob").save()
-    alice.new_edge("Follows", bob, since=date.today()).save()
+    alice.new_edge("Follows", bob, since=date.today())  # saved by new_edge
 ```
 
 #### 4. Schema & Index API

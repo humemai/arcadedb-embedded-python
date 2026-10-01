@@ -327,11 +327,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 try:
-    with db.transaction():
-        # Complex operation
-        result = db.query("sql", "SELECT FROM LargeTable")
-        for record in result:
-            process(record)
+    # A read needs no transaction, and a scan runs in parallel only outside one
+    result = db.query("sql", "SELECT FROM LargeTable")
+    for record in result:
+        process(record)
 
 except ArcadeDBError as e:
     logger.error(f"Database operation failed: {e}", exc_info=True)

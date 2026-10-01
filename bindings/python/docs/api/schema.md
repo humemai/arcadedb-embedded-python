@@ -869,12 +869,13 @@ def init_schema(db):
         print("Schema already initialized")
         return
 
-    # Schema statements apply immediately (no transaction needed)
-    db.schema.create_vertex_type("User")
-    db.schema.create_property("User", "username", "STRING")
-    db.schema.create_property("User", "email", "STRING")
+    # Schema statements apply immediately; several of them in one transaction write the schema once
+    with db.transaction():
+        db.schema.create_vertex_type("User")
+        db.schema.create_property("User", "username", "STRING")
+        db.schema.create_property("User", "email", "STRING")
 
-    db.schema.create_index("User", ["username"], unique=True)
+        db.schema.create_index("User", ["username"], unique=True)
 
     print("✅ Schema initialized")
 
