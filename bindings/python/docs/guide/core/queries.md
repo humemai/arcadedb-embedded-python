@@ -410,7 +410,7 @@ work, pass `"buildGraphNow": false` inside `METADATA`.
 
 Rules of thumb:
 
-- Use `UNIQUE_HASH` or `NOTUNIQUE_HASH` for exact-match lookups only.
+- Use `UNIQUE_HASH` or `NOTUNIQUE_HASH` for exact-match lookups only: SQL answers a range on a property whose only index is a hash index by scanning, and openCypher refuses it (ArcadeDB [#8835](https://github.com/ArcadeData/arcadedb/issues/8835)).
 - Use `UNIQUE` or `NOTUNIQUE` for `LSM_TREE` indexes when you need ranges, ordering, or a safe general-purpose default.
 - Use `FULL_TEXT` for tokenized text search, not normal equality lookups.
 - Use `LSM_VECTOR` for embeddings and nearest-neighbor search.
@@ -447,17 +447,23 @@ skipped when the `WHERE` clause excludes nulls on `p` (`p IS NOT NULL`, `p = ?`,
 `p > ?`; not `>=` or `<=`, which two nulls satisfy), or when `p` is declared both
 `MANDATORY` and `NOTNULL`. `NOTNULL` alone is not enough: it rejects an explicit null but
 not a record that leaves `p` out (ArcadeDB [#8701](https://github.com/ArcadeData/arcadedb/issues/8701)).
-Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. Descending
+Otherwise, create the index with `NULL_STRATEGY INDEX` so the nulls are in it. On such an
+index, a SQL range with only an upper bound (`p < ?`, `p <= ?`) also returns the records
+without a value until ArcadeDB [#8833](https://github.com/ArcadeData/arcadedb/issues/8833) is
+fixed: add `AND p IS NOT NULL` to it (see [Known Engine Issues](../known-issues.md)). Descending
 SQL reads are not affected. At 1,000,000 rows the ascending top 10 measured about 290 ms
 with the scan and about 1 ms without it (ArcadeDB [#8664](https://github.com/ArcadeData/arcadedb/issues/8664)).
 SQL reads the index in order whether the query projects `p` under its own name, under an
 alias, or not at all: `SELECT title FROM Event ORDER BY createdAt DESC LIMIT 10` reads ten
 index entries. Before ArcadeDB [#8811](https://github.com/ArcadeData/arcadedb/issues/8811),
 fixed in 26.10.1, the aliased and unprojected forms scanned the type and sorted it (642 to
-806 ms at 1,000,000 records, against 0.45 to 0.93 ms with the fix). openCypher reads the index
-in order in every form.
-For the first or last value past a bound, write the ordered read too:
-`SELECT ts FROM Event WHERE ts > ? ORDER BY ts LIMIT 1` reads one index entry, while
+806 ms at 1,000,000 records, against 0.45 to 0.93 ms with the fix). With a range on `p` in
+the `WHERE`, keep `p` under its own name or return the whole record: an aliased or unprojected
+`p` there still reads the whole range and sorts it (about 250 ms against 0.4 to 1.2 ms when half
+of 1,000,000 records match; ArcadeDB [#8836](https://github.com/ArcadeData/arcadedb/issues/8836)).
+openCypher reads the index in order in every form.
+For the first or last value past a bound, write the ordered read too, with the property under
+its own name: `SELECT ts FROM Event WHERE ts > ? ORDER BY ts LIMIT 1` reads one index entry, while
 `SELECT min(ts) FROM Event WHERE ts > ?` reads every record in the range, in both languages
 (at 1,000,000 records 0.2 to 0.5 ms against 136 to 145 ms in SQL and about 800 ms in openCypher;
 ArcadeDB [#8812](https://github.com/ArcadeData/arcadedb/issues/8812)). Over a whole type,

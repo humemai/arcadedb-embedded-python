@@ -85,3 +85,57 @@ about 30 per key, all 30 failed. Keys holding about 3 records each were not affe
 Index a property with few distinct values, such as a status or a country, with `NOTUNIQUE`
 (an `LSM_TREE` index) instead of `NOTUNIQUE_HASH`; the same deletes commit there. Hash
 indexes remain a good fit for keys that hold one or a few records each, such as identifiers.
+
+## With `NULL_STRATEGY INDEX`, a SQL range with only an upper bound returns records with no value
+
+ArcadeDB [#8833](https://github.com/ArcadeData/arcadedb/issues/8833); measured on 26.8.1,
+26.9.1, and a 26.10.1 snapshot. An index with the default null strategy (`SKIP`) is not
+affected.
+
+On an index created with `NULL_STRATEGY INDEX`, a SQL range that has an upper bound and no
+lower bound (`p < ?`, `p <= ?`) also returns every record whose `p` is null or absent. Over
+`p` = 0 to 9 plus 3 records without `p`, `SELECT count(*) FROM T WHERE p < 2` counted 5
+instead of 2, and `SELECT p FROM T WHERE p <= 0 ORDER BY p LIMIT 1` returned null instead
+of 0. A range with a lower bound, and openCypher, answer correctly.
+
+Exclude the nulls in the `WHERE`, or give the range a lower bound. `p + 0 < ?` is not a
+workaround: SQL evaluates `null + 0` to 0.
+
+```python
+rows = db.query("sql", "SELECT FROM T WHERE p < ? AND p IS NOT NULL", 2).to_list()
+first = db.query(
+    "sql", "SELECT p FROM T WHERE p <= ? AND p IS NOT NULL ORDER BY p LIMIT 1", 0
+).to_list()
+```
+
+## An openCypher range under a subtype's label can return vertices of other types
+
+ArcadeDB [#8834](https://github.com/ArcadeData/arcadedb/issues/8834); measured on 26.9.1 and
+a 26.10.1 snapshot. 26.8.1 is not affected.
+
+When an index is declared on a parent type, an openCypher range on the indexed property under
+a subtype's label can also return vertices of the parent type and of sibling subtypes. With
+`Q` and `R` extending `P` and an index on `P(a)`, `MATCH (n:Q) WHERE n.a > 500 RETURN n.a`
+returned the matching `Q` vertex along with a `P` and an `R` vertex. Equality lookups and
+SQL (`SELECT FROM Q WHERE a > 500`) are not affected.
+
+Repeat the label in the `WHERE`; on 26.9.1 adding `ORDER BY` is not enough:
+
+```python
+rows = db.query(
+    "opencypher", "MATCH (n:Q) WHERE n.a > $min AND n:Q RETURN n.a AS a", {"min": 500}
+).to_list()
+```
+
+## An openCypher range on a property with only a hash index fails
+
+ArcadeDB [#8835](https://github.com/ArcadeData/arcadedb/issues/8835); measured on 26.8.1,
+26.9.1, and a 26.10.1 snapshot.
+
+When the only index on a property is `UNIQUE_HASH` or `NOTUNIQUE_HASH`, an openCypher range
+on it (`<`, `<=`, `>`, `>=`) raises `Index '...' does not support ordered iterations`.
+Equality lookups use the hash index and work, and SQL answers the same range by scanning.
+
+Index a property that you query by range with `UNIQUE` or `NOTUNIQUE` (an `LSM_TREE` index),
+which serves both equality and ranges; a property cannot hold a hash index and an `LSM_TREE`
+index at once. Otherwise run the range in SQL.
