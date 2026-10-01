@@ -50,8 +50,9 @@ ALL queries use LIMIT-based pagination to avoid loading entire result sets:
 - Ratings: Paginated with @rid > {last_rid} LIMIT {batch_size}
 - Tags: Paginated with @rid > {last_rid} LIMIT {batch_size}
 
-Exception: User vertices use `SELECT COUNT(*) as count FROM (SELECT DISTINCT FROM ...)`
-(difficult to paginate efficiently)
+Exception: User vertices group the ratings by user, `SELECT userId FROM Rating GROUP BY userId`
+(difficult to paginate efficiently; GROUP BY rather than SELECT DISTINCT, which runs on one
+thread in 26.10.1, ArcadeData/arcadedb#8799)
 
 Dataset Sources:
 ----------------
@@ -266,7 +267,7 @@ class DataLoader:
                     "sql",
                     """
                     SELECT COUNT(*) as count FROM (
-                        SELECT DISTINCT userId FROM Rating
+                        SELECT userId FROM Rating GROUP BY userId
                     )
                     """,
                 )
@@ -336,9 +337,12 @@ class VertexCreator:
     def _create_users(self, total_users: int) -> tuple[int, BenchmarkStats]:
         """Create User vertices.
 
-        Note: Uses a DISTINCT subquery. The direct DISTINCT/ORDER BY form can
-        resolve against the wrong database context when the target graph DB is
-        open at the same time as the source document DB.
+        Note: reads the user ids with GROUP BY, which runs in the parallel scan
+        workers; SELECT DISTINCT runs on one thread in 26.10.1
+        (ArcadeData/arcadedb#8799). An earlier direct DISTINCT/ORDER BY form
+        resolved against the wrong database while the target graph DB was open
+        beside the source document DB; the GROUP BY form was checked with both
+        open, in all three creation modes, on 2026-10-01.
         """
         print(f"Creating {total_users:,} User vertices...")
         stats = BenchmarkStats()
@@ -353,10 +357,7 @@ class VertexCreator:
             with arcadedb.open_database(
                 str(self.data_loader.source_db_path)
             ) as source_db:
-                query = (
-                    "SELECT userId FROM (SELECT DISTINCT userId FROM Rating) "
-                    "ORDER BY userId"
-                )
+                query = "SELECT userId FROM Rating GROUP BY userId ORDER BY userId"
                 pending: list[dict[str, Any]] = []
                 # WAL off (use_wal=False, GraphBatch's default): this example rebuilds its database from
                 # the source files, so a crash mid-import costs a re-run. An import that must survive a
@@ -396,10 +397,7 @@ class VertexCreator:
             with arcadedb.open_database(
                 str(self.data_loader.source_db_path)
             ) as source_db:
-                query = (
-                    "SELECT userId FROM (SELECT DISTINCT userId FROM Rating) "
-                    "ORDER BY userId"
-                )
+                query = "SELECT userId FROM Rating GROUP BY userId ORDER BY userId"
                 batch_user_ids = []
 
                 for record in source_db.query("sql", query):
@@ -435,10 +433,7 @@ class VertexCreator:
             with arcadedb.open_database(
                 str(self.data_loader.source_db_path)
             ) as source_db:
-                query = (
-                    "SELECT userId FROM (SELECT DISTINCT userId FROM Rating) "
-                    "ORDER BY userId"
-                )
+                query = "SELECT userId FROM Rating GROUP BY userId ORDER BY userId"
                 batch_user_ids = []
 
                 for record in source_db.query("sql", query):
