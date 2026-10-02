@@ -612,6 +612,44 @@ cache far better than fp32 does.
 
 ---
 
+### `VectorIndex.warm_up()`
+
+Load the index's graph now instead of on the first search. From 26.10.1.
+
+After a database is opened, a vector index loads its persisted graph lazily, on
+the first search, and that search pays for it (ArcadeData/arcadedb#8852). After
+the 26.10.1 fix that is about 1 s at 1M 64-dimension vectors, growing with the
+index, and more on an index with deletions since its graph was saved, which
+still re-reads every vector's document. A service that restarts can call
+`warm_up()` right after opening the database, so the first user query does not
+pay it.
+
+It loads the existing graph and does not rebuild it (that is
+`build_graph_now()`). It is a no-op once the graph is in memory, and safe to call
+while other threads search. On an engine before 26.10.1 it raises
+`ArcadeDBError`; there, one throwaway search does the same.
+
+`get_stats()["graphState"]` reads `0` (loading) between the open and the first
+search or `warm_up()`, and `graphNodeCount` is `0` until the graph is resident.
+
+**Returns:**
+
+- `None`
+
+**Example:**
+
+```python
+with arcadedb.open_database("./vectors") as db:
+    index = db.schema.get_vector_index("Doc", "embedding")
+    index.warm_up()  # pay the graph load now, not on the first query
+
+# On engines before 26.10.1, the same with one throwaway search. The vector is
+# wrapped in a list: a lone list argument is read as the parameter list itself.
+#   db.query("sql", "SELECT vectorNeighbors('Doc[embedding]', ?, 1)", [probe_vector])
+```
+
+---
+
 ### `VectorIndex.build_graph_now()`
 
 Force an immediate rebuild/preparation of the vector graph.

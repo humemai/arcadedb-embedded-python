@@ -36,9 +36,26 @@ as a comparison arm, pinned to one worker and checked against what it submitted.
 
 **Edge direction must match the schema.** `CREATE EDGE TYPE` makes a two-way type by
 default, and `GraphBatch` stores both directions unless you pass `bidirectional=False`.
-Pass it only for a type declared one-way (`CREATE EDGE TYPE ... UNIDIRECTIONAL`): the
-batch does not check, and one-way edges in a two-way type make any query the planner
-walks from the target end return 0 rows with no error (`ArcadeData/arcadedb#8625`).
+Pass it only for a type declared one-way (`CREATE EDGE TYPE ... UNIDIRECTIONAL`). From
+26.10.1 the engine refuses a one-way edge in a two-way type: `new_edge` raises
+`ArcadeDBError` naming the type, and nothing is written. Before 26.10.1 the batch did not
+check, and such edges made any query the planner walked from the target end return 0
+rows with no error (`ArcadeData/arcadedb#8625`, fixed in #8628).
+
+**What sees a one-way edge.** An edge of a `UNIDIRECTIONAL` type is stored on its source
+vertex only. From 26.10.1:
+
+- Patterns see every such edge, whichever way they are written: Cypher
+  (`(t:Tag)<-[:TAGGED_WITH]-(q:Question)`, `(q)-[:TAGGED_WITH]->(t)`, and the undirected
+  `(t)-[:TAGGED_WITH]-(q)`) and SQL `MATCH`. The planner walks from the source when it can;
+  otherwise it scans the edge type once per query and reuses that scan.
+- `in()`, `inE()`, `both()`, and `bothE()` in SQL, and the vertex API
+  (`get_in_edges()`, `get_both_edges()` on the target), read what the target vertex stores,
+  which for a one-way edge is nothing. `out()` and `get_out_edges()` on the source see it.
+
+Before 26.10.1, patterns walked from the target end returned 0 rows as well. If a type
+is often queried from its target, declare it two-way (the default): a pattern from the
+target of a one-way type pays a scan of the whole edge type.
 
 ## Overview
 

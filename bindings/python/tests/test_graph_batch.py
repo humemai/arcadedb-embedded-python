@@ -200,3 +200,115 @@ def test_graph_batch_invalid_knob_values_are_rejected(temp_db_path):
                 assert "must be" in str(exc), (kwargs, str(exc))
             else:
                 raise AssertionError(f"Expected {kwargs} to be rejected")
+
+
+def test_graph_batch_refuses_one_way_edges_in_a_two_way_type(temp_db_path):
+    """A batch built with `bidirectional=False` stores each edge on its source
+    only. Before 26.10.1 it did so even for an edge type declared two-way (the
+    `CREATE EDGE TYPE` default), and every query the planner then walked from the
+    target end returned 0 rows with no error (ArcadeData/arcadedb#8625, fixed in
+    #8628). Now the engine refuses the edge, naming the type, and writes nothing;
+    a type declared UNIDIRECTIONAL loads as before."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE VERTEX TYPE Question")
+        db.command("sql", "CREATE VERTEX TYPE Tag")
+        db.command("sql", "CREATE EDGE TYPE TaggedWith")
+        db.command("sql", "CREATE EDGE TYPE OneWay UNIDIRECTIONAL")
+
+        try:
+            with db.graph_batch(bidirectional=False) as batch:
+                q = batch.create_vertex("Question", k=1)
+                t = batch.create_vertex("Tag", k=2)
+                batch.new_edge(q, "TaggedWith", t)
+        except arcadedb.ArcadeDBError as exc:
+            assert "TaggedWith" in str(exc), str(exc)
+            assert "bidirectional" in str(exc), str(exc)
+        else:
+            raise AssertionError(
+                "a one-way edge in a two-way type was accepted (ArcadeData/arcadedb#8625)"
+            )
+        assert (
+            db.query("sql", "SELECT count(*) AS n FROM TaggedWith").first().get("n")
+            == 0
+        )
+
+        with db.graph_batch(bidirectional=False) as batch:
+            q = batch.create_vertex("Question", k=3)
+            t = batch.create_vertex("Tag", k=4)
+            batch.new_edge(q, "OneWay", t)
+        assert db.query("sql", "SELECT count(*) AS n FROM OneWay").first().get("n") == 1
+
+
+def test_one_way_edges_are_seen_by_patterns_not_by_in(temp_db_path):
+    """The query contract of an edge type declared UNIDIRECTIONAL (26.10.1,
+    ArcadeData/arcadedb#8625 fixed in #8628). Its edges are stored on the source
+    vertex only. Patterns, Cypher and SQL MATCH, return every edge whichever
+    way they are written, walking from the source or scanning the edge type
+    once; `in()`, `inE()`, `both()`, and the vertex API read what the target
+    vertex stores, which is nothing. Before 26.10.1 a pattern walked from the
+    target returned 0 rows too."""
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE VERTEX TYPE Question")
+        db.command("sql", "CREATE VERTEX TYPE Tag")
+        db.command("sql", "CREATE EDGE TYPE TaggedWith UNIDIRECTIONAL")
+        with db.graph_batch(bidirectional=False) as batch:
+            tags = [batch.create_vertex("Tag", k=i) for i in range(5)]
+            for i in range(50):
+                q = batch.create_vertex("Question", k=i)
+                batch.new_edge(q, "TaggedWith", tags[i % 5])
+                batch.new_edge(q, "TaggedWith", tags[(i + 1) % 5])
+
+        def count(language, query):
+            return db.query(language, query).first().get("n")
+
+        # Patterns see all 100 edges, from either end.
+        assert (
+            count(
+                "opencypher",
+                "MATCH (q:Question)-[:TaggedWith]->(t:Tag) RETURN count(*) AS n",
+            )
+            == 100
+        )
+        assert (
+            count(
+                "opencypher",
+                "MATCH (t:Tag)<-[:TaggedWith]-(q:Question) RETURN count(*) AS n",
+            )
+            == 100
+        )
+        assert (
+            count(
+                "opencypher",
+                "MATCH (t:Tag)-[:TaggedWith]-(q:Question) RETURN count(*) AS n",
+            )
+            == 100
+        )
+        assert (
+            len(
+                db.query(
+                    "sql",
+                    "MATCH {type: Tag, as: t}<-TaggedWith-{type: Question, as: q} RETURN t, q",
+                ).to_list()
+            )
+            == 100
+        )
+
+        # The traversal functions and the vertex API read the target's own
+        # pointers, which a one-way edge does not write.
+        for fn in ("in", "inE", "both", "bothE"):
+            assert (
+                count(
+                    "sql",
+                    f"SELECT count(*) AS n FROM (SELECT expand({fn}('TaggedWith')) FROM Tag)",  # nosec B608 - fixed function names, no input
+                )
+                == 0
+            ), fn
+        assert (
+            count(
+                "sql",
+                "SELECT count(*) AS n FROM (SELECT expand(out('TaggedWith')) FROM Question)",
+            )
+            == 100
+        )
+        tag = db.query("sql", "SELECT FROM Tag WHERE k = 0").first().get_vertex()
+        assert tag.get_in_edges("TaggedWith") == []
