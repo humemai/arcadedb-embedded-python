@@ -9,15 +9,7 @@ our favour, on tables that had already been through several review passes.
 
 This page is the reason the suite is not a stopwatch.
 
-## What Changed, and When
-
-Until 2026-09-14 nothing in this harness compared answers across engines. The vector lanes
-measured recall against ground truth and the cross-model lane compared torn state after an
-interrupted transaction; every other lane recorded latency, throughput, and for a few
-queries a row count. Nothing had ever asked whether two engines returned the same rows for
-the same question.
-
-The rule from that date:
+## The Rule
 
 > Every timed query whose answer is deterministic records a **canonical digest** of that
 > answer, with a short readable sample beside it. A gate refuses to publish a table whose
@@ -30,12 +22,6 @@ returned, so checking the answer costs the measurement nothing. The gate is
 page checks. It holds the rows of the 2026-10 instrument, the first whose lanes record
 digests. Rows from earlier campaigns carry none, so the gate reports them as skipped, by
 count, rather than comparing them.
-
-Two consequences followed immediately. The campaign that was starting did not start until
-the digests and the gate existed and every lane recorded them. And the same digests were
-run first at small scale across every engine on every table, because if an adapter had been
-answering a different question all along, the rows already published were wrong, and that
-had to be known before anyone read them.
 
 ## The Canonical Form
 
@@ -189,43 +175,43 @@ says so.
 
 ## What It Found
 
-Answer checking found five defects in two days. Three are in the engine and are filed
-upstream; two were ours.
+Answer checking found five defects in two days. Three were in the engine, filed upstream
+and fixed in 26.10.1; two were ours.
 
-### Three Engine Defects, Filed Upstream
+### Three Engine Defects, Fixed in 26.10.1
 
 [**ArcadeData/arcadedb#7609**](https://github.com/ArcadeData/arcadedb/issues/7609): a
-comparison against a bare decimal literal loses the boundary value. Found because an
+comparison against a bare decimal literal lost the boundary value. Found because an
 analytical revenue query returned a different total from every comparator on the same data.
-Reproduced on a small fixture: an equality against the literal returns nothing, a
-greater-or-equal returns exactly what a strictly-greater returns, and a `BETWEEN` over the
-same bounds is correct. Root-caused in the engine to a suffix-less literal being parsed at
-single precision and widened back to double, which reproduces the error rather than undoing
-it. It is wider than the first example, since the direction depends on which literal is
-written, and sharper than it looks: the same rows behind an index answer every comparison
+Reproduced on a small fixture: an equality against the literal returned nothing, a
+greater-or-equal returned exactly what a strictly-greater returned, and a `BETWEEN` over the
+same bounds was correct. Root-caused in the engine to a suffix-less literal being parsed at
+single precision and widened back to double, which reproduced the error rather than undoing
+it. It was wider than the first example, since the direction depended on which literal was
+written, and sharper than it looked: the same rows behind an index answered every comparison
 correctly, because an index fetch takes a different path, so adding or dropping an index
-changes the answer. The harness rule that follows is that ArcadeDB SQL in this repository
+changed the answer. The harness rule that follows is that ArcadeDB SQL in this repository
 compares a numeric column through `BETWEEN` or a bound parameter and never against a bare
-decimal literal, and the gate enforces it rather than discipline.
+decimal literal.
 
 [**ArcadeData/arcadedb#7610**](https://github.com/ArcadeData/arcadedb/issues/7610): the
-served engine serialises a time bucket as a date, so every bucket inside one calendar day
-collapses to one value. The embedded engine on the same build returns the full grouping, and
-so do five comparators. Grouping, row counts, and aggregates are all correct; only the value
-on the wire is destroyed. The affected cell is withheld from the page and printed as a known
-disagreement rather than published as a latency for a different answer, and the rule that
-follows is that a served query projecting a temporal value is checked against its embedded
-twin. See the [time series table](https://humem.ai/projects/arcadedb#timeseries).
+served engine serialised a time bucket as a date, so every bucket inside one calendar day
+collapsed to one value. The embedded engine on the same build returned the full grouping, and
+so did five comparators. Grouping, row counts, and aggregates were all correct; only the value
+on the wire was destroyed. With the fix the served cell publishes, and its answer matches its
+embedded twin's. The rule that follows is that a served query projecting a temporal value is
+checked against its embedded twin. See the
+[time series table](https://humem.ai/projects/arcadedb#timeseries).
 
 [**ArcadeData/arcadedb#7611**](https://github.com/ArcadeData/arcadedb/issues/7611): an
-indexed lower bound loses part of a run of equal entries. An ascending range seek starts
-wherever the binary search landed inside the run, and the entries before it are never
-produced, so a query over an indexed column can be short by rows that qualify. Found by
+indexed lower bound lost part of a run of equal entries. An ascending range seek started
+wherever the binary search landed inside the run, and the entries before it were never
+produced, so a query over an indexed column could be short by rows that qualify. Found by
 running the document lane at the campaign's own scale factor rather than a small one, and
-root-caused with a repro against the engine API, including a candidate fix. It is not
-specific to one type, an unindexed scan over the same rows is correct, and rows written in
-one transaction merge into one entry and answer correctly, which is why bulk-loaded data
-hides it. This is the defect the two added row counts exist to catch.
+root-caused with a repro against the engine API, including a candidate fix. It was not
+specific to one type, an unindexed scan over the same rows was correct, and rows written in
+one transaction merged into one entry and answered correctly, which is why bulk-loaded data
+hid it. This is the defect the two added row counts exist to catch.
 
 ### Two of Our Own
 
@@ -237,12 +223,6 @@ defect in the digest specification rather than in any answer.
 Both of ours made ArcadeDB look better than the truth. That is the argument for this gate in
 one sentence: two wrong numbers, both in our favour, on a page that had already been
 reviewed three times.
-
-The response on the page was not a caveat. Both ArcadeDB rows came down from the document
-analytics table, the table carries a condition naming ArcadeDB and saying why, and the page
-gate was changed so that a **declared** withdrawal passes while a silent one still fails. A
-table may lose a row only by telling the reader it did. See the
-[documents table](https://humem.ai/projects/arcadedb#documents).
 
 !!! info "Bugs are written down when they are found, not when they are fixed"
     A finding gets a reproduction the day it is found, an upstream draft when it belongs to

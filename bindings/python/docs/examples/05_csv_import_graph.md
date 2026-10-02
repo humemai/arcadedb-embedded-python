@@ -13,7 +13,7 @@ for:
 - **Graph modeling** - Users and Movies as vertices, ratings and tags as edges
 - **SQL pipeline** - End-to-end graph creation with SQL DDL/DML
 - **GraphBatch vs synchronous transactions** - Compare the two Java-API vertex paths
-- **Index optimization** - Create indexes BEFORE bulk edge creation for 2-3× speedup
+- **Index optimization** - Create indexes BEFORE bulk edge creation
 - **Export & roundtrip validation** - Verify data integrity through complete cycle
 - **Performance benchmarking** - Measure and compare 6 different configurations
 - **Query validation** - 10 graph queries with result verification
@@ -25,8 +25,8 @@ for:
 - Foreign key resolution (userId → User vertex, movieId → Movie vertex)
 - Bulk vertex creation through `db.graph_batch(...)`, which crosses the Python/Java
   boundary once per batch
-- **Indexes provide 2-3× speedup** for edge creation
-- Export/import performance and compression ratios (50-80×)
+- Why the key indexes come before edge creation: each edge batch looks up its endpoints by key
+- Export and roundtrip import of the graph
 - Graph query patterns (MATCH, collaborative filtering, recommendations)
 - Production import patterns for large-scale graphs
 
@@ -86,7 +86,7 @@ python 05_csv_import_graph.py --help
 - **Vertex path:** With `--method java`, leave `GraphBatch` on. It is the repository's
   recommended bulk graph path, and `--no-async` exists to compare it against synchronous
   transactions. `--method sql` always builds vertices in synchronous transactions
-- **Indexes:** Keep enabled (2-3× speedup for edge creation)
+- **Indexes:** Keep enabled; each edge batch looks up its endpoints by `userId` and `movieId`
 - **Batch size:** 5000 for small, 50000 for large datasets
 - **Export:** Use `--export` to validate data integrity via roundtrip
 
@@ -126,115 +126,6 @@ CSVs, and this example only builds edges from rows that have the properties
 the edge declares: `timestamp IS NOT NULL` for RATED, plus `tag IS NOT NULL`
 for TAGGED. Example 04 keeps all the rows, NULLs included, because importing
 NULLs is what that example demonstrates.
-
-## Performance Results
-
-!!! note "Undated measurements"
-
-    These tables were recorded on an earlier engine version, with the values pasted into
-    the SQL text (the example now binds them), and have not been re-measured. `--method java` now builds vertices with `db.graph_batch(...)`, and no
-    GraphBatch timings for this example have been measured yet, so the tables have no
-    row for that path. `java_noasync` is `--method java --no-async` (synchronous vertex
-    transactions).
-
-### Small Dataset (610 users, 9,742 movies, 101,259 edges)
-
-| Method | Vertices | Edges | Creation Time | Memory (Peak) |
-|--------|----------|-------|---------------|---------------|
-| **java_noasync** ⚡ | **11,528/s** | **6,927/s** | **15.65s** | 5.5 GB |
-| java_noindex_noasync | 12,514/s | 6,766/s | 15.94s | 5.5 GB |
-| sql_noindex | 5,383/s | 5,225/s | 21.49s | 5.6 GB |
-| sql | 4,882/s | 4,956/s | 22.75s | 5.5 GB |
-
-### Large Dataset (330K users, 86K movies, 35.4M edges)
-
-| Method | Vertices | Edges | Creation Time | Memory (Peak) |
-|--------|----------|-------|---------------|---------------|
-| **java_noasync** ⚡ | **12,341/s** | **5,071/s** | **1h 57m** | 16.0 GB |
-| sql | 8,734/s | 3,789/s | 2h 36m | 16.0 GB |
-| java_noindex_noasync | 13,036/s | 1,839/s | 5h 21m | 15.7 GB |
-| sql_noindex | 8,902/s | 1,773/s | 5h 33m | 15.6 GB |
-
-## Key Performance Insights
-
-### 1. 🚀 **Edge Creation Rates Differ, but Not Because of the Java API**
-
-```
-Large Dataset Edge Creation:
-   java_noasync:           5,071 edges/sec
-   sql:                    3,789 edges/sec
-```
-
-Both methods create edges the same way: one SQL `CREATE EDGE` statement per edge,
-between vertices looked up from a cache. They differ only in how vertices are created
-and what the cache holds (vertex objects for `java`, RID strings for `sql`), so this gap
-is not a measurement of the Java API against SQL, and its cause has not been isolated.
-
-### 2. 📊 **Indexes Provide 2-3× Speedup**
-
-```
-Java API Edge Creation (Large Dataset):
-✅ WITH indexes (java_noasync):     5,071 edges/sec  ← 2.8× faster
-❌ WITHOUT indexes:                 1,839 edges/sec
-
-SQL Edge Creation (Large Dataset):
-✅ WITH indexes (sql):              3,789 edges/sec  ← 2.1× faster
-❌ WITHOUT indexes:                 1,773 edges/sec
-```
-
-**Best Practice:** Create indexes BEFORE bulk edge creation (unlike documents where indexes come after).
-
-### 3. 🎯 **DSL-First: Use SQL for Ingestion and Queries**
-
-**Use SQL For:**
-
-- ✅ **Bulk edge/vertex creation** with one consistent DSL across examples
-- ✅ **Complex graph queries** (MATCH patterns, multi-hop traversals)
-- ✅ Aggregations (GROUP BY, COUNT, AVG)
-- ✅ Ad-hoc analysis and prototyping
-- ✅ When readability and portability matter
-- ✅ Cypher compatibility (Neo4j migration path)
-
-### 4. 💾 **Memory Usage: Heap vs Total Process Memory**
-
-```
-Large Dataset Memory (8GB JVM Heap):
-Peak RSS (actual memory):  15.6 - 18.8 GB  ← Total process memory
-JVM Heap (-Xmx):           8.0 GB           ← Just the heap portion
-
-Total = Heap + Non-Heap (metaspace, page cache, thread stacks, direct buffers)
-```
-
-**Insight:** JVM heap setting (`-Xmx`) only limits heap memory. Total process memory
-includes metaspace, page cache, thread stacks, and direct buffers. Plan for 1.5-2× your
-heap size in actual RAM.
-
-## Export & Roundtrip Validation
-
-### Export Performance
-
-```
-Large Dataset Export (35.4M edges):
-✅ java_noasync:    122.53s  (288,815 records/sec)
-✅ sql:             187.54s  (188,682 records/sec)
-
-Compression Ratio: 50-80× (JSONL → gzip)
-File Size: 670 MB compressed (from ~33 GB uncompressed)
-```
-
-### Roundtrip Import Performance
-
-```
-Large Dataset Import from JSONL:
-✅ java_noasync:    1,365.41s  (25,906 records/sec)
-✅ sql:             1,783.64s  (19,843 records/sec)
-
-Total Roundtrip (Export + Import):
-✅ java_noasync:    1,487.94s  (24.8 min)
-✅ sql:             1,971.18s  (32.9 min)
-```
-
-**Validation:** All roundtrip imports passed 10 query validations, confirming data integrity.
 
 ## Graph Queries
 

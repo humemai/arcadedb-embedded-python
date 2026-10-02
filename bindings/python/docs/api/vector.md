@@ -16,7 +16,7 @@ ArcadeDB's vector support enables:
 **Key Features:**
 
 - Graph-based indexing for O(log N) search performance
-- Multiple distance metrics (cosine, euclidean, inner product)
+- Multiple distance metrics (cosine, euclidean, dot product)
 - Native NumPy integration (optional)
 - Configurable precision/performance trade-offs
 
@@ -288,7 +288,7 @@ db.create_vector_index(
 - `distance_function` (str): Distance metric (default: `"cosine"`)
     - `"cosine"`: Cosine distance (1 - cosine similarity)
     - `"euclidean"`: Squared Euclidean distance
-    - `"inner_product"`: Negative inner product
+    - `"dot_product"`: `-(1 + A·B) / 2`, for unit-length vectors
 - `max_connections` (int): Per-layer graph degree (default: 32; Vamana degree, NOT doubled at the base layer like hnswlib M, so use 2*M to match an hnswlib config)
     - Maps to `maxConnections` in JVector
     - Higher = better recall, more memory
@@ -377,7 +377,7 @@ also the default. If you explicitly disable eager preparation, the first call to
     - `distance`: Distance score (float), lower is better for all functions
         - Cosine: cosine distance, range [0, 2] (0 = identical)
         - Euclidean: squared Euclidean distance, range [0, ∞) (0 = identical)
-        - Inner product / dot product: negative dot product (lower = more similar)
+        - Dot product: `-(1 + A·B) / 2` (lower = more similar)
     - Range depends on `distance_function`
 
 **Example:**
@@ -424,7 +424,7 @@ rows = db.query(
 |----------|-------|----------------------|
 | cosine | [0, 2] | lower is better (0 = identical) |
 | euclidean | [0, ∞) | lower is better (0 = identical, squared distance) |
-| inner_product | (-∞, ∞) | lower is better (negative dot product) |
+| dot_product | [-1, 0] for unit vectors | lower is better (`-(1 + A·B) / 2`) |
 
 - Vertex must have the vector property populated
 - Vector dimensionality must match index dimensions
@@ -924,11 +924,12 @@ db.close()
 - Range: [0, ∞), lower is better
 - Use when: Absolute distance matters
 
-**Inner Product:**
+**Dot Product:**
 
-- Best for: Collaborative filtering, when vectors aren't normalized
-- Range: (-∞, ∞), lower is better (the score is the negative dot product)
-- Use when: Magnitude information is important
+- Best for: unit-length vectors, which it ranks the same way as cosine
+- Range: [-1, 0] for unit vectors, lower is better (the score is `-(1 + A·B) / 2`)
+- The engine expects unit-length vectors: when sampled vectors are not, it logs a
+  warning that search quality is degraded. Normalize on ingest, or use cosine
 
 ### Memory Considerations
 
@@ -977,37 +978,33 @@ Sizing headroom matters: a set of 10M 96-dimensional fp32 vectors is roughly
 
 ## Error Handling
 
+A vector whose length differs from the index's `dimensions` is refused by `save()`,
+which raises the Java `java.lang.IllegalArgumentException` ("Vector dimension does not
+match index dimension"), not `ArcadeDBError`. A record saved without the vector
+property raises nothing; it is not in the index.
+
 ```python
-from arcadedb_embedded import ArcadeDBError, to_java_float_array
+from arcadedb_embedded import to_java_float_array
 import numpy as np
 
+db.command(
+    "sql",
+    'CREATE INDEX ON Doc (emb) LSM_VECTOR METADATA {"dimensions": 384}',
+)
+
 try:
-    # Dimension mismatch
-    db.command(
-        "sql",
-        'CREATE INDEX ON Doc (emb) LSM_VECTOR METADATA {"dimensions": 384}',
-    )
-
-    v = db.new_vertex("Doc")
-    v.set("emb", to_java_float_array(np.random.rand(512)))  # Wrong size!
-    v.save()
-    # Indexing happens automatically and may fail asynchronously or on next access
-
-except ArcadeDBError as e:
+    with db.transaction():
+        v = db.new_vertex("Doc")
+        v.set("emb", to_java_float_array(np.random.rand(512)))  # Wrong size!
+        v.save()  # raises here; the transaction rolls back
+except Exception as e:  # java.lang.IllegalArgumentException
     print(f"Error: {e}")
-    # Handle dimension mismatch
 
-try:
-    # Missing vector property
+# Missing vector property: saved, not indexed, no error
+with db.transaction():
     v = db.new_vertex("Doc")
     v.set("id", "doc1")
-    # Forgot to set embedding!
     v.save()
-    # Indexing happens automatically
-
-except ArcadeDBError as e:
-    print(f"Error: {e}")
-    # Handle missing property
 ```
 
 ---

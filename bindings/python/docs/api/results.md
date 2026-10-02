@@ -119,8 +119,8 @@ json module. Measured ~5.5x faster than `to_list()` on a 10,000-row, nine-proper
 (578 ms against 103 ms, laptop, 2026-09-27).
 
 **Trade-off:** values carry JSON-native types. Numbers, strings, booleans, lists, and
-nested maps convert as expected, but temporal values arrive as ISO strings (not
-`datetime`) and DECIMALs as floats. Use `to_list()` when full Python-type fidelity
+nested maps convert as expected, but `DATE` and `DATETIME` values arrive as
+epoch-millisecond integers (not `datetime`) and DECIMALs as floats. Use `to_list()` when full Python-type fidelity
 matters more than speed.
 
 **Parameters:**
@@ -194,8 +194,7 @@ print(df.describe())
 
 Bulk-materialize all rows as columns: a dict of column name to numpy array
 (`int64`/`float64`/`bool`/`datetime64[ms]`) or Python list (strings and
-JSON-typed values). The fastest bulk path (~1.6x Java-native scans,
-measured); `to_dataframe()` uses it internally.
+JSON-typed values). The fastest bulk path; `to_dataframe()` uses it internally.
 
 Fixed-dimension vector properties (e.g. `ARRAY_OF_FLOATS` embedding
 columns) come back as one contiguous 2-D array of shape `(rows, dim)`
@@ -669,7 +668,8 @@ for result in result_set:
 for batch in db.query("sql", "SELECT FROM LargeTable").iter_chunks(size=1000):
     process_batch(batch)
 
-# Faster, with JSON-native values (temporals as ISO strings, DECIMALs as floats)
+# Faster, with JSON-native values (DATE and DATETIME as epoch-millisecond
+# integers, DECIMALs as floats)
 for batch in db.query("sql", "SELECT FROM LargeTable").iter_json_batches():
     process_batch(batch)
 ```

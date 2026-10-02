@@ -22,7 +22,7 @@ Ratios are Python time / Java-native time (lower is better; 1.0× = parity).
 
 | Workload | Python vs Java | Notes |
 |---|---|---|
-| Vector search, SQL path (100k×384, k=50) | **1.15×** (5.1ms vs 4.4ms) | was 15× before the bulk-array fixes |
+| Vector search, SQL path (100k×384, k=50) | **1.15×** (5.1ms vs 4.4ms) | |
 | Vector search, 500k vectors | **1.13×** | |
 | `find_nearest()` wrapper | **1.08×** | |
 | Typed bulk scan → numpy/pandas (100k×7 cols) | **~1.6×** | `to_columns()` / `to_dataframe()` |
@@ -79,8 +79,8 @@ bulk APIs when you're taking everything from a large result.**
   fine. The speedup is not Arrow being faster in general, it is the string
   decode and the null promotion not happening. Pick it for what your columns
   are, not by default.
-- `to_json_list()` / `iter_json_batches()`: bulk plain dicts (temporals as
-  ISO strings).
+- `to_json_list()` / `iter_json_batches()`: bulk plain dicts (`DATE` and
+  `DATETIME` values as epoch-millisecond integers).
 - `to_list()`: full Python-type fidelity (`datetime`, `Decimal`) when the
   result is not huge.
 

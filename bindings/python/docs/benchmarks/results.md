@@ -122,12 +122,12 @@ read as one. A cell that exceeded its time cap, a cell that failed inside its bu
 some other reason, and a cell killed at the envelope are three outcomes, and the page names
 which one each was.
 
-**An outcome note can name a corpus size the table does not show.** A table moves to a
-larger corpus only once every engine on it has a row there, so an attempt where some engines
-measured and others did not leaves the table at the smaller size with notes about the larger
-one underneath it. "There is no row" in such a note is about that engine, not about the
-attempt: other engines may well have produced numbers at that size, and they are held back
-until the table can move whole.
+**A larger corpus size is a second row group, not a replacement.** A table that can show
+scaling carries two sizes, and the larger one is its own set of rows under the same Size
+column. An engine with no row at the larger size is a declared absence like any other:
+censored at the time cap, killed at the memory envelope, or failed inside its budget, and
+the table says which. The engines that did measure at that size publish, so one engine's
+absence does not hold back the others' rows.
 
 ## Traps in the Other Direction
 

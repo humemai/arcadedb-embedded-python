@@ -173,7 +173,9 @@ def export_to_csv(
     Args:
         results: ResultSet or list of dicts to export
         file_path: Output CSV file path
-        fieldnames: Column names (auto-detected if None)
+        fieldnames: Header and column order (auto-detected if None). It
+            cannot rename: it must name every key of every row, or the export
+            raises (for a ResultSet, after writing the header).
 
     Raises:
         ArcadeDBError: If CSV export fails
@@ -183,11 +185,12 @@ def export_to_csv(
         >>> results = db.query("sql", "SELECT * FROM Movie LIMIT 100")
         >>> export_to_csv(results, "movies.csv")
 
-        >>> # Or with explicit columns
+        >>> # Or with the columns in a chosen order
+        >>> results = db.query("sql", "SELECT movieId, title, genres FROM Movie")
         >>> export_to_csv(
         ...     results,
         ...     "movies.csv",
-        ...     fieldnames=["movieId", "title", "genres"]
+        ...     fieldnames=["title", "movieId", "genres"]
         ... )
 
         >>> # Export list of dicts
@@ -205,8 +208,8 @@ def export_to_csv(
         if isinstance(results, ResultSet):
             # Stream rows via batched Java-side JSON serialization (one JPype
             # crossing per batch instead of several per row — measured ~5x on
-            # 100k-row exports). Values carry JSON-native types, so temporal
-            # columns are written as ISO strings.
+            # 100k-row exports). Values carry JSON-native types, so DATE and
+            # DATETIME columns are written as epoch-millisecond integers.
             with open(file_path, "w", newline="", encoding="utf-8") as f:
                 writer = None
                 wrote_header = False

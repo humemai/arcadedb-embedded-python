@@ -105,6 +105,13 @@ export_to_csv(
 Export query results (or a list of dictionaries) to CSV. This is a Python-side
 helper and does not use the Java exporter.
 
+`fieldnames` sets the header and the column order; it cannot rename columns. It must
+name every key of every row (a name a row lacks is written empty): a missing one raises
+`ArcadeDBError` ("dict contains fields not in fieldnames"), and for a `ResultSet` the
+header is already written by then, which leaves a header-only file. To rename, alias
+the columns in the query. A `ResultSet` is read through `iter_json_batches()`, so
+`DATE` and `DATETIME` values are written as epoch-millisecond integers.
+
 **Examples (ResultSet):**
 
 ```python

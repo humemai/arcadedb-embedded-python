@@ -15,7 +15,8 @@
  * Compiled into arcadedb-python-bridge.jar during the wheel build
  * (scripts/Dockerfile.build and scripts/build-native.sh) and consumed by
  * ResultSet.to_json_list() in the Python bindings. Values carry JSON-native
- * types (temporals as strings) — documented on the Python side.
+ * types (DATE and DATETIME as epoch-millisecond integers), as documented on
+ * the Python side.
  */
 package com.arcadedb.python;
 

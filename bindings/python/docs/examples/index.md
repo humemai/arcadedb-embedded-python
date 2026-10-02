@@ -16,7 +16,7 @@ Download and prepare datasets used by the examples (MovieLens, Stack Exchange, M
 Foundation example covering document types, CRUD operations, comprehensive data types (DATE, DATETIME, DECIMAL, FLOAT, INTEGER, STRING, BOOLEAN, and LIST), and NULL value handling (INSERT NULL, UPDATE to NULL, IS NULL queries).
 
 **[02 - Social Network Graph](02_social_network_graph.md)**
-Complete graph modeling with vertices, edges, NULL handling, and dual query languages (SQL MATCH vs Cypher). Demonstrates 8 people with optional fields, 24 bidirectional edges, graph traversal, and comprehensive queries.
+Complete graph modeling with vertices, edges, NULL handling, and dual query languages (SQL MATCH vs Cypher). Demonstrates 8 people with optional fields, each friendship stored as two directed edges (one each way), graph traversal, and comprehensive queries.
 
 **[03 - Vector Search](03_vector_search.md)**
 Semantic similarity search with HNSW (JVector) indexing. Demonstrates vector storage, index
@@ -41,7 +41,7 @@ Table-oriented OLAP benchmark with fixed analytical queries, load/index timing, 
 Graph OLTP benchmark with directed-edge semantics, result verification notes, and cross-backend workload comparison.
 
 **[10 - Stack Overflow Graph (OLAP)](10_stackoverflow_graph_olap.md)**
-Graph OLAP benchmark using a fixed OpenCypher query suite across multiple backends.
+Graph OLAP benchmark with a fixed query suite across multiple backends: OpenCypher where the backend runs it, an equivalent SQL or Python form elsewhere.
 
 **[11 - Vector Index Build](11_vector_index_build.md)**
 Build-only vector benchmark comparing ArcadeDB, pgvector, Qdrant, Milvus, FAISS, and LanceDB.
@@ -86,7 +86,7 @@ Embedded-first server workflow covering `create_server(...)`, HTTP auth (Basic a
 The server HTTP features a second process needs next: one transaction across several requests through `arcadedb-session-id`, `close database` / `open database` server commands, and InfluxDB line-protocol writes to a TIMESERIES type read back with SQL.
 
 **[25 - Sparse Vectors, Weight Precision, And Compaction](25_sparse_quantization_and_compact.md)**
-Sparse retrieval on a synthetic SPLADE-style corpus built twice: INT8 (rescored, and not) versus FP32 posting weights in `LSM_SPARSE_VECTOR`, and `COMPACT INDEX` as the settle step after a bulk load, with size, compaction time, query latency, and top-10 agreement.
+Sparse retrieval on a synthetic SPLADE-style corpus built once per weight setting: INT8 rescored, INT8 without rescoring, and FP32 posting weights in `LSM_SPARSE_VECTOR`, and `COMPACT INDEX` as the settle step after a bulk load, with size, compaction time, query latency, and top-10 agreement.
 
 **[26 - Cross-Model Transaction Atomicity](26_cross_model_transaction_atomicity.md)**
 Vector search, graph hop, and document update in one transaction, interrupted between the writes: rolled back cleanly inside a transaction, torn every time without one.

@@ -9,7 +9,7 @@ Python bindings surface in this repository. It reflects the current code in
 The Python bindings expose the **core database, schema, graph, vector, async,
 import/export, and server workflows** needed for typical application usage. Most
 omissions are **low-level JVM internals** (WAL details, bucket scanning, binary
-protocol, server plugins, clustering) that are not typically used from Python.
+protocol, clustering) that are not typically used from Python.
 The package bundles the optional in-process server (HTTP API + Studio); see
 [Server Mode](guide/server.md). For a server whose lifetime is independent of
 your Python process, or for HA/TLS, use the official ArcadeDB distribution.
@@ -23,11 +23,13 @@ your Python process, or for HA/TLS, use the official ArcadeDB distribution.
 | Schema & Indexes | ✅ Supported | Types, properties, LSM_TREE/HASH/FULL_TEXT/LSM_VECTOR/GEOSPATIAL indexes |
 | Graph API | ✅ Supported | SQL/OpenCypher graph workflows plus `Document`/`Vertex`/`Edge` wrapper compatibility |
 | Vector Search | ✅ Supported | JVector indexes + NumPy conversion helpers |
+| Sparse Vectors | ✅ Supported | `LSM_SPARSE_VECTOR` indexes and `vector.sparseNeighbors(...)` through SQL |
+| Time Series | ✅ Supported | `TIMESERIES` types through SQL, `async_executor().append_samples(...)` for bulk writes, and the server's `/api/v1/ts/{db}/write` endpoint |
 | Async Execution | ✅ Supported | `AsyncExecutor` plus record-level and SQL/Cypher async flows |
 | Data Import | ✅ Supported | SQL import workflows plus a narrow `db.import_documents(...)` wrapper for document files |
 | Data Export | ✅ Supported | JSONL + CSV for query results |
 | Server Mode | ✅ Supported | Embedded server lifecycle + Studio access |
-| Advanced/Low-level | ❌ Not exposed | WAL internals, binary protocol, HA/replication, plugins |
+| Advanced/Low-level | ❌ Not exposed | WAL internals, binary protocol, HA/replication |
 
 ### Detailed Coverage
 
@@ -90,7 +92,7 @@ APIs available when you explicitly need record objects**
 **Graph Traversals & Queries:**
 
 - ✅ SQL traversal: `SELECT * FROM User WHERE out('Follows').name = 'Alice'`
-- ✅ OpenCypher patterns: `MATCH (a:User)-[:FOLLOWS]->(b) RETURN b`
+- ✅ OpenCypher patterns: `MATCH (a:User)-[:Follows]->(b) RETURN b`
 - ✅ Path finding, shortest paths, pattern matching
 
 **Not exposed:** event listeners/callback hooks, low-level graph internals
@@ -110,7 +112,7 @@ with db.transaction():
 
 # Traverse via OpenCypher
 result = db.query("opencypher", """
-    MATCH (user:User {name: 'Alice'})-[:FOLLOWS]->(friend)
+    MATCH (user:User {name: 'Alice'})-[:Follows]->(friend)
     RETURN friend.name
 """)
 ```
@@ -145,10 +147,12 @@ Full Pythonic Schema API available via `db.schema`:
 - ✅ `get_database()`, `create_database()` - Database management
 - ✅ `get_studio_url()`, `get_http_port()` - Python enhancements
 - ✅ Embedded and HTTP access to the same databases
+- ✅ The bundled Postgres, Redis, and Bolt protocol plugins, started through
+  `config={"server_plugins": ...}` (see [Wire Protocols](guide/server.md#wire-protocols))
 
 **Not exposed:**
 
-- ❌ Plugin management, HA/replication, advanced user/security management:
+- ❌ HA/replication, advanced user/security management:
   run the official [ArcadeDB server](https://docs.arcadedb.com/#Server) for those
 
 #### 6. Data Import
@@ -186,7 +190,7 @@ Support exists, but the current repository guidance is:
 - ✅ Vector index creation - SQL `CREATE INDEX ... LSM_VECTOR`
 - ✅ NumPy array support - `to_java_float_array()`, `to_java_int_array()`, `to_java_byte_array()`, `to_python_array()`
 - ✅ Similarity search - SQL `vectorNeighbors`
-- ✅ Distance functions - cosine, euclidean, inner_product
+- ✅ Distance functions - cosine, euclidean, dot_product
 - ✅ Index tuning parameters (connections, beam width, quantization)
 - ✅ Automatic indexing of existing records
 - ✅ List vector indexes - `schema.list_vector_indexes()`
@@ -196,7 +200,7 @@ Support exists, but the current repository guidance is:
 - ❌ WAL and storage internals
 - ❌ Binary protocol and custom network stacks
 - ❌ HA/replication, distributed clustering
-- ❌ Server plugins and module management
+- ❌ Plugins other than the bundled Postgres, Redis, and Bolt ones, and module management
 - ❌ Custom query engines and DSLs
 
 ### Design Philosophy: Query-First Approach
@@ -214,7 +218,7 @@ This approach is actually **cleaner and more maintainable** than direct API expo
 ```python
 # Python way (clean):
 db.command("sql", "CREATE INDEX ON User (email) UNIQUE")
-db.query("opencypher", "MATCH (a)-[:FOLLOWS]->(b) RETURN b")
+db.query("opencypher", "MATCH (a)-[:Follows]->(b) RETURN b")
 
 # vs. hypothetical direct API (complex):
 schema = db.getSchema()
@@ -245,7 +249,6 @@ These bindings cover the **primary workflows** most Python developers need:
 - Graph, document, vector, and time-series data
 - SQL and OpenCypher queries
 
-They intentionally **do not expose** low-level JVM internals, clustering, and plugin
-management. For those scenarios, use the Java APIs directly.
+They intentionally **do not expose** low-level JVM internals and clustering. For those scenarios, use the Java APIs directly.
 
 For development workflow and tests, see [Contributing](development/contributing.md).

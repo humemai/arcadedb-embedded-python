@@ -413,12 +413,17 @@ class Database:
             rid: Record ID string (e.g. "#10:5")
 
         Returns:
-            Record object (Vertex, Document, or Edge) or None if not found
+            Record object (Vertex, Document, or Edge)
+
+        Raises:
+            ArcadeDBError: If no record has that RID (RecordNotFoundException)
 
         Example:
-            >>> record = db.lookup_by_rid("#10:5")
-            >>> if record:
+            >>> try:
+            ...     record = db.lookup_by_rid("#10:5")
             ...     print(record.get("name"))
+            ... except ArcadeDBError:
+            ...     print("no record with that RID")
         """
         self._check_not_closed()
         try:
@@ -485,7 +490,7 @@ class Database:
             dimensions: Vector dimensionality (e.g., 768 for BERT)
             id_property: Optional property used for key-based vector lookup.
                 Defaults to the engine default (usually "id") when omitted.
-            distance_function: "cosine", "euclidean", or "inner_product"
+            distance_function: "cosine", "euclidean", or "dot_product"
             max_connections: Per-layer graph degree (default: 32, matching the
                 engine default since #5352). Maps to `maxConnections` in
                 JVector, which is a Vamana per-layer degree and is NOT doubled
@@ -802,18 +807,19 @@ class Database:
         """
         Enable or disable automatic transaction management.
 
-        When enabled, ArcadeDB automatically begins a transaction for operations
-        that require one. When disabled, you must call begin() yourself (or use ``with db.transaction():``).
+        Off by default: a write outside a transaction raises ``ArcadeDBError``
+        ("Transaction not begun"), so wrap writes in ``with db.transaction():``
+        or call begin() yourself. When enabled, each statement outside a
+        transaction runs in its own committed transaction. The setting is not
+        persisted: a reopened database starts with it off again.
 
         Args:
             enabled: True to enable auto-transaction, False to disable
 
         Example:
-            >>> db.set_auto_transaction(False)  # Manual transaction control
-            >>> db.begin()
-            >>> # ... do work ...
-            >>> db.commit()
-            >>> db.set_auto_transaction(True)  # Restore default
+            >>> db.set_auto_transaction(True)   # each bare write commits alone
+            >>> db.command("sql", "INSERT INTO T SET a = 1")
+            >>> db.set_auto_transaction(False)  # back to the default
         """
         self._check_not_closed()
         try:
@@ -1134,17 +1140,21 @@ class Database:
             query: SQL query to execute
             file_path: Output CSV file path
             language: Query language (default: "sql")
-            fieldnames: Column names (auto-detected if None)
+            fieldnames: Header and column order (auto-detected if None). It
+                cannot rename: it must name every column the query returns, or
+                the export raises after writing the header. Alias columns in
+                the query to rename them.
 
         Example:
             >>> # Export all movies to CSV
             >>> db.export_to_csv("SELECT * FROM Movie", "movies.csv")
 
-            >>> # Export with specific columns
+            >>> # Renamed columns, in a chosen order
             >>> db.export_to_csv(
-            ...     "SELECT userId, movieId, rating FROM Rating WHERE rating >= 4.5",
+            ...     "SELECT userId AS user, movieId AS movie, rating AS score "
+            ...     "FROM Rating WHERE rating >= 4.5",
             ...     "high_ratings.csv",
-            ...     fieldnames=["user", "movie", "score"]
+            ...     fieldnames=["score", "user", "movie"]
             ... )
         """
         self._check_not_closed()

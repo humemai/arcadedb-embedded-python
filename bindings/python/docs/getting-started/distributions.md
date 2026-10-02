@@ -116,7 +116,7 @@ target platform, and filesystem overhead after installation:
 
 **Components (uncompressed):**
 
-- **ArcadeDB JARs**: ~33 MiB (65 JARs, including the optional server stack; [Server Mode](../guide/server.md#what-it-costs-you) breaks down its cost as measured on 26.8.1)
+- **ArcadeDB JARs**: ~33 MiB (the bundled JARs, including the optional server stack; [Server Mode](../guide/server.md#what-it-costs-you) lists the server stack's JARs; `arcadedb.jar_fingerprint()` counts and hashes the installed ones)
 - **Bundled JRE**: ~63 MiB (platform-specific Java 25 runtime via jlink, 20 modules)
 
 **Optimizations:**

@@ -389,7 +389,8 @@ ArcadeDB writes logs to multiple locations:
 
 **Content:** HTTP requests, connections, events
 
-**Example:** `./databases/log/server-event-log-2024-01-15.jsonl`
+**Example:** `./databases/log/server-event-log-20240115-093000.0.jsonl`
+(`server-event-log-YYYYMMDD-HHMMSS.N.jsonl`)
 
 ### 3. JVM Crash Logs
 

@@ -95,7 +95,9 @@ Both APIs can be used **simultaneously** on the same server instance; see
 ## Additional Features
 
 - **Multiple Query Languages**: SQL and OpenCypher
-- **ACID Transactions**: Full transactional guarantees
+- **ACID Transactions**: a commit survives a process crash; with
+    `arcadedb.txWalFlush=1` it also survives a power cut (see
+    [Durability](guide/core/transactions.md#durability-what-a-commit-survives))
 - **Type Safety**: Strong Python type handling and clear errors
 
 ## Current Ingest Guidance
@@ -128,7 +130,7 @@ are doing.
 
 !!! success "Advanced Features"
     - ⚡ **High performance** - Direct JVM integration via JPype
-    - 🔒 **ACID transactions** - Full transaction support
+    - 🔒 **ACID transactions** - durable to a process crash by default, to a power cut with `arcadedb.txWalFlush=1`
     - 🎯 **Vector storage** - HNSW (JVector) indexing for embeddings
     - 📥 **Data import** - CSV, XML, and ArcadeDB JSONL
     - 🔎 **Full-text search** - Lucene integration

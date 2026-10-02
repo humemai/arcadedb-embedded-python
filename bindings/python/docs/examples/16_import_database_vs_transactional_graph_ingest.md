@@ -21,13 +21,11 @@ Example 16 is the graph-ingest comparison harness for embedded Python.
 
 - This example exists because ingest winners are workload-dependent
 - `GraphBatch` is the repository's recommended bulk graph ingest path from Python
-- `IMPORT DATABASE` with `--parallel 4` was the fastest arm on the 5M/5M benchmark
-  shape below, and `GraphBatch` with `--parallel 4` was the fastest non-import arm.
-  Fastest here does not make `IMPORT DATABASE` the recommendation: its behavior varies
-  by import path and data shape, `commitEvery` transaction splitting has not behaved as
-  expected in some CSV-heavy runs, and very large imports can still hit
-  transaction-buffer limits. Use it when its file-driven workflow is what you need, and
-  when you have measured it on your own data
+- `IMPORT DATABASE` is not the recommendation: its behavior varies by import path and
+  data shape, `commitEvery` transaction splitting has not behaved as expected in some
+  CSV-heavy runs, and very large imports can still hit transaction-buffer limits. Use it
+  when its file-driven workflow is what you need, and when you have measured it on your own
+  data
 - Async SQL is a comparison arm only, and it is not a bulk graph ingest path
 
 !!! warning "Why the async arm accepts only `--async-parallel 1`"
@@ -42,40 +40,6 @@ Example 16 is the graph-ingest comparison harness for embedded Python.
 
     `GraphBatch` flushes its edges through that same executor and is measured exact,
     with `parallel_flush` on or off.
-
-## Snapshot (2026-03-24)
-
-For this shape:
-
-- `vertices=5,000,000`
-- `edges=5,000,000`
-- `vertex-int-props=10`
-- `vertex-str-props=10`
-- `edge-int-props=10`
-- `edge-str-props=10`
-- `string-size=64`
-- `batch-size=10,000`
-- `heap-size=8g`
-
-Measured times:
-
-- `Transactional` (`1 thread`): `575.078s`
-- `Async SQL` (`--async-parallel 1`): `701.080s`
-- `GraphBatch` (`--parallel 1`): `507.983s`, one-way edges
-- `GraphBatch` (`--parallel 4`): `359.672s`, one-way edges
-
-The two `GraphBatch` times were measured with `bidirectional=False` (each edge stored on its
-source vertex only), while the other three arms store both directions, so they understate a
-like-for-like load. The script now loads two-way edges: a one-way load into a two-way edge
-type makes any query the planner walks from the target end return 0 rows
-(ArcadeData/arcadedb#8625).
-- `IMPORT DATABASE` (`--parallel 1`): `453.481s`
-- `IMPORT DATABASE` (`--parallel 4`): `275.325s`
-
-All four methods produced the same final graph output for this benchmark shape.
-
-The `Async SQL` figure was measured at one worker, which is the only level the arm now
-accepts, so it is still a valid time for the work it describes.
 
 ## Run
 

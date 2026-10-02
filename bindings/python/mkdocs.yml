@@ -4,7 +4,7 @@ site_description: Native Python bindings for ArcadeDB - the multi-model database
 site_author: humemai
 repo_url: https://github.com/humemai/arcadedb-embedded-python
 repo_name: humemai/arcadedb-embedded-python
-edit_uri: edit/python-embedded/bindings/python/docs/
+edit_uri: edit/main/bindings/python/docs/
 
 copyright: Copyright &copy; 2026 humemai
 

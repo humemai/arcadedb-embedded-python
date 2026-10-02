@@ -199,9 +199,7 @@ The benchmark measures query execution, but the setup path still matters for con
 
 Before 26.10.1, `async_executor().command(...)` could silently drop records above
 parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see
-[Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation). This
-script's ArcadeDB load used that path until 2026-09-15, so an ArcadeDB load time recorded
-from an earlier run is not an `insert_many` time.
+[Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation).
 
 ## Result Notes
 

@@ -38,8 +38,7 @@ as a comparison arm, pinned to one worker and checked against what it submitted.
 default, and `GraphBatch` stores both directions unless you pass `bidirectional=False`.
 Pass it only for a type declared one-way (`CREATE EDGE TYPE ... UNIDIRECTIONAL`): the
 batch does not check, and one-way edges in a two-way type make any query the planner
-walks from the target end return 0 rows with no error (`ArcadeData/arcadedb#8625`). Our
-own examples 09, 10, and 13 did exactly that until 2026-09-29.
+walks from the target end return 0 rows with no error (`ArcadeData/arcadedb#8625`).
 
 ## Overview
 
@@ -147,8 +146,9 @@ with db.transaction():
 ```
 
 !!! warning "Vertex must exist before edge creation"
-    `CREATE EDGE ... FROM (...) TO (...)` requires both endpoint subqueries to return
-    persisted vertices. If either side matches no record, the edge creation fails.
+    `CREATE EDGE ... FROM (...) TO (...)` connects the persisted vertices its endpoint
+    subqueries return. If either side matches no record, it creates no edge and raises no
+    error, so check the returned rows when a missing endpoint matters.
 
 ### Listing Edges from a Vertex
 
@@ -293,10 +293,10 @@ relationship, giving it a property map, or filtering on it loads every edge it c
 
 ```python
 # ✅ Good - the relationship is not read, so it stays anonymous
-db.query("opencypher", "MATCH (p:Person {id: $id})-[:KNOWS]->()-[:KNOWS]->(f) RETURN count(DISTINCT f) AS n", {"id": 42})
+db.query("opencypher", "MATCH (p:Person {id: $id})-[:Knows]->()-[:Knows]->(f) RETURN count(DISTINCT f) AS n", {"id": 42})
 
 # ❌ Slower - `r` is bound, so each edge record is loaded
-db.query("opencypher", "MATCH (p:Person {id: $id})-[r:KNOWS]->()-[:KNOWS]->(f) RETURN count(DISTINCT f) AS n", {"id": 42})
+db.query("opencypher", "MATCH (p:Person {id: $id})-[r:Knows]->()-[:Knows]->(f) RETURN count(DISTINCT f) AS n", {"id": 42})
 ```
 
 ### 5. Ensure Vertices Exist Before Creating Edges

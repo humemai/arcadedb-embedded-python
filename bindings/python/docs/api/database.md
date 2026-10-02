@@ -97,6 +97,13 @@ Check if a database exists at the given path.
 
 - `bool`: True if database exists, False otherwise
 
+!!! warning "Starts the JVM with default settings"
+    `database_exists()` takes no `jvm_kwargs`. If the JVM is not running yet, it starts
+    it with the default settings, and a later `create_database(..., jvm_kwargs=...)`,
+    `open_database(..., jvm_kwargs=...)`, or `start_jvm(...)` with other settings
+    raises `ArcadeDBError`. To size the JVM, call `start_jvm(...)` first (see the
+    [JVM API](jvm.md)).
+
 **Example:**
 
 ```python
@@ -143,7 +150,7 @@ Execute a query and return results. Queries are read-only and don't require a tr
 
 **Parameters:**
 
-- `language` (str): Query language - `"sql"`, `"opencypher"`, `"graphql"`
+- `language` (str): Query language - `"sql"`, `"sqlscript"`, `"opencypher"` (or its alias `"cypher"`), `"graphql"`
 - `command` (str): Query string
 - `*args`: Optional positional parameters, or one mapping for named parameters
   A single list or tuple on its own is the positional-parameter array, one element per `?`, so `query("sql", "... ?", [0.9, 0.1, 0.0])` binds `?` to `0.9`. To bind one list as one parameter (a query vector, say), pass a NumPy array or `to_java_float_array(...)`, use a named parameter, or wrap it: `[[0.9, 0.1, 0.0]]`.
@@ -187,7 +194,9 @@ result = db.query("opencypher", """
 | Language | Notes |
 |----------|-------|
 | `sql` | ArcadeDB SQL |
+| `sqlscript` | Several SQL statements separated by `;`, run as one script (`query()` and `command()`) |
 | `opencypher` | OpenCypher graph query language |
+| `cypher` | Alias of `opencypher` |
 | `graphql` | GraphQL queries |
 
 ---
@@ -387,7 +396,10 @@ db.run_in_transaction(transfer)
 db.new_vertex(type_name: str) -> Vertex
 ```
 
-Create a new vertex (graph node) through the wrapper API. **Requires a transaction.**
+Create a new, unsaved vertex (graph node) through the wrapper API. Creating it needs no
+transaction; **its `save()` does**. Outside a transaction, `save()` raises the Java
+`com.arcadedb.exception.TransactionException` ("Transaction not begun"), not
+`ArcadeDBError`.
 
 **Parameters:**
 
@@ -399,7 +411,7 @@ Create a new vertex (graph node) through the wrapper API. **Requires a transacti
 
 **Raises:**
 
-- `ArcadeDBError`: If type doesn't exist or transaction not active
+- `ArcadeDBError`: If the type doesn't exist
 
 **Compatibility example:**
 
@@ -445,7 +457,9 @@ with db.transaction():
 db.new_document(type_name: str) -> Document
 ```
 
-Create a new document (non-graph record) through the wrapper API. **Requires a transaction.**
+Create a new, unsaved document (non-graph record) through the wrapper API. Creating it
+needs no transaction; **its `save()` does**, and raises the Java `TransactionException`
+outside one, as for [`new_vertex`](#new_vertex).
 
 **Parameters:**
 
@@ -560,14 +574,21 @@ Lookup a record by its RID.
 
 **Returns:**
 
-- `Record` object (Vertex, Document, or Edge) or `None` if not found
+- `Record` object (Vertex, Document, or Edge)
+
+**Raises:**
+
+- `ArcadeDBError`: If no record has that RID (the message names the engine's
+  `RecordNotFoundException`)
 
 **Example:**
 
 ```python
-record = db.lookup_by_rid("#10:5")
-if record:
+try:
+    record = db.lookup_by_rid("#10:5")
     print(record.get("name"))
+except ArcadeDBError:
+    print("no record with that RID")
 ```
 
 ---
@@ -707,7 +728,13 @@ Return whether read-your-writes consistency is currently enabled.
 db.set_auto_transaction(enabled: bool)
 ```
 
-Enable or disable automatic transaction management.
+Enable or disable automatic transaction management for this database handle.
+
+It is **off by default**: a data write outside a transaction (`db.command("sql",
+"INSERT ...")`, or a wrapper's `save()`) raises "Transaction not begun". With
+`set_auto_transaction(True)`, such a write runs in a transaction of its own that
+commits when the statement ends. The setting does not persist: a database opened again
+starts with it off. Prefer `with db.transaction():` for writes.
 
 ---
 
@@ -786,6 +813,9 @@ bulk ingest.
 - `wal`: WAL override during import
 - `extra_settings`: additional raw importer settings
 
+Every parameter, the side effects while it runs, and the returned `ImportResult` are in
+the [Import API](importer.md#dbimport_documents).
+
 **Example:**
 
 ```python
@@ -811,7 +841,10 @@ db.export_database(
 ) -> dict
 ```
 
-Export the database to JSONL (backup/restore), GraphML, or GraphSON.
+Export the database to JSONL (backup/restore). `format="graphml"` and
+`format="graphson"` raise `ArcadeDBError`: their exporters come from the
+`arcadedb-gremlin` module, which the wheel does not bundle. See the
+[Exporter API](exporter.md).
 
 ---
 
@@ -821,7 +854,13 @@ Export the database to JSONL (backup/restore), GraphML, or GraphSON.
 db.export_to_csv(query: str, file_path: str, language: str = "sql", fieldnames: Optional[List[str]] = None)
 ```
 
-Run a query and write results to CSV.
+Run a query and write results to CSV. `fieldnames` sets the header and the column
+order; it cannot rename columns. It must name every column the query returns (a name
+the rows lack is written empty): a missing column raises `ArcadeDBError` ("dict contains
+fields not in fieldnames") after the header is written, which leaves a header-only file.
+To rename, alias the columns in the query (`SELECT userId AS user ...`). `DATE` and
+`DATETIME` values are written as epoch-millisecond integers. See the
+[Exporter API](exporter.md#export_to_csv).
 
 ---
 
@@ -866,7 +905,7 @@ specifically need that surface.
 - `vector_property` (str): Property storing vector arrays
 - `dimensions` (int): Vector dimensionality
 - `id_property` (str | None): Optional property used for key-based vector lookup.
-- `distance_function` (str): `"cosine"`, `"euclidean"`, or `"inner_product"`
+- `distance_function` (str): `"cosine"`, `"euclidean"`, or `"dot_product"`
 - `max_connections` (int): Per-layer graph degree (default: 32; Vamana degree, use 2*M to match an hnswlib M). Maps to
   `maxConnections` in HNSW (JVector).
 - `beam_width` (int): Beam width for search/construction (default: 100). Maps to
@@ -944,7 +983,13 @@ See [Vector Search Guide](../guide/vectors.md) for details.
 db.close()
 ```
 
-Close the database connection.
+Close the database connection. It also closes the async executor
+([`async_executor`](#async_executor)) if this handle handed it out, and a `Database`
+that is garbage-collected closes itself.
+
+A handle from `ArcadeDBServer.get_database()` or `ArcadeDBServer.create_database()`
+belongs to the server: `close()` only marks that handle closed, and the database stays open for the
+server and its other handles until `server.stop()`.
 
 **Example:**
 

@@ -89,7 +89,7 @@ def test_set_read_your_writes(temp_db):
 
 def test_set_auto_transaction(temp_db):
     """Test auto-transaction configuration."""
-    # Default is True
+    # The default is off (a bare write raises); turn it on
     temp_db.set_auto_transaction(True)
 
     # Disable for manual control

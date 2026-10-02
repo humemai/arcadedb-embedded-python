@@ -665,9 +665,7 @@ DELETE r
 - Traversal expectations should be read as directed unless the query pattern
   explicitly traverses both directions
 - The ArcadeDB `GraphBatch` load stores both directions of every edge (`bidirectional=True`,
-  the engine default, as the SQL `CREATE EDGE` path the smaller graph examples use does).
-  Until 2026-09-29 it stored the source side only, and the reads the planner walks from the
-  target end returned 0 rows with no error (ArcadeData/arcadedb#8625)
+  the engine default, as the SQL `CREATE EDGE` path the smaller graph examples use does)
 - For cross-database comparability, `--threads 1` is the recommended baseline
 - `--verify-single-thread-series` uses DB-scoped baselines for deterministic
   repeatability, not strict cross-database equality

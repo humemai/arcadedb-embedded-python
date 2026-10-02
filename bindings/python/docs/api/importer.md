@@ -50,6 +50,87 @@ page's two entry points:
 - To compare the paths on your own data, use Example 15 and 16 style comparisons across
     transactional SQL, the batch helpers, and SQL import rather than assuming one winner.
 
+## `db.import_documents(...)`
+
+```python
+db.import_documents(
+    source: str | os.PathLike,
+    document_type: str = "Document",
+    *,
+    file_type: str | None = None,
+    delimiter: str | None = None,
+    header: str | None = None,
+    skip_entries: int | None = None,
+    properties_include: str | None = None,
+    commit_every: int | None = None,
+    parallel: int | None = None,
+    wal: bool | None = None,
+    verbose_level: int | None = None,
+    probe_only: bool | None = None,
+    force_database_create: bool | None = None,
+    trim_text: bool | None = None,
+    on_row_error: str | None = None,
+    extra_settings: Mapping[str, Any] | None = None,
+) -> ImportResult
+```
+
+Runs ArcadeDB's Java importer on one source into one document type. A parameter left
+at `None` is not passed, so the importer's own default applies. The engine setting each
+one sets is in parentheses.
+
+**Parameters:**
+
+- `source`: a local path (`str` or `os.PathLike`) or an importer URL. A path with no URL
+  scheme, a relative one included, is resolved to an absolute `file://` URI, which
+  `ImportResult.source_url` reports.
+- `document_type`: the target document type (`documentType`).
+- `file_type`: the importer format, such as `"csv"` (`documentsFileType`).
+- `delimiter`: the field delimiter of a delimited format (`documentsDelimiter`).
+- `header`: the column names, separated by the delimiter (`"id,name,city"`), for a file
+  that has no header line (`documentsHeader`). With it, no line is skipped as a header.
+- `skip_entries`: lines to skip at the start of the file, the header line included
+  (`documentsSkipEntries`). Without it, a file read without `header` skips its header
+  line only.
+- `properties_include`: comma-separated names of the properties to import
+  (`documentPropertiesInclude`); the importer's default `"*"` imports all of them.
+- `commit_every`, `parallel`, `wal`: the transaction split interval, the worker count,
+  and WAL use during the import (`commitEvery`, `parallel`, `wal`; see the side effects
+  below).
+- `verbose_level`: the importer's log level (`verboseLevel`, 2 by default).
+- `probe_only`: analyze the source without writing records (`probeOnly`).
+- `force_database_create`: delete and recreate the database when the importer opens a
+  database of its own (`forceDatabaseCreate`). It has no effect on the open database
+  this method runs on.
+- `trim_text`: trim text values (`trimText`, on by default); the XML format reads it.
+- `on_row_error`: `"abort"` (the default) or `"skip"`; see [`on_row_error`](#on_row_error).
+- `extra_settings`: any other importer setting by its engine name; each value is passed
+  as a string, and `None` values are dropped.
+
+**While it runs**, the call turns read-your-writes off on the database and applies any
+`parallel`, `commit_every`, and `wal` you pass to the database's async executor. When
+the import ends, with or without an error, it waits for the executor and restores all
+four settings.
+
+**Returns:** an `ImportResult` with
+
+- `result`: `"OK"`, or `"PROBE_ONLY"` with `probe_only=True` (then `statistics` is empty)
+- `operation`: `"import documents"`
+- `source_url`: the URL the importer read
+- `statistics`: the importer's counters as a dict, such as `createdDocuments`,
+  `parsedRecords`, and `skippedRecords`
+- `get(key, default=None)`: one counter from `statistics`
+- `to_dict()`: the counters plus `result`, `operation`, and `source_url` in one dict
+
+**Raises:** `ArcadeDBError` if the import fails, and `ValueError` for an `on_row_error`
+other than `"abort"` or `"skip"`.
+
+```python
+result = db.import_documents(
+    "movies.csv", document_type="Movie", file_type="csv", commit_every=5000
+)
+print(result.source_url, result.get("createdDocuments"))
+```
+
 ## Common Patterns
 
 ### Import a CSV File into a Document Type
