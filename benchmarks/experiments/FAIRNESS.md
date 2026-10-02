@@ -174,8 +174,9 @@ synchronous_commit`. `fairness_check` fails a row whose engine reports a
 different class from the one the cell asked for, which is what a flag that did
 not take looks like.
 
-**Four engines have no knob** and are the named exceptions: Neo4j, DuckDB and
-LadybugDB, each straced rather than assumed, and the SurrealDB 3.2.4 server,
+**Four engines have no knob** and are the named exceptions: DuckDB and LadybugDB,
+each straced rather than assumed, Neo4j, whose settings offer none and whose
+documentation says it forces the log at commit (not traced here), and the SurrealDB 3.2.4 server,
 whose binary exposes no sync setting at all. They run once, declare
 `durability_no_setting`, and the page prints their one number in both columns,
 which puts them on an equal footing instead of comparing their strict numbers
