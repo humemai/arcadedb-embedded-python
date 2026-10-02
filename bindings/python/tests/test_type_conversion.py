@@ -2,7 +2,7 @@
 Tests for type conversion between Java and Python types.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import arcadedb_embedded as arcadedb
@@ -365,6 +365,78 @@ def test_python_to_java_conversion(temp_db_path):
         # Set may be converted to list or remain as set/collection
         unique_items = record.get("unique_items")
         assert unique_items is not None
+
+
+def test_decimal_parameter_keeps_every_digit(temp_db_path):
+    """A Decimal bound to a SQL parameter is stored and matched exactly (#58).
+
+    Left to JPype it reached the engine as a Double: 38 digits were stored as
+    1.2345678901234567E+19, and a lookup by the same Decimal missed the rows
+    that held it exactly.
+    """
+    value = Decimal("12345678901234567890.123456789012345678")
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE Money")
+        db.command("sql", "CREATE PROPERTY Money.amount DECIMAL")
+        with db.transaction():
+            db.command("sql", "INSERT INTO Money SET k = 'param', amount = ?", value)
+            db.new_document("Money").set("k", "set").set("amount", value).save()
+
+        for key in ("param", "set"):
+            got = db.query("sql", "SELECT amount FROM Money WHERE k = ?", key).first()
+            assert got.get("amount") == value, key
+        found = db.query("sql", "SELECT k FROM Money WHERE amount = ?", value).to_list()
+        assert sorted(r["k"] for r in found) == ["param", "set"]
+
+
+def test_datetime_and_date_parameters(temp_db_path):
+    """datetime and date bind to SQL parameters, and keep microseconds (#58).
+
+    Both used to be refused ("No matching overloads"), and a datetime crossed as
+    a java.util.Date, which keeps milliseconds: DATETIME_MICROS stored
+    ...56.789000 for ...56.789123 and a lookup by the same value found nothing.
+    The engine stores DATETIME as a UTC wall clock: a naive value is that wall
+    clock as it stands and reads back unchanged on any host, and an aware one
+    is converted to UTC, so 21:34+09:00 is the same value as a naive 12:34.
+    """
+    naive = datetime(2026, 10, 1, 12, 34, 56, 789123)
+    aware = datetime(
+        2026, 10, 1, 21, 34, 56, 789123, tzinfo=timezone(timedelta(hours=9))
+    )
+    epoch_ms = 1790858096789  # 2026-10-01T12:34:56.789Z
+    on_day = date(2026, 10, 1)
+    with arcadedb.create_database(temp_db_path) as db:
+        db.command("sql", "CREATE DOCUMENT TYPE Event")
+        db.command("sql", "CREATE PROPERTY Event.at DATETIME_MICROS")
+        db.command("sql", "CREATE PROPERTY Event.on_day DATE")
+        with db.transaction():
+            for label, value in (("naive", naive), ("aware", aware)):
+                db.command(
+                    "sql",
+                    "INSERT INTO Event SET k = ?, at = ?, on_day = ?",
+                    label + " param",
+                    value,
+                    on_day,
+                )
+                db.new_document("Event").set("k", label + " set").set(
+                    "at", value
+                ).save()
+
+        every = ["aware param", "aware set", "naive param", "naive set"]
+        for key in every:
+            got = db.query(
+                "sql", "SELECT at, at.asLong() AS ms FROM Event WHERE k = ?", key
+            ).first()
+            assert got.get("at") == naive, key
+            assert got.get("ms") == epoch_ms, key
+        for value in (naive, aware):
+            found = db.query("sql", "SELECT k FROM Event WHERE at = ?", value).to_list()
+            assert sorted(r["k"] for r in found) == every
+
+        found = db.query(
+            "sql", "SELECT k FROM Event WHERE on_day = ?", on_day
+        ).to_list()
+        assert sorted(r["k"] for r in found) == ["aware param", "naive param"]
 
 
 def test_bytes_keep_every_byte(temp_db_path):
