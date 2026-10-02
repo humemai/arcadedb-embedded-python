@@ -797,9 +797,20 @@ class Chroma(Base):
     # ablation.
     quantization = "fp32"
     name = "chroma_dense"
-    # chromadb 1.5.9 exposes no close/shutdown on PersistentClient (checked
-    # dir(chromadb.Client)); it flushes per write. Nothing to ask for.
-    close_note = "chromadb exposes no close()"
+    # chromadb 1.5.9 DOES have a close: Client.close() releases the client's
+    # system and stops it when it is the last client. This comment said there
+    # was none until 2026-10-02, from dir(chromadb.Client), which is the
+    # factory function rather than the client it returns. The arm does not
+    # call it, and nothing this lane reads depends on it: there is no reopen,
+    # close_s is not on the page, close() itself took 2 to 10 ms in the runs
+    # below, and the client disk reading is taken after the process exits,
+    # when the footprint is the same with and without it (laptop, 5,000 vectors,
+    # and 20,000 with 300 inserts and 300 deletes: 6,210,172 bytes both ways,
+    # and 16,634,076 against 16,634,008, the HNSW link lists differing by
+    # 68 bytes). Every add() is persisted by the time it returns: a reopen
+    # counts every record and rewrites no index file in either case.
+    close_note = ("chromadb 1.5.9 has Client.close(), which this arm does not call: each add() is "
+                  "persisted when it returns, so close_s is 0.0 by omission, not by measurement")
 
     def connect(self):
         import chromadb
