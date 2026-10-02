@@ -69,9 +69,10 @@ TPC=postgres,postgres_tuned,mongodb
 # campaign has measured it.
 GRAPH=neo4j_graph,ladybug_graph,mongodb_graph,memgraph_graph,pgage_graph,falkordb_graph
 # The #131 dense arms are new (2026-10-02) and DuckDB VSS and ArangoDB now split their phases (#132):
-# smoked here until a campaign has measured them.
-DENSE=pgvector_dense,qdrant_dense,qdrant_dense_int8,milvus_dense,milvus_dense_int8,neo4j_dense,neo4j_dense_int8,mongodb_dense,lancedb_dense,elasticsearch_dense,elasticsearch_dense_int8,memgraph_dense,falkordb_dense,ladybug_dense,duckdb_vss_dense,arangodb_dense
-SPARSE=pgvector_sparse,qdrant_sparse,milvus_sparse,elasticsearch_sparse
+# smoked here until a campaign has measured them. So are the quantization survey's counterparts
+# (DECISIONS #135): MongoDB, Memgraph and ArangoDB int8, LanceDB fp32, Qdrant sparse uint8.
+DENSE=pgvector_dense,qdrant_dense,qdrant_dense_int8,milvus_dense,milvus_dense_int8,neo4j_dense,neo4j_dense_int8,mongodb_dense,mongodb_dense_int8,lancedb_dense,lancedb_dense_fp32,elasticsearch_dense,elasticsearch_dense_int8,memgraph_dense,memgraph_dense_int8,falkordb_dense,ladybug_dense,duckdb_vss_dense,arangodb_dense,arangodb_dense_int8
+SPARSE=pgvector_sparse,qdrant_sparse,qdrant_sparse_uint8,milvus_sparse,elasticsearch_sparse
 TS=questdb,timescaledb,mongodb
 # memgraph_e2, ladybug_e2, and duckdb_e2 are the #131 cross-model arms (2026-10-02), new rather than re-pinned.
 E2=pg_age_e2,mongodb_e2,neo4j_e2,composed_qdrant_neo4j,memgraph_e2,ladybug_e2,duckdb_e2

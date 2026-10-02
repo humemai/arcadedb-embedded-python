@@ -632,14 +632,16 @@ DISPLAY_NAMES = {
     "memgraph_e2": "Memgraph (vector index)", "ladybug_e2": "LadybugDB (vector extension)",
     "duckdb_e2": "DuckDB (vss + DuckPGQ)",
     "qdrant_sparse": "Qdrant", "qdrant_dense": "Qdrant", "qdrant_dense_int8": "Qdrant",
+    "qdrant_sparse_uint8": "Qdrant",
     "milvus_sparse": "Milvus", "milvus_dense": "Milvus", "milvus_dense_int8": "Milvus",
     "sqlite_vec_dense_int8": "sqlite-vec",
     "elasticsearch_sparse": "Elasticsearch",
-    "chroma_dense": "Chroma", "lancedb_dense": "LanceDB",
+    "chroma_dense": "Chroma", "lancedb_dense": "LanceDB", "lancedb_dense_fp32": "LanceDB",
     "sqlite_vec_dense": "sqlite-vec", "duckdb_vss_dense": "DuckDB VSS",
     # #131 item 3 (2026-10-02)
     "elasticsearch_dense": "Elasticsearch", "elasticsearch_dense_int8": "Elasticsearch",
     "memgraph_dense": "Memgraph", "falkordb_dense": "FalkorDB", "ladybug_dense": "LadybugDB",
+    "memgraph_dense_int8": "Memgraph",
     "duckpgq_graph": "DuckPGQ", "pgage_graph": "PostgreSQL + AGE",
     "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
     "memgraph_graph": "Memgraph", "falkordb_graph": "FalkorDB",
@@ -654,9 +656,9 @@ DISPLAY_NAMES = {
     "sqlite_lifecycle": "SQLite (embedded)", "duckdb_lifecycle": "DuckDB (embedded)",
     # Served only, so bare, like MongoDB and Neo4j; "(server)" marks an engine
     # that also has an embedded row.
-    "arangodb_tpc": "ArangoDB", "arangodb_graph": "ArangoDB", "arangodb_dense": "ArangoDB", "arangodb_e2": "ArangoDB",
+    "arangodb_tpc": "ArangoDB", "arangodb_graph": "ArangoDB", "arangodb_dense": "ArangoDB", "arangodb_dense_int8": "ArangoDB", "arangodb_e2": "ArangoDB",
     "arangodb_ts": "ArangoDB",
-    "mongodb_graph": "MongoDB", "mongodb_dense": "MongoDB", "mongodb_e2": "MongoDB",
+    "mongodb_graph": "MongoDB", "mongodb_dense": "MongoDB", "mongodb_dense_int8": "MongoDB", "mongodb_e2": "MongoDB",
     # memgraph_graph, falkordb_graph and sqlite are named above and were bound
     # a second time here by the branch merge, same value both times. One key
     # per dict: a duplicate literal key is how four tier caps were silently
@@ -823,6 +825,10 @@ SPARSE_PRECISION = {
     "arcadedb_sparse_server": "int8",
     "arcadedb_sparse_server_fp32": "fp32",
     "qdrant_sparse": "fp32",
+    # SparseIndexParams.datatype uint8, read back from the collection as
+    # qdrant_sparse_datatype (DECISIONS #135, 2026-10-02); the fp32 arm now sets
+    # float32 and reads it back the same way.
+    "qdrant_sparse_uint8": "uint8",
     "milvus_sparse": "fp32",
     "pgvector_sparse": "fp32",  # sparsevec stores float4 values
     "elasticsearch_sparse": "~9-bit",
@@ -872,6 +878,16 @@ DENSE_PRECISION = {
     "elasticsearch_dense": "fp32",
     "elasticsearch_dense_int8": "int8",
     "memgraph_dense": "fp32",
+    # The quantization survey's counterparts (DECISIONS #135, 2026-10-02),
+    # checked against the DDL each issues and the value each reads back:
+    #   mongodb_dense_int8   vectorSearch field "quantization": "scalar" (mongot_vector_quantization)
+    #   memgraph_dense_int8  CREATE VECTOR INDEX ... "scalar_kind": "i8" (memgraph_vector_scalar_kind)
+    #   lancedb_dense_fp32   index_type IVF_HNSW_FLAT, unquantized (lancedb_index_type)
+    #   arangodb_dense_int8  FAISS factory "IVF<nLists>,SQ8" (ivf_factory)
+    "mongodb_dense_int8": "int8",
+    "memgraph_dense_int8": "int8",
+    "lancedb_dense_fp32": "fp32",
+    "arangodb_dense_int8": "int8",
     "falkordb_dense": "fp32",
     "ladybug_dense": "fp32",
 }
@@ -1097,8 +1113,8 @@ DENSE_10M_ARMS = [
     ("qdrant", "qdrant_dense", "Qdrant (fp32)", False),
     ("chroma", "chroma_dense", "Chroma (fp32)", False),
     ("duckvss", "duckdb_vss_dense", "DuckDB VSS (fp32)", False),
-    # IVF_HNSW_SQ: the only quantized comparator, and it was unlabelled while
-    # ArcadeDB's two arms were, which made quantization read as our quirk.
+    # IVF_HNSW_SQ: once the only quantized comparator, and it was unlabelled
+    # while ArcadeDB's two arms were, which made quantization read as our quirk.
     ("lancedb", "lancedb_dense", "LanceDB (int8)", False),
     ("milvus", "milvus_dense", "Milvus (fp32)", False),
     ("milvus_int8", "milvus_dense_int8", "Milvus (int8)", False),
@@ -1118,6 +1134,11 @@ DENSE_10M_ARMS = [
     ("elastic", "elasticsearch_dense", "Elasticsearch (fp32)", False),
     ("elastic_int8", "elasticsearch_dense_int8", "Elasticsearch (int8)", False),
     ("memgraph", "memgraph_dense", "Memgraph (fp32)", False),
+    # DECISIONS #135 (2026-10-02); skipped until their overlay files exist.
+    ("mongo_int8", "mongodb_dense_int8", "MongoDB (int8)", False),
+    ("memgraph_int8", "memgraph_dense_int8", "Memgraph (int8)", False),
+    ("lancedb_fp32", "lancedb_dense_fp32", "LanceDB (fp32)", False),
+    ("arango_int8", "arangodb_dense_int8", "ArangoDB (int8)", False),
     ("falkordb", "falkordb_dense", "FalkorDB (fp32)", False),
     ("ladybug", "ladybug_dense", "LadybugDB (fp32)", False),
 ]
@@ -2229,7 +2250,9 @@ LANES = {
             "ingest+index total s is one timer around inserting the vectors and building the index; the two are not timed separately (Qdrant and Chroma build the index while ingesting, so the split is not defined there). ingest+index vectors/s divides the vector count by it.",
             "ArcadeDB's maxConnections is a Vamana per-layer degree, not hnswlib's M. Matching the parameter names would compare a half-degree graph against a full-degree one, so the graphs are matched by effect instead.",
 *(["ArangoDB's vector index is FAISS IVF (inverted lists over trained centroids), not HNSW, so the degree match above does not apply to it; its rows record nLists (about the square root of the corpus) and nProbe (an eighth of the lists) instead."]
-              if any(str(r.get("backend")) == "arangodb_dense" for r in _dense_rows_for_note()) else []),
+              if any(str(r.get("backend")).startswith("arangodb_dense") for r in _dense_rows_for_note()) else []),
+            *(["ArangoDB's int8 row is the same IVF with the lists holding 8-bit scalar-quantized codes (the FAISS factory `IVF<nLists>,SQ8`), its nProbe calibrated to the same recall target as the fp32 row's."]
+              if any(str(r.get("backend")) == "arangodb_dense_int8" for r in _dense_rows_for_note()) else []),
             "Milvus's dense rows run with segments sealed at 50% of the maximum segment size (the image default is 12%), so a 10M ingest lands directly in the few-large-segments layout that Milvus's own compaction otherwise reaches at an unpredictable moment; without it, half the runs queried many small segments and read slower with higher recall. One line changed from the image's configuration; sparse rows are at the default.",
             *([("ArcadeDB fp32 rows at 9.99M carry graphBuildCacheSize pinned to the corpus size (9,990,000) on both deployments, a user decision so the served build is not left on the wrong side of the engine's cache knee (issue #7146; the budget 26.10.1 makes the default). INT8 rows run this engine's default of 100,000. Comparators have no equivalent setting.")]
               if _dense_overlay_is_pinned() else []),
@@ -2902,6 +2925,7 @@ def _l4_rows():
 SPARSE_MP_OPTIONAL_ARMS = [
     ("arc_srv_fp32", "arcadedb_sparse_server_fp32", "ArcadeDB (server, fp32)"),
     ("pgvector", "pgvector_sparse", "pgvector"),   # 2026-09-11, files land with qDK
+    ("qdrant_uint8", "qdrant_sparse_uint8", "Qdrant (uint8)"),   # DECISIONS #135, 2026-10-02
 ]
 SPARSE_MP_ARMS = [
     ("arc_int8", "arcadedb_sparse_embedded", "ArcadeDB (embedded, int8)"),
@@ -5472,7 +5496,7 @@ def _delete_settle_notes(table):
         return []
     rows = [r for r in (_FROZEN_ROWS or []) if r.get("lane") == "l3d" and r.get("memgraph_delete_settle")]
     shown = {str(e.get("backend_key")) for e in table.get("entries", [])}
-    if not rows or "memgraph_dense" not in shown:
+    if not rows or not any(b.startswith("memgraph_dense") for b in shown):
         return []
     return [_gen("Memgraph's delete time includes a storage cleanup it runs itself (`FREE MEMORY`): Memgraph "
                  "keeps deleted points in its vector index until its garbage collector runs, and a search before "

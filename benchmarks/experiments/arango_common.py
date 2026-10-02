@@ -162,13 +162,24 @@ def calibrate_nprobe(search_fn, queries, gt, target: float, nlists: int, k: int 
     return best
 
 
-def vector_index(col, field: str, dim: int, n: int, metric: str = "l2") -> tuple[int, int]:
+def vector_index(col, field: str, dim: int, n: int, metric: str = "l2",
+                 factory: str | None = None) -> tuple[int, int]:
     """Create the IVF index after the load (it trains on what is there) and
-    return (nLists, nProbe) for the row."""
+    return (nLists, nProbe) for the row.
+
+    `factory`, when given, is a FAISS index factory string formatted with
+    `nlists` (the int8 arm's "IVF{nlists},SQ8"): the same IVF partitioning,
+    with the inverted lists holding 8-bit scalar-quantized codes instead of the
+    floats. Accepted, trained and answering on the pinned 3.12.11 (laptop probe
+    2026-10-02, 20,000 SIFT vectors at nLists 566: plain IVF recall@10 0.9985
+    at nProbe 64, SQ8 0.9905); the server keeps the string in the index's
+    params, which index_readback returns."""
     nlists, nprobe = ivf_params(n)
-    col.add_index({"type": "vector", "fields": [field],
-                   "params": {"metric": metric, "dimension": dim, "nLists": nlists,
-                              "defaultNProbe": nprobe, "trainingIterations": TRAINING_ITERATIONS}})
+    params = {"metric": metric, "dimension": dim, "nLists": nlists,
+              "defaultNProbe": nprobe, "trainingIterations": TRAINING_ITERATIONS}
+    if factory:
+        params["factory"] = factory.format(nlists=nlists)
+    col.add_index({"type": "vector", "fields": [field], "params": params})
     return nlists, nprobe
 
 

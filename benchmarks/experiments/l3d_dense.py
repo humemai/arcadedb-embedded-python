@@ -99,7 +99,10 @@ IVF_FIELDS = ("ivf_nlists", "ivf_nprobe", "ivf_recall_target", "ivf_recall_targe
               # is len(train) and could not have shown a short load or an
               # untrained index.
               "ivf_server_doc_count", "ivf_training_state", "ivf_resolved_nlists",
-              "ivf_index_bytes")
+              "ivf_index_bytes",
+              # The FAISS factory string the server holds for the index, None
+              # for plain IVF over the floats (the int8 arm's SQ8, 2026-10-02).
+              "ivf_factory")
 
 # The DDL's vocabulary and the results' vocabulary disagreed, and a recorded
 # label could not be fed back in as an input.
@@ -196,9 +199,13 @@ def degree_stamp(backend):
     # a false provenance claim (they are HNSW at M=16) that would also have
     # made F7's degree-matching invariant vacuous for exactly the rows the
     # ablation exists to compare.
+    # The suffix runs the other way on one arm: lancedb_dense is LanceDB's int8
+    # arm and lancedb_dense_fp32 its unquantized one (2026-10-02), both HNSW at
+    # COMPARATOR_M in the same IVF partitions.
     base = str(backend)
-    if base.endswith("_int8"):
-        base = base[:-len("_int8")]
+    for _suffix in ("_int8", "_fp32"):
+        if base.endswith(_suffix):
+            base = base[:-len(_suffix)]
     if base.startswith("arcadedb"):
         return M, "arcadedb_maxconnections_per_layer"
     # Memgraph 3.13.1 builds every vector index with a default-constructed
@@ -218,6 +225,8 @@ def degree_stamp(backend):
     # ArangoDB's vector index is FAISS IVF: inverted lists over trained
     # centroids, no graph and so no degree. Its operating point is nLists and
     # nProbe, which the row records as ivf_nlists/ivf_nprobe (2026-09-13).
+    # The int8 arm's lists hold SQ8 codes (ivf_factory on its row); the family
+    # names the absent degree, which both arms share, not the list encoding.
     if base == "arangodb_dense":
         return None, "ivf_flat_no_degree"
     if base in hnswlib_style:
@@ -826,15 +835,25 @@ class LanceDB(Base):
     # indistinguishable from its fp32 sibling on the one field that names the
     # ablation.
     # INT8, because that is what build() issues: IVF_HNSW_SQ is scalar
-    # quantization and it is LanceDB's only HNSW offering. The comment above
-    # names three arms that recorded fp32 while building quantized indexes;
-    # qdrant_dense_int8 and milvus_dense_int8 were corrected and THIS ONE, the
-    # third, kept declaring fp32 until 2026-08-30. export_web never published
-    # the wrong value -- it reads precision from DENSE_PRECISION, hand-built
-    # from the adapters, precisely because this field could not be trusted --
-    # so the page label was right while the row was wrong. Now they agree.
+    # quantization (8 bits, read back from the index's details). The comment
+    # above names three arms that recorded fp32 while building quantized
+    # indexes; qdrant_dense_int8 and milvus_dense_int8 were corrected and THIS
+    # ONE, the third, kept declaring fp32 until 2026-08-30. export_web never
+    # published the wrong value -- it reads precision from DENSE_PRECISION,
+    # hand-built from the adapters, precisely because this field could not be
+    # trusted -- so the page label was right while the row was wrong. Now they
+    # agree.
+    #
+    # NOT LANCEDB'S ONLY HNSW OFFERING ANY MORE. This arm was int8 on the
+    # stated ground that IVF_HNSW_SQ was; 0.39.0 builds IVF_HNSW_FLAT,
+    # unquantized HNSW in the same IVF partitions (the quantization survey,
+    # QUANTIZATION.md, 2026-10-02), so LanceDB now has an fp32 arm beside this
+    # one (lancedb_dense_fp32 below). This arm keeps its name so its history
+    # stays one series; the suffix marks the new arm, as on the sparse lane's
+    # ArcadeDB fp32 arms.
     quantization = "INT8"
     name = "lancedb_dense"
+    INDEX_TYPE = "IVF_HNSW_SQ"
     # lancedb 0.37.1 exposes no close on the connection (checked dir); its
     # tables are files written on commit.
     close_note = "lancedb exposes no close()"
@@ -852,11 +871,22 @@ class LanceDB(Base):
         _t0 = time.perf_counter()
         self.tbl = self.db.create_table("articles", tbl)
         self.ingest_s = round(time.perf_counter() - _t0, 2)
-        # IVF_HNSW_SQ is LanceDB's HNSW offering (int8 SQ; disclosed above)
+        # IVF_HNSW_SQ here (int8 SQ, disclosed above), IVF_HNSW_FLAT on the fp32 arm
         _t1 = time.perf_counter()
-        self.tbl.create_index(metric="l2", index_type="IVF_HNSW_SQ",
+        self.tbl.create_index(metric="l2", index_type=self.INDEX_TYPE,
                               m=COMPARATOR_M, ef_construction=EF_CONSTRUCTION)
         self.index_s = round(time.perf_counter() - _t1, 2)
+        # The engine's own answer, never the option we sent (BUGS F164): the
+        # index type from index_stats, and its details (HNSW degree and beam,
+        # and `compression` on a quantized index) from list_indices.
+        ix = self.tbl.list_indices()
+        applied = self.tbl.index_stats(ix[0].name).index_type if ix else None
+        if applied != self.INDEX_TYPE:
+            raise RuntimeError(f"lancedb vector index type read back {applied!r}, not {self.INDEX_TYPE!r}: "
+                               f"the row would record {self.quantization} for a different index (BUGS F164)")
+        self.row_extra = {"lancedb_index_type": applied,
+                          "lancedb_index_details": json.dumps(getattr(ix[0], "index_details", None),
+                                                              sort_keys=True, default=str)}
 
     def search(self, qvec, k):
         # Apply the search-time knobs. Without .ef() LanceDB used its own
@@ -891,6 +921,16 @@ class LanceDB(Base):
         for lo in range(0, len(ids), 500):
             lst = ",".join(str(int(v)) for v in ids[lo:lo + 500])
             self.tbl.delete(f"id IN ({lst})")
+
+
+class LanceDBFlat(LanceDB):
+    """LanceDB's IVF_HNSW_FLAT, its unquantized HNSW and the fp32 counterpart
+    of lancedb_dense (the quantization survey, DECISIONS #135): the same IVF
+    partitions, HNSW degree and beam, and search knobs (ef EF_SEARCH, nprobes
+    10), over the float vectors. Read back like the int8 arm's index type."""
+    quantization = "fp32"
+    name = "lancedb_dense_fp32"
+    INDEX_TYPE = "IVF_HNSW_FLAT"
 
 
 class SqliteVec(Base):
@@ -1449,6 +1489,11 @@ class MongoDense(Base):
     """
     quantization = "fp32"
     name = "mongodb_dense"
+    # THE REPRESENTATION IS SET AND READ BACK (BUGS F164, DECISIONS #135):
+    # `quantization` on the index's vector field, `none` here and `scalar` on
+    # the int8 arm below, read back from mongot's latestDefinition after the
+    # index is queryable; a mismatch refuses the cell.
+    MONGOT_QUANTIZATION = "none"
     # Every mutation costs a poll on mongot's own view of the data, because
     # the index is eventually consistent with the collection; the constant is
     # here rather than inline so the row can say what bound it ran under.
@@ -1473,9 +1518,16 @@ class MongoDense(Base):
         _t1 = time.perf_counter()
         mongo_common.create_vector_index(self.coll, "embedding", DIM,
                                          COMPARATOR_M, EF_CONSTRUCTION,
-                                         similarity="euclidean")
+                                         similarity="euclidean",
+                                         quantization=self.MONGOT_QUANTIZATION)
         self._index_state = mongo_common.wait_queryable(self.coll)
         self.index_s = round(time.perf_counter() - _t1, 2)
+        applied = mongo_common.index_quantization(self.coll)
+        if applied != self.MONGOT_QUANTIZATION:
+            raise RuntimeError(f"mongot vector index quantization read back {applied!r}, not "
+                               f"{self.MONGOT_QUANTIZATION!r}: the row would record {self.quantization} "
+                               f"for a different index (BUGS F164)")
+        self.row_extra = {"mongot_vector_quantization": applied}
 
     def engine_stats(self):
         """What mongot says it built, read after the fact and never asserted.
@@ -1544,7 +1596,7 @@ class MongoDense(Base):
             if (probe_id in got) == want_present:
                 return True
             time.sleep(0.25)
-        print(f"[mongodb_dense] mongot did not reflect the mutation of vid={probe_id} "
+        print(f"[{self.name}] mongot did not reflect the mutation of vid={probe_id} "
               f"(want_present={want_present}) within {self.MUTATE_SETTLE_S}s; read "
               f"mutate_deleted_hits / mutate_reinserted_hits on the row",
               file=sys.stderr, flush=True)
@@ -1570,6 +1622,18 @@ class MongoDense(Base):
         mongo_common.close(self.cl)
 
 
+class MongoDenseInt8(MongoDense):
+    """mongot's scalar-quantized vector index, MongoDB's int8 arm (#53, the
+    quantization survey, DECISIONS #135): the same arm with `quantization:
+    "scalar"` on the vector field, read back like the fp32 arm's `none`. The
+    stage's numCandidates stays EF_SEARCH; whatever mongot does with the
+    full-fidelity vectors after the quantized search is its own default, which
+    the recall on the row reflects."""
+    quantization = "INT8"
+    name = "mongodb_dense_int8"
+    MONGOT_QUANTIZATION = "scalar"
+
+
 class ArangoDense(Base):
     """ArangoDB 3.12.11 served (2026-09-13): article documents with an
     embedding array through the bulk import API, then the engine's vector
@@ -1580,6 +1644,10 @@ class ArangoDense(Base):
     quantization = "fp32"
     name = "arangodb_dense"
     calibrates = True
+    # None: plain IVF over the floats. The int8 arm sets a FAISS factory
+    # string; either way the server's params are read back and a mismatch
+    # refuses the cell (BUGS F164).
+    FACTORY = None
 
     def connect(self):
         self.cl, self.db, self.version = arango_common.connect()
@@ -1604,7 +1672,8 @@ class ArangoDense(Base):
                                f"the corpus has {len(vecs)}; refusing to index a short load")
         self.ingest_s = round(time.perf_counter() - _t0, 2)
         _t1 = time.perf_counter()
-        self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(col, "embedding", DIM, len(vecs))
+        self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(col, "embedding", DIM, len(vecs),
+                                                                      factory=self.FACTORY)
         self.index_s = round(time.perf_counter() - _t1, 2)
         # The index as the server reports it, not as we asked for it: from
         # 3.12.10 a failed training leaves the index "unusable" and the
@@ -1617,6 +1686,11 @@ class ArangoDense(Base):
         if self.ivf_training_state != "ready":
             raise RuntimeError(f"arangodb: vector index is {self.ivf_training_state!r}, not ready: "
                                f"{rb.get('errorMessage')!r}")
+        self.ivf_factory = (rb.get("params") or {}).get("factory")
+        want = self.FACTORY.format(nlists=self.ivf_nlists) if self.FACTORY else None
+        if self.ivf_factory != want:
+            raise RuntimeError(f"arangodb vector index factory read back {self.ivf_factory!r}, not {want!r}: "
+                               f"the row would record {self.quantization} for a different index (BUGS F164)")
 
     def search(self, qvec, k, nprobe=None):
         cur = self.db.aql.execute(
@@ -1645,6 +1719,22 @@ class ArangoDense(Base):
 
     def close(self):
         arango_common.close(self.cl)
+
+
+class ArangoDenseInt8(ArangoDense):
+    """ArangoDB's IVF with 8-bit scalar-quantized lists, its int8 arm (#53, the
+    quantization survey, DECISIONS #135): the FAISS factory string
+    "IVF<nLists>,SQ8" at the fp32 arm's nLists, trained the same way, and
+    nProbe calibrated to the same recall target on the same held-out slice, so
+    the pair is matched by effect as the fp32 arm is matched to the HNSW arms.
+    The lists hold SQ8 codes and FAISS ranks by the distance to them; nothing
+    re-ranks against the stored floats. ArangoDB forwards `factory` to FAISS
+    and validates it at creation only from 3.12.12 (its 3.12 vector-index
+    docs), so on the 3.12.11 pin the training state and the read-back factory
+    string are the only evidence the server built what the row says."""
+    quantization = "INT8"
+    name = "arangodb_dense_int8"
+    FACTORY = "IVF{nlists},SQ8"
 
 
 class Milvus(Base):
@@ -2121,6 +2211,9 @@ class MemgraphDense(Base):
     """
     quantization = "fp32"
     name = "memgraph_dense"
+    # The element type USearch stores, set in the definition and read back from
+    # SHOW VECTOR INDEX INFO onto the row; a mismatch refuses the cell (F164).
+    SCALAR_KIND = "f32"
 
     def connect(self):
         from neo4j import GraphDatabase
@@ -2151,12 +2244,19 @@ class MemgraphDense(Base):
             self.ingest_s = round(time.perf_counter() - _t0, 2)
             _t1 = time.perf_counter()
             s.run(f'CREATE VECTOR INDEX art ON :Article(embedding) WITH CONFIG {{"dimension": {DIM}, '
-                  f'"capacity": {len(vecs) + MUTATE_N}, "metric": "l2sq", "scalar_kind": "f32"}}').consume()
+                  f'"capacity": {len(vecs) + MUTATE_N}, "metric": "l2sq", '
+                  f'"scalar_kind": "{self.SCALAR_KIND}"}}').consume()
             self.index_s = round(time.perf_counter() - _t1, 2)
             info = [dict(r) for r in s.run("SHOW VECTOR INDEX INFO")]
-        size = next((int(r.get("size") or 0) for r in info if r.get("index_name") == "art"), None)
+        art = next((r for r in info if r.get("index_name") == "art"), {})
+        size = int(art["size"]) if art.get("size") is not None else None
         if size != len(vecs):
             raise RuntimeError(f"memgraph: vector index holds {size} of {len(vecs)} nodes after CREATE")
+        if art.get("scalar_kind") != self.SCALAR_KIND:
+            raise RuntimeError(f"memgraph vector index scalar_kind read back {art.get('scalar_kind')!r}, not "
+                               f"{self.SCALAR_KIND!r}: the row would record {self.quantization} for a "
+                               f"different index (BUGS F164)")
+        self.row_extra["memgraph_vector_scalar_kind"] = art.get("scalar_kind")
 
     def search(self, qvec, k):
         with self.drv.session() as s:
@@ -2188,6 +2288,18 @@ class MemgraphDense(Base):
 
     def close(self):
         self.drv.close()
+
+
+class MemgraphDenseInt8(MemgraphDense):
+    """Memgraph's `scalar_kind: "i8"` vector index, its int8 arm (#53, the
+    quantization survey, DECISIONS #135): USearch stores and compares int8
+    copies, with no re-ranking against the floats (vector_search.search orders
+    by the i8 distance), at the same fixed USearch graph parameters and the
+    same EF_SEARCH candidate request as the f32 arm. Read back from SHOW VECTOR
+    INDEX INFO like the f32 arm's `f32`."""
+    quantization = "INT8"
+    name = "memgraph_dense_int8"
+    SCALAR_KIND = "i8"
 
 
 class FalkorDense(Base):
@@ -2371,7 +2483,9 @@ BACKENDS = {b.name: b for b in
              ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8,
              ArcadeServerInt8, SqliteVecInt8,
              # #131 item 3 (2026-10-02)
-             ElasticDense, ElasticDenseInt8, MemgraphDense, FalkorDense, LadybugDense)}
+             ElasticDense, ElasticDenseInt8, MemgraphDense, FalkorDense, LadybugDense,
+             # the quantization survey's int8 counterparts (DECISIONS #135, 2026-10-02)
+             MongoDenseInt8, MemgraphDenseInt8, LanceDBFlat, ArangoDenseInt8)}
 
 # EVERY adapter that names itself must be registered here. This tuple is
 # explicit, and --backend takes `choices=list(BACKENDS)`, so a class that exists,
@@ -2418,6 +2532,13 @@ DURABILITY = {
     "surrealdb_dense_server": bench_common.DURABILITY_SURREAL_SERVER,
     "arangodb_dense": arango_common.DURABILITY,
     "mongodb_dense": mongo_common.DURABILITY,
+    # The precision arms carry their fp32 sibling's string: same server, same
+    # settings, another index representation (2026-10-02). neo4j_dense_int8 was
+    # missing here from its first commit and would have recorded the
+    # ingest-only note where its sibling records Neo4j's own.
+    "neo4j_dense_int8": bench_common.DURABILITY_NEO4J,
+    "arangodb_dense_int8": arango_common.DURABILITY,
+    "mongodb_dense_int8": mongo_common.DURABILITY,
 }
 
 

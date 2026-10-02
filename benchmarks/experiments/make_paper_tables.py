@@ -273,7 +273,8 @@ NAMES = {
     # DENSE ROWS STATE WHAT THEY STORE, all of them. T5 labelled only our two
     # arms "(emb, fp32)" and "(emb, int8)", so quantization read as an ArcadeDB
     # peculiarity and every unlabelled row read as full precision. LanceDB is
-    # not: it builds IVF_HNSW_SQ, int8 scalar-quantized, its only HNSW offering.
+    # not: lancedb_dense builds IVF_HNSW_SQ, int8 scalar-quantized (and since
+    # 2026-10-02 lancedb_dense_fp32 builds its unquantized IVF_HNSW_FLAT).
     # That makes its 0.932 recall the same kind of number as our int8 arm's
     # 0.943, where Chroma's 0.934 at fp32 is a different kind. Read from the
     # adapters in l3d_dense.py, never from the rows' `quantization` field, which
@@ -287,6 +288,11 @@ NAMES = {
     "qdrant_dense_int8": "Qdrant (int8)", "milvus_dense_int8": "Milvus (int8)",
     "arcadedb_dense_server_int8": "ArcadeDB (srv, int8)", "sqlite_vec_dense_int8": "sqlite-vec (int8)",
     "chroma_dense": "Chroma (fp32)", "lancedb_dense": "LanceDB (int8)",
+    # DECISIONS #135 (2026-10-02): LanceDB's fp32 arm (IVF_HNSW_FLAT) and three
+    # more int8 counterparts
+    "lancedb_dense_fp32": "LanceDB (fp32)", "mongodb_dense_int8": "MongoDB (int8)",
+    "memgraph_dense_int8": "Memgraph (int8)", "arangodb_dense_int8": "ArangoDB (int8)",
+    "qdrant_sparse_uint8": "Qdrant (uint8)",
     "sqlite_vec_dense": "sqlite-vec (fp32)",
     "duckdb_vss_dense": "DuckDB-VSS (fp32)",
     "arcadedb_e2": "ArcadeDB (one txn)", "surrealdb_e2": "SurrealDB (one txn)",

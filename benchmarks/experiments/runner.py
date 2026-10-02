@@ -579,6 +579,15 @@ BACKENDS = {
         "server_port": 27017,
         "ready_regex": r"DBBENCH mongod\+mongot ready",
     },
+    # The int8 arm (DECISIONS #135): cloned rather than referenced, so a digest
+    # bump cannot move one arm of an ablation without the other (as qdrant_dense_int8).
+    "mongodb_dense_int8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "dbbench:mongo-search",
+        "server_port": 27017,
+        "ready_regex": r"DBBENCH mongod\+mongot ready",
+    },
     "mongodb_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -962,6 +971,16 @@ BACKENDS = {
         "server_port": 8529,
         "ready_regex": r"is ready for business",
     },
+    # The SQ8 arm (DECISIONS #135): cloned, as every precision arm is.
+    "arangodb_dense_int8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "arangodb@sha256:563cb2c07af0aead37fd688b58f51d6eb534a3da6163621e130e67d7a55176c4",  # 3.12.11
+        "server_env": ["-e", "ARANGO_ROOT_PASSWORD=dbbenchpass"],
+        "server_cmd": ["arangod", "--vector-index", "true"],
+        "server_port": 8529,
+        "ready_regex": r"is ready for business",
+    },
     "arangodb_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1186,6 +1205,14 @@ BACKENDS = {
         "server_port": 6333,
         "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
     },
+    # The uint8-weight arm (DECISIONS #135): cloned, as every precision arm is.
+    "qdrant_sparse_uint8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "qdrant/qdrant@sha256:0699e7733a6fa7fa7f6b95dcbed84ebb04584110da525cdfdef9f305c4f57738",  # v1.19.1
+        "server_port": 6333,
+        "ready_regex": r"Qdrant (HTTP|gRPC) listening|Actix runtime found",
+    },
     # MILVUS 3.0.1 (re-pinned 2026-09-19 from v2.6.13, DECISIONS #87/#103d).
     #
     # 3.0.1 AND NOT 3.0.2. v3.0.2 has a git tag and pushed images (2026-09-18)
@@ -1310,6 +1337,8 @@ BACKENDS = {
                                      "image": "dbbench:arcadedb"},
     "chroma_dense": {"topology": "embedded", "image": "dbbench:dense"},
     "lancedb_dense": {"topology": "embedded", "image": "dbbench:dense"},
+    # LanceDB's unquantized IVF_HNSW_FLAT, the fp32 counterpart of its int8 arm.
+    "lancedb_dense_fp32": {"topology": "embedded", "image": "dbbench:dense"},
     "sqlite_vec_dense": {"topology": "embedded", "image": "dbbench:dense"},
     "sqlite_vec_dense_int8": {"topology": "embedded", "image": "dbbench:dense"},
     "duckdb_vss_dense": {"topology": "embedded", "image": "dbbench:dense"},
@@ -1408,6 +1437,20 @@ BACKENDS = {
     },
     # Memgraph: the graph arm's image and every fitted flag (F6).
     "memgraph_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1, the graph arm's
+        "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
+                       "--bolt-num-workers={ncpu}",
+                       "--storage-snapshot-thread-count={ncpu}",
+                       "--memory-limit={mem90_mib}",
+                       "--query-execution-timeout-sec=0",
+                       "--telemetry-enabled=false"],
+        "server_port": 7687,
+        "ready_regex": r"Bolt server is fully armed and operational",
+    },
+    # The i8 arm (DECISIONS #135): cloned, as every precision arm is.
+    "memgraph_dense_int8": {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1, the graph arm's
@@ -1685,7 +1728,10 @@ LANES = {
             ["arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32",
              "arcadedb_sparse_embedded_nocompact", "arcadedb_sparse_server",
              "arcadedb_sparse_server_fp32", "pgvector_sparse",
-             "qdrant_sparse", "milvus_sparse", "elasticsearch_sparse"],
+             "qdrant_sparse", "milvus_sparse", "elasticsearch_sparse",
+             # Qdrant's uint8 weights, the sparse lane's int8-class comparator
+             # arm (DECISIONS #135, 2026-10-02)
+             "qdrant_sparse_uint8"],
             ["search"]),
     "l3d": ("l3d_dense.py",
             ["arcadedb_dense_embedded", "arcadedb_dense_server", "chroma_dense", "lancedb_dense",
@@ -1695,11 +1741,15 @@ LANES = {
              # #131 item 3 (2026-10-02): Elasticsearch, Memgraph, FalkorDB,
              # LadybugDB; Elasticsearch's int8 arm with the int8 arms below.
              "elasticsearch_dense", "memgraph_dense", "falkordb_dense", "ladybug_dense",
-             # int8 arms for every dense engine that ships a quantized index.
-             # Chroma, DuckDB-VSS and sqlite-vec have none; LanceDB is int8
-             # already (IVF_HNSW_SQ is its only HNSW offering).
+             # int8 arms for every dense engine that ships a quantized index
+             # (QUANTIZATION.md). Chroma, DuckDB-VSS, pgvector and SurrealDB
+             # ship no int8 mode; FalkorDB and LadybugDB document none.
+             # LanceDB's int8 arm is lancedb_dense (IVF_HNSW_SQ), and its fp32
+             # arm the suffixed one.
              "arcadedb_dense_embedded_int8", "qdrant_dense_int8",
              "milvus_dense_int8", "elasticsearch_dense_int8",
+             # DECISIONS #135 (2026-10-02)
+             "mongodb_dense_int8", "memgraph_dense_int8", "lancedb_dense_fp32", "arangodb_dense_int8",
              # added 2026-08-30 under DECISIONS #53: every engine at every
              # precision it ships. The server arm is ours and was the one the
              # decision owed first.
@@ -2283,6 +2333,9 @@ MP_LABELS = {
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
     "elasticsearch_dense": "elastic", "elasticsearch_dense_int8": "elastic_int8",
     "memgraph_dense": "memgraph", "falkordb_dense": "falkordb", "ladybug_dense": "ladybug",
+    # DECISIONS #135 (2026-10-02)
+    "mongodb_dense_int8": "mongo_int8", "memgraph_dense_int8": "memgraph_int8",
+    "lancedb_dense_fp32": "lancedb_fp32", "arangodb_dense_int8": "arango_int8",
 }
 
 
@@ -2295,7 +2348,7 @@ MP_LABELS.update({
     "arcadedb_sparse_server": "arc_srv",
     "arcadedb_sparse_server_fp32": "arc_srv_fp32", "qdrant_sparse": "qdrant",
     "milvus_sparse": "milvus", "elasticsearch_sparse": "elastic",
-    "pgvector_sparse": "pgvector",
+    "pgvector_sparse": "pgvector", "qdrant_sparse_uint8": "qdrant_uint8",
 })
 
 

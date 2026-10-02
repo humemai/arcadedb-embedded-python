@@ -356,6 +356,11 @@ class ArcadeServer(ArcadeEmbedded):
 class Qdrant(Base):
     name = "qdrant_sparse"
     COLL = "docs"
+    # THE WEIGHT TYPE IS SET AND READ BACK (BUGS F164, DECISIONS #135): float32
+    # here, Qdrant's default, now named in the definition; uint8 on the int8-class
+    # arm below. The applied type is read from the collection after the build
+    # and a mismatch refuses the cell.
+    DATATYPE = "float32"
 
     def connect(self):
         from qdrant_client import QdrantClient, models
@@ -375,7 +380,8 @@ class Qdrant(Base):
             vectors_config={},
             sparse_vectors_config={
                 "text": models.SparseVectorParams(
-                    index=models.SparseIndexParams(on_disk=False))})
+                    index=models.SparseIndexParams(
+                        on_disk=False, datatype=models.Datatype(self.DATATYPE)))})
 
     def build(self, n_docs):
         m, batch, self._sent = self.models, [], 0
@@ -421,7 +427,13 @@ class Qdrant(Base):
             time.sleep(0.5)
         self.settle = {"qdrant_points_at_first_green": at_green,
                        "qdrant_settle_after_green_s": round(time.perf_counter() - t_green, 2)}
-        self.row_extra = dict(self.settle)
+        # The engine's own answer, never the option we sent (F164).
+        idx = info.config.params.sparse_vectors["text"].index
+        applied = getattr(getattr(idx, "datatype", None), "value", getattr(idx, "datatype", None))
+        if applied != self.DATATYPE:
+            raise RuntimeError(f"qdrant sparse index datatype read back {applied!r}, not {self.DATATYPE!r}: "
+                               f"the row would describe a different index (BUGS F164)")
+        self.row_extra = {"qdrant_sparse_datatype": applied, **self.settle}
 
     def search(self, idx, vals, k):
         m = self.models
@@ -433,6 +445,16 @@ class Qdrant(Base):
 
     def resolve(self, ids):
         return ids
+
+
+class QdrantUint8(Qdrant):
+    """Qdrant's sparse index with uint8 weights, its int8-class arm on the
+    sparse lane (#131, the quantization survey, DECISIONS #135): the same
+    collection, ingest and query, with `datatype: uint8` on the sparse index,
+    read back like the float32 arm's type. The query is the float32 arm's,
+    unchanged."""
+    name = "qdrant_sparse_uint8"
+    DATATYPE = "uint8"
 
 
 class PgVectorSparse(Base):
@@ -643,7 +665,9 @@ class ArcadeServerFP32(ArcadeServer):
 
 BACKENDS = {c.name: c for c in
             [ArcadeEmbedded, ArcadeEmbeddedFP32, ArcadeEmbeddedNoCompact, ArcadeServerFP32,
-             ArcadeServer, Qdrant, Milvus, PgVectorSparse, Elastic]}
+             ArcadeServer, Qdrant, Milvus, PgVectorSparse, Elastic,
+             # the quantization survey's sparse int8-class arm (DECISIONS #135)
+             QdrantUint8]}
 
 
 # DECISIONS #81, recorded on every row. The sparse lane times an ingest and
