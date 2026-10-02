@@ -53,6 +53,9 @@ BACKEND_PKG = {
     "duckdb": "duckdb",
     "duckpgq_graph": "duckdb",
     "elasticsearch_sparse": "elasticsearch",
+    "elasticsearch_dense": "elasticsearch",
+    "elasticsearch_dense_int8": "elasticsearch",
+    "ladybug_dense": "ladybug",
     "surrealdb_e2": "surrealdb",
 }
 

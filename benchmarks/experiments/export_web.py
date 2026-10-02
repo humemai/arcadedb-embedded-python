@@ -635,6 +635,9 @@ DISPLAY_NAMES = {
     "elasticsearch_sparse": "Elasticsearch",
     "chroma_dense": "Chroma", "lancedb_dense": "LanceDB",
     "sqlite_vec_dense": "sqlite-vec", "duckdb_vss_dense": "DuckDB VSS",
+    # #131 item 3 (2026-10-02)
+    "elasticsearch_dense": "Elasticsearch", "elasticsearch_dense_int8": "Elasticsearch",
+    "memgraph_dense": "Memgraph", "falkordb_dense": "FalkorDB", "ladybug_dense": "LadybugDB",
     "duckpgq_graph": "DuckPGQ", "pgage_graph": "PostgreSQL + AGE",
     "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
     "memgraph_graph": "Memgraph", "falkordb_graph": "FalkorDB",
@@ -855,6 +858,17 @@ DENSE_PRECISION = {
     #   sqlite_vec_dense_int8       vec0(embedding int8[DIM]) + vec_quantize_int8(v,'unit')
     "arcadedb_dense_server_int8": "int8",
     "sqlite_vec_dense_int8": "int8",
+    # #131 item 3 (2026-10-02), checked against the DDL each issues (#53):
+    #   elasticsearch_dense       dense_vector, index_options.type hnsw (float)
+    #   elasticsearch_dense_int8  index_options.type int8_hnsw, top k rescored with the floats
+    #   memgraph_dense            CREATE VECTOR INDEX ... "scalar_kind": "f32"
+    #   falkordb_dense            vecf32 property, CREATE VECTOR INDEX (float32)
+    #   ladybug_dense             FLOAT[DIM] column, CREATE_VECTOR_INDEX over it
+    "elasticsearch_dense": "fp32",
+    "elasticsearch_dense_int8": "int8",
+    "memgraph_dense": "fp32",
+    "falkordb_dense": "fp32",
+    "ladybug_dense": "fp32",
 }
 
 
@@ -1094,6 +1108,12 @@ DENSE_10M_ARMS = [
     ("surrealsrv", "surrealdb_dense_server", "SurrealDB (server, fp32)", False),
     ("arango", "arangodb_dense", "ArangoDB (fp32)", False),
     ("mongo", "mongodb_dense", "MongoDB (fp32)", False),
+    # #131 item 3 (2026-10-02); skipped until their overlay files exist.
+    ("elastic", "elasticsearch_dense", "Elasticsearch (fp32)", False),
+    ("elastic_int8", "elasticsearch_dense_int8", "Elasticsearch (int8)", False),
+    ("memgraph", "memgraph_dense", "Memgraph (fp32)", False),
+    ("falkordb", "falkordb_dense", "FalkorDB (fp32)", False),
+    ("ladybug", "ladybug_dense", "LadybugDB (fp32)", False),
 ]
 
 

@@ -75,6 +75,12 @@ COMPARATOR_M = int(os.environ.get("BENCH_DENSE_COMPARATOR_M", str(M // 2)))
 
 EF_CONSTRUCTION = 100
 EF_SEARCH = 100
+# Memgraph's USearch defaults (usearch 2.21.4, index.hpp): connectivity 16,
+# expansion_add 128, expansion_search 64, none settable through Memgraph
+# 3.13.1 (see degree_stamp and MemgraphDense).
+MEMGRAPH_USEARCH_CONNECTIVITY = 16
+MEMGRAPH_USEARCH_EXPANSION_ADD = 128
+MEMGRAPH_USEARCH_EXPANSION_SEARCH = 64
 SCALE_DOCS = {"micro": 5_000, "tiny": 100_000, "small": 1_000_000,
               "deep10m": 9_990_000}
 N_QUERIES = 1_000
@@ -179,7 +185,11 @@ def degree_stamp(backend):
                      # mongot builds a Lucene HNSW graph whose
                      # hnswOptions.maxEdges is the per-layer bound with the
                      # base layer doubled, i.e. hnswlib's M.
-                     "mongodb_dense"}
+                     "mongodb_dense",
+                     # 2026-10-02 (#131 item 3): Elasticsearch's index_options.m
+                     # is Lucene's, doubled at layer 0 like mongot's; FalkorDB's
+                     # vector index takes hnswlib's M itself.
+                     "elasticsearch_dense", "falkordb_dense"}
     # A PRECISION ARM IS THE SAME INDEX AT A DIFFERENT PRECISION, so it keeps
     # its parent's degree and unit. Without this strip, qdrant_dense_int8 and
     # milvus_dense_int8 missed the set and were stamped "exact_scan_no_ann" --
@@ -191,6 +201,20 @@ def degree_stamp(backend):
         base = base[:-len("_int8")]
     if base.startswith("arcadedb"):
         return M, "arcadedb_maxconnections_per_layer"
+    # Memgraph 3.13.1 builds every vector index with a default-constructed
+    # USearch config (src/storage/v2/indices/vector_index.cpp, `make(metric,
+    # {}, {})`; usearch 2.21.4): connectivity 16, doubled at the base layer,
+    # so hnswlib's M=16 by the engine's own fixed value, not by ours. The
+    # keys are not settable: CREATE VECTOR INDEX accepts unknown config keys
+    # and ignores them (laptop probe 2026-10-02: recall identical at
+    # connectivity 2, 16, and 64). Recorded as the value it builds.
+    if base == "memgraph_dense":
+        return MEMGRAPH_USEARCH_CONNECTIVITY, "hnswlib_m_doubled_at_base"
+    # LadybugDB's HNSW has two layers: `ml` is the base layer's degree and
+    # `mu` the upper layer's, so the base degree is recorded as is, at the
+    # 2 x COMPARATOR_M the hnswlib-style engines reach at their layer 0.
+    if base == "ladybug_dense":
+        return 2 * COMPARATOR_M, "ladybug_ml_base_degree"
     # ArangoDB's vector index is FAISS IVF: inverted lists over trained
     # centroids, no graph and so no degree. Its operating point is nLists and
     # nProbe, which the row records as ivf_nlists/ivf_nprobe (2026-09-13).
@@ -1014,13 +1038,20 @@ class DuckVSS(Base):
             "id": pa.array(range(len(vecs)), type=pa.int64()),
             "vec": pa.FixedSizeListArray.from_arrays(flat, DIM),
         })
+        # INGEST AND INDEX AS TWO TIMERS (DECISIONS #132, CAMPAIGN section 7
+        # row 44): the load and the HNSW build are two statements, so the
+        # boundary exists and the row records both, as the split arms do.
+        _t0 = time.perf_counter()
         self.cx.register("src", tbl)
         self.cx.execute(f"CREATE TABLE t AS SELECT id, vec::FLOAT[{DIM}] AS vec FROM src")
         self.cx.unregister("src")
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
+        _t1 = time.perf_counter()
         self.cx.execute(
             f"CREATE INDEX hn ON t USING HNSW (vec) "
             f"WITH (metric = 'l2sq', M = {COMPARATOR_M}, "
             f"ef_construction = {EF_CONSTRUCTION})")
+        self.index_s = round(time.perf_counter() - _t1, 2)
         self.cx.execute(f"SET hnsw_ef_search = {EF_SEARCH}")
 
     def search(self, qvec, k):
@@ -1524,6 +1555,10 @@ class ArangoDense(Base):
 
     def build(self, vecs):
         col = self.db.create_collection("article")
+        # INGEST AND INDEX AS TWO TIMERS (DECISIONS #132, CAMPAIGN section 7
+        # row 44): the bulk import, then the vector index's training and
+        # build, which only starts once the documents are in.
+        _t0 = time.perf_counter()
         for i in range(0, len(vecs), BATCH):
             chunk = vecs[i:i + BATCH]
             # Every batch's answer is checked: a short batch raises here, in
@@ -1536,7 +1571,10 @@ class ArangoDense(Base):
         if self.ivf_server_doc_count != len(vecs):
             raise RuntimeError(f"arangodb: server holds {self.ivf_server_doc_count} documents, "
                                f"the corpus has {len(vecs)}; refusing to index a short load")
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
+        _t1 = time.perf_counter()
         self.ivf_nlists, self.ivf_nprobe = arango_common.vector_index(col, "embedding", DIM, len(vecs))
+        self.index_s = round(time.perf_counter() - _t1, 2)
         # The index as the server reports it, not as we asked for it: from
         # 3.12.10 a failed training leaves the index "unusable" and the
         # create call still succeeds; an index that is not "ready" answers by
@@ -1931,12 +1969,378 @@ class MilvusInt8(Milvus):
         self.ingest_s = round(time.perf_counter() - _t0, 2)
 
 
+class ElasticDense(Base):
+    """Elasticsearch served (2026-10-02, DECISIONS #131 item 3, CAMPAIGN section 7
+    row 37): a `dense_vector` field with `index_options.type: hnsw` at the matched
+    operating point (`m` = COMPARATOR_M, Lucene's per-layer bound doubled at
+    layer 0 like hnswlib's; `ef_construction` = EF_CONSTRUCTION), L2 similarity,
+    one shard, no replica; queries through the `knn` search with
+    `num_candidates` = EF_SEARCH, Elasticsearch's per-shard candidate count and
+    the counterpart of ef_search. Same pinned server and heap fitting as the
+    sparse lane's arm (runner.BACKENDS), and the same settle step: refresh, then
+    a force-merge into one segment.
+
+    NO INGEST/INDEX SPLIT, DECLARED (F14c, fairness_check.PHASE_SPLIT_DECLARED):
+    Lucene builds an HNSW graph per segment while documents are indexed, and
+    the force-merge rebuilds it into one graph, so index work is spread through
+    the load and the settle, both inside the build timer.
+
+    THE HEAP AND THE PROCESSOR COUNT ARE READ BACK from `_nodes`, onto the row,
+    as CAMPAIGN section 7 row 20 asks of every JVM engine: the ENV we pass is a
+    claim, `jvm.mem.heap_max_in_bytes` is the answer.
+    """
+    quantization = "fp32"
+    name = "elasticsearch_dense"
+    IDX = "articles"
+    INDEX_TYPE = "hnsw"
+    RESCORE_OVERSAMPLE = None
+
+    def connect(self):
+        from elasticsearch import Elasticsearch, helpers
+        self.helpers = helpers
+        host = os.environ["BENCH_SERVER_HOST"]
+        self.es = Elasticsearch(f"http://{host}:9200", request_timeout=36000)
+        self.version = "elasticsearch:" + self.es.info()["version"]["number"]
+        node = next(iter(self.es.nodes.info(metric=["jvm", "os"])["nodes"].values()))
+        self.row_extra = {
+            "es_heap_max_mib": int(node["jvm"]["mem"]["heap_max_in_bytes"]) >> 20,
+            "es_allocated_processors": node["os"].get("allocated_processors"),
+            "es_available_processors": node["os"].get("available_processors"),
+            "es_index_type": self.INDEX_TYPE,
+            "es_num_candidates": EF_SEARCH,
+            "es_rescore_oversample": self.RESCORE_OVERSAMPLE,
+        }
+
+    def build(self, vecs):
+        self.es.indices.create(index=self.IDX, mappings={"properties": {"emb": {
+            "type": "dense_vector", "dims": DIM, "index": True, "similarity": "l2_norm",
+            "index_options": {"type": self.INDEX_TYPE, "m": COMPARATOR_M,
+                              "ef_construction": EF_CONSTRUCTION}}}},
+            settings={"number_of_shards": 1, "number_of_replicas": 0})
+
+        def actions():
+            for i in range(len(vecs)):
+                yield {"_index": self.IDX, "_id": i, "_source": {"emb": vecs[i].tolist()}}
+        self.helpers.bulk(self.es, actions(), chunk_size=CHROMA_BATCH, request_timeout=36000)
+
+    def post_build(self):
+        self.es.indices.refresh(index=self.IDX)
+        self.es.indices.forcemerge(index=self.IDX, max_num_segments=1, request_timeout=36000)
+        # The mapping as the server holds it, so a default that overrode our
+        # index_options would show on the row rather than hide behind our DDL.
+        _opts = self.es.indices.get_mapping(index=self.IDX)[self.IDX]["mappings"]["properties"]["emb"].get("index_options") or {}
+        self.row_extra.update({"es_index_options": json.dumps(_opts, sort_keys=True)})
+
+    def search(self, qvec, k):
+        knn = {"field": "emb", "query_vector": qvec.tolist(), "k": k,
+               "num_candidates": max(k, EF_SEARCH)}
+        if self.RESCORE_OVERSAMPLE:
+            knn["rescore_vector"] = {"oversample": self.RESCORE_OVERSAMPLE}
+        res = self.es.search(index=self.IDX, knn=knn, size=k, _source=False)
+        return [int(h["_id"]) for h in res["hits"]["hits"]]
+
+    def insert_vectors(self, ids, vecs):
+        self.helpers.bulk(self.es, ({"_index": self.IDX, "_id": int(v), "_source": {"emb": [float(x) for x in vecs[j]]}}
+                                    for j, v in enumerate(ids)), refresh="wait_for")
+
+    def delete_vectors(self, ids):
+        self.helpers.bulk(self.es, ({"_op_type": "delete", "_index": self.IDX, "_id": int(v)} for v in ids),
+                          refresh="wait_for")
+
+    def close(self):
+        self.es.close()
+
+
+class ElasticDenseInt8(ElasticDense):
+    """Elasticsearch's `int8_hnsw`, its own default for float vectors of this
+    width and its documented compact mode (#131 item 3, the quantization survey's
+    rule, #53): the graph is built and searched over int8 copies, and the top k
+    are re-scored against the stored floats (`rescore_vector.oversample` 1.0,
+    the minimum), which is what the Qdrant int8 arm asks for with rescore=True.
+    Without it, recall at 20k SIFT vectors was 0.979 against 0.982 with it and
+    0.9975 for the fp32 arm (laptop probe 2026-10-02): a quantized index used as a
+    compression technique, not as a different algorithm."""
+    quantization = "INT8"
+    name = "elasticsearch_dense_int8"
+    INDEX_TYPE = "int8_hnsw"
+    RESCORE_OVERSAMPLE = 1.0
+
+
+class MemgraphDense(Base):
+    """Memgraph served (2026-10-02, #131 item 3, CAMPAIGN section 7 row 38): Article
+    nodes loaded through UNWIND batches over Bolt, then `CREATE VECTOR INDEX` with
+    L2 (`l2sq`) over f32, and `vector_search.search` for queries. Same pinned image
+    and the same fitted flags as the graph arm (runner.BACKENDS: Bolt workers and
+    snapshot threads from the cpuset, the memory limit at 90% of the cap), read
+    back from SHOW CONFIG onto the row.
+
+    THE HNSW PARAMETERS ARE THE ENGINE'S OWN AND FIXED. Memgraph 3.13.1 builds
+    every vector index from a default-constructed USearch config (usearch
+    2.21.4: connectivity 16, doubled at the base layer, expansion_add 128,
+    expansion_search 64), and its WITH CONFIG accepts and ignores any other key.
+    The degree therefore matches the lane's hnswlib M=16 by the engine's value
+    (degree_stamp). ef_construction cannot be matched: 128 against the lane's
+    100, recorded on the row. ef_search is matched the way the Neo4j arm
+    matches it: the index is asked for EF_SEARCH results and the best k are
+    kept, and USearch expands at least as many candidates as it is asked for.
+
+    INGEST AND INDEX AS TWO TIMERS: the index is created after the load, and
+    CREATE VECTOR INDEX returns once it holds every node (its `size` is read
+    back and checked).
+    """
+    quantization = "fp32"
+    name = "memgraph_dense"
+
+    def connect(self):
+        from neo4j import GraphDatabase
+        import neo4j
+        host = os.environ["BENCH_SERVER_HOST"]
+        self.drv = GraphDatabase.driver(f"bolt://{host}:7687", auth=None)
+        with self.drv.session() as s:
+            v = s.run("SHOW VERSION").single()["version"]
+            cfg = {r["name"]: r["current_value"] for r in s.run("SHOW CONFIG")}
+        self.version = f"memgraph:{v}"
+        self.row_extra = {
+            "driver_version": f"neo4j-driver:{neo4j.__version__}",
+            "memgraph_storage_mode": cfg.get("storage_mode"),
+            "memgraph_bolt_workers": cfg.get("bolt_num_workers"),
+            "memgraph_memory_limit_mib": cfg.get("memory_limit"),
+            "memgraph_vector_connectivity": MEMGRAPH_USEARCH_CONNECTIVITY,
+            "memgraph_vector_expansion_add": MEMGRAPH_USEARCH_EXPANSION_ADD,
+            "memgraph_vector_expansion_search": MEMGRAPH_USEARCH_EXPANSION_SEARCH,
+            "memgraph_search_count": EF_SEARCH,
+        }
+
+    def build(self, vecs):
+        with self.drv.session() as s:
+            _t0 = time.perf_counter()
+            for i in range(0, len(vecs), CHROMA_BATCH):
+                rows = [{"vid": i + j, "e": vecs[i + j].tolist()} for j in range(len(vecs[i:i + CHROMA_BATCH]))]
+                s.run("UNWIND $rows AS r CREATE (:Article {vid: r.vid, embedding: r.e})", rows=rows).consume()
+            self.ingest_s = round(time.perf_counter() - _t0, 2)
+            _t1 = time.perf_counter()
+            s.run(f'CREATE VECTOR INDEX art ON :Article(embedding) WITH CONFIG {{"dimension": {DIM}, '
+                  f'"capacity": {len(vecs) + MUTATE_N}, "metric": "l2sq", "scalar_kind": "f32"}}').consume()
+            self.index_s = round(time.perf_counter() - _t1, 2)
+            info = [dict(r) for r in s.run("SHOW VECTOR INDEX INFO")]
+        size = next((int(r.get("size") or 0) for r in info if r.get("index_name") == "art"), None)
+        if size != len(vecs):
+            raise RuntimeError(f"memgraph: vector index holds {size} of {len(vecs)} nodes after CREATE")
+
+    def search(self, qvec, k):
+        with self.drv.session() as s:
+            r = s.run("CALL vector_search.search('art', $n, $q) YIELD node, distance "
+                      "RETURN node.vid AS vid ORDER BY distance LIMIT $k",
+                      n=max(k, EF_SEARCH), q=qvec.tolist(), k=k).data()
+        return [int(x["vid"]) for x in r]
+
+    def insert_vectors(self, ids, vecs):
+        rows = [{"vid": int(v), "e": [float(x) for x in vecs[j]]} for j, v in enumerate(ids)]
+        with self.drv.session() as s:
+            s.run("UNWIND $rows AS r CREATE (:Article {vid: r.vid, embedding: r.e})", rows=rows).consume()
+
+    def delete_vectors(self, ids):
+        # A COMMITTED DELETE STAYS IN THE VECTOR INDEX UNTIL THE STORAGE GC RUNS
+        # (memgraph/memgraph#4975, open; storage_gc_cycle_sec, default 30 s):
+        # until then vector_search.search returns the deleted nodes and reading
+        # any property of one raises "Trying to get a property from a deleted
+        # object" (repros/memgraph-vector-delete/, 3.13.1, the newest release).
+        # FREE MEMORY forces that GC, after which the search is right. It runs
+        # inside the timed delete, as the lane times every engine's own settle
+        # after a mutation (Neo4j's db.awaitIndexes, FalkorDB's OPERATIONAL
+        # wait), so Memgraph's delete pays for its cleanup rather than hiding it;
+        # the row records that it ran (memgraph_delete_settle).
+        with self.drv.session() as s:
+            s.run("MATCH (a:Article) WHERE a.vid IN $ids DELETE a", ids=[int(v) for v in ids]).consume()
+            s.run("FREE MEMORY").consume()
+        self.row_extra["memgraph_delete_settle"] = "FREE MEMORY after the delete (memgraph/memgraph#4975)"
+
+    def close(self):
+        self.drv.close()
+
+
+class FalkorDense(Base):
+    """FalkorDB 6.0.1 served (2026-10-02, #131 item 3, CAMPAIGN section 7 row 38):
+    Article nodes with a `vecf32` embedding loaded through UNWIND batches, then
+    `CREATE VECTOR INDEX` at the matched operating point (M = COMPARATOR_M,
+    hnswlib's; efConstruction = EF_CONSTRUCTION; efRuntime = EF_SEARCH) with
+    euclidean similarity, queried through `db.idx.vector.queryNodes`. Pinned to
+    6.0.1 because 4.20.6 and 4.22.0 crash on a write in a vector statement
+    (`repros/falkordb-vector-write/`); this lane makes no such write, and #129's
+    re-pin takes FalkorDB to 6.0.x everywhere.
+
+    THE INDEX IS BUILT IN THE BACKGROUND. CREATE VECTOR INDEX returns at once and
+    the index answers from a partial graph until `db.indexes()` reports it
+    OPERATIONAL: queried early on the laptop (20k vectors), recall was 0.05;
+    after the wait, 0.9985. The wait is inside the build timer and is index_s,
+    the BUGS F134 lesson applied before the first row rather than after.
+
+    THREADS FITTED as the graph arm's are (FAIRNESS F6): THREAD_COUNT from the
+    cpuset through FALKORDB_ARGS, read back with GRAPH.CONFIG GET.
+    """
+    quantization = "fp32"
+    name = "falkordb_dense"
+
+    def connect(self):
+        import falkordb
+        import importlib.metadata as _md
+        host = os.environ["BENCH_SERVER_HOST"]
+        self.db = falkordb.FalkorDB(host=host, port=int(os.environ.get("BENCH_SERVER_PORT", "6379")))
+        self.g = self.db.select_graph("dense")
+        mods = {m.get("name"): m.get("ver") for m in self.db.connection.module_list()}
+        ver = int(mods.get("graph") or 0)
+        self.version = f"falkordb:{ver // 10000}.{(ver // 100) % 100}.{ver % 100}"
+
+        def _cfg(name):
+            v = self.db.config_get(name)
+            return v[-1] if isinstance(v, (list, tuple)) else v
+        self.row_extra = {
+            "driver_version": f"falkordb:{_md.version('falkordb')}",
+            "falkordb_thread_count": _cfg("THREAD_COUNT"),
+            "falkordb_omp_threads": _cfg("OMP_THREAD_COUNT"),
+            "falkordb_resultset_size": _cfg("RESULTSET_SIZE"),
+        }
+
+    def build(self, vecs):
+        _t0 = time.perf_counter()
+        for i in range(0, len(vecs), CHROMA_BATCH):
+            rows = [{"vid": i + j, "e": vecs[i + j].tolist()} for j in range(len(vecs[i:i + CHROMA_BATCH]))]
+            self.g.query("UNWIND $rows AS r CREATE (:Article {vid: r.vid, embedding: vecf32(r.e)})", {"rows": rows})
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
+        _t1 = time.perf_counter()
+        self.g.query(f"CREATE VECTOR INDEX FOR (a:Article) ON (a.embedding) OPTIONS {{dimension: {DIM}, "
+                     f"similarityFunction: 'euclidean', M: {COMPARATOR_M}, efConstruction: {EF_CONSTRUCTION}, "
+                     f"efRuntime: {EF_SEARCH}}}")
+        self._await_operational()
+        self.index_s = round(time.perf_counter() - _t1, 2)
+
+    def _await_operational(self, timeout_s=36000):
+        t = time.perf_counter()
+        while True:
+            st = self.g.query("CALL db.indexes() YIELD label, status RETURN label, status").result_set
+            if st and all(x[1] == "OPERATIONAL" for x in st):
+                return
+            if time.perf_counter() - t > timeout_s:
+                raise RuntimeError(f"falkordb: vector index not OPERATIONAL after {timeout_s} s: {st}")
+            time.sleep(0.2)
+
+    def search(self, qvec, k):
+        res = self.g.query("CALL db.idx.vector.queryNodes('Article', 'embedding', $k, vecf32($q)) "
+                           "YIELD node, score RETURN node.vid ORDER BY score", {"k": k, "q": qvec.tolist()})
+        return [int(r[0]) for r in res.result_set]
+
+    def insert_vectors(self, ids, vecs):
+        rows = [{"vid": int(v), "e": [float(x) for x in vecs[j]]} for j, v in enumerate(ids)]
+        self.g.query("UNWIND $rows AS r CREATE (:Article {vid: r.vid, embedding: vecf32(r.e)})", {"rows": rows})
+        self._await_operational()
+
+    def delete_vectors(self, ids):
+        self.g.query("MATCH (a:Article) WHERE a.vid IN $ids DELETE a", {"ids": [int(v) for v in ids]})
+        self._await_operational()
+
+    def close(self):
+        self.db.connection.close()
+
+
+def _ladybug_fit():
+    """(threads, buffer_pool_bytes) for LadybugDB in THIS cell, the graph lane's
+    fit (l2_graph._ladybug_fit, FAIRNESS F6, BUGS F160): left at 0 it sizes its
+    thread pool and its buffer pool from the host (it read 16 threads under a
+    4-CPU cpuset on the laptop, 2026-10-02). Threads from sched_getaffinity, the
+    pool at the engine's own 0.8 ratio of the cgroup's memory.max."""
+    threads = len(os.sched_getaffinity(0))
+    try:
+        with open("/sys/fs/cgroup/memory.max") as fh:
+            text = fh.read().strip()
+    except OSError:
+        text = ""
+    return threads, (int(int(text) * 0.8) if text.isdigit() else None)
+
+
+class LadybugDense(Base):
+    """LadybugDB embedded (2026-10-02, #131 item 3, CAMPAIGN section 7 row 38): a
+    node table with a FLOAT[DIM] column, loaded by COPY from an Arrow table (the
+    engine's bulk path), then the official `vector` extension's HNSW index
+    (`CREATE_VECTOR_INDEX`, metric l2), queried through `QUERY_VECTOR_INDEX`.
+    The extension is installed at connect, as DuckPGQ's is.
+
+    THE DEGREE IN LADYBUGDB'S UNITS. Its HNSW has two layers: `ml` bounds the
+    lower (base) layer's degree and `mu` the upper's, so the match to the
+    hnswlib-style engines is ml = 2 x COMPARATOR_M and mu = COMPARATOR_M, with
+    efc = EF_CONSTRUCTION and efs = EF_SEARCH. Honoured, checked by effect on
+    the laptop (20k SIFT vectors): recall 0.0390 at ml 4, 0.9985 at ml 32,
+    1.0000 at ml 128.
+
+    INGEST AND INDEX AS TWO TIMERS: COPY, then CREATE_VECTOR_INDEX over the
+    loaded rows. THREADS AND BUFFER POOL FITTED to the cell (_ladybug_fit), the
+    thread count read back onto the row.
+    """
+    quantization = "fp32"
+    name = "ladybug_dense"
+    PATH = "/tmp/l3d_ladybug"
+
+    def connect(self):
+        import ladybug
+        threads, pool = _ladybug_fit()
+        kw = {"max_num_threads": threads}
+        if pool:
+            kw["buffer_pool_size"] = pool
+        self.db = ladybug.Database(self.PATH, **kw)
+        self.cx = ladybug.Connection(self.db)
+        self.cx.execute("INSTALL vector")
+        self.cx.execute("LOAD vector")
+        self.version = f"ladybug:{lib_version(ladybug, 'ladybug')}"
+        self.row_extra = {
+            "ladybug_threads": int(self.cx.execute('CALL current_setting("threads") RETURN *').get_next()[0]),
+            "ladybug_buffer_pool_mib": (pool >> 20) if pool else None,
+            "ladybug_ml": 2 * COMPARATOR_M, "ladybug_mu": COMPARATOR_M,
+        }
+
+    def _copy(self, ids, vecs):
+        import pyarrow as pa
+        tbl = pa.table({"vid": pa.array(np.asarray(ids, dtype=np.int64)),
+                        "embedding": pa.FixedSizeListArray.from_arrays(
+                            pa.array(np.asarray(vecs, dtype=np.float32).reshape(-1), type=pa.float32()), DIM)})
+        self.cx.execute("COPY Article FROM tbl")
+
+    def build(self, vecs):
+        self.cx.execute(f"CREATE NODE TABLE Article(vid INT64, embedding FLOAT[{DIM}], PRIMARY KEY(vid))")
+        _t0 = time.perf_counter()
+        for i in range(0, len(vecs), BATCH * 10):
+            self._copy(range(i, i + len(vecs[i:i + BATCH * 10])), vecs[i:i + BATCH * 10])
+        self.ingest_s = round(time.perf_counter() - _t0, 2)
+        _t1 = time.perf_counter()
+        self.cx.execute(f"CALL CREATE_VECTOR_INDEX('Article', 'art', 'embedding', mu := {COMPARATOR_M}, "
+                        f"ml := {2 * COMPARATOR_M}, efc := {EF_CONSTRUCTION}, metric := 'l2')")
+        self.index_s = round(time.perf_counter() - _t1, 2)
+
+    def search(self, qvec, k):
+        r = self.cx.execute(f"CALL QUERY_VECTOR_INDEX('Article', 'art', $q, $k, efs := {EF_SEARCH}) "
+                            "RETURN node.vid ORDER BY distance", {"q": qvec.tolist(), "k": k})
+        out = []
+        while r.has_next():
+            out.append(int(r.get_next()[0]))
+        return out
+
+    def insert_vectors(self, ids, vecs):
+        self._copy(list(ids), vecs)
+
+    def delete_vectors(self, ids):
+        self.cx.execute("MATCH (a:Article) WHERE a.vid IN $ids DELETE a", {"ids": [int(v) for v in ids]})
+
+    def close(self):
+        self.cx.close()
+        self.db.close()
+
+
 BACKENDS = {b.name: b for b in
             (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus,
              PgVector, Neo4jVector, SurrealDense, SurrealDenseServer, ArangoDense,
              MongoDense,
              ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8,
-             ArcadeServerInt8, SqliteVecInt8)}
+             ArcadeServerInt8, SqliteVecInt8,
+             # #131 item 3 (2026-10-02)
+             ElasticDense, ElasticDenseInt8, MemgraphDense, FalkorDense, LadybugDense)}
 
 # EVERY adapter that names itself must be registered here. This tuple is
 # explicit, and --backend takes `choices=list(BACKENDS)`, so a class that exists,
@@ -2099,6 +2503,11 @@ def main():
         _v = getattr(b, _k, None)
         if _v is not None:
             out[_k] = _v
+    # What a served or embedded engine reported about itself (pools, heap,
+    # settings it fixed), read from the engine at connect and after the build,
+    # never restated from the flags we sent (FAIRNESS F3/F6; the graph lane's
+    # row_extra, 2026-10-02 here).
+    out.update(getattr(b, "row_extra", None) or {})
     # F134: how long the build waited for a background-built index, and the
     # probe latencies that showed it had caught up.
     for _k, _v in (getattr(b, "settle", None) or {}).items():
@@ -2355,6 +2764,9 @@ def main():
     except Exception as e:                     # never lose a measured result
         out["conditions_error"] = f"{e.__class__.__name__}: {e}"
 
+    # Again at the end: an adapter may record a setting the mutation phase
+    # needed (Memgraph's delete settle), after the copy taken at the build.
+    out.update(getattr(b, "row_extra", None) or {})
     with open(args.out, "w") as f:
         json.dump(out, f)
     print("RESULT", json.dumps(out))

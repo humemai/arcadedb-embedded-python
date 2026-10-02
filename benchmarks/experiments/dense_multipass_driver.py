@@ -144,6 +144,9 @@ def main():
                # lane row (DECISIONS #74 item 2, #81, #84).
                **{_k: getattr(b, _k) for _k in ("ingest_s", "index_s")
                   if getattr(b, _k, None) is not None},
+               # The engine's own settings, read back (FAIRNESS F3/F6), as the
+               # lane records them (l3d_dense.main, 2026-10-02).
+               **(getattr(b, "row_extra", None) or {}),
                "durability": DURABILITY.get(BACKEND, DURABILITY_INGEST_ONLY),
                "instrument": INSTRUMENT,
                "p50": round(lats[len(lats) // 2], 3),

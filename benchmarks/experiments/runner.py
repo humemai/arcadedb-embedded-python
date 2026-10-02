@@ -1313,6 +1313,61 @@ BACKENDS = {
         "server_port": 7687,
         "ready_regex": r"Started\.",
     },
+    # THE #131 ITEM 3 ARMS (2026-10-02, CAMPAIGN section 7 rows 37-38). Each
+    # reuses its engine's pinned image and fitted flags from the lane where
+    # it already runs, so one engine wears one configuration on the page.
+    # Elasticsearch: the sparse arm's image and heap (-Xms=-Xmx at the tier
+    # heap, F3); the adapter reads heap_max and the processor count back.
+    "elasticsearch_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:33178ff49e06da93e3c51c5d87401b26e7a6dea0ef9bb26539cfddc46478b420",  # 9.5.4, the sparse arm's
+        "server_env": ["-e", "discovery.type=single-node", "-e", "xpack.security.enabled=false",
+                       "-e", "ES_JAVA_OPTS=-Xms{heap} -Xmx{heap}"],
+        "server_port": 9200,
+        "ready_regex": r'"message":"started|current.health=\"GREEN\"',
+    },
+    # The int8 arm: cloned rather than referenced, so a digest bump cannot
+    # move one arm of an ablation without the other (as qdrant_dense_int8).
+    "elasticsearch_dense_int8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "docker.elastic.co/elasticsearch/elasticsearch@sha256:33178ff49e06da93e3c51c5d87401b26e7a6dea0ef9bb26539cfddc46478b420",  # 9.5.4, the sparse arm's
+        "server_env": ["-e", "discovery.type=single-node", "-e", "xpack.security.enabled=false",
+                       "-e", "ES_JAVA_OPTS=-Xms{heap} -Xmx{heap}"],
+        "server_port": 9200,
+        "ready_regex": r'"message":"started|current.health=\"GREEN\"',
+    },
+    # Memgraph: the graph arm's image and every fitted flag (F6).
+    "memgraph_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1, the graph arm's
+        "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
+                       "--bolt-num-workers={ncpu}",
+                       "--storage-snapshot-thread-count={ncpu}",
+                       "--memory-limit={mem90_mib}",
+                       "--query-execution-timeout-sec=0",
+                       "--telemetry-enabled=false"],
+        "server_port": 7687,
+        "ready_regex": r"Bolt server is fully armed and operational",
+    },
+    # FalkorDB 6.0.1: 4.x crashes on a write inside a vector statement
+    # (repros/falkordb-vector-write/); #129's re-pin takes every FalkorDB arm
+    # to 6.0.x, and until the graph arm moves too, version_consistency_check
+    # reports the split. The graph arm's flags otherwise (F6).
+    "falkordb_dense": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "falkordb/falkordb@sha256:2756fdea96acff753e49c459dc279a21a50915d7b2b38bff8a3950d10f984fd8",  # 6.0.1
+        "server_env": ["-e", "BROWSER=0",
+                       "-e", "FALKORDB_ARGS=THREAD_COUNT {ncpu} RESULTSET_SIZE -1"],
+        "server_port": 6379,
+        "ready_regex": r"Ready to accept connections",
+    },
+    # LadybugDB: embedded in the client image, as the graph arm is; the
+    # adapter fits its threads and buffer pool to the cell (F160).
+    "ladybug_dense": {"topology": "embedded", "image": "dbbench:client"},
     "milvus_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1568,11 +1623,14 @@ LANES = {
              "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
              "milvus_dense", "pgvector_dense", "neo4j_dense", "surrealdb_dense", "surrealdb_dense_server",
              "arangodb_dense", "mongodb_dense",
+             # #131 item 3 (2026-10-02): Elasticsearch, Memgraph, FalkorDB,
+             # LadybugDB; Elasticsearch's int8 arm with the int8 arms below.
+             "elasticsearch_dense", "memgraph_dense", "falkordb_dense", "ladybug_dense",
              # int8 arms for every dense engine that ships a quantized index.
              # Chroma, DuckDB-VSS and sqlite-vec have none; LanceDB is int8
              # already (IVF_HNSW_SQ is its only HNSW offering).
              "arcadedb_dense_embedded_int8", "qdrant_dense_int8",
-             "milvus_dense_int8",
+             "milvus_dense_int8", "elasticsearch_dense_int8",
              # added 2026-08-30 under DECISIONS #53: every engine at every
              # precision it ships. The server arm is ours and was the one the
              # decision owed first.
@@ -2145,6 +2203,8 @@ MP_LABELS = {
     "surrealdb_dense": "surreal", "surrealdb_dense_server": "surrealsrv",
     "arangodb_dense": "arango", "mongodb_dense": "mongo",
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",
+    "elasticsearch_dense": "elastic", "elasticsearch_dense_int8": "elastic_int8",
+    "memgraph_dense": "memgraph", "falkordb_dense": "falkordb", "ladybug_dense": "ladybug",
 }
 
 

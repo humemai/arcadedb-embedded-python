@@ -510,6 +510,10 @@ def _comparator_engines():
                "milvus_sparse": "milvus", "milvus_dense": "milvus",
                "chroma_dense": "chroma", "lancedb_dense": "lancedb",
                "elasticsearch_sparse": "elasticsearch",
+               "elasticsearch_dense": "elasticsearch", "elasticsearch_dense_int8": "elasticsearch",
+               "memgraph_dense": "memgraph", "falkordb_dense": "falkordb", "ladybug_dense": "ladybug",
+               # one engine, one name, whichever table it ran on (2026-10-02)
+               "memgraph_graph": "memgraph", "falkordb_graph": "falkordb",
                "neo4j_graph": "neo4j", "ladybug_graph": "ladybug",
                "surrealdb_e2": "surrealdb",
                # THE BUFFER-POOL ABLATION IS NOT A TWELFTH ENGINE. It is

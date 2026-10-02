@@ -1032,11 +1032,16 @@ PHASE_SPLIT_DECLARED = {
     ("l3d", "sqlite_vec_dense"): "has no separate index: `vec0` is a brute-force table",
     ("l3d", "sqlite_vec_dense_int8"): "has no separate index: `vec0` is a brute-force table",
     ("l3d", "surrealdb_dense"): "defines its index before the load, which builds it as rows arrive",
+    # #131 item 3 (2026-10-02). Lucene builds a graph per segment while
+    # documents are indexed and the force-merge rebuilds it into one.
+    ("l3d", "elasticsearch_dense"): "builds its HNSW per segment as documents are indexed, and the refresh and the force-merge into one segment, which rebuilds the graph, are inside the build timer",
+    ("l3d", "elasticsearch_dense_int8"): "builds its HNSW per segment as documents are indexed, and the refresh and the force-merge into one segment, which rebuilds the graph, are inside the build timer",
 }
-PHASE_SPLIT_DISCLOSED = {
-    ("l3d", "duckdb_vss_dense"): "builds its HNSW index after the load, inside the same timer",
-    ("l3d", "arangodb_dense"): "builds its vector index after the load, inside the same timer",
-}
+# EMPTY SINCE 2026-10-02 (CAMPAIGN section 7 row 44): DuckDB VSS and ArangoDB
+# now time their load and their index as two timers, as the split arms do,
+# so neither needs a disclosure. An arm added here again is one whose index
+# phase exists and is timed inside one timer.
+PHASE_SPLIT_DISCLOSED = {}
 
 
 def check_phase_split(rows):
