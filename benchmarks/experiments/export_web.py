@@ -3066,7 +3066,7 @@ LIFECYCLE_SITUATION_LABELS = {
 # all) but the same edit changed its SCOPE from 100 seeds to an unbounded
 # whole-graph 2-hop, so its numbers describe the query written rather than the
 # view. Withheld rather than published with a caveat nobody reads.
-LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October"}   # PAGE-SPEC rule 7
+LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October."}   # PAGE-SPEC rule 7
 
 # SURREALDB'S OCTOBER LIFECYCLE ROWS CARRY OUR INPUT LIST (BUGS F161, DECISIONS #134). Its build fed the
 # engine from one in-memory Python list while the ArcadeDB arm streamed, fixed in the lane on 2026-09-30.
