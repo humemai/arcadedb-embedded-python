@@ -538,8 +538,17 @@ def _engine_version(label: str, raw: str | None,
     # the single-engine path below exactly as before.
     _members = _composed_members(raw)
     if len(_members) > 1 and "+" in str(raw or ""):
-        return " + ".join(f"{n.replace('-local', '')} {_short_version(v) or v}"
-                          for n, v in _members)
+        # "qdrant-local" IS NOT "qdrant". The member stamped `qdrant-local` is the
+        # Python client's in-process local mode, at the CLIENT package's version,
+        # not the Qdrant server the vector tables run (BUGS F133). Dropping the
+        # suffix printed "qdrant 1.19.1" under the atomicity table, which reads
+        # as the server; the build line says what ran instead.
+        def _member(n, v):
+            ver = _short_version(v) or v
+            if n.endswith("-local"):
+                return f"{n[:-len('-local')]}-client {ver} (local mode)"
+            return f"{n} {ver}"
+        return " + ".join(_member(n, v) for n, v in _members)
     if image:
         repo = image.split("@")[0].split(":")[0]
         engine = repo.rsplit("/", 1)[-1].lower()
@@ -1703,7 +1712,7 @@ _F133 = ("Qdrant + Neo4j's row is marked `re-run`. Its vector half ran in the "
          "Qdrant client's in-memory local mode, a pure-Python reimplementation rather than the Qdrant "
          "server, so every time, recall, and disk value it produced described that reimplementation. "
          "It is being re-run against the Qdrant server the vector table uses. Its all-or-nothing result "
-         "on the table above does not depend on this.")
+         "on the atomicity table below does not depend on this.")
 _BEFORE_F132 = lambda r: str(r.get("filtered_access") or "") != "record ids"      # noqa: E731
 # Neo4j's vector index ran BINARY-quantized (BUGS F164, DECISIONS #135): Neo4j 2026.08.1 builds a vector index with
 # `vector.quantization.type: "BINARY"` and a search expansion factor of 3 when the definition names no quantization,
@@ -1712,11 +1721,11 @@ _BEFORE_F132 = lambda r: str(r.get("filtered_access") or "") != "record ids"    
 # index configuration back as `neo4j_vector_quantization`, so a row without that field is a row from before the fix.
 _F164_DENSE = ("Neo4j's row is marked `re-run`: its vector index ran at Neo4j's default quantization, binary with a "
                "three-fold search expansion, which our index definition did not override, while the row recorded it as "
-               "unquantized. It is being re-measured with the quantization set explicitly, unquantized here and as a "
+               "unquantized. The next measurement sets the quantization explicitly, unquantized here and as a "
                "separate scalar-quantized row.")
 _F164_E2 = ("Neo4j's row is marked `re-run`: its vector index ran at Neo4j's default quantization, binary with a "
             "three-fold search expansion, which our index definition did not override, so its vector search was not "
-            "the unquantized search the other engines ran. It is being re-measured with the quantization set "
+            "the unquantized search the other engines ran. The next measurement sets the quantization "
             "explicitly. Its all-or-nothing result on the atomicity table does not depend on the index.")
 _BEFORE_F164 = lambda r: not r.get("neo4j_vector_quantization")                # noqa: E731
 
@@ -1727,22 +1736,43 @@ _BEFORE_F164 = lambda r: not r.get("neo4j_vector_quantization")                #
 # serverlog the October campaign kept (107 of 107). So its single-record writes and its cross-model transaction,
 # where one sync is most of the cost, sat beside every other engine's no-wait cells; they come down until the
 # re-measurement, whose rows carry the mode read back from the server (`surreal_sync_mode`). Its reads, analytics,
-# and ingest stay: ingest commits once per 5,000- or 10,000-record batch, and the durability table shows its writes
-# in the waiting column, where they belong.
+# and ingest stay: ingest commits once per 5,000- or 10,000-record batch. The durability table kept its writes in
+# the waiting column until 2026-10-03 (DECISIONS #136 item 1); since then every write withheld on its own table is
+# withheld there too (_durability_stale), so only its read, the control, prints there.
 _F165_WRITES = ("SurrealDB (server)'s write cells are marked `re-run`: the server ran at its default, a sync to disk "
                 "at every commit, although it has a setting that does not wait, and every other engine on this table "
-                "that has such a setting ran at it. Our harness missed that setting, and it is being re-measured at "
-                "it. Its read cells commit nothing and stay.")
+                "that has such a setting ran at it. Our harness missed that setting, and the next measurement runs "
+                "its writes at it. Its read cells commit nothing and stay.")
 _F165_E2 = ("SurrealDB (server)'s transaction cells are marked `re-run`: the server ran at its default, a sync to "
             "disk at every commit, although it has a setting that does not wait, and every other engine on this "
-            "table that has such a setting ran at it. Our harness missed that setting, and it is being re-measured "
-            "at it.")
+            "table that has such a setting ran at it. Our harness missed that setting, and the next measurement "
+            "runs the transaction at it.")
 _SURREAL_SERVED_SYNCED = lambda r: (str(r.get("backend") or "").startswith("surrealdb_")      # noqa: E731
                                     and str(r.get("backend") or "").endswith("_server")
                                     and not r.get("surreal_sync_mode"))
 _BEFORE_F134 = lambda r: not str(r.get("settle_s") or "").strip()                  # noqa: E731
 _BEFORE_F133 = lambda r: "qdrant-local" in str(r.get("engine_version") or "")     # noqa: E731
+# ArangoDB's relaxed cross-model rows predate its `persistent(pid)` index (BUGS F168). The index landed in
+# 299e454a8a (2026-09-21) and the stage said to carry it re-ran only the strict class, so the 20 relaxed
+# `arangodb_e2` rows on the page scanned every product for each read (2.6x to 25x slower than its own strict
+# rows, which have the index). Every row built with the index records `index_s`; a row without it was measured
+# before the index existed, and the whole row comes down until a relaxed cell is measured with it.
+_F168_E2 = ("ArangoDB's row is marked `re-run`: its rows on this table were measured before the index on the "
+            "product id that the protocol builds for it existed, so its reads scanned every product. They are "
+            "withheld until it is measured with the index.")
+_BEFORE_ARANGO_PID_INDEX = lambda r: str(r.get("index_s") or "").strip() in ("", "None")   # noqa: E731
+# LadybugDB's graph arm ran with threads and buffer pool sized from the whole host while its peers were fitted
+# to the cell (BUGS F160, DECISIONS #125). Stage qOA5 re-runs its four interactive cells at both durability
+# classes in this campaign; the fitted rows record `ladybug_threads` (read back from the engine) and
+# `ladybug_buffer_pool_mib` (l2_graph.py, LadybugGraph), so a row without them is an unfitted row and the
+# re-run's rows return by themselves.
+_F160_L2 = ("LadybugDB's row is marked `re-run`: it sized its thread count and buffer pool from the whole "
+            "machine rather than from the cores and memory its cell was given, while every other engine here "
+            "that sizes itself from the machine was fitted to its cell. It is being re-measured with both fitted.")
+_BEFORE_F160 = lambda r: not str(r.get("ladybug_threads") or "").strip()            # noqa: E731
 STALE_UNTIL_RERUN = {
+    ("e2", "arangodb_e2", None, None): (_F168_E2, _BEFORE_ARANGO_PID_INDEX),
+    ("l2", "ladybug_graph", None, None): (_F160_L2, _BEFORE_F160),
     ("e2", "surrealdb_e2", "graph-filtered search p50 ms", None): (_F132, _BEFORE_F132),
     ("e2", "surrealdb_e2_server", "graph-filtered search p50 ms", None): (_F132, _BEFORE_F132),
     ("e2", "surrealdb_e2_server", "retrieval p50 ms", "e2_500k"): (_F134, _BEFORE_F134),
@@ -2682,9 +2712,63 @@ OCT_DURABILITY_CONDITION = (
     "Durability is matched at the relaxed end: on every engine that has the "
     "setting, a commit returns without waiting for the disk and the log is "
     "flushed by the engine's own background policy, which is ArcadeDB's engine "
-    "default and a documented production mode for each of the others. Every "
-    "engine's setting was read out of the engine rather than assumed, and each "
-    "row records what it ran as `durability`.")
+    "default and a documented production mode for each of the others.")
+# "Every engine's setting was read out of the engine rather than assumed" was
+# printed under every table and was false for three kinds of row, each of which
+# says so in its own `durability` string: the served ArcadeDB arms, whose flag is
+# set on the server's JVM options and cannot be read back; the SurrealDB server,
+# whose rows record that no setting was found (BUGS F165); and the sparse lane's
+# three served comparators, which time no transactional write and record "engine
+# default". The sentence now names them, read off the rows.
+_DURABILITY_READ = "Each row records what it ran as `durability`"
+_NOT_READ_BACK = "no read-back"
+_DEFAULT_UNREAD = "engine default; no transactional write timed"
+
+# OUR ENGINE LOADED THE CROSS-MODEL CATALOG WITH THE LOG OFF (BUGS F113).
+# `graph_batch` turns the write-ahead log off for a bulk load unless asked not
+# to, and the e2 arm did not ask until 12b2012b74 (2026-09-23), after every
+# October e2 row was measured. The timed operations ran after the batch closed,
+# with the log on; the ingest column did not. No field on the row records it, so
+# the rows are dated against the fix commit's own time, read from git; when git
+# cannot answer, every row of the arm is treated as before the fix, which is the
+# direction that over-discloses for our own engine.
+_F113_FIX = "12b2012b74"
+_F113_BACKENDS = {"arcadedb_e2"}
+_COMMIT_TIMES = {}
+
+
+def _commit_time_utc(sha):
+    """The commit time of `sha` as an aware UTC datetime, or None."""
+    if sha in _COMMIT_TIMES:
+        return _COMMIT_TIMES[sha]
+    import datetime as _dt
+    got = None
+    try:
+        out = subprocess.run(["git", "-C", str(HERE), "show", "-s", "--format=%cI", sha],
+                             capture_output=True, text=True, timeout=60).stdout.strip()
+        if out:
+            got = _dt.datetime.fromisoformat(out).astimezone(_dt.timezone.utc)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        got = None
+    _COMMIT_TIMES[sha] = got
+    return got
+
+
+def _loaded_wal_off(r):
+    """True for a cross-model ArcadeDB row measured before the F113 fix."""
+    if str(r.get("backend")) not in _F113_BACKENDS:
+        return False
+    import datetime as _dt
+    fix = _commit_time_utc(_F113_FIX)
+    if fix is None:
+        return True
+    try:
+        ts = _dt.datetime.fromisoformat(str(r.get("ts_utc") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=_dt.timezone.utc)
+    return ts < fix
 
 
 def _durability_note(entries, rows, table_lane=None):
@@ -2692,23 +2776,57 @@ def _durability_note(entries, rows, table_lane=None):
 
     Returns None for a table whose rows predate the 2026-10 instrument, so a
     September payload is untouched.
+
+    EXACT LABELS, AND THE TABLE'S OWN LANE. A row counted when its label was a
+    SUBSTRING of an entry's, so the graph lane's "Neo4j" rows matched the
+    cross-model table's "Neo4j (vector index)" and that table named "Neo4j", an
+    engine it has no row for, among its exceptions. And a row taken down
+    (`outcome` withdrawn) prints no cell for the sentence to explain.
     """
     import bench_common
-    want = {str(e.get("backend")) for e in entries}
+    want = {str(e.get("backend")) for e in entries if e.get("outcome") != "withdrawn"}
     seen = {}
+    not_read_back, defaults, wal_off = set(), set(), set()
     for r in rows:
         if str(r.get("instrument") or "") != "2026-10":
             continue
+        if table_lane and r.get("lane") != table_lane:
+            continue
         lbl = display_name(str(r.get("backend") or ""))
-        if lbl not in want and not any(lbl in w for w in want):
+        if lbl not in want:
             continue
         cls = ("synced_default" if _SURREAL_SERVED_SYNCED(r)
                else bench_common.durability_class(r.get("durability")))
         if cls:
             seen.setdefault(cls, set()).add(lbl)
+        dur = str(r.get("durability") or "")
+        if _NOT_READ_BACK in dur:
+            not_read_back.add(lbl)
+        if dur.startswith(_DEFAULT_UNREAD):
+            defaults.add(lbl)
+        if _loaded_wal_off(r):
+            wal_off.add(lbl)
     if not seen:
         return None
+    unread = not_read_back | defaults | seen.get("synced_default", set())
     parts = [OCT_DURABILITY_CONDITION]
+    if unread:
+        parts.append(f"{_DURABILITY_READ}, and the setting was read out of the engine rather than "
+                     f"assumed on every engine except {_join_and(sorted(unread))}.")
+    else:
+        parts.append(f"{_DURABILITY_READ}, and every engine's setting was read out of the engine "
+                     f"rather than assumed.")
+    if not_read_back:
+        names = sorted(not_read_back)
+        _one = len(names) == 1
+        parts.append(f"{_join_and(names)} {'is' if _one else 'are'} given the setting when the server "
+                     f"starts, and the row records it, because the server offers no way to read it back.")
+    if defaults:
+        names = sorted(defaults)
+        _one = len(names) == 1
+        parts.append(f"{_join_and(names)} {'runs' if _one else 'run'} at {'its' if _one else 'their'} "
+                     f"defaults, and {'its row says' if _one else 'their rows say'} so without reading a "
+                     f"setting back, because this table times no transactional write.")
     # An engine that has a knob has rows in both classes in the frozen set; the
     # exception is the engine with strict rows and no relaxed row (BUGS F52).
     _strict_only = seen.get("strict", set()) - seen.get("relaxed", set())
@@ -2726,11 +2844,20 @@ def _durability_note(entries, rows, table_lane=None):
                      f"row says so rather than claiming one.")
     if seen.get("synced_default"):
         names = _join_and(sorted(seen["synced_default"]))
-        parts.append(f"{names} ran at its default in both runs, a sync to disk at every commit "
-                     f"(its server log reads \"Sync mode: every transaction commit\" in every run), "
-                     f"although it has a setting that does not wait; the next measurement runs both.")
+        parts.append(f"{names}'s rows record that no setting was found, and its server log shows "
+                     f"what it ran: its default in both runs, a sync to disk at every commit (the log "
+                     f"reads \"Sync mode: every transaction commit\" in every run), although it has a "
+                     f"setting that does not wait; the next measurement runs both.")
+    if wal_off:
+        names = sorted(wal_off)
+        _one = len(names) == 1
+        parts.append(f"{_join_and(names)} loaded {'its' if _one else 'their'} catalog with the write-ahead "
+                     f"log off, which the bulk-load helper {'it' if _one else 'they'} used does by default, "
+                     f"so {'its' if _one else 'their'} ingest figures had less durability than the relaxed "
+                     f"setting; {'its' if _one else 'their'} timed operations ran with the log on. The next "
+                     f"measurement loads with the log on.")
     return _gen(" ".join(parts), *sorted(_strict_only | seen.get("unverified", set())
-                                         | seen.get("synced_default", set())))
+                                         | seen.get("synced_default", set()) | unread | wal_off))
 
 
 # _pinned_dir cannot be used here: it is defined below and this is module scope.
@@ -2807,6 +2934,18 @@ def _e4_table():
             "metrics": metrics,
         })
 
+    # AT THE PIN OR NOT, BY COMMIT. This compared the artifact's engine VERSION
+    # with "26.9.1", September's release line, so once e4 was re-measured at
+    # October's pin (a 26.10.1.dev0 build of 417314c18) it announced "not yet
+    # re-run at the engine commit the rest of the page reports" over rows that
+    # were. The page's pin is a commit, so the artifact is held to the commit:
+    # every arm's engine_commit against BENCH_ENGINE_COMMIT, prefix either way
+    # because one side may be truncated. No commit on the artifact is not at
+    # the pin.
+    _pin = os.environ.get("BENCH_ENGINE_COMMIT", "").strip()
+    _commits = {str(m.get("engine_commit") or "").strip()
+                for m in (meta, meta.get("docker_client_conditions") or {})}
+    _at_pin = bool(_pin) and all(c and (c.startswith(_pin) or _pin.startswith(c)) for c in _commits)
     return {
         "id": "e4",
         "title": "What the client/server split costs",
@@ -2814,7 +2953,7 @@ def _e4_table():
         "conditions": [
             *([_gen(f"Measured at ArcadeDB {meta.get('engine_version')} on {str(meta.get('ts_utc'))[:10]}. This table has not yet been re-run at the engine commit the rest of the page reports; the re-run is queued and this line goes away with it.",
                     str(meta.get('engine_version')), str(meta.get('ts_utc'))[:10])]
-              if str(meta.get("engine_version") or "") and not str(meta.get("engine_version") or "").startswith("26.9.1") else []),
+              if str(meta.get("engine_version") or "") and not _at_pin else []),
             _gen(f"Every number is milliseconds. One engine build "
                  f"({_engine_identity(meta.get('engine_version'), meta.get('engine_commit'))}) in all three deployments, "
                  f"{meta.get('reps')} repetitions after {meta.get('warmup')} warmup, "
@@ -2825,7 +2964,6 @@ def _e4_table():
                  str(meta.get('mem_cap')), str(meta.get('heap'))),
             _R("e4", "same_materialisation"),
             _R("e4", "same_machine"),
-            _R("e4", "negative"),
         ],
         "columns": [label for _, label in E4_ARMS],
         "withheld_scales": [],
@@ -3152,6 +3290,25 @@ LIFECYCLE_SITUATION_PHRASES = {
 }
 
 
+def _lifecycle_engine(backend):
+    """The engine a lifecycle row belongs to: ArcadeDB for either deployment,
+    else the comparator's display name without its deployment."""
+    be = str(backend or "")
+    return "ArcadeDB" if "arcadedb" in be else display_name(be).split(" (")[0]
+
+
+def _lifecycle_row_label(backend, situation):
+    """The label a lifecycle row prints: the situation first, then the engine
+    for a comparator, then the deployment ("Graph (SurrealDB, embedded)").
+    One definition for the measured rows and the censored ones, so a censored
+    cell names the situation it was measuring rather than only the engine."""
+    be = str(backend or "")
+    mode = "server" if be.endswith("_server") else "embedded"
+    name = LIFECYCLE_SITUATION_LABELS.get(situation, situation)
+    engine = _lifecycle_engine(be)
+    return f"{name} ({mode})" if engine == "ArcadeDB" else f"{name} ({engine}, {mode})"
+
+
 def _or_series(items):
     """'a', 'a or b', 'a, b, or c' (the serial comma, as everywhere on the page)."""
     items = list(items)
@@ -3174,7 +3331,8 @@ def _lc_short_reason(text):
 # all) but the same edit changed its SCOPE from 100 seeds to an unbounded
 # whole-graph 2-hop, so its numbers describe the query written rather than the
 # view. Withheld rather than published with a caveat nobody reads.
-LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so the cell is re-measured in October."}   # PAGE-SPEC rule 7
+# The bounded seed set returns with the next measurement (CAMPAIGN section 7 row 34), not in this campaign.
+LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds to an unbounded 2-hop, so it stays off this table until the next measurement bounds the query again."}   # PAGE-SPEC rule 7
 
 # SURREALDB'S OCTOBER LIFECYCLE ROWS CARRY OUR INPUT LIST (BUGS F161, DECISIONS #134). Its build fed the
 # engine from one in-memory Python list while the ArcadeDB arm streamed, fixed in the lane on 2026-09-30.
@@ -3186,11 +3344,11 @@ LIFECYCLE_WITHHELD = {"graph_gav": "its query grew from a bounded set of seeds t
 # ran after the build and stand too. KEYED ON THE ROWS (the October pin), so the 26.10.1 rows are not
 # recognised and the cells return at their landing with nothing to edit.
 # (backend key, situation or None, scale or None, column or None for the whole entry) -> (why, stale)
-_SURREAL_LIST = ("SurrealDB's peak memory on this table is withheld and its 10M dense-vector row is marked "
-                 "`re-run`: our build fed SurrealDB from one in-memory Python list while the ArcadeDB arm "
-                 "streamed, so its memory reading was partly ours, and the 10M vector build was killed for our "
-                 "allocation, not SurrealDB's. Its session timings ran after the build and stand. Both are "
-                 "being re-measured with the input streamed.")
+_SURREAL_LIST = ("SurrealDB's peak memory on this table is withheld, and its 10M dense-vector cell is not shown: "
+                 "our build fed SurrealDB from one in-memory Python list while the ArcadeDB arm streamed, so its "
+                 "memory reading was partly ours, and the 10M vector build was killed for our allocation, not "
+                 "SurrealDB's. Its session timings ran after the build and stand. Both are re-measured in the "
+                 "next measurement, with the input streamed.")
 _SURREAL_LIST_ROW = lambda r: str(r.get("engine_commit") or "").startswith("417314c18")   # noqa: E731
 LIFECYCLE_STALE = {
     ("surrealdb_lifecycle", None, None, "peak memory GiB"): (_SURREAL_LIST, _SURREAL_LIST_ROW),
@@ -3253,8 +3411,7 @@ def _lifecycle_table(all_rows):
     # engine off the label. The ArcadeDB labels are unchanged: the page's
     # prose pins address them (page_check PROSE).
     def _engine_of(r):
-        be = str(r.get("backend", ""))
-        return "ArcadeDB" if "arcadedb" in be else display_name(be).split(" (")[0]
+        return _lifecycle_engine(r.get("backend", ""))
 
     by, declared = {}, []
     for r in rows:
@@ -3278,7 +3435,7 @@ def _lifecycle_table(all_rows):
         _ours = engine == "ArcadeDB"
         _mode = "server" if _srv else "embedded"
         entry = {
-            "backend": f"{_name} ({_mode})" if _ours else f"{_name} ({engine}, {_mode})",
+            "backend": _lifecycle_row_label(rs[0].get("backend"), situation),
             "backend_key": str(rs[0].get("backend")),
             "is_arcadedb": _ours,
             "engine": engine,
@@ -3493,6 +3650,9 @@ def _durability_scope_note(entries):
                    if str(e.get("scale") or "").startswith(k)
                    or (k == "crossmodel" and "crossmodel" in str(e.get("scale") or ""))})
            for k in kinds}
+    # The cross-model transaction is one operation printed once per catalog
+    # size (DURABILITY_PER_SCALE); it counts once.
+    ops["crossmodel"] = min(ops["crossmodel"], 1)
     tail = ("Read down the operations for one engine rather than across the "
             "engines for one operation, because what the setting costs is a "
             "property of the engine's commit and the rest of the page already "
@@ -3585,6 +3745,51 @@ def _engine_defect_notes(table_id, entries):
     return out
 
 
+# OPERATIONS WHOSE COST GROWS WITH THE CORPUS: one row per corpus size, never a
+# median pooled across sizes (_durability_table, "ACROSS CORPORA ON PURPOSE").
+DURABILITY_PER_SCALE = {"crossmodel_txn"}
+
+# SurrealDB's graph insert ran as two transactions at the October pin (BUGS F130);
+# the re-pin's rows carry another commit.
+_F130_ROW = lambda r: str(r.get("engine_commit") or "").startswith("417314c18")   # noqa: E731
+
+
+def _durability_corpus(lane, scale):
+    """The corpus size a per-size durability row names, from the lane's own constant."""
+    if lane == "e2":
+        return f"{_e2_products(scale)} products"
+    return scale_label(lane, scale)
+
+
+def _durability_scale_rank(lane, scale):
+    """Smallest corpus first, so the 50k row precedes the 500k one."""
+    if scale is None:
+        return 0
+    if lane == "e2":
+        from e2_hybrid import SCALE_PRODUCTS  # noqa: E402
+        return int(SCALE_PRODUCTS.get(scale, 0))
+    return SCALE_ORDER.index(scale) if scale in SCALE_ORDER else len(SCALE_ORDER)
+
+
+def _durability_stale(lane, workload, field, backend, scale):
+    """The STALE_UNTIL_RERUN reason that withholds this write on its own table,
+    or None. A whole-row entry withholds every write of that backend; a column
+    entry withholds the write only when the column is the one this operation
+    reads (by OCT_TABLE_METRICS' field -> label mapping)."""
+    src_tid = EQUIVALENCE_TABLE_OF.get((lane, workload))
+    src_col = next((lbl for f, lbl in OCT_TABLE_METRICS.get(lane, []) if f == field), None)
+    for (tid, bkey, column, only_scale), (why, pred) in STALE_UNTIL_RERUN.items():
+        if tid != src_tid or bkey != backend:
+            continue
+        if column is not None and column != src_col:
+            continue
+        if only_scale is not None and scale is not None and str(only_scale) != str(scale):
+            continue
+        if _stale(tid, bkey, only_scale if only_scale is not None else scale, pred):
+            return why
+    return None
+
+
 def _durability_table(all_rows):
     """The same write per engine at both durability settings, with the ratio.
 
@@ -3601,10 +3806,12 @@ def _durability_table(all_rows):
     """
     import bench_common
     entries = []
+    withdrawn = {}        # display name -> [operation label, ...]
     for lane, workload, field, op_key, op_label in DURABILITY_WRITES:
         rows = [r for r in all_rows
                 if r.get("lane") == lane and r.get("workload") == workload
                 and str(r.get("instrument") or "") == "2026-10"]
+        per_scale = op_key in DURABILITY_PER_SCALE
         by = {}
         for r in rows:
             # The tuned PostgreSQL arm is an ablation of one engine's image
@@ -3613,8 +3820,18 @@ def _durability_table(all_rows):
             # out of this one for the same reason.
             if str(r.get("backend")) in OFF_PAGE_ARMS:
                 continue
-            by.setdefault(str(r.get("backend")), []).append(r)
-        for backend, rs in sorted(by.items()):
+            by.setdefault((str(r.get("backend")), str(r.get("scale")) if per_scale else None),
+                          []).append(r)
+        for (backend, sc), rs in sorted(by.items(), key=lambda kv: (_durability_scale_rank(lane, kv[0][1]),
+                                                                     kv[0][0])):
+            if sc is not None:
+                # ONE ROW PER CORPUS SIZE for an operation whose cost grows with
+                # the corpus, named in the Size column beside the operation.
+                op_key_s = f"{op_key}_{_durability_corpus(lane, sc).split()[0]}"
+                op_label_s = (op_label[:-1] + f", {_durability_corpus(lane, sc)})"
+                              if op_label.endswith(")") else f"{op_label}, {_durability_corpus(lane, sc)}")
+            else:
+                op_key_s, op_label_s = op_key, op_label
             # The CELL's class, not the engine string: the string is what the
             # engine answered, and on a no-knob engine both cells answer the
             # same thing, which is precisely the case this table has to keep
@@ -3626,12 +3843,12 @@ def _durability_table(all_rows):
             entry = {
                 "backend": display_name(backend),
                 "is_arcadedb": "arcadedb" in backend,
-                "scale": op_key,
-                "scale_label": op_label,
+                "scale": op_key_s,
+                "scale_label": op_label_s,
                 "workload": "write",
                 "n_docs": None,
                 "deployment": deployment_of(backend),
-                "image": _one_version(rs, f"durability/{backend}/{op_key}").get("image"),
+                "image": _one_version(rs, f"durability/{backend}/{op_key_s}").get("image"),
                 # ArcadeDB is identified by commit (#49); a comparator by its
                 # own stamp, else its row read "arcadedb surrealdb-embedded:...".
                 "version_name": (_engine_identity(rs[0].get("engine_version"),
@@ -3690,13 +3907,22 @@ def _durability_table(all_rows):
             #
             # If a write is ever added whose cost grows with the corpus, this
             # flag is the line that has to be revisited.
+            #
+            # AND ONE WAS, from the start: the cross-model transaction searches
+            # the vector index and expands a hop over the whole catalog, so its
+            # cost grows with the catalog, and pooling its 50k and 500k rows
+            # put two corpora into one median (ArcadeDB's server row: 7.52 ms
+            # at 50k and 7.92 at 500k pooled to 7.66; PostgreSQL + AGE's 4.93
+            # and 13.08 to 8.95). It is in DURABILITY_PER_SCALE and gets one
+            # row per catalog size, where the flag stays off.
+            _span = not per_scale
             if no_setting:
-                got = _agg(rs, field, across_scales=True)
+                got = _agg(rs, field, across_scales=_span)
                 if got is not None:
                     entry["metrics"]["waits for the disk ms"] = got
             else:
-                rel = _agg(relaxed, field, across_scales=True)
-                strc = _agg(strict, field, across_scales=True)
+                rel = _agg(relaxed, field, across_scales=_span)
+                strc = _agg(strict, field, across_scales=_span)
                 if rel is not None:
                     entry["metrics"]["no wait ms"] = rel
                 if strc is not None:
@@ -3706,18 +3932,58 @@ def _durability_table(all_rows):
                     entry["metrics"]["cost of waiting"] = {
                         "median": round(ratio, 2), "min": round(ratio, 2),
                         "max": round(ratio, 2), "n": min(rel["n"], strc["n"])}
+            # A WRITE WITHHELD ON ITS OWN TABLE IS WITHHELD HERE TOO. This
+            # table re-reads the rows the write tables print, and it did not
+            # read STALE_UNTIL_RERUN, so a cell marked `re-run` on its own
+            # table (Neo4j's and the composed stack's cross-model rows, the
+            # SurrealDB server's writes) printed here as a measurement, and
+            # ArangoDB's cross-model pair compared a configuration without its
+            # index against one with it (BUGS F168). The same entries, keyed
+            # the same way, so the cells return here when they return there.
+            if entry["metrics"] and _durability_stale(lane, workload, field, backend, sc):
+                entry["metrics"] = {c: {"text": "re-run"} for c in entry["metrics"]}
+                entry["outcome"] = "withdrawn"
+                entry["version_name"] = None
+                withdrawn.setdefault(entry["backend"], []).append(op_label_s)
             if entry["metrics"]:
                 entries.append(entry)
     if not entries:
         return None
-    _no_knob = sorted({e["backend"] for e in entries
+    # The sentences below explain the numbers a row PRINTS, so a row taken
+    # down is not one of the engines they name.
+    _shown = [e for e in entries if not e.get("outcome")]
+    _no_knob = sorted({e["backend"] for e in _shown
                        if e.get("_durability_note_class") == "strict"})
-    _unverified = sorted({e["backend"] for e in entries
+    _unverified = sorted({e["backend"] for e in _shown
                           if e.get("_durability_note_class") == "unverified"})
-    _synced_default = sorted({e["backend"] for e in entries
+    _synced_default = sorted({e["backend"] for e in _shown
                               if e.get("_durability_note_class") == "synced_default"})
     for e in entries:
         e.pop("_durability_note_class", None)
+    _gone = sorted(withdrawn)
+    _gone_note = (_gen(f"{_join_and(_gone)} {'have' if len(_gone) > 1 else 'has'} cells marked `re-run` "
+                       f"here because the same writes are withheld on the table{'s' if len(_gone) > 1 else ''} "
+                       f"they come from, and the note under each of those tables says why.", *_gone)
+                  if _gone else None)
+    for name in _gone:
+        _declare_absence("durability", name, None, "withdrawn", _gone_note)
+    # TWO TRANSACTIONS WHERE THE OPERATION IS ONE (BUGS F130). At the October
+    # pin SurrealDB's graph insert sends `CREATE person ...; RELATE ...` with
+    # no BEGIN/COMMIT around them, and SurrealDB commits each statement of
+    # such a request on its own, so its strict cell waits for the disk twice
+    # per insert. The re-pin wraps them in one transaction; keyed on the rows
+    # at this pin, so the sentence goes when the re-pin's rows arrive.
+    _two_txn = sorted({e["backend"] for e in _shown
+                       if e.get("scale") == "graph_insert" and e["backend"].startswith("SurrealDB")
+                       and any(_F130_ROW(r) for r in all_rows
+                               if r.get("lane") == "l2" and r.get("workload") == "oltp"
+                               and display_name(str(r.get("backend"))) == e["backend"])})
+    _two_txn_note = (_gen(f"{_join_and(_two_txn)} sends the graph insert's person and its edge as two "
+                          f"statements with no transaction around them, so each commits on its own: "
+                          f"the run that waits for the disk waits twice for each insert, and the cost "
+                          f"of waiting on that row counts both. The next measurement wraps the two in "
+                          f"one transaction.", *_two_txn)
+                     if _two_txn else None)
 
     def _verb(names):
         return "have" if len(names) > 1 else "has"
@@ -3730,7 +3996,7 @@ def _durability_table(all_rows):
     # rule -- refuse the kind you cannot define rather than printing it and
     # hoping -- applied to the one other table that prints a lone number.
     _explained = set(_no_knob) | set(_unverified) | set(_synced_default)
-    _lone = sorted({e["backend"] for e in entries
+    _lone = sorted({e["backend"] for e in _shown
                     if e["metrics"].get("waits for the disk ms")
                     and not e["metrics"].get("no wait ms")}
                    - _explained)
@@ -3771,7 +4037,9 @@ def _durability_table(all_rows):
                     f"{'They have' if len(_synced_default) > 1 else 'It has'} a setting that does not "
                     f"wait, which our harness missed, and the next measurement runs both.",
                     *_synced_default)] if _synced_default else []),
-            *_engine_defect_notes("durability", entries),
+            *_engine_defect_notes("durability", _shown),
+            *([_two_txn_note] if _two_txn_note else []),
+            *([_gone_note] if _gone_note else []),
             _R("durability", "ratio"),
         ],
         "columns": ["no wait ms", "waits for the disk ms", "cost of waiting"],
@@ -3796,8 +4064,7 @@ MULTIMODEL_KINDS = {"censored": "censored", "withheld": "withheld",
                     "failed": "failed",
                     # "withdrawn" is not "withheld": a withheld cell is one
                     # number pulled from a row that stands, a withdrawn one is
-                    # the whole row taken down because the query it answered
-                    # was not the question the comparators answered.
+                    # the whole row taken down until it is measured again.
                     "withdrawn": "withdrawn"}
 
 
@@ -3871,10 +4138,17 @@ def _multimodel_table(finished):
                          "capability table cannot key its columns on titles: "
                          f"{columns}")
     entries, kinds_seen = [], set()
+    # THE MODE COLUMN NAMES DEPLOYMENTS, and "all three" is not one. The
+    # client/server split table labels its rows "all three" because each row
+    # holds the in-process, in-process-server, and separate-container arms;
+    # read as a deployment it printed "all three, embedded, server" for
+    # ArcadeDB. Its three arms are the embedded engine and two servers.
+    _MODE_OF = {"all three": ("embedded", "server")}
     for engine in MULTIMODEL_ENGINES:
-        modes = sorted({str(e.get("deployment")) for t in sources
+        modes = sorted({m for t in sources
                         for e in t.get("entries", [])
-                        if entry_engine(e) == engine and e.get("deployment")})
+                        if entry_engine(e) == engine and e.get("deployment")
+                        for m in _MODE_OF.get(str(e.get("deployment")), (str(e.get("deployment")),))})
         metrics = {}
         for t, col in zip(sources, columns):
             text, kinds = multimodel_cell(t, engine)
@@ -3896,8 +4170,12 @@ def _multimodel_table(finished):
             # if they disagree the join makes the disagreement visible and
             # version_consistency_check's family rules then refuse it, which
             # is the behaviour wanted over a silent None.
+            # ONE SPELLING BEFORE THE SET, not after it: the payload's version
+            # strings lose a leading "v" only when the payload is written
+            # (_one_spelling), so "surrealdb v3.2.4" and "surrealdb 3.2.4" were
+            # two members here and printed as "surrealdb 3.2.4" twice.
             "version_name": " / ".join(sorted({
-                str(e["version_name"]) for t in sources
+                _one_spelling(str(e["version_name"])) for t in sources
                 for e in t.get("entries", [])
                 if entry_engine(e) == engine and isinstance(e.get("version_name"), str)
                 and e["version_name"].strip()})) or None,
@@ -3912,10 +4190,12 @@ def _multimodel_table(finished):
                     "on that table had and was killed by the kernel",
         "failed": "failed, the cell reported an error inside its budget",
         # NOT THE SAME AS withheld. Withheld is one number pulled from a row
-        # that stands; withdrawn is the whole row taken down because the query
-        # it answered was not the question the other engines answered.
-        "withdrawn": "withdrawn, the query it answered was not the one the "
-                     "other engines answered, so the row came down",
+        # that stands; withdrawn is the whole row taken down until it is
+        # measured again. It said "the query it answered was not the one the
+        # other engines answered", which fits a stand-in engine (BUGS F133) and
+        # not a row measured before its own index existed (F168).
+        "withdrawn": "withdrawn, the row was measured before a fix to our harness and "
+                     "came down until it is measured again",
         "unrun": "not run, the placeholder run did not cover this "
                  "workload for that engine",
     }
@@ -4552,17 +4832,20 @@ OCT_PROSE = {
         "skeleton": (SKELETON_TABLE_NOTE, []),
         "disk": (OCT_DISK_NOTE, []),
     },
-    # e4's three explanatory sentences. They were unregistered until the table
+    # e4's explanatory sentences. They were unregistered until the table
     # was correctly dated October (it is artifact-backed, and the instrument
     # was inferred from a lane map it is not in), at which point the October
     # rule applies: a sentence that is not generated is registered here, by
-    # the table that prints it. None of the three states a measured quantity
-    # -- "slightly negative" is about a sign the cells themselves show -- so
-    # none carries a pin.
+    # the table that prints it. Neither states a measured quantity, so neither
+    # carries a pin. A third ("the separate-process column goes slightly
+    # negative at the smaller result sizes") described the two derived
+    # difference columns DECISIONS #73 took off the table on 2026-09-12; the
+    # cells left behind cross at 1,000 and 10,000 documents, not at the
+    # smallest sizes, so it was describing columns that no longer exist and
+    # was dropped (2026-10-03).
     "e4": {
         "same_materialisation": ('All three deployments turn the answer into Python objects the same way, so the difference is how the database was deployed and not how we read the result.', []),
         "same_machine": ('The separate container runs on the same machine, talking over the local network interface. It says what running the database beside your program costs, and says nothing about a database on another machine across a real network.', []),
-        "negative": ('The separate-process column goes slightly negative at the smaller result sizes. That is not a container being faster than an in-process server; it is the boundary term sitting below what this design can resolve, so run-to-run noise swamps it and the sign flips. Reported rather than clamped to zero, because the negative values are the evidence for the claim: at these sizes co-locating costs nothing measurable. The packing cost, in the column beside it, stays firmly positive at every size.', []),
     },
     "l3s": {
         "recall": ("Recall is reported beside every latency: ArcadeDB quantizes posting weights to int8 by default, so a latency number without its recall is not comparable.", []),
@@ -4641,11 +4924,11 @@ OCT_PROSE = {
         "gav": ("The Graph Analytical View is a copy of the graph that ArcadeDB builds in memory, laid out for questions that sweep the whole graph rather than follow a few links. Rows labelled GAV ran with it built, once, before any query was timed, and the view build column is what that took.", []),
     },
     "e2atom": {
-        "trial": ("A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all: the counts the page's E2 prose quotes are these.", []),
+        "trial": ("A trial writes the three products, kills the process between them, reopens, and checks whether every product is present or none. Torn means some but not all.", []),
     },
     "e2": {
         "atomic": ("Atomic means all or nothing: the whole update happens, or none of it does, with no state in between that anyone can observe. One engine can promise that across a vector, a graph edge, and a document because they share a transaction. Qdrant and Neo4j cannot promise it to each other, because nothing spans the two.", []),
-        "interesting": ("So the interesting result here is not the speed. It is what a crash halfway through leaves behind. The raw data records, for each run, whether an interrupted write left the two stores disagreeing, and whether they still disagreed after restarting. That is what this comparison exists to show.", []),
+        "interesting": ("So the interesting result here is not the speed. It is what a crash halfway through leaves behind, and the atomicity table below shows it: for each engine, how many interrupted writes left the store holding some but not all of the write after it was reopened. That is what this comparison exists to show.", []),
         "disk_split": ("SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.", []),
         "ingest": ("ingest+index total s is one timer around loading the vertices and edges and creating the vector index. Ingest paths: ArcadeDB embedded loads with the Python package's graph_batch (5,000 records per commit, vertices then edges) and then CREATE INDEX ... LSM_VECTOR; served sends CREATE VERTEX and CREATE EDGE batches as sqlscript over HTTP, then the same CREATE INDEX; SurrealDB embedded inserts through its Python SDK into the SDK's SurrealKV store on disk, and SurrealDB server through the same SDK over WebSocket onto RocksDB; Neo4j and the composed stack load the graph with UNWIND over bolt, and the composed stack upserts its vectors into Qdrant; PostgreSQL + pgvector + AGE loads the products with COPY under a pgvector HNSW index and creates the graph with UNWIND inside Cypher; ArangoDB import_bulk; MongoDB insert_many.",
                    [(r"graph_batch \(([\d,]+) records per commit", lambda P, rows: _const("e2_hybrid", "BATCH"), "const")]),
@@ -4688,9 +4971,9 @@ OCT_PROSE = {
         "pairs": ("Each row is one engine running ONE operation twice: once where a commit returns without waiting for the disk, which is the setting every other table on this page reports, and once where the commit waits for the log to be flushed and synced. Nothing else about the cell changes.", []),
         "every_write": ("Every timed write on the page is here: the six document operations, the three graph writes, and the cross-model transaction. Read down the operations for one engine rather than across the engines for one operation, because what the setting costs is a property of the engine's commit and the rest of the page already compares the engines.", []),
         "read_control": ("The read is the control, and it is the row that makes the rest readable: it runs in both cells like everything else and commits nothing, so it is what the writes are moving against.", []),
-        "size_column": ("The Size column names the operation rather than a corpus size: the three lanes that time a write do not write the same thing, so each engine is compared only against the engines running its own operation.", []),
+        "size_column": ("The Size column names the operation rather than a corpus size, and for the cross-model transaction the catalog size as well: the three lanes that time a write do not write the same thing, so each engine is compared only against the engines running its own operation.", []),
         "cell_property": ("The setting is a property of the cell, not a second measurement inside one: it lives on the database or on the server for most of these engines, so each pair of numbers is two runs.", []),
-        "ratio": ("The ratio is what the strict setting costs on that engine, at this corpus size and this operation count. It is not a claim about any other write. A large ratio is not a slow engine: it is an engine whose relaxed path was fast, measured against a flush that costs what a flush costs.", []),
+        "ratio": ("The ratio is what the strict setting costs on that engine for that operation. The document and graph operations write the same few records whatever the corpus holds, so each row pools every corpus size its lane ran it at; the cross-model transaction searches and expands over the whole catalog, so it has one row per catalog size and its ratio holds at that size. It is not a claim about any other write. A large ratio is not a slow engine: it is an engine whose relaxed path was fast, measured against a flush that costs what a flush costs.", []),
     },
     "docs_oltp": {
         "ingest": ("Ingest paths: ArcadeDB embedded loads through the Python package's insert_many in 10,000-row batches, one JSON payload per batch; served sends INSERT statements as sqlscript batches over HTTP; PostgreSQL COPY FROM STDIN; DuckDB CREATE TABLE AS SELECT from in-memory frames; SQLite executemany; MongoDB insert_many; ArangoDB import_bulk; SurrealDB inserts through its Python SDK.",
@@ -4928,14 +5211,27 @@ def _jvm_memory_note(table):
     tail = ("Every engine on a table gets the same memory envelope; how much of it a JVM "
             "takes is a property of the runtime, so read these cells against each other "
             "rather than against an engine that manages its own memory.")
+    # NO BAND ACROSS THE OCTOBER PAGE. The sentence adds "across every heap
+    # this page has run the peak lands between about two thirds of the heap and
+    # a fifth above it", a band measured on September's 8g-cap rows (the
+    # docstring above) and typed here. October's rows contradict it (about 40
+    # per cent on one table, 3 to 8 per cent on the lifecycle arms), and a
+    # typed band has no October row behind it, so an October table quotes only
+    # the cell it names. The September page keeps the band it was measured on.
+    band = _table_instrument(table.get("id")) != "2026-10"
     if not quotable:
         # Every JVM arm here ran more than one heap across this table's sizes,
         # so there is no single figure to quote and the sentence says the thing
         # that is true without one.
+        if not band:
+            return _gen(f"{head}. {tail}", names)
         return _gen(f"{head}: across every heap this page has run, the peak lands between "
                     f"about two thirds of the heap and a fifth above it. {tail}", names)
     who, (heap, gib) = max(quotable.items(), key=lambda kv: kv[1][1])
     pct = f"{gib / float(heap[:-1]) * 100:.0f}"
+    if not band:
+        return _gen(f"{head}: {who}'s {gib:.2f} GiB here is about {pct} per cent of its {heap} heap. {tail}",
+                    names, f"{gib:.2f}", pct, heap)
     return _gen(
         f"{head}: {who}'s {gib:.2f} GiB here is about {pct} per cent of its {heap} heap, and "
         f"across every heap this page has run the peak lands between about two thirds of the "
@@ -5521,7 +5817,9 @@ _MARK_MEANINGS = {
     "err": "the cell failed inside its budget; the note says what it reported",
     # DECISIONS #117. Not a dash: on this page a dash means an operation the
     # engine cannot express, and these ran; they measured our mistake.
-    "re-run": "the cell was measured before a fix to our harness and is being measured again; the note says what was wrong",
+    # Not "is being measured again": some marked cells are re-measured in this campaign and some only in the
+    # next measurement, and each note says which.
+    "re-run": "the cell was measured before a fix to our harness and stays off the table until it is measured again; the note says what was wrong",
 }
 
 
@@ -5607,7 +5905,14 @@ def _censored_entries(table):
         # THE SAME SHAPE AS A MEASURED ROW, so nothing that walks entries
         # trips over a key that is not there; `outcome` is what tells the
         # consumers that care this row is a statement and not a number.
-        out.append({"backend": display_name(backend), "backend_key": backend,
+        # A LIFECYCLE ROW IS LABELLED BY ITS SITUATION, like the measured rows
+        # beside it: two censored SurrealDB rows at 10M printed as the same
+        # "SurrealDB (embedded)" twice, one for documents with ten indexes and
+        # one for the graph, and a reader could not tell which was which.
+        _lc = lane == "lifecycle"
+        out.append({"backend": _lifecycle_row_label(backend, w) if _lc else display_name(backend),
+                    **({"engine": _lifecycle_engine(backend)} if _lc else {}),
+                    "backend_key": backend,
                     "is_arcadedb": "arcadedb" in str(backend).lower(),
                     "precision": None, "scale": scale,
                     "scale_label": scale_label(lane, scale), "workload": w,
@@ -5724,7 +6029,19 @@ def _split_note(table):
         f"and the total as what the whole of it cost.", total, str(hi))]
 
 
-def _index_note(table_id):
+# WHAT A "NONE" ARM'S INDEX CELL TIMES, in a reader's words, keyed like
+# fairness_check.NONE_ARM_TIMED_DDL. The documents table said DuckDB "builds
+# none" beside a DuckDB index cell of 0.01 s; both were true, because the index
+# it declares away is the analytics one and the cell times a key index its
+# transactional workload needs, built on an empty table. Said under the table so
+# the two read together.
+_NONE_ARM_DDL_WORDS = {
+    ("l1tpc", "duckdb"): ("the order-key index of the table new orders are written into, which the "
+                          "transactional workload needs and which is built while that table is still empty"),
+}
+
+
+def _index_note(table_id, table=None):
     """Which engines build an index for this table's queries, and which do not.
 
     PROTOCOL section 7 requires anything that differs between engines to be
@@ -5776,6 +6093,37 @@ def _index_note(table_id):
         parts.append(f"{_join_and(none)} build{'' if len(none) > 1 else 's'} none, because "
                      f"measuring it showed the index "
                      f"{'costs them' if len(none) > 1 else 'costs it'} or changes nothing")
+    # WHERE THE BUILD TIME IS. "The time an index took to build is the index
+    # column" was said under the cross-model table too, which prints no index
+    # column (its relaxed rows predate the split, so only the combined timer is
+    # filled); there the build is inside the ingest+index total. Read off the
+    # entries that print a number, the same test _finish_table uses to keep a
+    # column.
+    def _filled(col):
+        return any(isinstance((e.get("metrics") or {}).get(col), dict)
+                   and (e["metrics"][col] or {}).get("median") is not None
+                   for e in ((table or {}).get("entries") or []) if not e.get("outcome"))
+    if table is None or _filled("index s") or _table_instrument(table_id) != "2026-10":
+        where = "The time an index took to build is the index column."
+    elif _filled("ingest+index total s"):
+        where = ("This table has no index column: the time an index took to build is inside "
+                 "the ingest+index total.")
+    else:
+        where = ""
+    # A NONE ARM WHOSE INDEX CELL IS NOT ZERO, said beside the claim it seems
+    # to contradict (fairness_check.NONE_ARM_TIMED_DDL).
+    try:
+        import fairness_check as _fc
+        _timed = getattr(_fc, "NONE_ARM_TIMED_DDL", {})
+    except Exception:  # noqa: BLE001 - the page must still build without it
+        _timed = {}
+    extra = []
+    if where.endswith("is the index column.") and _table_instrument(table_id) == "2026-10":
+        for (ln, be), _decl in sorted(_timed.items()):
+            words = _NONE_ARM_DDL_WORDS.get((ln, be))
+            if ln == lane and words and display_name(be) in none:
+                extra.append(f"{display_name(be)}'s index cell is not zero because it times a different "
+                             f"index: {words}.")
     # WHAT IS TRUE OF ALL OF THEM, and no more. Ten of these arms were timed
     # with the index and without it; the rest reach the query through a
     # primary key or a record id, which is the same access path by another
@@ -5785,8 +6133,8 @@ def _index_note(table_id):
         "Indexes on this table are matched by effect rather than by rule: " +
         "; ".join(parts) + ". Where building one was a choice, the engine was timed with it "
         "and without it and the faster configuration kept; where an engine reaches these "
-        "queries through its own primary key or record id, that is its equivalent. The time "
-        "an index took to build is the index column.",
+        "queries through its own primary key or record id, that is its equivalent."
+        + (f" {where}" if where else "") + "".join(f" {x}" for x in extra),
         *(have + none))]
 
 
@@ -5805,6 +6153,10 @@ def _censored_notes(table_id):
             continue
         what = {"oltp": "transaction", "olap": "analytics", "hybrid": "transaction",
                 "atomicity": "atomicity", "search": "search", "ingest": "ingest"}.get(w, w or "the")
+        # The lifecycle lane's workload is its SITUATION, an internal key
+        # ("doc_idx10"); the sentence names it the way the row label does.
+        _cell = (f"the cell for {LIFECYCLE_SITUATION_PHRASES.get(w, w)}" if lane == "lifecycle"
+                 else f"the {what} cell")
         # TWO OUTCOMES, WORDED DIFFERENTLY (PAGE-SPEC, "a cell with no row is
         # accounted for by outcome"). An int (or None) in _censored_cells is a
         # cell that ran past the tier's cap; anything else is what the cell
@@ -5820,7 +6172,7 @@ def _censored_notes(table_id):
             # condition, and the peak comes off the row the same way the
             # envelope does -- passing one and not the other is how a real
             # number ends up looking typed.
-            tail = (f" at {scale_label(lane, scale)}: the {what} cell reached "
+            tail = (f" at {scale_label(lane, scale)}: {_cell} reached "
                     f"the {_cap_txt}{_peak_txt} and was killed by the kernel, the same envelope every "
                     f"engine on this table had; it did not run out of time, and there is no row.")
             # EVERY DIGIT IN THE SENTENCE IS PINNED TO ITS SOURCE, including
@@ -5834,12 +6186,12 @@ def _censored_notes(table_id):
             budget = f"{secs / 3600:g} hour" if secs else "its"
             _phase = _CENSORED_PHASE.get((lane, str(scale), backend, w))
             _in = f" It was still in {_phase} when the budget ran out." if _phase else ""
-            tail = (f" at {scale_label(lane, scale)}: the {what} cell exceeded "
+            tail = (f" at {scale_label(lane, scale)}: {_cell} exceeded "
                     f"its {budget} budget, the same budget every engine on this table had, on its first "
                     f"attempt and was not retried; there is no row.{_in}")
             pins = [scale_label(lane, scale), budget]
         else:
-            tail = (f" at {scale_label(lane, scale)}: the {what} cell failed "
+            tail = (f" at {scale_label(lane, scale)}: {_cell} failed "
                     f"inside its budget and was not retried, so there is no row. What it reported: "
                     f"{secs}")
             pins = [scale_label(lane, scale), str(secs)]
@@ -6349,6 +6701,44 @@ def _counts_note(table_id, entries):
     if table_id == "l2olap":
         n = str(L['graph_common'].OLAP_ITERATIONS)
         return [_gen(f"Each repetition runs every query {n} times; the p50 and p99 are over those runs.", n)]
+    if table_id == "l3s" and _instrument_of("l3s") == "2026-10":
+        # NOT THE DENSE SENTENCE. The branch below describes the dense
+        # multipass overlay (one query set, cold then warm passes over the same
+        # queries, pooled over five builds), and on this table it printed "warm
+        # pools the four passes after it, over five builds" beside the second-
+        # pass note that says the opposite and is right: the sparse warm columns
+        # come from a separate run, one build per engine, its cold pass over one
+        # half of the queries and five warm passes over the other half. So the
+        # sparse table says only what both runs did, read from their own
+        # records: the lane's queries per timed pass and the warm-up it
+        # discards (the rows' n_queries and query_n), and the half each pass of
+        # the second-pass run answers (the files' n_queries).
+        lrows = [r for r in _FROZEN_ROWS if r.get("lane") == "l3s"]
+        nq = {int(v) for v in (_num(r.get("n_queries")) for r in lrows) if v}
+        nt = {int(v) for v in (_num(r.get("query_n")) for r in lrows) if v}
+        half = set()
+        try:
+            root = _pinned_dir("sparse_mp")
+            for fp in (sorted(root.glob("sp_*.json")) if root.is_dir() else []):
+                for rec in json.loads(fp.read_text(encoding="utf-8")):
+                    if _num(rec.get("n_queries")):
+                        half.add(int(_num(rec.get("n_queries"))))
+        except (OSError, ValueError, SystemExit):
+            half = set()
+        if len(nq) != 1:
+            return []
+        n = f"{nq.pop():,}"
+        warm = (nt.pop() if len(nt) == 1 else None)
+        skip = (int(n.replace(",", "")) - warm) if warm is not None else None
+        lead = (f"Each timed pass on this table answers {n} queries, and its p50 and p99 leave out the "
+                f"first {skip} as warm-up" if skip and skip > 0 else f"Each timed pass on this table answers {n} queries")
+        vals = [n] + ([str(skip)] if skip and skip > 0 else [])
+        has_warm = any("warm p50 ms" in (e.get("metrics") or {}) for e in entries)
+        if has_warm and len(half) == 1:
+            h = f"{half.pop():,}"
+            return [_gen(f"{lead}; the second-pass run answers {h} of them in its cold pass and the other "
+                         f"{h} in each warm pass.", *vals, h)]
+        return [_gen(f"{lead}.", *vals)]
     if table_id in ("l3d", "l3s"):
         n = f"{L['l3d_dense'].N_QUERIES:,}"
         if not any("warm p50 ms" in (e.get("metrics") or {}) for e in entries):
@@ -6436,7 +6826,7 @@ def _finish_table(table: dict) -> dict:
                 base.append(note)
     table["conditions"] = (base
                            + _counts_note(table.get("id"), table.get("entries", []))
-                           + _index_note(table.get("id"))
+                           + _index_note(table.get("id"), table)
                            + _split_note(table)
                            + _phase_split_notes(table)
                            + _censored_notes(table.get("id"))
@@ -7271,7 +7661,8 @@ def main() -> int:
         # own conditions say all of this, per column.
         if _t.get("id") in ("durability", "e2atom"):
             continue
-        _note = _durability_note(_t.get("entries", []), rows)
+        _note = _durability_note(_t.get("entries", []), rows,
+                                 (_TABLE_LANE.get(_t.get("id")) or (None,))[0])
         if _note:
             _t.setdefault("conditions", [])
             if _note not in _t["conditions"]:
