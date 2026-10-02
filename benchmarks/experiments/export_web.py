@@ -1705,6 +1705,21 @@ _F133 = ("Qdrant + Neo4j's row is marked `re-run`. Its vector half ran in the "
          "It is being re-run against the Qdrant server the vector table uses. Its all-or-nothing result "
          "on the table above does not depend on this.")
 _BEFORE_F132 = lambda r: str(r.get("filtered_access") or "") != "record ids"      # noqa: E731
+# Neo4j's vector index ran BINARY-quantized (BUGS F164, DECISIONS #135): Neo4j 2026.08.1 builds a vector index with
+# `vector.quantization.type: "BINARY"` and a search expansion factor of 3 when the definition names no quantization,
+# and neither arm's definition did, while their rows recorded `quantization: "fp32"`. Every cell resting on the index
+# comes down; the cross-model atomicity row does not rest on it and stays. The re-measured rows read the applied
+# index configuration back as `neo4j_vector_quantization`, so a row without that field is a row from before the fix.
+_F164_DENSE = ("Neo4j's row is marked `re-run`: its vector index ran at Neo4j's default quantization, binary with a "
+               "three-fold search expansion, which our index definition did not override, while the row recorded it as "
+               "unquantized. It is being re-measured with the quantization set explicitly, unquantized here and as a "
+               "separate scalar-quantized row.")
+_F164_E2 = ("Neo4j's row is marked `re-run`: its vector index ran at Neo4j's default quantization, binary with a "
+            "three-fold search expansion, which our index definition did not override, so its vector search was not "
+            "the unquantized search the other engines ran. It is being re-measured with the quantization set "
+            "explicitly. Its all-or-nothing result on the atomicity table does not depend on the index.")
+_BEFORE_F164 = lambda r: not r.get("neo4j_vector_quantization")                # noqa: E731
+
 _BEFORE_F134 = lambda r: not str(r.get("settle_s") or "").strip()                  # noqa: E731
 _BEFORE_F133 = lambda r: "qdrant-local" in str(r.get("engine_version") or "")     # noqa: E731
 STALE_UNTIL_RERUN = {
@@ -1713,6 +1728,8 @@ STALE_UNTIL_RERUN = {
     ("e2", "surrealdb_e2_server", "retrieval p50 ms", "e2_500k"): (_F134, _BEFORE_F134),
     ("e2", "surrealdb_e2_server", "retrieval recall@10", "e2_500k"): (_F134, _BEFORE_F134),
     ("e2", "composed_qdrant_neo4j", None, None): (_F133, _BEFORE_F133),
+    ("e2", "neo4j_e2", None, None): (_F164_E2, _BEFORE_F164),
+    ("l3d", "neo4j_dense", None, None): (_F164_DENSE, _BEFORE_F164),
 }
 
 
@@ -1724,7 +1741,9 @@ def _rows_behind(table_id, backend_key, scale=None):
     if not lane_wl:
         return []
     lane, wl = lane_wl
-    rs = [r for r in (_FROZEN_ROWS or []) if r.get("lane") == lane and r.get("workload") == wl
+    # A table whose lane has one workload maps to None, which means any workload here: the literal comparison
+    # matched no dense, sparse, time-series, or lifecycle row, so a stale entry on those tables could never fire.
+    rs = [r for r in (_FROZEN_ROWS or []) if r.get("lane") == lane and (wl is None or r.get("workload") == wl)
           and r.get("backend") == backend_key and (scale is None or str(r.get("scale")) == str(scale))]
     relaxed = [r for r in rs if str(r.get("durability_class")) == "relaxed"]
     return relaxed or rs
