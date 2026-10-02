@@ -267,7 +267,7 @@ class ArcadeServer(ArcadeEmbedded):
         # report the real server version, not a hardcoded guess (the image is
         # digest-pinned in runner.py; keep the results row honest)
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self.version = "server:" + (info.json().get("version") or "?")
         except Exception:
             self.version = "server:unknown"

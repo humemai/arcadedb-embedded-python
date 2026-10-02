@@ -223,7 +223,7 @@ def main(args):
     root = f"http://{host}:{port}"
     base = f"{root}/api/v1"
     try:
-        info = rq.get(f"{base}/server", timeout=30)
+        info = rq.get(f"{base}/server?mode=basic", timeout=30)
         version = "server:" + (info.json().get("version") or "?")
     except Exception:  # noqa: BLE001
         version = "server:unknown"

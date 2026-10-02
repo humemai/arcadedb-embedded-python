@@ -310,7 +310,7 @@ def main() -> int:
         # The first request after start() pays a one-time warmup (lazy class
         # loading plus the password KDF); WARMUP absorbs it, but poke it once
         # here so the first sweep entry is not the one that eats it.
-        sess.get(f"{base}/api/v1/server", auth=auth, timeout=120)
+        sess.get(f"{base}/api/v1/server?mode=basic", auth=auth, timeout=120)
 
         run_http = http_runner(sess, base, auth, DB_NAME)
         arms = {

@@ -700,7 +700,7 @@ class ArcadeServer(Base):
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
         try:
-            r = self.rq.get(f"{self.base}/server", timeout=30).json()
+            r = self.rq.get(f"{self.base}/server?mode=basic", timeout=30).json()
             self.version = "server:" + str(r.get("version", "?"))
         except Exception:
             self.version = "server:?"

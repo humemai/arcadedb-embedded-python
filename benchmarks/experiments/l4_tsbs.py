@@ -258,7 +258,7 @@ class ArcadeTSServer(ArcadeTS):
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self._ver = "server:" + (info.json().get("version") or "?")
         except Exception:  # noqa: BLE001
             self._ver = "server:unknown"
@@ -568,7 +568,7 @@ class ArcadeNativeTSServer(ArcadeNativeTS):
         port = os.environ.get("BENCH_SERVER_PORT", "2480")
         self.base = f"http://{host}:{port}/api/v1"
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self._ver = "server:" + (info.json().get("version") or "?")
         except Exception:  # noqa: BLE001
             self._ver = "server:unknown"

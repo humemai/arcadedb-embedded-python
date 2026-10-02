@@ -1180,7 +1180,7 @@ class ArcadeServerTPC(ArcadeTPC):
         # was the last one still asserting it. The same defect in another form
         # made ArcadeDB rows read "server:latest" while a pinned digest ran.
         try:
-            info = self.rq.get(f"http://{host}:2480/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:2480/api/v1/server?mode=basic", timeout=30)
             self.version = "server:" + (info.json().get("version") or "?")
         except Exception as e:
             self.version = f"server:unknown ({e.__class__.__name__})"

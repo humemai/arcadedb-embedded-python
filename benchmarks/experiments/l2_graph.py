@@ -358,7 +358,7 @@ class ArcadeGraphServer(ArcadeGraphEmbedded):
         # fix in l1_tabular.py: a hardcoded "server:latest" is a tag nobody
         # ran, and it makes every F5 version check on this lane vacuous.
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self.version = "server:" + (info.json().get("version") or "?")
         except Exception:
             self.version = "server:unknown"

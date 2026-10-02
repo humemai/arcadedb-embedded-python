@@ -603,7 +603,7 @@ class ArcadeServer(Base):
         # makes every version check on this lane vacuous, and f8 silently
         # divided a 26.8.1 embedded row by a "latest" server row for weeks.
         try:
-            info = self.rq.get(f"http://{host}:{port}/api/v1/server", timeout=30)
+            info = self.rq.get(f"http://{host}:{port}/api/v1/server?mode=basic", timeout=30)
             self.version = "server:" + (info.json().get("version") or "?")
         except Exception:
             self.version = "server:unknown"
