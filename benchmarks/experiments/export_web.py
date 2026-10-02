@@ -629,6 +629,8 @@ DISPLAY_NAMES = {
     "surrealdb_e2_server": "SurrealDB (server)",
     "pg_age_e2": "PostgreSQL + pgvector + AGE",
     "neo4j_e2": "Neo4j (vector index)",
+    "memgraph_e2": "Memgraph (vector index)", "ladybug_e2": "LadybugDB (vector extension)",
+    "duckdb_e2": "DuckDB (vss + DuckPGQ)",
     "qdrant_sparse": "Qdrant", "qdrant_dense": "Qdrant", "qdrant_dense_int8": "Qdrant",
     "milvus_sparse": "Milvus", "milvus_dense": "Milvus", "milvus_dense_int8": "Milvus",
     "sqlite_vec_dense_int8": "sqlite-vec",

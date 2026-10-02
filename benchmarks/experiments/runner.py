@@ -860,6 +860,33 @@ BACKENDS = {
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
     },
+    # MEMGRAPH AND LADYBUGDB ON THE CROSS-MODEL TABLE (DECISIONS #131 item 4,
+    # from the 26.10.1 measurement): Memgraph served at the graph arm's digest
+    # and pools, LadybugDB embedded in the client image with its `vector`
+    # extension downloaded at connect.
+    "memgraph_e2": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "memgraph/memgraph@sha256:4710bee1ab5b47599876e30f17ae1679d0bbb2262d84dc06641521fecb7c89ce",  # 3.13.1
+        "server_cmd": ["--log-level=INFO", "--also-log-to-stderr=true",
+                       "--bolt-num-workers={ncpu}",
+                       "--storage-snapshot-thread-count={ncpu}",
+                       "--memory-limit={mem90_mib}",
+                       "--query-execution-timeout-sec=0",
+                       "--telemetry-enabled=false"],
+        "server_port": 7687,
+        "ready_regex": r"Bolt server is fully armed and operational",
+    },
+    "ladybug_e2": {
+        "topology": "embedded",
+        "image": "dbbench:client",
+    },
+    # DuckDB with vss and DuckPGQ in one engine (DECISIONS #131 item 4: tested,
+    # then added), embedded in the DuckDB image the other DuckDB arms run.
+    "duckdb_e2": {
+        "topology": "embedded",
+        "image": "dbbench:duckdb",
+    },
     "neo4j_e2": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1599,7 +1626,8 @@ LANES = {
               ["oltp", "olap"]),
     "e2": ("e2_hybrid.py",
            ["arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2", "surrealdb_e2_server",
-            "arangodb_e2", "mongodb_e2", "pg_age_e2", "neo4j_e2", "composed_qdrant_neo4j"],
+            "arangodb_e2", "mongodb_e2", "pg_age_e2", "neo4j_e2", "memgraph_e2", "ladybug_e2",
+            "duckdb_e2", "composed_qdrant_neo4j"],
            ["hybrid", "atomicity"]),
     # L5 measures OPEN and CLOSE, which every embedded deployment does and no
     # benchmark measures. Situations ride the WORKLOAD axis, so each is its own

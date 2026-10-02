@@ -776,7 +776,7 @@ def check_close_cost(rows):
 # `durability_class` (DECISIONS #90), or a PostgreSQL row whose server did not
 # answer its class's synchronous_commit (off relaxed, on strict).
 STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo4j",
-                  "ladybug_graph", "duckdb", "duckdb_vss_dense", "duckpgq_graph"}
+                  "ladybug_graph", "ladybug_e2", "duckdb", "duckdb_vss_dense", "duckpgq_graph", "duckdb_e2"}
 
 # THE THIRD CLASS, and the only backends allowed to be in it. SurrealDB 3.2.4
 # served has no sync setting at all -- no SYNC_DATA and no SURREAL_DATASTORE
@@ -867,6 +867,9 @@ INDEX_DECISIONS = {
         "arcadedb_e2_server":     "Product(pid) UNIQUE",
         "pg_age_e2":              "product(pid) PRIMARY KEY",
         "neo4j_e2":               "index on :Product(pid)",
+        "memgraph_e2":            "label-property index on :Product(pid)",
+        "ladybug_e2":             "pid is the node table's primary key (a hash index)",
+        "duckdb_e2":              "unique index on product(pid), built after the load",
         "mongodb_e2":             "pid as the vector index's filter path",
         # Every read now ADDRESSES the record id, including the candidate
         # ranking, which scanned `WHERE pid INSIDE [...]` until DECISIONS #117

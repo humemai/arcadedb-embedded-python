@@ -510,8 +510,10 @@ def _page_index(payload):
 # comparator that joins (ArangoDB, qDV) is checked the day it lands.
 E2_SINGLE_ENGINE = ("arcadedb_e2", "arcadedb_e2_server", "surrealdb_e2",
                     "surrealdb_e2_server", "neo4j_e2", "pg_age_e2", "arangodb_e2",
-                    "mongodb_e2")
-E2_OPTIONAL = ("arangodb_e2", "mongodb_e2")
+                    "mongodb_e2", "memgraph_e2", "ladybug_e2", "duckdb_e2")
+# Optional until a campaign has measured them (Memgraph, LadybugDB, and DuckDB join at
+# the 26.10.1 measurement, DECISIONS #131 item 4).
+E2_OPTIONAL = ("arangodb_e2", "mongodb_e2", "memgraph_e2", "ladybug_e2", "duckdb_e2")
 E2_BACKENDS = E2_SINGLE_ENGINE + ("composed_qdrant_neo4j",)
 
 
