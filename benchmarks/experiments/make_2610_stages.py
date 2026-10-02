@@ -88,6 +88,13 @@ def _october(sid):
 
 
 _LC = _october("qOG")
+
+# The restart lane's arms by model, from the lane's own map, so a model gaining
+# an engine there gains it here; and its protocol, stated rather than defaulted.
+import l6_restart as _RS  # noqa: E402
+RESTART_BY_MODEL = {m: tuple(b for b in runner.LANES["restart"][1] if _RS.MODEL[b] == m)
+                    for m in ("docs", "graph", "dense", "ts")}
+RESTART_ENV = ("BENCH_RS_ITERS=5", "BENCH_RS_WARMUP=1", "BENCH_RS_WRITE_N=1000")
 # id, title, lane, workloads, scales, guards, extra, stage_env, only, dur_mode, after
 STAGES = [
     ("qRA", "graph INTERACTIVE at both sizes, both durability classes", "l2", ["oltp"], ["sf1", "sf10"],
@@ -109,6 +116,17 @@ STAGES = [
     ("qRI", "lifecycle at four sizes, ArcadeDB and SurrealDB", "lifecycle", _LC[3], _LC[4], [], {},
      _LC[7], list(LIFECYCLE_PAPER)),
     ("qRJ", "the Python-cost table (host-side, run_bench.sh)", "pycost", [], [], [], {}, []),
+    # THE SERVER RESTART (DECISIONS #139 item 2, l6_restart.py), one stage per
+    # model: a stage's scales apply to every arm in it, and each model has its
+    # own tiers (the scale names the model, and the lane refuses another's).
+    ("qRK", "server restart on documents, both sizes", "restart", ["restart"], ["tpch1", "tpch10"],
+     _october("qOE")[5], {}, list(RESTART_ENV), list(RESTART_BY_MODEL["docs"])),
+    ("qRL", "server restart on the graph, both sizes", "restart", ["restart"], ["sf1", "sf10"],
+     _october("qOA")[5], {}, list(RESTART_ENV), list(RESTART_BY_MODEL["graph"])),
+    ("qRM", "server restart on dense vectors", "restart", ["restart"], ["small"],
+     [], {}, list(RESTART_ENV), list(RESTART_BY_MODEL["dense"])),
+    ("qRN", "server restart on time series, both sizes", "restart", ["restart"], ["ts100", "ts1000"],
+     [_october("qOJ")[5][0]], {}, list(RESTART_ENV), list(RESTART_BY_MODEL["ts"])),
     # No qRK: the lifecycle expansion to the single-model embedded engines was
     # dropped (DECISIONS #139); the lane's roster is ArcadeDB and SurrealDB.
 ]

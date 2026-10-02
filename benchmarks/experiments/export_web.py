@@ -946,6 +946,16 @@ SCALE_LABELS = {
     ("lifecycle", "lc100k"): "100k",
     ("lifecycle", "lc1m"): "1M",
     ("lifecycle", "lc10m"): "10M",
+    # THE SERVER RESTART (DECISIONS #139 item 2). Each engine restarts on ONE
+    # model's data, at that model's own tiers, so the size says the model too:
+    # rows are compared only within a size, never across models.
+    ("restart", "tpch1"): "documents, TPC-H SF1 (6.0M line items)",
+    ("restart", "tpch10"): "documents, TPC-H SF10 (60.0M line items)",
+    ("restart", "sf1"): "graph, LDBC SF1 (11k people)",
+    ("restart", "sf10"): "graph, LDBC SF10 (73k people)",
+    ("restart", "small"): "dense vectors, 1M (SIFT)",
+    ("restart", "ts100"): f"time series, {_l4_points('ts100')} points",
+    ("restart", "ts1000"): f"time series, {_l4_points('ts1000')} points (1,000 hosts)",
 }
 
 # THE SKELETON'S OWN LABELS (DECISIONS #86). The placeholder run uses the
@@ -970,6 +980,10 @@ SKELETON_SCALE_LABELS = {
     ("l4", "ts100"): f"{_l4_points('ts100')} points (skeleton)",
     ("e2", "e2"): "50k products (skeleton)",
     ("lifecycle", "lc10k"): "10k (skeleton)",
+    # One micro tier for three models on the laptop: the skeleton shows the
+    # table's shape, and the campaign's tiers (above) name each model apart.
+    ("restart", "micro"): "each engine's own micro corpus (skeleton)",
+    ("restart", "ts100"): f"time series, {_l4_points('ts100')} points (skeleton)",
 }
 
 
@@ -1085,6 +1099,7 @@ SOURCES = {
     "l2olap": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "e2atom": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "lifecycle": f"benchmarks/experiments/results/{FROZEN_NAME}",
+    "restart": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "docs_oltp": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "docs_olap": f"benchmarks/experiments/results/{FROZEN_NAME}",
     "multimodel": f"benchmarks/experiments/results/{FROZEN_NAME}",
@@ -2591,6 +2606,25 @@ LANES = {
             "Read the times with one caveat, which cuts against ArcadeDB. Every engine on this table writes to disk except the composed stack's vector half: Qdrant runs in memory (:memory:), so part of why the composed stack's queries answer as they do is that half of it never touches a disk. The all-or-nothing result above does not depend on this, since a half-finished update is visible in memory just as it is on disk, but the millisecond columns do.",
             "Because the composed stack's Qdrant half runs in memory, its disk value is Neo4j's alone. SurrealDB embedded runs on the SDK's SurrealKV store on disk and SurrealDB server on RocksDB, and each has its own disk reading.",
         ],
+    },
+    # THE SERVER RESTART (DECISIONS #139 item 2, l6_restart.py): what every
+    # served engine costs to come back on the same data, and to go down
+    # cleanly. October-only: no September row exists, so its conditions are
+    # OCT_PROSE's and the list here stays empty.
+    "restart": {
+        "title": "Server restart",
+        "dataset": "Each engine's own data on one model (documents, graph, dense vectors, or time series), restarted in place",
+        "metrics": [("restart_total_s", "restart s"),
+                    ("restart_start_s", "start s"),
+                    ("restart_first_query_s", "first answer s"),
+                    ("restart_after_write_s", "restart after writes s"),
+                    ("shutdown_idle_s", "stop s"),
+                    ("shutdown_write_s", "stop after writes s")],
+        # The two MongoDB rows are two servers: the search arm's container also
+        # runs mongot, which a restart has to bring back.
+        "labels": {"mongodb_dense": "MongoDB + MongoDB Search",
+                   "arcadedb_ts_native_server": "ArcadeDB (server)"},
+        "conditions": [],
     },
 }
 
@@ -4702,6 +4736,30 @@ OCT_PROSE = {
     },
 }
 OCT_PROSE["docs_olap"] = {"ingest": OCT_PROSE["docs_oltp"]["ingest"]}
+# The server restart (DECISIONS #139 item 2). Facts about the protocol, no
+# numbers, so no pins: the counts (cycles, batch size) are on every row.
+OCT_PROSE["restart"] = {
+    "what": ("A served engine has no open or close of its own to time, so this table times what it has instead: a "
+             "restart. Each engine is stopped the way its own image stops it, started again on the same data in the "
+             "same container, and timed until a fixed read answers exactly as it did before the stop. Start is the "
+             "time until the engine answers a liveness call; first answer is the time from there to the right answer.", []),
+    "stops": ("A stop is timed from the stop signal to the process gone, twice: after a session that wrote nothing, "
+              "and after one that wrote a fixed batch of records, each committed. A clean stop should cost what was "
+              "written, not what is stored, so it should not grow with the size of the data. Every batch written "
+              "before a stop is read back after the restart that follows it, so no engine's stop number comes from "
+              "losing writes.", []),
+    "warm_cache": ("These are process restarts on the same machine, the case of an upgrade, a configuration change, "
+                   "or a crash: the host still holds the engine's files in its page cache, so the restart reads them "
+                   "from memory. A restart after a reboot reads them from disk and would be slower for every engine.", []),
+    "durability": ("Each engine runs at the durability its own table runs it at: the relaxed setting where that table "
+                   "times writes (documents, graph, and time series), and the engine's default for the vector servers, "
+                   "whose table times only a load and sets none. So a stop after writes flushes what that setting left "
+                   "unflushed, and each row records the setting as `durability`.", []),
+    "models": ("Each engine restarts on one model's data, loaded by that model's own table, and is compared only with "
+               "the engines on the same data: the size column names the model. ArcadeDB's server runs all four. "
+               "PostgreSQL stands for the pgvector, Apache AGE, and TimescaleDB arms, which run the same server and "
+               "rebuild nothing in memory at start.", []),
+}
 OCT_PROSE["l2olap"]["ingest"] = OCT_PROSE["l2"]["ingest"]
 
 # The registered sentences each October table opens with, in order. Sentences
@@ -4713,6 +4771,7 @@ OCT_TABLE_PROSE = {
     "l2olap": ["gav"],
     "e2atom": ["trial"],
     "e2": ["atomic", "interesting", "disk_split"],
+    "restart": ["what", "stops", "warm_cache", "durability", "models"],
 }
 
 
@@ -5317,6 +5376,7 @@ _TABLE_LANE = {
     # budget would have left an engine off the table with no note, and the
     # coverage gate had no lane to read its fields from.
     "lifecycle": ("lifecycle", None),
+    "restart": ("restart", "restart"),
 }
 
 
@@ -7077,7 +7137,7 @@ def main() -> int:
             if (_row_ref and image and not str(backend).startswith("arcadedb")
                     and str(_row_ref).split("@")[0].split(":")[0] != str(image).split("@")[0].split(":")[0]):
                 image = str(_row_ref)
-            label = display_name(backend)
+            label = (spec.get("labels") or {}).get(backend) or display_name(backend)
             if lane == "l3d":
                 prec = DENSE_PRECISION.get(backend)
                 if prec is None:
@@ -7365,6 +7425,13 @@ def main() -> int:
         # setting to relax, which is the opposite of what the table shows. Its
         # own conditions say all of this, per column.
         if _t.get("id") in ("durability", "e2atom"):
+            continue
+        # NOR on the restart table: the note speaks of write and transaction
+        # cells matched at the relaxed end, and the restart table has none. Its
+        # vector servers run at the engine default their own table never sets,
+        # which the note would read as relaxed; the table's own sentence says
+        # what each stop is measured against (OCT_PROSE["restart"]["durability"]).
+        if _t.get("id") == "restart":
             continue
         _note = _durability_note(_t.get("entries", []), rows)
         if _note:

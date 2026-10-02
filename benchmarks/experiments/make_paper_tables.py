@@ -121,7 +121,10 @@ PAPER_SCALES = {"l1": ["medium"], "l1tpc": ["tpch1"], "l2": ["sf1", "sf10"], "e4
                 "l3s": ["tiny", "small", "medium"], "l3d": ["small", "deep10m"],
                 "e2": ["e2"],
                 "l4": ["ts100"],
-                "lifecycle": ["lc10k", "lc100k", "lc1m", "lc10m"]}
+                "lifecycle": ["lc10k", "lc100k", "lc1m", "lc10m"],
+                # The server restart (DECISIONS #139 item 2): each model at its
+                # own lane's tiers, the scale naming the model (l6_restart.py).
+                "restart": ["tpch1", "tpch10", "sf1", "sf10", "small", "ts100", "ts1000"]}
 # OCTOBER'S LARGE SIZES, WHICH #108 MAKES ROW GROUPS RATHER THAN REPLACEMENTS.
 # Dense and sparse always carried two (l3d small+deep10m, l3s three), so the
 # multi-size rendering has worked all along; these four lanes were simply
@@ -168,7 +171,7 @@ OCTOBER_LARGE_SCALES = {"l1tpc": "tpch10", "l2": "sf1full",
 # skeleton stays the micro generator.
 SKELETON_SCALES = {"l1tpc": ["micro"], "l2": ["micro", "sf1"], "l3s": ["micro"],
                    "l3d": ["micro"], "e2": ["e2"], "l4": ["ts100"],
-                   "lifecycle": ["lc10k"]}
+                   "lifecycle": ["lc10k"], "restart": ["micro", "ts100"]}
 SKELETON = os.environ.get("BENCH_SKELETON") == "1"
 # Set by land_stage --only-lanes; empty means every lane this freeze knows.
 _ONLY_LANES = {l.strip() for l in os.environ.get("BENCH_ONLY_LANES", "").split(",") if l.strip()}

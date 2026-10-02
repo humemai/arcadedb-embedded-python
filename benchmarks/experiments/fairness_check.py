@@ -1293,6 +1293,7 @@ LANE_SCRIPT = {
     "e2": {"e2_hybrid.py"},
     "e4": {"e4_decomp.py"},
     "lifecycle": {"l5_lifecycle.py"},
+    "restart": {"l6_restart.py"},
     "e4_decomp": {"deployment_decomp_probe.py"},
 }
 

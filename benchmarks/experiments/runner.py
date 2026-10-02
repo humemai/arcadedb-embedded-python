@@ -1738,6 +1738,25 @@ LANES = {
                   ["arcadedb_embedded", "arcadedb_server", "surrealdb_lifecycle"],
                   ["empty", "doc", "doc_idx10", "graph", "graph_gav",
                    "vector", "sparse", "ts"]),
+    # L6, the server restart (DECISIONS #139 item 2): every served engine on
+    # the page, one model each through its own lane's loader, restarted in
+    # place by the lane (it stops and starts its own server container through
+    # the Docker socket, mounted for this lane alone, below). The scale names
+    # the model: tpch*/micro documents, sf*/micro graph, small/deep10m/micro
+    # dense, ts* time series, so each cell gets its source lane's envelope.
+    # PostgreSQL stands for pgvector, PG+AGE, and TimescaleDB (one server
+    # binary); MongoDB appears twice because its search arm runs a second
+    # process, mongot, that a restart must bring back too.
+    # ArcadeDB's server runs all four models, so every group has the engine
+    # under test beside it (a page table publishes a tier only where ArcadeDB
+    # has a row).
+    "restart": ("l6_restart.py",
+                ["arcadedb_server", "surrealdb_tpc_server", "arangodb_tpc", "mongodb", "postgres",
+                 "arcadedb_graph_server", "neo4j_graph", "memgraph_graph", "falkordb_graph",
+                 "arcadedb_dense_server", "qdrant_dense", "milvus_dense", "elasticsearch_dense",
+                 "mongodb_dense",
+                 "arcadedb_ts_native_server", "questdb"],
+                ["restart"]),
     "l3s": ("l3_sparse.py",
             ["arcadedb_sparse_embedded", "arcadedb_sparse_embedded_fp32",
              "arcadedb_sparse_embedded_nocompact", "arcadedb_sparse_server",
@@ -2693,7 +2712,13 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                    # ArangoDB into waitForSync, SurrealDB embedded into
                    # SURREAL_SYNC_DATA. The served engines are set below, on
                    # their own containers.
-                   "BENCH_DURABILITY", "SURREAL_SYNC_DATA"):
+                   "BENCH_DURABILITY", "SURREAL_SYNC_DATA",
+                   # The restart lane's protocol knobs (l6_restart.py): cycles,
+                   # warm-up, the write batch, the stop grace, the poll interval,
+                   # the start deadline, and the laptop-only shutdown trace.
+                   "BENCH_RS_ITERS", "BENCH_RS_WARMUP", "BENCH_RS_WRITE_N",
+                   "BENCH_RS_GRACE_S", "BENCH_RS_POLL_S", "BENCH_RS_START_TIMEOUT_S",
+                   "BENCH_RS_TRACE", "BENCH_RS_VERIFY_S"):
             if os.environ.get(_k):
                 bench_env += ["-e", f"{_k}={os.environ[_k]}"]
 
@@ -2730,6 +2755,12 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                # so a cold open can be produced by evicting it. See LC_HOST_DIR.
                + (["-v", f"{LC_HOST_DIR}:/lcdb"]
                   if job["lane"] == "lifecycle" else [])
+               # The restart lane stops and starts its own server container
+               # (l6_restart.py through docker_api.py), so the same container
+               # comes back with the same data, flags, cpuset, and cap. Its
+               # client alone gets the Docker socket.
+               + (["-v", "/var/run/docker.sock:/var/run/docker.sock"]
+                  if job["lane"] == "restart" else [])
                + _client_tail(job, be, scale, run_id))
         cli_cid = sh(cmd)
         if len(cli_cid) < 12:

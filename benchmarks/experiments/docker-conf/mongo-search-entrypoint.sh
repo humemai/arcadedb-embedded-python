@@ -106,4 +106,17 @@ MONGOT_VER=$(head -1 "$MONGOT_DIR/VERSION.txt" | tr -d '\r')
 mongosh_auth "db.getSiblingDB('dbbench').build.replaceOne({_id:'mongot'}, {_id:'mongot', version:'${MONGOT_VER}'}, {upsert:true})" >/dev/null 2>&1 || true
 
 echo "DBBENCH mongod+mongot ready"
+# A `docker stop` signals PID 1, which is this script, and bash as PID 1 ignores
+# SIGTERM unless it traps it: mongod and mongot were never told to stop, and
+# docker killed them when its grace ran out. Forward it, search first (it syncs
+# from mongod), so both shut down cleanly; the restart lane (l6_restart.py)
+# times exactly that shutdown, and every other lane never stops the server.
+_stop() {
+    kill -TERM "$MONGOT_PID" 2>/dev/null || true
+    wait "$MONGOT_PID" 2>/dev/null || true
+    kill -TERM "$MONGOD_PID" 2>/dev/null || true
+    wait "$MONGOD_PID" 2>/dev/null || true
+    exit 0
+}
+trap _stop TERM INT
 wait -n "$MONGOD_PID" "$MONGOT_PID"

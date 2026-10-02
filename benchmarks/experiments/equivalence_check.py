@@ -148,7 +148,22 @@ SPLIT_BY_DEPLOYMENT = {
                  "their post-state record counts differ by construction",
 }
 
-NOT_COMPARABLE = {}
+# THE SAME SPLIT BY A FIELD THE ROW CARRIES. The server-restart lane runs each
+# engine on ONE model's data, and its campaign tiers already keep the models
+# apart (the scale names the model), but its laptop skeleton runs every model
+# at one tier: a document read and a graph read must not be one group there.
+SPLIT_BY_FIELD = {
+    "restart": "restart_model",
+}
+
+NOT_COMPARABLE = {
+    # The server-restart lane's vector read (l6_restart.py): each engine's top 10
+    # through its own approximate index, which the lane holds against the SAME
+    # engine's answer before every stop; two engines' approximate top 10s are
+    # not expected to be equal, so there is no cross-engine question here.
+    ("restart", "restart_knn"): "an approximate index's top 10; each engine's is held against its own answer "
+                                "before the stop, inside the lane",
+}
 # (lane, backend) -> "embedded" or "served", filled by collect() for the lanes
 # above, so E3 does not count an embedded arm as silent on the served group.
 _DEPLOYMENT = {}
@@ -227,6 +242,10 @@ def collect(rows):
             q = m.group(1)
             if r.get("lane") in SPLIT_BY_DEPLOYMENT:
                 _dep = "served" if r.get("topology") == "client_server" else "embedded"
+                _DEPLOYMENT[(r.get("lane"), r.get("backend"))] = _dep
+                q = f"{q}@{_dep}"
+            elif r.get("lane") in SPLIT_BY_FIELD:
+                _dep = str(r.get(SPLIT_BY_FIELD[r.get("lane")]))
                 _DEPLOYMENT[(r.get("lane"), r.get("backend"))] = _dep
                 q = f"{q}@{_dep}"
             entry = groups[key0 + (q,)][r.get("backend")]
@@ -317,7 +336,7 @@ def report(groups, seen_backends, out=print, list_groups=False):
         # and recorded neither a digest nor a declared absence for a query its
         # neighbours answered has not been checked and does not say why.
         for be in sorted(seen_backends.get((lane, scale, workload), set())):
-            if lane in SPLIT_BY_DEPLOYMENT and "@" in str(query) \
+            if (lane in SPLIT_BY_DEPLOYMENT or lane in SPLIT_BY_FIELD) and "@" in str(query) \
                     and _DEPLOYMENT.get((lane, be)) != str(query).rsplit("@", 1)[1]:
                 continue
             if be not in per_backend:
@@ -341,7 +360,8 @@ def report(groups, seen_backends, out=print, list_groups=False):
         if len(by_digest) == 1:
             agreed += 1
             continue
-        why = NOT_COMPARABLE.get((lane, query))
+        why = (NOT_COMPARABLE.get((lane, query))
+               or NOT_COMPARABLE.get((lane, str(query).split("@", 1)[0])))
         if why:
             not_comparable.append((key, why, sorted(real)))
             continue

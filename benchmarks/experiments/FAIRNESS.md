@@ -170,6 +170,20 @@ row counts of the two data-dependent queries (`q_groupby_rows`, `q_high_rows`),
 because a query that returned a different number of rows measured a different
 question.
 
+**F10c. What a clean stop syncs, by trace (the server-restart table, DECISIONS #139 item 2, 2026-10-02).** The
+restart table times each server's own clean stop after a batch of committed writes, at the durability its own
+table runs it at, so what the stop has to flush depends on that setting. Traced on the development machine
+(`l6_restart.py` with `BENCH_RS_TRACE=1`: a sidecar in the server's PID namespace logs every `fsync`,
+`fdatasync`, `sync_file_range`, `msync`, `syncfs`, and `sync` of every process during the stop; micro corpora,
+200 committed writes before the stop; counts only, the times are not measurements): ArcadeDB 2 to 5
+`fdatasync` (all four models); SurrealDB 7; ArangoDB 8; MongoDB 34, and 104 with mongot; PostgreSQL 22;
+Neo4j 279 (its checkpoint); Memgraph 18; FalkorDB 2 (its RDB snapshot); Qdrant 84 (36 `fsync`, 48 `msync`);
+Milvus 36; Elasticsearch 17; QuestDB 0 (`cairo.commit.mode=nosync`: its stop syncs nothing, and the batch
+still read back after the restart, from the page cache the host kept). Every batch read back after every
+restart on every engine. Two stops were not clean in the exit-code sense while losing nothing: Milvus exits
+134 (SIGABRT, a goroutine dump) on every stop, and before 2026-10-02 the `dbbench:mongo-search` entrypoint
+ignored the stop signal (bash as PID 1 traps nothing), which would have been a kill after the grace.
+
 **F10b. Both durability classes on every timed write (DECISIONS #90,
 superseding the single-setting half of #81).** F10 fixes the class within a
 table; #90 adds the second table. Every timed write operation runs twice, once

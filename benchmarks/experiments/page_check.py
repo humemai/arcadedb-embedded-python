@@ -1210,6 +1210,26 @@ NOT_PRINTED = [
      "PRAGMA threads=sched_getaffinity (FAIRNESS F6, audited in FAIRNESS.md "
      "rather than printed as a column), and the community build id the row "
      "carries beside the DuckDB version the page prints"),
+    # THE SERVER-RESTART LANE (l6_restart.py, DECISIONS #139 item 2).
+    (r"^(restart_iters|restart_warmup|restart_write_n|restart_poll_s|stop_grace_s|"
+     r"restart_read_key|n_points)$",
+     "the restart lane's protocol (cycles, warm-up, the write batch, the poll "
+     "interval, the stop grace) and its fixed read's key, stated on every row and "
+     "described under the table, never a column"),
+    (r"^(restart_load_s|shutdown_after_load_s|write_batch_s|restart_read_recall_at_10)$",
+     "the restart lane's parts that are not what it measures: the load (its own "
+     "table's ingest column), the first stop (it flushes the whole load, a "
+     "different question from a stop after a session), the write session that "
+     "gives the next stop something to flush, and the vector read's recall (the "
+     "read is held against the same engine's own answer before the stop)"),
+    (r"^(stop_killed_after_grace|stop_oom_killed|restart_writes_survived|restart_writes_visible_s)$",
+     "the restart lane's checks on its own stops and restarts: whether Docker had "
+     "to kill an engine that did not stop, an out-of-memory kill, and that every "
+     "batch written before a stop read back after the restart (and how long it "
+     "took to reappear); a check, not a column"),
+    (r"^shutdown_sync_(calls|s)$",
+     "the laptop shutdown trace (BENCH_RS_TRACE=1): which syncs a stop issued, "
+     "evidence for the durability notes, never run in a campaign cell"),
     (r"^driver_version$",
      "the client library a served arm was reached through; the page prints "
      "the engine's version, and the driver stays on the row for an audit"),
