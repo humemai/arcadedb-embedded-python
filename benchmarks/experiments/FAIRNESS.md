@@ -50,7 +50,7 @@ Fitting the pool is resource fitting, the first of the four sanctioned override 
 | Chroma, LanceDB, sqlite-vec | embedded in the driver, no separate server pool | n/a |
 | Milvus | `go_sched_gomaxprocs_threads 12`; Go sizes from `sched_getaffinity` | cpuset |
 | Memgraph 3.13.1 (2026-09-17) | `SHOW CONFIG` under `--cpuset-cpus 0-11` on a 16-CPU laptop: `bolt_num_workers` 16 and `storage_snapshot_thread_count` 16, both documented as "the number of processing units available on the machine"; 51 tasks in `/proc/1/task` at idle. Its memory limit is host-sized the same way (`memory_limit` 0 reported as 30.35 GiB inside an 8g container) | **host**; fitted: runner passes `--bolt-num-workers={ncpu}`, `--storage-snapshot-thread-count={ncpu}` and `--memory-limit` at 90% of the cap, and the adapter reads all three back onto the row (`memgraph_bolt_workers`, `memgraph_snapshot_threads`, `memgraph_memory_limit_mib`; 12, 12, 7372 on the laptop smoke at an 8g cap) The cross-model arm (`memgraph_e2`, from the 26.10.1 measurement) gets the same flags and reads the same settings back. |
-| FalkorDB 4.20.6 (2026-09-17) | startup log under the same cpuset: "Thread pool created, using 16 threads" and "Maximum number of OpenMP threads set to 12"; `GRAPH.CONFIG GET THREAD_COUNT` 16, `OMP_THREAD_COUNT` 12. The query pool reads the host's logical cores, the GraphBLAS pool reads the affinity mask | **host** for the query pool, cpuset for OpenMP; fitted: runner passes `THREAD_COUNT {ncpu}` in `FALKORDB_ARGS`, the log then reads "using 12 threads" and the adapter records `falkordb_thread_count` and `falkordb_omp_threads` from `GRAPH.CONFIG GET` (12 and 12 on the laptop smoke) |
+| FalkorDB 4.20.6 (2026-09-17; 6.0.1 from 2026-10-02 sizes the query pool from the cpuset, `THREAD_COUNT` 4 under a 4-CPU cpuset, and keeps the explicit setting) | startup log under the same cpuset: "Thread pool created, using 16 threads" and "Maximum number of OpenMP threads set to 12"; `GRAPH.CONFIG GET THREAD_COUNT` 16, `OMP_THREAD_COUNT` 12. The query pool reads the host's logical cores, the GraphBLAS pool reads the affinity mask | **host** for the query pool, cpuset for OpenMP; fitted: runner passes `THREAD_COUNT {ncpu}` in `FALKORDB_ARGS`, the log then reads "using 12 threads" and the adapter records `falkordb_thread_count` and `falkordb_omp_threads` from `GRAPH.CONFIG GET` (12 and 12 on the laptop smoke) |
 | LadybugDB 0.20.4 (2026-09-29, BUGS F160) | not audited on 2026-08-01 nor listed as owed; found from LadybugDB/ladybug#1070: `CALL current_setting("threads")` reads the host's CPU count under a cpuset (16 under `--cpuset-cpus 4-7` on the 16-CPU laptop, affinity 4), which is 20 on mini's 12-CPU cells, and the buffer pool defaults to 0.8 of physical RAM, about 49 GB against the 24 GB cell cap. A laptop A/B on the lane's own adapter at 20 against 12 threads put its reads 12-28% slow and its writes 12% fast | **host**; fitted 2026-09-29: the adapter passes `max_num_threads` from `sched_getaffinity` and `buffer_pool_size` at 0.8 of the cgroup `memory.max`, reads the thread count back, and records `ladybug_threads` and `ladybug_buffer_pool_mib` (4 and 3276 in a 4-CPU, 4 GB container); stage `qOA5` re-runs its OLTP rows, and `qOB2` pulls the fitted arm The cross-model arm (`ladybug_e2`, from the 26.10.1 measurement) opens through the same fit and records `ladybug_threads` and `ladybug_buffer_pool_mib`. |
 | PostgreSQL + AGE 1.8.0 on PostgreSQL 18.6 (2026-10-02, both AGE arms) | `SHOW` under an 8-CPU cpuset and a 16 GiB cap: `max_parallel_workers_per_gather` 2 and `work_mem` 4MB, PostgreSQL's fixed defaults rather than host-sized ones, so not F6's bug as stated; but every other engine's pools reach the cell's cores and cap, and these reach 3 of 12 cores and spill rather than use the cap. Measured on the full SF1 network (`repros/age-dialect/resource_fit_probe.py`): workers fitted to the cpuset made LSQB q2 1.8x faster and q4, q5, q7 1.1-1.25x; `work_mem` fitted from the cap cut temp-file spill from 42 GB to 0.7 GB per analytics pass at no net time cost, with no OOM kill; four times that bought nothing | **fixed default**; fitted: the runner passes `max_parallel_workers_per_gather` and `max_parallel_maintenance_workers` = cpuset - 1, `max_parallel_workers` = cpuset, and `work_mem` = (cap x 0.75) / (cpuset x 16), and the graph adapter reads every one back onto the row (`pg_*`); the cross-model rows carry them in `server_cmd` |
 | PostgreSQL 18.6 arms: `postgres_tuned`, `timescaledb`, `pgvector_dense`, `pgvector_sparse`, and the new `postgres_ts` (2026-10-02) | the same fixed defaults as AGE's (2 workers per query, a pool of 8, `work_mem` 4MB; `postgres_tuned` carried a constant 64MB). Same-run A/B on the laptop, defaults against fitted (`BENCH_PG_FIT=off`), answers identical in every pair, no OOM kill: TPC-H Q1 at SF1 on `postgres_tuned` 1.47x faster fitted, Q6 1.13x; the plain-table time series' per-host hourly aggregate 1.35x, its other queries unchanged, and q_last on the same plan either way (EXPLAIN, interleaved in one session); TimescaleDB unchanged within run noise; pgvector dense and sparse search unchanged and recall equal (0.997 and 0.94 both ways), the HNSW build a little faster with more maintenance workers | **fixed default**; fitted with AGE's rule through `runner.PG_FIT_CMD` on every PostgreSQL arm except `postgres`, the defaults arm by design; the time-series arms read every setting back onto the row (`pg_*`), the others carry them in `server_cmd`. `BENCH_PG_FIT=off` exists for the A/B only |
@@ -130,17 +130,21 @@ takes no sync option. DuckDB: `strace` counts 55 `fsync` calls for 50 commits,
 and `duckdb_settings()` at 1.5.4 (the pin since DECISIONS #103d) exposes only
 checkpoint and WAL-autocheckpoint thresholds, no commit-sync knob.
 
-**One engine is in neither class, and says so.** SurrealDB 3.2.4 served has no
-durability setting to match: its binary contains no `SYNC_DATA` and no
-`SURREAL_DATASTORE` token, and none of the 110 `SURREAL_*` variables it does
-expose names sync, WAL, fsync, or durability. This harness used to start it with
-`SURREAL_DATASTORE_SYNC_DATA=never`, which the server never read, so the flag
-labelled those rows as relaxed while changing nothing; it is gone. What 3.2.4
-does at commit was not established, and the row says
-"behaviour at commit is not verified" rather than claiming a class.
-`bench_common.durability_class` returns `unverified` for it, and
-`fairness_check` refuses that on any backend not listed as an exception, so it
-cannot spread silently to another engine.
+**SurrealDB served has the knob, on its storage path (BUGS F165, 2026-10-02).**
+SurrealDB 3.2.4 takes `sync=never|every|<interval>` as a query parameter on the
+RocksDB path (`rocksdb:/tmp/surreal/db?sync=never`) and prints the mode at INFO
+when it starts. Its default is `Sync mode: every transaction commit`: strace on
+the laptop counts one `fdatasync` per commit, 5.3 ms each wall clock, and none at
+`sync=never`, where single-record writes fall from about 7.5 ms to under 1.2 ms.
+Until this date the harness held that 3.2.4 had no sync setting, because the
+search covered only its `SURREAL_*` variable names, and every served row carried
+"behaviour at commit is not verified" while every serverlog we kept carried the
+default's line: the October campaign ran this engine at a sync per commit in both
+classes. The relaxed class now passes `sync=never`, the strict class `sync=every`,
+and the runner reads `Sync mode:` back from the startup log before the client
+starts and refuses the cell on a mismatch (`surreal_sync_mode` on the row). The
+`unverified` class stays in `bench_common.durability_class` and
+`fairness_check`, with no backend allowed in it.
 
 Every row records what it ran as `durability`; `fairness_check.check_durability`
 refuses a 2026-10 row with none, a row whose engine reports a class other than
@@ -180,9 +184,9 @@ synchronous_commit`. `fairness_check` fails a row whose engine reports a
 different class from the one the cell asked for, which is what a flag that did
 not take looks like.
 
-**Four engines have no knob** and are the named exceptions: Neo4j, DuckDB and
-LadybugDB, each straced rather than assumed, and the SurrealDB 3.2.4 server,
-whose binary exposes no sync setting at all. They run once, declare
+**Three engines have no knob** and are the named exceptions: Neo4j, DuckDB and
+LadybugDB, each straced rather than assumed (the SurrealDB 3.2.4 server stood
+here as a fourth until BUGS F165 found its setting). They run once, declare
 `durability_no_setting`, and the page prints their one number in both columns,
 which puts them on an equal footing instead of comparing their strict numbers
 against everyone else's relaxed ones.

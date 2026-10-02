@@ -804,8 +804,9 @@ BACKENDS = {
         "server_port": 7687,
         "ready_regex": r"Bolt server is fully armed and operational",
     },
-    # FALKORDB 4.20.6 on Redis 8.6.3 (2026-09-17), served, the falkordb Python
-    # client over the Redis protocol and the lane's Cypher verbatim
+    # FALKORDB 6.0.1 (2026-10-02, #129; 4.20.6 on Redis 8.6.3 from 2026-09-17
+    # until then), served, the falkordb Python client over the Redis protocol
+    # and the lane's Cypher verbatim
     # (l2_graph.FalkorGraph). The image's own FALKORDB_ARGS is
     # "MAX_QUEUED_QUERIES 25 TIMEOUT 1000 RESULTSET_SIZE 10000": a one-second
     # query timeout that aborts the triangle count at MICRO (1.2 s) and would
@@ -824,7 +825,7 @@ BACKENDS = {
     "falkordb_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
-        "server_image": "falkordb/falkordb@sha256:0a9fe4d1ee0bdda8e0a85ff36d3f03ca9ab91cd9441c4a836afae32e4014e2f7",  # v4.20.6
+        "server_image": "falkordb/falkordb@sha256:2756fdea96acff753e49c459dc279a21a50915d7b2b38bff8a3950d10f984fd8",  # 6.0.1, amd64
         "server_env": ["-e", "BROWSER=0",
                        "-e", "FALKORDB_ARGS=THREAD_COUNT {ncpu} RESULTSET_SIZE -1"],
         "server_port": 6379,
@@ -985,7 +986,7 @@ BACKENDS = {
         # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
         # embedded twin's SURREAL_SYNC_DATA is real and its default is
         # verified; see the DURABILITY maps in the lanes.
-        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
@@ -1004,7 +1005,7 @@ BACKENDS = {
         # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
         # embedded twin's SURREAL_SYNC_DATA is real and its default is
         # verified; see the DURABILITY maps in the lanes.
-        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
@@ -1030,7 +1031,7 @@ BACKENDS = {
         # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
         # embedded twin's SURREAL_SYNC_DATA is real and its default is
         # verified; see the DURABILITY maps in the lanes.
-        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
@@ -1048,7 +1049,7 @@ BACKENDS = {
         # as relaxed while changing nothing -- the BENCH_GAV=0 shape. The
         # embedded twin's SURREAL_SYNC_DATA is real and its default is
         # verified; see the DURABILITY maps in the lanes.
-        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
@@ -1062,7 +1063,7 @@ BACKENDS = {
         "image": "dbbench:client",
         "server_image": "surrealdb/surrealdb@sha256:6a5002363ff5b000b72a55f985203e951e3175e578002954b0e38f113e48a698",  # v3.2.4
         # No durability flag: 3.2.4 has none to set (see surrealdb_graph_server).
-        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db"],
+        "server_cmd": ["start", "--user", "root", "--pass", "root", "--log", "info", "rocksdb:/tmp/surreal/db?sync=never"],
         "server_port": 8000,
         "ready_regex": r"Started web server",
     },
@@ -1420,9 +1421,8 @@ BACKENDS = {
         "ready_regex": r"Bolt server is fully armed and operational",
     },
     # FalkorDB 6.0.1: 4.x crashes on a write inside a vector statement
-    # (repros/falkordb-vector-write/); #129's re-pin takes every FalkorDB arm
-    # to 6.0.x, and until the graph arm moves too, version_consistency_check
-    # reports the split. The graph arm's flags otherwise (F6).
+    # (repros/falkordb-vector-write/). The graph arm moved to the same digest
+    # on 2026-10-02 (#129), so one FalkorDB wears the page; its flags (F6).
     "falkordb_dense": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1801,6 +1801,13 @@ def durability_server_patch(cfg, cls):
     if "falkordb" in str(cfg.get("server_image", "")):
         env += ["-e", "REDIS_ARGS=--appendonly yes --appendfsync always"]
         notes.append("appendonly=yes, appendfsync=always")
+    # SurrealDB served (BUGS F165): the sync mode is a query parameter on the
+    # storage path, `sync=never|every|<interval>`; the relaxed path carries
+    # never, and every is a sync at each commit (strace: one fdatasync per
+    # commit). The runner reads the mode back from the startup log.
+    if "surrealdb/surrealdb" in str(cfg.get("server_image", "")):
+        cmd = [c.replace("?sync=never", "?sync=every") if isinstance(c, str) else c for c in cmd]
+        notes.append("sync=every")
     cfg["server_cmd"] = cmd
     cfg["server_env"] = env
     return cfg, (", ".join(notes) if notes else None)
@@ -2472,6 +2479,22 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
                 row["error"] = (f"server heap {row['server_heap']} != requested "
                                 f"{heap}; the cell is not the one we specified")
                 return row
+            # SURREALDB'S SYNC MODE, READ BACK (BUGS F165). For a month the
+            # served arm ran at the engine default, a sync at every commit, in
+            # both durability classes, while its rows said the behaviour could
+            # not be established; the server had been printing
+            # "Sync mode: every transaction commit" at INFO in every
+            # serverlog we kept. The path asks for a mode; the log is the
+            # evidence, and a cell whose server did not take it does not run.
+            if "surrealdb/surrealdb" in str(be.get("server_image", "")):
+                _sm = re.search(r"Sync mode: ([^\n(]+)", docker_logs(server_cid) or "")
+                _got = _sm.group(1).strip() if _sm else None
+                _want = "every transaction commit" if _dcls == "strict" else "never"
+                row["surreal_sync_mode"] = _got
+                if _got != _want:
+                    row["error"] = (f"SurrealDB sync mode {_got!r} != {_want!r} for the "
+                                    f"{_dcls} class; the cell is not the one we specified")
+                    return row
             # Before any of our data exists: the engine's own startup cost.
             # No settle loop here, the engine is idle and just booted.
             row["server_disk_baseline_mb"] = container_disk(

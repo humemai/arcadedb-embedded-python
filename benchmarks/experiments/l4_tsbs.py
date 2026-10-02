@@ -1320,6 +1320,7 @@ class SurrealTSServer(SurrealTS):
 
     def _open(self):
         self.db = surreal_common.served_client()
+        self.durability = surreal_common.served_durability()
         self._ver = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 

@@ -778,17 +778,13 @@ def check_close_cost(rows):
 STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_dense_int8", "neo4j_e2", "composed_qdrant_neo4j",
                   "ladybug_graph", "ladybug_e2", "duckdb", "duckdb_vss_dense", "duckpgq_graph", "duckdb_e2"}
 
-# THE THIRD CLASS, and the only backends allowed to be in it. SurrealDB 3.2.4
-# served has no sync setting at all -- no SYNC_DATA and no SURREAL_DATASTORE
-# token in its binary, and none of its 110 SURREAL_* variables names sync, WAL,
-# fsync, or durability -- so its behaviour at commit could not be established
-# (evidence in bench_common). Its string says "not verified" rather than
-# claiming a class, and these five arms are the only ones permitted to carry
-# such a string. Any other backend that starts saying "not verified" is an
-# engine whose default nobody checked, which is exactly what #81 forbids.
-UNVERIFIED_ALLOWED = {"surrealdb_tpc_server", "surrealdb_graph_server",
-                      "surrealdb_dense_server", "surrealdb_e2_server",
-                      "surrealdb_ts_server"}
+# THE THIRD CLASS, and the backends allowed to be in it: none since BUGS F165.
+# The five SurrealDB served arms were, on the claim that 3.2.4 had no sync
+# setting; it has one on its storage path, and its default syncs at every
+# commit, which the October rows ran under a "not verified" label in both
+# classes. Any backend that says "not verified" is an engine whose default
+# nobody checked, which is exactly what #81 forbids.
+UNVERIFIED_ALLOWED = set()
 
 # THE CELLS THAT MUST EXIST IN BOTH DURABILITY CLASSES (DECISIONS #90): the six
 # document operations, the three graph writes, and the cross-model transaction.

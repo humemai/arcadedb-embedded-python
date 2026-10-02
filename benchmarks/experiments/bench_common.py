@@ -29,11 +29,10 @@ INSTRUMENT = "2026-10"
 # its tables; fairness_check F8 refuses anything else.
 STRICT_PREFIX = "fsync at commit"
 
-# A THIRD ANSWER, because two were not enough. SurrealDB 3.2.4 has no sync
-# setting and its behaviour at commit could not be established (see the
-# evidence block below), and calling that "relaxed" would be the assertion
-# #81 exists to forbid. A string carrying this mark is its own class, and
-# fairness_check refuses it on any backend not named as an exception.
+# A THIRD ANSWER: an engine whose behaviour at commit could not be
+# established carries this mark rather than a class, and fairness_check refuses
+# it on any backend not named as an exception. None is named since BUGS F165
+# (SurrealDB served, the one engine that carried it, has a setting after all).
 UNVERIFIED_MARK = "not verified"
 
 
@@ -45,7 +44,7 @@ UNVERIFIED_MARK = "not verified"
 STRICT_MARKS = ("txWalFlush=2", "synchronous=FULL", "j=true", "commit.mode=sync",
                 "SURREAL_SYNC_DATA=true", "waitForSync=true", "synchronous_commit=on",
                 # the colon keeps "=1:" from matching the relaxed "=100000"
-                "flush-every-n-tx=1:", "appendfsync=always")
+                "flush-every-n-tx=1:", "appendfsync=always", "sync=every")
 
 
 def durability_class(text):
@@ -93,12 +92,17 @@ def durability_class(text):
 #   SurrealDB   embedded (SDK 2.0.0, core 2.3.10) strace A/B: with
 #   embedded    SURREAL_SYNC_DATA unset, 6 fsync at both 50 and 250 commits;
 #               with it true, 56 and 256. The default is no sync at commit.
-#   SurrealDB   3.2.4 has NO sync setting: its binary holds no "SYNC_DATA"
-#   served      and no "SURREAL_DATASTORE" token, and none of its 110
-#               SURREAL_* variables names sync, WAL, fsync, or durability.
-#               The env var this harness used to set was inert and is gone
-#               (runner.py). What it does at commit is NOT verified, and
-#               DURABILITY_SURREAL_SERVER says exactly that.
+#   SurrealDB   3.2.4 RocksDB: `sync=never|every|<interval>` on the storage
+#   served      path (rocksdb:/path?sync=never). Its startup log prints the
+#               mode at INFO; the default is "Sync mode: every transaction
+#               commit" (BUGS F165: what this block said until 2026-10-02,
+#               "no sync setting" and "not verified", came from searching the
+#               SURREAL_* variable names; the setting is not one of them, and
+#               every October serverlog carried the default's line). strace
+#               on the laptop, 1,000 writes: one fdatasync per commit at the
+#               default (5.3 ms each, wall clock), none at sync=never; a
+#               read-only BEGIN/COMMIT also syncs. The runner reads the mode
+#               back before the client starts (surreal_sync_mode).
 #   Neo4j       2026.08.1 SHOW SETTINGS: no durability or sync setting exists
 #               (the tx_log settings are buffer, preallocation, and rotation
 #               only), so it cannot be relaxed; that it forces the log at
@@ -116,7 +120,10 @@ def durability_class(text):
 #               defaults); strace on the pinned image, build plus 3,009
 #               commits: 1 fsync at the default, 3,012 with
 #               --storage-wal-file-flush-every-n-tx=1 (laptop, 2026-09-17).
-#   FalkorDB    4.20.6 on Redis 8.6.3, CONFIG GET: appendonly no, save
+#   FalkorDB    6.0.1 on Redis 8.10.2 (2026-10-02): the same defaults and the same
+#               trace, 1,000 writes: 0 fsync at the default, 1,000 fdatasync
+#               with AOF always (.notes repros/falkordb-601-durability).
+#               4.20.6 on Redis 8.6.3, CONFIG GET: appendonly no, save
 #               "3600 1 300 100 60 10000" (the image's defaults, RDB only);
 #               strace, build plus 3,011 writes: 0 fsync at the default,
 #               3,011 fdatasync with --appendonly yes --appendfsync always
@@ -131,8 +138,7 @@ DURABILITY_LADYBUG = "fsync at commit, not configurable (LadybugDB WAL)"
 DURABILITY_MONGODB = "write concern w=1, j=false (journal flushed every 100 ms)"
 DURABILITY_QUESTDB = "cairo.commit.mode=nosync (default): no fsync at commit"
 DURABILITY_SURREAL_EMBEDDED = "SurrealKV, SURREAL_SYNC_DATA unset (the default): no sync at commit"
-DURABILITY_SURREAL_SERVER = ("RocksDB at the engine default; SurrealDB 3.2.4 exposes no sync "
-                             "setting and the behaviour at commit is not verified")
+DURABILITY_SURREAL_SERVER = "RocksDB, sync=never: no sync at commit (the OS flushes)"
 DURABILITY_NEO4J = ("fsync at commit, not configurable (no durability setting in "
                     "SHOW SETTINGS at 2026.08.1)")
 DURABILITY_PG_OFF = "synchronous_commit=off"
@@ -172,6 +178,7 @@ DURABILITY_SQLITE_STRICT = "WAL, synchronous=FULL: synced at every commit"
 DURABILITY_MONGODB_STRICT = "write concern w=1, j=true (the journal is synced before the ack)"
 DURABILITY_QUESTDB_STRICT = "cairo.commit.mode=sync: fsync at commit"
 DURABILITY_SURREAL_EMBEDDED_STRICT = "SurrealKV, SURREAL_SYNC_DATA=true: sync at commit"
+DURABILITY_SURREAL_SERVER_STRICT = "RocksDB, sync=every (the engine default): synced at every commit"
 DURABILITY_ARANGO_STRICT = "waitForSync=true: the commit waits for the WAL sync"
 DURABILITY_PG_ON = "synchronous_commit=on"
 DURABILITY_MEMGRAPH_STRICT = "storage-wal-file-flush-every-n-tx=1: the WAL is fsynced at every commit"
@@ -182,19 +189,14 @@ DURABILITY_FALKORDB_STRICT = "appendonly=yes, appendfsync=always: the AOF is fda
 # the strict column and say so, which also puts them on an equal footing rather
 # than comparing their strict numbers against everyone else's relaxed ones."
 #
-# A FOURTH BELONGS HERE and the decision's list does not name it, so the reason
-# is written down rather than assumed: SurrealDB 3.2.4 SERVED has no sync
-# setting either. Its binary holds no "SYNC_DATA" and no "SURREAL_DATASTORE"
-# token and none of its 110 SURREAL_* variables names sync, WAL, fsync or
-# durability (#81's evidence block above). Setting an invented flag would label
-# the rows as strict while changing nothing, which is the exact failure #81 was
-# written after. It runs once and declares no setting, like the other three,
-# and its string keeps saying its behaviour at commit is not verified.
+# SurrealDB served stood here as a fourth until 2026-10-02, on the claim that
+# 3.2.4 had no sync setting. It has one, on the storage path, and its default
+# syncs at every commit (BUGS F165, the evidence block above); it is in
+# STRICT_OF below now, like every engine with a knob.
 NO_DURABILITY_SETTING = {
     DURABILITY_NEO4J,
     DURABILITY_DUCKDB,
     DURABILITY_LADYBUG,
-    DURABILITY_SURREAL_SERVER,
 }
 
 # relaxed string -> strict string, for the engines that HAVE the knob.
@@ -204,6 +206,7 @@ STRICT_OF = {
     DURABILITY_MONGODB: DURABILITY_MONGODB_STRICT,
     DURABILITY_QUESTDB: DURABILITY_QUESTDB_STRICT,
     DURABILITY_SURREAL_EMBEDDED: DURABILITY_SURREAL_EMBEDDED_STRICT,
+    DURABILITY_SURREAL_SERVER: DURABILITY_SURREAL_SERVER_STRICT,
     DURABILITY_PG_OFF: DURABILITY_PG_ON,
     DURABILITY_ARANGO: DURABILITY_ARANGO_STRICT,
     DURABILITY_MEMGRAPH: DURABILITY_MEMGRAPH_STRICT,

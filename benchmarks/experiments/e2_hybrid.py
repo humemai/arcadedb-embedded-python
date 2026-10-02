@@ -718,6 +718,7 @@ class SurrealServedE2(SurrealE2):
         # reconnects, re-authenticates and re-selects the namespace once when
         # the socket dies mid-query.
         self.db = surreal_common.served_client()
+        self.durability = surreal_common.served_durability()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
@@ -1378,7 +1379,7 @@ class MemgraphE2:
 
 
 class LadybugE2:
-    """LadybugDB 0.20.4 alone, embedded (DECISIONS #131 item 4, from the
+    """LadybugDB 0.21.2 alone, embedded (DECISIONS #131 item 4, from the
     26.10.1 measurement): a Product node table holding a FLOAT[64] embedding
     under the official `vector` extension's HNSW index, a RELATED rel table,
     the views counter on the node; the hit, the hop, and the update run in one

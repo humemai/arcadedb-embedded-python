@@ -1374,6 +1374,7 @@ class SurrealDenseServer(SurrealDense):
         # reconnects, re-authenticates and re-selects the namespace once when
         # the socket dies mid-query.
         self.db = surreal_common.served_client()
+        self.durability = surreal_common.served_durability()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
     # THE SERVER BUILDS THE INDEX IN THE BACKGROUND, SO THE BUILD WAITS FOR IT

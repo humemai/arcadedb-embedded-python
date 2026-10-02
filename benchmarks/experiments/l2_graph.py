@@ -737,7 +737,8 @@ def _int_or(v):
 
 
 class FalkorGraph(Base):
-    """FalkorDB 4.20.6 served (2026-09-17): a Redis module, reached through the
+    """FalkorDB 6.0.1 served (2026-10-02, #129; 4.20.6 from 2026-09-17 until
+    then): a Redis module, reached through the
     falkordb Python client over the Redis protocol (GRAPH.QUERY), the lane's
     Cypher VERBATIM. Every timed and untimed statement ran unchanged on the
     pinned image and every digest matched Neo4j's on the micro corpus (laptop
@@ -757,10 +758,12 @@ class FalkorGraph(Base):
         RESULTSET_SIZE -1 and leaves TIMEOUT at the module default of 0, no
         limit, so the lane's budget and, behind it, the cell watchdog are the
         only censors (#82b).
-      * THREAD_COUNT is sized from the HOST's logical cores: the log read
-        "Thread pool created, using 16 threads" under a 12-CPU cpuset, while
-        its OpenMP pool read 12 (FAIRNESS F6). The runner passes THREAD_COUNT
-        from the cpuset and the row records what the server reports.
+      * THREAD_COUNT: 4.20.6 sized it from the HOST's logical cores (the log
+        read "Thread pool created, using 16 threads" under a 12-CPU cpuset,
+        while its OpenMP pool read 12; FAIRNESS F6); 6.0.1 follows the cpuset
+        (GRAPH.CONFIG GET THREAD_COUNT 4 under a 4-CPU cpuset). The runner
+        still passes THREAD_COUNT from the cpuset and the row records what
+        the server reports.
       * BROWSER=1 starts a Next.js process in the same container; BROWSER=0.
 
     DURABILITY IS REDIS PERSISTENCE, read back with CONFIG GET. The image
@@ -884,7 +887,9 @@ class FalkorGraph(Base):
         self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
 
     # LSQB q1 WITH EVERY NODE NAMED (2026-09-18, DECISIONS #92). The canonical
-    # text binds none of its nine nodes, and on FalkorDB 4.20.6 the anonymous
+    # text binds none of its nine nodes, and on FalkorDB 4.20.6 (fixed in 6.0.1:
+    # `.notes` repros/falkordb-anon-chain, 8 against 60 on a synthetic chain,
+    # 60 on 6.0.1; the named spelling stays, it is the same query) the anonymous
     # chain loses PATH MULTIPLICITY across its intermediates: on the capped SF1
     # slice the eight-label chain answered 2,393 against 300,871 on every
     # other engine, and cutting it short showed where. Country<-City<-Person
@@ -2295,6 +2300,7 @@ class SurrealGraphServer(SurrealGraph):
         # reconnects, re-authenticates and re-selects the namespace once when
         # the socket dies mid-query.
         self.db = surreal_common.served_client()
+        self.durability = surreal_common.served_durability()
         self.version = "surrealdb-server:" + str(self.db.version()).replace("surrealdb-", "")
 
 
@@ -3105,7 +3111,7 @@ ADAPTERS = {a.name: a for a in
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. Neo4j and
 # LadybugDB cannot be relaxed and are the named exceptions on this table; the
-# SurrealDB server's behaviour could not be established and its string says so.
+# SurrealDB server runs sync=never or sync=every, read back by the runner (F165).
 # Every string, and the evidence behind it, is in bench_common.
 DURABILITY = {
     "arcadedb_graph_embedded": bench_common.DURABILITY_ARCADEDB,

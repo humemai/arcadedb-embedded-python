@@ -23,7 +23,7 @@ The quantization survey of DECISIONS #131 item 8 (CAMPAIGN.md section 7 row 42),
 | Elasticsearch 9.5.4 (joins dense, row 37) | `hnsw`, `int8_hnsw`, `int4_hnsw`, `bbq_hnsw`, `bbq_disk`, `int8_flat` (all accepted); **default `int8_hnsw` at 96 and 128 dimensions** (m 16, ef_construction 100), `bbq_hnsw` with 3x oversampling from 384 | not built yet | fp32 `hnsw` and int8 `int8_hnsw`, as row 37 says; the default is the int8 arm, so the fp32 arm must set `hnsw` explicitly | image: dense_vector mappings on the pinned server, defaults read through `_mapping/field?include_defaults=true` |
 | Memgraph 3.13.1 (joins dense, row 38) | `scalar_kind` f64, f32, f16, bf16, i8 (`b1` refused) | not built yet | f32 and i8 | image: `CREATE VECTOR INDEX ... scalar_kind` on the pinned server, `SHOW VECTOR INDEX INFO` |
 | FalkorDB (6.0.1 at the re-pin, row 38) | vector index over float32 | not built yet | none documented | docs, not yet run here |
-| LadybugDB 0.20.4 (row 38) | the official `vector` extension, HNSW over float arrays | not built yet | none documented | docs, not yet run here |
+| LadybugDB 0.21.2 (row 38) | the official `vector` extension, HNSW over float arrays | not built yet | none documented | docs, not yet run here |
 
 ## Sparse
 

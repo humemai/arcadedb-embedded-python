@@ -287,6 +287,18 @@ class ReconnectingClient:
         return self.reconnects
 
 
+def served_durability():
+    """The served arm's durability string at this cell's class (BUGS F165).
+
+    The server's mode is set on its storage path by the runner (sync=never,
+    or sync=every in the strict class) and read back from its startup log
+    before the client starts, so a cell that reaches here runs the mode this
+    string names. Every served adapter sets it in its open, beside the client.
+    """
+    import bench_common
+    return bench_common.at_class(bench_common.DURABILITY_SURREAL_SERVER)
+
+
 def served_client(url=None, ns="bench", db="bench", user="root", password="root"):
     """The served SurrealDB connection every lane opens, with #91's treatment.
 
