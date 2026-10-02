@@ -954,6 +954,7 @@ SCALE_LABELS = {
     ("restart", "sf1"): "graph, LDBC SF1 (11k people)",
     ("restart", "sf10"): "graph, LDBC SF10 (73k people)",
     ("restart", "small"): "dense vectors, 1M (SIFT)",
+    ("restart", "deep10m"): "dense vectors, 9.99M (Deep)",
     ("restart", "ts100"): f"time series, {_l4_points('ts100')} points",
     ("restart", "ts1000"): f"time series, {_l4_points('ts1000')} points (1,000 hosts)",
 }
@@ -7435,6 +7436,32 @@ def main() -> int:
             continue
         _note = _durability_note(_t.get("entries", []), rows)
         if _note:
+            _t.setdefault("conditions", [])
+            if _note not in _t["conditions"]:
+                _t["conditions"].append(_note)
+    # A CLEAN STOP THAT DOES NOT END CLEANLY (2026-10-02, milvus-io/milvus#53947).
+    # The restart lane sends the image's own stop signal and records the exit
+    # code; 0, or 143 for a process that ends by the signal after its shutdown
+    # hook ran (every JVM here), is a normal end. Milvus ends every clean stop
+    # in a panic in its shutdown path (exit 134) with its data intact, so its
+    # stop time is the time to that abort, and the table says so. Generated
+    # from the rows, so an engine that starts or stops doing this moves with them.
+    for _t in tables:
+        if _t.get("id") != "restart":
+            continue
+        _abnormal = {}
+        for _r in rows:
+            if _r.get("lane") != "restart" or _r.get("error") or _r.get("stop_killed_after_grace"):
+                continue
+            _codes = {c for c in (_r.get("stop_exit_codes") or []) if c not in (0, 143)}
+            if _codes:
+                _abnormal.setdefault(display_name(str(_r.get("backend"))), set()).update(_codes)
+        for _name, _codes in sorted(_abnormal.items()):
+            _c = ", ".join(str(x) for x in sorted(_codes))
+            _what = "an abort" if _codes == {134} else "an abnormal exit"
+            _note = _gen(f"{_name}'s clean stop ends in {_what}, exit code {_c}, rather than a normal exit, "
+                         f"although every row it wrote is there after the restart; its stop time is the time "
+                         f"to that exit.", _c)
             _t.setdefault("conditions", [])
             if _note not in _t["conditions"]:
                 _t["conditions"].append(_note)
