@@ -678,11 +678,12 @@ Wait for all pending operations to complete.
 
 **Parameters:**
 
-- `timeout_ms` (Optional[int]): Max wait time in milliseconds (None = forever)
+- `timeout_ms` (Optional[int]): Max wait time in milliseconds. `None` waits forever. `0` does not wait: it returns if everything is done and raises `TimeoutError` at once otherwise, a point-in-time check like `is_pending()` (the engine would treat a timeout of 0 as an infinite wait, so it is never passed through). Negative values are rejected.
 
 **Raises:**
 
-- `TimeoutError`: If the timeout elapses before completion
+- `TimeoutError`: If the timeout elapses before completion, or at once for `0` while work is pending
+- `ValueError`: If `timeout_ms` is negative
 
 **Note:** Always call before closing executor or database.
 

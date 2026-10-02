@@ -8,7 +8,7 @@ Most errors from ArcadeDB operations raise `ArcadeDBError` (there are no subclas
 
 - `ValueError`: invalid arguments, for example `ResultSet.one()` with zero or several rows, an unknown `set_wal_flush()` mode, or `AsyncExecutor.set_commit_every()` with a count below 1
 - `AttributeError`: `set()` on an immutable record, such as one returned by a query; call `.modify()` first
-- `TimeoutError`: `AsyncExecutor.wait_completion(timeout_ms)` when the timeout expires
+- `TimeoutError`: `AsyncExecutor.wait_completion(timeout_ms)` when the timeout expires (at once for `timeout_ms=0` while work is pending)
 - `TypeError`: a value that JPype cannot convert, for example a `datetime.time` passed to `set()`
 - Java exceptions, not wrapped: `Schema` calls that go directly to Java, such as `exists_type()`, `get_types()`, `get_indexes()`, and `exists_index()`; a wrapper's `save()` outside a transaction (`com.arcadedb.exception.TransactionException: Transaction not begun`; `db.new_vertex()` and `db.new_document()` themselves work outside one); and a vector of the wrong dimension saved to an indexed property (`java.lang.IllegalArgumentException`, raised by `save()`)
 
