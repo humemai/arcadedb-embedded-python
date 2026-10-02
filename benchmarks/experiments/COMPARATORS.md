@@ -227,11 +227,15 @@ Servers: PostgreSQL, pgvector, PG+AGE, TimescaleDB, MongoDB, MongoDB + MongoDB S
 
 ## Not added, and why
 
+**Which engine belongs on which table (DECISIONS #131).** A single-model specialist runs only on its model's tables. A multi-model engine runs on every table it can express in its own query language, and the graph tables require a graph query language (#128). Every cell an engine could fill and does not is either measured or listed below with its reason; an arm that has been decided but not yet measured is a row in CAMPAIGN.md section 7.
+
 - OrientDB: ArcadeDB is its successor, so it is the ancestor and not a live comparison (DECISIONS #68, #103).
 - HugeGraph, Dgraph, and TigerGraph: a sixth dialect for a comparator few readers care about, a different model, and not freely self-hostable, respectively (DECISIONS #103).
 - LDBC Graphalytics: not run. It is an algorithm suite that needs each engine's own analytics library, which most of the comparators lack; upstream already publishes it against the graph specialists and the page links there for that question (DECISIONS #103, #104). LSQB's nine queries are run instead, on the analytics table.
 - Cloud-only engines (Atlas-only features, Cosmos DB): cannot run in the envelope.
 - Plain SQL joins as a graph arm: the graph tables measure engines through a graph query language; a hand-written SQL join arm does not join them (DECISIONS #128).
+- Chroma on the sparse table: the pinned 1.5.9 refuses a sparse vector index in a local client ("Sparse vector indexing is not enabled in local"); sparse search is a Chroma Cloud feature (checked 2026-10-02, DECISIONS #131).
+- FalkorDB on the cross-model table: it has no interactive transaction (Redis `MULTI` queues commands, so a hop cannot read the vector hit inside one), and on its 4.x line a write in the same statement as a vector query crashes the server; 6.0.1 is clean of the crash but still has no interactive transaction (checked 2026-10-02, DECISIONS #131).
 
 ## Smoke before queueing
 
