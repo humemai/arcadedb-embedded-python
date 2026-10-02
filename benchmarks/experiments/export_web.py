@@ -3268,7 +3268,8 @@ def _lifecycle_table(all_rows):
             "already running when the probe connects, so those three columns describe "
             "the embedded process only. The session columns are measured for both.",
         ]) + [_gen(f"{LIFECYCLE_SITUATION_LABELS.get(k, k)} is withheld: {v}", v) for k, v in sorted(LIFECYCLE_WITHHELD.items())]
-           + [_gen(w) for w in stale_notes] + declared_notes,
+           + [_gen(w) for w in stale_notes] + declared_notes
+           + _engine_defect_notes("lifecycle", entries),
         "columns": _lc_columns,
         "withheld_scales": [],
         "withheld_reason": None,
@@ -3401,6 +3402,23 @@ def _durability_scope_note(entries):
 # answer -- the pin is unknown to this checkout -- it prints: for a number that
 # flatters our own engine, over-disclosing is the safe direction.
 ENGINE_DEFECTS_AT_PIN = {
+    # ArcadeDB #8852 (ours, 2026-10-01; fixed by PR #8863, merge 09a7aeff90, after the
+    # October pin 417314c18): the first vector search after a reopen re-reads every
+    # vector's document on one thread. The lifecycle sessions that search after opening
+    # (one query, write then query) are dominated by it from 1M up at the pin: 853 and
+    # 897 ms at 1M (open and close 98 and 16), 17.9 and 18.1 s at 10M (1.4 s and 15 ms),
+    # embedded and server alike. One entry names the embedded row and speaks for both.
+    "lifecycle": [{
+        "backend": "Dense vectors (embedded)",
+        "fix": "09a7aeff90",
+        "issue": "8852",
+        "release": "26.10.1",
+        "text": ("The dense-vector rows' one-query and write-then-query sessions, embedded and server alike, "
+                 "carry a defect in the engine build measured here, ArcadeDB issue #{issue} "
+                 "(https://github.com/ArcadeData/arcadedb/issues/{issue}): the first vector search after a "
+                 "database is reopened re-reads every vector's record on one thread, so from a million vectors "
+                 "up those sessions are mostly that re-read, and ArcadeDB {release} fixes it."),
+    }],
     "durability": [{
         "backend": "ArcadeDB (one transaction)",
         "fix": "a618b3ae5a",
