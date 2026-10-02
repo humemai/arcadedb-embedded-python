@@ -40,14 +40,14 @@ Every step was once done by hand, and the hand-done ones were where the mistakes
 
 ## What blocks a bad publish
 
-Six gate scripts (`refresh_web_page.GATES`; `page_check` has two sections), then three structural checks. All of them fail the run rather than warn:
+The gate scripts (`refresh_web_page.GATES`), then three structural checks. All of them fail the run rather than warn:
 
 | Check | Asks |
 |---|---|
 | `provenance_check` | does every cell trace to a run |
 | `fairness_check` | F1 to F14 comparison invariants, durability class and instrument included |
 | `equivalence_check` | do the engines of a table agree on the answer, and is every operation an engine cannot express declared (DECISIONS #88) |
-| `page_check.MAPPING` | do the page's table cells agree with the generated tables |
+| `page_check` | does the page agree with its own sources: its 9.99M dense cells with the generated table, the atomicity counts with the artifact, every operation of the query set a column with every engine answering or declared, no table losing its ArcadeDB row, and every number under a table traced to a source |
 | `page_check.PROSE` | do the page's hand-typed prose numbers agree with the tables and the page-derived pins |
 | `version_consistency_check` | does one engine wear two version strings across the page's tables, or a comparator an ArcadeDB release number |
 | `version_pin_check` | do `runner.py`, `build_images.sh`, the three Dockerfiles, and COMPARATORS.md agree on every image digest and package pin (it reads no rows) |
@@ -55,7 +55,7 @@ Six gate scripts (`refresh_web_page.GATES`; `page_check` has two sections), then
 | refresh step 3, `tableId` coverage | does every table the page's prose names by `tableId` exist in the payload, and does every table in the payload have a section on the page to render it; a scoped landing declares the tables it lacks in `pending_tables` instead of being refused |
 | refresh step 5 | is every figure the page references a generated one |
 
-`MAPPING` and `PROSE` split the page because the two surfaces fail differently. Cells are written by the exporter straight from the frozen results, so a wrong one is nearly impossible. Prose is typed by hand, so a wrong one is nearly inevitable: a caption once gave one engine's dense latency from the canonical CSV and the other's from the matched overlay, inside one sentence, with no published cell wrong and nothing invented.
+`PROSE` is its own section because the page's two surfaces fail differently. Cells are written by the exporter straight from the frozen results, so a wrong one is nearly impossible. Prose is typed by hand, so a wrong one is nearly inevitable: a caption once gave one engine's dense latency from the canonical CSV and the other's from the matched overlay, inside one sentence, with no published cell wrong and nothing invented.
 
 A disagreement that has been reproduced, understood, and filed upstream prints as KNOWN rather than FAIL and its cell is withheld from the page instead of being published beside an answer it does not match (`equivalence_check.KNOWN_DISAGREEMENTS`, `export_web.WITHHELD_CELLS`); nothing is withheld today (the last entry, the served native time-series group-by, upstream #7610, was released on 2026-09-18 when the fix reached the pin). The entry is deleted at the re-pin that carries the fix, which re-arms the gate for that query, because a gate that cannot pass until an upstream release lands is a gate somebody deletes.
 
@@ -66,7 +66,7 @@ A disagreement that has been reproduced, understood, and filed upstream prints a
 1. Confirm it is generated from frozen rows and add it to `export_web.LANES` or a builder.
 2. Add it to `export_web.py` if the data is not already exported.
 3. Reference it from `arcadedb.ts`.
-4. Add its headline cells to `page_check.MAPPING`, so the page and the generated tables are pinned to each other. A table nothing pins can drift silently.
+4. If it reports operations of the query set, add them to `page_check.OPERATION_MANIFEST`, so every operation is a column with every engine answering or declared. A table nothing checks can drift silently.
 5. If the prose around it quotes any number, add each one to `page_check.PROSE` with a regex that captures the digits as printed. Quoting a number in a sentence is making a claim; a claim nothing pins is one nothing checks.
 6. State in the table's conditions any measurement from the standard set it does not carry (PROTOCOL.md section 2, DECISIONS #89). `page_check` fails an omission that carries no reason.
 7. Run the command above.
@@ -91,7 +91,7 @@ One command, the same order every time, refuses by default:
 
 It pulls `runs_page_<pin>.jsonl` (and, with `--overlay`, an arm's dense multipass files at both sizes, always the sparse second-pass files `sparse_mp_<pin>/` when the sparse lane lands (BUGS F148), and always the deployment decomposition's `e4decomp_<pin>/` files, since the `e4` table is a directory of artifacts rather than rows in the log and the export stops without it), drops the rows of the backends named as still running so a stage in progress never reaches the freeze, merges, publishes through the gates, and prints which page tables changed.
 
-**`--only-lanes` scopes a staged landing, and the scope is cumulative.** Rows of every lane not named stay on the host for a later landing, because the gates read the whole freeze and would fail a landing on lanes it was not publishing; empty lands everything. The scope is the lanes named PLUS every lane already on the page, read from the published payload, so a landing adds to the page rather than rebuilding it as though no other lane existed (BUGS F111; PAGE-SPEC.md section 2). Under that sits a refusal: a landing that would make any table on the page disappear is REFUSED and the site's payload restored, because "the page lost a table" is the one diff nobody accepts on purpose. After the merge it also WARNS, without refusing, when a landed lane's rows were measured before a later commit to that lane's own script, and lists the commits: the gates cannot tell a harmless new field from a changed index decision, and an l4 landing once passed all six with DuckDB rows that predated the index every other arm had (BUGS F98). Without `--apply` it stops there and restores the site's payload; with `--apply` it builds the site, commits both repositories, and pushes. The merge into `runs.jsonl` is idempotent, so a run without `--apply` followed by one with it is the normal sequence.
+**`--only-lanes` scopes a staged landing, and the scope is cumulative.** Rows of every lane not named stay on the host for a later landing, because the gates read the whole freeze and would fail a landing on lanes it was not publishing; empty lands everything. The scope is the lanes named PLUS every lane already on the page, read from the published payload, so a landing adds to the page rather than rebuilding it as though no other lane existed (BUGS F111; PAGE-SPEC.md section 2). Under that sits a refusal: a landing that would make any table on the page disappear is REFUSED and the site's payload restored, because "the page lost a table" is the one diff nobody accepts on purpose. After the merge it also WARNS, without refusing, when a landed lane's rows were measured before a later commit to that lane's own script, and lists the commits: the gates cannot tell a harmless new field from a changed index decision, and an l4 landing once passed every gate with DuckDB rows that predated the index every other arm had (BUGS F98). Without `--apply` it stops there and restores the site's payload; with `--apply` it builds the site, commits both repositories, and pushes. The merge into `runs.jsonl` is idempotent, so a run without `--apply` followed by one with it is the normal sequence.
 
 **`--apply` governs the PUBLISH, not the merge, and `--dry-run` is the flag that writes nothing.** A run without `--apply` still performs steps 2 and 3, and step 3 merges. That reading cost nothing only by luck on 2026-09-19, when a test of an unrelated guard was killed by a closed pipe one step before the merge. Use `--dry-run` to pull, filter, and stop: it prints how many rows WOULD merge and which of them carry errors, and leaves `runs.jsonl` byte-identical. It is also the mode a pre-campaign rehearsal wants -- the rehearsal that found six defects before October's first cell was assembled by hand with `BENCH_RUNS_JSONL` and a scratch log, which nobody should have to reconstruct.
 

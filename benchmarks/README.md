@@ -8,7 +8,7 @@ rows their numbers are computed from. They differ
 in scope and in where they publish, not in the kind of thing they measure.
 
 - `experiments/` is the **live harness**: ArcadeDB, embedded and served,
-  against more than twenty specialist and multi-model engines on documents,
+  against specialist and multi-model engines on documents,
   graph, dense and sparse vectors, time series, and cross-model queries. It
   is what every campaign runs, and its results are the project page at
   <https://humem.ai/projects/arcadedb>. There is no paper; the page is the
@@ -20,9 +20,10 @@ in scope and in where they publish, not in the kind of thing they measure.
   against Java-native execution on identical jars. It predates the live
   harness, is kept so the paper's numbers stay reproducible, and is not
   extended; new work goes in `experiments/`. The one exception is
-  `jpype_overhead/results/mini_results*.csv`, the bench-host runs that feed the
-  live page's Python-cost table (`export_web.py` reads them, re-measured per pin). Its own README carries its
-  versions and layout.
+  `jpype_overhead/results/mini_results_<pin>.csv`, the bench-host run that feeds the
+  page's Python-cost table: `export_web.py` reads the file named by the pin it
+  publishes, only the September pin's exists, and the October payload omits the
+  table until it is re-measured. Its own README carries its versions and layout.
 
 ## Where to start in `experiments/`
 
