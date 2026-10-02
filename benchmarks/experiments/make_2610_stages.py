@@ -87,10 +87,6 @@ def _october(sid):
     raise SystemExit(f"make_october_stages has no stage {sid}; the 26.10.1 table borrows from it")
 
 
-def _lifecycle_rest():
-    return [b for b in runner.LANES["lifecycle"][1] if b not in LIFECYCLE_PAPER]
-
-
 _LC = _october("qOG")
 # id, title, lane, workloads, scales, guards, extra, stage_env, only, dur_mode, after
 STAGES = [
@@ -113,8 +109,8 @@ STAGES = [
     ("qRI", "lifecycle at four sizes, ArcadeDB and SurrealDB", "lifecycle", _LC[3], _LC[4], [], {},
      _LC[7], list(LIFECYCLE_PAPER)),
     ("qRJ", "the Python-cost table (host-side, run_bench.sh)", "pycost", [], [], [], {}, []),
-    ("qRK", "lifecycle at four sizes, the expansion (CAMPAIGN row 40)", "lifecycle", _LC[3], _LC[4],
-     [], {}, _LC[7], _lifecycle_rest()),
+    # No qRK: the lifecycle expansion to the single-model embedded engines was
+    # dropped (DECISIONS #139); the lane's roster is ArcadeDB and SurrealDB.
 ]
 
 

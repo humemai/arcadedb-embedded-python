@@ -1725,10 +1725,17 @@ LANES = {
     # 2026-09-16 (DECISIONS #95a) against the one other engine on the page
     # that a process can open and close in-process: SurrealDB embedded, whose
     # situations it cannot build are declared on the row (l5_lifecycle_surreal).
+    #
+    # THE SINGLE-MODEL EMBEDDED ENGINES ARE NOT ON THIS LANE (DECISIONS #139,
+    # amending #131 item 5). sqlite_lifecycle, duckdb_lifecycle,
+    # ladybug_lifecycle, chroma_lifecycle, lancedb_lifecycle, and
+    # sqlite_vec_lifecycle stay registered in BACKENDS and runnable by name
+    # (`--lanes lifecycle --backends sqlite_lifecycle`), but the lane's roster,
+    # which the stage generator and page_check's coverage read, is the
+    # embeddable multi-model engines: a single-model specialist runs only on
+    # its own model's tables (#131 item 1), and lifecycle is a cross-model one.
     "lifecycle": ("l5_lifecycle.py",
-                  ["arcadedb_embedded", "arcadedb_server", "surrealdb_lifecycle",
-                   "sqlite_lifecycle", "duckdb_lifecycle", "ladybug_lifecycle",
-                   "chroma_lifecycle", "lancedb_lifecycle", "sqlite_vec_lifecycle"],
+                  ["arcadedb_embedded", "arcadedb_server", "surrealdb_lifecycle"],
                   ["empty", "doc", "doc_idx10", "graph", "graph_gav",
                    "vector", "sparse", "ts"]),
     "l3s": ("l3_sparse.py",
