@@ -503,12 +503,14 @@ def convert_python_to_java(value: Any) -> Any:
     if isinstance(value, datetime):
         if java_python_types is None:
             return value
-        # The same instant as before (a naive value is local time, as
-        # datetime.timestamp() reads it), handed over as the UTC wall clock the
-        # engine stores DATETIME in. The java.util.Date this used to build kept
-        # milliseconds, so DATETIME_MICROS and DATETIME_NANOS lost the rest and
-        # a lookup by the same value never matched (#58).
-        utc = value.astimezone(timezone.utc)
+        # The engine stores DATETIME as a UTC wall clock, whatever the host's
+        # or the database's time zone. A naive value is taken as that wall
+        # clock as it stands, so it reads back unchanged on every host; an
+        # aware one is converted to UTC first, so its instant is kept. The
+        # java.util.Date this used to build read a naive value as local time
+        # and kept milliseconds, so DATETIME_MICROS and DATETIME_NANOS lost
+        # the rest and a lookup by the same value never matched (#58).
+        utc = value.astimezone(timezone.utc) if value.utcoffset() is not None else value
         return _get_java_time_types().local_datetime.of(
             utc.year,
             utc.month,

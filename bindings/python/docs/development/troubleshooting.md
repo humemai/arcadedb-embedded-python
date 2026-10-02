@@ -349,7 +349,7 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
             25,
             "Alice",
             ["python", "database"],
-            datetime.now(),
+            datetime.now(timezone.utc),
         )
     ```
 

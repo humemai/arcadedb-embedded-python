@@ -2,7 +2,7 @@
 Tests for type conversion between Java and Python types.
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import arcadedb_embedded as arcadedb
@@ -395,11 +395,15 @@ def test_datetime_and_date_parameters(temp_db_path):
     Both used to be refused ("No matching overloads"), and a datetime crossed as
     a java.util.Date, which keeps milliseconds: DATETIME_MICROS stored
     ...56.789000 for ...56.789123 and a lookup by the same value found nothing.
-    The instant is unchanged: a naive value is local time, as
-    datetime.timestamp() reads it, and reads back as the UTC wall clock.
+    The engine stores DATETIME as a UTC wall clock: a naive value is that wall
+    clock as it stands and reads back unchanged on any host, and an aware one
+    is converted to UTC, so 21:34+09:00 is the same value as a naive 12:34.
     """
     naive = datetime(2026, 10, 1, 12, 34, 56, 789123)
-    aware = datetime(2026, 10, 1, 12, 34, 56, 789123, tzinfo=timezone.utc)
+    aware = datetime(
+        2026, 10, 1, 21, 34, 56, 789123, tzinfo=timezone(timedelta(hours=9))
+    )
+    epoch_ms = 1790858096789  # 2026-10-01T12:34:56.789Z
     on_day = date(2026, 10, 1)
     with arcadedb.create_database(temp_db_path) as db:
         db.command("sql", "CREATE DOCUMENT TYPE Event")
@@ -418,21 +422,16 @@ def test_datetime_and_date_parameters(temp_db_path):
                     "at", value
                 ).save()
 
-        # On a UTC machine the two are the same instant, so a lookup finds both.
-        instants = {"naive": naive.timestamp(), "aware": aware.timestamp()}
-        for label, value in (("naive", naive), ("aware", aware)):
-            utc_wall_clock = value.astimezone(timezone.utc).replace(tzinfo=None)
-            for how in ("param", "set"):
-                key = f"{label} {how}"
-                got = db.query("sql", "SELECT at FROM Event WHERE k = ?", key).first()
-                assert got.get("at") == utc_wall_clock, key
+        every = ["aware param", "aware set", "naive param", "naive set"]
+        for key in every:
+            got = db.query(
+                "sql", "SELECT at, at.asLong() AS ms FROM Event WHERE k = ?", key
+            ).first()
+            assert got.get("at") == naive, key
+            assert got.get("ms") == epoch_ms, key
+        for value in (naive, aware):
             found = db.query("sql", "SELECT k FROM Event WHERE at = ?", value).to_list()
-            assert sorted(r["k"] for r in found) == sorted(
-                f"{other} {how}"
-                for other, instant in instants.items()
-                if instant == value.timestamp()
-                for how in ("param", "set")
-            )
+            assert sorted(r["k"] for r in found) == every
 
         found = db.query(
             "sql", "SELECT k FROM Event WHERE on_day = ?", on_day
