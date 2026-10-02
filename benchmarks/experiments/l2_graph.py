@@ -2606,28 +2606,39 @@ class MongoGraph(Base):
     turned out to be expressible; what follows is the part that is not
     obvious, and the full account is in COMPARATOR-DIALECTS.md.
 
-    THE MULTI-HOP READS USE CHAINED $lookup, NOT $graphLookup, and the reason
-    is not that $graphLookup fails. Measured at micro (2,000 persons, 40,833
-    edges, the fifty-id read set), with the depth offset written correctly --
-    `startWith: "$dst"` has already consumed the first hop, so "exactly N
-    hops" is `maxDepth: N-2` with `depthField == N-2` -- $graphLookup agrees
-    with the chained form on 50 of 50 ids at two hops AND at three, and both
-    agree with a plain Python enumeration over the same generator. The first
-    version of this probe compared depth 1 against two hops, got a disagreement
-    on 50 of 50, and would have gone into the record as "MongoDB's recursive
-    stage answers a different question"; it was our off-by-one. What decided
-    the spelling is cost, the way DECISIONS #93 decided SurrealDB's triangle
-    count: per operation over the same fifty ids,
+    THE MULTI-HOP READS USE $graphLookup (DECISIONS #131 item 2, from the
+    26.10.1 measurement), MongoDB's graph stage, wherever it states the
+    question exactly; until then every hop was a hand-written chained $lookup.
+    The stage walks `knows` breadth first and returns each edge ONCE, at its
+    shortest depth from where it was seeded, which is reachability, while the
+    lane's reads count the ends of paths of an exact length. Where it is
+    seeded therefore decides whether the two agree, and they agree by
+    construction, not by luck on one corpus, in these two spellings:
 
-        two hops    $graphLookup 4.10 ms   chained $lookup 3.21 ms
-        three hops  $graphLookup 30.01 ms  chained $lookup 38.27 ms
+      two hops (hop2): seeded at the person, maxDepth 1, the edges at depth 1.
+        An edge's depth is the distance from the person to its source; every
+        neighbour is at distance 1 (none at 0, since no person KNOWS itself),
+        so the depth-1 edges are exactly the neighbours' out-edges.
+      three hops (hop3f, the visited probe): seeded at each first edge's end,
+        maxDepth 1, the edges at depth 1, the third edge not the first one
+        again. By the same argument, relative to each first-hop neighbour.
 
-    so neither form wins on both. The chained form is used for both, because
-    it is the only one of the two that is a faithful translation BY
-    CONSTRUCTION rather than by measurement on one corpus (see below), and the
-    three-hop reading is the one place this arm is left slower than it needs
-    to be. Re-checking $graphLookup's equivalence at the campaign's LDBC
-    corpus would buy about 1.3x on hop3f and nothing else.
+    Seeding three hops at the person instead is NOT the same question: a
+    neighbour that is also two hops away has its edges at depth 1, so paths
+    through it are lost. Measured with `graphlookup_probe` against the chained
+    form over 200 read-set ids: the two spellings above 0 disagreements at two
+    and three hops, with and without the age filter, on the micro corpus and
+    on the LDBC SF1 person slice; seeding at the person 92 of 200 (micro) and
+    12 of 200 (LDBC). Both spellings rely on there being no self-loop, which
+    build() counts, records (`mongodb_knows_self_loops`), and refuses.
+
+    $lookup STAYS where the question is a join rather than a reachability:
+    the one-hop read (an index match on `src` and a join to the friend's
+    `person` document for the age), the far end's age filter on hop3f, the
+    writes, and the analytics, whose fourteen questions are fixed-shape
+    patterns (one-hop joins, a closed triangle, LSQB's labelled chains) that
+    $graphLookup cannot state, since it neither returns paths nor closes a
+    cycle.
 
     RELATIONSHIP UNIQUENESS HAS TO BE WRITTEN OUT. Cypher's MATCH forbids
     reusing the same relationship inside one path and ArangoDB's traversal
@@ -2641,7 +2652,8 @@ class MongoGraph(Base):
     out rather than left to luck: the day it matters, it would be a silent
     over-count against every engine that enforces the rule.
     """
-    QUERY_LANGUAGE = "the aggregation pipeline ($graphLookup)"
+    QUERY_LANGUAGE = ("the aggregation pipeline ($graphLookup for the two- and three-hop reads; "
+                      "$lookup for one-hop joins and the analytics)")
     name = "mongodb_graph"
 
     def connect(self):
@@ -2672,11 +2684,16 @@ class MongoGraph(Base):
         # dst is the inbound side the triangle count and the delete need.
         self.knows.create_index("src")
         self.knows.create_index("dst")
+        # The $graphLookup spellings below are exact only without self-loops
+        # (see the class docstring); counted on the row and refused.
+        loops = self.knows.count_documents({"$expr": {"$eq": ["$src", "$dst"]}})
+        self.row_extra = {**(getattr(self, "row_extra", None) or {}), "mongodb_knows_self_loops": loops}
+        if loops:
+            raise RuntimeError(f"mongodb_graph: {loops} KNOWS self-loops; the $graphLookup reads assume none")
 
     # ---- reads -------------------------------------------------------
-    # One hop is one $lookup from `knows` into `knows`; the last hop joins
-    # `person` only where a property of the far end is asked for.
-    _HOP = {"from": "knows", "localField": "dst", "foreignField": "src", "as": "e2"}
+    # The multi-hop reads walk `knows` with $graphLookup; a join to `person`
+    # only where a property of the far end is asked for.
 
     def _agg(self, coll, pipeline):
         return list(coll.aggregate(pipeline))
@@ -2704,10 +2721,13 @@ class MongoGraph(Base):
                 {"$project": {"_id": 0, "n": 1, "a": 1}}])
             return rows if rows else [{"n": 0, "a": None}]
         if op == "hop2":
-            return self._count_or_zero(self._agg(self.knows, [
-                {"$match": {"src": pid}},
-                {"$lookup": dict(self._HOP)}, {"$unwind": "$e2"},
-                {"$group": {"_id": "$e2.dst"}},
+            # Seeded at the person: the depth-1 edges are the neighbours' out-edges.
+            return self._count_or_zero(self._agg(self.person, [
+                {"$match": {"_id": pid}},
+                {"$graphLookup": {"from": "knows", "startWith": "$_id", "connectFromField": "dst",
+                                  "connectToField": "src", "maxDepth": 1, "depthField": "d", "as": "e"}},
+                {"$unwind": "$e"}, {"$match": {"e.d": 1}},
+                {"$group": {"_id": "$e.dst"}},
                 {"$count": "n"}]))
         if op == "hop3f":
             return self._count_or_zero(self._agg(self.knows, self._three_hops(pid) + [
@@ -2721,14 +2741,13 @@ class MongoGraph(Base):
 
     @staticmethod
     def _three_hops(pid):
+        """The third edges of every three-hop path from `pid`, as `e3`: one
+        $graphLookup per first edge, seeded at its end (see the docstring)."""
         return [
             {"$match": {"src": pid}},
-            {"$lookup": {"from": "knows", "localField": "dst",
-                         "foreignField": "src", "as": "e2"}},
-            {"$unwind": "$e2"},
-            {"$lookup": {"from": "knows", "localField": "e2.dst",
-                         "foreignField": "src", "as": "e3"}},
-            {"$unwind": "$e3"},
+            {"$graphLookup": {"from": "knows", "startWith": "$dst", "connectFromField": "dst",
+                              "connectToField": "src", "maxDepth": 1, "depthField": "d", "as": "e3"}},
+            {"$unwind": "$e3"}, {"$match": {"e3.d": 1}},
             # Cypher's relationship isomorphism, written out: the third edge
             # may not be the first one again (a->b, b->a, a->b).
             {"$match": {"$expr": {"$ne": ["$e3._id", "$_id"]}}},
@@ -2745,8 +2764,18 @@ class MongoGraph(Base):
         # person and the edge that links them either both exist or neither
         # does. A multi-document transaction is why the server runs as a
         # single-node replica set.
+        #
+        # THE ANCHOR IS LOOKED UP FIRST, as the Cypher's MATCH does, and
+        # nothing is written when it is absent (2026-10-02). The inserts were
+        # unconditional until then: on the full corpus every anchor exists, so
+        # the answers agreed, but on a capped LDBC slice the read set names
+        # persons the slice did not load, the Cypher engines created nothing
+        # for them, and this arm created them anyway, which the read-back
+        # digest showed. The lookup is also work every Cypher engine pays.
         with self.cl.start_session() as s:
             with s.start_transaction(write_concern=self._wc):
+                if self.db["person"].find_one({"_id": pid}, {"_id": 1}, session=s) is None:
+                    return
                 self.db["person"].insert_one(
                     {"_id": new_id, "name": f"w{new_id}", "age": 33, "city": "city_0"},
                     session=s)
@@ -3238,6 +3267,10 @@ def main():
     with _beat.phase("post-build", workload=args.workload):
         ad.post_build(args.workload)
     out["build_s"] = round(time.perf_counter() - t0, 2)
+    # Facts an adapter can only read once its data is loaded (MongoDB's
+    # self-loop count, which its $graphLookup reads depend on) join the row
+    # here; the connect-time read above cannot see them.
+    out.update(getattr(ad, "row_extra", None) or {})
     if _load_messages:
         # What the message half actually loaded, so a reader can check it
         # against the corpus README the way n_persons_ingested checks the
