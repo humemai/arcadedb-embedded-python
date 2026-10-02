@@ -807,18 +807,19 @@ class Database:
         """
         Enable or disable automatic transaction management.
 
-        When enabled, ArcadeDB automatically begins a transaction for operations
-        that require one. When disabled, you must call begin() yourself (or use ``with db.transaction():``).
+        Off by default: a write outside a transaction raises ``ArcadeDBError``
+        ("Transaction not begun"), so wrap writes in ``with db.transaction():``
+        or call begin() yourself. When enabled, each statement outside a
+        transaction runs in its own committed transaction. The setting is not
+        persisted: a reopened database starts with it off again.
 
         Args:
             enabled: True to enable auto-transaction, False to disable
 
         Example:
-            >>> db.set_auto_transaction(False)  # Manual transaction control
-            >>> db.begin()
-            >>> # ... do work ...
-            >>> db.commit()
-            >>> db.set_auto_transaction(True)  # Restore default
+            >>> db.set_auto_transaction(True)   # each bare write commits alone
+            >>> db.command("sql", "INSERT INTO T SET a = 1")
+            >>> db.set_auto_transaction(False)  # back to the default
         """
         self._check_not_closed()
         try:
