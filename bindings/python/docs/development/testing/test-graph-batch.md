@@ -4,8 +4,6 @@
 
 These tests cover the engine-backed `GraphBatch` helper used for bulk graph ingest.
 
-There are 6 tests.
-
 ## Covered Behavior
 
 ### 1) create vertices and edges
@@ -42,7 +40,7 @@ observable result. It asserts on `ArcadeDBError` and the engine's "must be"
 wording rather than grepping for the parameter name: an unwired keyword raises
 `TypeError: ... unexpected keyword argument 'commit_retries'`, whose message
 contains the parameter name, so a name-substring check passes on exactly the
-broken code it is meant to catch. The first version of this test did that.
+broken code it is meant to catch.
 
 ## Why It Matters
 

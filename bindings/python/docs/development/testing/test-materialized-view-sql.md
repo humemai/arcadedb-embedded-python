@@ -4,13 +4,11 @@
 
 These tests cover the SQL lifecycle for materialized views.
 
-There are 3 tests.
-
 ## Covered Behavior
 
 ### 1) end-to-end lifecycle
 
-Creates a materialized view, inspects `schema:materializedViews`, refreshes it after new source rows arrive, and drops it cleanly.
+Creates a materialized view, inspects `schema:materializedViews`, refreshes it after new source rows arrive, and drops it (and again with `IF EXISTS`); the drop is not checked.
 
 ### 2) refresh mode changes
 

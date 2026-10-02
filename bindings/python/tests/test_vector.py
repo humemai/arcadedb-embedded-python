@@ -1702,7 +1702,7 @@ class TestLSMVectorIndex:
         query = [0.9, 0.1] + [-1.0] * (dims - 2)
         results = index.find_nearest(query, k=1)
 
-        # BINARY quantization currently drops data or returns 0 results
+        # BINARY quantization returns exactly one result for k=1
         assert len(results) == 1
         vertex, distance = results[0]
         vec_data = arcadedb.to_python_array(vertex.get("embedding"))

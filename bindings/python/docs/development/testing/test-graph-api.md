@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_graph_api.py){ .md-button }
 
-There are 18 tests covering Pythonic wrappers (Document, Vertex, Edge classes) and their methods.
+The tests cover Pythonic wrappers (Document, Vertex, Edge classes) and their methods.
 
 ## Overview
 

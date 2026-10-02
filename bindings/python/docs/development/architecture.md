@@ -20,7 +20,7 @@ arcadedb_embedded/
 ├── async_executor.py    # Async command/query + record wrapper
 ├── core.py              # Database, DatabaseFactory, convenience helpers
 ├── exceptions.py        # ArcadeDBError (unified exceptions)
-├── exporter.py          # Export (JSONL/GraphML/GraphSON + CSV helper)
+├── exporter.py          # Export (JSONL + CSV helper)
 ├── graph.py             # Document, Vertex, Edge wrappers
 ├── graph_batch.py       # High-throughput graph ingest wrapper
 ├── importer.py          # Document import helpers and result payloads
@@ -37,7 +37,7 @@ arcadedb_embedded/
 
 **`__init__.py`**
 
-- Central export surface (Database, AsyncExecutor, GraphBatch, Schema, VectorIndex, the `export_database` / `export_to_csv` functions, converters, import helpers)
+- Central export surface, defined by `__all__`: `Database`, `DatabaseFactory`, and the module functions `create_database`, `open_database`, and `database_exists`; the record wrappers `Document`, `Vertex`, and `Edge`; `ResultSet` and `Result`; `Schema`, `IndexType`, and `PropertyType`; `TransactionContext`; `AsyncExecutor`, `GraphBatch`, and `ImportResult`; the type converters; `VectorIndex` and the array helpers (`to_java_float_array`, `to_java_int_array`, `to_java_byte_array`, and `to_python_array`); `ArcadeDBServer` and `create_server`; `export_database` and `export_to_csv`; `jar_fingerprint`; and `ArcadeDBError`
 - Version metadata
 
 **`_logging.py`**
@@ -49,8 +49,14 @@ arcadedb_embedded/
 - Starts JVM using bundled JRE and packaged JARs
 - Prefers programmatic configuration (`start_jvm(...)`, `jvm_kwargs`)
 - Supports explicit heap and common-pool thread limits via `heap_size` and `common_pool_parallelism`
-- Supports `ARCADEDB_JVM_ARGS` / `ARCADEDB_JVM_ERROR_FILE` as fallback
+- Always reads `ARCADEDB_JVM_ARGS` and puts its flags before `jvm_args`; `ARCADEDB_JVM_ERROR_FILE` sets the crash-log path
+- Adds default flags unless the merged arguments already set them: `--add-modules=jdk.incubator.vector`, `-Djava.awt.headless=true`, `--enable-native-access=ALL-UNNAMED`, `-Dfile.encoding=UTF8`, `--add-opens` flags (for `java.util.concurrent.atomic`, `java.nio.channels.spi`, and `java.lang`), `-Dpolyglot.engine.WarnInterpreterOnly=false`, `-XX:+UseCompactObjectHeaders`, and `-Xmx4g` when no heap is given; the `jdk.xml` entity limits are lifted while `disable_xml_limits` is true, and `-XX:ErrorFile` defaults to `./log/hs_err_pid%p.log`
 - Starts once per process: a later `start_jvm()` with no settings, or the same ones, joins the running JVM; different settings raise `ArcadeDBError`
+- From a source checkout (no `jars/` or `jre/` next to the package), extracts them from the newest wheel in `dist/` into `bindings/python/.runtime-cache/`, stamped with that wheel and re-extracted when the wheel changes
+- `jar_fingerprint()` hashes the JARs on disk (`sha256` over all of them, `engine_sha256` without the bridge JAR), so two installs can be compared by engine rather than by version string
+- `shutdown_jvm()` closes open databases and shuts the JVM down
+- Registers an `atexit` hook that closes any database still open when the interpreter exits
+- On Windows, disables Python's `faulthandler` right after the JVM starts, because the JVM's handled access violations would otherwise print as fatal exceptions
 
 **`core.py`**
 
@@ -90,17 +96,19 @@ arcadedb_embedded/
 
 **`exporter.py`**
 
-- `export_database`: JSONL/GraphML/GraphSON
+- `export_database`: JSONL only; GraphML and GraphSON need the engine's arcadedb-gremlin module, which the wheel excludes, so they raise `ArcadeDBError`
 - `export_to_csv`: serialize ResultSet/list to CSV
 
 **`vector.py`**
 
 - `VectorIndex`: JVector-based ANN search
-- `to_java_float_array` / `to_python_array`
+- `to_java_float_array` / `to_java_int_array` / `to_java_byte_array` / `to_python_array`
 
 **`results.py`**
 
-- `ResultSet`: iterator, chunking, bulk materialization (`to_json_list`, `to_columns`), DataFrame export
+- `ResultSet`: iterator, chunking, bulk materialization (`to_json_list`, `iter_json_batches`, `to_columns`), DataFrame and Arrow export (`to_dataframe`, `to_arrow`)
+- `ResultSet.close()` and context-manager use: a set read to its end closes itself; one closed before its end (by `first()`, `one()`, `close()`, or leaving its `with` block) raises `ArcadeDBError` when read again
+- An unclosed result set can keep the engine's parallel-scan threads parked, and they stall later queries that need the pool ([ArcadeData/arcadedb#8594](https://github.com/ArcadeData/arcadedb/issues/8594)), so close a set you stop reading early
 - `Result`: property access with conversion
 
 **`transactions.py`**
@@ -118,7 +126,7 @@ arcadedb_embedded/
 ### Java Bridge Jar
 
 Alongside the engine JARs, the wheel ships `arcadedb-python-bridge.jar`:
-seven small Java helpers (`RowBatcher`, `RowAccess`, `ColumnBatcher`,
+small Java helpers (`RowBatcher`, `RowAccess`, `ColumnBatcher`,
 `DocumentBatcher`, `EdgeBatcher`, `VertexBatcher`, and `TimeSeriesBatcher`, sources in
 `bindings/python/src/java/com/arcadedb/python/`)
 that move per-row/per-record loops to the Java side so bulk operations cost
@@ -148,7 +156,7 @@ def start_jvm(
     jvm_path = get_bundled_jre_lib_path()
     jar_files = glob.glob(os.path.join(get_jar_path(), "*.jar"))
 
-    # Merge programmatic args (preferred) with optional env fallback
+    # ARCADEDB_JVM_ARGS first, then jvm_args, then any missing default flags
     args = _build_jvm_args(
         heap_size=heap_size,
         disable_xml_limits=disable_xml_limits,
@@ -237,10 +245,19 @@ numpy_array = to_python_array(java_array)
 | `float` | `Double` | Automatic |
 | `bool` | `Boolean` | Automatic |
 | `None` | `null` | Automatic |
-| `list` | `ArrayList` | Converted by `convert_python_to_java()` (used by `set()` and bound parameters) |
+| `list` | `ArrayList` | Converted by `convert_python_to_java()` (used by `set()`, and by a bound parameter that is one of several arguments) |
+| `tuple` | `ArrayList` | Converted by `convert_python_to_java()` |
+| `set` | `HashSet` | Converted by `convert_python_to_java()` |
 | `dict` | `HashMap` | Converted by `convert_python_to_java()` |
-| `np.ndarray` | `float[]` | via `to_java_float_array()` |
+| `Decimal` | `BigDecimal` | Converted by `convert_python_to_java()` |
+| `datetime` | `java.util.Date` | Converted by `convert_python_to_java()` |
+| `date` | `LocalDate` | Converted by `convert_python_to_java()` |
+| `bytes` / `bytearray` | `byte[]` | Converted by `convert_python_to_java()` |
+| `np.ndarray` | `float[]` | via `to_java_float_array()`; a bound parameter is converted automatically |
 | `np.ndarray` (integer dtype) | `int[]` | via `to_java_int_array()` |
+
+A single `list` or `tuple` passed as the only bound argument is not one parameter: it
+expands into the positional parameters, one element per `?`.
 
 ---
 
@@ -285,19 +302,28 @@ for batch in large_dataset:
 
 ```
 DatabaseFactory (core.py)
-    ├─ create_database() / open_database() / database_exists()
+    ├─ create() / open() / exists()
     └─ returns Database
+
+create_database() / open_database() / database_exists() (core.py, module functions)
 
 Database (core.py)
     ├─ query()/command() → ResultSet | None
     ├─ begin()/commit()/rollback()/transaction() → TransactionContext
+    ├─ run_in_transaction(fn, retries=12) (retries on conflicts)
+    ├─ is_transaction_active()
     ├─ new_vertex()/new_document() → Vertex | Document
-    ├─ lookup_by_key()/lookup_by_rid()
+    ├─ insert_many() → int
+    ├─ import_documents() → ImportResult
+    ├─ graph_batch() → GraphBatch (graph_batch.py)
+    ├─ lookup_by_key()/lookup_by_rid()/count_type()
     ├─ create_vector_index() → VectorIndex
     ├─ async_executor() → AsyncExecutor (async_executor.py)
     ├─ schema → Schema (schema.py)
+    ├─ set_wal_flush()/set_read_your_writes()/set_auto_transaction()
     ├─ export_database()/export_to_csv()
-    └─ close()/is_open()
+    ├─ get_name()
+    └─ close()/is_open()/drop()
 
 Schema (schema.py)
     ├─ create_document_type()/create_vertex_type()/create_edge_type()
@@ -315,8 +341,10 @@ Record wrappers (graph.py)
     └─ Document → get()/set()/save()/delete()/modify(), to_dict(), get_rid()
 
 ResultSet (results.py)
-    ├─ iterator protocol
+    ├─ iterator protocol, context manager
     ├─ to_list()/to_dataframe()/iter_chunks()/count()/first()/one()
+    ├─ to_json_list()/iter_json_batches()/to_columns()/to_arrow()
+    ├─ close()
     └─ wraps Result objects
 
 Result (results.py)
@@ -335,7 +363,8 @@ Result (results.py)
 - Transactions are per thread: each thread's `db.transaction()` is its own
 - Two threads that update the same record can conflict: the losing commit raises
   `ArcadeDBError` with `ConcurrentModificationException` in the message, and the usual
-  answer is to retry that transaction
+  answer is to retry that transaction: `db.run_in_transaction(fn, retries=12)` rolls
+  back and re-runs `fn` on a conflict
 
 `tests/test_concurrency.py` covers this: `test_thread_safety` runs four threads against
 one shared `Database`, and `test_oltp_mixed_workload_threads` mixes reads with retried
@@ -387,7 +416,7 @@ that runs a server, and have the others use its HTTP API (see
 ### Bottlenecks
 
 1. **JVM Boundary Crossing**
-    - Cost: ~1-10 μs per Java method call
+    - Cost: a fixed cost on every Java method call
     - Impact: High-frequency calls (loops)
     - Solution: Batch operations, use Java bulk APIs
 2. **Type Conversion**
@@ -395,7 +424,7 @@ that runs a server, and have the others use its HTTP API (see
     - Impact: Large data transfers
     - Solution: Minimize conversions, use efficient formats
 3. **Transaction Overhead**
-    - Cost: ~100 μs per transaction
+    - Cost: a fixed cost on every commit
     - Impact: Many small transactions
     - Solution: Batch into larger transactions
 
@@ -452,7 +481,6 @@ all_results = list(result)  # Loads everything into memory
 result = db.query("sql", "SELECT FROM LargeTable")
 for row in result:
     process(row)
-    # Only one row in memory at a time
 ```
 
 When you do need the whole result materialized, prefer the bulk APIs
@@ -505,8 +533,12 @@ The Python binding is distributed as a **single, self-contained package** (`arca
 **Features:**
 
 - **Bundled JRE**: Includes a minimal Java 25 Runtime Environment (JRE) bundled directly in the wheel.
-- **Query engines**: SQL, OpenCypher, and GraphQL ship in the wheel. The Gremlin and
-  MongoDB modules are excluded (`scripts/jar_exclusions.txt`).
+- **Query engines**: SQL, OpenCypher, and GraphQL ship in the wheel.
+  `scripts/jar_exclusions.txt` drops the Gremlin, MongoDB, and gRPC modules, Raft HA
+  (so the server is single-node), metrics and tracing, the JavaScript stack (js,
+  truffle, icu4j, and regex), commons-math3, Jackson, snappy-java, and jline.
+- **Wire protocols**: the Postgres, Redis, and Bolt plugins ship, and the server starts
+  each one only when its plugin is configured (see `create_server()`).
 - **Zero Configuration**: No external Java installation required.
 
 ```python

@@ -2,13 +2,6 @@
 
 The ArcadeDB Python bindings have a comprehensive test suite covering all major functionality.
 
-## Quick Statistics
-
-!!! success "Test Results"
-    - **Current package**: the full suite passes cleanly
-    - Test counts evolve over time; run `uv run pytest -v -rs` for the latest totals
-    - Environment-specific skips may vary depending on optional components
-
 ## What's Tested
 
 The test suite covers:
@@ -21,7 +14,7 @@ The test suite covers:
 - ✅ **Vector search** - JVector-based `LSM_VECTOR` indexes, similarity search
 - ✅ **Data import** - SQL `IMPORT DATABASE` across CSV, XML, Neo4j, Word2Vec, and RDF, plus the `import_documents()` wrapper
 - ✅ **Graph ingest helper** - `GraphBatch` buffering and flush behavior
-- ✅ **Geospatial SQL** - `geo.within`, `geo.intersects`, null/boundary semantics
+- ✅ **Geospatial SQL** - `geo.within`, `geo.intersects`, null input returns null; a boundary point returns a boolean (which one is not asserted)
 - ✅ **Time series SQL** - `CREATE TIMESERIES TYPE`, range queries, bucketing
 - ✅ **Materialized views** - create, refresh, alter, drop lifecycle
 - ✅ **Graph algorithms** - `shortestPath`, `dijkstra`, `astar`
@@ -29,19 +22,43 @@ The test suite covers:
 - ✅ **Unicode support** - International characters, emoji
 - ✅ **Schema introspection** - Querying database metadata
 - ✅ **Type conversions** - Python/Java type mapping
-- ✅ **Large datasets** - Handling 1000+ records efficiently
+- ✅ **Large result sets** - Result sets of 1,000 records: ordered iteration, filtered and aggregate queries (no timing is asserted)
+- ✅ **Async executor** - `async_executor()` commands, queries, callbacks, and exact command-path counts at parallel levels 1 and 4
+- ✅ **Bulk ingest** - `insert_many`, `AsyncExecutor.create_record`, and numpy `append_samples`
+- ✅ **Export** - JSONL database export, CSV result export, and the error GraphML and GraphSON raise without arcadedb-gremlin
+- ✅ **ResultSet API** - `to_list`, `to_json_list`, `to_dataframe`, `to_arrow`, and release of the engine cursor
+- ✅ **JVM** - startup, arguments, and lifecycle (re-entry, reopen in one process, exit with an unclosed database)
+- ✅ **Bundled wire protocols** - PostgreSQL (including Arrow ADBC), Bolt, and the Redis port setting; a default server opens none of their ports
+- ✅ **Packaging and provenance** - server JARs in the wheel, `jar_fingerprint()`, the wheel platform tag, the dev-mode runtime cache, and `__version__`
+- ✅ **Sparse vectors** - `LSM_SPARSE_VECTOR` weight precision, the settle step (`COMPACT INDEX`), and INT8 rescoring
+- ✅ **Cross-model atomicity** - search, hop, and update in one transaction survive an interruption
+- ✅ **RESTORE** - `RESTORE DOCUMENT` and `RESTORE VERTEX` record counts and record integrity
+- ✅ **Schema batching** - schema statements apply at once; many batch in one transaction
+- ✅ **Docs snippets** - selected Python blocks from the documentation run as code
+- ✅ **JVM payload check** - a static check that no Python list crosses into the JVM
 
 ## Quick Start
 
 ### Install Test Dependencies
 
-Nothing to install: test dependencies come from the repo-root uv project and
-are synced automatically by `uv run`.
+1. Build the wheel: `cd bindings/python && ./scripts/build.sh` (Docker on Linux,
+   Python 3.12 by default). It writes the wheel to `bindings/python/dist/` and,
+   outside CI, refreshes the repo-root uv environment.
+2. From the repository root (or `bindings/python`), run `uv run pytest`. The
+   repo-root `pyproject.toml` is the test environment, pinned to Python 3.12, so it
+   needs a cp312 wheel. To leave out the heavy example packages (torch,
+   sentence-transformers), pass `--no-group examples` to `uv sync` and `uv run`.
+
+Other Python versions and platforms are covered by CI (see [CI/CD Setup](../ci-setup.md)).
+CI does not use the uv environment: it installs the built wheel and a hand-maintained
+list of test dependencies, then runs `pytest tests/` from `bindings/python` (see
+[CI Gates](../ci-setup.md#ci-gates)).
 
 ### Run All Tests
 
 ```bash
-# From anywhere in the repo
+# From the repository root or bindings/python (from any other directory a bare
+# run collects only that directory)
 uv run pytest
 
 # With verbose output
@@ -104,28 +121,28 @@ Test counts evolve over time. For the latest per-file counts, run `uv run pytest
 | [`test_materialized_view_sql.py`](test-materialized-view-sql.md) | Materialized view lifecycle and refresh behavior |
 | [`test_restore_sql.py`](test-restore-sql.md) | RESTORE DOCUMENT/VERTEX record-count and record integrity |
 | [`test_graph_algorithms_sql.py`](test-graph-algorithms-sql.md) | SQL graph algorithm runtime coverage |
-| [`test_hash_index_schema.py`](test-hash-index-schema.md) | HASH index schema API behavior |
+| [`test_hash_index_schema.py`](test-hash-index-schema.md) | HASH index schema API behavior, plus a named-list IN parameter on an LSM_TREE index |
 | [`test_jvm_args.py`](test-jvm-args.md) | JVM args handling |
 | [`test_transaction_config.py`](test-transaction-config.md) | WAL flush, read-your-writes, and auto-transaction settings |
 | [`test_type_conversion.py`](test-type-conversion.md) | Python/Java type conversion coverage |
 | [`test_vector.py`](test-vector.md) | Vector API and nearest-neighbor search behavior |
 | [`test_vector_params_verification.py`](test-vector-params-verification.md) | Vector param validation |
 | [`test_vector_sql.py`](test-vector-sql.md) | SQL vector functions, index creation, and search flows |
-| [`test_cross_model_atomicity.py`](test-cross-model-atomicity.md) | Search, hop, and update in one transaction survive an interruption between the writes with nothing torn; without a transaction they are torn every time |
-| [`test_example11_degree_matching.py`](test-example11-degree-matching.md) | Example 11 compares ArcadeDB against hnswlib-derived vector backends. |
+| [`test_cross_model_atomicity.py`](test-cross-model-atomicity.md) | Search, hop, and update in one transaction survive an interruption between the writes with nothing torn; with one transaction per write they are torn every time |
+| [`test_example11_degree_matching.py`](test-example11-degree-matching.md) | `hnsw_m_from_max_connections()` halves maxConnections for hnswlib-derived backends, never below 1, and accepts a string; skips if examples/11 is absent |
 | [`test_jar_provenance.py`](test-jar-provenance.md) | The wheel can say which engine it carries, not just which version it is. |
 | [`test_java_package_shadowing.py`](test-java-package-shadowing.md) | A folder named `java/` or `com/` must not change what a query returns |
-| [`test_jvm.py`](test-jvm.md) | Tests for start_jvm() re-entry behavior once the JVM is running. |
+| [`test_jvm.py`](test-jvm.md) | `start_jvm()` re-entry once the JVM is running, close and reopen in one process, and interpreter exit with an unclosed database |
 | [`test_jvm_payload.py`](test-jvm-payload.md) | A Python list must never be what crosses into the JVM |
 | [`test_resultset_arrow.py`](test-resultset-arrow.md) | Tests for ResultSet.to_arrow(). |
 | [`test_runtime_cache.py`](test-runtime-cache.md) | The dev-mode runtime cache must follow the wheel it was extracted from |
 | [`test_server_http_endpoints.py`](test-server-http-endpoints.md) | The three server HTTP features the bindings document but do not wrap (multi-request transactions, server database commands, and line-protocol time-series writes), plus a projection read over HTTP |
 | [`test_server_packaging.py`](test-server-packaging.md) | The server stack is actually IN the wheel, and the API is reachable. |
 | [`test_server_wire_protocols.py`](test-server-wire-protocols.md) | The wire protocols the wheel bundles are actually reachable. |
-| [`test_sparse_quantization_compact.py`](test-sparse-quantization-compact.md) | Sparse index weight precision and the settle step, plus the dense search beam argument |
+| [`test_sparse_quantization_compact.py`](test-sparse-quantization-compact.md) | Sparse index weight precision and the settle step, the dense search beam argument, and INT8 sparse rescoring |
 | [`test_vector_delta_visibility.py`](test-vector-delta-visibility.md) | Vectors written after an index build are searchable, exactly, before any rebuild |
 | [`test_vector_second_pass.py`](test-vector-second-pass.md) | A repeated query set returns the same neighbours as its first pass |
-| [`test_wheel_platform_tag.py`](test-wheel-platform-tag.md) | Built wheel manylinux platform tag verification (regression tests for issue #4037) |
+| [`test_wheel_platform_tag.py`](test-wheel-platform-tag.md) | Built wheel manylinux platform tag verification (regression tests for `ArcadeData/arcadedb#4037`), and `__version__` equals the installed distribution version |
 
 ## Common Testing Workflows
 
@@ -154,13 +171,13 @@ uv run pytest -vv -s
 
 ## Test Markers
 
-The markers are registered in `bindings/python/pyproject.toml` (`server`, `server_wire`, and
-`integration`) and in `tests/conftest.py` (`server` and `graph_export`). These are the ones the
-suite uses:
+The markers are registered in `bindings/python/pyproject.toml` (`server`, `server_wire`,
+`integration`, and `graph_export`); the repo-root `pyproject.toml` mirrors that block. These are
+the ones the suite uses:
 
 | Marker | Tests |
 | ------ | ----- |
-| `server` | The four server tests in `test_server.py`, `test_server_starts_and_serves_http` in `test_server_packaging.py`, and `test_docs_api_access_examples` in `test_docs_examples.py` |
+| `server` | `test_server_creation`, `test_server_database_operations`, `test_server_custom_config`, and `test_server_context_manager` in `test_server.py`, `test_server_starts_and_serves_http` in `test_server_packaging.py`, and `test_docs_api_access_examples` in `test_docs_examples.py` |
 | `server_wire` | Every test in `test_server_wire_protocols.py` (module-level `pytestmark`) |
 | `graph_export` | `test_export_graphml` and `test_export_graphson` in `test_exporter.py` |
 
@@ -189,11 +206,37 @@ uv run pytest -m "not server and not server_wire" \
 
 ## Expected Output
 
-When the current bindings test suite passes, you should see a clean all-green summary.
+A passing run ends with a summary of the form `N passed, M skipped`, with no failures or
+errors. On the shipped wheel some tests always skip: `test_export_graphml` and
+`test_export_graphson` (the wheel excludes arcadedb-gremlin), and, everywhere except Windows,
+`test_faulthandler_is_off_on_windows`. Run with `-rs` to see why each test skipped.
 
-```text
-======================== passed ========================
-```
+## Skips
+
+Beyond the tests above, a test skips when what it needs is missing:
+
+- **An optional Python package**: numpy, pandas, pyarrow, requests, psycopg,
+  adbc-driver-postgresql, or neo4j.
+- **Server support**: the tests marked `server` in `test_server.py` and
+  `test_docs_api_access_examples` skip when the wheel carries no Studio JAR.
+  `test_server_packaging.py` fails instead, so a wheel without the server stack cannot pass
+  quietly.
+- **An engine feature the runtime lacks**: OpenCypher and some of its clauses, the geo and
+  graph-algorithm SQL functions, `CREATE TIMESERIES TYPE`, the HASH index type, some vector
+  index options, and the Neo4j, Word2Vec, and RDF importers. Most of these skip on the error
+  the engine raises. The OpenCypher `collect`/`UNWIND` and pattern-comprehension tests skip
+  when the query returns no rows or a null, so a wrong empty answer shows up as a skip.
+- **A file outside the package**: `bindings/python/docs` (the docs-example tests),
+  `examples/11_vector_index_build.py`, the importer fixtures under
+  `integration/src/test/resources/`, and `benchmarks/experiments` (the JVM-payload check).
+- **The platform**: the XML and RDF import tests skip on their known Windows parse failures.
+
+CI fails the job when a skip reason contains "could not import", the default reason of
+`pytest.importorskip`, so most missing packages are caught. A skip with its own reason (the
+pyarrow module skip in `test_resultset_arrow.py`, the numpy `skipif` in
+`test_numpy_support.py`) or a hand-written `pytest.skip` (the requests check in
+`test_server_patterns.py`) is not caught, and none of the other conditions above fails the
+job. See [CI Gates](../ci-setup.md#ci-gates).
 
 ## Next Steps
 

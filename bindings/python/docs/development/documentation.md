@@ -8,6 +8,8 @@ This guide explains how to work with the MkDocs Material documentation for Arcad
 bindings/python/
 ├── docs/              # Documentation source
 │   ├── index.md       # Homepage
+│   ├── api-access-methods.md
+│   ├── java-api-coverage.md
 │   ├── getting-started/
 │   ├── guide/
 │   ├── api/
@@ -15,8 +17,7 @@ bindings/python/
 │   ├── benchmarks/
 │   ├── development/
 │   ├── brand/         # Logo and brand assets
-│   ├── stylesheets/   # extra.css
-│   └── javascripts/
+│   └── stylesheets/   # extra.css
 ├── mkdocs.yml         # MkDocs configuration
 └── site/              # Built documentation (gitignored)
 ```
@@ -56,9 +57,6 @@ The built site will be in `site/` directory.
 ```bash
 # Check for broken links
 uv run mkdocs build --strict -f bindings/python/mkdocs.yml
-
-# Validate configuration
-uv run mkdocs --version
 ```
 
 ## Versioned Documentation
@@ -75,6 +73,9 @@ Documentation is versioned using [mike](https://github.com/jimporter/mike) and a
       [humemai/humemai-docs](https://github.com/humemai/humemai-docs), which serves docs.humem.ai
     - Sets it as the `latest` version (every tag push does, dev tags included)
     - Updates version selector
+
+    It does not wait for the PyPI release, so a tag whose release fails still deploys its
+    docs as `latest`.
 
 3. **Users can view**:
     - Latest stable docs: <https://docs.humem.ai/arcadedb/>
@@ -333,6 +334,11 @@ change; it fails on warnings and on broken internal links:
 ```bash
 uv run mkdocs build --strict -f bindings/python/mkdocs.yml
 ```
+
+The deploy does not use the locked `docs` group of the repo-root project: it installs the
+latest `mkdocs-material`, `mkdocs-git-revision-date-localized-plugin`, `mkdocs-macros-plugin`,
+and `mike` with `uv pip install --system`. A page that builds locally can still differ in the
+deployed build.
 
 `tests/test_docs_examples.py`, part of the test suite, executes a selection of the
 Python snippets in these pages (see [Documentation Example Tests](testing/test-docs-examples.md)).

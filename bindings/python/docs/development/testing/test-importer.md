@@ -5,8 +5,8 @@
 
 The import-focused test coverage is split across:
 
-- `test_import_database.py` for SQL `IMPORT DATABASE` behavior and format coverage (10 tests)
-- `test_importer_api.py` for the narrow `db.import_documents(...)` wrapper (8 tests, which collect as 10 cases because the `on_row_error` test is parametrized over three modes)
+- `test_import_database.py` for SQL `IMPORT DATABASE` behavior and format coverage
+- `test_importer_api.py` for the narrow `db.import_documents(...)` wrapper
 
 ## Quick Start
 
@@ -42,11 +42,11 @@ with arcadedb.create_database("./mydb") as db:
 - **test_import_database_xml_vertices**: an XML file imported with `entityType = 'VERTEX'` stores 2 `v_user` vertices (skips on the Windows runtime, where the engine-side XML path fails).
 - **test_import_database_neo4j_fixture**: a Neo4j export imports and leaves at least one type in the schema.
 - **test_import_database_word2vec_vectors**: a Word2Vec file imports at least 10 `Word` records.
-- **test_import_database_rdf_fixture**: an RDF fixture imports at least one document.
+- **test_import_database_rdf_fixture**: an RDF fixture imports, and `schema:types` is non-empty afterwards (it counts types, not records); it skips without an RDF importer and on the Windows parse failure.
 - **test_import_database_into_timeseries_type**: `IMPORT DATABASE ... WITH documentType = 'Telemetry'` into a TIMESERIES type raises an `ArcadeDBError` mentioning "importing database", and the type still has 0 rows. The importer cannot place a document in a TIMESERIES type, so this pins the failure rather than an import path.
 - **test_import_database_with_missing_file_fails**: a missing file raises `ArcadeDBError`.
 
-The Neo4j, Word2Vec, and RDF tests skip when their fixture is missing or the runtime lacks that importer.
+The Neo4j, Word2Vec, and RDF tests skip when their fixture is missing or the runtime lacks that importer. The fixtures come from `integration/src/test/resources/` in the repository checkout (`importer-vertices.csv`, `importer-edges.csv`, `neo4j-export-mini.jsonl`, `importer-word2vec.txt`, and `importer-rdf.xml`). `test_import_database_into_timeseries_type` skips if `CREATE TIMESERIES TYPE` is rejected.
 
 `test_importer_api.py`:
 
@@ -60,7 +60,7 @@ The Neo4j, Word2Vec, and RDF tests skip when their fixture is missing or the run
 
 ### `on_row_error`
 
-Two tests. The first imports a three-row CSV whose middle row repeats a
+`test_import_documents_on_row_error` imports a three-row CSV whose middle row repeats a
 `UNIQUE`-indexed key, across three arms: the default, an explicit `"abort"`,
 and `"skip"`. Measured behaviour is `abort` leaving 0 rows and raising, against
 `skip` leaving `['A-1', 'B-2']` and not raising, with the engine logging
@@ -70,7 +70,7 @@ default and `"abort"` both raise and do not leave the full good set, and that
 and `"abort"` carry the same assertions, a change to the engine default cannot pass
 silently.
 
-The second checks that an unknown mode raises `ValueError`. That validation is
+`test_import_documents_rejects_unknown_on_row_error` checks that an unknown mode raises `ValueError`. That validation is
 Python-side on purpose: the engine tests `"skip".equalsIgnoreCase(value)`, so
 `"ignore"` or `"SKIPP"` would otherwise run the import in exactly the opposite
 mode from the one requested, with nothing logged. `"SKIP"` is accepted, mirroring
@@ -103,7 +103,6 @@ uv run pytest bindings/python/tests/test_import_database.py -v -s
 
 - For full database restores, the recommended Python surface is still SQL `IMPORT DATABASE`.
 - `db.import_documents(...)` is intentionally documented as a narrow wrapper rather than a new recommended default ingest workflow.
-- The maintained regression coverage for imports now lives in `test_import_database.py` and `test_importer_api.py`.
 
 ## Related Documentation
 

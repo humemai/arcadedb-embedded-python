@@ -4,8 +4,6 @@
 
 Despite the file name, these tests cover the `GraphBatch` bulk paths (`new_edges` and `create_vertices`), not the graph wrapper API; that is in [Graph API Tests](test-graph-api.md).
 
-There are 3 tests.
-
 ## Test Cases
 
 ### 1) graph batch new edges bulk
@@ -14,7 +12,7 @@ There are 3 tests.
 
 ### 2) graph batch create vertices json bulk correctness
 
-`create_vertices` on JSON-safe rows (the bulk JSON path) returns two `#` RIDs, and the stored `name`, `score`, and `ok` values read back as given. A row holding a `datetime` takes the property-matrix fallback: the test asserts it returns one RID and that the stored `ts` is not null (it does not check the type, and it does not compare the two paths).
+`create_vertices` on JSON-safe rows (the bulk JSON path) returns two `#` RIDs, and the first row's `name`, `score`, and `ok` read back as given. A row holding a `datetime` takes the property-matrix fallback: the test asserts it returns one RID and that the stored `ts` is not null (it does not check the type, and it does not compare the two paths).
 
 ### 3) graph batch new edges bulk with properties
 

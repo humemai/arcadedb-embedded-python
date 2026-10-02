@@ -8,8 +8,8 @@
 #   1) Build ArcadeDB JARs in Docker:
 #        docker run --rm -v "$PWD":/src -w /src maven:3.9-amazoncorretto-25 \
 #          sh -c "git config --global --add safe.directory /src && ./mvnw -DskipTests -pl package -am package"
-#   2) Point the build at your JAR directory:
-#        cd bindings/python && ./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-*/lib
+#   2) Point the build at the full assembly's lib directory:
+#        cd bindings/python && ./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-<version>.dir/arcadedb-<version>/lib
 
 set -euo pipefail
 
@@ -59,7 +59,7 @@ print_usage() {
     echo "  windows/amd64  Windows x86_64 (native build on Windows)"
     echo ""
     echo "PYTHON_VERSION:"
-    echo "  Python version for wheel (default: 3.12)"
+    echo "  Python version for wheel (default: 3.12); used by Linux (Docker) builds only"
     echo "  Examples: 3.10, 3.11, 3.12, 3.13, 3.14"
     echo ""
     echo "JAR_LIB_DIR (optional):"
@@ -75,7 +75,7 @@ print_usage() {
     echo "  $0 linux/amd64                        # Build for Linux x86_64 with Python 3.12 (Docker)"
     echo "  $0 linux/amd64 3.11                   # Build for Linux x86_64 with Python 3.11 (Docker)"
     echo "  $0 linux/amd64 3.12 /path/to/jars     # Build using JARs from /path/to/jars"
-    echo "  $0 darwin/arm64 3.12                  # Build for macOS ARM64 with Python 3.12 (native)"
+    echo "  $0 darwin/arm64                       # Build for macOS ARM64 (native; uses the first Python with a working build module)"
     echo ""
     echo "Package features:"
     echo "  ✅ Bundled platform-specific JRE (no Java required)"
@@ -501,9 +501,9 @@ fi
 
 echo ""
 echo -e "${BLUE}💡 Next steps:${NC}"
-echo -e "   🧪 Run tests (from anywhere in the repo):"
+echo -e "   🧪 Run tests (from the repository root or bindings/python):"
 echo -e "      ${YELLOW}uv run pytest${NC}"
 echo ""
-echo -e "   📤 Publish to PyPI:"
-echo -e "      ${YELLOW}twine upload dist/*.whl${NC}"
+echo -e "   📤 Releases publish through the release workflow (docs/development/release.md);"
+echo -e "      do not upload wheels by hand"
 echo ""

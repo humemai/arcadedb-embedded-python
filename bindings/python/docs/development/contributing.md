@@ -22,14 +22,25 @@ uv run pytest
 
 **Required:**
 
-- Python 3.10–3.14 (dev baseline 3.12)
+- Python: the package supports 3.10–3.14; the dev environment is 3.12 only
 - [uv](https://docs.astral.sh/uv/) (runs the dev environment)
 - Docker (for building the Linux wheels)
 - Git
 
 **Only for native macOS and Windows builds:**
 
-- A JDK 25 or later with `jlink` (`scripts/build-native.sh` checks for it)
+- A JDK 25 or later with `jlink` and `javac`, and `JAVA_HOME` set (`scripts/build-native.sh`
+  checks the version and `jlink`, and reads the JDK's modules from `JAVA_HOME`)
+- A Python with a working `build` module: the script takes the first of `python3.13`,
+  `python3.12`, `python3.11`, `python3`, and `python` that has one, and the version argument
+  does not choose it
+- Docker, to pull the JARs from the `arcadedata/arcadedb` image, unless
+  `src/arcadedb_embedded/jars/` already holds JARs. An existing JAR directory is reused
+  whatever its version, so delete it after a version change.
+
+A native build rewrites the `version`, `name`, and `description` lines of the tracked
+`bindings/python/pyproject.toml` in place, and deletes every wheel in `dist/` before it builds.
+Revert `pyproject.toml` before committing.
 
 The wheel bundles its own JRE, so running the tests or using the package needs no
 Java installation, and the Linux build runs inside Docker.
@@ -53,8 +64,8 @@ cd arcadedb-embedded-python/bindings/python
 
 2. **Build the Wheel**
 
-The package only works as a built wheel (it bundles the ArcadeDB JARs and a
-JRE), so there is no editable install. Building also refreshes the uv dev
+The JARs and JRE come from a built wheel, so there is no editable install.
+Outside CI, and when uv is on `PATH`, building also refreshes the uv dev
 environment at the repo root:
 
 ```bash
@@ -64,9 +75,11 @@ environment at the repo root:
 3. **Verify Setup**
 
 The dev environment is a uv project at the repo root (`pyproject.toml`); it
-installs the built wheel from `dist/` plus all test/dev dependencies. There is
-no virtualenv to activate: run everything through `uv run`, from anywhere in
-the repo:
+installs the built wheel from `dist/` plus all test/dev dependencies. It is
+pinned to Python 3.12, so it needs a cp312 wheel. There is no virtualenv to
+activate: run everything through `uv run`, from the repository root or
+`bindings/python` (from any other directory, a bare `uv run pytest` collects
+only that directory):
 
 ```bash
 # Run quick test
@@ -81,23 +94,24 @@ uv run pytest
 ```
 arcadedb-embedded-python/bindings/python/
 ├── src/
-│   └── arcadedb_embedded/        # Main package
-│       ├── __init__.py            # Package initialization
-│       ├── _logging.py            # Internal logging helpers
-│       ├── async_executor.py      # Async command/query execution
-│       ├── core.py                # Database, DatabaseFactory
-│       ├── exceptions.py          # Exception classes
-│       ├── exporter.py            # Data export (JSONL, GraphML, etc.)
-│       ├── graph.py               # Graph wrappers
-│       ├── graph_batch.py         # Bulk graph ingest helper
-│       ├── importer.py            # Import helpers
-│       ├── jvm.py                 # JVM startup logic
-│       ├── results.py             # Query result handling
-│       ├── schema.py              # Schema management
-│       ├── server.py              # ArcadeDBServer
-│       ├── transactions.py        # Transaction management
-│       ├── type_conversion.py     # Python-Java type conversion
-│       └── vector.py              # Vector search support
+│   ├── arcadedb_embedded/        # Main package
+│   │   ├── __init__.py            # Package initialization
+│   │   ├── _logging.py            # Internal logging helpers
+│   │   ├── async_executor.py      # Async command/query execution
+│   │   ├── core.py                # Database, DatabaseFactory
+│   │   ├── exceptions.py          # Exception classes
+│   │   ├── exporter.py            # JSONL database export, CSV result export
+│   │   ├── graph.py               # Graph wrappers
+│   │   ├── graph_batch.py         # Bulk graph ingest helper
+│   │   ├── importer.py            # Import helpers
+│   │   ├── jvm.py                 # JVM startup logic
+│   │   ├── results.py             # Query result handling
+│   │   ├── schema.py              # Schema management
+│   │   ├── server.py              # ArcadeDBServer
+│   │   ├── transactions.py        # Transaction management
+│   │   ├── type_conversion.py     # Python-Java type conversion
+│   │   └── vector.py              # Vector search support
+│   └── java/com/arcadedb/python/  # Bridge JAR sources (batched row transport)
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py                         # Shared fixtures
@@ -117,12 +131,12 @@ arcadedb-embedded-python/bindings/python/
 │   ├── test_graph_algorithms_sql.py        # shortestPath / dijkstra / astar
 │   ├── test_graph_api.py                   # Graph API tests
 │   ├── test_graph_batch.py                 # Bulk graph ingest helper
-│   ├── test_hash_index_schema.py           # HASH index schema tests
+│   ├── test_hash_index_schema.py           # HASH index schema tests, plus a named-list IN parameter on an LSM_TREE index
 │   ├── test_import_database.py             # SQL import workflow tests
 │   ├── test_importer_api.py                # Import helper wrapper tests
 │   ├── test_jar_provenance.py              # Engine provenance carried by the wheel
 │   ├── test_java_package_shadowing.py      # java/ or com/ folders on the path
-│   ├── test_jvm.py                         # start_jvm() re-entry tests
+│   ├── test_jvm.py                         # start_jvm() re-entry, close and reopen in one process, and exit with an unclosed database
 │   ├── test_jvm_args.py                    # JVM argument tests
 │   ├── test_jvm_payload.py                 # No Python list crosses into the JVM
 │   ├── test_logging_helper.py              # Internal logging helper tests
@@ -133,6 +147,7 @@ arcadedb-embedded-python/bindings/python/
 │   ├── test_resultset_arrow.py             # ResultSet.to_arrow() tests
 │   ├── test_runtime_cache.py               # Dev-mode runtime cache tests
 │   ├── test_schema.py                      # Schema tests
+│   ├── test_schema_batching.py             # Schema statements apply at once; many batch in one transaction
 │   ├── test_server.py                      # Server tests
 │   ├── test_server_http_endpoints.py       # Server HTTP features the bindings do not wrap
 │   ├── test_server_packaging.py            # Server stack bundled in the wheel
@@ -147,7 +162,7 @@ arcadedb-embedded-python/bindings/python/
 │   ├── test_vector_params_verification.py  # Vector parameter validation tests
 │   ├── test_vector_second_pass.py          # Repeated query sets return the same neighbours
 │   ├── test_vector_sql.py                  # Vector SQL tests
-│   └── test_wheel_platform_tag.py          # Wheel platform tag tests
+│   └── test_wheel_platform_tag.py          # Wheel platform tag tests, and __version__ equals the installed distribution version
 ├── docs/                          # MkDocs documentation
 │   ├── getting-started/
 │   ├── guide/
@@ -157,18 +172,20 @@ arcadedb-embedded-python/bindings/python/
 ├── examples/                      # Example scripts
 │   ├── 01_simple_document_store.py
 │   ├── 02_social_network_graph.py
-│   ├── ...                        # 26 numbered examples in all
+│   ├── ...                        # the other numbered examples
 │   ├── 26_cross_model_transaction_atomicity.py
 │   ├── download_data.py           # Data download helper
 │   ├── data/                      # Example datasets
 │   └── scripts/                   # Example helper scripts
+├── local-jars/                    # Engine JARs staged by build.sh (gitignored)
+├── .runtime-cache/                # JARs and JRE extracted for source-tree imports (gitignored)
 ├── pyproject.toml                 # Package configuration
 ├── setup.py                       # Setup configuration
 ├── scripts/                       # Build and maintenance helpers
 │   ├── arrow_transport_probe.py   # to_arrow() measurement script
 │   ├── build.sh                   # Main build entrypoint
 │   ├── build-native.sh            # Native build script
-│   ├── build_and_install_locally.sh # Local build + install helper
+│   ├── build_and_install_locally.sh # Engine build + wheel from the headless assembly (no Studio, Bolt, Redis, or GraphQL)
 │   ├── ensure-build-tools.sh      # Build tools setup
 │   ├── extract_version.py         # Version extraction
 │   ├── fix_markdown.py            # Docs formatter
@@ -195,12 +212,21 @@ arcadedb-embedded-python/bindings/python/
 
 **What the build does:**
 
-1. Extracts ArcadeDB version from parent `pom.xml`
-2. Copies the JAR files from the `arcadedata/arcadedb:<version>` image (or from a
-   directory you pass as the third argument, `JAR_LIB_DIR`) and filters them
-3. Creates a bundled platform-specific JRE and stages optimized JARs (see `scripts/jar_exclusions.txt`)
-4. Runs tests in isolated Docker environment
-5. Creates wheel file in `dist/`
+1. Reads the ArcadeDB version from the parent `pom.xml` (`scripts/extract_version.py`)
+2. Takes the JARs from the `arcadedata/arcadedb:<version>` image or, on Linux, from the
+   directory passed as the third argument, and removes those listed in
+   `scripts/jar_exclusions.txt`; a native build reuses `src/arcadedb_embedded/jars/` when it
+   already holds JARs
+3. Compiles the bridge JAR (`arcadedb-python-bridge.jar`) from `src/java/`
+4. Builds the bundled JRE with `jlink`
+5. Builds the wheel; on Linux, `scripts/verify_wheel_platform_tag.py` checks the manylinux tag
+   against the highest GLIBC version the JRE needs
+6. On Linux only, installs the wheel in a clean image and runs a smoke script that creates a
+   database, inserts one document, and queries it (the test suite does not run during the build)
+7. Deletes older wheels with the same tag from `dist/`
+8. Outside CI, with uv on `PATH`, refreshes the repo-root uv environment:
+   `uv lock --upgrade-package arcadedb-embedded`, then
+   `uv sync --reinstall-package arcadedb-embedded`
 
 ### Local Build
 
@@ -209,20 +235,29 @@ arcadedb-embedded-python/bindings/python/
 ./scripts/build.sh
 
 # Or target a specific supported platform on matching native hardware
-./scripts/build.sh darwin/arm64 3.12
-./scripts/build.sh windows/amd64 3.12
+# (the Python version argument applies to Linux (Docker) builds only)
+./scripts/build.sh darwin/arm64
+./scripts/build.sh windows/amd64
 
 # No install step needed: build.sh refreshes the repo-root uv env automatically
 
-# Embed engine JARs you built yourself instead of the image's (third argument)
-./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-*/lib
+# Embed engine JARs you built yourself instead of the image's (third argument;
+# Linux builds only, a native build ignores it)
+./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-<version>.dir/arcadedb-<version>/lib
 ```
+
+A wheel built from a JAR directory carries only the JARs in that directory (less those in
+`scripts/jar_exclusions.txt`). Use the full assembly's `lib` directory, as above. The
+headless assembly, which `scripts/build_and_install_locally.sh` stages, omits Studio, Bolt,
+Redis, and GraphQL, and its wheel fails `test_server_packaging.py`. To test a change to the
+bindings, build against the image's JARs; use a JAR directory to test an engine change.
 
 ### Development Install
 
-There is no editable install: the package only works as a built wheel (it
-bundles the ArcadeDB JARs and a JRE that a source install lacks). After
-changing Python code in `src/`, rebuild:
+There is no editable install. The JARs and JRE come from a built wheel: the uv
+environment installs it, and an import from the source tree extracts them from the
+newest wheel in `dist/` into `.runtime-cache/`. After changing Python code in
+`src/`, rebuild:
 
 ```bash
 ./scripts/build.sh   # rebuilds the wheel and refreshes the uv env
@@ -243,6 +278,11 @@ uv run pytest --cov=arcadedb_embedded --cov-report=html
 # View coverage report
 open htmlcov/index.html
 ```
+
+The tests use fixed ports: 2480 (the server default, which most server tests use) and 8080
+(`test_server_custom_config`), and `test_plugins_are_opt_in` asserts that 5432, 6379, and 7687
+refuse connections. A local PostgreSQL, Redis, Neo4j, or ArcadeDB server listening on one of
+those ports fails the suite. On Windows, run pytest with `--capture=sys`.
 
 ### Specific Test Files
 
@@ -280,6 +320,13 @@ but unused. See [Test Markers](testing/overview.md#test-markers) for which tests
 and how to leave out every server-starting test.
 
 ### Writing Tests
+
+Use the shared fixtures in `tests/conftest.py` rather than your own temporary directories. A
+server test carries `@pytest.mark.server` and
+`@pytest.mark.skipif(not has_server_support(), reason=...)`. One JVM serves the whole session,
+and engine-wide settings carry from one test to the next, so run the full suite after adding a
+test. The fixtures, feature guards, optional dependencies, hang diagnostics, and the Bandit rule
+are in [Writing a Test for This Suite](testing/best-practices.md#writing-a-test-for-this-suite).
 
 ```python
 # tests/test_example.py
@@ -370,17 +417,17 @@ def create_user(db,name,email):
 ### Formatting Tools
 
 ```bash
-# From bindings/python
+# From the repository root: the hooks CI runs (black, isort, shfmt, pretty-format-yaml,
+# prettier on src/java, and the whitespace and end-of-file fixers)
+uvx pre-commit run --files $(git ls-files 'bindings/python/**')
 
-# Format with black
-uv run black src/ tests/
-
-# Sort imports (pre-commit runs isort with the black profile)
-uv run isort --profile black src/ tests/
-
-# Type checking
+# Type checking, from bindings/python (advisory: no CI job runs mypy)
 uv run mypy src/
 ```
+
+Running black or isort by hand does not reproduce the gate: pre-commit pins its own tool
+versions, which can differ from the uv environment's, and it also covers `examples/` and
+`scripts/`.
 
 CI also runs Bandit, a dependency-floor audit, and the pre-commit hooks; see
 [CI Gates](ci-setup.md#ci-gates) for what they check and how to run them locally.
@@ -649,11 +696,10 @@ vim docs/api/database.md
 # Run tests
 uv run pytest
 
-# Format code (from bindings/python)
-uv run black src/ tests/
-uv run isort --profile black src/ tests/
+# Format and lint (from the repository root; the hooks CI runs)
+uvx pre-commit run --files $(git ls-files 'bindings/python/**')
 
-# Type check
+# Type check (advisory; from bindings/python)
 uv run mypy src/
 
 # Build documentation (from the repository root)
@@ -693,7 +739,7 @@ git push origin feature/my-new-feature
 # Go to GitHub and create Pull Request
 ```
 
-### 7. PR Template
+### 7. Suggested PR Description
 
 ```markdown
 ## Description
@@ -727,7 +773,7 @@ Closes #456
 ## Release Process
 
 Releases are cut by pushing a version tag; the release workflow builds, tests, and
-publishes all 20 wheels through PyPI trusted publishing. Do not upload wheels by hand.
+publishes the wheels through PyPI trusted publishing. Do not upload wheels by hand.
 The full procedure, including how the version reaches `pom.xml` and the checks to run
 on the tag before pushing it, is in [Release Workflow](release.md).
 
@@ -773,6 +819,12 @@ dependencies = [
 ]
 ```
 
+A test dependency goes in three places: the `test` extra in `bindings/python/pyproject.toml`,
+the install step in `.github/workflows/test-python-bindings.yml`, and the dependencies of the
+repo-root `pyproject.toml`. The `dependency-floors` CI job resolves the declared floors with
+`--resolution lowest-direct` for every Python version in the classifiers and runs `pip-audit`
+on the result, so a floor that admits a vulnerable release fails it.
+
 ## Troubleshooting
 
 ### JVM Errors
@@ -791,16 +843,20 @@ A JDK 25 or later is only needed to build native macOS and Windows wheels.
 ### Build Errors
 
 ```bash
-# Clean build artifacts
-rm -rf dist/ build/ *.egg-info
+# Clean build artifacts (from bindings/python)
+rm -rf dist/ build/ src/*.egg-info local-jars/ .runtime-cache/
 
-# Remove cached JARs and JRE
+# Remove cached JARs and JRE (a native build reuses an existing jars/ directory,
+# whatever its version)
 rm -rf src/arcadedb_embedded/jars/
 rm -rf src/arcadedb_embedded/jre/
 
 # Rebuild
 ./scripts/build.sh
 ```
+
+After deleting `dist/`, rebuild before the next `uv run` or `uv sync`: the repo-root
+environment installs the package from there.
 
 ### Test Failures
 
@@ -818,13 +874,11 @@ uv run pytest --cov=arcadedb_embedded --cov-report=term-missing
 ### Docker Issues
 
 ```bash
-# Clean Docker cache
-docker system prune -a
+# Clear Docker's build cache (unlike `docker system prune -a`, this keeps your images)
+docker builder prune
 
-# Rebuild without cache (Dockerfile.build needs ARCADEDB_TAG; build.sh normally passes it)
-docker build --no-cache -f scripts/Dockerfile.build \
-  --build-arg ARCADEDB_TAG="$(python3 scripts/extract_version.py --format=docker)" \
-  ../..
+# Rebuild
+./scripts/build.sh
 ```
 
 ## Getting Help

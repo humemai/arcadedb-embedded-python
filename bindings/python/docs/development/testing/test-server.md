@@ -2,9 +2,9 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_server.py){ .md-button }
 
-There are 5 tests covering server creation, database operations, custom config, context managers, and the default host. For advanced patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
+These tests cover server creation, database operations, custom config, context managers, and the default host. For advanced patterns (embedded + HTTP), see [Server Patterns](test-server-patterns.md).
 
-Note: the first four tests construct the server directly with the `ArcadeDBServer` class, are marked `@pytest.mark.server`, and are skipped unless server support is available.
+Note: the tests construct the server directly with the `ArcadeDBServer` class. Every test except `test_default_host_is_localhost` is marked `@pytest.mark.server` and is skipped unless server support is available.
 
 ## Quick Example
 
@@ -57,7 +57,9 @@ server.start()
 assert server.is_started()
 
 assert server.get_http_port() == 2480
-assert "http://" in server.get_studio_url()
+studio_url = server.get_studio_url()
+assert "http://" in studio_url
+assert "2480" in studio_url
 
 server.stop()
 assert not server.is_started()
@@ -117,7 +119,7 @@ server.stop()
 with ArcadeDBServer(root_path="./databases", root_password="mypassword") as server:
     # Server auto-starts in the context manager
     assert server.is_started()
-    # Server automatically stopped on exit
+    # The test does not check that the server stopped after the block
 ```
 
 ### 5. Default Host

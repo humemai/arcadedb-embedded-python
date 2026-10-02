@@ -383,9 +383,9 @@ class TestVectorSQL:
 
         vertex = neighbors[0]
         vec_data = arcadedb.to_python_array(vertex.get("vec"))
-        # Check content: The first dimension should be dominant
-        # Note: Currently returns nan in test environment, but search works (found the record).
-        # We relax the check to ensure the overflow bug is fixed.
+        # The returned vector's values are not checked: the content assert
+        # below is disabled, so this test asserts only that the INT8 index
+        # answers with one neighbour.
         # assert vec_data[0] > 0.9
 
     def test_create_index_with_quantization_binary_sql(self, test_db):

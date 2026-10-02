@@ -4,13 +4,11 @@
 
 These tests cover SQL-first timeseries behavior from the Python bindings.
 
-There are 3 tests.
-
 ## Covered Behavior
 
 ### 1) insert, range query, and bucket aggregation
 
-Creates a `TIMESERIES TYPE`, inserts records, validates `BETWEEN` queries, and checks `ts.timeBucket(...)` aggregation results.
+Creates a `TIMESERIES TYPE`, inserts records, validates `BETWEEN` queries (3 rows; timestamps compared up to a constant offset), and checks `ts.timeBucket(...)` aggregation results.
 
 ### 2) tag filtering and empty ranges
 

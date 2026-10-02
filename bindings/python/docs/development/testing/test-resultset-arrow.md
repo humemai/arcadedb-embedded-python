@@ -4,13 +4,13 @@
 
 Tests for ResultSet.to_arrow().
 
-There are 10 tests.
+The whole module skips when pyarrow is not installed.
 
 ## Test Cases
 
 ### 1) to arrow basic types
 
-Ints, floats, strings and bools survive the round trip with types.
+`name` and `n` read back exactly; `n`, `x`, and `name` have integer, floating-point, and string Arrow types; `ok` is selected but not checked.
 
 ### 2) to arrow keeps int64 with nulls
 

@@ -2,9 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_server_http_endpoints.py)
 
-The three server HTTP features the bindings document but do not wrap (guide/server.md, "Transactions, Database Commands and Time-Series Writes over HTTP"): a transaction spanning several requests through arcadedb-session-id, server-level database commands, and line-protocol writes to a TIMESERIES type. A fourth test checks a projection read over HTTP.
-
-There are 4 tests.
+The three server HTTP features the bindings document but do not wrap ([Transactions, Database Commands, and Time-Series Writes over HTTP](../../guide/server.md#transactions-database-commands-and-time-series-writes-over-http)): a transaction spanning several requests through arcadedb-session-id, server-level database commands, and line-protocol writes to a TIMESERIES type. A further test checks that a projection read over HTTP matches the same read through the embedded handle.
 
 ## Test Cases
 
@@ -22,7 +20,7 @@ There are 4 tests.
 
 ### 4) embedded and http projections agree
 
-Inserts 300 rows over HTTP and asserts that `SELECT id, amount FROM R ORDER BY id LIMIT 100` over HTTP returns 100 rows with ids 0 through 99, then runs the same statement through the embedded handle of the served database (`server.get_database("httpx")`) and asserts the two lists of `(id, amount)` pairs are equal. Until 2026-09-29 it never ran the embedded query.
+Inserts 300 rows over HTTP and asserts that `SELECT id, amount FROM R ORDER BY id LIMIT 100` over HTTP returns 100 rows, the first with id 0 and the last with id 99, then runs the same statement through the embedded handle of the served database (`server.get_database("httpx")`) and asserts the two lists of `(id, amount)` pairs are equal.
 
 ## Running
 

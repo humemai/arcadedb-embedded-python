@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_core.py){ .md-button }
 
-There are **37 tests** covering fundamental database operations.
+The tests cover fundamental database operations.
 
 ## Overview
 
@@ -20,7 +20,7 @@ Tests validate:
 - SQLScript, `UPDATE`/`DELETE` `BATCH`, `UPDATE ... CONTENT`, `TRUNCATE BUCKET`, `FIND REFERENCES`
 - Unicode/international character support
 - Schema introspection and metadata
-- Large result sets (1000+ records)
+- Result sets of 1,000 records (no timing is asserted)
 - Type conversions (Python ↔ Java)
 - RID lookup via `lookup_by_rid()`
 - `run_in_transaction()` commit and rollback on any exception, including `BaseException`
@@ -38,12 +38,12 @@ Tests validate:
 - **test_rich_data_types**: Defines a `Task` type with STRING/BOOLEAN/INTEGER/FLOAT/DECIMAL/DATE/DATETIME properties, uses built-in functions (`uuid()`, `date()`, `sysdate()`), then exercises insert, aggregation, filtering, UPDATE, and DELETE
 - **test_arcadedb_sql_features**: Tests built-in SQL functions and JSON-like embedded document properties on `TestEntity` (metadata returns a Java map-like object)
 - **test_transactions**: Tests successful commit and automatic rollback on exception
-- **test_run_in_transaction_commits_and_returns**: `run_in_transaction()` runs `fn` transactionally and hands back its return value
-- **test_run_in_transaction_rolls_back_on_non_arcadedb_error**: A plain `KeyError` from `fn` still rolls back and leaves no open transaction (#7108); it used to escape through the `except ArcadeDBError` handler
+- **test_run_in_transaction_commits_and_returns**: `run_in_transaction()` runs `fn` transactionally and hands back its return value; a non-retryable `ArcadeDBError` from `fn` propagates and its insert is rolled back
+- **test_run_in_transaction_rolls_back_on_non_arcadedb_error**: A plain `KeyError` from `fn` still rolls back and leaves no open transaction (regression test for #7108)
 - **test_run_in_transaction_rolls_back_on_base_exception**: `SystemExit` is a `BaseException`, so `except Exception` let it skip the rollback; the test raises `SystemExit` from `fn` and asserts no transaction is left open and nothing was stored
 - **test_result_methods**: Tests `Result` methods: `has_property()`, `get()`, `get_property_names()`, `to_dict()`, `to_json()`
-- **test_property_type_conversions**: Tests Python ↔ Java type mapping (str, int, long, float, double, bool, None, date)
-- **test_single_list_arg_is_positional_param_array**: A single list argument binds one element per `?` placeholder, the idiom example 04's CSV ingest uses
+- **test_property_type_conversions**: Tests Python ↔ Java type mapping (str, int, long, float, double, bool, None, date); `date` is only checked to be non-null
+- **test_single_list_arg_is_positional_param_array**: A single list argument binds one element per `?` placeholder, the idiom example 04's CSV ingest uses; a list among several arguments stays one parameter (`vectorCosineSimilarity(?, ?)` returns 1.0)
 
 ### Full-text Search
 
@@ -74,17 +74,17 @@ Tests validate:
 
 ### Result Materialization
 
-- **test_to_json_list_bulk_materialization**: `to_json_list()` returns every row with JSON-native types, across the bridge in one crossing
+- **test_to_json_list_bulk_materialization**: `to_json_list(batch_size=10)` returns all 25 rows across several Java batches, with JSON-native values; the `n` column matches `to_list()`
 - **test_to_json_list_empty_result**: `to_json_list()` on an empty result is an empty list
 - **test_to_columns_typed_bulk_materialization**: `to_columns()` returns typed numpy columns with pandas-convention nulls
-- **test_to_columns_survives_json_metacharacters_in_aliases**: A projection alias is arbitrary text, so the columnar header has to be real JSON (#6758): a quote used to kill the decode of the whole batch, a semicolon the column spec
-- **test_to_dataframe_fast_path**: `to_dataframe()` takes the columnar path and yields typed dtypes
+- **test_to_columns_survives_json_metacharacters_in_aliases**: A projection alias is arbitrary text, so the columnar header has to be real JSON (#6758): aliases containing a quote and a semicolon come back as the column names, with their values, across batches of 2 rows
+- **test_to_dataframe_fast_path**: `to_dataframe()` returns 50 rows with an integer dtype for `n` and the expected `name` in row 3 (skips without pandas). The test does not check which path built it
 - **test_resultset_close_and_context_manager**: `ResultSet` supports `close()` and the context-manager protocol
 
 ### Other Features
 
 - **test_error_handling**: `arcadedb.open_database()` on an invalid path raises `ArcadeDBError`
-- **test_failed_open_does_not_hang_process_exit**: A failed `open_database()` must leave the process able to exit; the engine's non-daemon AsyncFlush thread used to leak on a failed open
+- **test_failed_open_does_not_hang_process_exit**: A failed `open_database()` must leave the process able to exit: a child process that fails an open exits 0 within 60 s (regression test for a leaked non-daemon AsyncFlush thread)
 - **test_unicode_support**: Tests UTF-8 international characters (Spanish, Chinese, Japanese, Arabic) and emoji
 - **test_schema_queries**: Tests schema metadata via `SELECT FROM schema:types`, `schema:indexes`, and `schema:database`
 - **test_large_result_set_handling**: Bulk-inserts 1000 records and tests ordered iteration, filtering, and aggregation

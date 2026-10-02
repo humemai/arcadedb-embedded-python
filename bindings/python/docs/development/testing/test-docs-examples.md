@@ -2,17 +2,17 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_docs_examples.py){ .md-button }
 
-This test file validates representative Python snippets from the MkDocs documentation by executing them as real code, not just treating them as illustrative examples.
+This test file runs representative Python snippets from the MkDocs documentation as real code, each in its own subprocess, rather than treating them as illustrative examples.
 
 ## Overview
 
-The suite is organized into grouped scenarios rather than one pytest case per code fence. There are 7 tests, one per scenario:
+The suite is organized into grouped scenarios rather than one pytest case per code fence, one test per scenario:
 
 - Installation and distribution snippets
 - Index and quickstart examples
 - API access examples
 - Transaction examples
-- End-to-end example pages
+- Example pages (the simple document store page, plus a social-network script written in the test)
 - Core query guide examples
 - Graph guide examples
 
@@ -26,7 +26,7 @@ This suite helps catch issues such as:
 
 - imports that no longer match the public package surface
 - examples that assume missing schema or seed data
-- SQL or OpenCypher snippets that do not match ArcadeDB's actual dialect behavior
+- SQL or OpenCypher snippets the engine rejects
 - setup fragments that need an isolated subprocess because JVM startup options are process-wide
 
 ## Test Strategy
@@ -39,6 +39,20 @@ The file uses a few complementary approaches:
 - keep server-specific cases behind the existing server support checks
 
 This is intentionally broader than a smoke test, but it does not try to execute every Python fence in the docs tree.
+
+A block is found by a piece of text it contains, and the test fails if no Python block on the page contains that text. A block passes when its subprocess exits 0 within 120 s; printed output is not compared. The module skips when `bindings/python/docs` is absent.
+
+## What Each Test Runs
+
+Page paths are relative to `bindings/python/docs/`.
+
+- `test_docs_installation_and_distribution_examples`: blocks from `getting-started/installation.md` and `getting-started/distributions.md`.
+- `test_docs_index_and_quickstart_examples`: blocks from `index.md` and `getting-started/quickstart.md`. The batch-insert snippet it also runs is a copy of the quickstart's, written in the test rather than extracted from the page, so an edit to that quickstart block is not caught.
+- `test_docs_api_access_examples`: the access-path blocks from `api-access-methods.md`. It is marked `server`, and it skips without server support or without `requests`.
+- `test_docs_transaction_examples`: blocks from `guide/core/transactions.md`.
+- `test_docs_example_pages`: the `INSERT INTO Task SET` block from `examples/01_simple_document_store.md`, run against a seeded `Task` schema. The social-network script in the same test is written in the test itself, not read from `examples/02_social_network_graph.md`, so an edit to that page is not caught; the script asserts the rows returned by one SQL `MATCH` query and one OpenCypher query.
+- `test_docs_core_query_examples`: blocks from `guide/core/queries.md`, several of them run inside a database seeded with the data the page assumes.
+- `test_docs_graph_guide_examples`: blocks from `guide/graphs.md`.
 
 ## Running These Tests
 

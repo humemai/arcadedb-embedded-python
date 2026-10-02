@@ -2,16 +2,16 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_cypher.py){ .md-button }
 
-The tests validate OpenCypher query support, common graph patterns, and recent path-mode
-semantics.
+The tests validate OpenCypher query support, common graph patterns, and path-mode
+semantics (TRAIL, ACYCLIC, WALK).
 
 They also include regression coverage for planner behavior that matters to the
 Python bindings, such as `UNWIND` variables being usable inside `WHERE`
 predicates.
 
-There are 30 tests. Each first runs `RETURN 1` and skips if the `opencypher` engine
-is not available; three more skip if the engine rejects CASE/coalesce, collect/UNWIND,
-or pattern comprehension.
+Each test first runs `RETURN 1` and skips if the `opencypher` engine
+is not available; the CASE/coalesce, collect/UNWIND, and pattern comprehension
+tests also skip if the engine rejects that feature.
 
 ## OpenCypher
 

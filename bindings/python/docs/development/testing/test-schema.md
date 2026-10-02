@@ -2,8 +2,6 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_schema.py){ .md-button }
 
-There are 55 tests.
-
 ## Overview
 
 Schema tests cover:
@@ -355,7 +353,7 @@ Tests complete schema workflows.
 
 - `test_create_complete_graph_schema()` - Creates vertex/edge types with properties and indexes (including a `FULL_TEXT` index on `Post.content`)
 - `test_schema_modification_workflow()` - Adds properties and indexes to an existing type
-- `test_get_or_create_idempotent_schema_creation()` - `get_or_create_*` methods are idempotent across repeated calls
+- `test_get_or_create_idempotent_schema_creation()` - three rounds of `get_or_create_*` calls raise no error and the type exists afterwards; types, properties, and indexes are not counted
 
 **Pattern:**
 
@@ -392,11 +390,11 @@ Tests LSM vector index schema operations created via `db.create_vector_index(...
 
 - `test_list_lsm_vector_indexes()` - After `create_vector_index("Doc", "embedding", dimensions=3)`, `list_vector_indexes()` includes the new index
 - `test_get_lsm_vector_index_existing()` - `get_vector_index("Doc", "embedding")` returns a `VectorIndex` instance
-- `test_get_lsm_vector_index_persistence()` - `get_vector_index` can load a persisted LSM index; `get_size()` reflects inserted vectors
+- `test_get_lsm_vector_index_persistence()` - after one insert, `get_vector_index(...)` returns the index and `get_size()` is 1; the database is not reopened
 
 ### TestMapIndexByKeyValue
 
-Tests `CREATE INDEX ON <type> (<prop> BY KEY)` and `(<prop> BY VALUE)` on a MAP property (new in 26.8).
+Tests `CREATE INDEX ON <type> (<prop> BY KEY)` and `(<prop> BY VALUE)` on a MAP property.
 
 **Tests:**
 
@@ -466,7 +464,7 @@ with arcadedb.create_database("./test_db") as db:
 
 1. **Schema statements apply immediately** - No transaction needed for one; batch many in one transaction so the schema is written once, and remember a rollback does not undo them (`tests/test_schema_batching.py`)
 2. **Check existence** - Use `exists_type()` / `exists_index()` before creating
-3. **Use `get_or_create_*`** - Idempotent type/property/index creation
+3. **Use `get_or_create_*`** - Repeated calls for an existing type, property, or index raise no error
 4. **Index frequently queried** - Properties used in WHERE clauses
 5. **Use `PropertyType` / `IndexType` enums** - Match property and index types to your data
 6. **Vector indexes** - Create them with `db.create_vector_index()` (a `Database`

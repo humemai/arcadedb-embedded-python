@@ -1,6 +1,6 @@
 # Testing Best Practices
 
-Summary of best practices learned from the ArcadeDB Python test suite.
+Usage patterns the test suite exercises, and how to write a test for it.
 
 ## Database Lifecycle
 
@@ -204,40 +204,54 @@ except Exception:
 # Transaction was automatically rolled back
 ```
 
-## Testing
+## Writing a Test for This Suite
 
-### ✅ Clean Up Test Databases
-
-```python
-import tempfile
-import shutil
-
-# Good: Use temp directory
-temp_dir = tempfile.mkdtemp()
-try:
-    db = arcadedb.create_database(f"{temp_dir}/test_db")
-    # ... tests ...
-    db.close()
-finally:
-    shutil.rmtree(temp_dir)
-```
-
-### ✅ Use Fixtures for Setup/Teardown
+1. **Use the shared fixtures** in `tests/conftest.py`: `temp_db_path` (a fresh database
+   path), `temp_db` (an open database, closed and deleted afterwards), `temp_server_root`,
+   and `temp_dir_factory`, or pytest's own `tmp_path`. Server tests use `TEST_PASSWORD` as
+   the root password.
+2. **A teardown warns; it never swallows.** A teardown that hides its own failure hides the
+   bug with it. `temp_db` shows the pattern: it closes the database if it is still open and
+   turns a failed close into a warning.
+3. **Guard optional features** with `has_server_support()` and `has_graph_export_support()`
+   from `tests/conftest.py`, and keep a test that never skips beside the guard, as
+   `test_server_packaging.py` does for the server stack. A server test also carries
+   `@pytest.mark.server`.
+4. **One JVM serves the whole session.** A `start_jvm()` call with a different configuration
+   raises "already started", and engine-wide settings carry from one test to the next, so
+   run the full suite after adding a test. Anything that needs its own JVM, a crash, a lock
+   held by another process, or an isolated `sys.path` runs in a subprocess.
+5. **An optional dependency** goes through `pytest.importorskip("module")` with its default
+   reason, so that CI fails when the module is missing. Add the module to the `test` extra
+   in `bindings/python/pyproject.toml`, to the install step in
+   `.github/workflows/test-python-bindings.yml`, and to the repo-root `pyproject.toml`.
+6. **Hang diagnostics are built in.** A test still running after
+   `ARCADEDB_TEST_JAVA_DUMP_AFTER_S` seconds (540 by default) prints every Java thread's
+   stack, and `faulthandler_timeout` dumps the Python threads at 600 s. On Windows, run with
+   `--capture=sys`. `ARCADEDB_PYTEST_FORCE_EXIT=1` ends the session with `os._exit(0)`
+   instead of a JVM shutdown, for debugging a hang at exit.
+7. **Bandit scans `tests/`** at low severity and low confidence. Put `# nosec B608` on the
+   flagged line of an f-string SQL statement, as the existing tests do.
 
 ```python
 import pytest
 
-@pytest.fixture
-def db():
-    temp_dir = tempfile.mkdtemp()
-    database = arcadedb.create_database(f"{temp_dir}/test_db")
-    yield database
-    database.close()
-    shutil.rmtree(temp_dir)
+import arcadedb_embedded as arcadedb
+from tests.conftest import TEST_PASSWORD, has_server_support
 
-def test_something(db):
-    # db is ready to use
-    db.command("sql", "CREATE DOCUMENT TYPE Test")
+
+def test_insert_is_visible(temp_db):
+    temp_db.command("sql", "CREATE DOCUMENT TYPE Note")
+    with temp_db.transaction():
+        temp_db.command("sql", "INSERT INTO Note SET k = 1")
+    assert temp_db.query("sql", "SELECT k FROM Note").to_list() == [{"k": 1}]
+
+
+@pytest.mark.server
+@pytest.mark.skipif(not has_server_support(), reason="Requires server support")
+def test_server_starts(temp_server_root):
+    with arcadedb.create_server(temp_server_root, root_password=TEST_PASSWORD) as server:
+        assert server.is_started()
 ```
 
 ## Performance

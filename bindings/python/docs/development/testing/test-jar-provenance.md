@@ -4,39 +4,44 @@
 
 The wheel can say which engine it carries, not just which version it is.
 
-There are 8 tests.
-
 ## Test Cases
 
-### 1) fingerprint is deterministic
+### test_fingerprint_is_deterministic
 
-Same install, same answer. Otherwise it cannot compare two installs.
+Two calls return the same `sha256` and `count`, and `sha256` is 64 characters long.
+Otherwise it cannot compare two installs.
 
-### 2) fingerprint matches what is on disk
+### test_fingerprint_matches_what_is_on_disk
 
-count and bytes are read from the filesystem, not asserted.
+Asserts `count` equals the number of `.jar` files in `jar_dir`, `bytes` equals their
+total size on disk, and `count > 0`.
 
-### 3) hash actually covers every jar name and content
+### test_hash_actually_covers_every_jar_name_and_content
 
-Recompute the combined hash from the per-JAR digests.
+Recomputes the combined hash as a SHA-256 over the ordered (name, digest) pairs from
+`jar_fingerprint(per_jar=True)` and asserts it equals `sha256`.
 
-### 4) per jar digests are the real file digests
+### test_per_jar_digests_are_the_real_file_digests
 
 Spot-check against the bytes on disk, so the per-JAR list is evidence.
 
-### 5) renaming a jar would change the fingerprint
+### test_renaming_a_jar_would_change_the_fingerprint
 
-Name is hashed, not only content.
+Name is hashed, not only content: swapping the digests of the first two JARs changes
+the combined hash. With fewer than 2 JARs it returns without asserting.
 
-### 6) engine hash excludes our own jar
+### test_engine_hash_excludes_our_own_jar
 
-engine_sha256 answers "same ArcadeDB?", sha256 answers "same build?".
+engine_sha256 answers "same ArcadeDB?", sha256 answers "same build?". Asserts there is
+at least one non-engine JAR, `engine_count == count - len(ours)`,
+`engine_sha256 != sha256`, and that `engine_sha256` is the hash of exactly the engine
+JARs.
 
-### 7) our jar list still matches the wheel
+### test_our_jar_list_still_matches_the_wheel
 
 _OUR_JARS names a JAR that exists.
 
-### 8) exported from the package root
+### test_exported_from_the_package_root
 
 Harnesses record this next to engine_version, so it must be public.
 

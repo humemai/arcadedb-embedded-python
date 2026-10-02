@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_server_patterns.py){ .md-button }
 
-There are 6 tests covering three access patterns: standalone embedded, server-managed embedded, and HTTP API (remote access). Four check correctness; the two comparisons (5 and 6) also print timings, which are for reading and are not asserted.
+These tests cover three access patterns: standalone embedded, server-managed embedded, and HTTP API (remote access). Every test asserts results except `test_embedded_performance_comparison`, which asserts nothing and only prints timings. `test_http_api_access_pattern` also prints timings, which are not asserted.
 
 ## The 3 Access Patterns
 
@@ -30,7 +30,7 @@ Creates a database in standalone embedded mode and populates it, closes it to re
 
 ### 5) embedded performance comparison
 
-Creates a standalone and a server-managed database with 500 multi-field records each and runs the same 100 queries (filters, aggregations, date ranges, LIKE patterns) against both. Prints both times and their ratio. It shows that embedded access through a server is a direct JVM call, not HTTP; the ratio is printed, not asserted.
+Creates a standalone and a server-managed database with 500 multi-field records each and runs the same 100 queries (a price filter, a `GROUP BY` average, a category filter, a `LIKE` pattern, and an id `BETWEEN` range, in rotation) against both. Prints both times and their ratio. It asserts nothing.
 
 ### 6) HTTP API access pattern
 

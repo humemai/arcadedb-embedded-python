@@ -4,7 +4,7 @@
 
 Covers validation of vector index parameters passed into the Java layer.
 
-There are 13 tests, all in `TestVectorParams`.
+All the tests are in `TestVectorParams`.
 
 ## What's Covered
 

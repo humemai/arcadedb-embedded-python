@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_numpy_support.py){ .md-button }
 
-There are 3 tests covering automatic conversion of NumPy arrays passed into `db.command()`, `db.query()`, and regular transactions. Each test is guarded by `@pytest.mark.skipif(not HAS_NUMPY, ...)`.
+These tests cover automatic conversion of NumPy arrays passed into `db.command()`, `db.query()`, and regular transactions. Each test is guarded by `@pytest.mark.skipif(not HAS_NUMPY, ...)`.
 
 ## Coverage
 
@@ -106,19 +106,10 @@ vertex.save()
 
 !!! warning "Do not call `.tolist()` here"
 
-    A Python list crosses the JVM boundary one element at a time, so the cost
-    grows with the dimension of every vector you store. Measured on this
-    pattern, 20,000 vectors of dimension 384, median of three runs:
-
-    | what you pass to `set()` | time | rate |
-    |---|---|---|
-    | `embedding.tolist()` | 17.44 s | 1,147 vertices/s |
-    | `to_java_float_array(embedding)` | **0.95 s** | **21,090 vertices/s** |
-
-    That is **18.4x**, and it is pure conversion overhead: both store
-    identical values. Passing the raw NumPy array to `set()` does not work
-    (`TypeError`); `set()` needs the Java array, which is what
-    `to_java_float_array` returns and what it accepts NumPy for directly.
+    `.tolist()` crosses the JVM boundary one element at a time, so its cost
+    grows with the dimension of every vector you store;
+    `to_java_float_array()` crosses once, and it accepts a NumPy array
+    directly.
 
 ### Retrieve as NumPy
 
@@ -149,9 +140,11 @@ results = db.query(
 !!! note "`.tolist()` is not the conversion step here either"
 
     `db.query()` and `db.command()` accept a NumPy array as a bound parameter
-    directly: `test_numpy_array_conversion_in_command` and
-    `test_numpy_array_conversion_in_query` above bind one and read the stored
-    vector back. A Python list is
+    directly: `test_numpy_array_conversion_in_command` binds one in
+    `db.command()` and reads the stored vector back;
+    `test_numpy_array_conversion_in_query` does the same insert, then binds
+    one in `db.query()` and asserts only that the call does not raise. A
+    Python list is
     not a drop-in for it, and it raises no error either. When the list is the
     only argument, it is the positional-parameter array itself, one element
     per `?` (`test_single_list_arg_is_positional_param_array` in
@@ -160,10 +153,8 @@ results = db.query(
     arguments, as in the query above, a list is one collection parameter, but
     it crosses into the JVM element by element.
 
-    `to_java_float_array()` is accepted here too and is about 1.3x faster than
-    letting the binding convert (0.84 s against 1.08 s over 20,000 inserts of
-    dimension 384), so it is worth using on a hot path and unnecessary
-    elsewhere.
+    `to_java_float_array()` is accepted here too; the binding passes a NumPy
+    argument through it automatically.
 
 ## Common Assertions
 
@@ -250,9 +241,8 @@ for i, vec in enumerate(dense_vectors):
 1. **Use float32** - Faster and smaller than float64
 2. **Batch inserts** - Use chunked transactions for many vectors
 3. **Never `.tolist()` a vector you are storing** - it crosses the JVM
-   boundary one element at a time. `to_java_float_array()` crosses once and
-   accepts NumPy directly: 18.4x on the measurement above, and the gap widens
-   with the dimension
+   boundary one element at a time, so its cost grows with the dimension.
+   `to_java_float_array()` crosses once and accepts NumPy directly
 4. **Numpy for math** - Use NumPy for vector operations
 5. **`LSM_VECTOR` (JVector) for search** - Enable similarity search
 
