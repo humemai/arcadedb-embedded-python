@@ -817,15 +817,17 @@ BACKENDS = {
     },
     # PostgreSQL + Apache AGE on the graph tables (DECISIONS #128): the
     # cross-model lane's image and its memory fit, every statement the lane's
-    # own Cypher through AGE's cypher(). Parallel query stays at PostgreSQL's
-    # default, as on every other PostgreSQL arm; the adapter reads it back.
+    # own Cypher through AGE's cypher(). Parallel workers and work_mem are
+    # fitted to the cell like every other engine's pools (see {pg_workers}
+    # and {pg_work_mem} below); the adapter reads each setting back.
     "pgage_graph": {
         "topology": "client_server",
         "image": "dbbench:client",
         "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB",
+                       "-c", "max_worker_processes={pg_procs}", "-c", "max_parallel_workers={ncpu}", "-c", "max_parallel_workers_per_gather={pg_workers}", "-c", "max_parallel_maintenance_workers={pg_workers}", "-c", "work_mem={pg_work_mem}"],
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -852,7 +854,8 @@ BACKENDS = {
         "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
         "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
         "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
-                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB",
+                       "-c", "max_worker_processes={pg_procs}", "-c", "max_parallel_workers={ncpu}", "-c", "max_parallel_workers_per_gather={pg_workers}", "-c", "max_parallel_maintenance_workers={pg_workers}", "-c", "work_mem={pg_work_mem}"],
         "server_port": 5432,
         "ready_regex": r"(?s)PostgreSQL init process complete.*"
                        r"database system is ready to accept connections",
@@ -2266,8 +2269,26 @@ def run_cell(job, rep, scale, cpuset, tier, net_name):
             # (FAIRNESS F6: FalkorDB's THREAD_COUNT, Memgraph's Bolt workers);
             # {mem90_mib} is 90% of the server's cap in MiB, Memgraph's own
             # memory-limit rule applied to the container rather than the host.
-            _fit = dict(ncpu=_cpuset_size(cpuset),
-                        mem90_mib=int(server_mem * 0.9) >> 20)
+            # {pg_workers}, {pg_procs} and {pg_work_mem} fit PostgreSQL + AGE's
+            # query pools to the cell as every other engine's pools are fitted
+            # (FAIRNESS F3/F6, measured 2026-10-02, repros/age-dialect/
+            # resource_fit_probe.py): parallel workers per query = cpuset - 1,
+            # the leader being the cpuset's last core (PostgreSQL's fixed
+            # default of 2 used 3 of a 12-core cell; fitted, LSQB q2 ran 1.8x
+            # faster and q4, q5, q7 1.1-1.25x); and work_mem = what the cap
+            # leaves after shared_buffers, over the cpuset's processes, each
+            # allowed sixteen buffers (eight sort or hash nodes x
+            # hash_mem_multiplier 2), so a deep plan cannot sum past the cap.
+            # At 16 GiB over 8 cores that is 96 MB: the full SF1 network's
+            # analytics spilled 42 GB of temp files per pass at the 4 MB
+            # default and 0.7 GB at 96 MB, with no OOM kill, and four times
+            # more bought nothing.
+            _ncpu = _cpuset_size(cpuset)
+            _fit = dict(ncpu=_ncpu,
+                        mem90_mib=int(server_mem * 0.9) >> 20,
+                        pg_workers=max(1, _ncpu - 1),
+                        pg_procs=_ncpu + 2,
+                        pg_work_mem=f"{max(4, int((server_mem >> 20) * 0.75 / (_ncpu * 16)))}MB")
             server_cmd = [c.format(sb=f"{max(1, srv_gb // 4)}GB",
                                    ecs=f"{max(1, srv_gb * 3 // 4)}GB",
                                    mwm=f"{max(1, srv_gb // 2)}GB", **_fit)

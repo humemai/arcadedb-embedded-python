@@ -1644,19 +1644,24 @@ class PgAgeGraph(Base):
     1.6.0), so the read-back misses the first person the write phase created.
     equivalence_check.KNOWN_DISAGREEMENTS names it; the timed writes are right.
 
-    MEMORY AND DURABILITY as the other served PostgreSQL arms: the runner
-    fits shared_buffers, effective_cache_size and maintenance_work_mem to the
-    container and sets synchronous_commit=off in the relaxed class; every
-    setting that decides what was measured is read back with SHOW onto the
-    row, and durability is the server's own answer (DECISIONS #81, #90).
+    RESOURCES FITTED TO THE CELL, as every other engine's pools are (FAIRNESS
+    F3/F6): the runner sizes shared_buffers, effective_cache_size and
+    maintenance_work_mem from the container's cap, parallel workers per query
+    from its cpuset (PostgreSQL's fixed default of 2 used 3 cores of 12), and
+    work_mem from the cap over the cpuset's processes (the 4 MB default
+    spilled 42 GB of temp files per analytics pass on the full SF1 network;
+    fitted, 0.7 GB). Measured in repros/age-dialect/resource_fit_probe.py.
+    Every setting that decides what was measured is read back with SHOW onto
+    the row; synchronous_commit=off in the relaxed class, and durability is
+    the server's own answer (DECISIONS #81, #90).
     """
     QUERY_LANGUAGE = "Cypher through Apache AGE (cypher() in SQL)"
     name = "pgage_graph"
     GRAPH = "l2g"
     # Read back onto the row: the settings that decide a plan or a cache.
-    _SHOW = ("shared_buffers", "effective_cache_size", "work_mem", "maintenance_work_mem",
-             "max_parallel_workers_per_gather", "max_parallel_workers", "max_worker_processes",
-             "jit", "synchronous_commit")
+    _SHOW = ("shared_buffers", "effective_cache_size", "work_mem", "hash_mem_multiplier",
+             "maintenance_work_mem", "max_parallel_workers_per_gather", "max_parallel_workers",
+             "max_parallel_maintenance_workers", "max_worker_processes", "jit", "synchronous_commit")
 
     def _open(self):
         import psycopg
