@@ -192,10 +192,11 @@ OLAP_QUERIES = ("q1", "q6", "top_parts", "ship_mode", "by_month")
 # bites. The ArcadeDB HTTP API truncates a result at 20,000 rows unless the
 # request says otherwise, and the #88 digests caught both served time-series
 # arms returning exactly 20,000 where every other engine returned 32,944. This
-# lane sends everything through /command, which takes no `limit` field, so its
-# scans carry an explicit LIMIT in the SQL instead; the largest answer here is
-# CRUD_OPS rows, three orders of magnitude under the cap. A query on this lane
-# that starts returning more than 20,000 rows needs the cap raised in the SQL.
+# lane's writes go through /command and its analytics through /query (F163);
+# neither request sets a `limit` field, so its scans carry an explicit LIMIT in
+# the SQL instead; the largest answer here is CRUD_OPS rows, three orders of
+# magnitude under the cap. A query on this lane that starts returning more than
+# 20,000 rows needs the cap raised in the SQL.
 
 
 # ---------------------------------------------------------------------------
@@ -1249,8 +1250,24 @@ class ArcadeServerTPC(ArcadeTPC):
         with index_timer(self):
             self._cmd("CREATE INDEX ON LineItem (l_shipdate) NOTUNIQUE")
 
+    def _query(self, command, timeout=1800, params=None):
+        body = {"language": "sql", "command": command}
+        if params is not None:
+            body["params"] = params
+        r = self.rq.post(f"{self.base}/query/bench", json=body, timeout=timeout)
+        r.raise_for_status()
+        return r.json().get("result", [])
+
+    # THROUGH /query, NOT /command (BUGS F163, CAMPAIGN section 7 row 25).
+    # POST /command wraps even a SELECT in an auto-commit transaction, inside
+    # which a scan stays on one thread, while the embedded twin's db.query runs
+    # with none; since ArcadeData/arcadedb#8792 (7f2c770697) POST /query runs an
+    # idempotent statement without one, so the served analytics can scan in
+    # parallel wherever the embedded arm does. The timed point read moves too;
+    # writes stay on /command (/query refuses them), and so do the untimed
+    # verification scans, whose 20,000-row behaviour there is the known one.
     def olap(self, which):
-        return self._cmd(ARCADE_OLAP[which])
+        return self._query(ARCADE_OLAP[which])
 
     # BOUND VALUES (DECISIONS #116 item 2), as the embedded arm has always
     # passed them. Each transaction stays ONE sqlscript request, so it stays
@@ -1279,7 +1296,8 @@ class ArcadeServerTPC(ArcadeTPC):
                   params={"c": int(i), "pk": int(pkey)})
 
     def crud_read(self, i):
-        return self._cmd("SELECT ckey, pkey, qty FROM Crud WHERE ckey = :c", params={"c": int(i)})
+        # /query, as olap above (F163): the embedded twin reads with no transaction.
+        return self._query("SELECT ckey, pkey, qty FROM Crud WHERE ckey = :c", params={"c": int(i)})
 
     def crud_update(self, i):
         self._cmd("UPDATE Crud SET qty = 2 WHERE ckey = :c", params={"c": int(i)})
