@@ -645,7 +645,7 @@ DISPLAY_NAMES = {
     "memgraph_graph": "Memgraph", "falkordb_graph": "FalkorDB",
     "postgres": "PostgreSQL", "postgres_tuned": "PostgreSQL (tuned)",
     "duckdb": "DuckDB", "questdb": "QuestDB", "sqlite": "SQLite", "mongodb": "MongoDB",
-    "timescaledb": "TimescaleDB", "postgres_ts": "PostgreSQL", "postgresql": "PostgreSQL", "pgvector_dense": "pgvector", "pgvector_sparse": "pgvector", "neo4j_dense": "Neo4j",
+    "timescaledb": "TimescaleDB", "postgres_ts": "PostgreSQL", "postgresql": "PostgreSQL", "pgvector_dense": "pgvector", "pgvector_sparse": "pgvector", "neo4j_dense": "Neo4j", "neo4j_dense_int8": "Neo4j",
     "surrealdb_tpc": "SurrealDB (embedded)", "surrealdb_tpc_server": "SurrealDB (server)",
     "surrealdb_graph": "SurrealDB (embedded)", "surrealdb_graph_server": "SurrealDB (server)",
     "surrealdb_dense": "SurrealDB (embedded)", "surrealdb_dense_server": "SurrealDB (server)",
@@ -838,7 +838,9 @@ DENSE_PRECISION = {
     # mongot's vectorSearch index with "quantization": "none", read back off
     # the created index and recorded on the row as mongot_quantization.
     "mongodb_dense": "fp32",
-    "neo4j_dense": "fp32",      # float property list, no quantization option
+    # Neo4j 2026.08.1 quantizes BINARY unless told otherwise (BUGS F164); the arms set NONE and SCALAR and
+    # read the applied type back as neo4j_vector_quantization.
+    "neo4j_dense": "fp32", "neo4j_dense_int8": "int8",
     "qdrant_dense": "fp32",
     "milvus_dense": "fp32",
     "duckdb_vss_dense": "fp32",
@@ -1107,6 +1109,7 @@ DENSE_10M_ARMS = [
     # rows are skipped until then.
     ("pgvector", "pgvector_dense", "pgvector (fp32)", False),
     ("neo4jvec", "neo4j_dense", "Neo4j (fp32)", False),
+    ("neo4jvec_int8", "neo4j_dense_int8", "Neo4j (int8)", False),
     ("surreal", "surrealdb_dense", "SurrealDB (embedded, fp32)", False),
     ("surrealsrv", "surrealdb_dense_server", "SurrealDB (server, fp32)", False),
     ("arango", "arangodb_dense", "ArangoDB (fp32)", False),
@@ -5459,6 +5462,23 @@ def _censored_entries(table):
     return out, marks
 
 
+def _delete_settle_notes(table):
+    """An engine whose timed delete includes a cleanup step of its own, said
+    under the table (DECISIONS #135). Memgraph 3.13.1 keeps deleted points in
+    its vector index until its storage garbage collector runs, and a search
+    before then raises, so the dense arm runs `FREE MEMORY` inside the timed
+    delete and pays for it; the row carries `memgraph_delete_settle`."""
+    if table.get("id") != "l3d":
+        return []
+    rows = [r for r in (_FROZEN_ROWS or []) if r.get("lane") == "l3d" and r.get("memgraph_delete_settle")]
+    shown = {str(e.get("backend_key")) for e in table.get("entries", [])}
+    if not rows or "memgraph_dense" not in shown:
+        return []
+    return [_gen("Memgraph's delete time includes a storage cleanup it runs itself (`FREE MEMORY`): Memgraph "
+                 "keeps deleted points in its vector index until its garbage collector runs, and a search before "
+                 "then fails, so the cell triggers the collection inside the timed delete and pays for it.")]
+
+
 def _phase_split_notes(table):
     """Arms on a split table that print no `index s`, and why (DECISIONS #132).
 
@@ -6290,6 +6310,7 @@ def _finish_table(table: dict) -> dict:
                            + _index_note(table.get("id"))
                            + _split_note(table)
                            + _phase_split_notes(table)
+                           + _delete_settle_notes(table)
                            + _censored_notes(table.get("id"))
                            + _query_budget_notes(table.get("id"))
                            + _zero_growth_notes(table.get("id"))

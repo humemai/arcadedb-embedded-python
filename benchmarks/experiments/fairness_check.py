@@ -775,7 +775,7 @@ def check_close_cost(rows):
 # a row whose engine reports a class other than the one its cell asked for in
 # `durability_class` (DECISIONS #90), or a PostgreSQL row whose server did not
 # answer its class's synchronous_commit (off relaxed, on strict).
-STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_e2", "composed_qdrant_neo4j",
+STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_dense_int8", "neo4j_e2", "composed_qdrant_neo4j",
                   "ladybug_graph", "ladybug_e2", "duckdb", "duckdb_vss_dense", "duckpgq_graph", "duckdb_e2"}
 
 # THE THIRD CLASS, and the only backends allowed to be in it. SurrealDB 3.2.4

@@ -1209,9 +1209,20 @@ class Neo4jVector(Base):
     property loaded through UNWIND batches over bolt, then CREATE VECTOR INDEX
     at the matched operating point (vector.hnsw.m, vector.hnsw.ef_construction)
     with euclidean similarity; queries through db.index.vector.queryNodes.
-    Neo4j exposes no per-query ef_search; the note under the table says so."""
+    Neo4j exposes no per-query ef_search; the note under the table says so.
+
+    THE QUANTIZATION IS SET, NOT LEFT TO THE DEFAULT (BUGS F164, DECISIONS
+    #135). Neo4j 2026.08.1 builds a vector index BINARY-quantized, with a
+    search expansion factor of 3, when the definition names no
+    `vector.quantization.type`, and this arm's definition named none until
+    2026-10-02 while it recorded fp32: every Neo4j dense row at the October
+    pin measured a binary search. The type is now part of the definition
+    (`NONE` here, `SCALAR` on the int8 arm below), and the applied index
+    configuration is read back onto the row; a mismatch refuses the cell
+    rather than recording a label the engine did not run."""
     quantization = "fp32"
     name = "neo4j_dense"
+    QUANT_TYPE = "NONE"
 
     def connect(self):
         from neo4j import GraphDatabase
@@ -1232,9 +1243,19 @@ class Neo4jVector(Base):
             s.run(f"CREATE VECTOR INDEX art_emb IF NOT EXISTS FOR (a:Article) ON (a.embedding) "
                   f"OPTIONS {{indexConfig: {{`vector.dimensions`: {DIM}, "
                   f"`vector.similarity_function`: 'euclidean', "
+                  f"`vector.quantization.type`: '{self.QUANT_TYPE}', "
                   f"`vector.hnsw.m`: {COMPARATOR_M}, `vector.hnsw.ef_construction`: {EF_CONSTRUCTION}}}}}").consume()
             s.run("CALL db.awaitIndexes(36000)").consume()
             self.index_s = round(time.perf_counter() - _t1, 2)
+            # The engine's own answer, never the option we sent (F164).
+            cfg = s.run("SHOW VECTOR INDEXES YIELD name, options WHERE name = 'art_emb' "
+                        "RETURN options.indexConfig AS c").single()["c"]
+        applied = cfg.get("vector.quantization.type")
+        if applied != self.QUANT_TYPE:
+            raise RuntimeError(f"neo4j vector index quantization read back {applied!r}, not {self.QUANT_TYPE!r}: "
+                               f"the row would record {self.quantization} for a different index (BUGS F164)")
+        self.row_extra = {"neo4j_vector_quantization": applied,
+                          "neo4j_vector_index_config": json.dumps(cfg, sort_keys=True, default=str)}
 
     def search(self, qvec, k):
         with self.drv.session() as s:
@@ -1265,6 +1286,15 @@ class Neo4jVector(Base):
 
     def close(self):
         self.drv.close()
+
+
+class Neo4jVectorInt8(Neo4jVector):
+    """Neo4j's scalar-quantized vector index, its int8-class arm (#53, DECISIONS
+    #135): the same arm with `vector.quantization.type: 'SCALAR'`, read back
+    onto the row like the fp32 arm's `NONE`."""
+    quantization = "int8"
+    name = "neo4j_dense_int8"
+    QUANT_TYPE = "SCALAR"
 
 
 class SurrealDense(Base):
@@ -2335,7 +2365,7 @@ class LadybugDense(Base):
 
 BACKENDS = {b.name: b for b in
             (ArcadeEmbedded, ArcadeServer, Chroma, LanceDB, SqliteVec, DuckVSS, Qdrant, Milvus,
-             PgVector, Neo4jVector, SurrealDense, SurrealDenseServer, ArangoDense,
+             PgVector, Neo4jVector, Neo4jVectorInt8, SurrealDense, SurrealDenseServer, ArangoDense,
              MongoDense,
              ArcadeEmbeddedInt8, QdrantInt8, MilvusInt8,
              ArcadeServerInt8, SqliteVecInt8,

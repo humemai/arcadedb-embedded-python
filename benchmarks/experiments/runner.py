@@ -1369,6 +1369,17 @@ BACKENDS = {
         "server_port": 7687,
         "ready_regex": r"Started\.",
     },
+    "neo4j_dense_int8": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "neo4j@sha256:e702d6b535d9d3ae01ee7b132ec87aa40e23d3f0ace82fbfc344e2048cb81960",  # 2026.08.1-community
+        "server_env": ["-e", "NEO4J_AUTH=neo4j/dbbenchpass",
+                       "-e", "NEO4J_server_memory_heap_initial__size={heap}",
+                       "-e", "NEO4J_server_memory_heap_max__size={heap}",
+                       "-e", "NEO4J_server_memory_pagecache_size={pagecache}"],
+        "server_port": 7687,
+        "ready_regex": r"Started\.",
+    },
     # THE #131 ITEM 3 ARMS (2026-10-02, CAMPAIGN section 7 rows 37-38). Each
     # reuses its engine's pinned image and fitted flags from the lane where
     # it already runs, so one engine wears one configuration on the page.
@@ -1679,7 +1690,7 @@ LANES = {
     "l3d": ("l3d_dense.py",
             ["arcadedb_dense_embedded", "arcadedb_dense_server", "chroma_dense", "lancedb_dense",
              "sqlite_vec_dense", "duckdb_vss_dense", "qdrant_dense",
-             "milvus_dense", "pgvector_dense", "neo4j_dense", "surrealdb_dense", "surrealdb_dense_server",
+             "milvus_dense", "pgvector_dense", "neo4j_dense", "neo4j_dense_int8", "surrealdb_dense", "surrealdb_dense_server",
              "arangodb_dense", "mongodb_dense",
              # #131 item 3 (2026-10-02): Elasticsearch, Memgraph, FalkorDB,
              # LadybugDB; Elasticsearch's int8 arm with the int8 arms below.
@@ -2259,7 +2270,7 @@ MP_LABELS = {
     "qdrant_dense": "qdrant", "qdrant_dense_int8": "qdrant_int8",
     "chroma_dense": "chroma", "duckdb_vss_dense": "duckvss",
     "lancedb_dense": "lancedb",
-    "pgvector_dense": "pgvector", "neo4j_dense": "neo4jvec",
+    "pgvector_dense": "pgvector", "neo4j_dense": "neo4jvec", "neo4j_dense_int8": "neo4jvec_int8",
     "surrealdb_dense": "surreal", "surrealdb_dense_server": "surrealsrv",
     "arangodb_dense": "arango", "mongodb_dense": "mongo",
     "sqlite_vec_dense": "sqlitevec", "sqlite_vec_dense_int8": "sqlitevec_int8",

@@ -68,7 +68,7 @@ TPC=postgres,postgres_tuned,mongodb
 GRAPH=neo4j_graph,ladybug_graph,mongodb_graph,memgraph_graph,pgage_graph
 # The #131 dense arms are new (2026-10-02) and DuckDB VSS and ArangoDB now split their phases (#132):
 # smoked here until a campaign has measured them.
-DENSE=pgvector_dense,qdrant_dense,qdrant_dense_int8,milvus_dense,milvus_dense_int8,neo4j_dense,mongodb_dense,lancedb_dense,elasticsearch_dense,elasticsearch_dense_int8,memgraph_dense,falkordb_dense,ladybug_dense,duckdb_vss_dense,arangodb_dense
+DENSE=pgvector_dense,qdrant_dense,qdrant_dense_int8,milvus_dense,milvus_dense_int8,neo4j_dense,neo4j_dense_int8,mongodb_dense,lancedb_dense,elasticsearch_dense,elasticsearch_dense_int8,memgraph_dense,falkordb_dense,ladybug_dense,duckdb_vss_dense,arangodb_dense
 SPARSE=pgvector_sparse,qdrant_sparse,milvus_sparse,elasticsearch_sparse
 TS=questdb,timescaledb,mongodb
 E2=pg_age_e2,mongodb_e2,neo4j_e2,composed_qdrant_neo4j
