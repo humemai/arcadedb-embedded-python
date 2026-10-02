@@ -516,9 +516,11 @@ cores, with no transaction open, `sum` over a property measured 128 ms in SQL an
 openCypher, and a group-by with a count and a sum 221 ms against 141 ms. openCypher `DISTINCT`
 aggregates such as `count(DISTINCT n.p)`, `collect()`, and aggregates over a function call
 still run on one thread (`count(DISTINCT n.grp)` measured 827 ms); the SQL form of the same
-question runs in the workers. SQL has no `count(DISTINCT expr)` (ArcadeDB
-[#8889](https://github.com/ArcadeData/arcadedb/issues/8889)); count the rows of a
-`SELECT DISTINCT` subquery instead.
+question runs in the workers. SQL accepts `count(DISTINCT expr)`, and `sum`, `avg`, and
+`list` with `DISTINCT`, from 26.10.1 (ArcadeDB
+[#8889](https://github.com/ArcadeData/arcadedb/issues/8889)): its scan runs in the parallel
+workers and the distinct values are merged on one thread. On 26.9.1 it is a syntax error, so
+count the rows of a `SELECT DISTINCT` subquery instead, as below.
 
 ```python
 # openCypher aggregates over a label run in the parallel workers (26.10.1)
