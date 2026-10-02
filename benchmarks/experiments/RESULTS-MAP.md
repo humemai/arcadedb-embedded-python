@@ -49,7 +49,7 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `generated/preview-tables.md` | `refresh_web_page.py --preview` | a reader of the preview's inventory |
 | `generated_oct/**` | `make_paper_tables.py` under `BENCH_INSTRUMENT=2026-10` | the same readers, under the same switch |
 | `generated/memo_bottlenecks.html` | `memo_bottlenecks.py` | the maintainers' memo, not the page |
-| `sparse_cliff.jsonl` | `sparse_cliff_probe.py`, one shot | `make_paper_figures.py`, figure f3 |
+| `sparse_cliff.jsonl` | `sparse_cliff_probe.py`, one shot | `make_paper_figures.f3_sparse_perquery`, which opens it and skips the figure because none of its rows carries an engine version; f3 is not built (PAGE-SPEC.md section 3) |
 | `e3_q17/*.json` | `e3_recovery.py`, one shot per trial | `claims_check.py`; the recovery table is planned, not built |
 | `ingest_ab/ab_r*.json` | `async_ingest_probe.py`, one shot per repetition | `claims_check.py` |
 | `tentag/tentag_ab.json` | `ts_stride_probe.py`, one shot | `claims_check.py` |
@@ -59,6 +59,25 @@ A campaign file reports "no reader" when you grep the publishing scripts. That i
 | `mp_rows_<pin>.jsonl`, `mp_rows_small_<pin>.jsonl`, `mp_rows_sparse_<pin>.jsonl` | the per-cell multipass rows behind the overlay directories below | nothing on the page; the per-cell record |
 | `runs_skeleton_laptop.csv` | the laptop micro-scale placeholder freeze behind a skeleton publish, one repetition, sweep tier, `bench_host` of the laptop (DECISIONS #86) | `refresh_web_page.py --skeleton`, which refuses a row from the bench host or at paper tier. Never merged into `runs.jsonl` |
 | `runs_CALIBRATION_<tier>_<pin>.jsonl` | a calibration pass: one repetition per engine at a tier nothing has measured yet, run to turn that tier's query budgets from projections into measurements (DECISIONS #106). Not publishable at n=1 | nothing. `merge_campaign.py` takes an explicit `--remote` path and no glob, so it cannot pick one up by accident; `derive_budgets.py` reads the frozen CSV, so a calibration tier reaches the budget table only when someone re-freezes with its rows |
+
+
+**The libraries the lanes import.** No stage runs these directly, so a "who calls this?" sweep that looks for entry points finds no caller; each is imported, and none is dead:
+
+| module | what it is | imported by |
+|---|---|---|
+| `bench_common.py` | the shared helpers every lane and gate uses: latency statistics, disk size, run conditions, the durability strings, the answer digest, phase markers | every lane, the drivers, the gates, `runner.py` |
+| `graph_common.py` | the synthetic social-graph generator, and the graph lane's shared query texts, budget constants, and tier exclusions | `l2_graph.py`, `ldbc_snb.py`, `lsqb_probe.py`, `cell_cost_check.py`, `make_october_stages.py`, `page_check.py` |
+| `ldbc_snb.py` | the LDBC SNB data source for the graph lane, a drop-in for `graph_common`'s generator | `l2_graph.py`, `export_web.py`, `page_check.py` |
+| `sparse_common.py` | the synthetic SPLADE-shaped sparse corpus and query generator | `l3_sparse.py`, `gen_sparse_gt.py` |
+| `bigann_sparse.py` | the Big-ANN 2023 sparse corpus with its ground truth, a drop-in for `sparse_common` | `l3_sparse.py`, `sparse_cliff_probe.py` |
+| `budget_lookup.py` | answers how long a query may run at a tier, and whether to abandon it | `l1_tpc.py`, `l2_graph.py`, `l4_tsbs.py`, `cell_cost_check.py`, `make_october_stages.py` |
+| `budgets.py` | the per-query budget table `derive_budgets.py` generates; not hand-edited | `budget_lookup.py` |
+| `arango_common.py` | ArangoDB connection, version, and vector operating point for every lane that runs it | `l1_tpc.py`, `l2_graph.py`, `l3d_dense.py`, `l4_tsbs.py`, `e2_hybrid.py`, `probe_arango_deep10m.py` |
+| `mongo_common.py` | MongoDB connection, write concern, and vector-index helpers for the graph, dense, and cross-model lanes | `l2_graph.py`, `l3d_dense.py`, `e2_hybrid.py` |
+| `surreal_common.py` | the embedded SurrealDB core's identity, the durability setting, and the served arm's reconnecting client and HNSW settle | `l1_tpc.py`, `l2_graph.py`, `l3d_dense.py`, `l4_tsbs.py`, `e2_hybrid.py`, `l5_lifecycle_surreal.py`, `export_web.py`, `test_surreal_reconnect.py` |
+| `pagecache.py` | evicts one database's files from the page cache and proves they left, for a cold open | `l5_lifecycle.py`, `l5_lifecycle_surreal.py` |
+| `l5_lifecycle_server.py` | the lifecycle lane's served ArcadeDB arm | `l5_lifecycle.py` |
+| `l5_lifecycle_surreal.py` | the lifecycle lane's SurrealDB embedded arm | `l5_lifecycle.py` |
 
 The answer digest and its readable sample, the `durability` string, and the thermal fields (BUGS.md F45) are row fields rather than files, so nothing under `results/` holds them separately and a question about any of the three is answered by printing the row.
 
@@ -102,7 +121,7 @@ Add it to `FEEDS`/`FEEDS_FILES` in `provenance_check.py` **or** to this file. Th
 
 ## Queue scripts
 
-The live chain, what each script runs, and where finished scripts go: CAMPAIGN.md section 6. Every script gates on `verify_pair_c25.sh`, which is in this directory alongside `build_matched_pair.sh` and `build_c25_wheel.sh`, the pair recipe. Retired `qB*` scripts pinned to `b7c6c800d` live in `queue-archive-20260830/` on the bench host; they verify a locally compiled pair, which is the wrong claim for a pair assembled from upstream's published jars.
+The live chain and where finished scripts go: CAMPAIGN.md section 6; what each stage runs: `make_october_stages.STAGES`. Every script gates on `verify_pair_c25.sh`, which is in this directory alongside `build_matched_pair.sh` and `build_c25_wheel.sh`, the pair recipe. Retired `qB*` scripts pinned to `b7c6c800d` live in `queue-archive-20260830/` on the bench host; they verify a locally compiled pair, which is the wrong claim for a pair assembled from upstream's published jars.
 
 ## The 8d6af9475 pin
 

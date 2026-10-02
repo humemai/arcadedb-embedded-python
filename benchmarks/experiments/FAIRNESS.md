@@ -2,7 +2,7 @@
 
 Every number on the page compares systems. A comparison is only worth printing if both sides were given the same thing. This file says what "the same thing" means, what is allowed to differ, and what is checked mechanically rather than remembered.
 
-`fairness_check.py` is one of the SIX gates `refresh_web_page.py` runs (`equivalence_check`, `provenance_check`, `fairness_check`, `page_check`, `version_consistency_check`, `version_pin_check`). It fails loudly rather than warning quietly.
+`fairness_check.py` is one of the gates `refresh_web_page.py` runs (`equivalence_check`, `provenance_check`, `fairness_check`, `page_check`, `version_consistency_check`, `version_pin_check`). It fails loudly rather than warning quietly.
 
 The failure mode this contract exists to close is **a correct number measured under conditions the row beside it did not get**. `claims_check` and `provenance_check` cannot see it: both verify a number against its own artifact, and such a number is correct about its own run.
 
@@ -12,7 +12,7 @@ The failure mode this contract exists to close is **a correct number measured un
 
 **F2. Serial only.** Published cells run one at a time. `runner.py` forces `workers=1` on the paper tier and errors otherwise; queue scripts pass `--tier paper --workers 1` explicitly. The parallel sweep tier (disjoint cpuset shards, shuffled order) exists for exploration and must never reach a table. A published row from a sweep is detectable after the fact as a partial cpuset such as `0-5`, and `load_canonical` drops it.
 
-**F3. Same memory envelope per (lane, scale).** Every backend at a tier gets the same `--memory`/`--memory-swap` cap and, for JVM engines, the same heap.
+**F3. Same memory envelope per (lane, scale).** Every backend at a tier gets the same `--memory`/`--memory-swap` cap and, for JVM engines, the same heap. Two JVM processes are exceptions and run at their own default heap: QuestDB, whose rows record the tier heap although no heap reaches its server, and mongot inside the MongoDB Search image (CAMPAIGN.md section 7, row 30).
 
 A served backend gets the **full tier cap** and the client its own `BENCH_CLIENT_MEM` budget on top, stamped `mem_split="full+client"`, so a served engine sees exactly the cap an embedded engine of the same tier sees. Every frozen served row carries that stamp. `BENCH_SERVER_MEM_FRACTION` restores the older `server = 0.75 * total` split for a reproduction. Compare a served topology by `srv_cap / mem_split`, never by adding client and server: addition reads 1.75x the envelope.
 
@@ -51,13 +51,13 @@ Fitting the pool is resource fitting, the first of the four sanctioned override 
 | Milvus | `go_sched_gomaxprocs_threads 12`; Go sizes from `sched_getaffinity` | cpuset |
 | Memgraph 3.13.1 (2026-09-17) | `SHOW CONFIG` under `--cpuset-cpus 0-11` on a 16-CPU laptop: `bolt_num_workers` 16 and `storage_snapshot_thread_count` 16, both documented as "the number of processing units available on the machine"; 51 tasks in `/proc/1/task` at idle. Its memory limit is host-sized the same way (`memory_limit` 0 reported as 30.35 GiB inside an 8g container) | **host**; fitted: runner passes `--bolt-num-workers={ncpu}`, `--storage-snapshot-thread-count={ncpu}` and `--memory-limit` at 90% of the cap, and the adapter reads all three back onto the row (`memgraph_bolt_workers`, `memgraph_snapshot_threads`, `memgraph_memory_limit_mib`; 12, 12, 7372 on the laptop smoke at an 8g cap) |
 | FalkorDB 4.20.6 (2026-09-17) | startup log under the same cpuset: "Thread pool created, using 16 threads" and "Maximum number of OpenMP threads set to 12"; `GRAPH.CONFIG GET THREAD_COUNT` 16, `OMP_THREAD_COUNT` 12. The query pool reads the host's logical cores, the GraphBLAS pool reads the affinity mask | **host** for the query pool, cpuset for OpenMP; fitted: runner passes `THREAD_COUNT {ncpu}` in `FALKORDB_ARGS`, the log then reads "using 12 threads" and the adapter records `falkordb_thread_count` and `falkordb_omp_threads` from `GRAPH.CONFIG GET` (12 and 12 on the laptop smoke) |
-| LadybugDB 0.20.4 (2026-09-29, BUGS F160) | not audited on 2026-08-01 nor listed as owed; found from LadybugDB/ladybug#1070: `CALL current_setting("threads")` reads the host's CPU count under a cpuset (16 under `--cpuset-cpus 4-7` on the 16-CPU laptop, affinity 4), which is 20 on mini's 12-CPU cells, and the buffer pool defaults to 0.8 of physical RAM, about 49 GB against the 24 GB cell cap. qOA and qOA3 ran it that way; a laptop A/B on the lane's own adapter at 20 against 12 threads put its reads 12-28% slow and its writes 12% fast | **host**; fitted 2026-09-29: the adapter passes `max_num_threads` from `sched_getaffinity` and `buffer_pool_size` at 0.8 of the cgroup `memory.max`, reads the thread count back, and records `ladybug_threads` and `ladybug_buffer_pool_mib` (4 and 3276 in a 4-CPU, 4 GB container); stage `qOA5` re-runs its OLTP rows, and `qOB2` pulls the fitted arm |
+| LadybugDB 0.20.4 (2026-09-29, BUGS F160) | not audited on 2026-08-01 nor listed as owed; found from LadybugDB/ladybug#1070: `CALL current_setting("threads")` reads the host's CPU count under a cpuset (16 under `--cpuset-cpus 4-7` on the 16-CPU laptop, affinity 4), which is 20 on mini's 12-CPU cells, and the buffer pool defaults to 0.8 of physical RAM, about 49 GB against the 24 GB cell cap. A laptop A/B on the lane's own adapter at 20 against 12 threads put its reads 12-28% slow and its writes 12% fast | **host**; fitted 2026-09-29: the adapter passes `max_num_threads` from `sched_getaffinity` and `buffer_pool_size` at 0.8 of the cgroup `memory.max`, reads the thread count back, and records `ladybug_threads` and `ladybug_buffer_pool_mib` (4 and 3276 in a 4-CPU, 4 GB container); stage `qOA5` re-runs its OLTP rows, and `qOB2` pulls the fitted arm |
 
-The comparators added since this audit (MongoDB, TimescaleDB, QuestDB, pgvector, PG+AGE, SurrealDB, SQLite, and ArangoDB) are not yet audited; CAMPAIGN.md section 7, item 20 carries it.
+The comparators this audit did not cover (PostgreSQL, MongoDB, TimescaleDB, QuestDB, pgvector, PG+AGE, SurrealDB, SQLite, and ArangoDB) are not yet audited, and memory pools have been checked for a host-sized default only where one was found (Memgraph's memory limit and LadybugDB's buffer pool, BUGS F160); CAMPAIGN.md section 7, item 20 carries both.
 
 Two ways to get this audit wrong, both nearly recorded. Total OS thread count is not pool sizing: a JVM server runs dozens of threads irrespective of cpuset, so the question for a JVM is `availableProcessors()` and the named pool settings. And running `nproc` inside a container answers about the container, not about the engine: ask the engine's own metrics.
 
-The DuckDB bias runs **against** DuckDB, which wins that lane regardless, so nothing self-serving rests on it; the tabular rows are re-measured at each freeze rather than carried over.
+The DuckDB bias runs **against** DuckDB, which wins that lane regardless, so nothing self-serving rests on it.
 
 **F7. Same effective base-layer degree across dense backends per scale.** Engines spell graph degree differently: one takes the per-layer `maxConnections`, another the base-layer degree, and the same integer therefore builds two different graphs. Recorded per row as `degree_param` plus `degree_family` so the check reads the number in the unit its own engine meant. A row recording no degree FAILS.
 
@@ -93,7 +93,7 @@ commit returns without waiting for the disk and the log is flushed by the
 engine's own background policy.
 
 **Every default below was read out of the engine, not assumed** (laptop,
-2026-09-14; the evidence for each is in `bench_common.py` above the
+2026-09-14, and 2026-09-17 for Memgraph and FalkorDB; the evidence for each is in `bench_common.py` above the
 `DURABILITY_*` strings, which are defined once there so two lanes cannot
 describe one engine differently). In the relaxed class: ArcadeDB at
 `txWalFlush=0`, which `GlobalConfiguration.TX_WAL_FLUSH` reports as its default
@@ -104,13 +104,19 @@ PostgreSQL, pgvector, PG+AGE, and TimescaleDB, whose adapters run
 MongoDB's timed writes at `w=1, j=false` against a server reporting
 `journalCommitInterval` 100 ms; ArangoDB's default, with the 3.12.11 server
 answering `database.wait-for-sync` false, `rocksdb.use-fsync` false, and
-`rocksdb.sync-interval` 100 ms; QuestDB's default, with the 9.1.1 server
-answering `cairo.commit.mode` `nosync` from `SHOW PARAMETERS`; and SurrealDB
+`rocksdb.sync-interval` 100 ms; QuestDB's default, with the server
+answering `cairo.commit.mode` `nosync` from `SHOW PARAMETERS`; Memgraph's
+default, with `SHOW CONFIG` answering `storage_wal_enabled` true and
+`storage_wal_file_flush_every_n_tx` 100000, so the WAL is fsynced every
+100,000 transactions rather than at commit (`strace`: 1 `fsync` over a build
+and 3,009 commits); FalkorDB's default, with `CONFIG GET` answering
+`appendonly` no and RDB snapshots only, so nothing is synced at commit
+(`strace`: 0 `fsync` over a build and 3,011 writes); and SurrealDB
 embedded, where an A/B under `strace` shows 6 `fsync` calls at both 50 and 250
 commits with `SURREAL_SYNC_DATA` unset against 56 and 256 with it set.
 
 Three engines cannot be relaxed and are the named exceptions on their tables.
-Neo4j: `SHOW SETTINGS` at 2026.07.1 offers no durability or sync setting at all
+Neo4j: `SHOW SETTINGS` offers no durability or sync setting at all
 (its `tx_log` settings cover buffer, preallocation, and rotation), and forcing
 the log at commit is its documented behaviour. LadybugDB: `strace` counts 56
 `fdatasync` calls for 50 auto-commit writes, and `ladybug` 0.20.4's `Database()`
@@ -270,7 +276,7 @@ Three things follow, and they are what make this checkable rather than a good in
 
 * **A new arm must declare its index decision.** `fairness_check` fails a lane backend that declares nothing, the way the capability table refuses a kind its legend cannot define. Silence is the state this invariant exists to remove.
 * **And the declaration is checked against the rows, not trusted (F14b).** A map saying an arm builds an index is a claim; `index_s` on that arm's rows is the evidence. The gate fails an arm whose declaration cites a measured with/without ratio and whose every row records `index_s=0`, and fails one that declares `NONE` and records a build -- an index removed for costing that engine coming back. Only those two directions are asserted: a declaration like "record id carries pid" or "native TIMESERIES type" describes an index with no build step to time, and those arms are reported as not asserted rather than pattern-matched into an expectation. The count of arms checked, arms not asserted, and arms whose rows predate the ingest/index split is printed every run, so the coverage is visible rather than implied.
-* **And where one arm times the two phases, every arm does (F14c).** The ingest/index split turns "this engine took 40 s to build the corpus" into "12 s writing, 28 s indexing", and it arrives per adapter -- so it is exactly the kind of thing that stops arriving when someone adds the next engine to a lane and writes a `build()` without knowing its neighbours time two phases inside theirs. The cost is not a missing number but an unfair TABLE: the column exists because the other arms fill it, so the new arm prints a blank where everyone else prints a figure, and a blank in a benchmark reads as a result. Three states pass -- the arm splits, or it declares `index_before_load` (the index is defined before the first row lands and its work is spread through the load, as SurrealDB does on the document and time-series lanes), or no arm on that lane splits at all because every engine there builds its index as it ingests (sparse) or creates it in the schema before loading (graph). The finding is the fourth: a lane where some arms split, one does not, and it says nothing. On the dense lane the two phases are independent timers inside `build_s` rather than a division of it, so those rows also carry `setup_s` for the remainder, and the three add up (BUGS F101).
+* **And where one arm times the two phases, every arm does (F14c).** The ingest/index split turns "this engine took 40 s to build the corpus" into "12 s writing, 28 s indexing", and it arrives per adapter -- so it is exactly the kind of thing that stops arriving when someone adds the next engine to a lane and writes a `build()` without knowing its neighbours time two phases inside theirs. The cost is not a missing number but an unfair TABLE: the column exists because the other arms fill it, so the new arm prints a blank where everyone else prints a figure, and a blank in a benchmark reads as a result. Three states pass -- the arm splits, or it declares `index_before_load` (the index is defined before the first row lands and its work is spread through the load, as SurrealDB does on the document and time-series lanes), or no arm on that lane splits at all (on the sparse lane every engine but pgvector builds its index as it ingests, and pgvector's index build follows its load inside the same single timer; on the graph lane every engine creates its index in the schema before loading). The finding is the fourth: a lane where some arms split, one does not, and it says nothing. On the dense lane the two phases are independent timers inside `build_s` rather than a division of it, so those rows also carry `setup_s` for the remainder, and the three add up (BUGS F101).
 * **The decision names its evidence.** "No index" is a finding when it is measured (ArangoDB, DuckDB on the document lane) and a defect when it is an omission (PostgreSQL on the document lane, DuckDB on the time-series lane, both until 2026-09-22).
 * **Index build time is its own column** wherever the engine has a boundary to time. The dense vector table has always separated `ingest s` from `index s`; the rest folded index build into ingest, which hides both the cost and the asymmetry -- SurrealDB's document arm must build its index BEFORE the load, so about 5.3 s of index work sits inside an ingest number every other engine pays without any.
 
