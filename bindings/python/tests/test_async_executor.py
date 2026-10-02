@@ -103,7 +103,14 @@ def test_async_executor_bulk_command_is_exact_at_parallel_four(temp_db):
     async_exec.close()
 
     stored = int(db.query("sql", "SELECT count(*) AS c FROM Bulk4").one().get("c"))
-    assert stored == LOSS_REPRO_ROWS
+    # Says which failure it is: a batch dropped with no callback (#7615 back) or a
+    # batch rolled back and reported after its retries (#7625's design, under load).
+    # A darwin/arm64 runner stored 8742 of 9742 once on 2026-10-02 and the old
+    # message could not tell the two apart.
+    reported = [str(e)[:200] for e in errors[:3]]
+    assert (
+        stored == LOSS_REPRO_ROWS
+    ), f"stored {stored} of {LOSS_REPRO_ROWS}; on_error {len(errors)}x: {reported}"
     assert errors == []
 
 
