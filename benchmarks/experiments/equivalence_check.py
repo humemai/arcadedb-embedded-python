@@ -134,11 +134,24 @@ KNOWN_DISAGREEMENTS = {
     ("l2", "graph_update"): {"pgage_graph": _AGE_2587},
 }
 
-NOT_COMPARABLE = {
-    ("lifecycle", "lifecycle_read"):
-        "the embedded and served lifecycle arms run different mode sets, so "
-        "their post-state record counts differ by construction",
+# NOT ONE GROUP, TWO (2026-10-02). The lifecycle read was declared NOT_COMPARABLE
+# here because the embedded and served arms run different mode sets, so their
+# post-state record counts differ by construction. That was true of the served
+# arm and nothing else, and once six embedded engines joined the table the
+# declaration exempted all of them: a group holding ArcadeDB embedded and
+# DuckDB answering differently would have been skipped as "not comparable"
+# exactly as ArcadeDB server's different count is. Found rehearsing the
+# 26.10.1 publish. The group is split by deployment instead: embedded arms are
+# compared with each other, served arms with each other, and never across.
+SPLIT_BY_DEPLOYMENT = {
+    "lifecycle": "the embedded and served lifecycle arms run different mode sets, so "
+                 "their post-state record counts differ by construction",
 }
+
+NOT_COMPARABLE = {}
+# (lane, backend) -> "embedded" or "served", filled by collect() for the lanes
+# above, so E3 does not count an embedded arm as silent on the served group.
+_DEPLOYMENT = {}
 
 
 def _is_arcade(backend):
@@ -212,6 +225,10 @@ def collect(rows):
                 continue
             got += 1
             q = m.group(1)
+            if r.get("lane") in SPLIT_BY_DEPLOYMENT:
+                _dep = "served" if r.get("topology") == "client_server" else "embedded"
+                _DEPLOYMENT[(r.get("lane"), r.get("backend"))] = _dep
+                q = f"{q}@{_dep}"
             entry = groups[key0 + (q,)][r.get("backend")]
             entry.setdefault(str(val), []).append(
                 (r.get("rep"), str(r.get(f"res_{q}_sample") or ""), r.get(f"res_{q}_n"),
@@ -300,6 +317,9 @@ def report(groups, seen_backends, out=print, list_groups=False):
         # and recorded neither a digest nor a declared absence for a query its
         # neighbours answered has not been checked and does not say why.
         for be in sorted(seen_backends.get((lane, scale, workload), set())):
+            if lane in SPLIT_BY_DEPLOYMENT and "@" in str(query) \
+                    and _DEPLOYMENT.get((lane, be)) != str(query).rsplit("@", 1)[1]:
+                continue
             if be not in per_backend:
                 silent.append((key, be))
 

@@ -2058,7 +2058,7 @@ def _equivalence_notes(rows):
     for (lane, _scale, workload, query), by_backend in groups.items():
         tid = (EQUIVALENCE_TABLE_OF.get((lane, workload))
                or EQUIVALENCE_TABLE_OF.get((lane, None)))
-        if not tid:
+        if not tid or tid == "lifecycle":
             continue
         why = EQ.NOT_COMPARABLE.get((lane, query))
         if why:
@@ -2091,6 +2091,9 @@ def _equivalence_notes(rows):
             per_table[tid].append(f"{_join_and(_n)} cannot "
                                   f"express {query}: {why}")
     out = {}
+    _lc = _lifecycle_answer_note(groups)
+    if _lc:
+        out["lifecycle"] = _lc
     for tid, items in per_table.items():
         uniq = sorted(set(items))
         out[tid] = _gen("Every deterministic answer on this table is hashed and "
@@ -2099,6 +2102,77 @@ def _equivalence_notes(rows):
                         "that comparison could not cover, declared rather than "
                         "skipped: " + "; ".join(uniq) + ".", *uniq)
     return out
+
+
+def _lifecycle_answer_note(groups):
+    """The lifecycle table's answer check, in one sentence of what it compared.
+
+    NOT the generic note. That one lists every declared absence with its
+    reason, and on this table each engine's missing situations already have
+    their own sentence (_lifecycle_table): with six embedded engines it ran to
+    5,273 characters restating them (rehearsing the 26.10.1 publish,
+    2026-10-02). This says only what those sentences do not: which situations'
+    reads were compared with ArcadeDB's and how, which had nothing to compare
+    with, and why the server rows stand apart. Derived from the gate's own
+    groups (equivalence_check splits the lifecycle read by deployment), so a
+    situation moves between the clauses when the rows do.
+    """
+    import bench_common
+    emb = collections.defaultdict(set)    # situation -> embedded engines with an answer
+    srv = collections.defaultdict(set)    # situation -> served engines with an answer
+    reasons = collections.defaultdict(set)
+    for (lane, _scale, workload, query), by_backend in groups.items():
+        if lane != "lifecycle" or workload in LIFECYCLE_WITHHELD:
+            continue
+        served = query.endswith("@served")
+        for be, digests in by_backend.items():
+            for d in digests:
+                if bench_common.is_unexpressible(d):
+                    reasons[workload].add(str(d)[len(bench_common.UNEXPRESSIBLE_PREFIX):])
+                elif not bench_common.is_censored_answer(d):
+                    (srv if served else emb)[workload].add(be)
+    sits = [k for k in LIFECYCLE_SITUATION_ORDER if k in emb or k in srv or k in reasons]
+    if not sits:
+        return None
+    phrase = lambda k: LIFECYCLE_SITUATION_PHRASES.get(k, k)          # noqa: E731
+    checked = [k for k in sits if len(emb.get(k, ())) >= 2]
+    alone = collections.defaultdict(list)
+    for k in sits:
+        if len(emb.get(k, ())) == 1:
+            alone[display_name(str(next(iter(emb[k]))))].append(k)
+    nothing = [k for k in sits if not emb.get(k) and not srv.get(k)]
+    parts = []
+    if checked:
+        parts.append(f"The rows each session reads back are hashed, and for "
+                     f"{_join_and([phrase(k) for k in checked])} every embedded engine that "
+                     f"builds the situation must return the same hash as ArcadeDB embedded, or "
+                     f"nothing is published.")
+    for who, ks in alone.items():
+        parts.append(f"Only {who} builds {_join_and([phrase(k) for k in ks])}, so there is "
+                     f"no second answer to compare.")
+    if nothing:
+        _why = []
+        for k in nothing:
+            r = " ".join(sorted(reasons.get(k, ())))
+            if "approximate" in r:
+                _why.append(f"{phrase(k)}, whose read goes through an approximate index and is "
+                            f"checked by recall on the dense vector table instead")
+            elif "no read" in r:
+                _why.append(f"{phrase(k)}, which reads nothing back")
+            else:
+                _why.append(f"{phrase(k)}, for which no engine recorded a comparable answer")
+        # Semicolons between the items, which carry their own commas.
+        parts.append("Not compared: " + (_why[0] if len(_why) == 1 else
+                                         "; ".join(_why[:-1]) + "; and " + _why[-1]) + ".")
+    served = sorted({display_name(str(b)) for v in srv.values() for b in v})
+    if served:
+        parts.append(
+            f"The server rows are compared only with other server rows, because a server "
+            f"session runs a different set of modes and its record counts differ by "
+            f"construction; "
+            + (f"{served[0]} is the only engine served here, so they are compared with nothing."
+               if len(served) == 1 else f"{_join_and(served)} are compared with each other."))
+    return _gen(" ".join(parts), *[phrase(k) for k in sits], *alone, *served)
 
 
 def _cold_note(table_id, rows, columns=()):
