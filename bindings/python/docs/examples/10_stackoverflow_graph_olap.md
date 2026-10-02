@@ -2,8 +2,9 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/examples/10_stackoverflow_graph_olap.py){ .md-button }
 
-This example builds a Stack Overflow property graph and runs a fixed OLAP query suite
-using OpenCypher.
+This example builds a Stack Overflow property graph and runs a fixed OLAP query suite.
+ArcadeDB, Neo4j, LadybugDB, and GraphQLite run the OpenCypher text; SQLite and DuckDB run an
+equivalent SQL query, and `python_memory` computes each answer in Python.
 
 For ArcadeDB runs, the benchmark can optionally create a Graph Analytical View (GAV)
 before the query suite and measure how long it takes to wait until that view becomes
@@ -52,8 +53,10 @@ Question tags are parsed by:
 
 ## Graph Query Suite
 
-The source defines ten fixed OpenCypher queries in `QUERY_DEFS`. The same query text
-is reused across the supported backends for this example.
+The source defines ten fixed OpenCypher queries in `QUERY_DEFS`. The Cypher backends run
+this text; SQLite and DuckDB run the SQL query of the same name in
+`execute_sqlite_olap_query`, and `python_memory` computes it in
+`execute_python_memory_olap_query`.
 
 ### Q1. Top Askers
 
@@ -194,9 +197,7 @@ The source creates unique `Id` indexes on all six vertex types before the query 
   driver wrapper, with client/server resource accounting derived from `--server-fraction`
 - Traversal expectations should be interpreted as directed
 - The ArcadeDB `GraphBatch` load stores both directions of every edge (`bidirectional=True`,
-  the engine default). Until 2026-09-29 it stored the source side only, and 5 of the 10
-  queries, the ones the planner walks from the target end, returned 0 rows with no error
-  (ArcadeData/arcadedb#8625)
+  the engine default)
 
 ## Supported Backends
 

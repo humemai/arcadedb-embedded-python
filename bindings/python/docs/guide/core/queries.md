@@ -1,10 +1,8 @@
 # Query Languages Guide
 
 !!! warning "Known engine issues"
-    Three open ArcadeDB bugs can return a wrong answer or change the wrong rows without an
-    error: a unique composite index read by its first property, a SQL `UPDATE` that moves an
-    indexed key, and index range reads inside a transaction that has written. See
-    [Known Engine Issues](../known-issues.md) for the versions and the workarounds.
+    Open ArcadeDB bugs can return a wrong answer or refuse a lookup; see
+    [Known Engine Issues](../known-issues.md).
 
 The bindings run SQL and OpenCypher through `db.query()` and `db.command()`. Use them
 for schema, CRUD, and graph operations: SQL for relational-style work and OpenCypher
@@ -425,7 +423,10 @@ An index on a range column is not free when the range matches most of the rows. 
 26.10.1 a scan runs on several workers, while the index entries are read by one thread,
 so the engine gives up the index for the scan once a range matches more than
 `arcadedb.queryIndexMaxSelectivity` of the type: 0.6 on one thread, divided by (1 + W) / 2
-for W scan workers (24% on 4 workers, 6% on 18). `PROFILE` names the branch that ran
+for W scan workers (24% on 4 workers, 6% on 18). It applies only where the order the
+rows come in cannot show in the output, an aggregation or an `ORDER BY` the index does
+not serve, and only to a plain `LSM_TREE` index; a query that returns the rows as they
+come keeps the index. `PROFILE` names the branch that ran
 (`served by full scan` or `served by physical order`). Even so, a range matching 96% of
 2,000,000 rows measured 1.2x to 1.3x slower with the index than without it on a 4-core
 laptop, and a one-year slice (14%) 1.5x to 1.6x faster (`ArcadeData/arcadedb#8333`).
@@ -515,7 +516,9 @@ cores, with no transaction open, `sum` over a property measured 128 ms in SQL an
 openCypher, and a group-by with a count and a sum 221 ms against 141 ms. openCypher `DISTINCT`
 aggregates such as `count(DISTINCT n.p)`, `collect()`, and aggregates over a function call
 still run on one thread (`count(DISTINCT n.grp)` measured 827 ms); the SQL form of the same
-question runs in the workers.
+question runs in the workers. SQL has no `count(DISTINCT expr)` (ArcadeDB
+[#8889](https://github.com/ArcadeData/arcadedb/issues/8889)); count the rows of a
+`SELECT DISTINCT` subquery instead.
 
 ```python
 # openCypher aggregates over a label run in the parallel workers (26.10.1)
@@ -527,6 +530,13 @@ by_city = db.query(
 n_cities = db.query(
     "sql", "SELECT count(*) AS n FROM (SELECT DISTINCT city FROM Person)"
 ).to_list()[0]["n"]
+
+# Distinct values per group
+per_country = db.query(
+    "sql",
+    "SELECT country, count(*) AS n FROM (SELECT DISTINCT country, city FROM Person) "
+    "GROUP BY country",
+).to_list()
 ```
 
 **Distinct values.** In 26.10.1 a plain `SELECT DISTINCT p FROM Type` over at least 10,000
@@ -582,8 +592,8 @@ bulk APIs when you're taking everything from a large result.**
     10,000-row, nine-property scan, laptop, 2026-09-27), with typed columns
     including real `datetime64`.
 - Use `to_json_list()` (or `iter_json_batches()` when it may not fit in memory)
-    to bulk-load large results as plain dicts. JSON-native types: temporals
-    arrive as ISO strings.
+    to bulk-load large results as plain dicts. JSON-native types: `DATE` and
+    `DATETIME` values arrive as epoch-millisecond integers.
 - Use `to_list()` when you need full Python-type fidelity (`datetime`,
     `Decimal`) as row dicts and the result is not huge.
 - Use wrapper `to_dict()` only when you truly want the full document in Python.
@@ -608,7 +618,8 @@ with db.query("sql", "SELECT name, score FROM Item WHERE score > ?", 100) as res
 
 # Bulk materialization as dicts (~5.5x faster than to_list on a wide scan):
 # rows are JSON-serialized in batches on the Java side. Values carry
-# JSON-native types (temporals arrive as ISO strings, not datetime).
+# JSON-native types (DATE and DATETIME values arrive as epoch-millisecond
+# integers, not datetime).
 rows = db.query("sql", "SELECT FROM Item").to_json_list()
 
 # Materialize with full Python-type fidelity (datetime, Decimal, ...)

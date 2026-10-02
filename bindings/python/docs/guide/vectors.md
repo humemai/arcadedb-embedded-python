@@ -83,11 +83,12 @@ Preferred split:
 
 - `cosine` (default): returns cosine distance in [0,2]; lower is better.
 - `euclidean`: returns squared Euclidean distance (d²); lower is better.
-- `inner_product`: returns negative dot product; lower is better.
+- `dot_product`: returns `-(1 + A·B) / 2`; lower is better. It expects unit-length
+  vectors, and the engine logs a warning when sampled vectors are not.
 
 Important:
 
-- Vector-index search exposes cosine as distance: $1 - \cos(\theta)$.
+- Vector-index search exposes cosine as distance: 1 - cos(θ).
 - SQL `vectorCosineSimilarity(...)` exposes raw cosine similarity, so its values follow
   cosine similarity semantics rather than vector-index distance semantics.
 
@@ -128,6 +129,14 @@ merge): the same run keeps recall@10 between 0.985 and 1.000 through the
 rebuild. On an older release, run bulk deletes and updates at a quiet time; a
 rebuild takes about as long as building the index, and the engine logs
 `Built graph for index` when the new graph is in place.
+
+At about 10M vectors with sustained inserts while a rebuild runs, the next
+rebuild can be deferred indefinitely, and every search then pays a growing scan
+of the vectors not yet in the graph (ArcadeDB
+[#7260](https://github.com/ArcadeData/arcadedb/issues/7260), open). A heap of
+about twice the graph, a lower `mutations_before_rebuild`, or rebuilding in a
+quiet window avoids it. Read-mostly use, and loading first and serving after,
+never meet it.
 
 ### Build-time cache: use the default
 
@@ -217,7 +226,8 @@ Notes:
 
 - `to_java_float_array` accepts NumPy arrays directly.
 - For cosine, pass `normalize_embeddings=True` (as above) to your model.
-- For euclidean or inner_product, skip normalization if magnitude should matter.
+- For euclidean, skip normalization if magnitude should matter. For dot_product,
+  normalize: the engine expects unit-length vectors.
 
 ## Preferred Search Surface: SQL / Cypher
 

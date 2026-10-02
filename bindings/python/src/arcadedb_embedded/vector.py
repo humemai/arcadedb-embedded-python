@@ -195,9 +195,10 @@ class VectorIndex:
             - 2.0: Opposite vectors (angle 180)
 
         3. **DOT_PRODUCT**:
-           - Returns **Negative Dot Product** (Lower is better).
-           - Formula: $- (A \\cdot B)$
-           - Range: (-inf, +inf)
+           - Returns **-(1 + A.B) / 2** (Lower is better).
+           - Formula: $-(1 + A \\cdot B) / 2$
+           - Range: [-1.0, 0.0] for unit-length vectors, which the engine
+             expects (it logs a warning when sampled vectors are not).
            - Lower values indicate higher similarity (larger positive dot product).
 
     Quantization:

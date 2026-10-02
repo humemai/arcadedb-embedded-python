@@ -292,7 +292,10 @@ defines the supported values:
 - **Links**: `LINK`
 - **Vectors**: `ARRAY_OF_FLOATS`
 
-Either the enum member or its string name may be passed.
+Either the enum member or its string name may be passed. A string may also name an
+engine type the enum does not list: `DATETIME_SECOND`, `DATETIME_MICROS`,
+`DATETIME_NANOS`, `ARRAY_OF_SHORTS`, `ARRAY_OF_INTEGERS`, `ARRAY_OF_LONGS`, or
+`ARRAY_OF_DOUBLES`.
 
 **Example:**
 
@@ -331,7 +334,8 @@ schema.get_or_create_property(
 ```
 
 Get an existing property or create it if it doesn't exist. Same parameters as
-`create_property`. Returns the underlying Java `Property` object.
+`create_property`, except that `of_type` must be a string here: a `PropertyType`
+member raises `ArcadeDBError`. Returns the underlying Java `Property` object.
 
 ```python
 prop = schema.get_or_create_property("User", "email", "STRING")
@@ -633,14 +637,14 @@ for name in db.schema.list_vector_indexes():
 ### get_type
 
 ```python
-schema.get_type(type_name: str) -> Optional[Type]
+schema.get_type(name: str) -> Optional[Type]
 ```
 
 Get a type by name.
 
 **Parameters:**
 
-- `type_name` (str): Name of the type
+- `name` (str): Name of the type
 
 **Returns:**
 
@@ -665,14 +669,14 @@ else:
 ### exists_type
 
 ```python
-schema.exists_type(type_name: str) -> bool
+schema.exists_type(name: str) -> bool
 ```
 
 Check if type exists.
 
 **Parameters:**
 
-- `type_name` (str): Name of the type
+- `name` (str): Name of the type
 
 **Returns:**
 

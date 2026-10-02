@@ -10,7 +10,7 @@ Most errors from ArcadeDB operations raise `ArcadeDBError` (there are no subclas
 - `AttributeError`: `set()` on an immutable record, such as one returned by a query; call `.modify()` first
 - `TimeoutError`: `AsyncExecutor.wait_completion(timeout_ms)` when the timeout expires
 - `TypeError`: a value that JPype cannot convert, for example a `datetime.time` passed to `set()`
-- Java exceptions, not wrapped: `Schema` calls that go directly to Java, such as `exists_type()`, `get_types()`, `get_indexes()`, and `exists_index()`
+- Java exceptions, not wrapped: `Schema` calls that go directly to Java, such as `exists_type()`, `get_types()`, `get_indexes()`, and `exists_index()`; a wrapper's `save()` outside a transaction (`com.arcadedb.exception.TransactionException: Transaction not begun`; `db.new_vertex()` and `db.new_document()` themselves work outside one); and a vector of the wrong dimension saved to an indexed property (`java.lang.IllegalArgumentException`, raised by `save()`)
 
 **Error Sources:**
 
@@ -65,7 +65,8 @@ try:
     db = open_database("./nonexistent_db")
 except ArcadeDBError as e:
     print(f"Error: {e}")
-    # Error: Database does not exist: ./nonexistent_db
+    # Error: Failed to open database: com.arcadedb.exception.DatabaseNotFoundException:
+    # Database '/abs/path/to/nonexistent_db' does not exist
 ```
 
 **Solution:** Use `database_exists()` to check first, or use `create_database()`.

@@ -5,7 +5,9 @@ database or server is created.
 
 !!! warning "Configure once per process"
     JVM options are locked after the JVM starts. Call `start_jvm(...)` before the
-    first `create_database(...)`, `open_database(...)`, or `create_server(...)`.
+    first `create_database(...)`, `open_database(...)`, `database_exists(...)`,
+    `DatabaseFactory(...)`, or `create_server(...)`. `database_exists()` takes no
+    `jvm_kwargs` and starts the JVM with the default settings.
 
 ## Overview
 
@@ -80,7 +82,8 @@ example, a wheel built from a locally patched Java tree).
 
 **Parameters:**
 
-- `per_jar` (`bool`, default `False`): Also return the name, size, and SHA-256 of every JAR
+- `per_jar` (`bool`, default `False`): Also return a `jars` list with one dict per JAR:
+  `name`, `bytes`, `sha256`, and `engine` (`False` for the bindings' own bridge JAR)
 
 **Returns:** a dict with `count`, `bytes`, `sha256` (every JAR: "is this the same
 build?"), `engine_sha256` (every JAR except the bindings' own compiled bridge JAR: "is

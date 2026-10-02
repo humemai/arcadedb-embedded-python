@@ -169,11 +169,12 @@ db.commit()  # Changes persisted
 
 ### `Database.rollback()`
 
-Roll back the current transaction and discard all changes.
+Roll back the current transaction and discard all changes. With no active
+transaction it does nothing and returns `None`.
 
 **Raises:**
 
-- `ArcadeDBError`: If no active transaction
+- `ArcadeDBError`: If the rollback fails
 
 **Example:**
 

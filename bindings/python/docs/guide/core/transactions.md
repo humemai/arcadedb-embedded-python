@@ -41,6 +41,33 @@ with arcadedb.create_database(temp_db_path) as db:
     assert count == 2
 ```
 
+## Writes from several threads
+
+Threads that write at the same time can conflict: the transaction that loses raises
+`ConcurrentModificationException` at commit, and a `with db.transaction():` block cannot
+run again. `db.run_in_transaction(fn)` runs `fn` in a transaction and, on a
+concurrent-modification conflict, rolls back and runs it again (12 retries with a linear
+backoff by default). Any other error rolls back and propagates. See
+[`run_in_transaction`](../../api/database.md#run_in_transaction).
+
+```python
+from threading import Thread
+
+
+def worker(thread_id):
+    for i in range(20):
+        db.run_in_transaction(
+            lambda: db.command("sql", "INSERT INTO Log SET thread = ?, i = ?", thread_id, i)
+        )
+
+
+threads = [Thread(target=worker, args=(t,)) for t in range(10)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+```
+
 ## Schema statements apply immediately
 
 A schema statement (create or drop a type, property, or index) needs no transaction, and it is

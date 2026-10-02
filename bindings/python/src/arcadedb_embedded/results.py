@@ -175,9 +175,9 @@ class ResultSet:
         - ``to_json_list()`` returns the SAME shape, a list of dicts, and is
           measured ~5.5x faster on a 10,000-row, nine-property scan (578 ms
           against 103 ms, laptop, 2026-09-27).
-          The trade-off is JSON-native values: temporal values arrive as ISO
-          strings and DECIMALs as floats, so it is a drop-in only when the
-          result carries neither.
+          The trade-off is JSON-native values: DATE and DATETIME values
+          arrive as epoch-millisecond integers and DECIMALs as floats, so it
+          is a drop-in only when the result carries neither.
         - ``to_columns()``, ``to_dataframe()`` or ``to_arrow()`` move the data
           as columns and are faster still (~12x on the same scan: 47 ms).
 
@@ -281,8 +281,9 @@ class ResultSet:
         against 103 ms, laptop, 2026-09-27).
 
         Trade-off: values carry JSON-native types. Numbers, strings, booleans,
-        lists and nested maps convert as expected, but temporal values arrive
-        as ISO strings (not ``datetime``) and DECIMALs as floats. Use
+        lists and nested maps convert as expected, but DATE and DATETIME
+        values arrive as epoch-millisecond integers (not ``datetime``) and
+        DECIMALs as floats. Use
         ``to_list()`` when full Python-type fidelity matters more than speed.
 
         Args:

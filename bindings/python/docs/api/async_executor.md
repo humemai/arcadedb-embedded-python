@@ -44,7 +44,7 @@ automatic batching, and optimized WAL operations.
 
 The `AsyncExecutor` class enables:
 
-- **Parallel Execution**: 1-16 worker threads for concurrent operations (a level above 1
+- **Parallel Execution**: one or more worker threads for concurrent operations (a level above 1
   lost records submitted through `command()` before 26.10.1, see the warning above and
   #7615)
 - **Automatic Batching**: Auto-commit every N operations
@@ -112,7 +112,7 @@ Set the number of parallel worker threads, at least 1 (no upper cap; before 2026
 
 - **Default**: `arcadedb.asyncWorkerThreads`, the number of available cores minus 1
   (at least 1)
-- Raises `ValueError` if `level` is not between 1 and 16
+- Raises `ValueError` if `level` is below 1
 - Before 26.10.1, any level above 1 lost records submitted through `command()` (the
   warning at the top of this page; #7615, fixed in #7625). On an engine older than
   26.10.1, keep the level at 1 when the executor runs SQL commands that write.
@@ -768,19 +768,26 @@ Return True once the executor has been closed.
 async_exec.close()
 ```
 
-Shutdown worker threads and clean up resources.
+Shut down the database's async executor and its worker threads.
 
-**Note:** Always call after `wait_completion()`.
+A database has one async executor: every `db.async_executor()` call returns a handle on
+the same one. `close()` on any handle shuts it down for all of them, and every later
+operation, through any handle or a new `db.async_executor()` call, raises
+`DatabaseOperationException: Async executor has been shut down` until the database is
+closed and reopened. `db.close()` closes the executor itself, so call `close()` only
+when the database stays open and nothing else will use the executor.
+
+**Note:** Call it after `wait_completion()`.
 
 **Example:**
 
 ```python
+async_exec = db.async_executor()
 try:
-    async_exec = db.async_executor()
     # Operations
     async_exec.wait_completion()
 finally:
-    async_exec.close()
+    db.close()  # also closes the executor
 ```
 
 ---
@@ -862,17 +869,20 @@ print(async_exec.get_commit_every())  # 10240 unless arcadedb.asyncTxBatchSize s
 - Change it with `set_commit_every()` only to trade commit overhead against the work a
   single rollback discards.
 
-### 1. Always Close the Executor
+### 1. Let `db.close()` Close the Executor
 
 ```python
-# ✅ Good: Use try/finally
+# ✅ Good: wait for the work, then close the database, which closes the executor
 async_exec = db.async_executor()
 try:
     # Operations
     async_exec.wait_completion()
 finally:
-    async_exec.close()
+    db.close()
 ```
+
+The executor is shared by everything that uses the database: `async_exec.close()`
+stops it for every handle until the database is reopened.
 
 ### 2. Wait Before Closing
 

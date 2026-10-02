@@ -175,12 +175,13 @@ Step 5: Creating vector index...
 Step 6: Performing semantic similarity searches...
    Running 10 queries on randomly sampled categories...
 
-   🔍 Query 1: Find documents similar to Category 42
+   🔍 Query 1: Find documents similar to Category 33
+
       Top 5 MOST similar documents (smallest distance):
-      1. Article 67 about category_42
-         Category: category_42, Distance: 0.7634
-      2. Article 12 about category_42
-         Category: category_42, Distance: 0.7698
+      1. Article 1532 about category_33
+         Category: category_33, Distance: 0.8134
+      2. Article 7032 about category_33
+         Category: category_33, Distance: 0.8172
 ```
 
 ## Running the Example

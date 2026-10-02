@@ -57,11 +57,11 @@ either public or reproducible from a script in the repository.
 | Big-ANN 2023 sparse track | The challenge's CSR files and its own top-k ground truth, staged under `$BENCH_DATA/bigann` |
 | TSBS cpu-only, 100 and 1,000 hosts | `gen_tsbs_corpus.sh`, which records the host count, window, and interval so the corpus can be rebuilt rather than merely copied |
 
-`campaign_env.sh` holds the switch and the mount path for each of them, and
-`campaign_env_check` asserts that every corpus is actually present. Setting a path is not
-the same claim as the data being there: a lane handed a path with no corpus behind it once
-ran green for hours on generated data, and a row records the size it was **asked** for, not
-the corpus it read.
+`campaign_env.sh` holds the mount paths for the graph, sparse, dense, and TPC-H corpora,
+and `campaign_env_check` asserts that their directories are present under `$BENCH_DATA`; it
+checks no other corpus. Setting a path is not the same claim as the data being there: a lane
+handed a path with no corpus behind it once ran green for hours on generated data, and a row
+records the size it was **asked** for, not the corpus it read.
 
 ## One Lane, End to End
 

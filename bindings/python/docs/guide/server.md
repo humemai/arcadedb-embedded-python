@@ -4,14 +4,11 @@ ArcadeDB Python bindings include a full HTTP server with the Studio web UI. This
 
 ## What it costs you
 
-Server mode is bundled by default. It was briefly removed in 26.7.2 to slim
-the wheel and restored after that broke downstream users, so the trade is
-worth stating precisely rather than leaving you to guess.
+Server mode is bundled by default.
 
-**Disk.** The JAR table was re-measured on the 26.10.1.dev0 wheel (2026-10-01); the wheel and
-runtime figures after it were measured on the 26.8.1 line, and the current package sizes are
-in [Package Overview](../getting-started/distributions.md#whats-inside). The server stack is
-12 JARs:
+**Disk.** The server stack is these JARs, measured on the 26.10.1.dev0 wheel (2026-10-01);
+the current package sizes are in
+[Package Overview](../getting-started/distributions.md#whats-inside):
 
 | JAR | MB (uncompressed) | contains |
 |---|---|---|
@@ -29,55 +26,9 @@ in [Package Overview](../getting-started/distributions.md#whats-inside). The ser
 | `wildfly-client-config` | 0.05 | |
 | **total** | **8.29** | |
 
-**The wheel grows by more than that sum, and it is worth knowing why.** Measured
-on 26.8.1 on one machine, same commit, same platform, server excluded then included. The
-jars and JRE columns are sizes *as stored in the wheel* (deflated), which is why
-they add up to the wheel column:
-
-| | wheel file | jars (in wheel) | bundled JRE (in wheel) |
-|---|---|---|---|
-| embedded only | 59.06 MiB | 20.70 MiB | 38.30 MiB |
-| with server | **67.08 MiB** | 27.87 MiB | 39.10 MiB |
-| delta | **+8.02 MiB (+13.6%)** | +7.17 MiB | +0.80 MiB |
-
-Unpacked on disk the 26.8.1 package was 94.45 MiB (31.28 MiB of jars across 63
-files, 62.92 MiB of JRE).
-
-The extra ~0.8 MiB beyond the JARs is the **bundled JRE**, not the JARs. The
-build runs `jdeps` over the shipped JARs and `jlink`s a minimal runtime from
-whatever modules it finds, so adding the server stack pulls in modules nothing
-else needed. Comparing the two builds' module lists, exactly three are new:
-
-```
-embedded only  java.base java.compiler java.desktop java.net.http java.sql
-               jdk.incubator.vector jdk.jfr jdk.management jdk.unsupported
-with server    ... the same, plus java.naming, java.security.jgss,
-               java.security.sasl
-```
-
-which are JNDI and the Kerberos/SASL authentication stack that Undertow needs.
-The linked JRE goes from 62 MB to 63 MB on disk. Estimating this feature's
-cost from JAR sizes alone understates it by roughly 10%.
-
-**Memory and CPU, if you never call `create_server()`: about 10 ms, once.**
-The JARs sit on the classpath and the JVM loads classes lazily, so nothing is
-initialised, no threads start, and no heap is allocated for them. What you do
-pay is a slightly longer classpath for the JVM to open at startup.
-
-Measured on 26.8.1 by installing one wheel twice and deleting only the 12 server JARs
-from one copy, so the engine and every other variable is identical. 16 fresh
-processes per arm, interleaved, median [min-max] on one developer machine:
-
-| | 51 JARs | 63 JARs | delta |
-|---|---|---|---|
-| JVM start | 0.131 s [0.128-0.136] | 0.141 s [0.135-0.151] | **+9.8 ms** |
-| first database open + query | 0.343 s [0.329-0.385] | 0.335 s [0.322-0.382] | -8.7 ms |
-| peak RSS | 216.9 MB | 201.2 MB | -15.7 MB |
-
-Only the JVM-start row is a real effect; its ranges barely overlap. The other
-two deltas are negative and their ranges overlap heavily, which is measurement
-noise rather than a saving. So there is **no measurable memory cost** to
-carrying the server JARs, and about 10 ms of one-time startup.
+**Memory and CPU, if you never call `create_server()`.** The JARs sit on the
+classpath and the JVM loads classes lazily, so nothing is initialised, no
+threads start, and no heap is allocated for them.
 
 **If you do start a server**, `undertow-core` and `arcadedb-server` load and
 Undertow starts listener threads and buffer pools. That is the real cost, and
@@ -168,10 +119,22 @@ server = arcadedb.create_server(
 Any other key is forwarded to ArcadeDB as `arcadedb.<key with _ replaced by
 .>`. That is how the wire protocols below are configured.
 
-There is no `binary_port`. It was listed here and in the docstring until
-2026-08-01 and was silently discarded: ArcadeDB has no such setting. Its ports
-are `httpIncomingPort`, `httpsIncomingPort`, and the per-protocol ones below.
-2424 is OrientDB's legacy binary port and never applied to this engine.
+### Sizing the server's JVM
+
+The server runs in the JVM of your Python process, so its heap and JVM flags are the
+process's, and they are fixed when the JVM starts. `create_server()` takes no
+`jvm_kwargs`: call `start_jvm(...)` before it, or construct the server with
+`ArcadeDBServer(root_path, root_password, config, jvm_kwargs={...})`. Either has to
+come before the first database or server in the process starts the JVM (see the
+[JVM API](../api/jvm.md)).
+
+```python
+import arcadedb_embedded as arcadedb
+from arcadedb_embedded.jvm import start_jvm
+
+start_jvm(heap_size="8g")
+server = arcadedb.create_server("./databases", root_password="my_secure_password")
+```
 
 ## Wire Protocols
 
@@ -207,21 +170,8 @@ rows are measured rather than inferred from the jars being present.
 
 ### Two things to know before exposing these
 
-**`redis_port` is honoured.** On 26.8.1 it was accepted and ignored: the
-Redis listener bound the hardcoded 6379 while Postgres and Bolt bound what they
-were given. Root-caused and filed as [ArcadeDB #5796][5796] (the Redis plugin
-dropped the server's `ContextConfiguration` and read the static
-`GlobalConfiguration` default), fixed upstream on 2026-08-07.
-`tests/test_server_wire_protocols.py` checks that Redis binds the port it is
-given.
-
-[5796]: https://github.com/ArcadeData/arcadedb/issues/5796
-
-**Redis now requires authentication, as of 26.8.1.** Earlier versions accepted
-unauthenticated connections on the Redis port. A client that used to connect
-anonymously must now present credentials, so enabling this plugin is a
-breaking change for anything already talking to it. `arcadedb.redis.tls` is
-new in the same release if you want the transport encrypted.
+**Redis requires authentication.** A client must present credentials before
+anything else; set `arcadedb.redis.tls` (`redis_tls`) to encrypt the transport.
 
 **The wire listeners bind all interfaces by default.** `host` tightens the HTTP
 listener to loopback by default, but it does not reach the protocol plugins:
@@ -280,9 +230,8 @@ ArcadeDB's announcement and was not measured here.
 ### Not bundled
 
 Mongo wire, gRPC, and Raft replication are excluded from the wheel to keep it
-installable: the shaded gRPC jar alone is 38 MB against 39 MB for the entire
-engine payload, and the Raft jar is 80 MB. **This server is single-node by
-construction**: it cannot replicate or fail over. Use the Docker distribution
+installable. **This server is single-node by construction**: it cannot replicate
+or fail over. Use the Docker distribution
 for HA, gRPC, or Mongo-protocol access.
 
 ## Server Info Endpoint
@@ -429,7 +378,7 @@ Upstream's recommendation, from the same issue:
 - **Rows with a vector property:** the Postgres wire with `float4[]`
   parameters. HTTP and gRPC send each float as its own value, and neither has a
   packed vector encoding yet.
-- **Vertices and edges:** `POST /api/v1/batch?wal=true` (see
+- **Vertices and edges:** `POST /api/v1/batch/{db}?wal=true` (see
   [Graphs](graphs.md)).
 - **Batch size:** 2,000 rows is reasonable; 5,000 to 10,000 can amortize a
   little more for small rows, 2,000 to 5,000 for vector rows. The curve is flat,
@@ -509,7 +458,12 @@ with arcadedb.create_server("./databases", root_password="my_secure_password") a
 
 ### Multi-Threaded Access
 
-Within a **single Python process**, multiple threads can safely share an embedded database:
+Within a **single Python process**, multiple threads can share an embedded database.
+Concurrent writers conflict: a transaction that loses raises
+`ConcurrentModificationException` at commit, and `with db.transaction():` cannot retry
+it. Write from threads with `db.run_in_transaction(fn)`, which rolls back and runs `fn`
+again on a conflict (12 retries with a linear backoff by default; see
+[`run_in_transaction`](../api/database.md#run_in_transaction)):
 
 ```python
 import arcadedb_embedded as arcadedb
@@ -521,8 +475,9 @@ with arcadedb.create_database("./mydb") as db:
 
     def worker(thread_id):
         # ✅ Multiple threads in SAME process can share the database
-        with db.transaction():
-            db.command("sql", "INSERT INTO Log SET thread = ?", thread_id)
+        db.run_in_transaction(
+            lambda: db.command("sql", "INSERT INTO Log SET thread = ?", thread_id)
+        )
 
     # Start multiple threads, and join them before the block closes the database
     threads = [Thread(target=worker, args=(i,)) for i in range(10)]

@@ -222,7 +222,7 @@ TEST_QUERIES = [
 ]
 
 # Run each query 10 times for statistical reliability
-for query_name, query in test_queries:
+for query_name, query in TEST_QUERIES:
     run_times = []
     for _ in range(10):
         query_start = time.time()
@@ -232,7 +232,9 @@ for query_name, query in test_queries:
     avg_time = statistics.mean(run_times)
     std_time = statistics.stdev(run_times)
     print(f"   📊 {query_name}:")
-    print(f"      Average: {avg_time*1000:.2f}ms ± {std_time*1000:.2f}ms")
+    print(f"      Average: {avg_time:.3f}s ± {std_time:.3f}s")
+    print(f"      Range: [{min(run_times):.3f}s - {max(run_times):.3f}s]")
+    print(f"      Results: {len(result)}")
 ```
 
 ### Step 9: Create Indexes (AFTER Import)

@@ -2,11 +2,9 @@
 
 This guide covers the currently available import workflows in the Python bindings.
 
-The current bindings are SQL-first. The old broad Python `Importer`, `import_csv()`,
-and `import_xml()` surface is intentionally not part of the current public API. The
-remaining import surface is SQL `IMPORT DATABASE` plus the narrow
-`db.import_documents(...)` helper for document-file loads, but this repository still
-does not encourage leaning on importer-based paths heavily from Python.
+The current bindings are SQL-first. The import surface is SQL `IMPORT DATABASE` plus
+the narrow `db.import_documents(...)` helper for document-file loads, but this
+repository still does not encourage leaning on importer-based paths heavily from Python.
 
 Use it when you need its supported file-import behavior or a full
 `EXPORT DATABASE` + `IMPORT DATABASE` restore flow. For large Python-side table/document

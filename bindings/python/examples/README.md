@@ -237,8 +237,6 @@ Synthetic graph ingest comparison harness:
 - Runs transactional SQL, GraphBatch, async SQL, and SQL import on equivalent
   vertex/edge data
 - Includes parity checks on final vertex and edge counts
-- On the recorded 5M/5M run, async SQL was the slowest arm at 701s against 359s for
-  GraphBatch and 275s for SQL import, both at four threads
 - The async SQL arm is pinned to `--async-parallel 1` (see
   [Bulk Ingest Recommendation](../docs/guide/import.md#bulk-ingest-recommendation)).
   GraphBatch is the recommended bulk graph ingest path
@@ -368,8 +366,9 @@ Two decisions a sparse-retrieval workload should make on purpose:
 - weight precision: `LSM_SPARSE_VECTOR` quantizes posting weights to INT8 by default;
   `"weightQuantization": "FP32"` keeps them exact
 - the settle step: `COMPACT INDEX` merges the LSM segments a bulk load leaves behind
-- builds the same synthetic corpus twice (once per precision), compacts both, and
-  reports index size, top-10 agreement, and query time before and after compaction
+- builds the same synthetic corpus once per weight setting (INT8 rescored, INT8 without
+  rescoring, and FP32), compacts each, and reports index size, query time before and
+  after compaction, and each INT8 index's top-10 agreement with FP32
 - flags: `--docs` (default 20,000), `--queries` (default 50), and `--db-dir`
 
 **Learn:** How weight precision and compaction change sparse index size and query time

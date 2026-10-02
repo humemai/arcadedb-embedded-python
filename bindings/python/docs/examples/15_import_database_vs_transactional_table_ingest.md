@@ -24,8 +24,7 @@ Example 15 is the table-ingest comparison harness for embedded Python.
 - The recommended path for Python-managed bulk table/document ingest is
   `db.insert_many(...)`, which crosses the Python/Java boundary once per batch and
   loops Java-side. It is not one of the four arms here
-- The async SQL arm is a comparison arm, not a recommendation. Do not read its time in
-  the snapshot below as an endorsement of it
+- The async SQL arm is a comparison arm, not a recommendation
 - The broader example set uses `db.insert_many(...)` for document preloading
 
 !!! warning "Why the async arm accepts only `--async-parallel 1`"
@@ -33,40 +32,9 @@ Example 15 is the table-ingest comparison harness for embedded Python.
     Before 26.10.1, `async_executor().command(...)` could silently drop records above
     parallel level 1 (`ArcadeData/arcadedb#7615`, fixed in #7625); see
     [Bulk Ingest Recommendation](../guide/import.md#bulk-ingest-recommendation).
-    The pin dates from those wheels: `run_async_sql_load(...)` raises `ValueError` for
-    any `--async-parallel` other than 1, and counts stored rows against submitted rows
-    per table so a short load fails instead of being reported as a fast one.
-
-## Snapshot (2026-03-19, three of the four arms)
-
-This run predates `db.import_documents(...)`, so it has no time for that arm, and it has
-not been re-run on a later engine.
-
-For this shape:
-
-- `tables=10`
-- `rows-per-table=1,000,000`
-- `columns=20` plus `id`
-- `string-size=128`
-- `batch-size=10,000`
-- `heap-size=8g`
-
-Measured times:
-
-- `Transactional INSERT`: `189.921s`
-- `Async SQL INSERT`: `146.670s`
-- `IMPORT DATABASE` with `--parallel 1`: `58.281s`
-
-The run parameters recorded above do not name an `--async-parallel` value. The flag
-defaulted to 1 at the time, and 1 is the only level the arm now accepts, so the
-`Async SQL INSERT` figure is most likely a one-worker time. Treat it as unverified
-rather than as a like-for-like comparison until the arm is re-run.
-
-For this synthetic workload, `IMPORT DATABASE` was the fastest of the three arms timed.
-
-That benchmark result should not be treated as the repository-wide recommendation, and
-neither should the async time. For the real document-preload examples the path to use is
-`db.insert_many(...)`, which has no arm here and therefore no time in this table.
+    `run_async_sql_load(...)` raises `ValueError` for any `--async-parallel` other than 1,
+    and counts stored rows against submitted rows per table so a short load fails instead
+    of being reported as a fast one.
 
 ## Run
 

@@ -1,9 +1,148 @@
 # Known Engine Issues
 
-These are ArcadeDB engine bugs that can return a wrong answer, change the wrong rows, or
-refuse a write. Each entry names the versions it was measured on, what you see, a workaround
-that was checked on the same reproduction, and the release that fixes it once there is one.
-Entries leave this page when the fix ships in a release these bindings package.
+These are ArcadeDB engine bugs that can return a wrong answer, store a wrong value, change
+the wrong rows, or refuse a read or a write. Each entry names the versions it was measured
+on, what you see, a workaround that was checked on the same reproduction, and the release
+that fixes it once there is one. Entries leave this page when the fix ships in a release
+these bindings package.
+
+## A SQL decimal literal keeps only the digits a double holds
+
+ArcadeDB [#8872](https://github.com/ArcadeData/arcadedb/issues/8872); measured on a
+26.10.1 snapshot.
+
+An unquoted decimal literal in SQL loses the digits that a double cannot hold, even when the
+property is `DECIMAL`. `INSERT INTO D SET dec = 12345678901234567890.123456789012345678`
+stored `1.2345678901234567E+19`.
+
+Quote the literal, or bind a `Decimal` as a named parameter; both stored the value exactly.
+A positional `Decimal` (`?`) lost the same digits.
+
+```python
+from decimal import Decimal
+
+with db.transaction():
+    db.command("sql", "INSERT INTO D SET dec = '12345678901234567890.123456789012345678'")
+    db.command(
+        "sql",
+        "INSERT INTO D SET dec = :dec",
+        {"dec": Decimal("12345678901234567890.123456789012345678")},
+    )
+```
+
+## An unindexed SQL `=` or `IN` on a `DECIMAL` misses a value written with another scale
+
+ArcadeDB [#8885](https://github.com/ArcadeData/arcadedb/issues/8885); measured on a
+26.10.1 snapshot.
+
+With `Decimal("19.90")` stored in a `DECIMAL` property `b`, `SELECT FROM T WHERE b = :v`
+with `{"v": Decimal("19.9")}` returned 0 rows when `b` had no index, and 1 row when it had
+one. `b IN :v` with `[Decimal("19.9")]`, and the string literal `b = '19.9'`, also returned
+0 rows without an index. The two values are equal; only their scale differs.
+
+Compare with a closed range on the same value, or use openCypher; both returned the row with
+and without an index:
+
+```python
+from decimal import Decimal
+
+v = Decimal("19.9")
+rows = db.query("sql", "SELECT FROM T WHERE b >= :v AND b <= :v", {"v": v}).to_list()
+rows = db.query("opencypher", "MATCH (n:T) WHERE n.b = $v RETURN n.b AS b", {"v": v}).to_list()
+```
+
+A positional `Decimal` (`b = ?`) also found the row, but a positional `Decimal` loses the
+digits a double cannot hold (see the previous entry).
+
+## Comparing an indexed `BOOLEAN` with `1` or `'true'` raises
+
+ArcadeDB [#8887](https://github.com/ArcadeData/arcadedb/issues/8887); measured on a
+26.10.1 snapshot.
+
+With a `NOTUNIQUE` or `NOTUNIQUE_HASH` index on a `BOOLEAN` property `a`,
+`SELECT FROM T WHERE a = ?` with `1` raises `ArcadeDBError` (`ClassCastException: class
+java.lang.Long cannot be cast to class java.lang.Boolean`), and with `'true'` it raises a
+`ClassCastException` too. Without the index the same queries return the matching row. The
+literals `a = 1` and `a = 'true'` fail the same way on the indexed property, and so does
+openCypher `n.a = $v` with `1`.
+
+Bind a Python `bool`, or write the literal `true`:
+
+```python
+rows = db.query("sql", "SELECT FROM T WHERE a = ?", True).to_list()
+```
+
+## openCypher compares a `LONG` above `2**53` with a float or `Decimal` in double precision
+
+ArcadeDB [#8888](https://github.com/ArcadeData/arcadedb/issues/8888); measured on a
+26.10.1 snapshot.
+
+With two vertices whose `LONG` property `b` holds `2**53` and `2**53 + 1`,
+`MATCH (n:C) WHERE n.b = $v RETURN n` returned both vertices for `{"v": float(2**53)}` and
+for `{"v": Decimal(2**53 + 1)}` when `b` had no index. With an index it returned one, and
+SQL returned one with or without the index. A Python `int` returned the one matching vertex
+in both languages.
+
+On an `INTEGER` property with an index, openCypher `n.i = $v` with the string `"7.0"`
+raises `NumberFormatException`. Without the index it returns no rows, and SQL returns no
+rows either way.
+
+Bind integers as Python `int`, or compare in SQL, and do not bind numeric strings to integer
+properties:
+
+```python
+rows = db.query(
+    "opencypher", "MATCH (n:C) WHERE n.b = $v RETURN n.b AS b", {"v": 2**53 + 1}
+).to_list()
+```
+
+## `CONTAINS` and `CONTAINSVALUE` miss an integer operand on a `LIST OF DOUBLE` or `MAP OF DOUBLE`
+
+ArcadeDB [#8890](https://github.com/ArcadeData/arcadedb/issues/8890); measured on a
+26.10.1 snapshot.
+
+On a `LIST OF DOUBLE` property `l` holding `[7.0, 8.5]` with a `BY ITEM` index,
+`SELECT FROM T WHERE l CONTAINS ?` with `7` returned 0 rows; on an unindexed twin it
+returned 1. On an unindexed `MAP OF DOUBLE` property `m` holding `{"x": 7.0}`,
+`WHERE m CONTAINSVALUE ?` returned 0 rows with `7` and 1 row with `7.0`. A Python `int`
+crosses as a `Long`, and the literals `CONTAINS 7` and `CONTAINSVALUE 7` miss the same way.
+
+Bind the operand as the declared item or value type, here a float:
+
+```python
+rows = db.query("sql", "SELECT FROM T WHERE l CONTAINS ?", 7.0).to_list()
+rows = db.query("sql", "SELECT FROM T WHERE m CONTAINSVALUE ?", float(7)).to_list()
+```
+
+## `sysdate()` is off by the JVM's offset from UTC
+
+ArcadeDB [#8892](https://github.com/ArcadeData/arcadedb/issues/8892); measured on a
+26.10.1 snapshot.
+
+`sysdate()` returns, and stores, the current time shifted by the JVM's offset from UTC. In a
+JVM on Asia/Seoul time, `INSERT INTO T SET t = sysdate()` stored a time 9 hours ahead of the
+real instant; on America/New_York time (UTC-4 when measured) it was 4 hours behind.
+`sysdate('<zone>')` is right only when that zone is the JVM's own: `sysdate('UTC')` was
+9 hours ahead on the Asia/Seoul JVM, and `sysdate('Asia/Seoul')` was 9 hours behind on a UTC
+JVM. The JVM takes its zone from the operating system, or from the `TZ` environment
+variable when it is set.
+
+Start the JVM in UTC, or bind the time from Python as a named parameter. The JVM starts once
+per process, so pass the setting with the first `create_database()` or `open_database()`
+call, or set `ARCADEDB_JVM_ARGS="-Duser.timezone=UTC"` in the environment before it:
+
+```python
+from datetime import datetime, timezone
+
+import arcadedb_embedded as arcadedb
+
+db = arcadedb.create_database(
+    "./mydb", jvm_kwargs={"jvm_args": "-Duser.timezone=UTC"}
+)
+
+with db.transaction():
+    db.command("sql", "INSERT INTO T SET t = :t", {"t": datetime.now(timezone.utc)})
+```
 
 ## A unique composite index read by its first property returns part of the rows
 
