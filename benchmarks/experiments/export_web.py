@@ -1736,9 +1736,9 @@ _BEFORE_F164 = lambda r: not r.get("neo4j_vector_quantization")                #
 # serverlog the October campaign kept (107 of 107). So its single-record writes and its cross-model transaction,
 # where one sync is most of the cost, sat beside every other engine's no-wait cells; they come down until the
 # re-measurement, whose rows carry the mode read back from the server (`surreal_sync_mode`). Its reads, analytics,
-# and ingest stay: ingest commits once per 5,000- or 10,000-record batch. The durability table kept its writes in
-# the waiting column until 2026-10-03 (DECISIONS #136 item 1); since then every write withheld on its own table is
-# withheld there too (_durability_stale), so only its read, the control, prints there.
+# and ingest stay: ingest commits once per 5,000- or 10,000-record batch. The durability table keeps its writes in
+# the waiting column (DECISIONS #136 item 1): a sync at every commit is what that column measures, so
+# _durability_stale exempts these entries while withholding every other write withheld on its own table.
 _F165_WRITES = ("SurrealDB (server)'s write cells are marked `re-run`: the server ran at its default, a sync to disk "
                 "at every commit, although it has a setting that does not wait, and every other engine on this table "
                 "that has such a setting ran at it. Our harness missed that setting, and the next measurement runs "
@@ -2729,29 +2729,12 @@ _DEFAULT_UNREAD = "engine default; no transactional write timed"
 # to, and the e2 arm did not ask until 12b2012b74 (2026-09-23), after every
 # October e2 row was measured. The timed operations ran after the batch closed,
 # with the log on; the ingest column did not. No field on the row records it, so
-# the rows are dated against the fix commit's own time, read from git; when git
-# cannot answer, every row of the arm is treated as before the fix, which is the
+# the rows are dated against the fix commit's time, kept here as a constant so the
+# export never asks git; a row with no readable time counts as before the fix, the
 # direction that over-discloses for our own engine.
 _F113_FIX = "12b2012b74"
+_F113_FIX_UTC = "2026-09-22T20:44:12+00:00"   # `git show -s --format=%cI 12b2012b74`, in UTC
 _F113_BACKENDS = {"arcadedb_e2"}
-_COMMIT_TIMES = {}
-
-
-def _commit_time_utc(sha):
-    """The commit time of `sha` as an aware UTC datetime, or None."""
-    if sha in _COMMIT_TIMES:
-        return _COMMIT_TIMES[sha]
-    import datetime as _dt
-    got = None
-    try:
-        out = subprocess.run(["git", "-C", str(HERE), "show", "-s", "--format=%cI", sha],
-                             capture_output=True, text=True, timeout=60).stdout.strip()
-        if out:
-            got = _dt.datetime.fromisoformat(out).astimezone(_dt.timezone.utc)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        got = None
-    _COMMIT_TIMES[sha] = got
-    return got
 
 
 def _loaded_wal_off(r):
@@ -2759,9 +2742,7 @@ def _loaded_wal_off(r):
     if str(r.get("backend")) not in _F113_BACKENDS:
         return False
     import datetime as _dt
-    fix = _commit_time_utc(_F113_FIX)
-    if fix is None:
-        return True
+    fix = _dt.datetime.fromisoformat(_F113_FIX_UTC)
     try:
         ts = _dt.datetime.fromisoformat(str(r.get("ts_utc") or "").replace("Z", "+00:00"))
     except ValueError:
@@ -2833,7 +2814,7 @@ def _durability_note(entries, rows, table_lane=None):
     if _strict_only:
         names = _join_and(sorted(_strict_only))
         _one = len(_strict_only) == 1
-        parts.append(f"The exception on this table is {names}, which "
+        parts.append(f"The {'exception' if _one else 'exceptions'} on this table {'is' if _one else 'are'} {names}, which "
                      f"{'has' if _one else 'have'} no setting to relax and "
                      f"{'waits' if _one else 'wait'} for the disk at every commit; "
                      f"{'its' if _one else 'their'} write and transaction cells are paying for that.")
@@ -3785,9 +3766,36 @@ def _durability_stale(lane, workload, field, backend, scale):
             continue
         if only_scale is not None and scale is not None and str(only_scale) != str(scale):
             continue
+        if pred is _SURREAL_SERVED_SYNCED:
+            # DECISIONS #136 item 1: a synced write is exactly what the waiting column measures
+            continue
         if _stale(tid, bkey, only_scale if only_scale is not None else scale, pred):
             return why
     return None
+
+
+def _no_knob_sentence(no_knob):
+    """Why each engine with no durability setting prints one number, with the evidence it actually has:
+    DuckDB and LadybugDB were traced (strace counted one sync per commit, bench_common), Neo4j's sync at
+    commit is its documented behaviour behind a SHOW SETTINGS that offers no durability setting."""
+    documented = [b for b in no_knob if "neo4j" in b.lower()]
+    on_duckdb = [b for b in no_knob if "duckpgq" in b.lower()]   # DuckDB with an extension: DuckDB's trace is its trace
+    traced = [b for b in no_knob if b not in documented and b not in on_duckdb]
+    parts = []
+    if traced:
+        clause = f"{_join_and(traced)} {'were' if len(traced) > 1 else 'was'} traced to a sync at every commit"
+        if on_duckdb and any(b.lower() == "duckdb" for b in traced):
+            clause += f", and {_join_and(on_duckdb)} {'run' if len(on_duckdb) > 1 else 'runs'} on DuckDB"
+        parts.append(clause)
+    if documented:
+        parts.append(f"{_join_and(documented)} {'force' if len(documented) > 1 else 'forces'} "
+                     f"{'their' if len(documented) > 1 else 'its'} log at commit as "
+                     f"{'they document' if len(documented) > 1 else 'it documents'}, and "
+                     f"{'offer' if len(documented) > 1 else 'offers'} no setting that changes it")
+    verb = "have" if len(no_knob) > 1 else "has"
+    return (f"{_join_and(no_knob)} {verb} no setting to relax: {'; '.join(parts)}. So each prints one "
+            f"number, in the column for a commit that waits. Reading it against the other column would be "
+            f"reading a choice the engine does not offer.")
 
 
 def _durability_table(all_rows):
@@ -3978,7 +3986,7 @@ def _durability_table(all_rows):
                        and any(_F130_ROW(r) for r in all_rows
                                if r.get("lane") == "l2" and r.get("workload") == "oltp"
                                and display_name(str(r.get("backend"))) == e["backend"])})
-    _two_txn_note = (_gen(f"{_join_and(_two_txn)} sends the graph insert's person and its edge as two "
+    _two_txn_note = (_gen(f"{_join_and(_two_txn)} {'send' if len(_two_txn) > 1 else 'sends'} the graph insert's person and its edge as two "
                           f"statements with no transaction around them, so each commits on its own: "
                           f"the run that waits for the disk waits twice for each insert, and the cost "
                           f"of waiting on that row counts both. The next measurement wraps the two in "
@@ -4019,11 +4027,7 @@ def _durability_table(all_rows):
             _R("durability", "read_control"),
             _R("durability", "size_column"),
             _R("durability", "cell_property"),
-            *([_gen(f"{_join_and(_no_knob)} {_verb(_no_knob)} no setting to relax, "
-                    f"established by tracing the commits rather than assumed, so "
-                    f"each prints one number, in the column for a commit that "
-                    f"waits. Reading it against the other column would be reading a "
-                    f"choice the engine does not offer.", *_no_knob)] if _no_knob else []),
+            *([_gen(_no_knob_sentence(_no_knob), *_no_knob)] if _no_knob else []),
             *([_gen(f"{_join_and(_unverified)} {_verb(_unverified)} no durability "
                     f"setting to read and what {'they do' if len(_unverified) > 1 else 'it does'} "
                     f"at commit could not be established from the engine, so the one "

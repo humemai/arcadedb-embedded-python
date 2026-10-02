@@ -181,6 +181,9 @@ DURABILITY_FALKORDB_STRICT = "appendonly=yes, appendfsync=always: the AOF is fda
 # DuckDB, and LadybugDB, each straced rather than assumed) print one number in
 # the strict column and say so, which also puts them on an equal footing rather
 # than comparing their strict numbers against everyone else's relaxed ones."
+# Corrected 2026-10-03: DuckDB and LadybugDB were straced (above); Neo4j was not. Its
+# case rests on SHOW SETTINGS offering no durability setting and on its documented
+# sync at commit, and the page now says so (export_web._no_knob_sentence).
 #
 # A FOURTH BELONGS HERE and the decision's list does not name it, so the reason
 # is written down rather than assumed: SurrealDB 3.2.4 SERVED has no sync
