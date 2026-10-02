@@ -14,7 +14,9 @@
 set -uo pipefail
 SHA="${1:?usage: verify_pair_c25.sh <full-40-char-sha>}"
 SHORT=${SHA:0:9}
-IMG="arcadedb-c25:${SHORT}"
+# PAIR_IMAGE names the server image when it is not the c25 build of this commit
+# (the 26.10.1 stages pass the release pair they were generated for).
+IMG="${PAIR_IMAGE:-arcadedb-c25:${SHORT}}"
 REPO=$HOME/repos/humemai/arcadedb-embedded-python
 fail() { echo "PAIR UNVERIFIED: $*"; exit 1; }
 

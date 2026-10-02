@@ -13,8 +13,11 @@ REPO_ROOT="$(cd "$BENCH_DIR/../../.." && pwd)"
 SITE="$REPO_ROOT/.venv/lib/python3.12/site-packages/arcadedb_embedded"
 JAVA="$SITE/jre/bin/java"
 JARS="$SITE/jars/*"
-RESULTS="$BENCH_DIR/results"
-DBS="$BENCH_DIR/dbs"
+# PYCOST_RESULTS / PYCOST_DBS move the output and the databases out of the tree
+# (the 26.10.1 pycost stage runs on the bench host, whose tree must stay clean:
+# a modified tracked file is an outage for every queue script's git pull).
+RESULTS="${PYCOST_RESULTS:-$BENCH_DIR/results}"
+DBS="${PYCOST_DBS:-$BENCH_DIR/dbs}"
 mkdir -p "$RESULTS" "$DBS"
 
 JFLAGS=(
@@ -75,6 +78,11 @@ fi
 step() { # step <name> <cmd...>
     local name="$1"
     shift
+    # ONLY_STEPS="a b c" runs those steps and skips the rest (the pycost stage
+    # runs the six the page's table reads); unset runs the whole battery.
+    if [ -n "${ONLY_STEPS:-}" ] && [[ " $ONLY_STEPS " != *" $name "* ]]; then
+        return 0
+    fi
     echo "=== [$(date +%H:%M:%S)] $name" | tee -a "$RESULTS/run.log"
     if "$@" > "$RESULTS/$name.log" 2>&1; then
         echo "OK  $name" >> "$RESULTS/run.log"
@@ -103,7 +111,9 @@ jrun() { # jrun <phase> <dataDir> <dbDir>
 }
 
 prun() { # prun <phase> <dataDir> <dbDir>
-    (cd "$REPO_ROOT" && "${PIN[@]}" uv run python "$BENCH_DIR/bench_python.py" "$@")
+    # UV_RUN_ARGS=--no-sync keeps a wheel installed by hand (the pinned release)
+    # from being replaced by the lockfile's on the first `uv run`.
+    (cd "$REPO_ROOT" && "${PIN[@]}" uv run ${UV_RUN_ARGS:-} python "$BENCH_DIR/bench_python.py" "$@")
 }
 
 : > "$RESULTS/all_results.csv"
