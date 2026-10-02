@@ -1167,7 +1167,7 @@ class Neo4jE2:
             # one did until 2026-10-02 (BUGS F164, DECISIONS #135). Read back.
             s.run(f"CREATE VECTOR INDEX prod_emb IF NOT EXISTS FOR (p:Product) ON (p.embedding) "
                   f"OPTIONS {{indexConfig: {{`vector.dimensions`: {DIM}, `vector.similarity_function`: 'euclidean', "
-                  f"`vector.quantization.type`: 'NONE', "
+                  f"`vector.quantization.type`: 'NONE', `vector.default_search_expansion_factor`: 1.0, "
                   f"`vector.hnsw.m`: 16, `vector.hnsw.ef_construction`: 100}}}}").consume()
             s.run("CALL db.awaitIndexes(36000)").consume()
             cfg = s.run("SHOW VECTOR INDEXES YIELD name, options WHERE name = 'prod_emb' "
@@ -1175,6 +1175,11 @@ class Neo4jE2:
             if cfg.get("vector.quantization.type") != "NONE":
                 raise RuntimeError(f"neo4j vector index quantization read back "
                                    f"{cfg.get('vector.quantization.type')!r}, not 'NONE' (BUGS F164)")
+            # NONE's own default is 1.0 (2026.08.1, 2026.09.0); set and checked so
+            # a release that moves it cannot widen the candidate pool unseen.
+            if float(cfg.get("vector.default_search_expansion_factor") or 0) != 1.0:
+                raise RuntimeError(f"neo4j vector index search expansion read back "
+                                   f"{cfg.get('vector.default_search_expansion_factor')!r}, not 1.0")
             self.row_extra = {"neo4j_vector_quantization": cfg.get("vector.quantization.type"),
                               "neo4j_vector_index_config": json.dumps(cfg, sort_keys=True, default=str)}
 

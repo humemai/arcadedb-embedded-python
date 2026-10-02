@@ -1273,6 +1273,15 @@ class Neo4jVector(Base):
     quantization = "fp32"
     name = "neo4j_dense"
     QUANT_TYPE = "NONE"
+    # THE SEARCH EXPANSION, SET AND READ BACK (2026-10-02). Each quantization
+    # type brings its own default `vector.default_search_expansion_factor`
+    # (2026.08.1 and 2026.09.0: NONE 1.0, SCALAR 1.5, BINARY 3.0), the multiple
+    # of the requested candidates the index searches before re-scoring. The lane
+    # matches search effort at ef 100 and Neo4j, which has no per-query ef, asks
+    # for 100 candidates and keeps 10, so a default 1.5 would give the int8 arm
+    # 150 where its fp32 twin and every other engine search 100: both arms set
+    # 1.0, as the Elasticsearch int8 arm sets the minimum oversample.
+    SEARCH_EXPANSION = 1.0
 
     def connect(self):
         from neo4j import GraphDatabase
@@ -1294,6 +1303,7 @@ class Neo4jVector(Base):
                   f"OPTIONS {{indexConfig: {{`vector.dimensions`: {DIM}, "
                   f"`vector.similarity_function`: 'euclidean', "
                   f"`vector.quantization.type`: '{self.QUANT_TYPE}', "
+                  f"`vector.default_search_expansion_factor`: {self.SEARCH_EXPANSION}, "
                   f"`vector.hnsw.m`: {COMPARATOR_M}, `vector.hnsw.ef_construction`: {EF_CONSTRUCTION}}}}}").consume()
             s.run("CALL db.awaitIndexes(36000)").consume()
             self.index_s = round(time.perf_counter() - _t1, 2)
@@ -1304,7 +1314,12 @@ class Neo4jVector(Base):
         if applied != self.QUANT_TYPE:
             raise RuntimeError(f"neo4j vector index quantization read back {applied!r}, not {self.QUANT_TYPE!r}: "
                                f"the row would record {self.quantization} for a different index (BUGS F164)")
+        expansion = cfg.get("vector.default_search_expansion_factor")
+        if float(expansion or 0) != self.SEARCH_EXPANSION:
+            raise RuntimeError(f"neo4j vector index search expansion read back {expansion!r}, not "
+                               f"{self.SEARCH_EXPANSION}: the arm would search a different candidate pool")
         self.row_extra = {"neo4j_vector_quantization": applied,
+                          "neo4j_vector_search_expansion": expansion,
                           "neo4j_vector_index_config": json.dumps(cfg, sort_keys=True, default=str)}
 
     def search(self, qvec, k):

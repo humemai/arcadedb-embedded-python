@@ -1110,7 +1110,8 @@ NOT_PRINTED = [
      "the page prints the summed peak memory and the workload's disk; these "
      "are the per-side splits those two are computed from"),
     (r"^(hnsw_M|m|k|ef_construction|ef_search|ivf_\w+|degree_param|"
-     r"graph_build_cache_\w+|qps)$",
+     r"graph_build_cache_\w+|qps|neo4j_vector_search_expansion|ladybug_ml|ladybug_mu|"
+     r"lance_nprobes)$",
      "index parameters and their calibration: matched by effect and printed "
      "as conditions under the table, never as columns"),
     (r"^(settle_s|settle_s_lane|settle_s_adapter|engine_settle_s|gt_load_s|"
