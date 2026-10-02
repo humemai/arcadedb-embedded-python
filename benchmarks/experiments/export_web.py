@@ -3606,7 +3606,20 @@ def _durability_table(all_rows):
 # publish). Every cell is derived from the finished tables: which engine has
 # a row where, and where a table declares it absent instead. Nothing about
 # what an engine covers is typed.
-MULTIMODEL_ENGINES = ("ArcadeDB", "ArangoDB", "MongoDB", "SurrealDB")
+# POSTGRESQL + AGE JOINS THE CAPABILITY TABLE (DECISIONS #131 item 9, from the
+# 26.10.1 measurement). It is one engine on two tables under two names: the
+# graph arm (pgage_graph, "PostgreSQL + AGE") and the cross-model arm
+# (pg_age_e2, "PostgreSQL + pgvector + AGE", which also loads pgvector), both on
+# the dbbench:pg-age image, so the table folds them into one row. PostgreSQL's
+# other arms (documents, pgvector, TimescaleDB) run other images and stay their
+# own engines on their own tables.
+MULTIMODEL_ENGINES = ("ArcadeDB", "ArangoDB", "MongoDB", "SurrealDB", "PostgreSQL + AGE")
+MULTIMODEL_ALIASES = {"PostgreSQL + pgvector + AGE": "PostgreSQL + AGE"}
+
+
+def multimodel_engine(name):
+    """The capability table's row for an engine name (MULTIMODEL_ALIASES)."""
+    return MULTIMODEL_ALIASES.get(name, name)
 MULTIMODEL_CELLS = {"measured": "measured", "declared": "declared", "none": "no arm"}
 MULTIMODEL_KINDS = {"censored": "censored", "withheld": "withheld",
                     "unexpressible": "cannot express", "envelope": "out of memory",
@@ -3642,11 +3655,11 @@ def multimodel_cell(table, engine):
     # so a censored engine stays in the comparison; reading one as "measured"
     # here would claim a number the campaign never took.
     rows = [e for e in table.get("entries", [])
-            if entry_engine(e) == engine and not e.get("outcome")]
+            if multimodel_engine(entry_engine(e)) == engine and not e.get("outcome")]
     if rows:
         return MULTIMODEL_CELLS["measured"], []
     kinds = sorted({str(a.get("kind")) for a in table.get("declared_absences") or []
-                    if engine_family(a.get("backend")) == engine})
+                    if multimodel_engine(engine_family(a.get("backend"))) == engine})
     if kinds:
         return (MULTIMODEL_CELLS["declared"] + ", "
                 + "; ".join(MULTIMODEL_KINDS.get(k, k) for k in kinds)), kinds
@@ -3691,7 +3704,7 @@ def _multimodel_table(finished):
     for engine in MULTIMODEL_ENGINES:
         modes = sorted({str(e.get("deployment")) for t in sources
                         for e in t.get("entries", [])
-                        if entry_engine(e) == engine and e.get("deployment")})
+                        if multimodel_engine(entry_engine(e)) == engine and e.get("deployment")})
         metrics = {}
         for t, col in zip(sources, columns):
             text, kinds = multimodel_cell(t, engine)
@@ -3716,7 +3729,7 @@ def _multimodel_table(finished):
             "version_name": " / ".join(sorted({
                 str(e["version_name"]) for t in sources
                 for e in t.get("entries", [])
-                if entry_engine(e) == engine and isinstance(e.get("version_name"), str)
+                if multimodel_engine(entry_engine(e)) == engine and isinstance(e.get("version_name"), str)
                 and e["version_name"].strip()})) or None,
             "host": None,
             "metrics": metrics,

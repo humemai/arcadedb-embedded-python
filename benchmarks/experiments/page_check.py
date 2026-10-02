@@ -1263,7 +1263,7 @@ def _check_multimodel(payload):
         print(f"  ROWS    multimodel: {list(rows)} != {list(EW.MULTIMODEL_ENGINES)}")
         bad += 1
     for engine in EW.MULTIMODEL_ENGINES:
-        anywhere = any(EW.engine_family(e.get("backend"), e.get("is_arcadedb")) == engine
+        anywhere = any(EW.multimodel_engine(EW.engine_family(e.get("backend"), e.get("is_arcadedb"))) == engine
                        for t in tables for e in t.get("entries", []))
         if not anywhere:
             print(f"  ROSTER  multimodel: {engine} is on no table in the payload")
