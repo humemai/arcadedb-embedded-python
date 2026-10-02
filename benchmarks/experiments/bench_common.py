@@ -128,6 +128,20 @@ def durability_class(text):
 #               strace, build plus 3,011 writes: 0 fsync at the default,
 #               3,011 fdatasync with --appendonly yes --appendfsync always
 #               (laptop, 2026-09-17).
+#   Chroma      chromadb 1.5.9 PersistentClient: its SQLite (chroma.sqlite3)
+#               reads back journal_mode=delete, and Settings offer no sync
+#               option; strace, one add() per commit: 436 fsync at 50 adds
+#               and 2,036 at 250, i.e. 8 per add (laptop, 2026-10-02). It
+#               syncs at every write and cannot be relaxed.
+#   LanceDB     lancedb 0.39.0, a local directory: each add() commits a new
+#               table version (252 versions after 250 adds) and strace counts
+#               0 fsync, fdatasync, msync, or sync_file_range over 50 and 250
+#               adds (a positive control, one os.fsync, counted 1); no sync
+#               option on connect() or the table (laptop, 2026-10-02). Nothing
+#               is synced at commit, and nothing makes it so.
+#   LadybugDB   RE-MEASURED at 0.21.2 (laptop, 2026-10-02) after the move from
+#               0.20.4: 56 fdatasync at 50 auto-commit writes and 256 at 250,
+#               one per commit, as before.
 #
 # One string per engine, defined here, so two lanes cannot describe the same
 # engine differently and a re-check lands in one place.
@@ -149,6 +163,8 @@ DURABILITY_MEMGRAPH = ("storage-wal-enabled=true, storage-wal-file-flush-every-n
                        "(image default): the WAL is fsynced every 100,000 transactions, not at commit")
 DURABILITY_FALKORDB = ("appendonly=no, RDB save '3600 1 300 100 60 10000' (image default): "
                        "nothing is synced at commit")
+DURABILITY_CHROMA = "fsync at commit, not configurable (Chroma's SQLite in rollback-journal mode)"
+DURABILITY_LANCEDB = "no sync at commit, not configurable (LanceDB writes each table version unsynced)"
 
 # ---------------------------------------------------------------------------
 # BOTH DURABILITY SETTINGS, ON THE WRITES (DECISIONS #90, superseding the
@@ -197,6 +213,10 @@ NO_DURABILITY_SETTING = {
     DURABILITY_NEO4J,
     DURABILITY_DUCKDB,
     DURABILITY_LADYBUG,
+    # The lifecycle arms (2026-10-02): Chroma always syncs and LanceDB never
+    # does, and neither has a setting, so each prints one number.
+    DURABILITY_CHROMA,
+    DURABILITY_LANCEDB,
 }
 
 # relaxed string -> strict string, for the engines that HAVE the knob.

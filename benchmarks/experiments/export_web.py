@@ -654,6 +654,8 @@ DISPLAY_NAMES = {
     "surrealdb_ts": "SurrealDB (embedded)", "surrealdb_ts_server": "SurrealDB (server)",
     "surrealdb_lifecycle": "SurrealDB (embedded)",
     "sqlite_lifecycle": "SQLite (embedded)", "duckdb_lifecycle": "DuckDB (embedded)",
+    "ladybug_lifecycle": "LadybugDB (embedded)", "chroma_lifecycle": "Chroma (embedded)",
+    "lancedb_lifecycle": "LanceDB (embedded)", "sqlite_vec_lifecycle": "sqlite-vec (embedded)",
     # Served only, so bare, like MongoDB and Neo4j; "(server)" marks an engine
     # that also has an embedded row.
     "arangodb_tpc": "ArangoDB", "arangodb_graph": "ArangoDB", "arangodb_dense": "ArangoDB", "arangodb_dense_int8": "ArangoDB", "arangodb_e2": "ArangoDB",
@@ -4541,6 +4543,12 @@ OCT_PROSE = {
         # measured on the laptop only. Retires with CAMPAIGN section 7 row 22 (the read moves to an untimed cycle).
         "vector_stats": ("ArcadeDB's embedded dense-vector rows read the index's statistics just before close, to record whether a rebuild ran. The read is outside the timers, but on this engine build it raises the cost of the close that follows it, so that row's open and close figure is an upper bound for a session that touches nothing.", []),
         "surreal_rows": ("SurrealDB rows have no JVM start: the SurrealDB core is a compiled extension that the Python import loads, so there is no runtime to start apart from the import. Their first open is the first open with the SDK already imported, and their cold process is interpreter start, import, open, and close, the same span the ArcadeDB embedded rows time. SurrealDB's time-series row is a plain table of timestamped records, the footing its time-series rows elsewhere on this page run on, because the engine has no time-series type.", []),
+        # The other in-process engines (row 40, 2026-10-02, l5_lifecycle_embedded): facts about each engine's
+        # session, not numbers, so no pins. Printed only when that engine's rows are on the table.
+        "ladybug_rows": ("LadybugDB's documents, graph, and time-series rows each carry one index that ArcadeDB's do not: a LadybugDB node table must have a primary key, and the engine keeps a hash index on it. Its time-series row is a plain table of timestamped rows keyed on the timestamp.", []),
+        "chroma_rows": ("A Chroma open is the client plus a handle on each collection the database holds, which is what ArcadeDB's open does with its schema, and Chroma loads a collection's HNSW index on its first query. Every Chroma record carries an embedding, so the scratch collection that the empty row writes into holds one-dimensional vectors.", []),
+        "lance_rows": ("A LanceDB open is the connection plus a handle on each table the database holds. LanceDB has no close: neither the connection nor a table exposes one, and each write commits a new table version as it is made, so its close column times the session dropping its handles. Its dense-vector index is IVF_HNSW_FLAT, unquantized like every dense-vector index on this table.", []),
+        "sqlitevec_rows": ("sqlite-vec's dense-vector row is an exact scan: vec0 builds no approximate index, so its query reads every vector and there is no index to drop. It runs inside SQLite under WAL with synchronous=NORMAL, as every SQLite arm on this page does.", []),
     },
     "durability": {
         "pairs": ("Each row is one engine running ONE operation twice: once where a commit returns without waiting for the disk, which is the setting every other table on this page reports, and once where the commit waits for the log to be flushed and synced. Nothing else about the cell changes.", []),
@@ -5121,6 +5129,20 @@ def _oct_conditions(table):
         tail.append(_R("lifecycle", "vector_stats"))
     if tid == "lifecycle" and any("SurrealDB" in n for n in names):
         tail.append(_R("lifecycle", "surreal_rows"))
+    if tid == "lifecycle":
+        # The compiled engines beside SurrealDB, named once rather than a sentence each.
+        _native = [e for e in ("SQLite", "DuckDB", "LadybugDB", "Chroma", "LanceDB", "sqlite-vec")
+                   if any(f"({e}, embedded)" in n for n in names)]
+        if _native:
+            _list = (_native[0] if len(_native) == 1 else
+                     f"{_native[0]} and {_native[1]}" if len(_native) == 2 else
+                     ", ".join(_native[:-1]) + f", and {_native[-1]}")
+            tail.append(_gen(f"{_list} rows have no JVM start: each engine is a compiled library that its "
+                             f"Python import loads, so the import is its runtime start.", _list))
+        for _e, _key in (("LadybugDB", "ladybug_rows"), ("Chroma", "chroma_rows"),
+                         ("LanceDB", "lance_rows"), ("sqlite-vec", "sqlitevec_rows")):
+            if any(f"({_e}, embedded)" in n for n in names):
+                tail.append(_R("lifecycle", _key))
     if tid == "l2olap":
         pair = _gav_pair_note(table)
         if pair:

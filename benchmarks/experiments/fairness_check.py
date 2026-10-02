@@ -776,7 +776,16 @@ def check_close_cost(rows):
 # `durability_class` (DECISIONS #90), or a PostgreSQL row whose server did not
 # answer its class's synchronous_commit (off relaxed, on strict).
 STRICT_ALLOWED = {"neo4j_graph", "neo4j_dense", "neo4j_dense_int8", "neo4j_e2", "composed_qdrant_neo4j",
-                  "ladybug_graph", "ladybug_e2", "duckdb", "duckdb_vss_dense", "duckpgq_graph", "duckdb_e2"}
+                  "ladybug_graph", "ladybug_e2", "duckdb", "duckdb_vss_dense", "duckpgq_graph", "duckdb_e2",
+                  # The lifecycle table's in-process arms (DECISIONS #131 item 5): DuckDB and LadybugDB as on
+                  # their other tables, and Chroma, which syncs at every add with no setting (bench_common).
+                  "duckdb_lifecycle", "ladybug_lifecycle", "chroma_lifecycle"}
+
+# NO SETTING THE OTHER WAY: an engine that never syncs at commit and has no
+# setting that would make it. It runs the relaxed class by construction and
+# cannot run the strict one, so it prints one number like the engines above.
+# LanceDB 0.39.0: 0 sync calls over 250 commits under strace (bench_common).
+RELAXED_ONLY_ALLOWED = {"lancedb_lifecycle"}
 
 # THE THIRD CLASS, and the backends allowed to be in it: none since BUGS F165.
 # The five SurrealDB served arms were, on the claim that 3.2.4 had no sync
@@ -1148,7 +1157,7 @@ def check_durability(rows):
             # by construction; #90 puts it on an equal footing by printing that
             # one number in both columns rather than comparing its strict
             # number against everyone else's relaxed one.
-            if r.get("backend") not in STRICT_ALLOWED | UNVERIFIED_ALLOWED:
+            if r.get("backend") not in STRICT_ALLOWED | UNVERIFIED_ALLOWED | RELAXED_ONLY_ALLOWED:
                 print(f"  FAIL {where}: declares no durability setting but is not "
                       f"one of the named exceptions"); bad += 1
             if got == "unverified":

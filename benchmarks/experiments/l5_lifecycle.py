@@ -604,6 +604,12 @@ def main():
         # sizes, session, and mode set; each declares what its model lacks.
         import l5_lifecycle_sql
         return l5_lifecycle_sql.main(args)
+    if args.backend in ("ladybug_lifecycle", "chroma_lifecycle", "lancedb_lifecycle",
+                        "sqlite_vec_lifecycle"):
+        # The other in-process engines on the page (row 40, 2026-10-02): the
+        # same session, each declaring what its model lacks.
+        import l5_lifecycle_embedded
+        return l5_lifecycle_embedded.main(args)
     if args.backend.endswith("_server"):
         # The served twin (2026-09-07): same situations, same generators, the
         # server's open/close database commands over HTTP. No filesystem

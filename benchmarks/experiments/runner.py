@@ -1036,6 +1036,12 @@ BACKENDS = {
     # queued last by #133): SQLite in the client image, DuckDB in its pinned one.
     "sqlite_lifecycle": {"topology": "embedded", "image": "dbbench:client"},
     "duckdb_lifecycle": {"topology": "embedded", "image": "dbbench:duckdb"},
+    # The other in-process engines on the page (row 40, 2026-10-02,
+    # l5_lifecycle_embedded): each in the image its other arms run in.
+    "ladybug_lifecycle": {"topology": "embedded", "image": "dbbench:client"},
+    "chroma_lifecycle": {"topology": "embedded", "image": "dbbench:dense"},
+    "lancedb_lifecycle": {"topology": "embedded", "image": "dbbench:dense"},
+    "sqlite_vec_lifecycle": {"topology": "embedded", "image": "dbbench:dense"},
     "surrealdb_dense_server": {
         "topology": "client_server",
         "image": "dbbench:client",
@@ -1721,7 +1727,8 @@ LANES = {
     # situations it cannot build are declared on the row (l5_lifecycle_surreal).
     "lifecycle": ("l5_lifecycle.py",
                   ["arcadedb_embedded", "arcadedb_server", "surrealdb_lifecycle",
-                   "sqlite_lifecycle", "duckdb_lifecycle"],
+                   "sqlite_lifecycle", "duckdb_lifecycle", "ladybug_lifecycle",
+                   "chroma_lifecycle", "lancedb_lifecycle", "sqlite_vec_lifecycle"],
                   ["empty", "doc", "doc_idx10", "graph", "graph_gav",
                    "vector", "sparse", "ts"]),
     "l3s": ("l3_sparse.py",

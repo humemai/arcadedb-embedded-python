@@ -47,7 +47,7 @@ Fitting the pool is resource fitting, the first of the four sanctioned override 
 | Elasticsearch | `_nodes/os` reports `available_processors: 12`, `allocated_processors: 12` | cpuset |
 | Neo4j | 10 `GC Thread#N`; G1 derives `8 + (N-8)*5/8` above 8, so 12 CPUs gives 10 | cpuset |
 | ArcadeDB (JVM) | `availableProcessors()` reads the cgroup on Java 11+ | cpuset |
-| Chroma, LanceDB, sqlite-vec | embedded in the driver, no separate server pool | n/a |
+| Chroma, LanceDB, sqlite-vec | embedded in the driver, no separate server pool. Their Rust runtimes follow the cpuset (laptop, 2026-10-02, after one open: Chroma 1.5.9's `tokio-rt-worker` threads 5 under `--cpuset-cpus 4-7` against 17 with no cpuset on the 16-CPU laptop, LanceDB 0.39.0's `lancedb-tokio` 5 against 17), as do the threads the Python process starts (4 against 16 beside Chroma, 5 against 17 beside LanceDB); SQLite is single-threaded. Their caches are fixed or unbounded, not host-sized | cpuset; the lifecycle arms record the threads the process holds after its first open (`lc_threads_after_open`) |
 | Milvus | `go_sched_gomaxprocs_threads 12`; Go sizes from `sched_getaffinity` | cpuset |
 | Memgraph 3.13.1 (2026-09-17) | `SHOW CONFIG` under `--cpuset-cpus 0-11` on a 16-CPU laptop: `bolt_num_workers` 16 and `storage_snapshot_thread_count` 16, both documented as "the number of processing units available on the machine"; 51 tasks in `/proc/1/task` at idle. Its memory limit is host-sized the same way (`memory_limit` 0 reported as 30.35 GiB inside an 8g container) | **host**; fitted: runner passes `--bolt-num-workers={ncpu}`, `--storage-snapshot-thread-count={ncpu}` and `--memory-limit` at 90% of the cap, and the adapter reads all three back onto the row (`memgraph_bolt_workers`, `memgraph_snapshot_threads`, `memgraph_memory_limit_mib`; 12, 12, 7372 on the laptop smoke at an 8g cap) The cross-model arm (`memgraph_e2`, from the 26.10.1 measurement) gets the same flags and reads the same settings back. |
 | FalkorDB 4.20.6 (2026-09-17; 6.0.1 from 2026-10-02 sizes the query pool from the cpuset, `THREAD_COUNT` 4 under a 4-CPU cpuset, and keeps the explicit setting) | startup log under the same cpuset: "Thread pool created, using 16 threads" and "Maximum number of OpenMP threads set to 12"; `GRAPH.CONFIG GET THREAD_COUNT` 16, `OMP_THREAD_COUNT` 12. The query pool reads the host's logical cores, the GraphBLAS pool reads the affinity mask | **host** for the query pool, cpuset for OpenMP; fitted: runner passes `THREAD_COUNT {ncpu}` in `FALKORDB_ARGS`, the log then reads "using 12 threads" and the adapter records `falkordb_thread_count` and `falkordb_omp_threads` from `GRAPH.CONFIG GET` (12 and 12 on the laptop smoke) |
@@ -129,6 +129,18 @@ the log at commit is its documented behaviour. LadybugDB: `strace` counts 56
 takes no sync option. DuckDB: `strace` counts 55 `fsync` calls for 50 commits,
 and `duckdb_settings()` at 1.5.4 (the pin since DECISIONS #103d) exposes only
 checkpoint and WAL-autocheckpoint thresholds, no commit-sync knob.
+
+Two engines on the lifecycle table only (2026-10-02, DECISIONS #131 item 5)
+have no setting either way. Chroma 1.5.9 syncs at every write: `strace` counts
+8 `fsync` calls per `add()` (436 at 50 adds, 2,036 at 250), its SQLite reads
+back `journal_mode=delete`, and its Settings offer no sync option, so it cannot
+be relaxed and is named with the three above. LanceDB 0.39.0 never syncs at
+commit: each `add()` writes a new table version and `strace` counts no sync
+call of any kind over 250 of them, with no option on the connection or the
+table, so it cannot be made strict (`fairness_check.RELAXED_ONLY_ALLOWED`).
+Each prints one number, as the engines above do. LadybugDB was re-measured at
+0.21.2 when the client image moved to it: one `fdatasync` per commit, as at
+0.20.4.
 
 **SurrealDB served has the knob, on its storage path (BUGS F165, 2026-10-02).**
 SurrealDB 3.2.4 takes `sync=never|every|<interval>` as a query parameter on the
