@@ -2566,22 +2566,35 @@ class ArangoGraph(Base):
         return self._n(self.VISITED, k=str(pid))
 
     def run_update(self, new_id):
-        self._n("UPDATE {_key: @nk} WITH {age: @a} IN person", nk=str(new_id), a=UPDATE_AGE)
+        # A no-op when the person is absent, as Cypher's MATCH ... SET is:
+        # `UPDATE {_key: ...}` raises "document not found" instead, which the
+        # anchored write (above) makes reachable on a capped slice. The
+        # FILTER on _key reads the primary index.
+        self._n("FOR p IN person FILTER p._key == @nk UPDATE p WITH {age: @a} IN person",
+                nk=str(new_id), a=UPDATE_AGE)
 
     def person_scan(self, id_from):
         return self._n("FOR p IN person FILTER p.id >= @f "
                        "RETURN {id: p.id, name: p.name, age: p.age, city: p.city}", f=id_from)
 
     def run_write(self, pid, new_id):
-        self._n("INSERT {_key: @nk, id: @n, name: CONCAT('w', @nk), age: 33, city: 'city_0'} INTO person "
+        # THE ANCHOR IS LOOKED UP FIRST, as the Cypher's MATCH does, and
+        # nothing is written when it is absent (2026-10-02, the same fix as
+        # MongoDB's): on a capped LDBC slice the read set names persons the
+        # slice did not load, and the unconditional inserts created a person
+        # the Cypher engines did not. Still one AQL query, so one transaction.
+        self._n("LET a = DOCUMENT('person', @k) FILTER a != null "
+                "INSERT {_key: @nk, id: @n, name: CONCAT('w', @nk), age: 33, city: 'city_0'} INTO person "
                 "INSERT {_from: CONCAT('person/', @k), _to: CONCAT('person/', @nk), since: 2026} INTO knows",
                 k=str(pid), nk=str(new_id), n=new_id)
 
     def run_delete(self, new_id):
         # One AQL query, so one transaction: the edges touching the vertex, then the vertex.
+        # Both removals are no-ops when the person is absent, as Cypher's
+        # MATCH ... DETACH DELETE is (`REMOVE {_key: ...}` raised instead).
         self._n("LET v = CONCAT('person/', @nk) "
-                "FOR e IN knows FILTER e._from == v OR e._to == v REMOVE e IN knows "
-                "REMOVE {_key: @nk} IN person",
+                "LET gone = (FOR e IN knows FILTER e._from == v OR e._to == v REMOVE e IN knows) "
+                "FOR p IN person FILTER p._key == @nk REMOVE p IN person",
                 nk=str(new_id))
 
     def run_olap(self, qname):
