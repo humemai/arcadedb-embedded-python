@@ -115,7 +115,24 @@ LANES_CHECKED_OTHERWISE = {
 # (100 x 12 = 1200 pairs), which is what every other engine has always
 # returned. Removed together with the export_web.WITHHELD_CELLS entry that
 # kept the cell off the page while this stood; neither is any use alone.
-KNOWN_DISAGREEMENTS = {}
+#
+# PostgreSQL + AGE's two CRUD read-backs (2026-10-02, apache/age#2587). The
+# read-back is `MATCH (q:Person) WHERE q.id >= $f`, $f the first id the write
+# phase created, and a btree index scan on agtype that starts at a `>=` bound
+# skips the keys equal to it, on every AGE release tried (1.6.0 on PG16 to
+# master on PG18; repros/age-index-range/). So AGE returns every written person
+# but the first, and both state digests split from the other engines. The
+# writes themselves landed (an equality read finds that person), and the timed
+# cells time the right work; WHETHER TO WITHHOLD AGE's write and update cells
+# while this stands is the landing's call (HANDOFF). Remove both entries when
+# the pin carries AGE's fix.
+_AGE_2587 = ("returns every person the write phase created but the first: the read-back's "
+             "`q.id >= $f` goes through the Person id index, and AGE's btree scan starting at a "
+             "`>=` bound skips the key equal to it (apache/age#2587, open)")
+KNOWN_DISAGREEMENTS = {
+    ("l2", "graph_insert"): {"pgage_graph": _AGE_2587},
+    ("l2", "graph_update"): {"pgage_graph": _AGE_2587},
+}
 
 NOT_COMPARABLE = {
     ("lifecycle", "lifecycle_read"):

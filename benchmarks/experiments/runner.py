@@ -815,6 +815,21 @@ BACKENDS = {
         "topology": "embedded",
         "image": "dbbench:duckdb",
     },
+    # PostgreSQL + Apache AGE on the graph tables (DECISIONS #128): the
+    # cross-model lane's image and its memory fit, every statement the lane's
+    # own Cypher through AGE's cypher(). Parallel query stays at PostgreSQL's
+    # default, as on every other PostgreSQL arm; the adapter reads it back.
+    "pgage_graph": {
+        "topology": "client_server",
+        "image": "dbbench:client",
+        "server_image": "dbbench:pg-age",  # PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0, built from Dockerfile.pgage
+        "server_env": ["-e", "POSTGRES_PASSWORD=dbbenchpass", "-e", "POSTGRES_DB=bench"],
+        "server_cmd": ["-c", "synchronous_commit=off", "-c", "shared_buffers={sb}", "-c", "effective_cache_size={ecs}",
+                       "-c", "maintenance_work_mem={mwm}", "-c", "max_wal_size=4GB"],
+        "server_port": 5432,
+        "ready_regex": r"(?s)PostgreSQL init process complete.*"
+                       r"database system is ready to accept connections",
+    },
     # ---- E2 hybrid-ACID lane ----
     "arcadedb_e2": {
         "topology": "embedded",
@@ -1518,7 +1533,7 @@ LANES = {
     "l2": ("l2_graph.py",
            ["arcadedb_graph_embedded", "arcadedb_graph_server",
             "neo4j_graph", "ladybug_graph", "surrealdb_graph", "surrealdb_graph_server", "arangodb_graph",
-            "mongodb_graph", "memgraph_graph", "falkordb_graph", "duckpgq_graph"],
+            "mongodb_graph", "memgraph_graph", "falkordb_graph", "duckpgq_graph", "pgage_graph"],
            ["oltp", "olap"]),
     "l1tpc": ("l1_tpc.py",
               ["arcadedb_embedded", "arcadedb_server", "duckdb", "sqlite", "mongodb", "surrealdb_tpc",

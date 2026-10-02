@@ -63,7 +63,9 @@ stage() {
 #   lancedb  0.37.1->0.39.0         lancedb_dense
 #   neo4j driver 6.2.0->6.3.1       ALSO memgraph_graph (engine unmoved, client moved)
 TPC=postgres,postgres_tuned,mongodb
-GRAPH=neo4j_graph,ladybug_graph,mongodb_graph,memgraph_graph
+# pgage_graph is new rather than re-pinned (DECISIONS #128): smoked here until a
+# campaign has measured it.
+GRAPH=neo4j_graph,ladybug_graph,mongodb_graph,memgraph_graph,pgage_graph
 DENSE=pgvector_dense,qdrant_dense,qdrant_dense_int8,milvus_dense,milvus_dense_int8,neo4j_dense,mongodb_dense,lancedb_dense
 SPARSE=pgvector_sparse,qdrant_sparse,milvus_sparse,elasticsearch_sparse
 TS=questdb,timescaledb,mongodb
@@ -84,9 +86,13 @@ stage 26-l2-olap-micro   -- --lanes l2 --workloads olap --scale micro --backends
 
 # ---- l2 analytics: the LDBC SF1 slice. LadybugDB's projection and COPY paths
 # are the flagged risk of this re-pin, and LSQB is where they are exercised.
-stage 27-l2-olap-sf1 \
+# AT sf1full, NOT sf1 (2026-10-02): only the full-network tier loads the
+# message half (ldbc_snb.loads_messages), so at sf1 the caps capped nothing and
+# every row recorded `lsqb_na` with LSQB's nine never asked. The caps make
+# sf1full the same slice it was meant to be.
+stage 27-l2-olap-sf1full \
   BENCH_GRAPH_SOURCE=ldbc BENCH_GRAPH_MSG_LIMIT=30000 BENCH_GRAPH_PERSON_LIMIT=2000 \
-  -- --lanes l2 --workloads olap --scale sf1 --backends "$GRAPH"
+  -- --lanes l2 --workloads olap --scale sf1full --backends "$GRAPH"
 
 # ---- l3d dense, with the #82d mutate phase the skeleton forces on.
 stage 28-l3d-dense BENCH_DENSE_MUTATE=1 \

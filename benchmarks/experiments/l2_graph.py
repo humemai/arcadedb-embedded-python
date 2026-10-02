@@ -1592,6 +1592,242 @@ class DuckpgqGraph(Base):
 
 
 
+class PgAgeGraph(Base):
+    """PostgreSQL with Apache AGE, served (DECISIONS #128): every graph read
+    and write is the lane's own Cypher text, run through AGE's `cypher()`
+    table function, on the `dbbench:pg-age` image the cross-model lane already
+    pins (PostgreSQL 18 + pgvector 0.8.6 + AGE 1.8.0~rc0; the row records the
+    versions the server reports).
+
+    THE TEXTS RUN AS WRITTEN (laptop probe 2026-10-02,
+    repros/age-dialect/probe.py): the four reads, the write,
+    update and delete, the five hand-written analytics queries and LSQB's
+    nine. What AGE adds is the wrapper: `SELECT * FROM cypher('l2g', $$ <text>
+    $$, $1) AS (<one agtype column per RETURN item>)`, the column names taken
+    from the RETURN aliases every lane text already carries, and the values
+    bound through cypher()'s third argument as one agtype map (DECISIONS #116
+    item 2). AGE returns each value as agtype text, parsed back to the Python
+    value it spells after the timed call returns, as every adapter's rows are.
+
+    ONE LABEL PER VERTEX, SO MESSAGE IS A TABLE PARENT. AGE gives a vertex
+    exactly one label, and LSQB asks for `(:Message)`, the SNB supertype of
+    Post and Comment. A label is a PostgreSQL table here, so the supertype is
+    PostgreSQL inheritance: an empty `Message` label, and `ALTER TABLE
+    l2g."Post" INHERIT l2g."Message"` (and Comment), after which a scan of
+    Message reads both and `label(m)` still names each own label
+    (repros/age-dialect/inherit.py). Without it q4, q5, q7 and q8 count 0.
+
+    THE LOAD IS POSTGRESQL'S COPY INTO AGE'S LABEL TABLES. AGE's own bulk
+    loader, load_labels_from_file, reads a CSV from the server's filesystem,
+    which a served arm on this harness does not share with its client. A label
+    is an ordinary table (`id graphid, properties agtype`; an edge label adds
+    `start_id, end_id`), so COPY ... FROM STDIN writes exactly the rows the
+    loader and a Cypher CREATE write: each id is the graphid the label's own
+    sequence would assign, (label id << 48) | n in insertion order, and the
+    sequences are advanced past them so the timed CREATE continues from there.
+    Measured on the laptop: 20,000 persons in 0.12 s and 418,599 KNOWS in
+    2.9 s, where the cross-model lane's UNWIND ... CREATE path took 3.7 minutes
+    for 150,000 edges (BUGS F35).
+
+    INDEXES. AGE 1.8 creates a primary key on every vertex label's id and
+    btree indexes on every edge label's start_id and end_id, which are what a
+    traversal joins on. The lane adds the one its reads need: a btree on the
+    Person `id` property expression, which `WHERE p.id = $id` uses with the
+    value bound (EXPLAIN: Index Scan using person_id). Chosen by measurement
+    (DECISIONS #112; repros/age-dialect/index_probe.py, 10,000 persons on the
+    laptop, p50 without -> with it): point 7.76 -> 0.13 ms, hop1 8.08 -> 0.49,
+    hop2 13.8 -> 4.4, hop3f 126 -> 59, the same answers both ways.
+
+    ONE WRONG ANSWER, AGE'S AND DECLARED. The CRUD read-back `q.id >= $f`
+    goes through that index, and a btree scan on agtype that starts at a `>=`
+    bound skips the key equal to it (apache/age#2587, every release since
+    1.6.0), so the read-back misses the first person the write phase created.
+    equivalence_check.KNOWN_DISAGREEMENTS names it; the timed writes are right.
+
+    MEMORY AND DURABILITY as the other served PostgreSQL arms: the runner
+    fits shared_buffers, effective_cache_size and maintenance_work_mem to the
+    container and sets synchronous_commit=off in the relaxed class; every
+    setting that decides what was measured is read back with SHOW onto the
+    row, and durability is the server's own answer (DECISIONS #81, #90).
+    """
+    QUERY_LANGUAGE = "Cypher through Apache AGE (cypher() in SQL)"
+    name = "pgage_graph"
+    GRAPH = "l2g"
+    # Read back onto the row: the settings that decide a plan or a cache.
+    _SHOW = ("shared_buffers", "effective_cache_size", "work_mem", "maintenance_work_mem",
+             "max_parallel_workers_per_gather", "max_parallel_workers", "max_worker_processes",
+             "jit", "synchronous_commit")
+
+    def _open(self):
+        import psycopg
+        host = os.environ["BENCH_SERVER_HOST"]
+        port = os.environ.get("BENCH_SERVER_PORT", "5432")
+        # Autocommit: every lane statement is one cypher() call, one statement,
+        # so each is its own transaction, as the write's MATCH + two CREATEs
+        # must be (DECISIONS #82a).
+        self.cx = psycopg.connect(f"host={host} port={port} dbname=bench user=postgres "
+                                  "password=dbbenchpass", autocommit=True)
+        self.cx.execute("LOAD 'age'")
+        self.cx.execute('SET search_path = ag_catalog, "$user", public')
+        self._sql = {}   # lane text -> wrapped SQL, built once per text
+
+    def connect(self):
+        self._open()
+        c = self.cx
+        c.execute("CREATE EXTENSION IF NOT EXISTS age")
+        pv = c.execute("SELECT version()").fetchone()[0].split(" (")[0]
+        av = c.execute("SELECT extversion FROM pg_extension WHERE extname = 'age'").fetchone()[0]
+        self.version = f"{pv} + age:{av}"
+        shown = {k: c.execute(f"SHOW {k}").fetchone()[0] for k in self._SHOW}
+        self.durability = bench_common.pg_durability_string(shown["synchronous_commit"])
+        self.row_extra = {f"pg_{k}": v for k, v in shown.items() if k != "synchronous_commit"}
+        self.row_extra["driver_version"] = f"psycopg:{__import__('psycopg').__version__}"
+        # A fresh cell gets a fresh server; a reused one (laptop smoke) starts clean.
+        if c.execute("SELECT 1 FROM ag_catalog.ag_graph WHERE name = %s", (self.GRAPH,)).fetchone():
+            c.execute("SELECT drop_graph(%s, true)", (self.GRAPH,))
+        c.execute("SELECT create_graph(%s)", (self.GRAPH,))
+        self._labels = {}
+        self._make_label("Person", "v")
+        self._make_label("KNOWS", "e")
+
+    def _make_label(self, name, kind):
+        fn = "create_vlabel" if kind == "v" else "create_elabel"
+        self.cx.execute(f"SELECT {fn}(%s, %s)", (self.GRAPH, name))
+        self._labels[name] = self.cx.execute(
+            "SELECT id FROM ag_catalog.ag_label WHERE name = %s AND graph = "
+            "(SELECT graphid FROM ag_catalog.ag_graph WHERE name = %s)",
+            (name, self.GRAPH)).fetchone()[0]
+
+    def _gid(self, label, n):
+        """The graphid AGE's sequence for `label` assigns to its n-th row."""
+        return (self._labels[label] << 48) | n
+
+    def _copy_vertices(self, label, rows):
+        """COPY (property dict, ...) into a vertex label; returns {lane id: graphid}."""
+        gids, n = {}, 0
+        with self.cx.cursor() as cur, cur.copy(
+                f'COPY {self.GRAPH}."{label}" (id, properties) FROM STDIN') as cp:
+            for props in rows:
+                n += 1
+                g = self._gid(label, n)
+                gids[props["id"]] = g
+                cp.write_row((g, json.dumps(props)))
+        self.cx.execute(f"SELECT setval('{self.GRAPH}.\"{label}_id_seq\"', %s)", (max(n, 1),))
+        return gids
+
+    def _copy_edges(self, label, triples):
+        """COPY (start graphid, end graphid, property dict) into an edge label,
+        continuing the label's sequence from wherever an earlier stream left it."""
+        n = self._edge_n.get(label, 0)
+        with self.cx.cursor() as cur, cur.copy(
+                f'COPY {self.GRAPH}."{label}" (id, start_id, end_id, properties) FROM STDIN') as cp:
+            for s, d, props in triples:
+                n += 1
+                cp.write_row((self._gid(label, n), s, d, json.dumps(props)))
+        added = n - self._edge_n.get(label, 0)
+        self._edge_n[label] = n
+        self.cx.execute(f"SELECT setval('{self.GRAPH}.\"{label}_id_seq\"', %s)", (max(n, 1),))
+        return added
+
+    def build(self, n_persons):
+        self._edge_n = {}
+        self._gids = {"Person": self._copy_vertices(
+            "Person", ({"id": i, "name": name, "age": age, "city": city}
+                       for i, name, age, city in gen_persons(n_persons)))}
+        pg = self._gids["Person"]
+        self._copy_edges("KNOWS", ((pg[s], pg[d], {"since": y}) for s, d, y in gen_edges(n_persons)))
+        self.cx.execute(f'CREATE INDEX person_id ON {self.GRAPH}."Person" USING btree '
+                        "(ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype))")
+
+    def build_messages(self):
+        import ldbc_snb as _ldbc
+        mc = _ldbc.MessageCorpus(self._scale)
+        self._make_label("Message", "v")
+        vcount = ecount = 0
+        for label, ids in mc.vertex_spec():
+            self._make_label(label, "v")
+            self._gids[label] = self._copy_vertices(label, ({"id": v} for v in ids))
+            vcount += len(self._gids[label])
+            if label in _ldbc.MSG_MESSAGE_SUBLABELS:
+                self.cx.execute(f'ALTER TABLE {self.GRAPH}."{label}" INHERIT {self.GRAPH}."Message"')
+        for rel, src_label, dst_label, gen in mc.edge_spec():
+            if rel not in self._labels:
+                self._make_label(rel, "e")
+            sg, dg = self._gids[src_label], self._gids[dst_label]
+            ecount += self._copy_edges(rel, ((sg[s], dg[d], {}) for s, d in gen()))
+        self.msg_counts = {"msg_vertices": vcount, "msg_edges": ecount}
+        # The id maps were only the load's; the timed queries never read them.
+        self._gids = {"Person": self._gids["Person"]}
+
+    def post_build(self, workload):
+        """PostgreSQL's documented step after a bulk load: ANALYZE, so the
+        planner has statistics for the tables COPY just filled."""
+        self.cx.execute("ANALYZE")
+
+    def reopen(self):
+        """Reattach to the built graph: a new session, no DDL."""
+        self.cx.close()
+        self._open()
+
+    @staticmethod
+    def _columns(text):
+        """The result columns of a lane text: its last RETURN's aliases."""
+        import re
+        m = list(re.finditer(r"\bRETURN\b", text, re.I))
+        if not m:
+            return ["v"]
+        tail = re.split(r"\b(?:ORDER\s+BY|LIMIT|SKIP)\b", text[m[-1].end():], flags=re.I)[0]
+        items, depth, cur = [], 0, ""
+        for ch in tail:
+            depth += ch in "([{"
+            depth -= ch in ")]}"
+            if ch == "," and depth == 0:
+                items.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        items.append(cur)
+        cols = []
+        for i, it in enumerate(items):
+            a = re.search(r"\bAS\s+(\w+)\s*$", it.strip(), re.I)
+            cols.append(a.group(1) if a else f"c{i}")
+        return cols
+
+    def _wrapped(self, text, bound):
+        """(SQL, column names) for a lane text, built on its first call."""
+        hit = self._sql.get((text, bound))
+        if hit is None:
+            cols = self._columns(text)
+            sql = (f"SELECT * FROM cypher('{self.GRAPH}', $$ {text} $$"
+                   + (", %s" if bound else "") + ") AS ("
+                   + ", ".join(f"{c} agtype" for c in cols) + ")")
+            hit = self._sql[(text, bound)] = (sql, cols)
+        return hit
+
+    @staticmethod
+    def _value(v):
+        """agtype text -> the Python value it spells ('"a"' -> 'a', '3' -> 3)."""
+        if v is None:
+            return None
+        s = str(v)
+        for suffix in ("::numeric", "::vertex", "::edge", "::path"):
+            if s.endswith(suffix):
+                s = s[: -len(suffix)]
+        return json.loads(s)
+
+    def run_cypher(self, text, params=None):
+        sql, cols = self._wrapped(text, bool(params))
+        rows = self.cx.execute(sql, (json.dumps(params),) if params else None).fetchall()
+        return [{c: self._value(v) for c, v in zip(cols, r)} for r in rows]
+
+    def run_cypher_write(self, text, params=None):
+        sql, _ = self._wrapped(text, bool(params))
+        self.cx.execute(sql, (json.dumps(params),) if params else None)
+
+    def close(self):
+        self.cx.close()
+
+
 class SurrealGraph(Base):
     """SurrealDB through its Python SDK on the SDK's SurrealKV disk store
     (SDK 2.0.0, which carries core 2.3.10), the same LDBC questions in SurrealQL: person records with
@@ -2818,7 +3054,7 @@ class MongoGraph(Base):
 ADAPTERS = {a.name: a for a in
             [ArcadeGraphEmbedded, ArcadeGraphServer, Neo4jGraph, LadybugGraph,
              SurrealGraph, SurrealGraphServer, ArangoGraph, MongoGraph,
-             MemgraphGraph, FalkorGraph, DuckpgqGraph]}
+             MemgraphGraph, FalkorGraph, DuckpgqGraph, PgAgeGraph]}
 
 # DECISIONS #81: what each arm runs at commit, recorded on the row. Neo4j and
 # LadybugDB cannot be relaxed and are the named exceptions on this table; the
@@ -2840,6 +3076,9 @@ DURABILITY = {
     # DuckDB has no durability knob (DECISIONS #90): one string in both classes,
     # the same the document, time-series and dense-VSS DuckDB arms record.
     "duckpgq_graph": bench_common.DURABILITY_DUCKDB,
+    # Read back with SHOW at connect (the adapter's own answer wins); this is
+    # the relaxed-class string it is compared against, as for every PostgreSQL arm.
+    "pgage_graph": bench_common.DURABILITY_PG_OFF,
 }
 
 

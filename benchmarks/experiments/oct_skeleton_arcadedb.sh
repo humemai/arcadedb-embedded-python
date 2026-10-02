@@ -118,10 +118,12 @@ stage 05-l2-oltp-strict  -- --lanes l2 --workloads oltp --scale micro --backends
 stage 06-l2-olap-micro   -- --lanes l2 --workloads olap --scale micro --backends "$GRAPH"
 
 # ---- l2 analytics: the LDBC SF1 slice, the same caps every other engine's
-# analytics row used (DECISIONS #104; lsqb_probe.py header).
-stage 07-l2-olap-sf1 \
+# analytics row used (DECISIONS #104; lsqb_probe.py header). At sf1full: only
+# that tier loads the message half, so at sf1 LSQB's nine were never asked
+# (fixed 2026-10-02, with oct_repin_smoke.sh stage 27).
+stage 07-l2-olap-sf1full \
   BENCH_GRAPH_SOURCE=ldbc BENCH_GRAPH_MSG_LIMIT=30000 BENCH_GRAPH_PERSON_LIMIT=2000 \
-  -- --lanes l2 --workloads olap --scale sf1 --backends "$GRAPH"
+  -- --lanes l2 --workloads olap --scale sf1full --backends "$GRAPH"
 
 # ---- l3d dense: both precisions, with the #82d mutate phase the skeleton forces on.
 stage 08-l3d-dense BENCH_DENSE_MUTATE=1 \

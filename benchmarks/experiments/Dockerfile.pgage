@@ -16,6 +16,14 @@
 # the PG17 pin this replaces was 1.7.0~rc0. Apache AGE tags every release -rc0
 # and votes that artifact through as the release, so there is no non-rc build
 # to pin to and "latest stable" for AGE means the newest -rc0 for the major.
+#
+# THE PACKAGE IS PINNED TOO (2026-10-02, CAMPAIGN section 7 row 26). The base
+# image is pinned by digest, but `postgresql-18-age` unversioned took whatever
+# PGDG served on the build day, so two builds of this file could carry two
+# AGE builds under one tag. Pinned to the build the cross-model rows were
+# measured on (`dpkg-query` on dbbench:pg-age: 1.8.0~rc0-2.pgdg12+1, which the
+# rows record as age:1.8.0). If PGDG stops serving it, the build fails here
+# rather than moving AGE silently.
 FROM pgvector/pgvector@sha256:1d50c689b0a6511b9ea0a15615281c81a59fd04a08eb35057ec8646fb3a2118a
-RUN apt-get update && apt-get install -y --no-install-recommends postgresql-18-age \
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-18-age=1.8.0~rc0-2.pgdg12+1 \
     && rm -rf /var/lib/apt/lists/*

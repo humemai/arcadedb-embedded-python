@@ -635,7 +635,7 @@ DISPLAY_NAMES = {
     "elasticsearch_sparse": "Elasticsearch",
     "chroma_dense": "Chroma", "lancedb_dense": "LanceDB",
     "sqlite_vec_dense": "sqlite-vec", "duckdb_vss_dense": "DuckDB VSS",
-    "duckpgq_graph": "DuckPGQ",
+    "duckpgq_graph": "DuckPGQ", "pgage_graph": "PostgreSQL + AGE",
     "neo4j_graph": "Neo4j", "ladybug_graph": "LadybugDB",
     "memgraph_graph": "Memgraph", "falkordb_graph": "FalkorDB",
     "postgres": "PostgreSQL", "postgres_tuned": "PostgreSQL (tuned)",

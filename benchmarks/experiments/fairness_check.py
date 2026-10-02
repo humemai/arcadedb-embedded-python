@@ -832,7 +832,10 @@ WRITE_CELLS = {("l1tpc", "oltp"), ("l2", "oltp"), ("e2", "hybrid")}
 # `knows` and all nine LSQB edge collections with `edge=True`, which is what
 # earns it the automatic _from/_to edge index; DuckPGQ and MongoDB, having
 # neither adjacency nor an edge collection, index the edge endpoints
-# explicitly (k_src/k_dst, s/d). Checked BY EFFECT too: every engine's 1-hop
+# explicitly (k_src/k_dst, s/d); PostgreSQL + AGE gets a primary key on every
+# vertex label's graphid and btree indexes on every edge label's start_id and
+# end_id from AGE itself, and adds a btree on the Person `id` property
+# expression for the reads' `WHERE p.id = $id`. Checked BY EFFECT too: every engine's 1-hop
 # p50 is under 2 ms, none of them showing the scan signature that gave e2's
 # ArangoDB row away (22.52 ms against 3.21 ms indexed).
 #
