@@ -5353,6 +5353,44 @@ def _censored_entries(table):
     return out, marks
 
 
+def _phase_split_notes(table):
+    """Arms on a split table that print no `index s`, and why (DECISIONS #132).
+
+    Read from fairness_check's PHASE_SPLIT_DECLARED and PHASE_SPLIT_DISCLOSED,
+    the maps the F14c gate reads, so the page and the gate cannot come to
+    disagree. Declared arms have no separate index phase to time; disclosed
+    arms have one and time it inside the total, which the sentence says so a
+    reader does not read their blank `index s` as a fast build.
+    """
+    lane_wl = _TABLE_LANE.get(table.get("id"))
+    cols = set(table.get("columns") or [])
+    if not lane_wl or "index s" not in cols:
+        return []
+    try:
+        import fairness_check
+        declared = fairness_check.PHASE_SPLIT_DECLARED
+        disclosed = fairness_check.PHASE_SPLIT_DISCLOSED
+    except Exception:  # noqa: BLE001 - the page must still build without it
+        return []
+    lane = lane_wl[0]
+    shown = {str(e.get("backend")) for e in table.get("entries", [])}
+    out = []
+    dec = sorted({display_name(b) for (ln, b) in declared if ln == lane} & shown)
+    if dec:
+        out.append(f"{_join_and(dec)} print{'' if len(dec) > 1 else 's'} no index time "
+                   "because there is no separate index phase to time: each builds its "
+                   "index during or before the load, or has none.")
+    dis = sorted({display_name(b) for (ln, b) in disclosed if ln == lane} & shown)
+    if dis:
+        out.append(f"{_join_and(dis)} build{'' if len(dis) > 1 else 's'} {'their' if len(dis) > 1 else 'its'} "
+                   "index after the load and time it inside the total, so "
+                   f"{'their' if len(dis) > 1 else 'its'} total includes the index build "
+                   "and the table has no separate index figure for "
+                   f"{'them' if len(dis) > 1 else 'it'}; the next measurement splits "
+                   f"{'them' if len(dis) > 1 else 'it'}.")
+    return out
+
+
 def _split_note(table):
     """The two phases are INSIDE the total, and do not always fill it.
 
@@ -6134,6 +6172,7 @@ def _finish_table(table: dict) -> dict:
                            + _counts_note(table.get("id"), table.get("entries", []))
                            + _index_note(table.get("id"))
                            + _split_note(table)
+                           + _phase_split_notes(table)
                            + _censored_notes(table.get("id"))
                            + _query_budget_notes(table.get("id"))
                            + _zero_growth_notes(table.get("id"))

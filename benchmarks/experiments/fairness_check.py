@@ -1012,6 +1012,28 @@ def check_index_decisions(rows=None):
     return bad
 
 
+# DECISIONS #132. F14c's dense lane, read per adapter rather than per row: the
+# rows were measured before the split reached every arm, and a mid-campaign
+# change would split the lane's rows, so the October answer is a declaration
+# for the arms whose index work genuinely has no separate phase, and a
+# disclosure for the two that do have one and time it inside one timer. Both
+# maps are read by export_web as well, so the page and this gate state the
+# same thing. The disclosed arms gain the split at the re-pin (CAMPAIGN
+# section 7), after which their entries here go.
+PHASE_SPLIT_DECLARED = {
+    ("l3d", "chroma_dense"): "builds its HNSW index during the load (`add`)",
+    ("l3d", "qdrant_dense"): "builds its HNSW index in the background as points arrive, and the wait for it is inside the build timer",
+    ("l3d", "qdrant_dense_int8"): "builds its HNSW index in the background as points arrive, and the wait for it is inside the build timer",
+    ("l3d", "sqlite_vec_dense"): "has no separate index: `vec0` is a brute-force table",
+    ("l3d", "sqlite_vec_dense_int8"): "has no separate index: `vec0` is a brute-force table",
+    ("l3d", "surrealdb_dense"): "defines its index before the load, which builds it as rows arrive",
+}
+PHASE_SPLIT_DISCLOSED = {
+    ("l3d", "duckdb_vss_dense"): "builds its HNSW index after the load, inside the same timer",
+    ("l3d", "arangodb_dense"): "builds its vector index after the load, inside the same timer",
+}
+
+
 def check_phase_split(rows):
     """F14c: if one arm on a lane splits ingest from index, every arm must.
 
@@ -1047,7 +1069,7 @@ def check_phase_split(rows):
         st[0] += 1
         if r.get("index_s") not in (None, "", "None"):
             st[1] += 1
-        if r.get("index_before_load"):
+        if r.get("index_before_load") or (lane, r.get("backend")) in PHASE_SPLIT_DECLARED:
             st[2] += 1
     bad = 0
     for lane in sorted(lanes, key=str):
@@ -1057,7 +1079,10 @@ def check_phase_split(rows):
             print(f"  n/a    {lane}: no arm splits, so there is nothing to be "
                   f"inconsistent about ({len(arms)} arm(s))")
             continue
-        missing = sorted(b for b, st in arms.items() if not st[1] and not st[2])
+        disclosed = sorted(b for b, st in arms.items()
+                           if not st[1] and not st[2] and (lane, b) in PHASE_SPLIT_DISCLOSED)
+        missing = sorted(b for b, st in arms.items()
+                         if not st[1] and not st[2] and (lane, b) not in PHASE_SPLIT_DISCLOSED)
         if missing:
             print(f"  FAIL   {lane}: {len(split)} of {len(arms)} arms split ingest "
                   f"from index; these do not, and declare no reason: "
@@ -1065,7 +1090,9 @@ def check_phase_split(rows):
             bad += len(missing)
         else:
             declared = [b for b, st in arms.items() if not st[1] and st[2]]
-            extra = f", {len(declared)} declared index-before-load" if declared else ""
+            extra = f", {len(declared)} declared with no separate index phase" if declared else ""
+            if disclosed:
+                extra += f", {len(disclosed)} disclosed on the page ({', '.join(disclosed)})"
             print(f"  ok     {lane}: all {len(arms)} arm(s) accounted for "
                   f"({len(split)} split{extra})")
     return bad
