@@ -272,6 +272,8 @@ STAGES = [
     # lifecycle cell, all eight situations at all four sizes, so the table holds one instrument (#84), with qOG's
     # settings; the newest ts_utc under the canonical key supersedes qOG's rows, as qOA5 does for LadybugDB. About
     # 72 h, 48 of them the 10M vector cell's own cap (the user's choice: run it as scripted, #122).
+    # STOPPED 2026-10-02 before it started (DECISIONS #134): the 26.10.1 measurement re-runs these cells, and the
+    # October page withholds what F161 affected (export_web.LIFECYCLE_STALE). Kept here because it was generated.
     ("qOA6", "SurrealDB lifecycle re-run, the input streamed (F161)", "lifecycle",
      ["empty", "doc", "doc_idx10", "graph", "graph_gav", "vector", "sparse", "ts"],
      ["lc10k", "lc100k", "lc1m", "lc10m"],
