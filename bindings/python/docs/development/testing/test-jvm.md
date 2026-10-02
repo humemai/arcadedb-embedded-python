@@ -2,31 +2,35 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_jvm.py)
 
-Tests for start_jvm() re-entry behavior once the JVM is running.
-
-There are 5 tests.
+Tests for start_jvm() re-entry behavior once the JVM is running, plus reopening a
+database in the same process and interpreter exit with a database left open. An
+autouse fixture starts the JVM before each test.
 
 ## Test Cases
 
-### 1) bare start jvm joins running jvm
+### test_bare_start_jvm_joins_running_jvm
 
-See the source for the exact assertions.
+With a stored `-Xmx6g -Xms6g` config, a bare `start_jvm()` does not raise.
 
-### 2) identical config is idempotent
+### test_identical_config_is_idempotent
 
-See the source for the exact assertions.
+With the stored config built from `heap_size="6g"` and `jvm_args="-Xms6g"`, calling
+`start_jvm()` with the same arguments does not raise.
 
-### 3) conflicting override raises
+### test_conflicting_override_raises
 
-See the source for the exact assertions.
+With `-Xmx4g` stored, `start_jvm(heap_size="99g")` raises `ArcadeDBError` matching
+"already started".
 
-### 4) create close reopen same process
+### test_create_close_reopen_same_process
 
-See the source for the exact assertions.
+Create a database, insert `k = 1`, close it, and reopen it in the same process: the
+query returns `[{"k": 1}]`.
 
-### 5) interpreter exits with unclosed database
+### test_interpreter_exits_with_unclosed_database
 
-A leaked (unclosed) Database must not hang interpreter exit.
+A leaked (unclosed) Database must not hang interpreter exit. A child process creates a
+database without closing it; the test asserts it prints `OK` and exits 0 within 120 s.
 
 ## Running
 

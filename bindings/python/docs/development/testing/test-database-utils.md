@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_database_utils.py){ .md-button }
 
-There are 5 tests covering the `count_type`, `is_transaction_active`, and `drop` database utility methods, an integration test combining several methods, and error handling on a closed database.
+The tests cover the `count_type`, `is_transaction_active`, and `drop` database utility methods, an integration test combining several methods, and error handling on a closed database.
 
 ### test_count_type
 

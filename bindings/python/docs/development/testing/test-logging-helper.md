@@ -4,17 +4,17 @@
 
 Tests for the internal _logging helper.
 
-There are 2 tests.
-
 ## Test Cases
 
-### 1) get logger returns namespaced logger
+### test_get_logger_returns_namespaced_logger
 
-See the source for the exact assertions.
+`get_logger("arcadedb_embedded.foo")` returns a `logging.Logger` with that name.
 
-### 2) log swallowed exception emits debug
+### test_log_swallowed_exception_emits_debug
 
-See the source for the exact assertions.
+Inside an `except` block, `log_swallowed_exception(logger, "during shutdown")` emits
+exactly one DEBUG record on that logger; its message contains the text and it carries
+`exc_info`.
 
 ## Running
 

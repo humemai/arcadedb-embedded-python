@@ -4,8 +4,6 @@
 
 These tests cover SQL vector functions for math, aggregations, distance metrics, normalization, quantization, native INT8 encoding, sparse vectors, `LSM_VECTOR` index creation and search, and vector conversions, plus regression tests for the Python conversion fast paths.
 
-There are 35 tests.
-
 ## Overview
 
 Tests validate:
@@ -51,8 +49,8 @@ Tests validate:
 ### Quantization & Encoding
 
 - **test_vector_quantization_functions**: `vectorQuantizeInt8(v)` runs and returns a non-null result.
-- **test_int8_quantization_boundary_condition_sql**: INT8 quantized `LSM_VECTOR` index (Dim=16, N=10) builds and is searchable via `vectorNeighbors`.
-- **test_create_index_with_quantization_int8_sql**: Creates an `INT8` quantized `LSM_VECTOR` index, inserts N=50 vectors, and verifies `vectorNeighbors` search succeeds.
+- **test_int8_quantization_boundary_condition_sql**: INT8 quantized `LSM_VECTOR` index (Dim=16, N=10) builds and accepts a `vectorNeighbors` query without error; the test asserts only that the projection returns a row, not that it holds a neighbour.
+- **test_create_index_with_quantization_int8_sql**: Creates an `INT8` quantized `LSM_VECTOR` index, inserts N=50 vectors, and verifies `vectorNeighbors` returns one neighbour (the returned vector's values are not checked).
 - **test_create_index_with_quantization_binary_sql**: Creates a `BINARY` quantized `LSM_VECTOR` index (Dim=128) with `storeVectorsInGraph` and verifies search.
 - **test_create_index_with_native_int8_encoding_sql**: Creates an `LSM_VECTOR` index on a `BINARY` property with `"quantization": "NONE", "encoding": "INT8"` and verifies the metadata (skips if the build does not expose `encoding`).
 - **test_vector_neighbors_on_native_int8_storage_sql**: Verifies `vectorNeighbors` works against native INT8-encoded storage ingested as byte arrays (skips if unsupported).

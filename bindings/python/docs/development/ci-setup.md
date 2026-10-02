@@ -32,17 +32,41 @@ The CI/CD workflows build and release across **4 platforms** for a total of **20
     - macos-15 (macOS Apple Silicon)
     - windows-2025 (Windows x86_64)
 - **Jobs**: `bandit`, `dependency-floors`, `download-jars`, `test` (20 matrix jobs: 4 platforms × 5 Python versions), and `test-summary`
-- **Artifacts**: `wheel-{platform}-py{version}` (20 artifacts)
+- **Artifacts**:
+    - `wheel-<os>-<arch>-py<version>` (for example `wheel-linux-amd64-py3.12`), kept 7 days; the
+      release workflow collects these with the pattern `wheel-*-py*`
+    - `wheel-<os>-<arch>-test`, a second copy of each platform's Python 3.12 wheel, kept 7 days
+    - `arcadedb-jars`, the unfiltered JAR set for the native builds, kept 1 day
+    - The `test-results-*` upload names `pytest-output.txt` and `.coverage`, which the pytest
+      step does not write, so it uploads nothing
 - **Triggers**: pushes to `main` and pull requests that touch `bindings/python/**` or the workflow itself, manual dispatch, and `workflow_call` from the release workflow
 
 ### `test-python-examples.yml`
 
 Builds the wheel on the same 4 × 5 matrix and runs the example scripts
-(`0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py` by default). Example 21 is excluded in CI.
+(`0[1-9]_*.py 1[0-9]_*.py 2[0-9]_*.py` by default). Example 21 runs at reduced scale
+(`--base-cities 1200 ...`, 15-minute limit).
 Same path filter and triggers as the bindings workflow. A clean exit is not the whole
 check for example 10: its queries are run a second time on the pure-Python reference
 backend (`--db python_memory`), and `examples/scripts/compare_query_hashes.py` fails the
 job unless every query's row count and result hash agree (#12).
+
+What else a run does:
+
+- **An unreachable dataset host skips, it does not fail.** When `download_data.py` exits 75,
+  the examples that need that dataset count as Skipped and the job stays green with a
+  warning. Any other non-zero exit fails the job. Check the Skipped row of the job summary.
+- **Each example has its own CI arguments and time limit.** An example that exceeds its
+  limit (exit 124 from `timeout`) is reported as a timeout and counts as a failure.
+- **Example 12 reads example 11's output.** It fails when example 11 did not build its
+  database first.
+- **The embedding model is cached.** `HF_HOME` points into the workspace and is cached, and a
+  pre-warm step fetches the model with retries. That step has `continue-on-error`, so a
+  failure there does not stop the job by itself.
+- **A newer push to a pull request cancels the older run.** Runs on a push to `main` are left
+  to finish.
+- **Artifacts:** `example-logs-<os>-<arch>-py<version>` (kept 7 days), and, when the job
+  fails, `example-databases-<os>-<arch>-py<version>` (kept 3 days).
 
 ### `lint-workflows.yml`
 
@@ -57,11 +81,14 @@ Runs on every push to `main` and every pull request:
 - **validate-version**: the tag's base version must equal the `pom.xml` base version, or the release stops
 - **test** and **test-examples**: call the two test workflows above with the tag version
 - **publish**: needs all three, collects all 20 wheels, checks the count and the versions, and publishes to `arcadedb-embedded` on PyPI through the `pypi` environment (trusted publishing)
+- The publish job has `continue-on-error: true`, so a failed upload or a failed check in it still leaves the run green. Check PyPI for every wheel the release built.
 
 ### `deploy-python-docs.yml`
 
 Deploys the docs with mike on a version tag or a manual dispatch. See
-[Documentation](documentation.md#versioned-documentation).
+[Documentation](documentation.md#versioned-documentation). It runs on the same tag push as
+the release but does not wait for it, so a tag whose release fails still deploys its docs
+as `latest`.
 
 ## CI Gates
 
@@ -74,9 +101,11 @@ What must pass before a change is green, beyond the tests themselves:
   `bindings/python/pyproject.toml` (with the `test`, `vector`, `examples`, `arrow`,
   and `pandas` extras) are resolved to their lowest allowed versions for every
   Python version in the classifiers, and `pip-audit` checks the result.
-- **No skips for missing imports** (`test` job): a test that skips because
-  `pytest.importorskip` could not import a module fails the job. A new test
-  dependency must be added both to the `test` extra in `bindings/python/pyproject.toml`
+- **No skips for missing imports** (`test` job): the job fails when a skip reason in the
+  JUnit XML contains `could not import`, which is the reason a `pytest.importorskip` call
+  without its own `reason=` gives. A custom `reason=` or a hand-written `pytest.skip` is not
+  caught, so a test for an optional dependency should call `importorskip` without one. A
+  new test dependency must be added both to the `test` extra in `bindings/python/pyproject.toml`
   and to the "Install wheel and test dependencies" step of `test-python-bindings.yml`.
   The repo-root `pyproject.toml` carries the same packages for local runs.
 - **Timeouts**: the pytest step has a 30-minute limit, and `faulthandler_timeout = 600`
@@ -97,6 +126,8 @@ Run the same checks locally before pushing (from the repository root):
 ```bash
 uv run bandit -c bindings/python/pyproject.toml -r bindings/python/src bindings/python/tests \
   --severity-level low --confidence-level low
+uv run bandit -c bindings/python/pyproject.toml -r bindings/python/examples \
+  --severity-level medium --confidence-level high
 uv run pytest -rs
 uvx pre-commit run --files $(git ls-files 'bindings/python/**')
 ```
@@ -194,6 +225,10 @@ cd bindings/python
 # Windows x86_64, from Git Bash (native)
 ./scripts/build.sh windows/amd64
 ```
+
+The macOS and Windows builds need a JDK 25 or later with `jlink` and `JAVA_HOME` set, ignore
+the Python version argument, and rewrite the tracked `pyproject.toml` in place. See
+[Native Build Script](build-architecture.md#native-build-script).
 
 ## Troubleshooting
 

@@ -2,8 +2,9 @@ name: Test Python Bindings
 
 on:
   # Run on push to bindings/python/ directory, on main only: the upstream-main
-  # mirror branch that sync-upstream.sh pushes is upstream's tree without our
-  # fixes, and running our checks on it only produces red runs nobody acts on.
+  # mirror branch that sync-upstream.sh maintains (locally; the script does not
+  # push it) is upstream's tree without our fixes, and running our checks on it
+  # if it is pushed only produces red runs nobody acts on.
   push:
     branches:
       - main

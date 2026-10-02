@@ -4,8 +4,6 @@
 
 These tests cover HASH index creation and discovery through the Python schema API, plus indexed `IN` parameter expansion.
 
-There are 3 tests.
-
 ## Covered Behavior
 
 ### 1) create, discover, and query
@@ -22,4 +20,4 @@ There are 3 tests.
 
 ## Runtime Guard
 
-If the current packaged runtime does not support `IndexType.HASH`, these tests skip instead of failing spuriously.
+If the current packaged runtime does not support `IndexType.HASH`, the two HASH tests skip instead of failing spuriously. `test_indexed_in_named_list_parameter_returns_rows` uses `LSM_TREE` and has no such guard.

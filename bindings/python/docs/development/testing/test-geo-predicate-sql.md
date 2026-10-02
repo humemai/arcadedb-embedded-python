@@ -4,8 +4,6 @@
 
 These tests cover the SQL geospatial predicate helpers used from Python.
 
-There are 2 tests.
-
 ## Covered Behavior
 
 ### 1) `geo.within` and `geo.intersects`

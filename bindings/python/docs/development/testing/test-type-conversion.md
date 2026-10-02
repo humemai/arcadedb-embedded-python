@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_type_conversion.py){ .md-button }
 
-There are 16 tests covering Python ↔ Java type conversion: primitives (int, float, str, bool, None), date/datetime and offset datetimes, Decimal, bytes, collections (list, set, dict), nested structures, the one-crossing path for lists of scalars, the `property_names` accessor, the `Result.to_dict()` / `Result.to_json()` helpers, and Java `int[]` / `long[]` arrays.
+These tests cover Python ↔ Java type conversion: primitives (int, float, str, bool, None), date/datetime and offset datetimes, Decimal, bytes, collections (list, set, dict), nested structures, the one-crossing path for lists of scalars, the `property_names` accessor, the `Result.to_dict()` / `Result.to_json()` helpers, and Java `int[]` / `long[]` arrays.
 
 ## Key Types
 
@@ -93,7 +93,7 @@ assert isinstance(record.get("created_datetime"), datetime)
 
 ### test_offset_datetime_conversion
 
-An `OffsetDateTime` converts directly to a timezone-aware UTC `datetime`, and stored as a property it reads back as the same instant in UTC wall-clock time (naive), through `query()` and through `to_columns()`. Storing one used to drop the property silently (engine #4922).
+An `OffsetDateTime` converts directly to a timezone-aware UTC `datetime`, and stored as a property it reads back as the same instant in UTC wall-clock time through `query()` and through `to_columns()`. The `query()` check compares the value with any tzinfo stripped, so whether it comes back naive is not asserted; the `to_columns()` check runs only when `to_columns()` returns columns (NumPy and the bridge JAR present). Regression test for engine #4922.
 
 ---
 
@@ -248,13 +248,13 @@ with db.transaction():
 
 ### test_bytes_keep_every_byte
 
-Python `bytes` and `bytearray` are stored as a Java `byte[]`, through `Document.set()` and a bound SQL parameter, and every byte survives, including bytes that are not UTF-8. They used to reach Java as a `String`: `b"Hello"` read back as `"Hello"` and `b"\xff\x00\xfe\x80"` as `""`, with no error. A `byte[]` reads back as a list of signed ints, so the test compares `bytes(b & 0xFF for b in data)`.
+Python `bytes` and `bytearray` are stored as a Java `byte[]`, through `Document.set()` and a bound SQL parameter, and every byte survives, including bytes that are not UTF-8. Regression test: bytes once reached Java as a `String`, so `b"Hello"` read back as `"Hello"` and `b"\xff\x00\xfe\x80"` as `""`, with no error. A `byte[]` reads back as a list of signed ints, so the test compares `bytes(b & 0xFF for b in data)`.
 
 ---
 
 ### test_scalar_list_crosses_as_one_array_with_the_same_types
 
-`convert_python_to_java()` hands a list or tuple whose elements are all `int`, `float`, `str`, `bool`, or `None` to the JVM as one `Object[]` instead of one `add()` call per element (126 us against 28 us for 39 ids on a laptop). The test pins what that must not change: the result is a growable `ArrayList`, the elements are `Long`, `Double`, `String`, `Boolean`, and null exactly as before, an int past 64 bits raises the same `OverflowError`, a list holding a nested list or a dict still converts element by element, and a bound `IN :ids` list selects the right rows.
+`convert_python_to_java()` hands a list or tuple whose elements are all `int`, `float`, `str`, `bool`, or `None` to the JVM as one `Object[]` instead of one `add()` call per element. The test pins what that must not change: the result is a growable `ArrayList`, the elements are `Long`, `Double`, `String`, `Boolean`, and null exactly as before, an int past 64 bits raises the same `OverflowError`, a list holding a nested list or a dict still converts element by element, and a bound `IN :ids` list selects the right rows.
 
 ---
 

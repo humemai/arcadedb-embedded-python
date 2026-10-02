@@ -4,8 +4,6 @@
 
 These tests cover the SQL graph-algorithm functions exposed through the packaged runtime.
 
-There are 5 tests.
-
 ## Covered Behavior
 
 ### 1) `shortestPath(...)`

@@ -2,12 +2,6 @@
 
 Comprehensive testing documentation for ArcadeDB Python bindings.
 
-!!! success "Test Coverage"
-    Current bindings suite
-
-    - **Current package**: the full suite passes (run `uv run pytest -v -rs` for current totals)
-    - All ArcadeDB features working (SQL, OpenCypher, vectors, graphs, server/Studio)
-
 ## Quick Navigation
 
 <div class="grid cards" markdown>
@@ -16,7 +10,7 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
     ---
 
-    Quick start, statistics, and how to run tests
+    Quick start, markers, skips, and how to run tests
 
 -   :material-database: **[Core Tests](testing/test-core.md)**
 
@@ -114,13 +108,24 @@ Comprehensive testing documentation for ArcadeDB Python bindings.
 
 ### Installation
 
-Nothing to install: test dependencies come from the repo-root uv project and
-are synced automatically by `uv run`.
+1. Build the wheel: `cd bindings/python && ./scripts/build.sh` (Docker on Linux,
+   Python 3.12 by default). It writes the wheel to `bindings/python/dist/` and,
+   outside CI, refreshes the repo-root uv environment.
+2. From the repository root (or `bindings/python`), run `uv run pytest`. The
+   repo-root `pyproject.toml` is the test environment, pinned to Python 3.12, so it
+   needs a cp312 wheel. To leave out the heavy example packages (torch,
+   sentence-transformers), pass `--no-group examples` to `uv sync` and `uv run`.
+
+Other Python versions and platforms are covered by CI (see [CI/CD Setup](ci-setup.md)).
+CI does not use the uv environment: it installs the built wheel and a hand-maintained
+list of test dependencies, then runs `pytest tests/` from `bindings/python` (see
+[CI Gates](ci-setup.md#ci-gates)).
 
 ### Running Tests
 
 ```bash
-# Run all tests
+# Run all tests (from the repository root or bindings/python; from any other
+# directory a bare run collects only that directory)
 uv run pytest
 
 # Run specific category (paths are relative to the repository root)
@@ -212,12 +217,12 @@ tests/
 ├── test_graph_algorithms_sql.py        # shortestPath / dijkstra / astar
 ├── test_graph_api.py                   # Graph API tests
 ├── test_graph_batch.py                 # Bulk graph ingest helper
-├── test_hash_index_schema.py           # HASH index schema tests
+├── test_hash_index_schema.py           # HASH index schema tests, plus a named-list IN parameter on an LSM_TREE index
 ├── test_import_database.py             # SQL import workflow tests
 ├── test_importer_api.py                # Import helper wrapper tests
 ├── test_jar_provenance.py              # Engine provenance carried by the wheel
 ├── test_java_package_shadowing.py      # java/ or com/ folders on the path
-├── test_jvm.py                         # start_jvm() re-entry tests
+├── test_jvm.py                         # start_jvm() re-entry, close and reopen in one process, and exit with an unclosed database
 ├── test_jvm_args.py                    # JVM argument tests
 ├── test_jvm_payload.py                 # No Python list crosses into the JVM
 ├── test_logging_helper.py              # Internal logging helper tests
@@ -228,6 +233,7 @@ tests/
 ├── test_resultset_arrow.py             # ResultSet.to_arrow() tests
 ├── test_runtime_cache.py               # Dev-mode runtime cache tests
 ├── test_schema.py                      # Schema tests
+├── test_schema_batching.py             # Schema statements apply at once; many batch in one transaction
 ├── test_server.py                      # Server tests
 ├── test_server_http_endpoints.py       # Server HTTP features the bindings do not wrap
 ├── test_server_packaging.py            # Server stack bundled in the wheel
@@ -242,7 +248,7 @@ tests/
 ├── test_vector_params_verification.py  # Vector parameter validation tests
 ├── test_vector_second_pass.py          # Repeated query sets return the same neighbours
 ├── test_vector_sql.py                  # Vector SQL tests
-└── test_wheel_platform_tag.py          # Wheel platform tag tests
+└── test_wheel_platform_tag.py          # Wheel platform tag tests, and __version__ equals the installed distribution version
 ```
 
 ## Next Steps

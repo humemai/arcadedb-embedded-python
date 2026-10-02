@@ -97,10 +97,15 @@ gh release create X.Y.Z --verify-tag \
 
 - Check the Actions tab for "Build and Release Python Packages to PyPI" (`release-python-packages.yml`) and "Deploy MkDocs to GitHub Pages" (`deploy-python-docs.yml`).
 - The release workflow first checks that the tag's base version equals the `pom.xml`
-  base version, then runs both test workflows, then publishes the 20 wheels.
+  base version, then runs both test workflows, then publishes the wheels.
+- The publish job has `continue-on-error: true`, so the run stays green even when the
+  PyPI upload fails. Check PyPI for every wheel the release built.
 - Every tag push deploys its docs as `latest`, dev tags included. To publish docs
   without moving `latest`, run the docs workflow by hand (`workflow_dispatch`) with
   `set_latest=false`.
+- The docs workflow does not wait for the release, so a tag whose release fails still
+  deploys its docs as `latest`. If the release failed, move `latest` back (see
+  [Rolling Back a Release](#rolling-back-a-release)).
 
 ### 6. After the Release
 
@@ -142,42 +147,50 @@ The Python bindings use an **automated versioning system** that extracts version
 |-------------------------|----------------|----------|
 | `26.10.1-SNAPSHOT` | `26.10.1.dev0` | Development builds |
 | `26.9.1` | `26.9.1` | Release builds |
-| `26.9.1` (with `--python-patch=1`) | `26.9.1.post1` | Python-specific patches |
-| `26.9.1` (with `--python-patch=2`) | `26.9.1.post2` | Additional Python patches |
+| `26.9.1` (tag `26.9.1.post1`) | `26.9.1.post1` | Python-only fix to a release |
 
 ### Development Mode vs Release Mode
 
 **Development Mode** (SNAPSHOT versions):
 
 - Triggered by: `-SNAPSHOT` suffix in `pom.xml`
-- Conversion: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0`
+- Conversion: `X.Y.Z-SNAPSHOT` → `X.Y.Z.devN`, where N comes from the untracked
+  `scripts/.dev_version_tracker.json` and is 0 when that file has no entry for the version
+  (no build step adds one)
 - Purpose: Pre-release development builds
 - Example: `26.10.1-SNAPSHOT` → `26.10.1.dev0`
 
 **Release Mode** (clean versions):
 
 - Triggered by: No `-SNAPSHOT` suffix in `pom.xml`
-- Conversion: `X.Y.Z` → `X.Y.Z` (or `X.Y.Z.postN` for Python patches)
+- Conversion: `X.Y.Z` → `X.Y.Z` (a `.postN` version comes from the tag; see below)
 - Purpose: Official releases to PyPI
-- Example: `26.9.1` → `26.9.1` or `26.9.1.post1`
+- Example: `26.9.1` → `26.9.1`
 
 ### Python-Specific Patches
 
-For Python-only bug fixes that don't require a new ArcadeDB version:
+A Python-only fix to a released version ships as `X.Y.Z.postN` (see
+[Hotfix Release](#hotfix-release-xyzpostn)). The suffix comes from the tag, not from
+`pom.xml`: the release workflow passes the tag to both test workflows as `build-version`,
+they export it as `BUILD_VERSION`, and `build.sh` hands it to the Docker build or to
+`build-native.sh`, which write it into `pyproject.toml` in place of the version derived
+from `pom.xml`. To build such a wheel locally:
 
 ```bash
-# Compute the version with a Python patch number
-python scripts/extract_version.py --python-patch=1
-
-# Results in version: 26.9.1.post1 (if base ArcadeDB version is 26.9.1)
+BUILD_VERSION=26.9.1.post1 ./scripts/build.sh
 ```
+
+Without `BUILD_VERSION`, `extract_version.py` derives the version from `pom.xml` as
+described above.
 
 ### Implementation Details
 
 The conversion is handled by `bindings/python/scripts/extract_version.py` (see file for detailed implementation). Key features:
 
 - **Automatic Detection**: Distinguishes development vs release mode automatically
-- **Command Line Interface**: Supports `--python-patch=N` parameter for .postN versions
+- **Command Line Interface**: `--format=docker` prints the raw `pom.xml` version (the image
+  tag). Its `--python-patch=N` option is not used by any build path; the `.postN` suffix
+  comes from the tag
 - **Error Handling**: Validates input and provides clear error messages
 - **Flexible Usage**: Can be called from build scripts, Docker, or manually
 
@@ -197,7 +210,7 @@ Python bindings follow the ArcadeDB main project version from `pom.xml`:
 1. Upstream sets it in the root `pom.xml`: `<version>X.Y.Z-SNAPSHOT</version>` or `<version>X.Y.Z</version>`
 2. `scripts/extract_version.py` converts based on mode:
     - Development: `X.Y.Z-SNAPSHOT` → `X.Y.Z.dev0`
-    - Release: `X.Y.Z` → `X.Y.Z` (or `X.Y.Z.postN` with --python-patch)
+    - Release: `X.Y.Z` → `X.Y.Z` (a `.postN` comes from the tag, through `BUILD_VERSION`)
 3. Create annotated tag: `git tag -a X.Y.Z -F notes.md`
 4. GitHub Release tag: `X.Y.Z`
 5. Workflows use the tag version directly: `X.Y.Z`, `X.Y.Z.devN`, or `X.Y.Z.postN`
@@ -310,6 +323,10 @@ uv run --project .. --group docs mike alias --update-aliases \
 - Ensure `git config` is set in workflow
 - Check that the `HUMEMAI_DOCS_TOKEN` secret is set and can push to `humemai/humemai-docs`
 - Verify the `main` branch of `humemai/humemai-docs` exists (docs deploy there under `arcadedb/`)
+- The deploy installs the latest `mkdocs-material`, `mkdocs-git-revision-date-localized-plugin`,
+  `mkdocs-macros-plugin`, and `mike` with `uv pip install --system`, not the locked `docs`
+  group of the repo-root project, so a page that builds locally can still differ in the
+  deployed build
 
 **Version not appearing:**
 
@@ -334,7 +351,8 @@ uv run --project .. --group docs mike alias --update-aliases \
 **Test failures:**
 
 - Run specific test: `uv run pytest bindings/python/tests/test_core.py::test_name -v` (from the repository root)
-- Check logs in `bindings/python/log/`
+- Check `log/` in the directory pytest ran from (`<repo root>/log/` for the command above;
+  `bindings/python/log/` in CI)
 - The tests use the wheel's bundled JRE, so no system Java is involved
 
 ## See Also

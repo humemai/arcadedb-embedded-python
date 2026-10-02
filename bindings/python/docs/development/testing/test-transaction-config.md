@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_transaction_config.py){ .md-button }
 
-There are 10 tests covering WAL flush modes and their database-wide scope, read-your-writes, auto-transaction control, and combinations of these settings (plus error handling on a closed database).
+These tests cover WAL flush modes and their database-wide scope, read-your-writes, auto-transaction control, and combinations of these settings (plus error handling on a closed database).
 
 ## Key Config Options
 
@@ -34,8 +34,7 @@ temp_db.set_wal_flush("no")
 ### test_set_wal_flush_is_database_wide
 
 Pins that `set_wal_flush()` reaches the transactions of every thread on the database: a thread that never called it
-commits with the mode another thread set. Until `ArcadeData/arcadedb#8397` (26.10.1) the setter changed only the
-calling thread (`#8352`), and this test pinned that instead; if the scope ever goes back, the test fails and the
+commits with the mode another thread set. If the scope ever narrows to the calling thread, the test fails and the
 durability section of the transactions guide must change with it. The process default is read from a fresh thread
 first rather than assumed to be `NO`, because a production-mode server anywhere in the process raises it to 1 for
 every database opened afterwards (`test_server.py` starts one, and CI runs it first).
@@ -139,7 +138,7 @@ Tests manual transaction control with auto-transaction disabled.
 
 **What it tests:**
 
-- With `set_auto_transaction(False)`, writes inside an explicit `db.transaction()` context are persisted (count == 2); the test does not try a write outside a transaction
+- With `set_auto_transaction(False)`, writes inside an explicit `db.transaction()` context are visible to a later query (count == 2); the test does not try a write outside a transaction
 - Auto-transaction is re-enabled in a `finally` block
 
 **Pattern:**
@@ -241,7 +240,7 @@ with pytest.raises(ValueError, match="Invalid WAL flush mode"):
 with pytest.raises(ArcadeDBError, match="closed"):
     db.set_wal_flush("no")
 
-# Records written under any flush mode are persisted
+# Records written under any flush mode are visible to a later query
 count = next(db.query("sql", "SELECT count(*) as cnt FROM ConfigTest")).get("cnt")
 assert count == 2
 ```

@@ -9,16 +9,18 @@ plus an EXHAUSTIVE scan of the buffer, merged and deduped, with tombstoned
 entries filtered out.
 
 That design is why the October dense table can say what it says about
-mutation cost, so its two load-bearing properties are pinned here:
+mutation cost. It rests on two properties:
 
   CORRECTNESS  a vector in the buffer is found exactly, because brute force
                is exact -- not "eventually", not "after a rebuild".
   COST         the buffer is scanned per query, so the work is deferred into
                a per-query tax rather than skipped.
 
-Both are asserted below the rebuild threshold, which is the only place they
-can be told apart: above it a rebuild fires and a passing search proves
-nothing about the delta path.
+Only CORRECTNESS is asserted, and only below the rebuild threshold, the one
+place the delta path can be told apart: above it a rebuild fires and a
+passing search proves nothing about the delta path. COST is not measured:
+when the index reports its counters, the test checks only that no rebuild
+fired, the graph node count did not change, and the delta buffer is not empty.
 """
 
 import math as _math

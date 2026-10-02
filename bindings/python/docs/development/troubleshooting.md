@@ -38,6 +38,34 @@ Common issues, solutions, and debugging techniques for ArcadeDB Python bindings.
     ```
 ---
 
+## Development Environment
+
+These apply to the repository's uv environment (the repo-root `pyproject.toml`).
+
+### `uv run` Cannot Resolve `arcadedb-embedded`
+
+The environment takes `arcadedb-embedded` only from the wheels in
+`bindings/python/dist/`, and it is pinned to Python 3.12, so it needs a cp312 wheel
+there. Build one with `cd bindings/python && ./scripts/build.sh` (on Linux it builds
+for Python 3.12 by default).
+
+### The Environment Still Runs an Older Wheel
+
+`build.sh` refreshes the environment only when `CI` is unset and `uv` is on `PATH`.
+Refresh it by hand from the repository root:
+
+```bash
+uv lock --upgrade-package arcadedb-embedded && uv sync --reinstall-package arcadedb-embedded
+```
+
+To see which engine is installed:
+
+```bash
+uv run python -c "import arcadedb_embedded as a; print(a.__version__, a.jar_fingerprint()['engine_sha256'])"
+```
+
+---
+
 ## Runtime Errors
 
 ### Database Connection Issues
@@ -108,21 +136,11 @@ db = arcadedb.create_database("./mydb")
 
 ---
 
-### Script Hangs at Exit
+### Database Left Open at Exit
 
-**Symptom (older wheels):** The Python process finished its work but never
-exited (or printed `Windows fatal exception: access violation` during
-shutdown).
-
-**Cause:** A `Database` was left open. Older engines ran non-daemon
-background threads (asynchronous WAL flushing, index maintenance) until
-`close()` was called, and the JVM could not terminate while they were alive.
-
-**Current behavior:** Fixed on both sides. The engine's background threads are
-daemon threads and it installs its own JVM shutdown hook (#5418), and since
-26.8.1 the bindings also close any database still open when the interpreter
-exits. Explicit `db.close()` (or a `with` block) is still the recommended pattern:
-it flushes deterministically and releases the lock for other processes.
+The bindings close any database still open when the interpreter exits. Call
+`db.close()` (or use a `with` block) to flush and release the database lock at a
+known point instead.
 
 ---
 
@@ -184,7 +202,7 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g")
 | `-Xms<size>` | Initial heap size (recommended: same as `-Xmx`) | `-Xms8g` |
 | `-XX:MaxDirectMemorySize=<size>` | Limit off-heap direct buffers | `-XX:MaxDirectMemorySize=8g` |
 | `-Darcadedb.vectorIndex.graphBuildCacheSize=<count>` | Override for the vectors cached during the graph build (default `0`, automatic; leave it) | `-Darcadedb.vectorIndex.graphBuildCacheSize=2000000` (only to bound a build on a small heap) |
-| `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>` | FLOOR for the rebuild threshold (default: 100). The effective threshold is `max(floor, min(graphSize x rebuildGraphRatio, maxPendingMutations))`, so on a 1M-vector index at the defaults it is **50,000**, not 100, so raising this alone changes nothing above ~500 vectors | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=200` |
+| `-Darcadedb.vectorIndex.mutationsBeforeRebuild=<count>` | FLOOR for the rebuild threshold (default: 100). The effective threshold is `max(floor, min(graphSize x rebuildGraphRatio, maxPendingMutations))`, so on a 1M-vector index at the defaults it is **50,000**, not 100, so raising this alone changes nothing above ~500 vectors. Separately, `arcadedb.vectorIndex.maxDeltaScanRatio` (default 1.0) triggers a rebuild sooner when a query's scan of the pending vectors costs more than that multiple of its graph walk; the floor still applies | `-Darcadedb.vectorIndex.mutationsBeforeRebuild=200` |
 
 **Vector Index Memory Tuning:**
 
@@ -208,22 +226,17 @@ start_jvm(
 
 **Cache Size Guidelines:**
 
-- `locationCacheSize`: **removed** (ArcadeDB issues #5559, #5568). It was never
-  a cache: a vector location is the only mapping from a vector id to its record,
-  so a bound on it did not spill to disk, it dropped vectors from searches and
-  from `countEntries()`. The per-index metadata key is now rejected (and the
-  bindings raise `ValueError` for `location_cache_size`); the JVM property
-  `arcadedb.vectorIndex.locationCacheSize` is ignored, with a warning for a positive
-  value. Size the heap for the live vector set instead.
+- `locationCacheSize`: not a setting. The bindings raise `ValueError` for
+  `location_cache_size`, the engine refuses the per-index metadata key, and the JVM
+  property `arcadedb.vectorIndex.locationCacheSize` is ignored. Size the heap for the
+  live vector set instead.
 
 - `graphBuildCacheSize`: vectors held in RAM while the graph is built. **Leave
     it at the default.** The default (`0`) is automatic: the engine sizes the
     cache from the heap it actually has free and takes the whole corpus when it
     fits, so a build never re-reads vectors from disk unnecessarily. Set an
     absolute count only when you deliberately run a small heap and want the
-    build bounded; memory ≈ cacheSize × (dimensions × 4 + 64) bytes. (Engines
-    before 26.10 read a post-GC heap figure that included the page cache and
-    could pick a fraction of the corpus on a large heap; that is fixed upstream.)
+    build bounded; memory ≈ cacheSize × (dimensions × 4 + 64) bytes.
 
 **Memory Planning:**
 
@@ -340,9 +353,11 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
         )
     ```
 
-2. **Convert NumPy Arrays**:
+2. **Pass NumPy Arrays Directly as Parameters**: a NumPy array passed as a bound
+    parameter is converted to a Java `float[]` automatically. Only `Document.set()`
+    needs an explicit `to_java_float_array()` (see
+    [Type Conversion Error](#type-conversion-error)).
     ```python
-    from arcadedb_embedded import to_java_float_array
     import numpy as np
 
     arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
@@ -350,7 +365,7 @@ start_jvm(heap_size="8g", jvm_args="-Xms8g -XX:MaxDirectMemorySize=8g")
         db.command(
             "sql",
             "INSERT INTO EmbeddingDoc SET embedding = ?",
-            to_java_float_array(arr),
+            arr,
         )
     ```
 ---
@@ -407,7 +422,7 @@ with db.transaction():
 **Symptom:**
 ```python
 db.query("sql", "SELECT * FROM User WHERE name = Alice")
-# ArcadeDBError: Syntax error near 'Alice'
+# ArcadeDBError: Query failed: ...
 ```
 
 **Cause:** String not properly quoted.
@@ -617,7 +632,6 @@ all_results = list(result)  # Loads everything!
 result = db.query("sql", "SELECT FROM LargeTable")
 for row in result:
     process(row)
-    # Only one row in memory
 ```
 
 2. **Close ResultSets you stop reading early:**
@@ -667,7 +681,7 @@ for i in range(0, 1000000, batch_size):
 ```python
 server = arcadedb.create_server("./databases", root_password="change-me")
 server.start()
-# ArcadeDBError: Unable to start server
+# ArcadeDBError: Failed to start server: ...
 ```
 
 **Solutions:**
@@ -697,16 +711,10 @@ ls -la ./databases
 chmod -R 755 ./databases
 ```
 
-3. **Check logs:**
-```python
-# Enable logging
-import logging
-logging.basicConfig(level=logging.DEBUG)
-
-server = arcadedb.create_server("./databases", root_password="change-me")
-server.start()
-# Check log output
-```
+3. **Check logs:** the engine does not log through Python's `logging`. It writes
+   `./log/arcadedb.log.*` relative to the working directory, server events go to
+   `<root_path>/log/server-event-log-*.jsonl`, and a JVM crash leaves
+   `./log/hs_err_pid*.log` (or the path in `ARCADEDB_JVM_ERROR_FILE`).
 
 ---
 
@@ -893,8 +901,14 @@ logging.basicConfig(
 )
 
 import arcadedb_embedded as arcadedb
-# Now all operations will be logged
+# Python logging carries only the bindings' own records: DEBUG lines for
+# exceptions swallowed during cleanup, and a WARNING when a bridge class is missing
 ```
+
+**Engine and server logs:** the engine writes `./log/arcadedb.log.*` relative to the
+working directory, server events go to `<root_path>/log/server-event-log-*.jsonl`,
+and a JVM crash leaves `./log/hs_err_pid*.log` (or the path in
+`ARCADEDB_JVM_ERROR_FILE`).
 
 **Java logging:**
 
@@ -1087,7 +1101,8 @@ else:
     Include:
 
     - Python version (`python --version`)
-    - Package version (`pip show arcadedb-embedded`)
+    - Package version and engine hash
+      (`python -c "import arcadedb_embedded as a; print(a.__version__, a.jar_fingerprint()['engine_sha256'])"`)
     - Minimal reproducible example
     - Full error message with stack trace
     - Operating system

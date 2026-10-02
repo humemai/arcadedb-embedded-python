@@ -2,7 +2,7 @@
 
 [View source code]({{ config.repo_url }}/blob/{{ config.extra.version_tag }}/bindings/python/tests/test_concurrency.py){ .md-button }
 
-There are 5 tests covering file locking, thread safety, sequential access, the multi-process limitation, and a mixed OLTP-style workload.
+The tests cover file locking, thread safety, sequential access, the multi-process limitation, and a mixed OLTP-style workload.
 
 ## Key Insight
 
@@ -34,7 +34,7 @@ Seeds 1,000 accounts, then 4 threads run 400 operations each, 90% point reads an
 
 ## What the lock looks like from a second process
 
-This is what test 4 does:
+This is what `test_concurrent_access_limitation` does:
 
 ```python
 import subprocess
@@ -58,11 +58,11 @@ print(out.stdout)  # LOCKED: ... is locked by another process (path=...)
 db.close()
 ```
 
-The child sees an `ArcadeDBError`. From 26.10.1 its message ends with the engine's root cause, `(caused by com.arcadedb.utility.LockException: Database 'mydb' is locked by another process (path=...))`; earlier wheels printed only the outer "Error on creating new database instance".
+The child sees an `ArcadeDBError` whose message ends with the engine's root cause, `(caused by com.arcadedb.utility.LockException: Database 'mydb' is locked by another process (path=...))`.
 
 ## Threads: share one instance, retry conflicting writes
 
-Share a single `Database` across threads rather than opening one per thread. Reads need no coordination. Two threads that update the same record can conflict: the losing commit raises `ArcadeDBError` with `ConcurrentModificationException` in the message, and the usual answer is to retry the transaction, as test 5 does:
+Share a single `Database` across threads rather than opening one per thread. Reads need no coordination. Two threads that update the same record can conflict: the losing commit raises `ArcadeDBError` with `ConcurrentModificationException` in the message, and the usual answer is to retry the transaction, as `test_oltp_mixed_workload_threads` does:
 
 ```python
 import time

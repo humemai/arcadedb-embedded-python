@@ -4,9 +4,8 @@ Comprehensive test suite for the ArcadeDB Python embedded bindings.
 
 For detailed test documentation, examples, and best practices, see the **[Testing Guide](https://docs.humem.ai/arcadedb/latest/development/testing/)**
 
-## Quick Stats
+## Scope
 
-- Current bindings suite
 - Package includes the embedded ArcadeDB features (SQL, OpenCypher, vectors,
   graphs) **and** the optional in-process HTTP server with Studio
 
@@ -23,7 +22,7 @@ uv run pytest tests/test_core.py -v
 uv run pytest --cov=arcadedb_embedded --cov-report=html
 
 # Run matching keyword
-pytest -k "transaction" -v
+uv run pytest -k "transaction" -v
 ```
 
 ## Test Files

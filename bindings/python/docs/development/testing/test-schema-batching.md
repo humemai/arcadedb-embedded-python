@@ -4,9 +4,7 @@
 
 Schema statements apply immediately, and many of them batch in one transaction (ArcadeData/arcadedb#8635).
 
-Until 2026-09-29 the docs called schema operations "auto-transactional" and told users not to wrap them in a transaction. Upstream's answer on #8635 is the other way round on both points: a schema statement is not transactional (it takes effect at once, and a rollback does not undo it), and running many of them inside one transaction is the recommended way to create many types, because the schema is then written to disk once when the transaction ends.
-
-There are 2 tests.
+A schema statement is not transactional: it takes effect at once, and a rollback does not undo it. Running many inside one transaction is the recommended way to create many types, because the schema is written to disk once when the transaction ends (ArcadeData/arcadedb#8635).
 
 ## Test Cases
 

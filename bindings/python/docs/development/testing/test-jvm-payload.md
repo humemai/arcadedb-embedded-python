@@ -6,19 +6,17 @@ A Python list must never be what crosses into the JVM.
 
 JPype copies a NumPy array across in one crossing and marshals a list element by element, so the cost scales with the length of every vector. The bulk paths decline a list silently, so a `.tolist()` on the way into the JVM runs, returns the right answer, and is slower. The analysis lives in `benchmarks/experiments/jvm_payload_check.py`; these tests run it from the suite so it rides CI without a workflow of its own.
 
-There are 2 tests.
-
 ## Test Cases
 
-### 1) the check has not gone blind
+### test_the_check_has_not_gone_blind
 
 Runs the checker's self-test first: a check that quietly stops matching looks exactly like a clean tree. Asserts it still finds the defects it exists for and still ignores the comparator patterns (Qdrant, Milvus, Chroma, MongoDB, Neo4j) that genuinely want Python lists.
 
-### 2) no python list crosses into the jvm
+### test_no_python_list_crosses_into_the_jvm
 
-The bindings and the benchmark adapters carry no site where a `.tolist()` flows into a call that crosses into the JVM.
+No file under `benchmarks/experiments`, `bindings/python/src`, `bindings/python/examples`, or `bindings/python/tests` carries a site where a `.tolist()` flows into a call that crosses into the JVM.
 
-Both tests skip when `benchmarks/experiments` is not checked out, because the bindings are distributed without it.
+Each test skips when `benchmarks/experiments` is not checked out, because the bindings are distributed without it.
 
 ## Running
 

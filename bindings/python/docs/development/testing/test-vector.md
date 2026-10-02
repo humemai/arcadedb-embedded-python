@@ -6,7 +6,7 @@ The test suite exercises the current Java-native JVector + LSM vector index
 used by ArcadeDB (no Python hnswlib dependency). All tests run through the Python
 bindings.
 
-There are 46 tests: five module-level tests for the array helpers and 41 in
+The array-helper tests are module-level functions; the rest are in
 `TestLSMVectorIndex`.
 
 ## Overview
@@ -63,9 +63,9 @@ What the tests cover:
 
 - **test_lsm_vector_search_approximate_product**: on a `PRODUCT` index (a `TypeIndex` wrapper), `find_nearest_approximate(k=1)` returns the closest vector.
 - **test_lsm_vector_search_approximate_typeindex**: the same through the `TypeIndex` wrapper path; skips if the build does not return one.
-- **test_lsm_vector_search_approximate_fallback**: on an index without `PRODUCT` quantization, `find_nearest_approximate()` raises `ArcadeDBError` (the docstring says "fall back", but the test asserts the error).
+- **test_lsm_vector_search_approximate_fallback**: on an index without `PRODUCT` quantization, `find_nearest_approximate()` raises `ArcadeDBError` (despite the test name, it asserts the error).
 - **test_lsm_vector_search_approximate_product_requires_enough_vectors**: a `PRODUCT` index on too few vectors raises `ArcadeDBError` mentioning `pq_clusters`.
-- **test_lsm_vector_search_approximate_returns_k**: with 256 vectors, `find_nearest_approximate(k=2)` returns exactly 2 results, each with a record and a distance.
+- **test_lsm_vector_search_approximate_returns_k**: with 261 vectors (5 hand-picked plus 256 fillers), `find_nearest_approximate(k=2)` returns exactly 2 results, each with a record and a distance.
 - **test_lsm_vector_search_approximate_persistence**: after closing and reopening, `vectorNeighbors(...)` returns one neighbour with a record and a distance (it polls up to 50 times while the graph loads).
 
 ### Size, stats, and persistence
@@ -82,7 +82,7 @@ What the tests cover:
 - **test_lsm_cosine_distance_45_degree_vectors**: vectors 45° apart are at the expected cosine distance.
 - **test_lsm_cosine_distance_3d_orthogonal_vectors**: orthogonal 3-D vectors are at distance 1.0.
 - **test_lsm_cosine_distance_3d_parallel_and_opposite**: parallel 3-D vectors are at distance below 0.01, opposite ones at 2.0.
-- **test_lsm_cosine_distance_high_dimensional**: in 128 dimensions, parallel, opposite, and near-orthogonal vectors are at about 0, 2.0, and 1.0 (skips without NumPy).
+- **test_lsm_cosine_distance_high_dimensional**: in 128 dimensions, parallel, opposite, and near-orthogonal vectors are at about 0, 2.0, and 1.0 (each check runs only for a vector that comes back; orthogonal tolerance 0.1; skips without NumPy).
 - **test_lsm_euclidean_distance**: with `EUCLIDEAN`, the reported distances are 0.0 for the origin and 25.0 for the point (3, 4) (the squared Euclidean distance from the origin), and the origin comes back first.
 
 ### Quantization
@@ -93,7 +93,7 @@ What the tests cover:
 
 ## SQL Vector Functions Tests
 
-SQL vector operations are tested separately in `test_vector_sql.py`, including vector math functions, distance calculations, aggregations, quantization (with known limitations), and SQL-based index creation and search.
+SQL vector operations are tested separately in `test_vector_sql.py`, including vector math functions, distance calculations, aggregations, quantization (the INT8 SQL test does not check the returned vector's values), and SQL-based index creation and search.
 
 ## Common Patterns
 

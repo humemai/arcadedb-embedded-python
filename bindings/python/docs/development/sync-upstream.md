@@ -27,7 +27,7 @@ In order:
 6. Keeps this fork's own copies of the paths listed in `FORK_OWNED_PATHS` in the script (the root `README.md`, `pyproject.toml`, `uv.lock`, and a few others), and keeps the paths in `FORK_EXCLUDED_PATHS` (such as `CLAUDE.md`) out of the fork.
 7. Treats `.github/` as an **allowlist**: after the merge it deletes every tracked file under `.github/` that is not named in `FORK_GITHUB_ALLOWLIST`, so no upstream workflow arrives. A list of files to delete could only name the ones that existed when it was written; the allowlist also stops the ones upstream adds later. Adding a workflow of our own therefore means adding it to that list in the same commit, or the next sync deletes it.
 
-The lists live in `sync-upstream.sh` and nowhere else on purpose: this page used to repeat the workflows by name and had gone stale.
+The lists live in `sync-upstream.sh` and nowhere else on purpose.
 
 ## When the merge stops on conflicts
 
@@ -84,10 +84,10 @@ be undone afterwards.
 
 The verification routine:
 
-1. `./sync-upstream.sh`, then `./scripts/build.sh linux/amd64` in `bindings/python`. Pass `JAR_LIB_DIR` if the fix has not reached a published upstream image yet; otherwise the wheel does not contain it.
+1. `./sync-upstream.sh`, then `./scripts/build.sh linux/amd64` in `bindings/python`. If the fix has not reached a published upstream image yet, pass the engine's JAR directory as `build.sh`'s third argument (`./scripts/build.sh linux/amd64 3.12 <jar dir>`); otherwise the wheel does not contain it. An environment variable named `JAR_LIB_DIR` is ignored.
 2. Re-run the issue's own reproduction against the new build. A Java reproduction compiles against an image's `lib/*` and needs no wheel at all, which makes it the cheaper check where one exists.
 3. Compare against the same reproduction on the build the issue was filed against. A fix is "verified" when the repro that reproduced stops reproducing, on the same host, not when the issue is closed.
-   **Mind the JVM.** Upstream's published images run **Java 21**; the wheel bundles a **Java 25** JRE, and the embedded JVM always passes `-XX:+UseCompactObjectHeaders`, which Java 21 will not even start with. Verify on the image's own Java when replying upstream (that is what the issue was filed on), and, for any fix that affects the bindings, run the same repro again with that build's jars on Java 25 and the same flag. A fix confirmed on a JVM we do not ship is not yet confirmed for us.
+   **Mind the JVM.** Upstream's published images run **Java 21**; the wheel bundles a **Java 25** JRE, and the embedded JVM adds `-XX:+UseCompactObjectHeaders` unless the JVM arguments already set it, a flag Java 21 will not even start with. Verify on the image's own Java when replying upstream (that is what the issue was filed on), and, for any fix that affects the bindings, run the same repro again with that build's jars on Java 25 and the same flag. A fix confirmed on a JVM we do not ship is not yet confirmed for us.
 4. Record the verification next to the issue, with the commit it was verified against.
 5. Apply what the answer changes in practice across the package, the same day: `src/`, `tests/`, `examples/`, and `docs/`, not only the code that found the issue. A maintainer's answer often carries a recommendation (a setting, a statement, a pattern to avoid) beyond the fix itself. Install the rebuilt wheel first, so the new behavior can be tested locally; a test for a new feature should fail on the last release (`uv run --no-project --with arcadedb-embedded==<last release> python -m pytest ...`) and must not pass vacuously on the new one. The routine is not finished at the reply.
 

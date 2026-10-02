@@ -49,15 +49,17 @@ We use a **hybrid build approach** to create platform-specific wheels:
 
 1. **setup.py with BinaryDistribution class**: Overrides default behavior
 2. **Platform-specific JRE**: Each wheel contains native binaries
-3. **Platform tags**: Automatically set by setuptools based on JRE contents
+3. **Platform tags**: Set per build method. The Linux Docker build passes
+   `--plat-name=manylinux_2_34_<arch>` and then checks that tag against the highest GLIBC
+   version the bundled JRE needs (`scripts/verify_wheel_platform_tag.py`). The macOS build
+   sets `_PYTHON_HOST_PLATFORM=macosx-11.0-arm64` (`scripts/build-native.sh`). The Windows
+   build takes `win_amd64` from the interpreter.
 
 ### Why Platform-Specific Wheels Matter
 
-Initially, we were creating `py3-none-any` wheels because:
-
-- `pyproject.toml` alone doesn't communicate platform-specificity to setuptools
-- Without `setup.py`, setuptools assumes "pure Python" package
-- Result: All platforms got same wheel name, installers could not select correct one
+`pyproject.toml` alone does not tell setuptools that the package is platform-specific.
+Without `setup.py`, setuptools treats it as a pure Python package, every platform gets the
+same `py3-none-any` wheel name, and installers cannot select the correct one.
 
 **The Solution - setup.py**:
 
@@ -103,7 +105,7 @@ See `bindings/python/setup.py` for the complete implementation.
 
 ### Jobs
 
-`test-python-bindings.yml` runs five jobs. Two build the wheels:
+`test-python-bindings.yml` runs these jobs. `download-jars` and `test` build the wheels:
 
 ```yaml
 jobs:
@@ -120,7 +122,7 @@ jobs:
     # Builds platform-specific wheel, runs tests
 ```
 
-The other three are `bandit` (security scan), `dependency-floors` (audit of the declared
+The others are `bandit` (security scan), `dependency-floors` (audit of the declared
 dependency floors), and `test-summary`. See [CI/CD Setup](ci-setup.md#ci-gates).
 
 ### Job 1: download-jars (Ubuntu)
@@ -143,10 +145,14 @@ The JARs are filtered later, by the build that packages them (see
 
 1. Run Docker multi-stage build on native ARM64/AMD64 runner
 2. Build platform-specific wheel:
-    - `jre-builder`: Creates platform-specific JRE via `jlink`
+    - `jre-builder`: Filters the JARs, compiles `arcadedb-python-bridge.jar`, and creates the
+      platform-specific JRE via `jdeps` and `jlink`
     - `python-builder`: Builds wheel with bundled JRE
+    - `tester`: Installs the wheel in a clean image and runs a create, insert, and query
+      smoke script (not pytest)
 3. Skip artifact download (Docker gets JARs directly)
-4. Tests run on same native platform
+4. `build.sh` runs the `tester` smoke stage; the full suite then runs on the runner host
+   against the built wheel
 
 #### macOS Platform (Native)
 
@@ -231,32 +237,42 @@ errors=$(grep -oE 'errors="[0-9]+"' test-results.xml | grep -oE '[0-9]+')
 # Stage 1: java-builder (the ArcadeDB image; ARCADEDB_TAG is a required build arg)
 FROM arcadedata/arcadedb:${ARCADEDB_TAG} AS java-builder
 
-# Stage 2: jre-builder (filters JARs, creates JRE)
+# Stage 2: jre-builder (filters JARs, compiles the bridge JAR, creates JRE)
 FROM amazoncorretto:25 AS jre-builder
 COPY --from=java-builder /home/arcadedb/lib /build/upstream-jars/
 COPY bindings/python/local-jars/lib/ /build/local-jars/
 # Uses /build/local-jars instead of the image's JARs when USE_LOCAL_JARS=1
 # Reads jar_exclusions.txt
 # Filters out excluded JARs before packaging
+# Compiles arcadedb-python-bridge.jar from bindings/python/src/java with javac
+# Runs jdeps on the JARs and adds jdk.management, jdk.zipfs, jdk.unsupported,
+# and jdk.incubator.vector to the detected modules
 # Runs jlink → creates /build/jre (platform-specific!)
 
 # Stage 3: python-builder (builds wheel)
 FROM python:${PYTHON_VERSION}-slim AS python-builder
 COPY --from=jre-builder /build/jars /build/jars/
 COPY --from=jre-builder /build/jre /build/jre/
-# Builds wheel with bundled JRE
+# Builds wheel with bundled JRE; on Linux, checks the manylinux tag against the JRE
+
+# Stage 4: export (build.sh copies the wheel out of this stage)
+FROM python-builder AS export
+
+# Stage 5: tester (installs the wheel in a clean image, runs a smoke script)
+FROM python:${PYTHON_VERSION}-slim AS tester
 ```
 
-### Key Fix: Copy from jre-builder, not java-builder
-
-**Bug:** Originally copied from `java-builder` → got unfiltered JARs
-**Fix:** Copy from `jre-builder` → gets the filtered JAR set
+`python-builder` copies the JARs from `jre-builder`, not from `java-builder`, so it gets the
+filtered JAR set.
 
 ## Native Build Script
 
 ### `scripts/build-native.sh` Workflow
 
 ```bash
+# 0. Check for Java 25 or later and jlink; pick the first of python3.13, python3.12,
+#    python3.11, python3, and python that has a working `build` module
+
 # 1. Use JARs already in src/arcadedb_embedded/jars (the CI artifact)
 if [ -d "$JARS_DIR" ]; then
   echo "Using existing JARs"
@@ -267,7 +283,9 @@ fi
 
 # 2. Apply jar_exclusions.txt (CRLF-safe on Windows)
 
-# 3. Create platform-specific JRE via jlink
+# 3. Compile arcadedb-python-bridge.jar from src/java with javac
+
+# 4. Create platform-specific JRE via jlink
 jlink --output jre \
   --add-modules "$MODULES" \
   --strip-debug \
@@ -275,11 +293,13 @@ jlink --output jre \
   --no-header-files \
   --compress zip-9
 
-# 4. Remove Windows-only non-runtime artifacts when needed
+# 5. Remove Windows-only non-runtime artifacts when needed
 
-# 5. Stage JRE into src/arcadedb_embedded/jre
+# 6. Stage JRE into src/arcadedb_embedded/jre
 
-# 6. Build wheel
+# 7. Write version, name, and description into pyproject.toml; run write_version.py
+
+# 8. Delete dist/*.whl, then build the wheel
 python -m build --wheel
 ```
 
@@ -287,11 +307,22 @@ python -m build --wheel
 `jar_exclusions.txt` themselves, so the artifact, fallback Docker downloads, and Windows checkouts
 all end up with the same JAR set.
 
+When you run a native build by hand:
+
+- An existing, non-empty `src/arcadedb_embedded/jars` is reused whatever engine version it
+  holds. Docker is needed only to fill it when it is empty; delete it to pick up another engine.
+  A JAR directory passed as `build.sh`'s third argument is not used by native builds.
+- `JAVA_HOME` must be set: the script runs with `set -u` and reads `$JAVA_HOME/jmods`.
+- The Python version argument of `build.sh` is not used. The interpreter is the first match
+  of the fallback list in step 0.
+- The script rewrites the tracked `bindings/python/pyproject.toml` in place (version, name,
+  and description). Revert that file before you commit.
+
 ## GitHub ARM64 Runners (linux/arm64)
 
 ### Native ARM64 Support
 
-As of late 2024, GitHub Actions provides **free native ARM64 runners** for public repositories:
+GitHub provides native ARM64 runners (`ubuntu-24.04-arm`) for public repositories:
 
 ```yaml
 - platform: linux/arm64
@@ -300,7 +331,7 @@ As of late 2024, GitHub Actions provides **free native ARM64 runners** for publi
 
 ### Benefits
 
-- **Native performance:** No emulation overhead (3-4x faster than QEMU)
+- **Native performance:** No emulation overhead
 - **True platform builds:** `jlink` creates actual ARM64 JRE
 - **Free for public repos:** Part of GitHub Actions free tier
 - **Consistent with other platforms:** Same build process as linux/amd64
@@ -326,12 +357,20 @@ bindings/python/
 ├── scripts/jar_exclusions.txt  # Single source of truth for JAR filtering
 ├── scripts/Dockerfile.build    # Docker builds (Linux)
 ├── scripts/setup_jars.py       # Copies JARs/JRE to package
+├── scripts/extract_version.py  # Reads the version from pom.xml
+├── scripts/write_version.py    # Writes src/arcadedb_embedded/_version.py
+├── scripts/verify_wheel_platform_tag.py  # Checks the manylinux tag against the JRE's GLIBC
+├── setup.py                    # BinaryDistribution: forces a platform-specific wheel
 ├── pyproject.toml              # Package metadata, dependencies
-└── src/arcadedb_embedded/
-    └── jre/                    # Bundled JRE (created during build)
-        ├── bin/java            # Platform-specific Java binary
-        ├── lib/                # JRE libraries
-        └── ...
+├── local-jars/lib/             # JARs staged from build.sh's third argument (gitignored)
+├── dist/                       # Built wheels
+└── src/
+    ├── java/                   # Bridge sources, compiled into arcadedb-python-bridge.jar
+    └── arcadedb_embedded/
+        └── jre/                # Bundled JRE (created during build)
+            ├── bin/java        # Platform-specific Java binary
+            ├── lib/            # JRE libraries
+            └── ...
 ```
 
 ## Build Workflow File
@@ -354,44 +393,6 @@ bindings/python/
 
 4. **bandit, dependency-floors, and test-summary jobs**
     - See [CI/CD Setup](ci-setup.md#ci-gates)
-
-## Common Issues & Solutions
-
-### Issue 1: All Platforms Created Identical Linux Wheels
-
-**Problem:** Original Docker-only approach built linux-x64 JRE for all platforms.
-
-**Solution:** Native runners for macOS, Docker only for Linux.
-
-### Issue 2: Test Count Parsing Failed
-
-**Problem:** `grep -P` (Perl regex) not available on macOS.
-
-**Solution:** Switch to JUnit XML + POSIX-compatible `grep -oE`.
-
-### Issue 3: Docker Copied Unfiltered JARs
-
-**Problem:** `python-builder` copied from `java-builder` (unfiltered JARs) instead of `jre-builder` (filtered JARs).
-
-**Solution:** Change `COPY --from=java-builder` to `COPY --from=jre-builder`.
-
-### Issue 4: Linux Builds Downloaded Unnecessary Artifact
-
-**Problem:** Linux Docker builds downloaded the JAR artifact but didn't use it.
-
-**Solution:** Skip artifact download for Linux platforms (Docker gets JARs directly).
-
-### Issue 5: Bash Counter Increment Failed
-
-**Problem:** `COUNTER=$((COUNTER+1))` failed with `set -e` in bash.
-
-**Solution:** Use `((COUNTER++))` or `COUNTER=$((COUNTER + 1))` (spaces matter).
-
-### Issue 6: Sed Pattern Too Greedy
-
-**Problem:** Sed regex captured too much when parsing test output.
-
-**Solution:** Switch to JUnit XML (structured data, no regex).
 
 ## Size Breakdown (current ballpark)
 
@@ -416,8 +417,10 @@ cd bindings/python
 ./scripts/build.sh linux/amd64 3.12
 
 # Or embed JARs you built yourself (third argument, JAR_LIB_DIR)
-./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-*/lib
+./scripts/build.sh linux/amd64 3.12 ../../package/target/arcadedb-<version>.dir/arcadedb-<version>/lib
 ```
+
+That directory is the full assembly's `lib`, the same JAR set the image ships.
 
 Without `JAR_LIB_DIR`, the Linux build copies its JARs from the
 `arcadedata/arcadedb:<tag>` image, so engine changes in your local checkout are **not**
@@ -427,7 +430,7 @@ and pass their directory as the third argument. `build.sh` stages them into
 `local-jars/lib` and the Docker build uses them instead of the image's.
 
 `build.sh` reads the ArcadeDB tag from `pom.xml` and passes it on. If you call the lower-level
-scripts directly, `build-native.sh` needs `PLATFORM PACKAGE_NAME PACKAGE_DESCRIPTION ARCADEDB_TAG`
+scripts directly, `build-native.sh` needs `PLATFORM PACKAGE_NAME PACKAGE_DESCRIPTION ARCADEDB_TAG [BUILD_VERSION]`
 (the tag comes from `python3 scripts/extract_version.py --format=docker`), and `Dockerfile.build`
 needs `--build-arg ARCADEDB_TAG=<tag>`.
 
