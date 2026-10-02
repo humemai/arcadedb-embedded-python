@@ -140,11 +140,13 @@ def test_default_host_is_localhost(temp_server_root):
 def test_failed_server_start_does_not_hang_process_exit(tmp_path):
     """A server.start() that fails part-way must not leave the process unable to exit.
 
-    Regression: with a later plugin's port taken, the engine has already started
+    Regression: when a plugin fails to start, the engine has already started
     non-daemon threads (the HTTP idempotency cleaner, the security and session
-    timers) when start() throws, and only the Java stop() ends them. The wrapper's
-    stop() returned early because the start never completed, so the process hung
-    at exit (a CI job ran 28 minutes past its tests on 2026-10-02).
+    timers) and only the Java stop() ends them. The wrapper's stop() returned
+    early because the start never completed, so the process hung at exit (a CI
+    job ran 28 minutes past its tests on 2026-10-02). The failure is forced with
+    a Postgres port out of range, which fails on every OS; a busy port does not
+    (macOS lets the engine's listener bind a port another socket holds).
     """
     import subprocess  # nosec B404 - fixed argv, no shell
     import sys
@@ -156,9 +158,6 @@ def test_failed_server_start_does_not_hang_process_exit(tmp_path):
         "    with socket.socket() as s:\n"
         "        s.bind(('127.0.0.1', 0))\n"
         "        return s.getsockname()[1]\n"
-        "busy = socket.socket()\n"
-        "busy.bind(('0.0.0.0', 0))\n"
-        "busy.listen()\n"
         "server = create_server(\n"
         f"    root_path={str(tmp_path / 'databases')!r},\n"
         f"    root_password={TEST_PASSWORD!r},\n"
@@ -167,12 +166,13 @@ def test_failed_server_start_does_not_hang_process_exit(tmp_path):
         "        'server_plugins': 'Redis:com.arcadedb.redis.RedisProtocolPlugin,'\n"
         "                          'Postgres:com.arcadedb.postgres.PostgresProtocolPlugin',\n"
         "        'redis_port': free(),\n"
-        "        'postgres_port': busy.getsockname()[1],\n"
+        "        'postgres_port': 70000,\n"
         "    },\n"
         ")\n"
         "try:\n"
         "    server.start()\n"
         "    print('started')\n"
+        "    server.stop()\n"
         "except Exception:\n"
         "    print('start failed')\n"
     )
