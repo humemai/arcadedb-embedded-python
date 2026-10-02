@@ -576,7 +576,9 @@ def check_protocol_overlays():
 # measured on. Disclosed on the page's lifecycle table by export_web. Remove
 # the entry at the re-pin that carries the fix, so the gate is armed again.
 KNOWN_REGRESSIONS = {
-    "vector": {
+    # A LIST PER SITUATION: one situation can carry a known regression on more
+    # than one pin (the September one below, and the October one after it).
+    "vector": [{
         "commit": "8d6af9475",
         # THE RELEASES THE REGRESSION IS IN, for rows that carry no commit.
         # engine_commit is stamped by a campaign that built a matched pair;
@@ -592,11 +594,36 @@ KNOWN_REGRESSIONS = {
         "versions": ("26.8", "26.9"),
         "why": "the first search after a write started a full async rebuild and close() waited on it; "
                "filed as #7183, fixed in #7191 for 26.10.1",
-    },
+    }, {
+        # THE OCTOBER PIN (417314c18, 2026-09-17), BUGS F159. Only the EMBEDDED
+        # arm's clean close grows with what is stored (5.4, 12.5, 88, and 1,400
+        # ms at 10k, 100k, 1M, and 10M vectors; the server arm's stays at about
+        # 5 ms at every size): the lane reads LSMVectorIndex.getStats() before
+        # close, outside the timers, and at this pin a clean close then fsyncs
+        # the data files it holds, which #8626 found and #8630 (7bb0c116f9,
+        # 2026-09-29, after this pin) fixed for 26.10.1. The page's lifecycle
+        # table already says the dense-vector row's clean figure is an upper
+        # bound for that reason; the re-pin moves the stats read out of the
+        # session (CAMPAIGN section 7 row 22) and runs on an engine with #8630,
+        # so this entry comes out then.
+        "commit": "417314c18",
+        "versions": (),
+        "why": "the embedded arm reads the index statistics before close (BUGS F159) and at this pin a clean "
+               "close then fsyncs every data file it holds (#8626, fixed by #8630 for 26.10.1); disclosed on the "
+               "page as an upper bound",
+    }],
 }
 
 
-def _known_applies(known, rows):
+def _known_applies(entries, rows):
+    """The known regression these rows come from, or None."""
+    for known in entries or ():
+        if _known_matches(known, rows):
+            return known
+    return None
+
+
+def _known_matches(known, rows):
     """Do these rows come from the engine the known regression describes?"""
     if not known:
         return False
@@ -727,8 +754,8 @@ def check_close_cost(rows):
             # Scoped to THIS cell's rows, not to every lifecycle row in the
             # set: one arm carrying the regressed build was licensing the
             # exception for arms that did not.
-            known = KNOWN_REGRESSIONS.get(sit)
-            if _known_applies(known, cell_rows):
+            known = _known_applies(KNOWN_REGRESSIONS.get(sit), cell_rows)
+            if known:
                 print(f"  KNOWN: {sit}/{scale} clean session (open+close) {med:.1f} ms "
                       f"median of {len(vals)} exceeds the 100 ms budget: {known['why']}")
             else:
@@ -745,8 +772,8 @@ def check_close_cost(rows):
         if "lc10k" in sizes and "lc100k" in sizes:
             small, big = sizes["lc10k"], sizes["lc100k"]
             if small > 0 and big / small > 1.5:
-                known = KNOWN_REGRESSIONS.get(sit)
-                if _known_applies(known, by_sit_rows[sit]):
+                known = _known_applies(KNOWN_REGRESSIONS.get(sit), by_sit_rows[sit])
+                if known:
                     print(f"  KNOWN: {sit} clean session grows {big / small:.1f}x "
                           f"({small:.1f} -> {big:.1f} ms medians) over 10x the rows: {known['why']}")
                 else:
