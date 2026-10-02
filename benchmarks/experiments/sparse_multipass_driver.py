@@ -137,6 +137,8 @@ def main():
                # Only Elasticsearch has it, and the 9.0-vs-9.4 recall gap was
                # diagnosable only because the lane recorded it.
                "es_prune": getattr(b, "prune", None),
+               # The adapter's read-back and settle evidence, as on the lane's rows.
+               **(getattr(b, "row_extra", None) or {}),
                "recall_at_10": recall}
         rec.update({f"query_{k2}": v for k2, v in p.items()})
         rec.update(run_conditions(lane="l3s_mp"))

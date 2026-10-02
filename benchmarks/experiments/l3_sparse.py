@@ -378,23 +378,50 @@ class Qdrant(Base):
                     index=models.SparseIndexParams(on_disk=False))})
 
     def build(self, n_docs):
-        m, batch = self.models, []
+        m, batch, self._sent = self.models, [], 0
         for i, idx, vals in gen_docs(n_docs):
             batch.append(m.PointStruct(
                 id=i, vector={"text": m.SparseVector(indices=idx, values=vals)}))
+            self._sent += 1
             if len(batch) >= INGEST_BATCH:
                 self.cl.upsert(self.COLL, batch, wait=False)
                 batch = []
         if batch:
             self.cl.upsert(self.COLL, batch, wait=True)
 
+    # Bound on the settle below; a collection that never holds every point sent
+    # refuses the cell instead of answering from part of the corpus.
+    SETTLE_S = float(os.environ.get("BENCH_QDRANT_SETTLE_S", "3600"))
+
     def post_build(self):
-        # wait for indexing/optimizer to settle
+        # WAIT FOR EVERY POINT, NOT ONLY FOR GREEN (2026-10-02). The batches go
+        # in with wait=False and only the last with wait=True, and on the laptop
+        # neither that last ack nor a green status meant the collection held the
+        # corpus: at the Big-ANN 100k slice the lane searched a collection whose
+        # points_count read 62,384 and returned recall@10 0.936 against exact
+        # ground truth, where the same ingest with wait=True on every batch
+        # returned 1.0 (repin-prep probe, qdrant v1.19.1). So the settle polls the
+        # EXACT count until it equals what was sent, and green again after it,
+        # inside the build timer, as the Milvus and MongoDB arms wait for their
+        # index to hold what they were given. The row records what the
+        # collection held at the first green and how long the rest took.
+        deadline = time.time() + self.SETTLE_S
+        at_green = t_green = None
         while True:
             info = self.cl.get_collection(self.COLL)
-            if str(info.status).lower().endswith("green"):
-                return
+            green = str(info.status).lower().endswith("green")
+            held = self.cl.count(self.COLL, exact=True).count if green else None
+            if green and at_green is None:
+                at_green, t_green = held, time.perf_counter()
+            if green and held == self._sent:
+                break
+            if time.time() > deadline:
+                raise RuntimeError(f"qdrant: the collection holds {held} of {self._sent} points "
+                                   f"{self.SETTLE_S:.0f} s after the last upsert; refusing to search part of the corpus")
             time.sleep(0.5)
+        self.settle = {"qdrant_points_at_first_green": at_green,
+                       "qdrant_settle_after_green_s": round(time.perf_counter() - t_green, 2)}
+        self.row_extra = dict(self.settle)
 
     def search(self, idx, vals, k):
         m = self.models
@@ -728,6 +755,9 @@ def main():
     build = time.perf_counter() - t0
     out["build_s"] = round(build, 2)
     out["build_docs_per_s"] = round(n_docs / build, 1)
+    # What the engine reported about the index it built, and any settle it
+    # waited for, as the dense lane records it.
+    out.update(getattr(b, "row_extra", None) or {})
 
     # timed warm search
     _search_t0 = time.perf_counter()
